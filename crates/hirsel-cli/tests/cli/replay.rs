@@ -468,22 +468,87 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 }
 "#;
 
-/// Record `program` with `grants` in both engines, then delete the granted program and
-/// replay each tape in both engines: nothing is spawned, and the output is the recorded one.
+/// `printf | sort | uniq -c` on the host: every status is reported, a failing first stage
+/// is what pipefail reports, and its message reaches the shared standard error.
+const PIPELINE_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
+fn failed(take e: ProcessError) -> () {}
+
+fn stage(args: Args, index: u64, take words: List[String]) -> Command {
+  let program = match arg.path(args, index) {
+    Ok(program) => program,
+    Error(_) => path.of("/missing"),
+  }
+  Command(program: program, args: words, dir: None(), env: None())
+}
+
+fn status(s: ExitStatus) -> String {
+  match s {
+    Exited(code) => f"exited {code}",
+    Signaled(signal) => f"signaled {signal}",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant
+  let p = io.process(rt) ? grant
+  let counted = proc.pipeline(
+    p,
+    [stage(args, 0u64, ["b\na\nb\n"]), stage(args, 1u64, []), stage(args, 2u64, ["-c"])],
+    b"",
+    4096u64,
+    None()
+  ) ? failed
+  let PipelineOutput(statuses: statuses, stdout: stdout, stderr: _) = take counted
+  for s in statuses {
+    let _ = out.print(out, f"{status(s)}\n")
+  }
+  match string.from_bytes(take stdout) {
+    Ok(s) => {
+      let _ = out.print(out, s)
+    },
+    Error(_) => {},
+  }
+  let broken = proc.pipeline(
+    p,
+    [stage(args, 1u64, ["--no-such-flag"]), stage(args, 2u64, ["-c"])],
+    b"",
+    4096u64,
+    None()
+  ) ? failed
+  let _ = out.print(out, f"pipefail {status(std@1/process.pipefail(broken))}\n")
+  if bytes.len(broken.stdout) == 0u64 && bytes.len(broken.stderr) > 0u64 {
+    let _ = out.print(out, "stderr shared\n")
+  }
+  Ok(())
+}
+"#;
+
+/// Record `program` in both engines with each of `children` granted and passed as an
+/// argument in order, then delete the granted programs and replay each tape in both
+/// engines: nothing is spawned, and the output is the recorded one.
 fn process_round_trip(
     name: &str,
     program: &str,
-    child: &Path,
+    children: &[&Path],
     expected: &[u8],
     ready: Option<&Path>,
 ) -> PathBuf {
-    let root = child.parent().unwrap();
+    let root = children[0].parent().unwrap();
     let source = root.join(format!("{name}.hir"));
     std::fs::write(&source, program).unwrap();
+    let stdlib = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../stdlib/std@1/hirsel.json")
+        .canonicalize()
+        .unwrap();
+    std::fs::write(
+        root.join(format!("{name}.hir.json")),
+        serde_json::json!({"schema":1,"package":{"name":name,"version":"1"},"sources":[{"path":format!("{name}.hir"),"module":[]}],"dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string(),
+    )
+    .unwrap();
     let grants = root.join(format!("{name}.json"));
     std::fs::write(
         &grants,
-        serde_json::json!({"io":{"stdout":"stdout.bytes@1","stdin":"stdin.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"process":{"provider":"process.spawn@1","rules":[{"program":child}]}},"args":[child]}).to_string(),
+        serde_json::json!({"io":{"stdout":"stdout.bytes@1","stdin":"stdin.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"process":{"provider":"process.spawn@1","rules":children.iter().map(|c| serde_json::json!({"program":c})).collect::<Vec<_>>()}},"args":children}).to_string(),
     )
     .unwrap();
     let tapes = [false, true].map(|native| {
@@ -538,8 +603,13 @@ fn process_round_trip(
         );
         tape
     });
-    let copy = std::fs::read(child).unwrap();
-    std::fs::remove_file(child).unwrap();
+    let copies: Vec<_> = children
+        .iter()
+        .map(|child| std::fs::read(child).unwrap())
+        .collect();
+    for child in children {
+        std::fs::remove_file(child).unwrap();
+    }
     for tape in &tapes {
         for native in [false, true] {
             assert_replayed(
@@ -553,7 +623,9 @@ fn process_round_trip(
             );
         }
     }
-    std::fs::write(child, copy).unwrap();
+    for (child, copy) in children.iter().zip(copies) {
+        std::fs::write(child, copy).unwrap();
+    }
     root.to_path_buf()
 }
 
@@ -572,7 +644,7 @@ fn timed_out_runs_kill_their_child_and_replay_without_spawning() {
     process_round_trip(
         "deadline",
         DEADLINE_PROGRAM,
-        &sleep,
+        &[&sleep],
         b"timed out\nin time\n",
         None,
     );
@@ -604,7 +676,7 @@ fn a_canceled_parent_kills_its_running_child_and_replays_without_spawning() {
     process_round_trip(
         "cancel",
         CANCEL_PROGRAM,
-        &script,
+        &[&script],
         b"canceled\n",
         Some(&ready),
     );
@@ -619,7 +691,7 @@ fn a_streaming_cat_child_round_trips_lines_and_replays_without_spawning() {
     process_round_trip(
         "stream",
         STREAM_PROGRAM,
-        &cat,
+        &[&cat],
         b"ping\npong\neof\nexited 0\nkilled\n",
         None,
     );
@@ -698,4 +770,24 @@ fn filesystem_breadth_source_replays_across_backends_without_following_outside_l
             );
         }
     }
+}
+
+#[test]
+fn a_host_pipeline_reports_every_status_and_replays_without_spawning() {
+    let root = process_root("replay-pipeline");
+    let programs = ["printf", "sort", "uniq"].map(|name| root.join(name));
+    for (name, copy) in ["/usr/bin/printf", "/usr/bin/sort", "/usr/bin/uniq"]
+        .iter()
+        .zip(&programs)
+    {
+        std::fs::copy(name, copy).unwrap();
+    }
+    process_round_trip(
+        "pipeline",
+        PIPELINE_PROGRAM,
+        &programs.each_ref().map(PathBuf::as_path),
+        b"exited 0\nexited 0\nexited 0\n      1 a\n      2 b\npipefail exited 2\nstderr shared\n",
+        None,
+    );
+    std::fs::remove_dir_all(&root).unwrap();
 }

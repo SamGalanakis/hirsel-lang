@@ -1,0 +1,15 @@
+// Pipeline status helpers over core `proc.pipeline` results
+// (docs/spec/core-library.md#processes).
+// The status a shell's `pipefail` reports for a pipeline: the last stage's status that is
+// not `Exited(0)`, or `Exited(0)` when every stage succeeded. An upstream stage that a
+// downstream one ended early by closing its input reports `Signaled(13)`, as in a shell.
+@noalloc
+pub fn pipefail(pipeline: PipelineOutput) -> ExitStatus uses {} {
+  let mut status: ExitStatus = Exited(0)
+  for stage in pipeline.statuses {
+    if stage != Exited(0) {
+      status = stage
+    }
+  }
+  status
+}

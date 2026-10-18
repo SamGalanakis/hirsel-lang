@@ -306,7 +306,9 @@ A process run is recorded at the call: the request (the `Proc` handle, the comma
 program, arguments, working-directory handle or none and exact environment or none, every
 stdin byte, `max_output`, and the deadline's clock handle and ticks or none) and the completion (the exit status with exactly the
 captured stdout and stderr bytes, or the error, `TimedOut()` included). Elapsed time and the
-order in which the child's streams were drained are never recorded. Under
+order in which the child's streams were drained are never recorded. A `proc.pipeline` is
+recorded the same way: its request holds every stage's command in stage order, and its
+completion every stage's status with exactly the captured stdout and shared stderr bytes. Under
 `tasks.cooperative@1` a run that parks records `blocked` and a `ready` event like a network
 request, and its completion when the poll that finds it ready completes it; a cancelled run
 records nothing more, since cancellation is derived from the schedule. A completed

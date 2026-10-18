@@ -160,6 +160,7 @@ pub fn replay_interpreter_with_fixture(
                 Request::Process { .. }
                 | Request::TestProcess { .. }
                 | Request::ProcessRun { .. }
+                | Request::ProcessPipeline { .. }
                 | Request::ProcessSpawn { .. }
                 | Request::ChildWrite { .. }
                 | Request::ChildCloseStdin { .. }

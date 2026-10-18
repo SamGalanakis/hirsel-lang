@@ -1,0 +1,118 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// A scripted pipeline: each stage takes its own run entry, statuses are every stage's in
+// order, stdout is the last stage's and stderr every stage's in stage order. Checks cover
+// every stage before any entry is taken, and a stage with no entry takes none.
+fn output(code: i32, take stdout: Bytes, take stderr: Bytes) -> Result[
+  ProcessOutput,
+  ProcessError
+] {
+  Ok(ProcessOutput(status: Exited(code), stdout: stdout, stderr: stderr))
+}
+
+fn run(
+  take program: String,
+  take args: List[String],
+  take outcome: Result[ProcessOutput, ProcessError]
+) -> ProcessScript {
+  ProcessScript(program: program, args: args, outcome: outcome)
+}
+
+fn stage(program: String, take args: List[String]) -> Command {
+  Command(program: path.of(program), args: args, dir: None(), env: None())
+}
+
+fn sort_uniq() -> List[Command] {
+  [
+    stage("/usr/bin/printf", ["b\na\nb\n"]),
+    stage("/usr/bin/sort", []),
+    stage("/usr/bin/uniq", ["-c"])
+  ]
+}
+
+pub fn exercise(t: Test) -> Result[(), ProcessError] {
+  let p = test.process(
+    t,
+    [
+      run("/usr/bin/printf", ["b\na\nb\n"], output(0, b"b\na\nb\n", b"")),
+      run("/usr/bin/sort", [], output(0, b"a\nb\nb\n", b"sort: note\n")),
+      run(
+        "/usr/bin/uniq",
+        ["-c"],
+        output(0, b"      1 a\n      2 b\n", b"uniq: note\n")
+      ),
+      run("/usr/bin/grep", ["x"], output(1, b"", b"")),
+      run(
+        "/usr/bin/yes",
+        [],
+        Ok(ProcessOutput(status: Signaled(13), stdout: b"", stderr: b""))
+      ),
+      run("/usr/bin/head", ["-n1"], output(0, b"y\n", b"")),
+      run("/usr/bin/false", [], Error(PermissionDenied()))
+    ],
+    []
+  )
+  // Every stage's checks come first, in stage order, and take no entry.
+  test.check(t, proc.pipeline(p, [], b"", 64u64, None()) == Error(InvalidInput()))
+  test.check(
+    t,
+    proc.pipeline(
+      p,
+      [stage("/usr/bin/sort", []), stage("sort", [])],
+      b"",
+      64u64,
+      None()
+    ) == Error(InvalidInput())
+  )
+  test.check(
+    t,
+    proc.pipeline(
+      p,
+      [stage("/usr/bin/sort", []), stage("/bin/sh", [])],
+      b"",
+      64u64,
+      None()
+    ) == Error(NotGranted())
+  )
+  // A stage with no entry is NotFound and takes no other stage's entry.
+  test.check(
+    t,
+    proc.pipeline(
+      p,
+      [stage("/usr/bin/sort", []), stage("/usr/bin/uniq", [])],
+      b"",
+      64u64,
+      None()
+    ) == Error(NotFound())
+  )
+  let counted = proc.pipeline(p, sort_uniq(), b"", 64u64, None())?
+  test.check(t, counted.statuses == [Exited(0), Exited(0), Exited(0)])
+  test.check(t, counted.stdout == b"      1 a\n      2 b\n")
+  test.check(t, counted.stderr == b"sort: note\nuniq: note\n")
+  test.check(t, std@1/process.pipefail(counted) == Exited(0))
+  // Its entries are used: the same pipeline again finds none.
+  test.check(t, proc.pipeline(p, sort_uniq(), b"", 64u64, None()) == Error(NotFound()))
+  // pipefail reports the last stage that failed: a SIGPIPE'd upstream here.
+  let early = proc.pipeline(
+    p,
+    [stage("/usr/bin/yes", []), stage("/usr/bin/head", ["-n1"])],
+    b"",
+    64u64,
+    None()
+  )?
+  test.check(t, early.statuses == [Signaled(13), Exited(0)])
+  test.check(t, std@1/process.pipefail(early) == Signaled(13))
+  // A stage's error outcome is the pipeline's.
+  test.check(
+    t,
+    proc.pipeline(
+      p,
+      [stage("/usr/bin/grep", ["x"]), stage("/usr/bin/false", [])],
+      b"",
+      64u64,
+      None()
+    ) == Error(PermissionDenied())
+  )
+  Ok(())
+}

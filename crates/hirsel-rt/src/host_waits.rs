@@ -49,13 +49,14 @@ unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Option<Co
 }
 
 /// Whether `request` can wait for the host and so park its task: a stdin read, a timer
-/// wait, a process run, a child write, read or wait, or a network request.
+/// wait, a process run or pipeline, a child write, read or wait, or a network request.
 pub(crate) fn may_park(request: &Request) -> bool {
     matches!(
         request,
         Request::ReadStdin { .. }
             | Request::SleepUntil { .. }
             | Request::ProcessRun { .. }
+            | Request::ProcessPipeline { .. }
             | Request::ChildWrite { .. }
             | Request::ChildRead { .. }
             | Request::ChildWait { .. }

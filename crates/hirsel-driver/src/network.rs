@@ -4,7 +4,7 @@ use hirsel_interp::library::{Library, SimulationConfig, error, ok, u64_value};
 use hirsel_interp::{
     Error, Integer, OperationCall, OperationContext, OperationResult, Operations, Value,
 };
-use hirsel_rt::process::{ProcessFailure, ProcessOutcome};
+use hirsel_rt::process::{PipelineOutcome, ProcessFailure, ProcessOutcome};
 use hirsel_rt::{
     io::{Adapter, Completion as C, Request as R},
     io_real::RealIo,
@@ -243,6 +243,9 @@ impl HostIo {
 /// `Result[ProcessOutput, ProcessError]` for a run's outcome.
 fn process_value(outcome: ProcessOutcome) -> Value {
     hirsel_interp::library::process::outcome_value(&outcome)
+}
+fn pipeline_value(outcome: PipelineOutcome) -> Value {
+    hirsel_interp::library::process::pipeline_value(&outcome)
 }
 /// `WaitError::Canceled(cause)`.
 fn wait_canceled(cause: u32) -> Value {
@@ -673,12 +676,12 @@ impl HostLibrary {
             ));
         }
         self.yield_now = true;
-        if name != "proc.run" {
+        if name != "proc.run" && name != "proc.pipeline" {
             return self.host_child(name, a, cx);
         }
         let token = self.next_wait;
         self.next_wait += 1;
-        match self.process_request(a, token) {
+        match self.process_request(name, a, token) {
             Err(Error::Blocked(_)) => {}
             result => return result,
         }
@@ -897,19 +900,50 @@ impl HostLibrary {
             }
         })
     }
-    fn process_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
-        let Some(command) = self.command(&a[1])? else {
-            return Ok(OperationResult::returned(process_value(
-                ProcessOutcome::Error(ProcessFailure::InvalidInput),
-            )));
-        };
+    /// Issue `proc.run` or `proc.pipeline` under `token`: its completion, or Blocked while
+    /// the children run.
+    fn process_request(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        token: u64,
+    ) -> Result<OperationResult, Error> {
+        let (process, stdin, max_output) = (self.id(&a[0])?, bytes(&a[2])?, word(&a[3])?);
         let deadline = self.deadline(&a[4])?;
-        let request = R::ProcessRun {
-            process: self.id(&a[0])?,
-            command,
-            stdin: bytes(&a[2])?,
-            max_output: word(&a[3])?,
-            deadline,
+        let request = if name == "proc.run" {
+            match self.command(&a[1])? {
+                Some(command) => R::ProcessRun {
+                    process,
+                    command,
+                    stdin,
+                    max_output,
+                    deadline,
+                },
+                None => {
+                    return Ok(OperationResult::returned(process_value(
+                        ProcessOutcome::Error(ProcessFailure::InvalidInput),
+                    )));
+                }
+            }
+        } else {
+            match fields(&a[1])?
+                .into_iter()
+                .map(|stage| self.command(stage))
+                .collect::<Result<Option<Vec<_>>, _>>()?
+            {
+                Some(stages) => R::ProcessPipeline {
+                    process,
+                    stages,
+                    stdin,
+                    max_output,
+                    deadline,
+                },
+                None => {
+                    return Ok(OperationResult::returned(pipeline_value(
+                        PipelineOutcome::Error(ProcessFailure::InvalidInput),
+                    )));
+                }
+            }
         };
         self.io.adapter().enter(token);
         let cancellation = self
@@ -922,6 +956,7 @@ impl HostLibrary {
         }
         match completion? {
             C::Process(outcome) => Ok(OperationResult::returned(process_value(outcome))),
+            C::Pipeline(outcome) => Ok(OperationResult::returned(pipeline_value(outcome))),
             _ => Err(invalid()),
         }
     }
@@ -1624,18 +1659,19 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
             };
         }
-        if name == "proc.run" {
-            // Finishing a cancelled run's token kills and reaps its child.
+        if name == "proc.run" || name == "proc.pipeline" {
+            // Finishing a cancelled run's token kills and reaps its children.
             if canceled {
                 self.io.adapter().finish(token);
                 self.waits.remove(&token);
-                return Ok(Some(OperationResult::returned(process_value(
-                    ProcessOutcome::Error(ProcessFailure::Canceled(
-                        self.library.cancellation().unwrap(),
-                    )),
-                ))));
+                let failure = ProcessFailure::Canceled(self.library.cancellation().unwrap());
+                return Ok(Some(OperationResult::returned(if name == "proc.run" {
+                    process_value(ProcessOutcome::Error(failure))
+                } else {
+                    pipeline_value(PipelineOutcome::Error(failure))
+                })));
             }
-            return match self.process_request(&arguments, token) {
+            return match self.process_request(&name, &arguments, token) {
                 Err(Error::Blocked(_)) => Ok(None),
                 result => {
                     self.waits.remove(&token);
@@ -1729,7 +1765,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 return self.storage(&name, call.arguments).map(Some);
             }
             if name == "io.process"
-                || (name == "proc.run" || name == "proc.spawn" || name.starts_with("child."))
+                || (name.starts_with("proc.") || name.starts_with("child."))
                     && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
             {
                 if name == "io.process" {
@@ -1875,7 +1911,7 @@ mod tests {
             variant(0, vec![]),
         ];
         assert_eq!(
-            host.process_request(&arguments, 1).unwrap(),
+            host.process_request("proc.run", &arguments, 1).unwrap(),
             OperationResult::returned(error(variant(1, vec![])))
         );
         let HostIo::Replay(io) = &host.io else {

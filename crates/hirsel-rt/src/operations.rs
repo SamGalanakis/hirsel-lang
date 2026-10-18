@@ -195,6 +195,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "env.get"
         | "io.process"
         | "proc.run"
+        | "proc.pipeline"
         | "proc.spawn"
         | "child.write"
         | "child.close_stdin"
@@ -303,6 +304,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "test.net"
             | "io.process"
             | "proc.run"
+            | "proc.pipeline"
             | "proc.spawn"
             | "child.write"
             | "child.close_stdin"
@@ -1139,6 +1141,21 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_proc_pipeline",
+        destination: true,
+        result: Some((64, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::I64,
+            Physical::Pointer,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_test_process",
         destination: true,
         result: Some((8, 8)),
@@ -1812,6 +1829,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "io.tasks",
     "io.process",
     "proc.run",
+    "proc.pipeline",
     "random.bytes",
     "clock.sleep_until",
     "instant.checked_add",

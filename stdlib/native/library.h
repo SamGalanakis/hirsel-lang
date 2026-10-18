@@ -220,6 +220,9 @@ uint8_t hirsel_rt_v2_io_process(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*
 typedef struct { uint32_t tag, padding, kind, code; hirsel_rt_v2_slice stdout_bytes, stderr_bytes; } hirsel_rt_v2_process_result;
 /* The trailing operand is Option[Deadline]: its tag, then the clock at 8 and the Instant at 16. */
 uint8_t hirsel_rt_v2_proc_run(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_process_result*, const uint64_t*, const void*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t, const void*);
+/* Result[PipelineOutput, ProcessError]: the statuses List or ProcessError at 8, stdout at 16, stderr at 40. */
+typedef struct { uint32_t tag, padding; uint64_t statuses; hirsel_rt_v2_slice stdout_bytes, stderr_bytes; } hirsel_rt_v2_pipeline_result;
+uint8_t hirsel_rt_v2_proc_pipeline(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_pipeline_result*, const uint64_t*, hirsel_rt_v2_header*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t, const void*);
 /* Result[Child or u64, ProcessError]: the value, or ProcessError (tag, payload) at 8. */
 typedef struct { uint32_t tag, padding; uint64_t value; } hirsel_rt_v2_child_word_result;
 /* Result[() or ExitStatus, ProcessError]: the ExitStatus or ProcessError at 4. */

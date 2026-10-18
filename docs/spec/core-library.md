@@ -137,6 +137,7 @@ N fn udp.close(n: Net, take s: UdpSocket of n) -> ()
 
 // CAP-1/2, PROV-1/3, DROP-2/3, CONC-1/3, DET-1
 fn proc.run(p: Proc, cmd: Command, stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
+fn proc.pipeline(p: Proc, stages: List[Command], stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[PipelineOutput, ProcessError]
 fn proc.spawn(p: Proc, cmd: Command) -> Result[Child of p, ProcessError]
 N fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessError]
 N fn child.close_stdin(p: Proc, mut c: Child of p) -> ()
@@ -792,6 +793,7 @@ The process data types are root core types, with variant ordinals in the order w
 ExitStatus    = Exited(i32) | Signaled(i32)
 Signal        = Interrupt() | Terminate() | Kill()
 ProcessOutput = { status: ExitStatus, stdout: Bytes, stderr: Bytes }
+PipelineOutput = { statuses: List[ExitStatus], stdout: Bytes, stderr: Bytes }
 ProcessError  = NotGranted() | InvalidInput() | NotFound() | PermissionDenied()
               | OutputLimit() | Fault(u32) | TimedOut() | Canceled(CancelCause)
               | InputClosed()
@@ -807,8 +809,11 @@ ChildStep     = Print(Bytes) | PrintErr(Bytes) | Expect(Bytes) | Exit(ExitStatus
 A `Command` describes one child: the program to run, its arguments, its working directory
 and its environment. `proc.run(p, cmd, stdin, max_output, deadline)` runs one child to
 completion and returns its exit status and everything it wrote to standard output and
-standard error. `proc.spawn(p, cmd)` starts a streaming child that the program talks to
-while it runs. Both make these checks of `cmd` in this order, each before any host effect:
+standard error. `proc.pipeline(p, stages, stdin, max_output, deadline)` runs commands
+connected as a shell pipeline. `proc.spawn(p, cmd)` starts a streaming child that the
+program talks to while it runs. Each makes these checks of each command in this order,
+each before any host effect; a pipeline checks every stage in stage order before
+anything is spawned, and an empty `stages` is `InvalidInput()`:
 
 1. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
    `..` component and no trailing `/`, and no argument contains a NUL byte. With `env`
@@ -822,8 +827,9 @@ while it runs. Both make these checks of `cmd` in this order, each before any ho
    `None()` the working directory is `/`. A `Dir` grants the child nothing; it only names
    where it starts.
 Cancellation follows these program checks as specified by
-[CONC-3](concurrency.md#conc-3-cancellation). After that, for `proc.run` with `Some(d)`, a
-deadline `d.at` that `d.clock` has already reached is `TimedOut()`, and nothing is spawned.
+[CONC-3](concurrency.md#conc-3-cancellation). After that, for `proc.run` and
+`proc.pipeline` with `Some(d)`, a deadline `d.at` that `d.clock` has already reached is
+`TimedOut()`, and nothing is spawned.
 
 The child's argument vector is `program` followed by `args`. With `env` `None()` its
 environment holds exactly the variables its rule lists that are set in the launcher's
@@ -849,7 +855,20 @@ its clock is a `MonotonicClock` the program already holds, and no other clock is
 only its child, gracefully, and returns `TimedOut()`; a scope deadline that passes during
 a run cancels it like any other cancellation.
 
-`proc.run` parks its task while the child runs, so other tasks keep running
+**Pipelines.** `proc.pipeline` runs its stages as one run: `stdin` goes to the first
+stage, each stage's standard output is connected to the next stage's standard input by a
+host pipe the program never touches, and the last stage's standard output is captured as
+`stdout`. Every stage writes standard error to one shared captured pipe, as a shell's
+stages share a terminal, so `stderr` interleaves them as the host delivers it.
+`statuses` holds every stage's `ExitStatus` in stage order (a shell's `PIPESTATUS`); a
+stage that exits early can end an earlier one with SIGPIPE, reported as `Signaled(13)`.
+`max_output` bounds `stdout` and `stderr`, `OutputLimit()` killing every stage, and a
+deadline or cancellation ends every stage as it ends a `proc.run` child. A stage that
+cannot start (`NotFound()`, `PermissionDenied()`, `Fault(_)`) kills and reaps the stages
+started before it and is the result. `std@1/process.pipefail` reduces the statuses as a
+shell's `pipefail` does.
+
+`proc.run` and `proc.pipeline` park their task while the children run, so other tasks keep running
 ([CONC-1](concurrency.md#conc-1-runtime)). It is a cancellation point throughout: cancelling
 its task sends the child SIGKILL at once, reaps it, discards its output and returns
 `Canceled(cause)`. The child's own effects are outside Hirsel's model
@@ -906,7 +925,14 @@ then takes the first unused run entry whose `program` and `args` equal its own a
 its `outcome`, with an output longer than `max_output` on either stream returning
 `OutputLimit()`. With no such entry the result is `NotFound()`. `stdin`, `dir` and `env` are not
 consulted beyond their checks. A scripted run takes no time: its deadline matters only to
-the check before spawning, and an outcome `Error(TimedOut())` scripts a timeout.
+the check before spawning, and an outcome `Error(TimedOut())` scripts a timeout. A
+`proc.pipeline` on it makes every stage's checks, then each stage takes the first unused
+run entry whose `program` and `args` equal its own, all or none: with a stage that has
+none the result is `NotFound()` and no entry is taken. The first error outcome in stage
+order is the result; otherwise `statuses` are the outcomes' statuses, `stdout` the last
+stage's output and `stderr` every stage's standard error concatenated in stage order,
+bounded by `max_output` as a run's streams are. Scripted runs do not read their input,
+so no stage's output reaches the next.
 
 A `proc.spawn` on it takes the first unused child entry whose `program` and `args` equal
 its own (with none, `NotFound()`) and plays its steps in order:

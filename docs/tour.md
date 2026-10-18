@@ -1457,6 +1457,9 @@ A `Command` names a program, its arguments, an optional working `Dir` and an opt
 exact environment (`None()` passes through only the names the grant lists).
 `proc.run` runs one to completion with its stdin, an output bound and an
 optional `Deadline`: past it the child is stopped and the run returns `TimedOut()`.
+`proc.pipeline` runs a `List[Command]` as a shell pipeline, each stage's output feeding
+the next, and returns every stage's status with the last stage's output and one shared
+stderr; `std@1/process.pipefail` reduces the statuses as a shell's `pipefail` does.
 `proc.spawn` instead returns a `Child of p` to stream: `child.write`, `close_stdin`,
 `read_stdout` (0 at end of output), `read_stderr`, `wait` (with an optional deadline)
 and `kill` (with a chosen `Signal`) each park only their task. Dropping a `Child` kills and reaps it. A process grant names exact

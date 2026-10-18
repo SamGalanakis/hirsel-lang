@@ -72,6 +72,118 @@ pub enum ProcessOutcome {
     Error(ProcessFailure),
 }
 
+/// A `proc.pipeline` completion: every stage's status in stage order, the last stage's
+/// standard output and the standard error every stage shares, or the error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PipelineOutcome {
+    Output {
+        statuses: Vec<ExitStatus>,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+    },
+    Error(ProcessFailure),
+}
+
+impl PipelineOutcome {
+    /// The completion bounded by `max_output` on each captured stream, as every provider
+    /// applies it.
+    pub fn bounded(self, max_output: u64) -> Self {
+        match self {
+            Self::Output { stdout, stderr, .. }
+                if stdout.len() as u64 > max_output || stderr.len() as u64 > max_output =>
+            {
+                Self::Error(ProcessFailure::OutputLimit)
+            }
+            outcome => outcome,
+        }
+    }
+    /// A one-stage pipeline's completion as the `proc.run` completion it is.
+    pub fn into_run(self) -> ProcessOutcome {
+        match self {
+            Self::Output {
+                statuses,
+                stdout,
+                stderr,
+            } if statuses.len() == 1 => ProcessOutcome::Output {
+                status: statuses[0],
+                stdout,
+                stderr,
+            },
+            Self::Output { .. } => ProcessOutcome::Error(ProcessFailure::Fault(1)),
+            Self::Error(failure) => ProcessOutcome::Error(failure),
+        }
+    }
+}
+
+impl From<ProcessOutcome> for PipelineOutcome {
+    /// A `proc.run` completion as the one-stage pipeline completion it is.
+    fn from(outcome: ProcessOutcome) -> Self {
+        match outcome {
+            ProcessOutcome::Output {
+                status,
+                stdout,
+                stderr,
+            } => Self::Output {
+                statuses: vec![status],
+                stdout,
+                stderr,
+            },
+            ProcessOutcome::Error(failure) => Self::Error(failure),
+        }
+    }
+}
+
+/// A scripted world's pipeline (docs/spec/core-library.md#processes, scripted runs): each
+/// stage takes the first unused run entry whose program and args equal its own, all or
+/// none (`NotFound()` when one has none). The first error outcome in stage order is the
+/// pipeline's; otherwise the statuses are the outcomes', the output the last stage's and
+/// the standard error every stage's in stage order.
+pub fn script_pipeline(
+    runs: &mut [Option<ProcessRun>],
+    stages: &[Command],
+    max_output: u64,
+) -> PipelineOutcome {
+    let mut taken: Vec<usize> = vec![];
+    for stage in stages {
+        let entry = runs.iter().enumerate().position(|(i, r)| {
+            !taken.contains(&i)
+                && r.as_ref()
+                    .is_some_and(|r| r.program == stage.program && r.args == stage.args)
+        });
+        match entry {
+            Some(i) => taken.push(i),
+            None => return PipelineOutcome::Error(ProcessFailure::NotFound),
+        }
+    }
+    let (mut statuses, mut stdout, mut stderr) = (vec![], vec![], vec![]);
+    let mut failed = None;
+    for i in taken {
+        match runs[i].take().unwrap().outcome {
+            ProcessOutcome::Output {
+                status,
+                stdout: out,
+                stderr: err,
+            } => {
+                statuses.push(status);
+                stdout = out;
+                stderr.extend_from_slice(&err);
+            }
+            ProcessOutcome::Error(failure) => {
+                failed.get_or_insert(failure);
+            }
+        }
+    }
+    match failed {
+        Some(failure) => PipelineOutcome::Error(failure),
+        None => PipelineOutcome::Output {
+            statuses,
+            stdout,
+            stderr,
+        }
+        .bounded(max_output),
+    }
+}
+
 /// `ExitStatus`, in its docs/spec/core-library.md variant order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -153,18 +265,6 @@ impl Command {
             .find(|r| r.program == self.program)
             .filter(|rule| names.iter().all(|name| rule.env.iter().any(|e| e == name)))
             .ok_or(ProcessFailure::NotGranted)
-    }
-}
-
-/// A completion's streams bounded by `max_output`, as every provider applies it.
-pub fn bounded(outcome: ProcessOutcome, max_output: u64) -> ProcessOutcome {
-    match outcome {
-        ProcessOutcome::Output { stdout, stderr, .. }
-            if stdout.len() as u64 > max_output || stderr.len() as u64 > max_output =>
-        {
-            ProcessOutcome::Error(ProcessFailure::OutputLimit)
-        }
-        outcome => outcome,
     }
 }
 

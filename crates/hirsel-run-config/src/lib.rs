@@ -21,9 +21,10 @@ pub mod tls;
 pub use child::{ChildStream, ScriptChild, ScriptRead, Signal, child_mismatch, child_unmet};
 mod process;
 pub use process::{
-    ChildRun, ChildStep, Command, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome,
-    ProcessRule, ProcessRun, bounded, canonical_program, decode_child_runs, decode_process_runs,
-    encode_child_runs, encode_process_runs, scriptable, validate_process_grant,
+    ChildRun, ChildStep, Command, ExitStatus, PipelineOutcome, ProcessFailure, ProcessGrant,
+    ProcessOutcome, ProcessRule, ProcessRun, canonical_program, decode_child_runs,
+    decode_process_runs, encode_child_runs, encode_process_runs, script_pipeline, scriptable,
+    validate_process_grant,
 };
 
 /// A host-supplied, immutable admission snapshot. Its revision hashes the exact file.

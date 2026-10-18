@@ -91,6 +91,7 @@ N fn prng.below(mut generator: prng.Generator, upper_exclusive: u64) -> Result[u
 fn prng.bytes(mut generator: prng.Generator, count: u64) -> unique Bytes uses {}
 fn random.u64(r: Random) -> Result[u64, RandomError]
 fn random.below(r: Random, upper_exclusive: u64) -> Result[u64, random.SampleError]
+N fn process.pipefail(pipeline: PipelineOutput) -> ExitStatus uses {}
 ```
 
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`,

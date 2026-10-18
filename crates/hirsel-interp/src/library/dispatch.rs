@@ -1375,7 +1375,7 @@ primary_operations! { self, call, context, name, a, value;
     },
     // A rejected replay never publishes effects or consumes script entries; a scripted
     // child's read parks as a scripted peer's does.
-    Capability: "io.process" | "proc.run" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" => {
+    Capability: "io.process" | "proc.run" | "proc.pipeline" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" => {
         return self.network_call(name, &call, context).map(Some);
     },
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },

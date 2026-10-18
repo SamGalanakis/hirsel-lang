@@ -12,8 +12,8 @@
 use crate::handles::Grant;
 use crate::io::{AdapterError, Completion, Request, State};
 pub use hirsel_run_config::{
-    ChildRun, ChildStep, ChildStream, Command, ExitStatus, ProcessFailure, ProcessOutcome,
-    ProcessRule, ProcessRun, ScriptChild, ScriptRead, Signal, bounded, canonical_program,
+    ChildRun, ChildStep, ChildStream, Command, ExitStatus, PipelineOutcome, ProcessFailure,
+    ProcessOutcome, ProcessRule, ProcessRun, ScriptChild, ScriptRead, Signal, canonical_program,
 };
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -55,40 +55,45 @@ impl ChildEnv {
     }
 }
 
-/// One run after every check passed: the host provider's whole input.
+/// One child after its checks passed.
 pub struct ProcessSpec<'a> {
     pub program: &'a str,
     pub args: &'a [String],
-    pub stdin: &'a [u8],
     pub env: ChildEnv,
     /// The working directory's Dir handle, always host-backed here; `None` is `/`.
     pub directory: Option<u64>,
-    pub max_output: u64,
-    /// CLOCK_MONOTONIC nanoseconds by which the run must end.
-    pub deadline: Option<u64>,
 }
 impl<'a> ProcessSpec<'a> {
-    /// The checked `command` under `rule`, with no input and no bound: a spawn's spec.
+    /// The checked `command` under its granting `rule`.
     pub fn of(command: &'a Command, rule: &ProcessRule) -> Self {
         Self {
             program: &command.program,
             args: &command.args,
-            stdin: &[],
             env: ChildEnv::of(command, rule),
             directory: command.directory,
-            max_output: 0,
-            deadline: None,
         }
     }
+}
+
+/// A checked one-shot run or pipeline: the host provider's whole input. Stage `i`'s
+/// standard output feeds stage `i + 1`; `stdin` feeds the first stage.
+pub struct HostRun<'a> {
+    pub stages: &'a [ProcessSpec<'a>],
+    pub stdin: &'a [u8],
+    /// The bound on the captured standard output and the shared standard error.
+    pub max_output: u64,
+    /// CLOCK_MONOTONIC nanoseconds by which the run must end.
+    pub deadline: Option<u64>,
 }
 
 /// What a host provider performs after every check passed. Its answer is the completion
 /// the request returns, which the policy validates: in replay, the recorded one.
 pub enum HostCall<'a> {
-    /// `proc.run`: [`Completion::Process`].
-    Run(&'a ProcessSpec<'a>),
-    /// `proc.spawn` as Child handle `child` (the spec's `stdin` is empty and its bound 0):
-    /// [`Completion::Spawned`] with that handle.
+    /// `proc.run`, one stage: [`Completion::Process`].
+    Run(&'a HostRun<'a>),
+    /// `proc.pipeline`, two or more stages: [`Completion::Pipeline`].
+    Pipeline(&'a HostRun<'a>),
+    /// `proc.spawn` as Child handle `child`: [`Completion::Spawned`] with that handle.
     Spawn {
         child: u64,
         spec: &'a ProcessSpec<'a>,
@@ -163,23 +168,142 @@ impl State {
             .then_some(ProcessFailure::InvalidInput)
         }))
     }
+    /// A checked `proc.run` (one stage) or `proc.pipeline`: served by a scripted world, or
+    /// by `host`, whose completion may fail, time out or exceed the bound but never
+    /// contradict the checks; cancellation never reaches it.
+    fn run_stages(
+        &mut self,
+        host: &mut dyn FnMut(HostCall<'_>) -> Result<Completion, AdapterError>,
+        process: u64,
+        stages: &[Command],
+        stdin: &[u8],
+        max_output: u64,
+        deadline: Option<Deadline>,
+    ) -> Result<PipelineOutcome, AdapterError> {
+        let (rules, world) = self.process_grant(process)?;
+        let outcome = match world {
+            // A scripted run takes no time: only a deadline the clock's latest reading
+            // already reached times it out, before any entry is taken.
+            ProcessWorld::Script(_)
+                if deadline
+                    .is_some_and(|d| self.last_monotonic.is_some_and(|now| now >= d.ticks)) =>
+            {
+                PipelineOutcome::Error(ProcessFailure::TimedOut)
+            }
+            ProcessWorld::Script(id) => {
+                let runs = self
+                    .process_scripts
+                    .get_mut(&id)
+                    .ok_or(AdapterError::InvalidCompletion)?;
+                hirsel_run_config::script_pipeline(runs, stages, max_output)
+            }
+            ProcessWorld::Host => {
+                let mut specs = vec![];
+                for stage in stages {
+                    let rule = stage
+                        .check(&rules)
+                        .map_err(|_| AdapterError::InvalidCompletion)?;
+                    specs.push(ProcessSpec::of(stage, rule));
+                }
+                let run = HostRun {
+                    stages: &specs,
+                    stdin,
+                    max_output,
+                    deadline: deadline.map(|d| d.ticks),
+                };
+                let outcome = if stages.len() == 1 {
+                    match host(HostCall::Run(&run))? {
+                        Completion::Process(ProcessOutcome::Output {
+                            status,
+                            stdout,
+                            stderr,
+                        }) => PipelineOutcome::Output {
+                            statuses: vec![status],
+                            stdout,
+                            stderr,
+                        },
+                        Completion::Process(ProcessOutcome::Error(f)) => PipelineOutcome::Error(f),
+                        _ => return Err(AdapterError::InvalidCompletion),
+                    }
+                } else {
+                    match host(HostCall::Pipeline(&run))? {
+                        Completion::Pipeline(outcome) => outcome,
+                        _ => return Err(AdapterError::InvalidCompletion),
+                    }
+                };
+                let valid = match &outcome {
+                    PipelineOutcome::Error(
+                        ProcessFailure::NotGranted
+                        | ProcessFailure::Canceled(_)
+                        | ProcessFailure::InputClosed,
+                    ) => false,
+                    PipelineOutcome::Error(ProcessFailure::InvalidInput) => {
+                        stages.iter().any(|s| s.directory.is_some())
+                    }
+                    PipelineOutcome::Error(ProcessFailure::TimedOut) => deadline.is_some(),
+                    PipelineOutcome::Error(_) => true,
+                    PipelineOutcome::Output { statuses, .. } => {
+                        statuses.len() == stages.len()
+                            && outcome.clone().bounded(max_output) == outcome
+                    }
+                };
+                if !valid {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                outcome
+            }
+        };
+        // A completed timeout proves the clock reached the deadline, as a completed timer
+        // wait does.
+        if let (PipelineOutcome::Error(ProcessFailure::TimedOut), Some(d)) = (&outcome, deadline) {
+            self.last_monotonic = Some(self.last_monotonic.unwrap_or(0).max(d.ticks));
+        }
+        Ok(outcome)
+    }
     pub(crate) fn process_error(
         &self,
         request: &Request,
     ) -> Result<Option<Completion>, AdapterError> {
         let failure = match request {
             Request::ProcessRun {
-                process, command, ..
-            }
-            | Request::ProcessSpawn { process, command } => {
+                process,
+                command,
+                deadline,
+                ..
+            } => {
                 let (rules, world) = self.process_grant(*process)?;
-                if let Request::ProcessRun {
-                    deadline: Some(d), ..
-                } = request
-                {
+                if let Some(d) = deadline {
                     self.expect(d.clock, Grant::MonotonicClock)?;
                 }
                 self.command_error(command, &rules, world)?
+            }
+            Request::ProcessSpawn { process, command } => {
+                let (rules, world) = self.process_grant(*process)?;
+                self.command_error(command, &rules, world)?
+            }
+            // Every stage passes its checks, in stage order, before anything is spawned.
+            Request::ProcessPipeline {
+                process,
+                stages,
+                deadline,
+                ..
+            } => {
+                let (rules, world) = self.process_grant(*process)?;
+                if let Some(d) = deadline {
+                    self.expect(d.clock, Grant::MonotonicClock)?;
+                }
+                if stages.is_empty() {
+                    Some(ProcessFailure::InvalidInput)
+                } else {
+                    let mut failure = None;
+                    for stage in stages {
+                        failure = self.command_error(stage, &rules, world)?;
+                        if failure.is_some() {
+                            break;
+                        }
+                    }
+                    failure
+                }
             }
             Request::ChildWrite { process, child, .. } => {
                 let (_, open) = self.child_grant(*process, *child)?;
@@ -209,6 +333,7 @@ impl State {
         };
         Ok(failure.map(|f| match request {
             Request::ProcessRun { .. } => Completion::Process(ProcessOutcome::Error(f)),
+            Request::ProcessPipeline { .. } => Completion::Pipeline(PipelineOutcome::Error(f)),
             Request::ProcessSpawn { .. } => Completion::Spawned(Err(f)),
             Request::ChildRead { .. } => Completion::ChildBytes(Err(f)),
             _ => Completion::ChildUnit(Err(f)),
@@ -280,74 +405,31 @@ impl State {
                 stdin,
                 max_output,
                 deadline,
-            } => {
-                let (rules, world) = self.process_grant(*process)?;
-                let outcome = match world {
-                    // A scripted run takes no time: only a deadline the clock's latest
-                    // reading already reached times it out, before any entry is taken.
-                    ProcessWorld::Script(_)
-                        if deadline.is_some_and(|d| {
-                            self.last_monotonic.is_some_and(|now| now >= d.ticks)
-                        }) =>
-                    {
-                        ProcessOutcome::Error(ProcessFailure::TimedOut)
-                    }
-                    ProcessWorld::Script(id) => {
-                        let runs = self
-                            .process_scripts
-                            .get_mut(&id)
-                            .ok_or(AdapterError::InvalidCompletion)?;
-                        match runs.iter_mut().find(|r| {
-                            r.as_ref().is_some_and(|r| {
-                                r.program == command.program && r.args == command.args
-                            })
-                        }) {
-                            Some(entry) => bounded(entry.take().unwrap().outcome, *max_output),
-                            None => ProcessOutcome::Error(ProcessFailure::NotFound),
-                        }
-                    }
-                    ProcessWorld::Host => {
-                        let rule = command
-                            .check(&rules)
-                            .map_err(|_| AdapterError::InvalidCompletion)?;
-                        let Completion::Process(outcome) = host(HostCall::Run(&ProcessSpec {
-                            stdin,
-                            max_output: *max_output,
-                            deadline: deadline.map(|d| d.ticks),
-                            ..ProcessSpec::of(command, rule)
-                        }))?
-                        else {
-                            return Err(AdapterError::InvalidCompletion);
-                        };
-                        // A provider can fail, time out or exceed the bound, never contradict
-                        // the checks; cancellation never reaches it.
-                        let valid = match &outcome {
-                            ProcessOutcome::Error(
-                                ProcessFailure::NotGranted
-                                | ProcessFailure::Canceled(_)
-                                | ProcessFailure::InputClosed,
-                            ) => false,
-                            ProcessOutcome::Error(ProcessFailure::InvalidInput) => {
-                                command.directory.is_some()
-                            }
-                            ProcessOutcome::Error(ProcessFailure::TimedOut) => deadline.is_some(),
-                            outcome => bounded(outcome.clone(), *max_output) == *outcome,
-                        };
-                        if !valid {
-                            return Err(AdapterError::InvalidCompletion);
-                        }
-                        outcome
-                    }
-                };
-                // A completed timeout proves the clock reached the deadline, as a
-                // completed timer wait does.
-                if let (ProcessOutcome::Error(ProcessFailure::TimedOut), Some(d)) =
-                    (&outcome, deadline)
-                {
-                    self.last_monotonic = Some(self.last_monotonic.unwrap_or(0).max(d.ticks));
-                }
-                Ok(Completion::Process(outcome))
-            }
+            } => Ok(Completion::Process(
+                self.run_stages(
+                    host,
+                    *process,
+                    std::slice::from_ref(command),
+                    stdin,
+                    *max_output,
+                    *deadline,
+                )?
+                .into_run(),
+            )),
+            Request::ProcessPipeline {
+                process,
+                stages,
+                stdin,
+                max_output,
+                deadline,
+            } => Ok(Completion::Pipeline(self.run_stages(
+                host,
+                *process,
+                stages,
+                stdin,
+                *max_output,
+                *deadline,
+            )?)),
             Request::ProcessSpawn { process, command } => {
                 let (rules, world) = self.process_grant(*process)?;
                 let child = self.handles.next();
@@ -615,6 +697,7 @@ pub(crate) fn is_process_request(request: &Request) -> bool {
         Request::Process { .. }
             | Request::TestProcess { .. }
             | Request::ProcessRun { .. }
+            | Request::ProcessPipeline { .. }
             | Request::ProcessSpawn { .. }
             | Request::ChildWrite { .. }
             | Request::ChildCloseStdin { .. }
@@ -710,19 +793,29 @@ pub(crate) fn wait_child(
     }
 }
 
-/// Kill and reap a child that is not trusted to stop.
-fn kill(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+/// Kill and reap children that are not trusted to stop.
+fn kill(children: &mut [std::process::Child]) {
+    for child in children {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
 }
 
-/// A timed-out child: SIGTERM, then SIGKILL once [`TERMINATION_GRACE`] passes, then reap.
-pub(crate) fn terminate(child: &mut std::process::Child, cancel: Option<RawFd>) {
-    // SAFETY: the child is unreaped, so its pid still names it.
-    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+/// Timed-out children: SIGTERM to each, then SIGKILL to any still running once
+/// [`TERMINATION_GRACE`] passes, then reap them all.
+pub(crate) fn terminate(children: &mut [std::process::Child], cancel: Option<RawFd>) {
+    for child in children.iter_mut() {
+        // A stage already reaped keeps its status, and its pid may name another process.
+        if matches!(child.try_wait(), Ok(None)) {
+            // SAFETY: the child is unreaped, so its pid still names it.
+            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        }
+    }
     let grace = monotonic_now() + TERMINATION_GRACE.as_nanos() as u64;
-    if !matches!(wait_child(child, Some(grace), cancel), Ok(Ended::Exited(_))) {
-        kill(child);
+    for child in children {
+        if !matches!(wait_child(child, Some(grace), cancel), Ok(Ended::Exited(_))) {
+            kill(std::slice::from_mut(child));
+        }
     }
 }
 
@@ -766,75 +859,130 @@ pub(crate) fn host_command(spec: &ProcessSpec<'_>, cwd: Option<RawFd>) -> std::p
     command
 }
 
-/// Run one checked program on the host to completion, starting in `cwd` (a pinned
-/// directory descriptor) or `/`. The run ends `TimedOut()` at its deadline, and kills the
-/// child at once when `cancel` becomes readable (its outcome is then discarded).
-pub fn run_host(
-    spec: &ProcessSpec<'_>,
-    cwd: Option<RawFd>,
-    cancel: Option<RawFd>,
-) -> ProcessOutcome {
-    use std::os::unix::process::ExitStatusExt;
-    if spec.deadline.is_some_and(|d| monotonic_now() >= d) {
-        return ProcessOutcome::Error(ProcessFailure::TimedOut);
+/// A pipe whose ends close on exec: (read, write).
+fn pipe() -> std::io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    use std::os::fd::FromRawFd;
+    let mut fds = [0; 2];
+    // SAFETY: fds is a writable pair; pipe2 fills it on success.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    let mut child = match host_command(spec, cwd).spawn() {
-        Ok(child) => child,
-        Err(error) => return ProcessOutcome::Error(spawn_failure(&error)),
+    // SAFETY: both descriptors are fresh and owned here.
+    Ok(unsafe {
+        (
+            std::os::fd::OwnedFd::from_raw_fd(fds[0]),
+            std::os::fd::OwnedFd::from_raw_fd(fds[1]),
+        )
+    })
+}
+
+/// Run a checked run or pipeline on the host to completion, stage `i` starting in
+/// `cwds[i]` (a pinned directory descriptor) or `/`. Each stage's standard output feeds
+/// the next through a pipe the program never sees, and every stage writes standard error
+/// to one shared pipe. The run ends `TimedOut()` at its deadline, and kills every child at
+/// once when `cancel` becomes readable (its outcome is then discarded). A stage that
+/// cannot start kills and reaps the stages before it.
+pub fn run_host(
+    run: &HostRun<'_>,
+    cwds: &[Option<RawFd>],
+    cancel: Option<RawFd>,
+) -> PipelineOutcome {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Stdio;
+    if run.deadline.is_some_and(|d| monotonic_now() >= d) {
+        return PipelineOutcome::Error(ProcessFailure::TimedOut);
+    }
+    let Ok((errors, error_input)) = pipe() else {
+        return PipelineOutcome::Error(ProcessFailure::Fault(1));
     };
+    let mut children: Vec<std::process::Child> = vec![];
+    let mut input = None;
+    let mut previous: Option<std::process::ChildStdout> = None;
+    for (spec, cwd) in run.stages.iter().zip(cwds) {
+        let mut command = host_command(spec, *cwd);
+        if let Some(output) = previous.take() {
+            command.stdin(Stdio::from(output));
+        }
+        let Ok(stderr) = error_input.try_clone() else {
+            kill(&mut children);
+            return PipelineOutcome::Error(ProcessFailure::Fault(1));
+        };
+        command.stderr(Stdio::from(stderr));
+        match command.spawn() {
+            Ok(mut child) => {
+                if children.is_empty() {
+                    input = child.stdin.take();
+                }
+                previous = child.stdout.take();
+                children.push(child);
+            }
+            Err(error) => {
+                kill(&mut children);
+                return PipelineOutcome::Error(spawn_failure(&error));
+            }
+        }
+    }
+    // Only the children hold the shared error pipe's write end now.
+    drop(error_input);
     let streams = without_sigpipe(|| {
         drain(
-            child.stdin.take().expect("piped stdin"),
-            spec.stdin,
-            child.stdout.take().expect("piped stdout"),
-            child.stderr.take().expect("piped stderr"),
-            spec.max_output,
-            spec.deadline,
+            input.expect("piped stdin"),
+            run.stdin,
+            std::fs::File::from(std::os::fd::OwnedFd::from(previous.expect("piped stdout"))),
+            std::fs::File::from(errors),
+            run.max_output,
+            run.deadline,
             cancel,
         )
     });
     let (stdout, stderr) = match streams {
         Ok(Drained::Done(stdout, stderr)) => (stdout, stderr),
-        // Over the bound: the child is not trusted to stop writing.
+        // Over the bound: the children are not trusted to stop writing.
         Ok(Drained::OverLimit) => {
-            kill(&mut child);
-            return ProcessOutcome::Error(ProcessFailure::OutputLimit);
+            kill(&mut children);
+            return PipelineOutcome::Error(ProcessFailure::OutputLimit);
         }
         Ok(Drained::Expired) => {
-            terminate(&mut child, cancel);
-            return ProcessOutcome::Error(ProcessFailure::TimedOut);
+            terminate(&mut children, cancel);
+            return PipelineOutcome::Error(ProcessFailure::TimedOut);
         }
         Ok(Drained::Canceled) => {
-            kill(&mut child);
-            return ProcessOutcome::Error(ProcessFailure::Canceled(0));
+            kill(&mut children);
+            return PipelineOutcome::Error(ProcessFailure::Canceled(0));
         }
         Err(_) => {
-            kill(&mut child);
-            return ProcessOutcome::Error(ProcessFailure::Fault(1));
+            kill(&mut children);
+            return PipelineOutcome::Error(ProcessFailure::Fault(1));
         }
     };
-    let status = match wait_child(&mut child, spec.deadline, cancel) {
-        Ok(Ended::Exited(status)) => status,
-        Ok(Ended::Expired) => {
-            terminate(&mut child, cancel);
-            return ProcessOutcome::Error(ProcessFailure::TimedOut);
-        }
-        Ok(Ended::Canceled) => {
-            kill(&mut child);
-            return ProcessOutcome::Error(ProcessFailure::Canceled(0));
-        }
-        Err(_) => {
-            kill(&mut child);
-            return ProcessOutcome::Error(ProcessFailure::Fault(1));
-        }
-    };
-    let status = match (status.code(), status.signal()) {
-        (Some(code), _) => ExitStatus::Exited(code),
-        (None, Some(signal)) => ExitStatus::Signaled(signal),
-        (None, None) => return ProcessOutcome::Error(ProcessFailure::Fault(1)),
-    };
-    ProcessOutcome::Output {
-        status,
+    let mut statuses = vec![];
+    for index in 0..children.len() {
+        let status = match wait_child(&mut children[index], run.deadline, cancel) {
+            Ok(Ended::Exited(status)) => status,
+            Ok(Ended::Expired) => {
+                terminate(&mut children, cancel);
+                return PipelineOutcome::Error(ProcessFailure::TimedOut);
+            }
+            Ok(Ended::Canceled) => {
+                kill(&mut children);
+                return PipelineOutcome::Error(ProcessFailure::Canceled(0));
+            }
+            Err(_) => {
+                kill(&mut children);
+                return PipelineOutcome::Error(ProcessFailure::Fault(1));
+            }
+        };
+        statuses.push(match (status.code(), status.signal()) {
+            (Some(code), _) => ExitStatus::Exited(code),
+            (None, Some(signal)) => ExitStatus::Signaled(signal),
+            (None, None) => {
+                kill(&mut children);
+                return PipelineOutcome::Error(ProcessFailure::Fault(1));
+            }
+        });
+    }
+    PipelineOutcome::Output {
+        statuses,
         stdout,
         stderr,
     }
@@ -848,11 +996,13 @@ pub fn run_host(
 pub(crate) struct HostJob {
     wake: std::os::unix::net::UnixStream,
     cancel: std::os::unix::net::UnixStream,
-    result: std::sync::mpsc::Receiver<ProcessOutcome>,
+    result: std::sync::mpsc::Receiver<PipelineOutcome>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl HostJob {
-    fn start(body: impl FnOnce(RawFd) -> ProcessOutcome + Send + 'static) -> std::io::Result<Self> {
+    fn start(
+        body: impl FnOnce(RawFd) -> PipelineOutcome + Send + 'static,
+    ) -> std::io::Result<Self> {
         use std::os::unix::net::UnixStream;
         let (wake, signal) = UnixStream::pair()?;
         let (cancel, canceled) = UnixStream::pair()?;
@@ -885,8 +1035,8 @@ impl Drop for HostJob {
 /// begins it the first time. A job that cannot start is a host fault.
 pub(crate) fn cooperative_job(
     readiness: &crate::readiness::Readiness,
-    start: impl FnOnce() -> Option<Box<dyn FnOnce(RawFd) -> ProcessOutcome + Send>>,
-) -> Result<ProcessOutcome, AdapterError> {
+    start: impl FnOnce() -> Option<Box<dyn FnOnce(RawFd) -> PipelineOutcome + Send>>,
+) -> Result<PipelineOutcome, AdapterError> {
     let mut pending = readiness.pending();
     if let Some(job) = &pending.process {
         return match job.result.try_recv() {
@@ -899,7 +1049,7 @@ pub(crate) fn cooperative_job(
         };
     }
     let Some(body) = start() else {
-        return Ok(ProcessOutcome::Error(ProcessFailure::Fault(1)));
+        return Ok(PipelineOutcome::Error(ProcessFailure::Fault(1)));
     };
     match HostJob::start(body) {
         Ok(job) => {
@@ -907,43 +1057,64 @@ pub(crate) fn cooperative_job(
             pending.process = Some(job);
             Err(AdapterError::Blocked)
         }
-        Err(_) => Ok(ProcessOutcome::Error(ProcessFailure::Fault(1))),
+        Err(_) => Ok(PipelineOutcome::Error(ProcessFailure::Fault(1))),
     }
 }
 
 /// `run_host` for the entered cooperative token, as a [`HostJob`].
 pub(crate) fn run_cooperative(
     readiness: &crate::readiness::Readiness,
-    spec: &ProcessSpec<'_>,
-    cwd: Option<RawFd>,
-) -> Result<ProcessOutcome, AdapterError> {
+    run: &HostRun<'_>,
+    cwds: &[Option<RawFd>],
+) -> Result<PipelineOutcome, AdapterError> {
     cooperative_job(readiness, || {
-        let program = spec.program.to_owned();
-        let args = spec.args.to_vec();
-        let stdin = spec.stdin.to_vec();
-        let env = spec.env.clone();
-        let (directory, max_output, deadline) = (spec.directory, spec.max_output, spec.deadline);
-        // The thread keeps its own descriptor of the working directory.
-        let cwd = match cwd {
-            // SAFETY: the pinned directory descriptor is live for this call.
-            Some(fd) => Some(
-                unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
+        let stages: Vec<_> = run
+            .stages
+            .iter()
+            .map(|s| {
+                (
+                    s.program.to_owned(),
+                    s.args.to_vec(),
+                    s.env.clone(),
+                    s.directory,
+                )
+            })
+            .collect();
+        let stdin = run.stdin.to_vec();
+        let (max_output, deadline) = (run.max_output, run.deadline);
+        // The thread keeps its own descriptors of the working directories.
+        let cwds = cwds
+            .iter()
+            .map(|cwd| match cwd {
+                // SAFETY: the pinned directory descriptor is live for this call.
+                Some(fd) => unsafe { std::os::fd::BorrowedFd::borrow_raw(*fd) }
                     .try_clone_to_owned()
-                    .ok()?,
-            ),
-            None => None,
-        };
+                    .ok()
+                    .map(Some),
+                None => Some(None),
+            })
+            .collect::<Option<Vec<_>>>()?;
         Some(Box::new(move |cancel| {
-            let spec = ProcessSpec {
-                program: &program,
-                args: &args,
+            let specs: Vec<ProcessSpec<'_>> = stages
+                .iter()
+                .map(|(program, args, env, directory)| ProcessSpec {
+                    program,
+                    args,
+                    env: env.clone(),
+                    directory: *directory,
+                })
+                .collect();
+            let run = HostRun {
+                stages: &specs,
                 stdin: &stdin,
-                env,
-                directory,
                 max_output,
                 deadline,
             };
-            run_host(&spec, cwd.as_ref().map(AsRawFd::as_raw_fd), Some(cancel))
+            let cwds: Vec<_> = cwds
+                .iter()
+                .map(|c| c.as_ref().map(AsRawFd::as_raw_fd))
+                .collect();
+            run_host(&run, &cwds, Some(cancel))
         }))
     })
 }
@@ -990,8 +1161,8 @@ enum Drained {
 fn drain(
     stdin: std::process::ChildStdin,
     input: &[u8],
-    mut stdout: std::process::ChildStdout,
-    mut stderr: std::process::ChildStderr,
+    mut stdout: std::fs::File,
+    mut stderr: std::fs::File,
     max: u64,
     deadline: Option<u64>,
     cancel: Option<RawFd>,
@@ -1317,6 +1488,85 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
         ProcessOutcome::Error(failure) => {
             result.tag = 1;
             (result.kind, result.code) = failure_parts(failure);
+        }
+    }
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+
+/// `Result[PipelineOutput, ProcessError]`. Ok: the statuses List block at 8, stdout at 16,
+/// stderr at 40. Error: ProcessError (u32 tag, Fault's u32) at 8.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PipelineResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub statuses: u64,
+    pub stdout: crate::views::Slice,
+    pub stderr: crate::views::Slice,
+}
+
+/// `proc.pipeline(p, stages, stdin, max_output, deadline)`.
+/// # Safety
+/// Context is bound; Proc, the List[Command] block, the Bytes slice and the
+/// `Option[Deadline]` are borrowed live values; out is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut PipelineResult,
+    process: *const u64,
+    stages: *mut crate::Header,
+    stdin_owner: *mut crate::Header,
+    stdin_start: u64,
+    stdin_length: u64,
+    max_output: u64,
+    deadline: *const u8,
+) -> u8 {
+    let request = Request::ProcessPipeline {
+        process: unsafe { process.read() },
+        stages: unsafe { list(stages, 40, |at| command(ctx, at)) },
+        stdin: unsafe { crate::io::slice_bytes(stdin_owner, stdin_start, stdin_length) }.to_vec(),
+        max_output,
+        deadline: unsafe { deadline_of(deadline) },
+    };
+    let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Pipeline(outcome) = completion else {
+        crate::fault("pipeline completion mismatch")
+    };
+    // Zero padding and the inactive arm; no pointer is made from error bits.
+    let mut result: PipelineResult = unsafe { std::mem::zeroed() };
+    match outcome {
+        PipelineOutcome::Output {
+            statuses,
+            stdout,
+            stderr,
+        } => {
+            // ExitStatus is pointer-free (u32 tag, i32 at 4), like the runtime address list.
+            let block =
+                unsafe { crate::alloc::allocate_sequence(ctx, 0, statuses.len() as u64, 8, 4) };
+            let first = crate::alloc::sequence_elements_offset(4) as usize;
+            for (index, status) in statuses.into_iter().enumerate() {
+                let (kind, code) = match status {
+                    ExitStatus::Exited(code) => (0u32, code as u32),
+                    ExitStatus::Signaled(signal) => (1, signal as u32),
+                };
+                unsafe {
+                    let slot = crate::alloc::payload(block).add(first + index * 8);
+                    slot.cast::<u32>().write(kind);
+                    slot.add(4).cast::<u32>().write(code);
+                }
+            }
+            result.statuses = block as u64;
+            result.stdout = unsafe { crate::text::allocate_bytes(ctx, &stdout) };
+            result.stderr = unsafe { crate::text::allocate_bytes(ctx, &stderr) };
+        }
+        PipelineOutcome::Error(failure) => {
+            result.tag = 1;
+            let (kind, code) = failure_parts(failure);
+            result.statuses = u64::from(kind) | u64::from(code) << 32;
         }
     }
     unsafe { out.write(result) };

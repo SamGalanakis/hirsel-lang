@@ -43,6 +43,12 @@
       ]
     },
     {
+      "path": "process.hir",
+      "module": [
+        "process"
+      ]
+    },
+    {
       "path": "list.hir",
       "module": [
         "list"

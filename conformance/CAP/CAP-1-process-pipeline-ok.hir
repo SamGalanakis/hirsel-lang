@@ -1,0 +1,20 @@
+// rule: CAP-1
+// expect: accept
+// A Dir names each stage's working directory; it is not authority to run a pipeline.
+pub fn counted(p: Proc, d: Dir) -> Result[PipelineOutput, ProcessError] {
+  proc.pipeline(
+    p,
+    [
+      Command(program: path.of("/usr/bin/sort"), args: [], dir: Some(d), env: None()),
+      Command(
+        program: path.of("/usr/bin/uniq"),
+        args: ["-c"],
+        dir: Some(d),
+        env: None()
+      )
+    ],
+    b"b\na\nb\n",
+    65536,
+    None()
+  )
+}

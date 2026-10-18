@@ -9,9 +9,9 @@ use super::{
 };
 use crate::{Error, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_run_config::{
-    ChildRun, ChildStep, ChildStream, Command, ExitStatus, ProcessFailure, ProcessGrant,
-    ProcessOutcome, ProcessRule, ProcessRun, ProviderContract, ScriptChild, ScriptRead, Signal,
-    bounded, canonical_program, scriptable,
+    ChildRun, ChildStep, ChildStream, Command, ExitStatus, PipelineOutcome, ProcessFailure,
+    ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, ProviderContract, ScriptChild,
+    ScriptRead, Signal, canonical_program, script_pipeline, scriptable,
 };
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
@@ -168,6 +168,92 @@ pub fn decode_completion(bytes: &[u8]) -> Option<ProcessOutcome> {
         )
         .map(ProcessOutcome::Error),
         _ => None,
+    }
+}
+
+/// The recorded pipeline completion: `0`, the u64 status count, each status as a tag byte
+/// and its i32, then u64-framed stdout and stderr; or `1, ordinal, code`. Integers are
+/// little endian.
+pub fn encode_pipeline(outcome: &PipelineOutcome) -> Vec<u8> {
+    match outcome {
+        PipelineOutcome::Output {
+            statuses,
+            stdout,
+            stderr,
+        } => {
+            let mut out = vec![0];
+            out.extend_from_slice(&(statuses.len() as u64).to_le_bytes());
+            for status in statuses {
+                let (tag, code) = match status {
+                    ExitStatus::Exited(code) => (0, code),
+                    ExitStatus::Signaled(signal) => (1, signal),
+                };
+                out.push(tag);
+                out.extend_from_slice(&code.to_le_bytes());
+            }
+            for stream in [stdout, stderr] {
+                out.extend_from_slice(&(stream.len() as u64).to_le_bytes());
+                out.extend_from_slice(stream);
+            }
+            out
+        }
+        PipelineOutcome::Error(failure) => encode_completion(&ProcessOutcome::Error(*failure)),
+    }
+}
+pub fn decode_pipeline(bytes: &[u8]) -> Option<PipelineOutcome> {
+    fn word<const N: usize>(bytes: &[u8], at: usize) -> Option<[u8; N]> {
+        bytes.get(at..at.checked_add(N)?)?.try_into().ok()
+    }
+    if *bytes.first()? != 0 {
+        return decode_completion(bytes).map(PipelineOutcome::from);
+    }
+    let count = usize::try_from(u64::from_le_bytes(word(bytes, 1)?)).ok()?;
+    let mut at = 9;
+    let mut statuses = vec![];
+    for _ in 0..count {
+        let code = i32::from_le_bytes(word(bytes, at + 1)?);
+        statuses.push(match *bytes.get(at)? {
+            0 => ExitStatus::Exited(code),
+            1 => ExitStatus::Signaled(code),
+            _ => return None,
+        });
+        at += 5;
+    }
+    let mut streams = vec![];
+    for _ in 0..2 {
+        let len = usize::try_from(u64::from_le_bytes(word(bytes, at)?)).ok()?;
+        at += 8;
+        streams.push(bytes.get(at..at.checked_add(len)?)?.to_vec());
+        at += len;
+    }
+    let stderr = streams.pop()?;
+    let stdout = streams.pop()?;
+    (at == bytes.len()).then_some(PipelineOutcome::Output {
+        statuses,
+        stdout,
+        stderr,
+    })
+}
+
+/// `Result[PipelineOutput, ProcessError]` for one completion.
+pub fn pipeline_value(outcome: &PipelineOutcome) -> Value {
+    match outcome {
+        PipelineOutcome::Output {
+            statuses,
+            stdout,
+            stderr,
+        } => ok(Value::Record {
+            definition: hirsel_syntax::DefPath::core("PipelineOutput"),
+            fields: vec![
+                Some(collection::sequence(
+                    BuiltinType::List,
+                    statuses.iter().map(|s| status_value(*s)),
+                )),
+                Some(Value::Bytes(stdout.clone())),
+                Some(Value::Bytes(stderr.clone())),
+            ],
+        }),
+        PipelineOutcome::Error(failure) => error(failure_value(*failure)),
     }
 }
 
@@ -420,11 +506,18 @@ impl Simulation {
                 self.record("Test", name, encode_arguments(a), encode_value(&value), cx)?;
                 value
             }
-            "proc.run" => {
+            "proc.run" | "proc.pipeline" => {
                 let (world, rules) = self.process_grant(arg(a, 0)?)?;
-                let command = self.command(arg(a, 1)?)?;
+                let stages = if name == "proc.run" {
+                    vec![self.command(arg(a, 1)?)?]
+                } else {
+                    collection::elements(arg(a, 1)?, BuiltinType::List)?
+                        .iter()
+                        .map(|stage| self.command(stage))
+                        .collect::<Result<Vec<_>, _>>()?
+                };
                 bytes(arg(a, 2)?)?;
-                let with_dir = command.directory.is_some();
+                let with_dir = stages.iter().any(|s| s.directory.is_some());
                 let max_output = match arg(a, 3)? {
                     Value::Integer(n) if n.kind() == Primitive::U64 => n.bits() as u64,
                     _ => return Err(invalid("max_output requires u64")),
@@ -437,37 +530,53 @@ impl Simulation {
                     return Err(invalid("expected MonotonicClock"));
                 }
                 let deadline = deadline.map(|(_, ticks)| ticks);
-                let checked = command.check(&rules).map(|_| ()).and_then(|()| {
+                // Every stage's checks, in stage order, precede cancellation.
+                let checked = if stages.is_empty() {
+                    Err(ProcessFailure::InvalidInput)
+                } else {
+                    stages
+                        .iter()
+                        .try_for_each(|stage| stage.check(&rules).map(|_| ()))
+                }
+                .and_then(|()| {
                     canceled.map_or(Ok(()), |cause| Err(ProcessFailure::Canceled(cause)))
                 });
                 let request = encode_arguments(a);
                 let outcome = if let Some(recorded) = self.replay_output("Proc", name, &request)? {
-                    // Replay re-derives the program check; a contradicting completion refuses.
-                    let outcome = decode_completion(recorded)
-                        .ok_or_else(|| invalid("invalid process tape completion"))?;
+                    // Replay re-derives the program checks; a contradicting completion refuses.
+                    let outcome = if name == "proc.run" {
+                        decode_completion(recorded).map(PipelineOutcome::from)
+                    } else {
+                        decode_pipeline(recorded)
+                    }
+                    .ok_or_else(|| invalid("invalid process tape completion"))?;
                     let consistent = match (&checked, &outcome) {
-                        (Err(expected), ProcessOutcome::Error(found)) => expected == found,
+                        (Err(expected), PipelineOutcome::Error(found)) => expected == found,
                         (Err(_), _) => false,
                         (
                             Ok(()),
-                            ProcessOutcome::Error(
+                            PipelineOutcome::Error(
                                 ProcessFailure::NotGranted
                                 | ProcessFailure::Canceled(_)
                                 | ProcessFailure::InputClosed,
                             ),
                         ) => false,
-                        (Ok(()), ProcessOutcome::Error(ProcessFailure::InvalidInput)) => with_dir,
-                        (Ok(()), ProcessOutcome::Error(ProcessFailure::TimedOut)) => {
+                        (Ok(()), PipelineOutcome::Error(ProcessFailure::InvalidInput)) => with_dir,
+                        (Ok(()), PipelineOutcome::Error(ProcessFailure::TimedOut)) => {
                             deadline.is_some()
                         }
-                        (Ok(()), outcome) => bounded(outcome.clone(), max_output) == *outcome,
+                        (Ok(()), PipelineOutcome::Error(_)) => true,
+                        (Ok(()), PipelineOutcome::Output { statuses, .. }) => {
+                            statuses.len() == stages.len()
+                                && outcome.clone().bounded(max_output) == outcome
+                        }
                     };
                     if !consistent {
                         return Err(invalid("process tape completion contradicts its grant"));
                     }
                     outcome
                 } else if let Err(failure) = checked {
-                    ProcessOutcome::Error(failure)
+                    PipelineOutcome::Error(failure)
                 } else if world == 0
                     && self.config.process.as_ref().is_some_and(|p| {
                         ProviderContract::parse(&p.provider) == Some(ProviderContract::ProcessSpawn)
@@ -479,22 +588,22 @@ impl Simulation {
                     )));
                 } else if deadline.is_some_and(|ticks| ticks <= self.monotonic_now()) {
                     // A scripted run takes no time: only a reached deadline times it out.
-                    ProcessOutcome::Error(ProcessFailure::TimedOut)
+                    PipelineOutcome::Error(ProcessFailure::TimedOut)
                 } else {
                     let runs = self
                         .process_worlds
                         .get_mut(&world)
                         .ok_or_else(|| invalid("missing process world"))?;
-                    match runs.iter_mut().find(|r| {
-                        r.as_ref()
-                            .is_some_and(|r| r.program == command.program && r.args == command.args)
-                    }) {
-                        Some(entry) => bounded(entry.take().unwrap().outcome, max_output),
-                        None => ProcessOutcome::Error(ProcessFailure::NotFound),
-                    }
+                    script_pipeline(runs, &stages, max_output)
                 };
-                self.record("Proc", name, request, encode_completion(&outcome), cx)?;
-                outcome_value(&outcome)
+                if name == "proc.run" {
+                    let outcome = outcome.into_run();
+                    self.record("Proc", name, request, encode_completion(&outcome), cx)?;
+                    outcome_value(&outcome)
+                } else {
+                    self.record("Proc", name, request, encode_pipeline(&outcome), cx)?;
+                    pipeline_value(&outcome)
+                }
             }
             "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout"
             | "child.read_stderr" | "child.wait" | "child.kill" => {

@@ -532,8 +532,9 @@ rules. `proc.run` returns Canceled in a cancelled scope, then checks its `Comman
 and a well-formed exact environment, InvalidInput; the exact rule and its environment
 names, NotGranted); a deadline virtual time has reached is TimedOut, and otherwise it
 serves the first unused `process.script@1` or `test.process` entry with equal program
-and args (none: NotFound), bounding each stream by `max_output` (OutputLimit). It
-never spawns: the driver's host library sends `process.spawn@1` runs to the runtime.
+and args (none: NotFound), bounding each stream by `max_output` (OutputLimit).
+`proc.pipeline` checks every stage, then takes one entry per stage, all or none, with
+`hirsel_run_config::script_pipeline`; `proc.run` is its one-stage case. It never spawns: the driver's host library sends `process.spawn@1` runs to the runtime.
 Replay takes the recorded completion and re-derives the checks; a contradiction
 refuses. `proc.spawn` makes the same checks and plays the first unused scripted child
 entry with `hirsel_run_config::ScriptChild`, minting a `Child` grant of its Proc. A read

@@ -320,6 +320,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "status: ExitStatus,stdout: Bytes,stderr: Bytes",
         ),
         (
+            "PipelineOutput",
+            "",
+            "statuses: List[ExitStatus],stdout: Bytes,stderr: Bytes",
+        ),
+        (
             "ProcessScript",
             "",
             "program: String,args: List[String],outcome: Result[ProcessOutput,ProcessError]",

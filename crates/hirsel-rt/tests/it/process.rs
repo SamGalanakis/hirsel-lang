@@ -359,6 +359,193 @@ fn host_runs_record_and_replay_without_spawning() {
     }
 }
 
+fn pipeline(process: u64, stages: &[(&str, &[&str])], stdin: &[u8], max: u64) -> Request {
+    Request::ProcessPipeline {
+        process,
+        stages: stages
+            .iter()
+            .map(|(program, args)| command(program, args))
+            .collect(),
+        stdin: stdin.to_vec(),
+        max_output: max,
+        deadline: None,
+    }
+}
+
+fn piped(statuses: &[ExitStatus], stdout: &[u8], stderr: &[u8]) -> Completion {
+    Completion::Pipeline(PipelineOutcome::Output {
+        statuses: statuses.to_vec(),
+        stdout: stdout.to_vec(),
+        stderr: stderr.to_vec(),
+    })
+}
+
+/// `printf | sort | uniq -c` on the host: each stage's output feeds the next without
+/// passing through the program, every status is reported, and every stage shares one
+/// standard error. Go os/exec's TestIgnorePipeErrorOnSuccess (exec_test.go, adapted;
+/// third-party/NOTICES.md) is the early-exit case: a stage that stops reading ends its
+/// upstream with SIGPIPE, which the statuses report rather than hide.
+#[test]
+fn host_pipelines_connect_stages_and_report_every_status() {
+    let (_temp, mut io, p) = host(&[
+        ("/usr/bin/printf", &[]),
+        ("/usr/bin/sort", &[]),
+        ("/usr/bin/uniq", &[]),
+        ("/usr/bin/yes", &[]),
+        ("/usr/bin/head", &[]),
+        (SH, &[]),
+        ("/bin/sleep", &[]),
+        ("/bin/cat", &[]),
+        ("/no/such/program", &[]),
+    ]);
+    let counted = pipeline(
+        p,
+        &[
+            ("/usr/bin/printf", &["b\\na\\nb\\n"]),
+            ("/usr/bin/sort", &[]),
+            ("/usr/bin/uniq", &["-c"]),
+        ],
+        b"",
+        4096,
+    );
+    let ok = [ExitStatus::Exited(0); 3];
+    assert_eq!(
+        io.call(counted),
+        Ok(piped(&ok, b"      1 a\n      2 b\n", b""))
+    );
+    // The program's input feeds the first stage.
+    assert_eq!(
+        io.call(pipeline(
+            p,
+            &[("/usr/bin/sort", &[]), ("/bin/cat", &[])],
+            b"b\na\n",
+            64
+        )),
+        Ok(piped(&ok[..2], b"a\nb\n", b""))
+    );
+    assert_eq!(
+        io.call(pipeline(
+            p,
+            &[("/usr/bin/yes", &[]), ("/usr/bin/head", &["-n1"])],
+            b"",
+            64
+        )),
+        Ok(piped(
+            &[ExitStatus::Signaled(13), ExitStatus::Exited(0)],
+            b"y\n",
+            b""
+        ))
+    );
+    // Both stages write to the one shared standard error, here in a fixed order.
+    assert_eq!(
+        io.call(pipeline(
+            p,
+            &[
+                (SH, &["-c", "echo one >&2; echo data"]),
+                (SH, &["-c", "cat; echo two >&2; exit 3"]),
+            ],
+            b"",
+            64
+        )),
+        Ok(piped(
+            &[ExitStatus::Exited(0), ExitStatus::Exited(3)],
+            b"data\n",
+            b"one\ntwo\n"
+        ))
+    );
+    // The bound covers the captured streams; an unbounded producer is killed.
+    assert_eq!(
+        io.call(pipeline(
+            p,
+            &[("/usr/bin/yes", &[]), ("/bin/cat", &[])],
+            b"",
+            4096
+        )),
+        Ok(Completion::Pipeline(PipelineOutcome::Error(
+            ProcessFailure::OutputLimit
+        )))
+    );
+    // A stage that cannot start kills and reaps the stages started before it.
+    let begun = std::time::Instant::now();
+    assert_eq!(
+        io.call(pipeline(
+            p,
+            &[("/bin/sleep", &["30"]), ("/no/such/program", &[])],
+            b"",
+            64
+        )),
+        Ok(Completion::Pipeline(PipelineOutcome::Error(
+            ProcessFailure::NotFound
+        )))
+    );
+    assert!(begun.elapsed() < std::time::Duration::from_secs(10));
+    // A deadline ends every stage.
+    let (clock, now) = clock(&mut io);
+    let mut timed = pipeline(p, &[("/bin/sleep", &["30"]), ("/bin/cat", &[])], b"", 64);
+    let Request::ProcessPipeline { deadline, .. } = &mut timed else {
+        unreachable!()
+    };
+    *deadline = Some(Deadline {
+        clock,
+        ticks: now + 100_000_000,
+    });
+    assert_eq!(
+        io.call(timed),
+        Ok(Completion::Pipeline(PipelineOutcome::Error(
+            ProcessFailure::TimedOut
+        )))
+    );
+    assert!(begun.elapsed() < std::time::Duration::from_secs(10));
+}
+
+#[test]
+fn host_pipelines_record_and_replay_without_spawning() {
+    use hirsel_rt::launch::{parse_tape, render_tape};
+    let rules: &[(&str, &[&str])] = &[("/usr/bin/sort", &[]), ("/bin/cat", &[])];
+    let (_temp, mut io, p) = host(rules);
+    io.call(pipeline(
+        p,
+        &[("/usr/bin/sort", &[]), ("/bin/cat", &[])],
+        b"b\na\n",
+        64,
+    ))
+    .unwrap();
+    io.call(pipeline(
+        p,
+        &[("/usr/bin/sort", &[]), ("/bin/sh", &[])],
+        b"",
+        64,
+    ))
+    .unwrap();
+    io.call(pipeline(p, &[], b"", 64)).unwrap();
+    let tape = io.tape().to_vec();
+    assert_eq!(tape.len(), 4);
+    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    let replay = |tape: Vec<Event>| {
+        let mut sim = SimIo::new(Tree::default(), tape.clone());
+        sim.set_process_grant(&grant(rules));
+        tape.iter()
+            .map(|event| sim.call(event.request.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        replay(tape.clone()),
+        tape.iter()
+            .map(|e| Ok(e.completion.clone()))
+            .collect::<Vec<_>>()
+    );
+    // A recorded completion with the wrong number of statuses, or past the bound,
+    // contradicts the request.
+    for forged in [
+        piped(&[ExitStatus::Exited(0)], b"a\nb\n", b""),
+        piped(&[ExitStatus::Exited(0); 2], &[0; 65], b""),
+    ] {
+        let mut tape = tape.clone();
+        tape[1].completion = forged;
+        assert!(replay(tape)[1].is_err());
+    }
+}
+
 #[test]
 fn scripted_worlds_serve_matching_entries_in_order() {
     let runs = vec![

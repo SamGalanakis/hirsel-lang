@@ -1,0 +1,54 @@
+// rule: CONC-3
+// expect: run
+// process: {"provider":"process.script@1","rules":[{"program":"/bin/test"}],"runs":[],"children":[]}
+// A pipeline's program errors, in every stage, precede cancellation; a pipeline that
+// passes its checks in a cancelled task returns Canceled without running.
+fn stage(program: String) -> Command {
+  Command(program: path.of(program), args: [], dir: None(), env: None())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let p = io.process(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() -> bool {
+          let mut r = take receiver
+          let _ = channel.receive(tasks, mut r)
+          let ungranted: bool = match proc.pipeline(
+            p,
+            [stage("/bin/test"), stage("/bin/echo")],
+            b"",
+            64,
+            None()
+          ) {
+            Error(NotGranted()) => true,
+            _ => false,
+          }
+          let empty: bool = match proc.pipeline(p, [], b"", 64, None()) {
+            Error(InvalidInput()) => true,
+            _ => false,
+          }
+          let valid: bool = match proc.pipeline(
+            p,
+            [stage("/bin/test"), stage("/bin/test")],
+            b"",
+            64,
+            None()
+          ) {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          ungranted && empty && valid
+        }
+      )
+      task.cancel(s, h)
+      failure.check(task.await(s, take h), Arithmetic())
+    }
+  )
+  Ok(())
+}

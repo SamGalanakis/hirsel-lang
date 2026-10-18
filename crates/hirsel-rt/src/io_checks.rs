@@ -177,6 +177,9 @@ pub fn cancel(
         R::Print { .. } | R::PrintStderr { .. } => C::Unit(Err(IoError::Canceled(cause))),
         R::SleepUntil { .. } => C::Wait(Err(WaitError::Canceled(cause))),
         R::ProcessRun { .. } => C::Process(ProcessOutcome::Error(ProcessFailure::Canceled(cause))),
+        R::ProcessPipeline { .. } => C::Pipeline(hirsel_run_config::PipelineOutcome::Error(
+            ProcessFailure::Canceled(cause),
+        )),
         R::ProcessSpawn { .. } => C::Spawned(Err(ProcessFailure::Canceled(cause))),
         R::ChildWrite { .. } => C::ChildUnit(Err(ProcessFailure::Canceled(cause))),
         R::ChildRead { .. } => C::ChildBytes(Err(ProcessFailure::Canceled(cause))),

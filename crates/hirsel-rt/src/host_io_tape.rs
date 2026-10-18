@@ -1,7 +1,9 @@
 //! Additional typed tape forms for host streams, exact environment reads, processes,
 //! random draws and timer waits.
 use crate::io::{ClockError, Completion, EnvError, InputError, RandomError, Request, WaitError};
-use hirsel_run_config::{ChildStream, ExitStatus, ProcessFailure, ProcessOutcome, Signal, hex};
+use hirsel_run_config::{
+    ChildStream, ExitStatus, PipelineOutcome, ProcessFailure, ProcessOutcome, Signal, hex,
+};
 
 fn failure_word(failure: ProcessFailure) -> String {
     match failure {
@@ -87,6 +89,26 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         Request::ProcessSpawn { process, command } => {
             format!("process_spawn {process} {}", command_words(command))
         }
+        // The stage count leads, so the words after it are that many commands.
+        Request::ProcessPipeline {
+            process,
+            stages,
+            stdin,
+            max_output,
+            deadline,
+        } => {
+            let mut text = format!(
+                "process_pipeline {process} {} {max_output} {} {}",
+                hex(stdin),
+                deadline_word(*deadline),
+                stages.len()
+            );
+            for stage in stages {
+                text.push(' ');
+                text.push_str(&command_words(stage));
+            }
+            text
+        }
         Request::ChildWrite {
             process,
             child,
@@ -169,6 +191,26 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         }
         Completion::Process(ProcessOutcome::Error(failure)) => {
             format!("process error {}", failure_word(*failure))
+        }
+        Completion::Pipeline(PipelineOutcome::Output {
+            statuses,
+            stdout,
+            stderr,
+        }) => {
+            let mut text = format!(
+                "pipeline ok {} {} {}",
+                hex(stdout),
+                hex(stderr),
+                statuses.len()
+            );
+            for status in statuses {
+                text.push(' ');
+                text.push_str(&status_words(*status));
+            }
+            text
+        }
+        Completion::Pipeline(PipelineOutcome::Error(failure)) => {
+            format!("pipeline error {}", failure_word(*failure))
         }
         Completion::Spawned(Ok(child)) => format!("spawned ok {child}"),
         Completion::ChildUnit(Ok(())) => "child_unit ok".into(),
@@ -326,6 +368,34 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             deadline: parse_deadline(deadline)?,
             command: parse_command(&mut rest.iter().copied()).and_then(ended(rest))?,
         },
+        [
+            "process_pipeline",
+            process,
+            stdin,
+            max_output,
+            deadline,
+            count,
+            rest @ ..,
+        ] => {
+            let mut words = rest.iter().copied();
+            let mut used = 0;
+            let mut stages = vec![];
+            for _ in 0..number::<usize>(count)? {
+                let (stage, n) = parse_command(&mut words)?;
+                used += n;
+                stages.push(stage);
+            }
+            if used != rest.len() {
+                return Err("trailing process tape words".into());
+            }
+            Request::ProcessPipeline {
+                process: number(process)?,
+                stages,
+                stdin: bytes(stdin)?,
+                max_output: number(max_output)?,
+                deadline: parse_deadline(deadline)?,
+            }
+        }
         ["process_spawn", process, rest @ ..] => Request::ProcessSpawn {
             process: number(process)?,
             command: parse_command(&mut rest.iter().copied()).and_then(ended(rest))?,
@@ -421,6 +491,29 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         }
         ["process", "error", failure @ ..] => {
             Completion::Process(ProcessOutcome::Error(parse_failure(failure)?))
+        }
+        ["pipeline", "ok", stdout, stderr, count, statuses @ ..] => {
+            if statuses.len() != number::<usize>(count)?.saturating_mul(2) {
+                return Err("process tape status count".into());
+            }
+            Completion::Pipeline(PipelineOutcome::Output {
+                statuses: statuses
+                    .chunks(2)
+                    .map(|pair| {
+                        let code = number(pair[1])?;
+                        match pair[0] {
+                            "exited" => Ok(ExitStatus::Exited(code)),
+                            "signaled" => Ok(ExitStatus::Signaled(code)),
+                            _ => Err("bad process tape status".to_string()),
+                        }
+                    })
+                    .collect::<Result<_, _>>()?,
+                stdout: bytes(stdout)?,
+                stderr: bytes(stderr)?,
+            })
+        }
+        ["pipeline", "error", failure @ ..] => {
+            Completion::Pipeline(PipelineOutcome::Error(parse_failure(failure)?))
         }
         ["spawned", "ok", child] => Completion::Spawned(Ok(number(child)?)),
         ["child_unit", "ok"] => Completion::ChildUnit(Ok(())),

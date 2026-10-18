@@ -60,6 +60,7 @@ conformance/CAP/CAP-1-output-no-added-newline.hir
 conformance/CAP/CAP-1-process-child-signal-run.hir
 conformance/CAP/CAP-1-process-env-run.hir
 conformance/CAP/CAP-1-process-env-scripted-run.hir
+conformance/CAP/CAP-1-process-pipeline-scripted-run.hir
 conformance/CAP/CAP-1-process-projection-bad.hir
 conformance/CAP/CAP-1-process-projection-ok.hir
 conformance/CAP/CAP-1-process-run-bad.hir
@@ -533,6 +534,7 @@ conformance/CONC/CONC-3-clock-deadline-receive-run.hir
 conformance/CONC/CONC-3-clock-deadline-sleep-run.hir
 conformance/CONC/CONC-3-clock-deadline-tls-run.hir
 conformance/CONC/CONC-3-clock-denied-run.hir
+conformance/CONC/CONC-3-clock-pipeline-deadline-run.hir
 conformance/CONC/CONC-3-clock-process-deadline-run.hir
 conformance/CONC/CONC-3-clock-process-races-run.hir
 conformance/CONC/CONC-3-clock-sleep-duration-run.hir
@@ -540,6 +542,7 @@ conformance/CONC/CONC-3-clock-sleep-order-run.hir
 conformance/CONC/CONC-3-clock-tied-timers-run.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
 conformance/CONC/CONC-3-http-client-deadline-run.hir
+conformance/CONC/CONC-3-process-pipeline-canceled-run.hir
 conformance/CONC/CONC-3-process-run-canceled-run.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir

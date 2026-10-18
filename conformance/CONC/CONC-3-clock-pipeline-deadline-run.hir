@@ -1,0 +1,51 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// process: {"provider":"process.script@1","rules":[{"program":"/usr/bin/sort"},{"program":"/usr/bin/uniq"}],"runs":[{"program":"/usr/bin/sort","args":[],"outcome":{"output":{"status":{"exited":0},"stdout":[97,10],"stderr":[]}}},{"program":"/usr/bin/uniq","args":[],"outcome":{"output":{"status":{"exited":0},"stdout":[97,10],"stderr":[]}}}],"children":[]}
+// stdout: timed out
+// stdout: ran 2 stages
+// stdout: at 0
+// A pipeline whose deadline the clock already reached times out before any stage runs or
+// takes an entry; a scripted pipeline takes no time, so one with a later deadline runs.
+fn after(c: MonotonicClock, start: Instant of c, ns: u64) -> Deadline {
+  match instant.checked_add(c, start, ns) {
+    Some(at) => Deadline(clock: c, at: at),
+    None() => Deadline(clock: c, at: start),
+  }
+}
+
+fn stages() -> List[Command] {
+  [
+    Command(program: path.of("/usr/bin/sort"), args: [], dir: None(), env: None()),
+    Command(program: path.of("/usr/bin/uniq"), args: [], dir: None(), env: None())
+  ]
+}
+
+fn outcome(r: Result[PipelineOutput, ProcessError]) -> String {
+  match r {
+    Ok(ran) => f"ran {list.len(ran.statuses)} stages\n",
+    Error(TimedOut()) => "timed out\n",
+    Error(_) => "failed\n",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let p = io.process(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let reached = proc.pipeline(p, stages(), b"a\n", 64u64, Some(after(c, start, 0u64)))
+  let _ = out.print(output, outcome(reached))
+  let later = proc.pipeline(p, stages(), b"a\n", 64u64, Some(after(c, start, 1000u64)))
+  let _ = out.print(output, outcome(later))
+  match clock.monotonic(c) {
+    Ok(now) => {
+      let _ = out.print(output, f"at {instant.ticks(now) - instant.ticks(start)}\n")
+    },
+    Error(_) => return Ok(()),
+  }
+  Ok(())
+}

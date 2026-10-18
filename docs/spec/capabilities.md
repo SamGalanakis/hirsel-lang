@@ -71,9 +71,9 @@ same socket. TCP, UDP and Unix rules never imply one another.
 **Processes.** `Proc` is a process capability over a finite set of rules, each naming one
 canonical absolute executable path and the exact environment variable names passed through
 to it. There is no `PATH` search, no wildcard and no directory rule, and an empty rule set
-is a `Proc` that runs nothing. `proc.run` and `proc.spawn` check the program against the
-rules of the `Proc` they are given before any host effect; a failed check returns
-`NotGranted()` without spawning. A child's environment holds only variables its rule
+is a `Proc` that runs nothing. `proc.run`, `proc.pipeline` and `proc.spawn` check each
+program against the rules of the `Proc` they are given before any host effect; a failed
+check returns `NotGranted()` without spawning, and a pipeline checks every stage first. A child's environment holds only variables its rule
 names: those the launcher has set, or exactly the program's own values for them, never
 another name. Its working directory is set only by an explicit `Dir`. A
 streaming `Child of p` carries `p`'s authority, and every operation on it takes `p` as

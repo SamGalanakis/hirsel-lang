@@ -5,7 +5,7 @@
 //! runs on a [`HostJob`](crate::process::HostJob), so the task parks instead of blocking
 //! the thread.
 use crate::io::{AdapterError, Completion};
-use crate::process::{ChildStream, Ended, ExitStatus, HostCall, ProcessFailure, ProcessOutcome};
+use crate::process::{ChildStream, Ended, ExitStatus, HostCall, PipelineOutcome, ProcessFailure};
 use crate::readiness::Readiness;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -90,15 +90,10 @@ impl HostChildren {
             Some(d) => cwd(d).map(Some).ok_or(ProcessFailure::InvalidInput),
         };
         Ok(match call {
-            HostCall::Run(spec) => Completion::Process(match directory(spec.directory) {
-                Err(failure) => ProcessOutcome::Error(failure),
-                // Under cooperative admission the run parks its task instead of blocking
-                // the thread, and a cancellation kills its child.
-                Ok(cwd) => match readiness {
-                    Some(readiness) => crate::process::run_cooperative(readiness, spec, cwd)?,
-                    None => crate::process::run_host(spec, cwd, None),
-                },
-            }),
+            HostCall::Run(run) => {
+                Completion::Process(Self::run(run, &directory, readiness)?.into_run())
+            }
+            HostCall::Pipeline(run) => Completion::Pipeline(Self::run(run, &directory, readiness)?),
             HostCall::Spawn { child, spec } => Completion::Spawned(
                 directory(spec.directory)
                     .and_then(|cwd| self.spawn(child, spec, cwd))
@@ -129,6 +124,27 @@ impl HostChildren {
                 self.0.remove(&child);
                 Completion::Unit(Ok(()))
             }
+        })
+    }
+    /// A run or pipeline: under cooperative admission it parks its task instead of
+    /// blocking the thread, and a cancellation kills its children.
+    fn run(
+        run: &crate::process::HostRun<'_>,
+        directory: &dyn Fn(Option<u64>) -> Result<Option<RawFd>, ProcessFailure>,
+        readiness: Option<&Readiness>,
+    ) -> Result<PipelineOutcome, AdapterError> {
+        let cwds = match run
+            .stages
+            .iter()
+            .map(|s| directory(s.directory))
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(cwds) => cwds,
+            Err(failure) => return Ok(PipelineOutcome::Error(failure)),
+        };
+        Ok(match readiness {
+            Some(readiness) => crate::process::run_cooperative(readiness, run, &cwds)?,
+            None => crate::process::run_host(run, &cwds, None),
         })
     }
     fn child(&mut self, id: u64) -> Result<&mut HostChild, AdapterError> {
@@ -254,8 +270,9 @@ impl HostChildren {
             }
         };
         Ok(match outcome {
-            ProcessOutcome::Output { status, .. } => Ok(status),
-            ProcessOutcome::Error(failure) => Err(failure),
+            PipelineOutcome::Output { statuses, .. } if statuses.len() == 1 => Ok(statuses[0]),
+            PipelineOutcome::Output { .. } => Err(ProcessFailure::Fault(1)),
+            PipelineOutcome::Error(failure) => Err(failure),
         })
     }
 }
@@ -263,10 +280,10 @@ impl HostChildren {
 /// Close input, read and discard both outputs to end of file, then reap. A readable
 /// `cancel` drops the child instead, which kills it. At `deadline` the child gets
 /// SIGTERM, then SIGKILL after the grace, and is reaped: `TimedOut`.
-fn finish(mut child: HostChild, cancel: Option<RawFd>, deadline: Option<u64>) -> ProcessOutcome {
+fn finish(mut child: HostChild, cancel: Option<RawFd>, deadline: Option<u64>) -> PipelineOutcome {
     let timed_out = |child: &mut HostChild| {
-        crate::process::terminate(&mut child.child, cancel);
-        ProcessOutcome::Error(ProcessFailure::TimedOut)
+        crate::process::terminate(std::slice::from_mut(&mut child.child), cancel);
+        PipelineOutcome::Error(ProcessFailure::TimedOut)
     };
     child.stdin = None;
     let mut open = [true, true];
@@ -306,10 +323,10 @@ fn finish(mut child: HostChild, cancel: Option<RawFd>, deadline: Option<u64>) ->
             if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
-            return ProcessOutcome::Error(ProcessFailure::Fault(1));
+            return PipelineOutcome::Error(ProcessFailure::Fault(1));
         }
         if fds[2].revents != 0 {
-            return ProcessOutcome::Error(ProcessFailure::Canceled(0));
+            return PipelineOutcome::Error(ProcessFailure::Canceled(0));
         }
         let HostChild { stdout, stderr, .. } = &mut child;
         for (i, pipe) in [stdout as &mut dyn Read, stderr as &mut dyn Read]
@@ -327,22 +344,22 @@ fn finish(mut child: HostChild, cancel: Option<RawFd>, deadline: Option<u64>) ->
                         e.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
                     ) => {}
-                Err(_) => return ProcessOutcome::Error(ProcessFailure::Fault(1)),
+                Err(_) => return PipelineOutcome::Error(ProcessFailure::Fault(1)),
             }
         }
     }
     // A reaped child's Drop signals nothing: std keeps its status.
     match crate::process::wait_child(&mut child.child, deadline, cancel) {
         Ok(Ended::Exited(status)) => match exit_status(status) {
-            Some(status) => ProcessOutcome::Output {
-                status,
+            Some(status) => PipelineOutcome::Output {
+                statuses: vec![status],
                 stdout: vec![],
                 stderr: vec![],
             },
-            None => ProcessOutcome::Error(ProcessFailure::Fault(1)),
+            None => PipelineOutcome::Error(ProcessFailure::Fault(1)),
         },
-        Ok(Ended::Canceled) => ProcessOutcome::Error(ProcessFailure::Canceled(0)),
+        Ok(Ended::Canceled) => PipelineOutcome::Error(ProcessFailure::Canceled(0)),
         Ok(Ended::Expired) => timed_out(&mut child),
-        Err(_) => ProcessOutcome::Error(ProcessFailure::Fault(1)),
+        Err(_) => PipelineOutcome::Error(ProcessFailure::Fault(1)),
     }
 }

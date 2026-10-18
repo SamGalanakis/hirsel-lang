@@ -141,6 +141,14 @@ pub enum Request {
         max_output: u64,
         deadline: Option<crate::process::Deadline>,
     },
+    /// `proc.pipeline`.
+    ProcessPipeline {
+        process: u64,
+        stages: Vec<hirsel_run_config::Command>,
+        stdin: Vec<u8>,
+        max_output: u64,
+        deadline: Option<crate::process::Deadline>,
+    },
     /// `proc.spawn`.
     ProcessSpawn {
         process: u64,
@@ -531,6 +539,8 @@ pub enum Completion {
     Address(Result<SocketAddr, NetError>),
     Accepted(Result<(u64, SocketAddr), NetError>),
     Process(hirsel_run_config::ProcessOutcome),
+    /// `proc.pipeline`.
+    Pipeline(hirsel_run_config::PipelineOutcome),
     /// `proc.spawn`: the Child handle.
     Spawned(Result<u64, hirsel_run_config::ProcessFailure>),
     /// `child.write`, `child.close_stdin` and `child.kill`.

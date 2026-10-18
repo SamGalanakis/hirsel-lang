@@ -5,7 +5,8 @@ use hirsel_heapcheck::{OpOutcome, OpValue, Operations};
 use hirsel_lir::layout_types::ScalarKind;
 use hirsel_rt::io::{Completion as C, Request as R};
 use hirsel_rt::process::{
-    ChildRun, ChildStep, Command, ExitStatus, ProcessFailure, ProcessOutcome, ProcessRun,
+    ChildRun, ChildStep, Command, ExitStatus, PipelineOutcome, ProcessFailure, ProcessOutcome,
+    ProcessRun,
 };
 
 fn bytes(v: &OpValue) -> Option<Vec<u8>> {
@@ -238,24 +239,46 @@ impl Io {
                 }
             }
             (Some("io"), "process", [OpValue::Handle(1)]) => R::Process { io: 1 },
-            (Some("proc"), "run", [p, cmd, stdin, max, deadline]) => {
+            (Some("proc"), name @ ("run" | "pipeline"), [p, cmd, stdin, max, deadline]) => {
                 // The runtime's policy checks a deadline against the clock's reading, which
                 // H owns; a run that starts before it is reached races it.
                 let deadline = match self.deadline(deadline)? {
                     Ok(deadline) => deadline,
                     Err(fail) => return Some(fail),
                 };
-                let command = match self.command(cmd)? {
-                    Ok(command) => command,
-                    Err(fail) => return Some(fail),
-                };
-                let request = R::ProcessRun {
-                    process: self.network_id(p)?,
-                    command,
-                    stdin: bytes(stdin)?,
-                    max_output: word(max)?,
-                    deadline: deadline
-                        .map(|(_, at, _, clock)| hirsel_rt::process::Deadline { clock, ticks: at }),
+                let (process, stdin, max_output) = (self.network_id(p)?, bytes(stdin)?, word(max)?);
+                let deadline_request = deadline
+                    .map(|(_, at, _, clock)| hirsel_rt::process::Deadline { clock, ticks: at });
+                let request = if name == "run" {
+                    let command = match self.command(cmd)? {
+                        Ok(command) => command,
+                        Err(fail) => return Some(fail),
+                    };
+                    R::ProcessRun {
+                        process,
+                        command,
+                        stdin,
+                        max_output,
+                        deadline: deadline_request,
+                    }
+                } else {
+                    let OpValue::Sequence(commands) = cmd else {
+                        return None;
+                    };
+                    let mut stages = vec![];
+                    for command in commands {
+                        match self.command(command)? {
+                            Ok(command) => stages.push(command),
+                            Err(fail) => return Some(fail),
+                        }
+                    }
+                    R::ProcessPipeline {
+                        process,
+                        stages,
+                        stdin,
+                        max_output,
+                        deadline: deadline_request,
+                    }
                 };
                 return Some(
                     match self.process_completion(module, request, cancellation) {
@@ -405,6 +428,16 @@ impl Io {
                 ]))
             }
             C::Process(ProcessOutcome::Error(f)) => v(1, failure(f)),
+            C::Pipeline(PipelineOutcome::Output {
+                statuses,
+                stdout,
+                stderr,
+            }) => io_ok(OpValue::Aggregate(vec![
+                OpValue::Sequence(statuses.into_iter().map(status_value).collect()),
+                OpValue::ByteSequence(stdout),
+                OpValue::ByteSequence(stderr),
+            ])),
+            C::Pipeline(PipelineOutcome::Error(f)) => v(1, failure(f)),
             _ => return OpOutcome::Unsupported,
         })
     }
