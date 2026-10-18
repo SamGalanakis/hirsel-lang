@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-796 exported definitions; 246 variants.
+807 exported definitions; 253 variants.
 
 
 ## Types and roots
@@ -37,6 +37,13 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Arithmetic() -> CheckRule` — Variant of CheckRule. <!-- core@1/CheckRule#Arithmetic -->
 - `Bounds() -> CheckRule` — Variant of CheckRule. <!-- core@1/CheckRule#Bounds -->
 - `TextInvariant() -> CheckRule` — Variant of CheckRule. <!-- core@1/CheckRule#TextInvariant -->
+- `opaque resource type Child: sendable + noalloc_drop uses {Proc}` <!-- core@1/Child -->
+- `type ChildScript uses {} = { program: String, args: List[String], steps: List[ChildStep] }` <!-- core@1/ChildScript -->
+- `type ChildStep uses {} = Stdout(Bytes) | Stderr(Bytes) | Expect(Bytes) | Exit(ExitStatus)` <!-- core@1/ChildStep -->
+- `Exit(ExitStatus) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Exit -->
+- `Expect(Bytes) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Expect -->
+- `Stderr(Bytes) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Stderr -->
+- `Stdout(Bytes) -> ChildStep` — Variant of ChildStep. <!-- core@1/ChildStep#Stdout -->
 - `type CliError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Usage(ArgError) | Files(FileError) | Output(OutputError)` <!-- core@1/CliError -->
 - `Files(FileError) -> CliError` — Variant of CliError. <!-- core@1/CliError#Files -->
 - `Output(OutputError) -> CliError` — Variant of CliError. <!-- core@1/CliError#Output -->
@@ -45,6 +52,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `OutOfRange() -> ClockError` — Variant of ClockError. <!-- core@1/ClockError#OutOfRange -->
 - `Unavailable() -> ClockError` — Variant of ClockError. <!-- core@1/ClockError#Unavailable -->
 - `@capability(global) opaque type Db: plain + copyable + sendable + noalloc_drop uses {Db}` <!-- core@1/Db -->
+- `type Deadline: plain + copyable + sendable + noalloc_drop uses {MonotonicClock} = { clock: MonotonicClock, at: Instant }` <!-- core@1/Deadline -->
 - `type DecodeError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Version() | SchemaMismatch() | Truncated() | Trailing() | Scalar() | Utf8() | Tag() | Length() | Duplicate() | Order()` <!-- core@1/DecodeError -->
 - `Duplicate() -> DecodeError` — Variant of DecodeError. <!-- core@1/DecodeError#Duplicate -->
 - `Length() -> DecodeError` — Variant of DecodeError. <!-- core@1/DecodeError#Length -->
@@ -173,13 +181,16 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Plain() -> PeerTls` — Variant of PeerTls. <!-- core@1/PeerTls#Plain -->
 - `opaque type PositionView: copyable + inert + noalloc_drop uses {}` <!-- core@1/PositionView -->
 - `@capability(global) opaque type Proc: plain + copyable + sendable + noalloc_drop uses {Proc}` <!-- core@1/Proc -->
-- `type ProcessError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotGranted() | InvalidInput() | NotFound() | PermissionDenied() | OutputLimit() | Fault(u32)` <!-- core@1/ProcessError -->
+- `type ProcessError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = NotGranted() | InvalidInput() | NotFound() | PermissionDenied() | OutputLimit() | Fault(u32) | TimedOut() | Canceled(CancelCause) | InputClosed()` <!-- core@1/ProcessError -->
+- `Canceled(CancelCause) -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#Canceled -->
 - `Fault(u32) -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#Fault -->
+- `InputClosed() -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#InputClosed -->
 - `InvalidInput() -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#InvalidInput -->
 - `NotFound() -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#NotFound -->
 - `NotGranted() -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#NotGranted -->
 - `OutputLimit() -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#OutputLimit -->
 - `PermissionDenied() -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#PermissionDenied -->
+- `TimedOut() -> ProcessError` — Variant of ProcessError. <!-- core@1/ProcessError#TimedOut -->
 - `type ProcessOutput uses {} = { status: ExitStatus, stdout: Bytes, stderr: Bytes }` <!-- core@1/ProcessOutput -->
 - `type ProcessScript uses {} = { program: String, args: List[String], outcome: Result[ProcessOutput, ProcessError] }` <!-- core@1/ProcessScript -->
 - `type Ptr[T] uses {}` <!-- core@1/Ptr -->
@@ -358,6 +369,15 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `fn channel.open[T: sendable](tasks: Tasks) -> (Sender[T], Receiver[T])` <!-- core@1/channel/open -->
 - `fn channel.receive[T](tasks: Tasks, mut r: Receiver[T]) -> Result[T, ChannelError]` <!-- core@1/channel/receive -->
 - `fn channel.send[T: sendable](tasks: Tasks, mut s: Sender[T], take v: T) -> Result[(), (T, ChannelError)]` <!-- core@1/channel/send -->
+
+## child
+
+- `@noalloc fn child.close_stdin(p: Proc, mut c: Child of p) -> ()` <!-- core@1/child/close_stdin -->
+- `@noalloc fn child.kill(p: Proc, mut c: Child of p) -> ()` <!-- core@1/child/kill -->
+- `fn child.read_stderr(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]` <!-- core@1/child/read_stderr -->
+- `fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]` <!-- core@1/child/read_stdout -->
+- `@noalloc fn child.wait(p: Proc, take c: Child of p) -> Result[ExitStatus, ProcessError]` <!-- core@1/child/wait -->
+- `@noalloc fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessError]` <!-- core@1/child/write -->
 
 ## cli
 
@@ -955,7 +975,8 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## proc
 
-- `fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64) -> Result[ProcessOutput, ProcessError]` <!-- core@1/proc/run -->
+- `fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]` <!-- core@1/proc/run -->
+- `fn proc.spawn(p: Proc, program: Path, args: List[String], dir: Option[Dir]) -> Result[Child of p, ProcessError]` <!-- core@1/proc/spawn -->
 
 ## random
 
@@ -1116,7 +1137,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()` — Preserve the original hundred-case entry point over the shared kernel. <!-- std@1/test/for_all -->
 - `pub fn test.for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()` — Adapted from Go testing/quick: an explicit count bounds the property loop. <!-- std@1/test/for_all_cases -->
 - `fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net` <!-- core@1/test/net -->
-- `fn test.process(t: Test, runs: List[ProcessScript]) -> Proc` <!-- core@1/test/process -->
+- `fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc` <!-- core@1/test/process -->
 
 ## text
 
