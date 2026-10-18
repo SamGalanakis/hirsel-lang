@@ -542,7 +542,8 @@ Version      = Http10 | Http11
 Header       = { name: String, value: String }
 Config       = { max_redirects: u32, connect_timeout: Option[Duration],
                  read_timeout: Option[Duration], write_timeout: Option[Duration],
-                 max_head_bytes: u64, max_headers: u64, user_agent: String,
+                 max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[Duration],
+                 max_headers: u64, user_agent: String,
                  roots: TlsRoots, status_as_error: bool }
 ResponseHead = { version: Version, status: u16, reason: String, headers: List[Header],
                  content_length: Option[u64], chunked: bool, keep_alive: bool,
@@ -551,7 +552,7 @@ Response     = { status: u16, headers: List[Header], body: Bytes, url: String }
 HttpError    = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError)
              | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects
              | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme
-             | UnsupportedTransferEncoding | Status(u16) | OutOfOrder
+             | UnsupportedTransferEncoding | Status(u16) | OutOfOrder | Closed
 
 pub opaque resource type Request: noalloc_drop uses {Net}
 
@@ -659,15 +660,16 @@ reconstruct authority from a run record.
 
 ## HTTP server
 
-The server helpers share the client's wire parser and error type:
+The server shares the client's wire parser and error type:
 
 ```text
 RequestLine = { method_start: u64, method_end: u64, target_start: u64, target_end: u64, version: u8 }
 N fn http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut headers: Inline[RawHeader, k], mut count: u64) -> Result[ParseStatus, HeadError] uses {}
-ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes }
+ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes, keep_alive: bool }
 fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
-fn http.receive_request(n: Net, mut s: Stream of n, max_head_bytes: u64, max_body_bytes: u64) -> Result[ServerRequest, HttpError]
-fn http.respond(n: Net, mut s: Stream of n, status: u16, headers: List[Header], body: Bytes) -> Result[(), HttpError]
+fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection
+fn http.receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpError]
+fn http.respond(mut c: ServerConnection, status: u16, headers: List[Header], body: Bytes, close: bool) -> Result[(), HttpError]
 ```
 
 `parse_request` follows httparse's strict request-line delimiters, accepts HTTP/1.0 and
@@ -678,13 +680,25 @@ the consumed head-plus-body byte count, or `None` for incomplete input. It accep
 (zero bytes when absent). Malformed heads and framing fail; transfer codings are
 unsupported. Bytes after the declared body are excluded from the request.
 
-`receive_request` reads until that request completes; EOF before completion is `Truncated`.
-`respond` validates status and headers, writes the body with its exact Content-Length and
-`Connection: close`, and rejects caller-supplied Content-Length, Transfer-Encoding and
-Connection headers. The caller owns the stream, closes it after the response, and owns the
-sequential listen/accept loop. A server maps malformed requests to a 400 response before
-invoking application handling. No routing, concurrency or persistent-connection framework
-is implied.
+`ServerConnection` is a resource owning its branded stream and unread bytes. Its Config
+uses `max_head_bytes` and `max_body_bytes` (10 MiB by default), `read_timeout`,
+`write_timeout`, and `idle_timeout` (30 seconds by default, `None` for unbounded).
+`receive_request` consumes exactly one request, retaining bytes already read for the
+next request. `respond` must complete before the next receive; a second receive or
+response out of order is `OutOfOrder`. Pipelined responses therefore stay in request
+order, with application handling sequential within one connection.
+
+Persistence follows RFC 9112 section 9: HTTP/1.1 persists by default; HTTP/1.0 requires
+an explicit keep-alive token. Every Connection field contributes comma-separated,
+case-insensitive tokens; close takes precedence over keep-alive. `respond` validates
+status and headers and owns Content-Length, Transfer-Encoding and Connection framing.
+Its `close` argument lets the handler end a connection even when the request permits
+reuse. It emits Connection: keep-alive or close accordingly. A failed request permits
+one final error response, always closing. Any failed response ends reuse. A closed
+connection, clean EOF between requests, or an expired keep-alive idle wait returns
+`Closed`; EOF within a request is `Truncated`. Dropping the resource closes the socket.
+Servers map malformed requests to a 400 response before application handling. The
+caller owns the listen/accept loop, routing and concurrency across connections.
 
 ## Unicode scalar properties and simple case
 

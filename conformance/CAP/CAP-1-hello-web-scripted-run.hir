@@ -8,17 +8,20 @@ pub type ServerError = Grant(GrantError) | Network(NetError) | Http(http.HttpErr
 
 fn serve(n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
   let mut (stream, _) = net.accept(n, mut listener) ? Network
-  match http.receive_request(n, mut stream, 16384, 1048576) {
+  let mut config = http.default_config()
+  config.max_head_bytes = 16384
+  config.max_body_bytes = 1048576
+  let mut connection = http.server_connection(n, take stream, config)
+  match http.receive_request(mut connection) {
     Ok(incoming) => http.respond(
-      n,
-      mut stream,
+      mut connection,
       200u16,
       [http.Header(name: "Content-Type", value: "text/plain")],
-      b"Hello, world"
+      b"Hello, world",
+      true
     ) ? Http,
-    Error(_) => http.respond(n, mut stream, 400u16, [], b"Bad Request") ? Http,
+    Error(_) => http.respond(mut connection, 400u16, [], b"Bad Request", true) ? Http,
   }
-  net.close(n, take stream)
   Ok(())
 }
 

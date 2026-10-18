@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-771 exported definitions; 245 variants.
+773 exported definitions; 246 variants.
 
 
 ## Types and roots
@@ -527,11 +527,12 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## http
 
-- `pub type http.Config { max_redirects: u32, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, }` <!-- std@1/http/Config -->
+- `pub type http.Config { max_redirects: u32, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, }` <!-- std@1/http/Config -->
 - `pub type http.Header { name: String, value: String, }` <!-- std@1/http/Header -->
-- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder` <!-- std@1/http/HttpError -->
+- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed` <!-- std@1/http/HttpError -->
 - `BodyTooLarge -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#BodyTooLarge -->
 - `Chunk -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Chunk -->
+- `Closed -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Closed -->
 - `HeadTooLarge -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#HeadTooLarge -->
 - `Malformed(http_wire.HeadError) -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Malformed -->
 - `Net(NetError) -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Net -->
@@ -555,7 +556,8 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub opaque resource type http.Request: noalloc_drop uses {Net}` — ready=0, streaming request=1, sent=2, body=3, done=4, failed=5. <!-- std@1/http/Request -->
 - `pub type http.Response { status: u16, headers: List[Header], body: Bytes, url: String, }` <!-- std@1/http/Response -->
 - `pub type http.ResponseHead { version: Version, status: u16, reason: String, headers: List[Header], content_length: Option[u64], chunked: bool, keep_alive: bool, location: Option[String], content_type: Option[String], }` <!-- std@1/http/ResponseHead -->
-- `pub type http.ServerRequest { method: String, target: String, version: Version, headers: List[Header], body: Bytes, }` — A sequential, one-request-per-connection server. <!-- std@1/http/ServerRequest -->
+- `pub opaque resource type http.ServerConnection: noalloc_drop uses {Net}` — A sequential server connection owns its stream and unread bytes. <!-- std@1/http/ServerConnection -->
+- `pub type http.ServerRequest { method: String, target: String, version: Version, headers: List[Header], body: Bytes, keep_alive: bool, }` <!-- std@1/http/ServerRequest -->
 - `pub type http.Version = Http10 | Http11` <!-- std@1/http/Version -->
 - `Http10 -> http.Version` — Variant of http.Version. <!-- std@1/http/Version#Http10 -->
 - `Http11 -> http.Version` — Variant of http.Version. <!-- std@1/http/Version#Http11 -->
@@ -567,12 +569,13 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn http.read_all(mut r: Request, limit: u64) -> Result[Bytes, HttpError]` <!-- std@1/http/read_all -->
 - `pub fn http.read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]` <!-- std@1/http/read_body -->
 - `pub fn http.receive_head(mut r: Request) -> Result[ResponseHead, HttpError]` <!-- std@1/http/receive_head -->
-- `pub fn http.receive_request( n: Net, mut s: Stream of n, max_head_bytes: u64, max_body_bytes: u64 ) -> Result[ServerRequest, HttpError]` — Read an owned, bounded Content-Length request. <!-- std@1/http/receive_request -->
+- `pub fn http.receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpError]` — Clean EOF and the keep-alive idle limit return Closed. <!-- std@1/http/receive_request -->
 - `pub fn http.request( n: Net, config: Config, method: Method, url: String, headers: List[Header] ) -> Result[Request, HttpError]` <!-- std@1/http/request -->
-- `pub fn http.respond( n: Net, mut s: Stream of n, status: u16, headers: List[Header], body: Bytes ) -> Result[(), HttpError]` — The writer owns framing: callers cannot inject a second length or encoding. <!-- std@1/http/respond -->
+- `pub fn http.respond( mut c: ServerConnection, status: u16, headers: List[Header], body: Bytes, close: bool ) -> Result[(), HttpError]` — The writer owns framing: callers cannot inject a second length or encoding. <!-- std@1/http/respond -->
 - `pub fn http.send_bodiless(mut r: Request) -> Result[(), HttpError]` <!-- std@1/http/send_bodiless -->
 - `pub fn http.send_body(mut r: Request, body: Bytes) -> Result[(), HttpError]` <!-- std@1/http/send_body -->
 - `pub fn http.send_chunk(mut r: Request, data: Bytes) -> Result[(), HttpError]` <!-- std@1/http/send_chunk -->
+- `pub fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection` <!-- std@1/http/server_connection -->
 - `pub fn http.trailers(r: Request) -> unique List[Header]` <!-- std@1/http/trailers -->
 
 ## http_wire

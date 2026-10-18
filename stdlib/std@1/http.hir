@@ -19,6 +19,8 @@ pub type Config {
   read_timeout: Option[time.Duration],
   write_timeout: Option[time.Duration],
   max_head_bytes: u64,
+  max_body_bytes: u64,
+  idle_timeout: Option[time.Duration],
   max_headers: u64,
   user_agent: String,
   roots: TlsRoots,
@@ -46,7 +48,7 @@ pub type Response {
 
 pub type HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status(
   u16
-) | OutOfOrder
+) | OutOfOrder | Closed
 
 // ready=0, streaming request=1, sent=2, body=3, done=4, failed=5.
 // body_kind: EOF=0, content-length=1, chunked=2. chunk_suffix tracks the
@@ -77,6 +79,8 @@ pub fn default_config() -> Config uses {} {
     read_timeout: None(),
     write_timeout: None(),
     max_head_bytes: 65536,
+    max_body_bytes: 10485760,
+    idle_timeout: Some(time.Duration(nanoseconds: 30000000000)),
     max_headers: 100,
     user_agent: "hirsel-std/1",
     roots: WebPki(),
@@ -982,14 +986,60 @@ pub fn fetch(
   )
 }
 
-// A sequential, one-request-per-connection server. Header syntax and framing
-// share the client wire parser. Transfer codings are deliberately unsupported.
+// A sequential server connection owns its stream and unread bytes. A response
+// must finish before the next request can be received (RFC 9112 section 9).
+// state: ready=0, response pending=1, closed=2, request failed=3.
+pub opaque resource type ServerConnection: noalloc_drop uses {Net} {
+  net: Net,
+  stream: Stream of .net,
+  config: Config,
+  input: bufio.Reader,
+  state: u8,
+  keep_alive: bool,
+  served: bool,
+}
+@noalloc drop(self) {}
+
+pub fn server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection {
+  ServerConnection(
+    net: n,
+    stream: take stream,
+    config: unique config,
+    input: bufio.new(4096),
+    state: 0,
+    keep_alive: false,
+    served: false
+  )
+}
+
+// All Connection fields contribute tokens; close wins regardless of order.
+fn http_server_keep_alive(headers: List[Header], version: Version) -> bool uses {} {
+  let mut keep = version == Http11()
+  let mut closed = false
+  for h in headers {
+    if http_same(h.name, "connection") {
+      let tokens = string.split(unique h.value, ",")
+      for token in tokens {
+        let value = string.trim(token)
+        if http_same(value, "close") {
+          closed = true
+        }
+        if http_same(value, "keep-alive") {
+          keep = true
+        }
+      }
+    }
+  }
+  keep && !closed
+}
+
 pub type ServerRequest {
   method: String,
   target: String,
   version: Version,
   headers: List[Header],
   body: Bytes,
+  keep_alive: bool,
 }
 
 // Complete includes the consumed body; subsequent bytes belong to another request.
@@ -1083,6 +1133,14 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
           } else {
             Http10()
           },
+          keep_alive: http_server_keep_alive(
+            headers,
+            if line.version == 1 {
+              Http11()
+            } else {
+              Http10()
+            }
+          ),
           headers: take headers,
           body: unique core@1/bytes.slice(buf, end, end + length)
         ),
@@ -1092,36 +1150,75 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
   )
 }
 
-// Read an owned, bounded Content-Length request. The caller owns the Stream and
-// closes it after responding; malformed/truncated requests never invoke a handler.
-pub fn receive_request(
-  n: Net,
-  mut s: Stream of n,
-  max_head_bytes: u64,
-  max_body_bytes: u64
-) -> Result[ServerRequest, HttpError] {
-  let mut input = bufio.new(4096)
+// Clean EOF and the keep-alive idle limit return Closed. An incomplete request
+// is Truncated. A failed read may receive one final error response, then closes.
+pub fn receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpError] {
+  if c.state == 2 {
+    return Error(Closed())
+  }
+  if c.state != 0 {
+    return Error(OutOfOrder())
+  }
+  c.state = 3
+  let n = c.net
+  let mut idle = c.served && bufio.buffered(c.input) == 0
   while true {
-    let buf = bufio.contents(input)
-    match parse_server_request(buf, max_head_bytes, max_body_bytes)? {
-      Some((incoming, _)) => return Ok(take incoming),
+    let buf = bufio.contents(c.input)
+    match parse_server_request(buf, c.config.max_head_bytes, c.config.max_body_bytes)? {
+      Some((incoming, end)) => {
+        bufio.consume(mut c.input, end)
+        c.keep_alive = incoming.keep_alive
+        c.state = 1
+        return Ok(take incoming)
+      },
       None() => (),
     }
-    if bufio.stream_read_more(n, mut s, mut input, 4096) ? http_buffer_error == 0 {
+    let timeout = http_timeout(
+      if idle {
+        c.config.idle_timeout
+      } else {
+        c.config.read_timeout
+      }
+    )?
+    core@1/net.set_read_timeout(n, mut c.stream, timeout) ? http_net_error
+    let count = match bufio.stream_read_more(n, mut c.stream, mut c.input, 4096) {
+      Ok(count) => count,
+      Error(Source(TimedOut())) => {
+        if idle {
+          c.state = 2
+          return Error(Closed())
+        }
+        return Error(http_net_error(TimedOut()))
+      },
+      Error(e) => return Error(http_buffer_error(e)),
+    }
+    if count == 0 {
+      if bufio.buffered(c.input) == 0 {
+        c.state = 2
+        return Error(Closed())
+      }
       return Error(Truncated())
     }
+    idle = false
   }
   Error(Truncated())
 }
 
 // The writer owns framing: callers cannot inject a second length or encoding.
 pub fn respond(
-  n: Net,
-  mut s: Stream of n,
+  mut c: ServerConnection,
   status: u16,
   headers: List[Header],
-  body: Bytes
+  body: Bytes,
+  close: bool
 ) -> Result[(), HttpError] {
+  if c.state != 1 && c.state != 3 {
+    return Error(OutOfOrder())
+  }
+  let keep = c.state == 1 && c.keep_alive && !close
+  c.state = 2
+  let n = c.net
+  core@1/net.set_write_timeout(n, mut c.stream, http_timeout(c.config.write_timeout)?) ? http_net_error
   if status < 200 || status > 599 || (status == 204 || status == 304) && core@1/bytes.len(
     body
   ) != 0 {
@@ -1146,8 +1243,19 @@ pub fn respond(
   }
   text.append(mut out, "Content-Length: ")
   u64.format_into(core@1/bytes.len(body), mut out)
-  text.append(mut out, "\r\nConnection: close\r\n\r\n")
-  core@1/net.write_all(n, mut s, core@1/bytes.from_list(take out)) ? http_net_error
-  core@1/net.write_all(n, mut s, body) ? http_net_error
+  text.append(
+    mut out,
+    if keep {
+      "\r\nConnection: keep-alive\r\n\r\n"
+    } else {
+      "\r\nConnection: close\r\n\r\n"
+    }
+  )
+  core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take out)) ? http_net_error
+  core@1/net.write_all(n, mut c.stream, body) ? http_net_error
+  c.served = true
+  if keep {
+    c.state = 0
+  }
   Ok(())
 }

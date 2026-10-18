@@ -26,9 +26,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let _ = out.print(output, std@1/u16.to_string(bound.port))
   let _ = out.print(output, "\n")
   let mut (stream, _) = net.accept(n, mut listener) ? Network
-  let _ = std@1/http.receive_request(n, mut stream, 16384, 1048576) ? Http
-  std@1/http.respond(n, mut stream, 200u16, [], greeting) ? Http
-  net.close(n, take stream)
+  let mut config = std@1/http.default_config()
+  config.max_head_bytes = 16384
+  config.max_body_bytes = 1048576
+  let mut connection = std@1/http.server_connection(n, take stream, config)
+  let _ = std@1/http.receive_request(mut connection) ? Http
+  std@1/http.respond(mut connection, 200u16, [], greeting, true) ? Http
   let _ = out.print(output, "served ")
   let _ = out.print(output, name)
   Ok(())

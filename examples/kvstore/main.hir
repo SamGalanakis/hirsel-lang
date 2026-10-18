@@ -208,7 +208,7 @@ fn route(request: http.ServerRequest) -> Result[Action, Reply] uses {} {
 }
 
 // ---- connections ----
-fn send_reply(n: Net, mut stream: Stream of n, reply: Reply) -> Result[
+fn send_reply(mut connection: http.ServerConnection, reply: Reply) -> Result[
   (),
   http.HttpError
 ] {
@@ -224,7 +224,7 @@ fn send_reply(n: Net, mut stream: Stream of n, reply: Reply) -> Result[
   if string.byte_len(reply.allow) > 0 {
     list.push(mut headers, http.Header(name: "Allow", value: unique reply.allow))
   }
-  http.respond(n, mut stream, reply.status, headers, string.as_bytes(reply.body))
+  http.respond(mut connection, reply.status, headers, string.as_bytes(reply.body), true)
 }
 
 fn queue(
@@ -291,12 +291,15 @@ fn serve(
 ) -> () {
   let mut stream = take incoming
   let mut jobs = take saves
-  let reply = match http.receive_request(n, mut stream, 16384, MAX_VALUE) {
+  let mut config = http.default_config()
+  config.max_head_bytes = 16384
+  config.max_body_bytes = MAX_VALUE
+  let mut connection = http.server_connection(n, take stream, config)
+  let reply = match http.receive_request(mut connection) {
     Ok(request) => handle(tasks, state, mut jobs, request),
     Error(_) => plain(400u16, "malformed HTTP request\n"),
   }
-  let _ = send_reply(n, mut stream, reply)
-  net.close(n, take stream)
+  let _ = send_reply(mut connection, reply)
 }
 
 fn port_arg(args: Args) -> Result[u16, ServerError] {

@@ -3674,6 +3674,7 @@ conformance/SEM/SEM-1-format-into-appends-run.hir
 conformance/SEM/SEM-1-format-into-fused-append-run.hir
 conformance/SEM/SEM-1-hex-suffix-like-digits-bad.hir
 conformance/SEM/SEM-1-hex-suffix-like-digits-run.hir
+conformance/SEM/SEM-1-http-server-persistence-run.hir
 conformance/SEM/SEM-1-http-server-wire-run.hir
 conformance/SEM/SEM-1-http-wire-run.hir
 conformance/SEM/SEM-1-left-bit-loss.hir

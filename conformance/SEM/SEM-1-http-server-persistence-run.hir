@@ -1,0 +1,183 @@
+// rule: SEM-1
+// expect: run
+// Go net/http serve_test.go: TestServeHTTP10Close, TestClientCanClose,
+// TestHTTP{10,11}KeepAlive204Response, TestHTTP10KeepAlive304Response,
+// testTCPConnectionStaysOpen and TestCloseNotifierPipelined.
+fn wire(value: String) -> unique Bytes uses {} {
+  unique string.as_bytes(value)
+}
+
+fn exercise(t: Test, first: String, keep: bool, pipelined: bool, status: u16) -> Result[
+  (),
+  http.HttpError
+] {
+  let second = "GET /two HTTP/1.1\r\nConnection: close\r\n\r\n"
+  let response = string.concat(
+    string.concat("HTTP/1.1 ", u16.to_string(status)),
+    if keep {
+      " \r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+    } else {
+      " \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    }
+  )
+  let mut steps: List[NetStep] = []
+  list.push(
+    mut steps,
+    Send(
+      wire(
+        if pipelined {
+          string.concat(first, second)
+        } else {
+          first
+        }
+      )
+    )
+  )
+  list.push(mut steps, Expect(wire(response)))
+  if keep {
+    if !pipelined {
+      list.push(mut steps, Send(wire(second)))
+    }
+    list.push(
+      mut steps,
+      Expect(b"HTTP/1.1 200 \r\nContent-Length: 3\r\nConnection: close\r\n\r\ntwo")
+    )
+  }
+  list.push(mut steps, Close())
+  let addr = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: addr, clients: [NetClient(from: addr, steps: take steps)])]
+  )
+  let mut listener = net.listen(n, addr) ? http_net
+  let (stream, _) = net.accept(n, mut listener) ? http_net
+  let mut connection = http.server_connection(n, take stream, http.default_config())
+  let request = http.receive_request(mut connection)?
+  test.check(t, request.keep_alive == keep)
+  match http.receive_request(mut connection) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  http.respond(mut connection, status, [], b"", false)?
+  if keep {
+    let next = http.receive_request(mut connection)?
+    test.check(t, next.target == "/two")
+    http.respond(mut connection, 200u16, [], b"two", false)?
+  }
+  match http.receive_request(mut connection) {
+    Error(Closed()) => (),
+    _ => test.check(t, false),
+  }
+  match http.respond(mut connection, 200u16, [], b"", false) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  Ok(())
+}
+
+fn http_net(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  exercise(t, "GET / HTTP/1.0\r\n\r\n", false, false, 204u16)?
+  exercise(t, "GET / HTTP/1.0\r\n\r\n", false, true, 204u16)?
+  exercise(
+    t,
+    "GET / HTTP/1.1\r\nHost: foo\r\nConnection: close\r\n\r\n",
+    false,
+    false,
+    204u16
+  )?
+  exercise(
+    t,
+    "GET / HTTP/1.1\r\nHost: foo\r\nConnection: close\r\n\r\n",
+    false,
+    true,
+    204u16
+  )?
+  exercise(t, "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n", true, false, 204u16)?
+  exercise(t, "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n", true, true, 204u16)?
+  exercise(t, "GET / HTTP/1.1\r\nHost: foo\r\n\r\n", true, false, 204u16)?
+  exercise(t, "GET / HTTP/1.1\r\nHost: foo\r\n\r\n", true, true, 204u16)?
+  exercise(
+    t,
+    "GET / HTTP/1.0\r\nConnection: keep-alive\r\nIf-Modified-Since: Mon, 02 Jan 2006 15:04:05 GMT\r\n\r\n",
+    true,
+    false,
+    304u16
+  )?
+  exercise(
+    t,
+    "GET / HTTP/1.0\r\nConnection: keep-alive\r\nIf-Modified-Since: Mon, 02 Jan 2006 15:04:05 GMT\r\n\r\n",
+    true,
+    true,
+    304u16
+  )?
+  exercise(t, "GET / HTTP/1.0\r\nConnection: unknown\r\n\r\n", false, false, 200u16)?
+  exercise(t, "GET / HTTP/1.0\r\nConnection: unknown\r\n\r\n", false, true, 200u16)?
+  exercise(
+    t,
+    "GET / HTTP/1.1\r\nConnection: keep-alive, CLOSE\r\nConnection: keep-alive\r\n\r\n",
+    false,
+    false,
+    200u16
+  )?
+  exercise(
+    t,
+    "GET / HTTP/1.1\r\nConnection: keep-alive, CLOSE\r\nConnection: keep-alive\r\n\r\n",
+    false,
+    true,
+    200u16
+  )?
+  exercise(
+    t,
+    "GET / HTTP/1.1\r\nConnection: close\r\nConnection: keep-alive\r\n\r\n",
+    false,
+    false,
+    200u16
+  )?
+  exercise(
+    t,
+    "GET / HTTP/1.1\r\nConnection: close\r\nConnection: keep-alive\r\n\r\n",
+    false,
+    true,
+    200u16
+  )?
+  exercise(t, "POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc", true, false, 200u16)?
+  exercise(t, "POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nabc", true, true, 200u16)?
+  // A stalled reused connection ends at its idle bound without a response.
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(b"GET / HTTP/1.1\r\n\r\n"),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+              ),
+              Stall()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
+  let mut connection = http.server_connection(n, take stream, http.default_config())
+  let _ = http.receive_request(mut connection)?
+  http.respond(mut connection, 200u16, [], b"", false)?
+  match http.receive_request(mut connection) {
+    Error(Closed()) => (),
+    _ => test.check(t, false),
+  }
+  Ok(())
+}

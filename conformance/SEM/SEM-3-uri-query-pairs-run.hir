@@ -78,7 +78,11 @@ pub fn main(t: Test) -> Result[(), uri.QueryError] {
       return Ok(())
     },
   }
-  let request = match http.receive_request(n, mut stream, 1024, 1024) {
+  let mut config = http.default_config()
+  config.max_head_bytes = 1024
+  config.max_body_bytes = 1024
+  let mut connection = http.server_connection(n, take stream, config)
+  let request = match http.receive_request(mut connection) {
     Ok(request) => take request,
     Error(_) => {
       check(false)
@@ -95,10 +99,9 @@ pub fn main(t: Test) -> Result[(), uri.QueryError] {
   let form_pairs = uri.query_pairs(form)?
   check(form_pairs == [("x", "one two"), ("x", "+")])
   let body = uri.encode_query(form_pairs)
-  match http.respond(n, mut stream, 200u16, [], string.as_bytes(body)) {
+  match http.respond(mut connection, 200u16, [], string.as_bytes(body), true) {
     Ok(()) => (),
     Error(_) => check(false),
   }
-  net.close(n, take stream)
   Ok(())
 }
