@@ -9,6 +9,7 @@ conformance/CAP/CAP-1-arg-count-parameter-ok.hir
 conformance/CAP/CAP-1-arg-snapshot-run.hir
 conformance/CAP/CAP-1-arg-text-parameter-bad.hir
 conformance/CAP/CAP-1-arg-text-parameter-ok.hir
+conformance/CAP/CAP-1-bufio-stdin-run.hir
 conformance/CAP/CAP-1-clock-grants-denied-run.hir
 conformance/CAP/CAP-1-clock-projection-bad.hir
 conformance/CAP/CAP-1-clock-projection-ok.hir

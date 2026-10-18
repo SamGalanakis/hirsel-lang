@@ -1619,6 +1619,45 @@ fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
     std::fs::remove_file(format!("{}.json", source.display())).unwrap();
 }
 
+/// The corpus runs this program with empty stdin; here bufio's stdin adapters
+/// share one Reader over real bytes, refilling four at a time.
+#[test]
+fn simulation_bufio_stdin_adapters_share_one_reader() {
+    let source = std_file(include_str!(
+        "../../../conformance/CAP/CAP-1-bufio-stdin-run.hir"
+    ));
+    let simulation = source.with_extension("simulation.json");
+    std::fs::write(
+        &simulation,
+        serde_json::to_vec(&serde_json::json!({
+            "stdin":"one\ntwo,three\nfour",
+            "projections":["stdin","stdout"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg("--simulation")
+        .arg(&simulation)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "line [one\n]\nuntil 4 [two,]\nexact thr\nmore 4\nread 5 [ee\nfo]\n"
+    );
+    std::fs::remove_file(simulation).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    std::fs::remove_file(format!("{}.json", source.display())).unwrap();
+}
+
 #[test]
 fn host_io_records_use_piped_stdin_distinct_stderr_and_exact_environment_snapshots() {
     use std::io::Write;

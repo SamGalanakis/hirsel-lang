@@ -29,16 +29,11 @@ fn file_refill(mut source: FileSource, mut out: List[u8], max: u64) -> Result[
   )
 }
 
-// bufio's refill mutates a source; stdin.read itself only borrows the capability.
-fn stdin_bytes(mut input: Stdin, mut out: List[u8], max: u64) -> Result[u64, InputError] {
-  stdin.read(input, mut out, max)
-}
-
 fn input_refill(mut source: InputSource, mut out: List[u8], max: u64) -> Result[
   u64,
   Error
 ] {
-  Ok(bufio.read(mut source.buffer, mut source.input, stdin_bytes, mut out, max) ? Input)
+  Ok(bufio.stdin_read(source.input, mut source.buffer, mut out, max) ? Input)
 }
 
 fn memory_refill(mut source: MemorySource, mut out: List[u8], max: u64) -> Result[

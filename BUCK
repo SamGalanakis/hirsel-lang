@@ -117,6 +117,7 @@ hirsel_test(
         "crates/hirsel-cli/tests/**",
         "crates/hirsel-cli/src/**",
     ]) + [
+        "conformance/CAP/CAP-1-bufio-stdin-run.hir",
         "conformance/CAP/CAP-1-host-inputs-run.hir",
         "conformance/CONC/CONC-2-await.hir",
         "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
@@ -207,6 +208,7 @@ hirsel_test(
         "crates/hirsel-cli/tests/**",
         "crates/hirsel-cli/src/**",
     ]) + [
+        "conformance/CAP/CAP-1-bufio-stdin-run.hir",
         "conformance/CAP/CAP-1-host-inputs-run.hir",
         "conformance/CONC/CONC-2-await.hir",
         "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",

@@ -566,6 +566,11 @@ fn bufio.file_read_more(d: Dir, mut f: File of d, mut r: Reader, max: u64) -> Re
 @preserves_unique(out) fn bufio.file_read_exact(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[FileError]]
 @preserves_unique(out) fn bufio.file_read_until(d: Dir, mut f: File of d, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[FileError]]
 fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[unique String,ReadError[FileError]]
+fn bufio.stdin_read_more(s: Stdin, mut r: Reader, max: u64) -> Result[u64,ReadError[InputError]]
+@preserves_unique(out) fn bufio.stdin_read(s: Stdin, mut r: Reader, mut out: List[u8], max: u64) -> Result[u64,ReadError[InputError]]
+@preserves_unique(out) fn bufio.stdin_read_exact(s: Stdin, mut r: Reader, mut out: List[u8], count: u64) -> Result[(),ReadError[InputError]]
+@preserves_unique(out) fn bufio.stdin_read_until(s: Stdin, mut r: Reader, delimiter: u8, mut out: List[u8], limit: u64) -> Result[u64,ReadError[InputError]]
+fn bufio.stdin_read_line(s: Stdin, mut r: Reader, limit: u64) -> Result[unique String,ReadError[InputError]]
 ```
 
 `new(0)` uses capacity one. Capacity bounds each refill, not accumulated unread data.
@@ -585,6 +590,10 @@ Invalid UTF-8 returns `InvalidUtf8` after consuming those bytes. All reads propa
 errors as `Source`; operations taking an output list retain already appended bytes. The Stream adapters use
 `core@1/net.read` with the same rules and preserve the stream's Net brand.
 The File adapters mirror them using `core@1/file.read`, preserving `File of d`.
+The Stdin adapters mirror them using `core@1/stdin.read`. A Stream or File is mutable
+source state, but `Stdin` is a borrowed, copyable capability token, as `Stdout` is for
+writes, so `stdin.read` does not fit the refill's `mut S` parameter: read stdin through
+these adapters rather than a hand-written refill.
 Discard buffered state before seeking or otherwise reading the underlying File directly.
 
 A line read over an existing branded Stream needs only persistent buffer state:

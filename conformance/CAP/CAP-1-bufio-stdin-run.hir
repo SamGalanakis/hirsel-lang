@@ -1,0 +1,55 @@
+// rule: CAP-1
+// expect: run
+// stdout: line []
+// stdout: until 0 []
+// stdout: exact eof
+// stdout: more 0
+// stdout: read 0 []
+// bufio's stdin adapters read the borrowed Stdin token through one Reader,
+// as its file and stream adapters read a mutable source. The corpus runs
+// with empty stdin; hirsel-cli's simulation test supplies bytes.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn text(out: List[u8]) -> String {
+  match string.from_bytes(bytes.from_list(unique out)) {
+    Ok(s) => s,
+    Error(_) => "?",
+  }
+}
+
+fn shown(take read: Result[u64, bufio.ReadError[InputError]], out: List[u8]) -> String {
+  match read {
+    Ok(n) => f"{n} [{text(out)}]",
+    Error(_) => "error",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let s = io.stdin(rt) ? Grant
+  let mut r = bufio.new(4)
+  let line = match bufio.stdin_read_line(s, mut r, 64) {
+    Ok(line) => f"[{line}]",
+    Error(_) => "error",
+  }
+  out.print(output, f"line {line}\n") ? Output
+  let mut until: List[u8] = []
+  let found = bufio.stdin_read_until(s, mut r, 44u8, mut until, 64)
+  out.print(output, f"until {shown(take found, until)}\n") ? Output
+  let mut three: List[u8] = []
+  let exact = match bufio.stdin_read_exact(s, mut r, mut three, 3) {
+    Ok(()) => text(three),
+    Error(UnexpectedEof()) => "eof",
+    Error(_) => "error",
+  }
+  out.print(output, f"exact {exact}\n") ? Output
+  let more = match bufio.stdin_read_more(s, mut r, 64) {
+    Ok(n) => f"{n}",
+    Error(_) => "error",
+  }
+  out.print(output, f"more {more}\n") ? Output
+  let mut rest: List[u8] = []
+  let read = bufio.stdin_read(s, mut r, mut rest, 64)
+  out.print(output, f"read {shown(take read, rest)}\n") ? Output
+  Ok(())
+}
