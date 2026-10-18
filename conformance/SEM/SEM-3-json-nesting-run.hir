@@ -36,7 +36,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
     Error(Nesting(128)) => (),
     _ => failure.check(false, TextInvariant()),
   }
-  let over: json.Value = Array([box take value])
+  let over: json.Value = Array([take value])
   match json.stringify(over) {
     Error(Nesting(128)) => (),
     _ => failure.check(false, TextInvariant()),

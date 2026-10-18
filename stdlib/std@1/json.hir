@@ -1,7 +1,7 @@
 // JSON DOM contracts: STD-OP-json.* and TYPE-ROW-Value/JsonError.
 pub type Value = Null | Bool(bool) | Number(String) | Text(String) | Array(
-  List[box Value]
-) | Object(Map[String, box Value])
+  List[Value]
+) | Object(Map[String, Value])
 
 pub type JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber
 
@@ -239,7 +239,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
   pos += 1
   json_whitespace(data, mut pos)
   if c == 91 {
-    let mut items: List[box Value] = []
+    let mut items: List[Value] = []
     if json_peek(data, pos) == 93 {
       pos += 1
       let array_value: Value = Array(take items)
@@ -247,7 +247,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
     }
     while true {
       let child = json_node(data, mut pos, depth + 1)?
-      core@1/list.push(mut items, box take child)
+      core@1/list.push(mut items, take child)
       json_whitespace(data, mut pos)
       let next = json_peek(data, pos)
       if next == 93 {
@@ -262,7 +262,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
     let array_value: Value = Array(take items)
     return Ok(take array_value)
   }
-  let mut entries: Map[String, box Value] = core@1/map.empty()
+  let mut entries: Map[String, Value] = core@1/map.empty()
   if json_peek(data, pos) == 125 {
     pos += 1
     return Ok(Object(take entries))
@@ -281,7 +281,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
     }
     pos += 1
     let child = json_node(data, mut pos, depth + 1)?
-    core@1/map.insert(mut entries, take key, box take child)
+    core@1/map.insert(mut entries, take key, take child)
     json_whitespace(data, mut pos)
     let next = json_peek(data, pos)
     if next == 125 {
@@ -375,9 +375,9 @@ fn json_write_number(text: String, mut builder: List[u8]) -> Result[(), JsonErro
 
 // Adapted serde_json src/ser.rs compact Serializer sequence/map dispatch,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
-// #98: matching a box uses implicit payload projections and borrows the DOM.
+// Matching borrows the DOM.
 @preserves_unique(builder)
-fn json_write_box(value: box Value, mut builder: List[u8], depth: u64) -> Result[
+fn json_write_value(value: Value, mut builder: List[u8], depth: u64) -> Result[
   (),
   JsonError
 ] uses {} {
@@ -413,7 +413,7 @@ fn json_write_box(value: box Value, mut builder: List[u8], depth: u64) -> Result
           core@1/list.push(mut builder, 44)
         }
         first = false
-        json_write_box(item, mut builder, depth + 1)?
+        json_write_value(item, mut builder, depth + 1)?
       }
       core@1/list.push(mut builder, 93)
       Ok(())
@@ -431,7 +431,7 @@ fn json_write_box(value: box Value, mut builder: List[u8], depth: u64) -> Result
         first = false
         json_write_text(key, mut builder)
         core@1/list.push(mut builder, 58)
-        json_write_box(child, mut builder, depth + 1)?
+        json_write_value(child, mut builder, depth + 1)?
       }
       core@1/list.push(mut builder, 125)
       Ok(())
@@ -444,7 +444,7 @@ fn json_write_box(value: box Value, mut builder: List[u8], depth: u64) -> Result
 // Borrow input, append to the caller's counted builder, retain prefixes on error.
 @preserves_unique(builder)
 pub fn write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {} {
-  json_write_box(box copy value, mut builder, 0)
+  json_write_value(value, mut builder, 0)
 }
 
 // Adapted serde_json src/ser.rs to_string,

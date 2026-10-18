@@ -323,7 +323,7 @@ match std@1/http.fetch(big_head, config, Get(), "http://example.com", [], None()
 fn json_round_trip_over_scripted_tls() {
     execute(
         r#"
-let value: std@1/json.Value = Object({let mut fields: Map[String, box std@1/json.Value] = map.empty(); map.insert(mut fields, "name", box Text("Hirsel")); take fields})
+let value: std@1/json.Value = Object({let mut fields: Map[String, std@1/json.Value] = map.empty(); map.insert(mut fields, "name", Text("Hirsel")); take fields})
 let json = match std@1/json.stringify(value) { Ok(s) => take s, Error(_) => { test.check(t, false); return Ok(()) } }
 let n = test.net(t, [NetPeer(address: "api.example.com", port: 443, resolves_to: [], tls: Certificate(["api.example.com"]), connections: [Open([
  Expect(b"POST /v1/items/7 HTTP/1.1\r\nhost: api.example.com\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\ncontent-type: application/json\r\ncontent-length: 17\r\n\r\n{\"name\":\"Hirsel\"}"),

@@ -1,0 +1,32 @@
+// rule: MEM-7
+// expect: run
+// stdout: ["ewe","lamb"]
+// stdout: "lamb"
+// json.Value holds its arrays' and objects' members directly, since List and
+// Map are already blocks: a member selected from an object or an array is a
+// json.Value and passes straight to json.stringify.
+pub type AppError = Json(json.JsonError) | Missing | Grant(GrantError) | Output(
+  OutputError
+)
+
+fn member(object: Map[String, json.Value], key: String) -> Result[String, AppError] {
+  let Some(selected) = map.get(object, key) else {
+    return Error(Missing())
+  }
+  Ok(json.stringify(selected) ? Json)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let Object(object) = json.parse(r#"{"flock":["ewe","lamb"],"count":2}"#) ? Json else {
+    return Error(Missing())
+  }
+  out.print(output, member(object, "flock")?) ? Output
+  out.print(output, "\n") ? Output
+  let Some(Array(flock)) = map.get(object, "flock") else {
+    return Error(Missing())
+  }
+  out.print(output, json.stringify(flock[1]) ? Json) ? Output
+  out.print(output, "\n") ? Output
+  Ok(())
+}

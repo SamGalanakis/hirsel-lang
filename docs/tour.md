@@ -824,7 +824,7 @@ total 2.50h
 `std@1` is ordinary Hirsel source. JSON numbers retain their decimal spelling;
 objects retain insertion order and duplicate keys are rejected. There is no
 automatic conversion of application records to JSON: construct or inspect
-`json.Value`, whose nested arrays and objects contain `box Value`.
+`json.Value`, whose nested arrays and objects contain `Value`s.
 
 <!-- tour: conformance/LANG/LANG-8-tour-06-json-run.hir -->
 [Runnable source](../conformance/LANG/LANG-8-tour-06-json-run.hir)

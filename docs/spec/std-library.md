@@ -163,9 +163,13 @@ Wait(WaitError)`. Retrying with a delay is a loop around `time.sleep`; nothing p
 
 ```text
 Value     = Null() | Bool(bool) | Number(String) | Text(String)
-          | Array(List[box Value]) | Object(Map[String, box Value])
+          | Array(List[Value]) | Object(Map[String, Value])
 JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber()
 ```
+
+Arrays and objects hold `Value`s directly ([MEM-7](memory.md#mem-7-layout)): a member
+selected with `list` or `map` operations is a `Value`, which passes straight to
+`json.stringify` or `json.write`.
 
 `json.parse` takes a UTF-8 `String` and returns an owned tree, keeping validated decimal
 number lexemes exactly. It accepts JSON whitespace only, validates escaped UTF-16 surrogate

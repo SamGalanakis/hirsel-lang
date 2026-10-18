@@ -77,7 +77,7 @@ fn convert[S](
   let mut first = true
   let mut encoded_index: Option[u64] = None()
   let mut hash_name = ""
-  let mut converted: List[box json.Value] = []
+  let mut converted: List[json.Value] = []
   while true {
     let row = match std@1/csv.read_record(mut reader, mut source, refill) {
       Ok(Some(row)) => take row,
@@ -116,7 +116,7 @@ fn convert[S](
     if list.len(row) != list.len(headers) {
       return Error(Invalid())
     }
-    let mut object: Map[String, box json.Value] = map.empty()
+    let mut object: Map[String, json.Value] = map.empty()
     let mut digest = ""
     for j in 0u64..list.len(headers) {
       if encoded_index == Some(j) {
@@ -126,15 +126,15 @@ fn convert[S](
         }
         let canonical = std@1/base64.encode(data, Standard(), Required())
         digest = digest_hex(data)
-        map.insert(mut object, copy headers[j], box Text(take canonical))
+        map.insert(mut object, copy headers[j], Text(take canonical))
       } else {
-        map.insert(mut object, copy headers[j], box Text(copy row[j]))
+        map.insert(mut object, copy headers[j], Text(copy row[j]))
       }
     }
     if encoded_index != None() {
-      map.insert(mut object, copy hash_name, box Text(take digest))
+      map.insert(mut object, copy hash_name, Text(take digest))
     }
-    list.push(mut converted, box Object(take object))
+    list.push(mut converted, Object(take object))
   }
   let value: json.Value = Array(take converted)
   let output = match json.stringify(value) {

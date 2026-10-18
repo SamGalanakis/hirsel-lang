@@ -167,7 +167,10 @@ charged; one held by a binding or an inline record field grows in amortized cons
 ### MEM-7: Layout
 
 Records and variants are inline; a `box T` field is a heap block, required for recursive
-types. Patterns, `match` and `let` destructuring, and field or element access inspect a
+types whose recursion does not already pass through a block. A recursion through `List`,
+`Map` or another block needs no box, and a library type does not box such an element:
+a binding keeps a `box T` type, which is not a `T`, so a boxed element would reach its
+readers as `box T`. Patterns, `match` and `let` destructuring, and field or element access inspect a
 box's payload through an implicit projection, recursively through nested boxes. There is no
 explicit unbox syntax and no implicit boxing conversion. `String`, `Bytes`, `List`, `Map`,
 `Array` and escaping closures are blocks. `Inline[T, n]`, `@layout(c)`, `@packed`,

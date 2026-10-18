@@ -30,25 +30,25 @@ pub fn format(entry: Entry) -> String uses {} {
     Warn() => "warn",
     Error() => "error",
   }
-  let mut fields: List[box json.Value] = []
+  let mut fields: List[json.Value] = []
   let mut i: u64 = 0
   while i < core@1/list.len(entry.fields) {
     let field = entry.fields[i]
-    let mut object: Map[String, box json.Value] = core@1/map.empty()
-    core@1/map.insert(mut object, "name", box Text(unique field.name))
-    core@1/map.insert(mut object, "value", box Text(unique field.value))
-    core@1/list.push(mut fields, box Object(take object))
+    let mut object: Map[String, json.Value] = core@1/map.empty()
+    core@1/map.insert(mut object, "name", Text(unique field.name))
+    core@1/map.insert(mut object, "value", Text(unique field.value))
+    core@1/list.push(mut fields, Object(take object))
     i += 1
   }
-  let mut object: Map[String, box json.Value] = core@1/map.empty()
-  core@1/map.insert(mut object, "level", box Text(level))
-  core@1/map.insert(mut object, "message", box Text(unique entry.message))
-  core@1/map.insert(mut object, "fields", box Array(take fields))
+  let mut object: Map[String, json.Value] = core@1/map.empty()
+  core@1/map.insert(mut object, "level", Text(level))
+  core@1/map.insert(mut object, "message", Text(unique entry.message))
+  core@1/map.insert(mut object, "fields", Array(take fields))
   let timestamp: json.Value = match entry.timestamp {
     Some(timestamp) => Number(i128.to_string(timestamp.unix_nanoseconds)),
     None() => Null(),
   }
-  core@1/map.insert(mut object, "timestamp", box take timestamp)
+  core@1/map.insert(mut object, "timestamp", take timestamp)
   let value: json.Value = Object(take object)
   let mut out: List[u8] = []
   match json.stringify(value) {

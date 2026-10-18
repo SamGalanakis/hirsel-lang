@@ -13,7 +13,7 @@ pub type Query {
 pub type Entry {
   level: String,
   message: String,
-  fields: Map[String, box json.Value],
+  fields: Map[String, json.Value],
 }
 
 pub type Ranked {
@@ -92,7 +92,7 @@ fn parse_args(args: Args) -> Result[Query, String] {
   }
 }
 
-fn text_member(fields: Map[String, box json.Value], key: String) -> Option[String] {
+fn text_member(fields: Map[String, json.Value], key: String) -> Option[String] {
   match map.get(fields, key) {
     Some(Text(s)) => Some(unique s),
     Some(Number(n)) => Some(unique n),

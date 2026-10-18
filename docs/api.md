@@ -3778,13 +3778,13 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fjson_2fValue"></a>
 
-- `pub type json.Value = Null | Bool(bool) | Number(String) | Text(String) | Array( List[box Value] ) | Object(Map[String, box Value])`
+- `pub type json.Value = Null | Bool(bool) | Number(String) | Text(String) | Array( List[Value] ) | Object(Map[String, Value])`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
 
 <a id="def-std_401_2fjson_2fValue_23Array"></a>
 
-- `Array( List[box Value] ) -> json.Value`
+- `Array( List[Value] ) -> json.Value`
 
 Variant of json.Value.
 
@@ -3814,7 +3814,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fjson_2fValue_23Object"></a>
 
-- `Object(Map[String, box Value]) -> json.Value`
+- `Object(Map[String, Value]) -> json.Value`
 
 Variant of json.Value.
 

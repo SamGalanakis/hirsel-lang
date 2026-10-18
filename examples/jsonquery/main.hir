@@ -3,15 +3,8 @@ fn query(take text: String, key: String) -> Result[String, common.Error] {
   let Ok(Object(object)) = json.parse(take text) else {
     return Error(Invalid())
   }
-  // A binding retains its box type; constructor patterns inspect the payload.
-  let selected: json.Value = match map.get(object, key) {
-    Some(Null()) => Null(),
-    Some(Bool(value)) => Bool(value),
-    Some(Number(value)) => Number(copy value),
-    Some(Text(value)) => Text(copy value),
-    Some(Array(value)) => Array(copy value),
-    Some(Object(value)) => Object(copy value),
-    None() => return Error(Invalid()),
+  let Some(selected) = map.get(object, key) else {
+    return Error(Invalid())
   }
   let Ok(output) = json.stringify(selected) else {
     return Error(Invalid())

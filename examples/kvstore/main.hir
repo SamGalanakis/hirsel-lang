@@ -32,9 +32,9 @@ const MAX_VALUE: u64 = 65536
 
 // ---- JSON ----
 fn entries_json(entries: Map[String, String]) -> String uses {} {
-  let mut fields: Map[String, box json.Value] = map.empty()
+  let mut fields: Map[String, json.Value] = map.empty()
   for (key, value) in entries {
-    map.insert(mut fields, unique key, box Text(unique value))
+    map.insert(mut fields, unique key, Text(unique value))
   }
   match json.stringify(Object(take fields)) {
     Ok(s) => take s,
