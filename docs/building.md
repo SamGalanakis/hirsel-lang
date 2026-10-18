@@ -483,6 +483,24 @@ each sorted, unique path in `conformance/passing.txt`; the full-gate counter
 checks every compiled test identity executes exactly once. Neither needs a total
 updated when another lane adds an item.
 
+## Memory limits
+
+Every hirsel binary and test harness caps its own memory before doing any work
+(`crates/hirsel-guard`): a hard data limit of `HIRSEL_MEMORY_LIMIT` (bytes or a
+`K`, `M`, `G` or `T` count; default `4G`), which programs they launch inherit. A
+run that reaches it stops at once with `hirsel: memory limit 4G reached
+(HIRSEL_MEMORY_LIMIT); ...` and exit status 71. The native benchmark suite
+(`bench/native/suite.py`) sets the same limit on itself, so every build and
+benchmark it launches inherits it. Under Buck2 each test's limit is
+its measured grant (twice its `memory_kb` in `tools/buck2/test_sizes.bzl`); a test
+that needs more gets a re-measured request, not a variable.
+
+Every runner that spawns worker threads or processes (the agreement campaign,
+`native`, the corpus-wide tests) takes its worker count from `HIRSEL_JOBS`,
+default 2; under Buck2 the test launcher sets it to the action's CPU reservation.
+No runner defaults to the machine's core count, and every worker allocates under
+the same process limit.
+
 ## Run locally
 
 The host is shared. A program run outside Buck2 (a built `hirsel`, a

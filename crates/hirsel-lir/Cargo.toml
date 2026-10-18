@@ -16,6 +16,7 @@ hirsel-core-contract = { path = "../hirsel-core-contract" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-tir = { path = "../hirsel-tir" }
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-lir = { path = ".", features = ["testing"] }

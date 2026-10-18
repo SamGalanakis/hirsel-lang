@@ -13,4 +13,5 @@ hirsel-types = { path = "../hirsel-types" }
 hirsel-diag = { path = "../hirsel-diag" }
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 proptest = { version = "1", default-features = false, features = ["std"] }

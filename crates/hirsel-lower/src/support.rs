@@ -671,7 +671,7 @@ pub fn with_large_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
         std::thread::Builder::new()
             .stack_size(hirsel_intern::jobs::COMPILER_STACK_BYTES)
             .spawn_scoped(scope, work)
-            .expect("fixture thread creation failed")
+            .unwrap_or_else(|error| hirsel_guard::spawn_failed(128 * 1024 * 1024, error))
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     })

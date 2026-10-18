@@ -544,10 +544,7 @@ fn round_trip_all(select: impl Fn(&Path) -> bool) -> Kinds {
     let mut programs = vec![];
     accepted(&corpus(), &mut programs);
     programs.retain(|p| select(p));
-    let jobs: usize = std::env::var("HIRSEL_JOBS")
-        .ok()
-        .and_then(|j| j.parse().ok())
-        .unwrap_or(4);
+    let jobs = hirsel_guard::jobs();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results = std::sync::Mutex::new(vec![]);
     std::thread::scope(|scope| {

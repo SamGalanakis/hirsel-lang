@@ -492,6 +492,22 @@ def references(source: pathlib.Path, seen: set[pathlib.Path]) -> set[str]:
     return found
 
 
+# The memory guard (crates/hirsel-guard): every binary and test harness makes it
+# the global allocator, so each sets its HIRSEL_MEMORY_LIMIT before any work.
+GUARD = re.compile(r'^(?:hirsel_guard::)?install!\(', re.MULTILINE)
+
+
+def guarded(crate_root: pathlib.Path) -> bool:
+    """Whether a binary's or test harness's root, or a module the root names by
+    `#[path]`, installs the memory guard."""
+    text = crate_root.read_text(encoding="utf-8")
+    if GUARD.search(text):
+        return True
+    return any(GUARD.search(target.read_text(encoding="utf-8"))
+               for target in ((crate_root.parent / m.group(1)).resolve() for m in PATH_ATTR.finditer(text))
+               if target.is_file())
+
+
 def sources(root_dir: pathlib.Path, crate_root: pathlib.Path) -> Raw:
     """A target's own directory, and the files it reaches outside it."""
     own = relative(root_dir)
@@ -608,6 +624,7 @@ def first_party(meta: dict) -> str:
     members = set(meta["workspace_members"])
     BUILD_SCRIPT_INPUTS["hirsel-driver"] = compiler_identity_inputs(meta)
     opt_levels = dev_opt_levels()
+    unguarded = []
     out = [
         HEADER,
         'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test", "hirsel_toolchain_bundle")\n',
@@ -681,11 +698,15 @@ def first_party(meta: dict) -> str:
                 out.append("\n" + call("hirsel_test", **profile, name=f"{name}-unittest", deps=test_deps,
                                         **test_attrs(f"{name}-unittest", src), **attrs))
         own = [f"//:{name}"] if lib else []
+        if lib and lib.get("test", True) and not guarded(pathlib.Path(lib["src_path"])):
+            unguarded.append(relative(pathlib.Path(lib["src_path"])))
         for target in package["targets"]:
             kind = target["kind"][0]
             if kind not in ("bin", "test", "example"):
                 continue
             src = pathlib.Path(target["src_path"])
+            if not guarded(src):
+                unguarded.append(relative(src))
             attrs = dict(
                 crate=target["name"].replace("-", "_"),
                 crate_root=relative(src),
@@ -709,6 +730,9 @@ def first_party(meta: dict) -> str:
                 out.append("\n" + call("hirsel_test", **profile, name=f"{name}-test-{target['name']}", deps=own + test_deps, bin_exes=binaries,
                                          shards=count if count > 1 else None, costs=costs,
                                          **test_attrs(f"{name}-test-{target['name']}", src), **attrs))
+    if unguarded:
+        raise SystemExit("these binary and test roots do not install the memory guard; add "
+                         "`hirsel_guard::install!();` (`#[cfg(test)]` in a library): " + ", ".join(unguarded))
     out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", data=Raw(f"glob({starlark(CORPUS, 4)})")))
     for gate in GATE_TESTS:
         out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(CORPUS, 4)})")))

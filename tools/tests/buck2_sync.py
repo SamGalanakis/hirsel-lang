@@ -31,6 +31,19 @@ class NativePoolRouting(unittest.TestCase):
         self.assertNotIn('host = True', buck)
 
 
+class GuardedRoots(unittest.TestCase):
+    def test_a_root_or_a_path_module_installs_the_guard(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'plain.rs').write_text('//! A harness.\nuse std::fs;\n// hirsel_guard::install!();\n')
+            (root / 'lib.rs').write_text('//! A library.\n#[cfg(test)]\nhirsel_guard::install!();\n')
+            (root / 'support.rs').write_text('hirsel_guard::install!(Counting);\n')
+            (root / 'main.rs').write_text('#[path = "support.rs"]\nmod support;\n')
+            self.assertFalse(sync.guarded(root / 'plain.rs'))
+            self.assertTrue(sync.guarded(root / 'lib.rs'))
+            self.assertTrue(sync.guarded(root / 'main.rs'))
+
+
 class SeededTests(unittest.TestCase):
     def test_a_binary_drawing_random_cases_anywhere_in_its_modules_is_seeded(self):
         with tempfile.TemporaryDirectory() as directory:

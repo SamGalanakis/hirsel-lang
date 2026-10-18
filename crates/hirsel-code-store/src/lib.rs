@@ -3,6 +3,9 @@
 //! `add(bundle) -> Ok | Missing(hashes)`, fetch by hash with every object
 //! re-hashed on read, an optional signature policy, and a place's code
 //! check on arrival.
+
+#[cfg(test)]
+hirsel_guard::install!();
 mod arrival;
 pub mod config;
 mod object;

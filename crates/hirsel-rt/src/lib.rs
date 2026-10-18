@@ -12,6 +12,9 @@
 //! by its ID and name (`T04 DropLast`); `proofs/rc/README.md` defines the IDs and the README here
 //! lists the entries. `tests/it/model.rs` runs the model's `rc-trace v1` vectors on the runtime.
 
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod handles;
 mod host_child;
 pub mod host_launch;

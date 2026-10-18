@@ -11,5 +11,6 @@ hirsel-intern = { path = "../hirsel-intern" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-lexer = { path = "../hirsel-lexer" }
 hirsel-parser = { path = "../hirsel-parser" }

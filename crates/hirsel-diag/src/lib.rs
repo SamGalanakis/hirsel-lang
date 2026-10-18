@@ -1,4 +1,8 @@
 //! Rule-linked diagnostics and stable JSON (FAIL-1, LANG-6).
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use hirsel_span::{SourceMap, Span};
 use std::{borrow::Cow, fmt};
 use unicode_width::UnicodeWidthStr;

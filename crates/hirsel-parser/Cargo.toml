@@ -12,5 +12,6 @@ hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-diag = { path = "../hirsel-diag" }
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 insta = "1"
 proptest = "1"

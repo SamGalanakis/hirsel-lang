@@ -1,5 +1,9 @@
 //! Written headers → self-contained semantic signatures (LANG-6).
 //! No body is visited. Missing syntax is rejected; omissions have fixed defaults.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 mod contracts;
 mod destruction;
 mod import;

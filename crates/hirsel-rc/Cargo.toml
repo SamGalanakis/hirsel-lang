@@ -17,4 +17,5 @@ hirsel-tir = { path = "../hirsel-tir" }
 hirsel-types = { path = "../hirsel-types" }
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-heapcheck = { path = "../hirsel-heapcheck" }

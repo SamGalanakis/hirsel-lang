@@ -1,4 +1,8 @@
 //! Command-line mechanics shared by the CLI and compiler tools.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub use lexopt;
 use lexopt::{Arg, Error, Parser};
 use std::path::PathBuf;

@@ -6,6 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-check-protocol = { path = "../hirsel-check-protocol" }
 hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-diag = { path = "../hirsel-diag" }
@@ -27,3 +28,5 @@ bincode = "1.3.3"
 
 [build-dependencies]
 hirsel-run-config = { path = "../hirsel-run-config" }
+
+[dev-dependencies]

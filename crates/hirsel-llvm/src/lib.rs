@@ -6,6 +6,9 @@
 //! `tools/native-toolchain/llvm-21.lock`. No raw LLVM handle is
 //! public, and there is no fallback to another LLVM.
 
+#[cfg(test)]
+hirsel_guard::install!();
+
 mod c_entry;
 mod compare;
 mod context;

@@ -1,4 +1,7 @@
 //! Compile once, keep physical counts separate from sampled cycles, report source lines.
+
+hirsel_guard::install!();
+
 use hirsel_cli_args::{
     CommonOption, CommonOptions,
     lexopt::{self, Arg::*, Parser},

@@ -1,5 +1,9 @@
 //! Lossless, iterative tokenization of the M0 grammar (LANG-1, SEM-1/2/3).
 //! Newlines remain physical source boundaries; statement completion is parser-owned.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;
 use hirsel_span::{FileId, SourceMap, Span};

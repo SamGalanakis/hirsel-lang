@@ -1,5 +1,8 @@
 //! Modes, ownership, brands and closure checks.
 
+#[cfg(test)]
+hirsel_guard::install!();
+
 mod arenas;
 pub mod authority;
 mod explain;

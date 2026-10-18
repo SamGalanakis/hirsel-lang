@@ -26,6 +26,7 @@ enum Class {
 
 const CRATES: &[(&str, Class)] = &[
     ("hirsel-graph", Class::LeafUtility),
+    ("hirsel-guard", Class::LeafUtility),
     ("hirsel-span", Class::Data),
     ("hirsel-intern", Class::Data),
     ("hirsel-diag", Class::Data),
@@ -289,12 +290,15 @@ fn argument_parser_is_shared_only_by_tools() {
 
 #[test]
 fn layering_controls() {
-    for &(consumer, _) in CRATES {
-        if consumer != "hirsel-graph" {
+    for &(consumer, class) in CRATES {
+        if !matches!(class, Class::LeafUtility) {
             assert!(check_edge(consumer, "hirsel-graph", Kind::Production).is_ok());
             assert!(check_edge("hirsel-graph", consumer, Kind::Production).is_err());
         }
     }
+    // Leaf utilities depend on no workspace crate, each other included.
+    assert!(check_edge("hirsel-guard", "hirsel-graph", Kind::Production).is_err());
+    assert!(check_edge("hirsel-graph", "hirsel-guard", Kind::Production).is_err());
     for consumer in ["hirsel-rt", "hirsel-interp", "hirsel-heapcheck"] {
         assert!(check_edge(consumer, "hirsel-kernels", Kind::Production).is_ok());
     }

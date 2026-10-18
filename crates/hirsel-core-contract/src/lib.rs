@@ -2,6 +2,10 @@
 //!
 //! Data only. The driver registry produces operation identities; engines supply
 //! dispositions; nothing here infers a schema from an implementation.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod snapshot;
 use hirsel_syntax::{ContentHash, DefPath, PassingMode};
 

@@ -6,3 +6,6 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+
+[dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }

@@ -1,4 +1,8 @@
 //! Per-definition queries and phase adapters (LANG-6, PROG-5).
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 mod operations;
 pub use operations::*;
 mod native_audit;

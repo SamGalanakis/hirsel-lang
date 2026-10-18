@@ -4,6 +4,9 @@
 //! `crates/hirsel-<crate>/tests/it/<file>.rs`, and `<crate>_<module>` the
 //! driver-using unit tests of `src/<module>`; hirsel-rc's suites link separately
 //! (tests/rc).
+
+hirsel_guard::install!();
+
 mod check_audit_tests;
 mod check_lower_cursor_tests;
 mod check_lower_match_tests;

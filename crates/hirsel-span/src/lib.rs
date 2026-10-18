@@ -1,4 +1,8 @@
 //! Byte-oriented source locations (LANG-1, FAIL-1); columns count Unicode scalars.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use std::path::{Path, PathBuf};
 
 /// Session-local index into a source map, never a definition identity (PROG-1).

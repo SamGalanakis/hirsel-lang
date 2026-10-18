@@ -12,3 +12,6 @@ hirsel-tir = { path = "../hirsel-tir" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-core-contract = { path = "../hirsel-core-contract" }
 hirsel-codec = { path = "../hirsel-codec" }
+
+[dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }

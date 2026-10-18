@@ -34,8 +34,7 @@ unsafe impl GlobalAlloc for MeteredAllocator {
         unsafe { System.realloc(ptr, layout, size) }
     }
 }
-#[global_allocator]
-static ALLOCATOR: MeteredAllocator = MeteredAllocator;
+hirsel_guard::install!(MeteredAllocator);
 fn measured<T>(phase: &str, work: impl FnOnce() -> T) -> T {
     let marker = 0u8;
     BASE.set(&marker as *const u8 as usize);

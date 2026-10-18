@@ -16,4 +16,5 @@ sha2 = "0.10"
 id-salt = ["hirsel-intern/id-salt"]
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-syntax = { path = ".", features = ["id-salt"] }

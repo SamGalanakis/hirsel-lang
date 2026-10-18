@@ -191,6 +191,30 @@ class LauncherBless(LauncherFixture):
         self.assertEqual(json.loads(self.observed.read_text())['cases'], ['pool::other'])
 
 
+class LauncherMemory(LauncherFixture):
+    def limits(self, limit):
+        probe = self.root / 'probe'
+        probe.write_text('#!/bin/sh\necho "$(ulimit -S -d) $(ulimit -H -d) $HIRSEL_MEMORY_LIMIT"\n')
+        probe.chmod(0o755)
+        env = self.env | ({'HIRSEL_MEMORY_LIMIT': limit} if limit else {})
+        if not limit:
+            env.pop('HIRSEL_MEMORY_LIMIT', None)
+        run = subprocess.run(['sh', str(LAUNCHER), 'probe'], cwd=self.root, env=env,
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return run.stdout.split()
+
+    def test_the_grant_caps_the_run_data_in_every_unit(self):
+        self.assertEqual(self.limits('1048576K'), ['1048576', '1048576', '1048576K'])
+        self.assertEqual(self.limits('512M'), ['524288', '524288', '512M'])
+        self.assertEqual(self.limits('2G'), ['2097152', '2097152', '2G'])
+
+    def test_without_a_grant_the_launcher_sets_no_cap(self):
+        soft, hard = subprocess.run(['sh', '-c', 'echo $(ulimit -S -d) $(ulimit -H -d)'],
+                                    capture_output=True, text=True).stdout.split()
+        self.assertEqual(self.limits(''), [soft, hard])
+
+
 class LauncherBinaries(unittest.TestCase):
     """CARGO_BIN_EXE_<name> is compiled in under HIRSEL_TEST_BIN_EXE_DIR and
     linked by the launcher to the binary the run carries (tools/buck2/defs.bzl)."""

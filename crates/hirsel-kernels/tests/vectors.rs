@@ -1,3 +1,5 @@
+hirsel_guard::install!();
+
 use hirsel_kernels::{
     integer::{self, Format, Width},
     siphash,

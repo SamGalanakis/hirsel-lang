@@ -100,6 +100,18 @@ while :; do
   [ -n "$cgroup" ] && [ "$cgroup" != / ] || break
   cgroup="${cgroup%/*}"
 done
+# The run's memory grant (defs.bzl) caps its data before anything runs, so
+# scripts and the native programs a test launches are capped too; hirsel
+# binaries set the same limit again and name it when they reach it.
+if [ -n "${HIRSEL_MEMORY_LIMIT:-}" ]; then
+  case "$HIRSEL_MEMORY_LIMIT" in
+    *K) limit_kb="${HIRSEL_MEMORY_LIMIT%K}" ;;
+    *M) limit_kb="$((${HIRSEL_MEMORY_LIMIT%M} * 1024))" ;;
+    *G) limit_kb="$((${HIRSEL_MEMORY_LIMIT%G} * 1024 * 1024))" ;;
+    *) limit_kb="$((HIRSEL_MEMORY_LIMIT / 1024))" ;;
+  esac
+  ulimit -d "$limit_kb"
+fi
 RUST_TEST_THREADS="${RUST_TEST_THREADS:-$jobs}" HIRSEL_JOBS="${HIRSEL_JOBS:-$jobs}"
 [ "$RUST_TEST_THREADS" -le "$jobs" ] || RUST_TEST_THREADS=$jobs
 [ "$HIRSEL_JOBS" -le "$jobs" ] || HIRSEL_JOBS=$jobs

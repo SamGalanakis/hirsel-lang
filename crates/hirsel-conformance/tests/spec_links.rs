@@ -3,6 +3,9 @@
 //! every relative link in the spec reaches an existing heading or file.
 //! It keeps its own test binary: it reads every crate's sources, which only
 //! this binary's inputs carry.
+
+hirsel_guard::install!();
+
 use hirsel_conformance::{SPEC_DIR, parse_header, spec_definitions, spec_rules};
 use hirsel_diag::RuleId;
 use std::{

@@ -11,6 +11,7 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-cli-args = { path = "../hirsel-cli-args" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-driver = { path = "../hirsel-driver" }

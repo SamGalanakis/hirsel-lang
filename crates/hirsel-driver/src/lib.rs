@@ -2,6 +2,10 @@
 //! depend on (signature, check, modes, lower) and to the native backends that
 //! compile its validated native input. Callers import engine items from
 //! hirsel-engine itself; this crate exports only the wiring.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use hirsel_engine::{
     CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PackageCache,
     PhaseAdapters, RunOutcome, SimulationConfig, ToolError,

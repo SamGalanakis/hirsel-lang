@@ -1,3 +1,5 @@
+hirsel_guard::install!();
+
 use std::{
     process::Command,
     sync::atomic::{AtomicUsize, Ordering},
@@ -90,6 +92,28 @@ fn file(text: &str) -> std::path::PathBuf {
     ));
     std::fs::write(&path, text).unwrap();
     path
+}
+#[test]
+fn a_run_past_its_memory_limit_ends_with_the_guard_message() {
+    // Compiling and running even an empty main needs more than 64M (the
+    // compiler's stack alone is 128M), so the run must stop at the limit.
+    let path = file("pub fn main() -> Result[(), ()] {\n  Ok(())\n}\n");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&path)
+        .env("HIRSEL_MEMORY_LIMIT", "64M")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(hirsel_guard::EXIT_STATUS),
+        "{stderr}"
+    );
+    assert!(
+        stderr.starts_with("hirsel: memory limit 64M reached (HIRSEL_MEMORY_LIMIT); allocating "),
+        "{stderr}"
+    );
 }
 fn std_file(text: &str) -> std::path::PathBuf {
     let path = file(text);

@@ -3,6 +3,9 @@
 //! share: [`ObjectStorage`] is a conditional PUT (`If-None-Match: *`) and a
 //! GET, which a directory, an S3-compatible bucket and a simulation all
 //! implement.
+
+#[cfg(test)]
+hirsel_guard::install!();
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};

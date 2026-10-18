@@ -1,4 +1,7 @@
 //! Stage an explicit package check to separate phase costs from artifact reuse.
+
+hirsel_guard::install!();
+
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_syntax::ItemKind;

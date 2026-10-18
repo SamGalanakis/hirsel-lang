@@ -47,6 +47,8 @@ FRONT = frozenset({CONFORMANCE, AGREEMENT})
 CRATE_CAMPAIGNS = {
     # The shared contract crates every stage is built on.
     'hirsel-graph': ALL,
+    # The memory guard every binary and test harness allocates through.
+    'hirsel-guard': ALL,
     'hirsel-span': ALL,
     'hirsel-intern': ALL,
     'hirsel-diag': ALL,

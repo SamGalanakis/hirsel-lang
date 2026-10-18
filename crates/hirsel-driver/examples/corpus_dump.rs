@@ -1,4 +1,7 @@
 //! Dump every root, with optional canonical numbering of equal full type graphs.
+
+hirsel_guard::install!();
+
 #[path = "../tests/support/canonical_tir.rs"]
 mod canonical_tir;
 use hirsel_driver::*;

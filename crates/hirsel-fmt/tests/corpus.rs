@@ -1,3 +1,5 @@
+hirsel_guard::install!();
+
 use hirsel_span::{SourceMap, Span};
 use hirsel_syntax::*;
 fn parse(source: &str) -> (SyntaxFile, SourceMap, bool) {

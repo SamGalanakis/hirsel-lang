@@ -6,6 +6,10 @@
 //! calls `hirsel-rt` and never reuses the interpreter's value or checked-mode
 //! machinery. A [`Violation`] is a defect in the executed code; a language
 //! failure is an ordinary observed outcome that is audited like a success.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod build;
 mod exec;
 pub mod ledger;

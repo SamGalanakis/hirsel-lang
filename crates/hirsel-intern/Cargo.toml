@@ -10,4 +10,5 @@ rust-version.workspace = true
 id-salt = []
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 proptest = "1"

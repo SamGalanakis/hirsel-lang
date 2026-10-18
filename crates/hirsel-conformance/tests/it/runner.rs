@@ -831,6 +831,40 @@ fn path_selection_runs_only_matches_and_keeps_the_selected_ratchet() {
 }
 
 #[test]
+fn a_run_past_the_memory_limit_ends_the_runner_with_the_guard_message() {
+    // Checking and running even an empty main needs more than 64M (the
+    // compiler's stack alone is 128M), so the runner must stop at the limit.
+    let root = Fixture::new();
+    fs::write(
+        root.0.join("conformance/OWN/empty-run.hir"),
+        "// rule: OWN-6\n// expect: run\npub fn main() -> Result[(), ()] {\n  Ok(())\n}\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel-conformance"))
+        .args([
+            "--shard",
+            "1/1",
+            "--path",
+            "conformance/OWN/empty-run.hir",
+            "--root",
+        ])
+        .arg(&root.0)
+        .env("HIRSEL_MEMORY_LIMIT", "64M")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(hirsel_guard::EXIT_STATUS),
+        "{stderr}"
+    );
+    assert!(
+        stderr.starts_with("hirsel: memory limit 64M reached (HIRSEL_MEMORY_LIMIT); allocating "),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn path_selection_requires_unratcheted_expected_outcomes() {
     use hirsel_conformance::{Selection, run_suite_selected};
     let root = Fixture::new();

@@ -1,4 +1,7 @@
 //! The integration tests of this crate, linked as one binary.
+
+hirsel_guard::install!();
+
 mod abi;
 mod arena;
 mod box_payload;

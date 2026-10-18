@@ -1,4 +1,8 @@
 //! Semantic types and complete separately checked signatures (LANG-6, PROG-5).
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod core_roles;
 pub mod encoding;
 pub mod rows;

@@ -17,7 +17,7 @@ pub fn with_compiler_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
                 COMPILER_THREAD.set(true);
                 work()
             })
-            .expect("compiler thread creation failed");
+            .unwrap_or_else(|error| hirsel_guard::spawn_failed(COMPILER_STACK_BYTES, error));
         thread
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))

@@ -10,3 +10,6 @@ hirsel-span = { path = "../hirsel-span" }
 hirsel-intern = { path = "../hirsel-intern" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-diag = { path = "../hirsel-diag" }
+
+[dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }

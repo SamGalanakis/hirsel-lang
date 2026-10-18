@@ -28,6 +28,7 @@ webpki-roots = "=1.0.9"
 sha2 = "0.10"
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-rt = { path = ".", features = ["diagnostic"] }
 hirsel-lir = { path = "../hirsel-lir" }

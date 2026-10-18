@@ -663,11 +663,7 @@ fn full_gate_cold_and_warm_corpus_verdicts_and_diagnostics_are_identical() {
         &mut corpus,
     );
     corpus.sort();
-    let jobs = std::env::var("HIRSEL_JOBS")
-        .ok()
-        .and_then(|jobs| jobs.parse::<usize>().ok())
-        .unwrap_or(4)
-        .max(1);
+    let jobs = hirsel_guard::jobs();
     // Worker `w` checks programs w, w + jobs, ... in order, each warm through a cache of
     // its own, so a failing program replays from the same HIRSEL_JOBS.
     let corpus = &corpus;

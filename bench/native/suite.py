@@ -5,11 +5,33 @@ import importlib.util
 import json
 import os
 import platform
+import re
+import resource
 import subprocess
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+
+
+def cap_memory():
+    """Cap this process's data at HIRSEL_MEMORY_LIMIT (bytes or a binary K, M,
+    G or T count, as crates/hirsel-guard reads it; default 4G), never above a
+    limit it inherited, so every build and benchmark it launches inherits the
+    cap however the suite is invoked."""
+    text = os.environ.get('HIRSEL_MEMORY_LIMIT', '4G')
+    if not re.fullmatch(r'[1-9][0-9]*[KMGT]?', text):
+        raise SystemExit(f'HIRSEL_MEMORY_LIMIT={text} is not a positive byte count with an '
+                         'optional K, M, G or T, such as 4G')
+    units = {'K': 1 << 10, 'M': 1 << 20, 'G': 1 << 30, 'T': 1 << 40}
+    limit = int(text[:-1]) * units[text[-1]] if text[-1] in units else int(text)
+    _, hard = resource.getrlimit(resource.RLIMIT_DATA)
+    if hard != resource.RLIM_INFINITY:
+        limit = min(limit, hard)
+    resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
+
+
+cap_memory()
 LANGUAGES = ('c', 'rust')
 VARIANTS = ('system', 'mimalloc', 'arena')
 TARGETS = ('x86_64-linux-gnu', 'aarch64-linux-gnu')

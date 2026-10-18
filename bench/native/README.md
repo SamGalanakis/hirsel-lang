@@ -36,6 +36,9 @@ fixed fixtures and independent Python byte oracles. Freeze before evaluation,
 retain old raw reports with their embedded manifest, and use a new dataset after
 any change. Checks reject silently edited inputs, toolchains or references.
 
+Every suite script caps its own data at `HIRSEL_MEMORY_LIMIT` (default `4G`) on
+import, so each build and benchmark it launches inherits the limit.
+
 ## Workload contracts
 
 Both implementations use equivalent node/ownership algorithms; safe Rust uses standard Vec/Box ownership and Rc for shared heap lists.

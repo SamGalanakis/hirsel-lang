@@ -1,4 +1,6 @@
 //! The object storage contract, run against every implementation.
+
+hirsel_guard::install!();
 use hirsel_object_storage::*;
 use std::sync::Arc;
 

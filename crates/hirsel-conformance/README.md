@@ -2,7 +2,7 @@
 
 Validate rule-linked corpus headers, judge each file's result against its header and gate the corpus, with an additive passing ratchet.
 
-Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-span, hirsel-syntax, hirsel-run-config, serde_json; no phase internals.
+Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-span, hirsel-syntax, hirsel-run-config, serde_json, hirsel-guard (the memory guard every binary installs); no phase internals.
 
 Invariants and boundary:
 
@@ -311,7 +311,7 @@ then replayed from a warmed engine, and each mismatching case is reduced while
 keeping the same discrepancy. The cases of `native-tests/topology/cases.txt`
 run under 22 link partitions, and 64 generated successes and 64 directed
 failures run under their pairwise covers. `--jobs N` sets how many cases run at once
-(default: positive `HIRSEL_JOBS`, otherwise 4). Each run of `native` or `agree --native` keeps its scratch
+(default `HIRSEL_JOBS`, else 2). Each run of `native` or `agree --native` keeps its scratch
 directories, and its report unless `--out` names one, under its own run root
 `native-gate/runs/<pid>-<time>` beside the executable, so concurrent runs in
 one checkout never share a path; the root is held by a file lock, explicitly

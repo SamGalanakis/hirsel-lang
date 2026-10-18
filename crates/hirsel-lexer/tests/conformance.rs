@@ -1,4 +1,7 @@
 //! Every corpus program must survive the lossless tape, independently of parsing.
+
+hirsel_guard::install!();
+
 use hirsel_lexer::lex;
 use hirsel_span::SourceMap;
 use hirsel_syntax::TokenKind;

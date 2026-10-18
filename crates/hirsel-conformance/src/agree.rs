@@ -1702,13 +1702,9 @@ fn rank(seed: u64, path: &str, edit: &Edit) -> u64 {
             .fold(mix(hash ^ part.len() as u64), |h, b| mix(h ^ u64::from(*b)))
     })
 }
-/// Independent engines on a few workers; results keep the input order.
+/// Independent engines on `HIRSEL_JOBS` workers; results keep the input order.
 fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let workers = std::env::var("HIRSEL_JOBS")
-        .ok()
-        .and_then(|jobs| jobs.parse::<usize>().ok())
-        .filter(|&jobs| jobs > 0)
-        .unwrap_or(4);
+    let workers = hirsel_guard::jobs();
     std::thread::scope(|scope| {
         let handles: Vec<_> = items
             .chunks(items.len().div_ceil(workers).max(1))
@@ -1717,7 +1713,7 @@ fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R>
                 std::thread::Builder::new()
                     .stack_size(64 << 20)
                     .spawn_scoped(scope, move || chunk.iter().map(f).collect::<Vec<_>>())
-                    .expect("classification worker")
+                    .unwrap_or_else(|error| hirsel_guard::spawn_failed(64 << 20, error))
             })
             .collect();
         handles

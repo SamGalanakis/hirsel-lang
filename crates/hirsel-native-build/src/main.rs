@@ -1,4 +1,7 @@
 //! Compile source outside measurements; timing launches only the sealed executable.
+
+hirsel_guard::install!();
+
 use hirsel_driver::native::{
     OptLevel, Options, Partition, RuntimeBuild, TargetSpec, Toolchain, build, link,
 };

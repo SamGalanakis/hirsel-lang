@@ -18,4 +18,5 @@ hirsel-intern = { path = "../hirsel-intern" }
 
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-validate = { path = "../hirsel-validate" }

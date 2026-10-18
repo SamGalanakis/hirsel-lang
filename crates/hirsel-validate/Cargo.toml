@@ -13,5 +13,6 @@ hirsel-tir = { path = "../hirsel-tir" }
 hirsel-types = { path = "../hirsel-types" }
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-span = { path = "../hirsel-span" }

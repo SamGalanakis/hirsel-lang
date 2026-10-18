@@ -1,5 +1,8 @@
 //! The integration tests of this crate, linked as one binary, apart from the std
 //! suites (tests/it-stdlib) and scaling probes (tests/it-scaling).
+
+hirsel_guard::install!();
+
 mod admission;
 mod agreement;
 mod alias_diagnostics;

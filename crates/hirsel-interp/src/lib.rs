@@ -1,4 +1,8 @@
 //! Deterministic reference execution of ownership-explicit TIR.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod aggregate;
 mod bounded;
 mod budget;

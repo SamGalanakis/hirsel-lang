@@ -870,11 +870,7 @@ fn the_heap_checker_agrees_with_the_interpreter_on_every_scalar_library_operatio
     let program = program(&target);
     let cases = cases();
     let work: Vec<(&Case, &ValidatedUnit<Ready>)> = cases.iter().zip(&program.units).collect();
-    let threads = std::env::var("HIRSEL_JOBS")
-        .ok()
-        .and_then(|jobs| jobs.parse::<usize>().ok())
-        .filter(|&jobs| jobs > 0)
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()));
+    let threads = hirsel_guard::jobs();
     let chunk = work.len().div_ceil(threads);
     let program = &program;
     // Cases are independent; each thread's lines join in case order.

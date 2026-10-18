@@ -138,11 +138,7 @@ fn normalization_invariants(shard: usize) {
         let expected =
             375271 / NORMALIZATION_SHARDS + usize::from(shard < 375271 % NORMALIZATION_SHARDS);
         assert_eq!(vectors.len(), expected);
-        let jobs = std::env::var("HIRSEL_JOBS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(4)
-            .clamp(1, 4);
+        let jobs = hirsel_guard::jobs().min(4);
         let checked: usize = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..jobs)
                 .map(|worker| {

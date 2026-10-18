@@ -1,6 +1,10 @@
 //! Process-global session identities (LANG-4): the append-only spelling
 //! interner, the shared id assignment rule, and deterministic fan-out. Session
 //! ids never reach persisted or printed output; spellings and paths do.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod jobs;
 pub mod memory;
 mod salt;

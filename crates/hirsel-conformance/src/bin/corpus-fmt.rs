@@ -1,3 +1,5 @@
+hirsel_guard::install!();
+
 use std::{env, path::PathBuf, process::ExitCode};
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| {

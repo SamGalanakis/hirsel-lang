@@ -1,4 +1,8 @@
 //! Explicit ordered ownership IR, before Perceus dup/drop optimization (LANG-3, MEM-1).
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use hirsel_diag::RuleId;
 use hirsel_span::Span;
 use hirsel_syntax::{BinaryOp, ContentHash, DefPath, UnaryOp};

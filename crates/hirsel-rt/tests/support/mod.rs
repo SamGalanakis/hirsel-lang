@@ -120,8 +120,7 @@ unsafe impl GlobalAlloc for Counting {
     }
 }
 
-#[global_allocator]
-static COUNTING: Counting = Counting;
+hirsel_guard::install!(Counting);
 
 /// Host bytes this thread has allocated and not freed.
 pub fn host_outstanding() -> i64 {

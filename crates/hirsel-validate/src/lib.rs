@@ -15,6 +15,9 @@
 //! missing or ambiguous identity evidence is a violation.
 //! See the crate README for the checks and conservative unsupported cases.
 
+#[cfg(test)]
+hirsel_guard::install!();
+
 use hirsel_intern::work::{self, Counter};
 use hirsel_syntax::DefPath;
 use hirsel_tir::*;

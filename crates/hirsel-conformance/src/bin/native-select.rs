@@ -1,4 +1,7 @@
 //! Inventory and derive native campaign inputs without running any program.
+
+hirsel_guard::install!();
+
 use hirsel_cli_args::{
     CommonOption, CommonOptions,
     lexopt::{Arg::*, Parser, ValueExt},

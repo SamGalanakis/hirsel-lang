@@ -1,4 +1,8 @@
 //! See README.md: invariants and allowed dependencies. Modules land with their owning tasks.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod append_into;
 pub mod arena_credit;
 pub mod cleanup;

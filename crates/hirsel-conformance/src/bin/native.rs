@@ -2,6 +2,9 @@
 //! matrix, the set rule, topology and mismatch artifacts), `--cranelift` (the
 //! Cranelift parity gate) and `--cranelift-times` (emission time per backend),
 //! `--replay` and `--reduce` of a stored artifact.
+
+hirsel_guard::install!();
+
 use hirsel_cli_args::{
     CommonOption, CommonOptions, Shard,
     lexopt::{Arg::*, Parser, ValueExt},
@@ -154,14 +157,9 @@ fn all_agree(what: &str, results: &[native::CaseResult]) -> bool {
     ok
 }
 
-fn worker_count(configured: Option<&str>, explicit: Option<usize>) -> usize {
-    explicit
-        .or_else(|| {
-            configured
-                .and_then(|jobs| jobs.parse().ok())
-                .filter(|&jobs| jobs > 0)
-        })
-        .unwrap_or(4)
+/// `--jobs`, else the host's worker limit (`HIRSEL_JOBS`, default 2).
+fn worker_count(explicit: Option<usize>) -> usize {
+    explicit.unwrap_or_else(hirsel_guard::jobs)
 }
 
 fn run() -> Result<bool, String> {
@@ -229,8 +227,7 @@ fn run() -> Result<bool, String> {
         println!("{USAGE}");
         return Ok(true);
     }
-    let configured_jobs = std::env::var("HIRSEL_JOBS").ok();
-    let jobs = worker_count(configured_jobs.as_deref(), jobs);
+    let jobs = worker_count(jobs);
     let root = common
         .root
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
@@ -991,12 +988,8 @@ mod tests {
 
     #[test]
     fn host_worker_limit_is_the_default_and_explicit_jobs_override_it() {
-        assert_eq!(worker_count(Some("2"), None), 2);
-        assert_eq!(worker_count(Some("2"), Some(1)), 1);
-        assert_eq!(worker_count(None, None), 4);
-        assert_eq!(worker_count(Some("invalid"), None), 4);
-        assert_eq!(worker_count(Some("0"), None), 4);
-        assert_eq!(worker_count(Some("invalid"), Some(3)), 3);
+        assert_eq!(worker_count(None), hirsel_guard::jobs());
+        assert_eq!(worker_count(Some(3)), 3);
     }
 
     #[test]

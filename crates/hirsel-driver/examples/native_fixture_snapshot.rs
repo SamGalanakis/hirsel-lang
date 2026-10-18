@@ -1,4 +1,7 @@
 //! Refresh source-owned Rc/Ready heap fixtures after a native schema change.
+
+hirsel_guard::install!();
+
 use hirsel_driver::compiler_adapters;
 use hirsel_engine::{
     QueryEngine, check_progress, default_context, default_environment, with_compiler_stack,

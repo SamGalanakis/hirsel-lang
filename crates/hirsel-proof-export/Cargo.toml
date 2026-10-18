@@ -13,3 +13,6 @@ hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-tir = { path = "../hirsel-tir" }
 hirsel-types = { path = "../hirsel-types" }
 hirsel-validate = { path = "../hirsel-validate" }
+
+[dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }

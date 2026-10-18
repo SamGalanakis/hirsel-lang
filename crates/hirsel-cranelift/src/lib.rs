@@ -10,6 +10,9 @@
 //! Ready operation it does not lower is `CodegenError::Unsupported` naming it, never a
 //! placeholder.
 
+#[cfg(test)]
+hirsel_guard::install!();
+
 mod bounded;
 mod compare;
 mod construction;

@@ -3,6 +3,10 @@
 //!
 //! A shared data crate. It owns schemas, effect classification and
 //! pure validators; it never transforms programs or reads `OwnershipFacts`.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod abi;
 pub mod abi_types;
 pub mod codec;

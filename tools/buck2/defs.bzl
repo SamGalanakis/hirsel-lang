@@ -268,6 +268,12 @@ def _rust_test_impl(ctx):
         # these Bazel test variables. They are stable per
         # target and shard, as they are part of the action key.
         "TEST_TARGET": str(ctx.label.raw_target()),
+        # The memory the run was granted: the pool reserves `memory_kb` and
+        # kills a run past twice that (README.md, Measured test requests). The
+        # launcher and every hirsel binary's guard (crates/hirsel-guard) cap
+        # the run's data there, so it stops with a named message instead; a
+        # larger cap comes from re-measuring the binary's request.
+        "HIRSEL_MEMORY_LIMIT": "{}K".format(2 * int(ctx.attrs.request[1])),
     }
     env.update({name: cmd_args(tree) for name, tree in tools.items()})
     if tools:

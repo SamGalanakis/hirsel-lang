@@ -2,6 +2,10 @@
 //! must index `succ`. Adjacency order determines DFS order; duplicate edges are
 //! allowed. Dominators and loop decomposition converge without a cutoff, even
 //! on irreducible graphs. No walk uses the native call stack.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Nodes reachable from `entry`, in reverse DFS postorder.

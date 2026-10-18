@@ -37,6 +37,7 @@ sha2 = "0.10"
 sha2 = "0.10"
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-codec = { path = "../hirsel-codec" }
 hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
 hirsel-validate = { path = "../hirsel-validate" }

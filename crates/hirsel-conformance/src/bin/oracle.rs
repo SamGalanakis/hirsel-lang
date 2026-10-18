@@ -1,4 +1,6 @@
 //! The compiler-architecture oracles O1–O4 (`hirsel_conformance::oracle`).
+
+hirsel_guard::install!();
 use hirsel_cli_args::{
     CommonOption, CommonOptions,
     lexopt::{Arg::*, Parser, ValueExt},

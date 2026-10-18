@@ -1,3 +1,5 @@
+hirsel_guard::install!();
+
 use hirsel_run_config::hex;
 use hirsel_syntax::{DefPath, ItemPath, PackageId};
 use hirsel_types::serialization::{

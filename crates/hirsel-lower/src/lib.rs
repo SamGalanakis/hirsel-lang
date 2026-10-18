@@ -1,6 +1,10 @@
 //! Mode-table-driven lowering. Missing judgments are compiler contract errors.
 //! Synthetic Take operands relocate compiler-owned temporaries; they do not
 //! authorize a source move. Every source use comes from CheckedBody.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use hirsel_intern::work::{self, Counter};
 mod bindings;
 mod builder;

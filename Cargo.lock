@@ -422,6 +422,7 @@ dependencies = [
  "hirsel-check-protocol",
  "hirsel-diag",
  "hirsel-engine",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-lexer",
  "hirsel-parser",
@@ -451,6 +452,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-run-config",
  "rustls",
@@ -461,6 +463,7 @@ dependencies = [
 name = "hirsel-cli-args"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "lexopt",
 ]
 
@@ -469,6 +472,7 @@ name = "hirsel-code-store"
 version = "0.1.0"
 dependencies = [
  "hirsel-codec",
+ "hirsel-guard",
  "hirsel-object-storage",
  "hirsel-proof-export",
  "hirsel-syntax",
@@ -481,6 +485,7 @@ dependencies = [
 name = "hirsel-codec"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "hirsel-syntax",
 ]
 
@@ -492,6 +497,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
+ "hirsel-guard",
  "hirsel-run-config",
  "hirsel-span",
  "hirsel-syntax",
@@ -503,6 +509,7 @@ name = "hirsel-core-contract"
 version = "0.1.0"
 dependencies = [
  "hirsel-codec",
+ "hirsel-guard",
  "hirsel-syntax",
 ]
 
@@ -517,6 +524,7 @@ dependencies = [
  "gimli",
  "hirsel-core-contract",
  "hirsel-graph",
+ "hirsel-guard",
  "hirsel-lir",
  "hirsel-syntax",
 ]
@@ -525,6 +533,7 @@ dependencies = [
 name = "hirsel-diag"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "hirsel-span",
  "serde",
  "serde_json",
@@ -542,6 +551,7 @@ dependencies = [
  "hirsel-cranelift",
  "hirsel-diag",
  "hirsel-engine",
+ "hirsel-guard",
  "hirsel-heapcheck",
  "hirsel-intern",
  "hirsel-interp",
@@ -576,6 +586,7 @@ dependencies = [
  "hirsel-check-protocol",
  "hirsel-diag",
  "hirsel-fmt",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-interp",
  "hirsel-lexer",
@@ -596,6 +607,7 @@ dependencies = [
 name = "hirsel-fmt"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-lexer",
  "hirsel-parser",
@@ -606,6 +618,16 @@ dependencies = [
 [[package]]
 name = "hirsel-graph"
 version = "0.1.0"
+dependencies = [
+ "hirsel-guard",
+]
+
+[[package]]
+name = "hirsel-guard"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "hirsel-heapcheck"
@@ -613,6 +635,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-codec",
  "hirsel-core-contract",
+ "hirsel-guard",
  "hirsel-lir",
  "hirsel-syntax",
 ]
@@ -621,6 +644,7 @@ dependencies = [
 name = "hirsel-intern"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "proptest",
 ]
 
@@ -629,6 +653,7 @@ name = "hirsel-interp"
 version = "0.1.0"
 dependencies = [
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-kernels",
  "hirsel-run-config",
@@ -643,6 +668,9 @@ dependencies = [
 [[package]]
 name = "hirsel-kernels"
 version = "0.1.0"
+dependencies = [
+ "hirsel-guard",
+]
 
 [[package]]
 name = "hirsel-layout"
@@ -650,6 +678,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-codec",
  "hirsel-core-contract",
+ "hirsel-guard",
  "hirsel-lir",
  "hirsel-syntax",
  "hirsel-tir",
@@ -661,6 +690,7 @@ name = "hirsel-lexer"
 version = "0.1.0"
 dependencies = [
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",
@@ -674,6 +704,7 @@ dependencies = [
  "hirsel-core-contract",
  "hirsel-diag",
  "hirsel-graph",
+ "hirsel-guard",
  "hirsel-layout",
  "hirsel-lir",
  "hirsel-span",
@@ -689,6 +720,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
  "hirsel-graph",
+ "hirsel-guard",
  "hirsel-heapcheck",
  "hirsel-interp",
  "hirsel-layout",
@@ -705,6 +737,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-check-protocol",
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-interp",
  "hirsel-span",
@@ -724,6 +757,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-lexer",
  "hirsel-parser",
@@ -741,6 +775,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-driver",
  "hirsel-engine",
+ "hirsel-guard",
  "serde_json",
 ]
 
@@ -748,6 +783,7 @@ dependencies = [
 name = "hirsel-object-storage"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "serde_json",
  "tempfile",
 ]
@@ -757,6 +793,7 @@ name = "hirsel-parser"
 version = "0.1.0"
 dependencies = [
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",
@@ -774,6 +811,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
+ "hirsel-guard",
  "hirsel-heapcheck",
  "hirsel-intern",
  "hirsel-interp",
@@ -803,6 +841,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-codec",
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
@@ -816,6 +855,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
  "hirsel-graph",
+ "hirsel-guard",
  "hirsel-heapcheck",
  "hirsel-intern",
  "hirsel-layout",
@@ -831,6 +871,7 @@ name = "hirsel-resolve"
 version = "0.1.0"
 dependencies = [
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",
@@ -843,6 +884,7 @@ name = "hirsel-rt"
 version = "0.1.0"
 dependencies = [
  "hirsel-core-contract",
+ "hirsel-guard",
  "hirsel-interp",
  "hirsel-kernels",
  "hirsel-layout",
@@ -864,6 +906,7 @@ dependencies = [
 name = "hirsel-run-config"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "proptest",
  "rustls",
  "rustls-pki-types",
@@ -879,6 +922,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-check-protocol",
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-run-config",
  "hirsel-span",
@@ -890,6 +934,7 @@ dependencies = [
 name = "hirsel-span"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "serde",
 ]
 
@@ -897,6 +942,7 @@ dependencies = [
 name = "hirsel-syntax"
 version = "0.1.0"
 dependencies = [
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",
@@ -909,6 +955,7 @@ name = "hirsel-tir"
 version = "0.1.0"
 dependencies = [
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-types",
@@ -921,6 +968,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-codec",
  "hirsel-diag",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-run-config",
  "hirsel-span",
@@ -935,6 +983,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-diag",
  "hirsel-graph",
+ "hirsel-guard",
  "hirsel-intern",
  "hirsel-span",
  "hirsel-syntax",

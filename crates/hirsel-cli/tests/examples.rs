@@ -1,5 +1,8 @@
 //! End-to-end examples: exercise CLI manifests, std selection, actual output,
 //! and native linking rather than duplicating language conformance tests.
+
+hirsel_guard::install!();
+
 #[path = "../src/execution_policy.rs"]
 mod execution_policy;
 use execution_policy::DEFAULT_RUN_MAX_STEPS;

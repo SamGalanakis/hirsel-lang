@@ -4,7 +4,7 @@ Expose check, run, build, fmt and JSON through the compiler driver.
 
 Every nonzero CLI exit includes a cause on stderr, including JSON checks (whose stdout JSON protocol is retained). Returned Error payloads use the PROG-3 host report, independently of stderr grants.
 
-Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-intern's timings and memory, and shared span/syntax types as needed; no phase internals.
+Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-intern's timings and memory, and shared span/syntax types as needed, and hirsel-guard, the memory guard every binary installs; no phase internals.
 
 Invariants and boundary:
 

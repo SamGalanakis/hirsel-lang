@@ -1,4 +1,8 @@
 //! Recovery parser for the frozen grammar, independent of lexing and name lookup.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;
 use hirsel_span::{FileId, SourceMap, Span};

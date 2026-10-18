@@ -1,5 +1,9 @@
 //! Canonical Hirsel formatting (LANG-1/11/12). See the crate README for layout.
 //! Names come from the immutable symbol snapshot; no parser or lexer is used here.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 mod doc;
 mod printer;
 mod trivia;

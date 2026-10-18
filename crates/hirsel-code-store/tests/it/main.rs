@@ -1,4 +1,6 @@
 //! Code store configuration entries.
+
+hirsel_guard::install!();
 use hirsel_code_store::*;
 
 #[test]

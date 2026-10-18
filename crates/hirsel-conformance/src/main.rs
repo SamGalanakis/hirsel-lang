@@ -1,3 +1,5 @@
+hirsel_guard::install!();
+
 use hirsel_cli_args::{
     CommonOption, CommonOptions,
     lexopt::{Arg::*, Parser, ValueExt},

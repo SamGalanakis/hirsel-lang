@@ -28,6 +28,7 @@ hirsel_test(
         "//:hirsel-check-protocol",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-lexer",
         "//:hirsel-parser",
@@ -76,6 +77,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-run-config",
         "//third-party:serde_json",
@@ -97,6 +99,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-run-config",
         "//third-party:rustls",
@@ -205,6 +208,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-run-config",
         "//third-party:rustls",
@@ -320,7 +324,10 @@ hirsel_library(
 
 hirsel_test(
     name = "hirsel-cli-args-unittest",
-    deps = ["//third-party:lexopt"],
+    deps = [
+        "//:hirsel-guard",
+        "//third-party:lexopt",
+    ],
     data = glob(["crates/hirsel-cli-args/Cargo.toml"]) + glob(["crates/hirsel-cli-args/src/**"], exclude = ["crates/hirsel-cli-args/src/**/*.rs"]),
     crate = "hirsel_cli_args",
     crate_root = "crates/hirsel-cli-args/src/lib.rs",
@@ -356,6 +363,7 @@ hirsel_test(
     name = "hirsel-code-store-unittest",
     deps = [
         "//:hirsel-codec",
+        "//:hirsel-guard",
         "//:hirsel-object-storage",
         "//:hirsel-proof-export",
         "//:hirsel-syntax",
@@ -379,6 +387,7 @@ hirsel_test(
     deps = [
         "//:hirsel-code-store",
         "//:hirsel-codec",
+        "//:hirsel-guard",
         "//:hirsel-object-storage",
         "//:hirsel-proof-export",
         "//:hirsel-syntax",
@@ -413,7 +422,10 @@ hirsel_library(
 
 hirsel_test(
     name = "hirsel-codec-unittest",
-    deps = ["//:hirsel-syntax"],
+    deps = [
+        "//:hirsel-guard",
+        "//:hirsel-syntax",
+    ],
     data = glob(["crates/hirsel-codec/Cargo.toml"]) + glob(["crates/hirsel-codec/src/**"], exclude = ["crates/hirsel-codec/src/**/*.rs"]),
     crate = "hirsel_codec",
     crate_root = "crates/hirsel-codec/src/lib.rs",
@@ -432,6 +444,7 @@ hirsel_library(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -458,6 +471,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -499,6 +513,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -527,6 +542,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -555,6 +571,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -583,6 +600,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -610,6 +628,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -651,6 +670,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -679,6 +699,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -707,6 +728,7 @@ hirsel_binary(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -734,6 +756,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -790,6 +813,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-run-config",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -856,6 +880,7 @@ hirsel_test(
     name = "hirsel-core-contract-unittest",
     deps = [
         "//:hirsel-codec",
+        "//:hirsel-guard",
         "//:hirsel-syntax",
     ],
     data = glob(["crates/hirsel-core-contract/Cargo.toml"]) + glob(["crates/hirsel-core-contract/src/**"], exclude = ["crates/hirsel-core-contract/src/**/*.rs"]),
@@ -897,6 +922,7 @@ hirsel_test(
     deps = [
         "//:hirsel-core-contract",
         "//:hirsel-graph",
+        "//:hirsel-guard",
         "//:hirsel-lir",
         "//:hirsel-syntax",
         "//third-party:cranelift-codegen",
@@ -944,6 +970,7 @@ hirsel_test(
     opt_level = 1,
     name = "hirsel-diag-unittest",
     deps = [
+        "//:hirsel-guard",
         "//:hirsel-span",
         "//third-party:serde",
         "//third-party:serde_json",
@@ -1006,6 +1033,10 @@ hirsel_build_script(
         "crates/hirsel-graph/build.rs",
         "crates/hirsel-graph/src/**",
         "crates/hirsel-graph/include/**",
+        "crates/hirsel-guard/Cargo.toml",
+        "crates/hirsel-guard/build.rs",
+        "crates/hirsel-guard/src/**",
+        "crates/hirsel-guard/include/**",
         "crates/hirsel-heapcheck/Cargo.toml",
         "crates/hirsel-heapcheck/build.rs",
         "crates/hirsel-heapcheck/src/**",
@@ -1156,6 +1187,7 @@ hirsel_test(
         "//:hirsel-cranelift",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -1215,6 +1247,7 @@ hirsel_binary(
         "//:hirsel-cranelift",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -1265,6 +1298,7 @@ hirsel_binary(
         "//:hirsel-cranelift",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -1315,6 +1349,7 @@ hirsel_binary(
         "//:hirsel-cranelift",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -1364,6 +1399,7 @@ hirsel_test(
         "//:hirsel-cranelift",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -1468,6 +1504,7 @@ hirsel_test(
         "//:hirsel-cranelift",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -1526,6 +1563,7 @@ hirsel_test(
         "//:hirsel-cranelift",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -1597,6 +1635,7 @@ hirsel_test(
         "//:hirsel-cranelift",
         "//:hirsel-diag",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -1716,6 +1755,7 @@ hirsel_library(
         "//:hirsel-check-protocol",
         "//:hirsel-diag",
         "//:hirsel-fmt",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-interp",
         "//:hirsel-lexer",
@@ -1774,6 +1814,7 @@ hirsel_test(
         "//:hirsel-check-protocol",
         "//:hirsel-diag",
         "//:hirsel-fmt",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-interp",
         "//:hirsel-lexer",
@@ -1834,6 +1875,7 @@ hirsel_test(
         "//:hirsel-check-protocol",
         "//:hirsel-diag",
         "//:hirsel-fmt",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-interp",
         "//:hirsel-lexer",
@@ -1885,6 +1927,7 @@ hirsel_library(
 hirsel_test(
     name = "hirsel-fmt-unittest",
     deps = [
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-lexer",
         "//:hirsel-parser",
@@ -1909,6 +1952,7 @@ hirsel_test(
     name = "hirsel-fmt-test-corpus",
     deps = [
         "//:hirsel-fmt",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-lexer",
         "//:hirsel-parser",
@@ -1944,7 +1988,7 @@ hirsel_library(
 hirsel_test(
     opt_level = 1,
     name = "hirsel-graph-unittest",
-    deps = [],
+    deps = ["//:hirsel-guard"],
     data = glob(["crates/hirsel-graph/Cargo.toml"]) + glob(["crates/hirsel-graph/src/**"], exclude = ["crates/hirsel-graph/src/**/*.rs"]),
     crate = "hirsel_graph",
     crate_root = "crates/hirsel-graph/src/lib.rs",
@@ -1952,6 +1996,33 @@ hirsel_test(
     features = [],
     manifest_dir = "crates/hirsel-graph",
     package_name = "hirsel-graph",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_library(
+    name = "hirsel-guard",
+    deps = ["//third-party:libc"],
+    crate = "hirsel_guard",
+    crate_root = "crates/hirsel-guard/src/lib.rs",
+    srcs = glob(["crates/hirsel-guard/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-guard",
+    package_name = "hirsel-guard",
+    version = "0.1.0",
+    edition = "2024",
+)
+
+hirsel_test(
+    name = "hirsel-guard-unittest",
+    deps = ["//third-party:libc"],
+    data = glob(["crates/hirsel-guard/Cargo.toml"]) + glob(["crates/hirsel-guard/src/**"], exclude = ["crates/hirsel-guard/src/**/*.rs"]),
+    crate = "hirsel_guard",
+    crate_root = "crates/hirsel-guard/src/lib.rs",
+    srcs = glob(["crates/hirsel-guard/src/**"]),
+    features = [],
+    manifest_dir = "crates/hirsel-guard",
+    package_name = "hirsel-guard",
     version = "0.1.0",
     edition = "2024",
 )
@@ -1979,6 +2050,7 @@ hirsel_test(
     deps = [
         "//:hirsel-codec",
         "//:hirsel-core-contract",
+        "//:hirsel-guard",
         "//:hirsel-lir",
         "//:hirsel-syntax",
     ],
@@ -2003,6 +2075,7 @@ hirsel_test(
         "//:hirsel-heapcheck",
         "//:hirsel-codec",
         "//:hirsel-core-contract",
+        "//:hirsel-guard",
         "//:hirsel-lir",
         "//:hirsel-syntax",
     ],
@@ -2042,7 +2115,10 @@ hirsel_library(
 hirsel_test(
     opt_level = 1,
     name = "hirsel-intern-unittest",
-    deps = ["//third-party:proptest"],
+    deps = [
+        "//:hirsel-guard",
+        "//third-party:proptest",
+    ],
     data = glob(["crates/hirsel-intern/Cargo.toml"]) + glob(["crates/hirsel-intern/src/**"], exclude = ["crates/hirsel-intern/src/**/*.rs"]),
     seeded = True,
     crate = "hirsel_intern",
@@ -2082,6 +2158,7 @@ hirsel_test(
     name = "hirsel-interp-unittest",
     deps = [
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-kernels",
         "//:hirsel-run-config",
@@ -2114,6 +2191,7 @@ hirsel_test(
     deps = [
         "//:hirsel-interp",
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-kernels",
         "//:hirsel-run-config",
@@ -2160,7 +2238,7 @@ hirsel_library(
 
 hirsel_test(
     name = "hirsel-kernels-unittest",
-    deps = [],
+    deps = ["//:hirsel-guard"],
     data = glob(["crates/hirsel-kernels/Cargo.toml"]) + glob(["crates/hirsel-kernels/src/**"], exclude = ["crates/hirsel-kernels/src/**/*.rs"]),
     crate = "hirsel_kernels",
     crate_root = "crates/hirsel-kernels/src/lib.rs",
@@ -2174,7 +2252,10 @@ hirsel_test(
 
 hirsel_test(
     name = "hirsel-kernels-test-vectors",
-    deps = ["//:hirsel-kernels"],
+    deps = [
+        "//:hirsel-kernels",
+        "//:hirsel-guard",
+    ],
     bin_exes = {},
     data = glob(["crates/hirsel-kernels/Cargo.toml"]),
     crate = "vectors",
@@ -2212,6 +2293,7 @@ hirsel_test(
     deps = [
         "//:hirsel-codec",
         "//:hirsel-core-contract",
+        "//:hirsel-guard",
         "//:hirsel-lir",
         "//:hirsel-syntax",
         "//:hirsel-tir",
@@ -2250,6 +2332,7 @@ hirsel_test(
     name = "hirsel-lexer-unittest",
     deps = [
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2276,6 +2359,7 @@ hirsel_test(
     deps = [
         "//:hirsel-lexer",
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2327,6 +2411,7 @@ hirsel_test(
         "//:hirsel-core-contract",
         "//:hirsel-diag",
         "//:hirsel-graph",
+        "//:hirsel-guard",
         "//:hirsel-layout",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2358,6 +2443,7 @@ hirsel_test(
         "//:hirsel-core-contract",
         "//:hirsel-diag",
         "//:hirsel-graph",
+        "//:hirsel-guard",
         "//:hirsel-layout",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2408,6 +2494,7 @@ hirsel_test(
     deps = [
         "//:hirsel-core-contract",
         "//:hirsel-graph",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-interp",
         "//:hirsel-layout",
@@ -2443,6 +2530,7 @@ hirsel_test(
         "//:hirsel-llvm",
         "//:hirsel-core-contract",
         "//:hirsel-graph",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-interp",
         "//:hirsel-layout",
@@ -2508,6 +2596,7 @@ hirsel_test(
     deps = [
         "//:hirsel-check-protocol",
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-interp",
         "//:hirsel-span",
@@ -2555,6 +2644,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-lexer",
         "//:hirsel-parser",
@@ -2592,6 +2682,7 @@ hirsel_binary(
     deps = [
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//third-party:serde_json",
     ],
     crate = "hirsel_native_build",
@@ -2609,6 +2700,7 @@ hirsel_test(
     deps = [
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//third-party:serde_json",
     ],
     data = glob(["crates/hirsel-native-build/Cargo.toml"]) + glob(["crates/hirsel-native-build/src/**"], exclude = ["crates/hirsel-native-build/src/**/*.rs"]),
@@ -2638,6 +2730,7 @@ hirsel_library(
 hirsel_test(
     name = "hirsel-object-storage-unittest",
     deps = [
+        "//:hirsel-guard",
         "//third-party:serde_json",
         "//third-party:tempfile",
     ],
@@ -2656,6 +2749,7 @@ hirsel_test(
     name = "hirsel-object-storage-test-it",
     deps = [
         "//:hirsel-object-storage",
+        "//:hirsel-guard",
         "//third-party:serde_json",
         "//third-party:tempfile",
     ],
@@ -2693,6 +2787,7 @@ hirsel_test(
     name = "hirsel-parser-unittest",
     deps = [
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2718,6 +2813,7 @@ hirsel_test(
     deps = [
         "//:hirsel-parser",
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -2766,6 +2862,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -2845,6 +2942,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-interp",
@@ -2978,6 +3076,7 @@ hirsel_test(
     deps = [
         "//:hirsel-codec",
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-span",
         "//:hirsel-syntax",
         "//:hirsel-tir",
@@ -3026,6 +3125,7 @@ hirsel_test(
     deps = [
         "//:hirsel-core-contract",
         "//:hirsel-graph",
+        "//:hirsel-guard",
         "//:hirsel-heapcheck",
         "//:hirsel-intern",
         "//:hirsel-layout",
@@ -3078,6 +3178,7 @@ hirsel_test(
     name = "hirsel-resolve-unittest",
     deps = [
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -3148,6 +3249,7 @@ hirsel_test(
     name = "hirsel-rt-unittest",
     deps = [
         "//:hirsel-core-contract",
+        "//:hirsel-guard",
         "//:hirsel-interp",
         "//:hirsel-kernels",
         "//:hirsel-layout",
@@ -3193,6 +3295,7 @@ hirsel_test(
     deps = [
         "//:hirsel-rt",
         "//:hirsel-core-contract",
+        "//:hirsel-guard",
         "//:hirsel-interp",
         "//:hirsel-kernels",
         "//:hirsel-layout",
@@ -3263,6 +3366,7 @@ hirsel_library(
 hirsel_test(
     name = "hirsel-run-config-unittest",
     deps = [
+        "//:hirsel-guard",
         "//third-party:proptest",
         "//third-party:rustls",
         "//third-party:rustls-pki-types",
@@ -3286,6 +3390,7 @@ hirsel_test(
     name = "hirsel-run-config-test-it",
     deps = [
         "//:hirsel-run-config",
+        "//:hirsel-guard",
         "//third-party:proptest",
         "//third-party:rustls",
         "//third-party:rustls-pki-types",
@@ -3332,6 +3437,7 @@ hirsel_test(
     deps = [
         "//:hirsel-check-protocol",
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-run-config",
         "//:hirsel-span",
@@ -3366,7 +3472,10 @@ hirsel_library(
 hirsel_test(
     opt_level = 1,
     name = "hirsel-span-unittest",
-    deps = ["//third-party:serde"],
+    deps = [
+        "//:hirsel-guard",
+        "//third-party:serde",
+    ],
     data = glob(["crates/hirsel-span/Cargo.toml"]) + glob(["crates/hirsel-span/src/**"], exclude = ["crates/hirsel-span/src/**/*.rs"]),
     crate = "hirsel_span",
     crate_root = "crates/hirsel-span/src/lib.rs",
@@ -3401,6 +3510,7 @@ hirsel_test(
     opt_level = 1,
     name = "hirsel-syntax-unittest",
     deps = [
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//third-party:serde",
@@ -3442,6 +3552,7 @@ hirsel_test(
     name = "hirsel-tir-unittest",
     deps = [
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-span",
         "//:hirsel-syntax",
         "//:hirsel-types",
@@ -3485,6 +3596,7 @@ hirsel_test(
     deps = [
         "//:hirsel-codec",
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-run-config",
         "//:hirsel-span",
@@ -3510,6 +3622,7 @@ hirsel_test(
         "//:hirsel-types",
         "//:hirsel-codec",
         "//:hirsel-diag",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-run-config",
         "//:hirsel-span",
@@ -3562,6 +3675,7 @@ hirsel_test(
     deps = [
         "//:hirsel-diag",
         "//:hirsel-graph",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",
@@ -3590,6 +3704,7 @@ hirsel_test(
         "//:hirsel-validate",
         "//:hirsel-diag",
         "//:hirsel-graph",
+        "//:hirsel-guard",
         "//:hirsel-intern",
         "//:hirsel-span",
         "//:hirsel-syntax",

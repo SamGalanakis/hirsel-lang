@@ -1,4 +1,8 @@
 //! Corpus headers, the corpus verdict and the gate over it, with an additive passing ratchet.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use hirsel_diag::{RuleId, Severity};
 use hirsel_engine::RunOutcome;
 use std::{

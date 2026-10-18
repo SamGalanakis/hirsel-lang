@@ -4,6 +4,10 @@
 //! decodes, re-derives every signature fingerprint, recomputes every digest
 //! and table, and re-validates each definition with V; any difference is a
 //! located refusal.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 mod content;
 mod obligations;
 pub mod sidecar;

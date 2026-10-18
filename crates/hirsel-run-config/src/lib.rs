@@ -1,4 +1,8 @@
 //! One closed canonical run description. Parsed data never mints host authority.
+
+#[cfg(test)]
+hirsel_guard::install!();
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};

@@ -13,6 +13,7 @@ hirsel-syntax = { path = "../hirsel-syntax" }
 llvm-sys = { version = "=211.0.1", default-features = false, features = ["strict-versioning", "force-dynamic"] }
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 hirsel-layout = { path = "../hirsel-layout" }
 hirsel-lir = { path = "../hirsel-lir", features = ["testing"] }
 hirsel-heapcheck = { path = "../hirsel-heapcheck" }

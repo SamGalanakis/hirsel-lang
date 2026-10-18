@@ -90,7 +90,7 @@ conservatively change it. Launch never reads checkout files to compute identity.
 `DefPath` display emits the versioned path bound by `ValidatedRun`.
 This identity is separate from `native::input_identity` and artifact provenance.
 
-Allowed dependencies: the shared data crates, check-protocol, run-config, validate, interp, resolve, parser, lexer and fmt. Never signature, check, modes, lower, the native backends, the CLI or the conformance runner.
+Allowed dependencies: the shared data crates, check-protocol, run-config, validate, interp, resolve, parser, lexer and fmt, and hirsel-guard for the compiler thread's stack. Never signature, check, modes, lower, the native backends, the CLI or the conformance runner.
 
 Invariants and boundary:
 

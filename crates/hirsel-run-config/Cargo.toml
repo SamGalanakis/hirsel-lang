@@ -15,4 +15,5 @@ rustls-pki-types = { version = "=1.15.1", default-features = false, features = [
 webpki = { package = "rustls-webpki", version = "=0.103.15", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
 proptest = "1"

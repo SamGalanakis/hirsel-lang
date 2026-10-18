@@ -11,3 +11,6 @@ hirsel-span = { path = "../hirsel-span" }
 hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-types = { path = "../hirsel-types" }
 hirsel-diag = { path = "../hirsel-diag" }
+
+[dev-dependencies]
+hirsel-guard = { path = "../hirsel-guard" }
