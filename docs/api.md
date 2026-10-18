@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-832 exported definitions; 266 variants.
+834 exported definitions; 266 variants.
 
 ## Types and roots
 
