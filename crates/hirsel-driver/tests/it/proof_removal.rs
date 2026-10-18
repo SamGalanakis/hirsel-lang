@@ -233,6 +233,16 @@ fn an_accepted_bounds_check_removes_only_its_projection_guard() {
             without(checks(&reference), Opcode::Address, "MEM-14")
         );
         assert_eq!(report[0], format!("proof {BOUNDS}: removed"));
+        // The removed guard also leaves H's fault-injection domain.
+        let mut engine = engine(BUMP);
+        let input = engine.export_native_input().unwrap();
+        let validated = engine.import_native_input(input).unwrap();
+        let sites = hirsel_driver::native::Sites::new(validated.snapshot());
+        let entry = entry_path(&default_context());
+        let before_heap = hirsel_driver::native::run_heap(&reference, &entry, &sites).unwrap();
+        let after_heap = hirsel_driver::native::run_heap(&ready, &entry, &sites).unwrap();
+        assert_eq!(before_heap.observation, after_heap.observation);
+        assert_eq!(before_heap.sites, after_heap.sites + 1);
         let before = bump_ir(&reference);
         let after = bump_ir(&ready);
         assert!(

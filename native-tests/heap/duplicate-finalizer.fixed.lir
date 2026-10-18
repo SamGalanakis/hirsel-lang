@@ -5,13 +5,13 @@
     (ScalarAlignments 1 2 4 8 16 4 8 8 16)
     (SysV64)
     (Elf) "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-    (ArtifactVersions 27 3 1 8 0))
-  (LayoutTable #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 3 1
+    (ArtifactVersions 28 3 1 8 0))
+  (LayoutTable #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 3 1
     (list
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 3)
+          (none) #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 3)
         (Scalar
           (U64))
         (Fixed 8) 8
@@ -32,7 +32,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 3)
+          (none) #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 3)
         (Scalar
           (Bool))
         (Fixed 1) 1
@@ -53,7 +53,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 3)
+          (none) #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 3)
         (Aggregate)
         (Fixed 8) 8
         (list
@@ -72,7 +72,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 3)
+          (none) #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 3)
         (Block 2)
         (Fixed 8) 8
         (list)
@@ -92,7 +92,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 3)
+          (none) #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 3)
         (Resource)
         (Fixed 8) 8
         (list
@@ -117,7 +117,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 3)
+          (none) #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 3)
         (Block 4)
         (Fixed 8) 8
         (list)
@@ -158,11 +158,11 @@
   (list
     (LirUnit
       (UnitHeader
-        (Ready) 27
+        (Ready) 28
         (Source)
         (InputIdentity 11 #129a1e7efb7f261960cd22cf61a43afb3602da1616b6a941a635e4327915a243)
         (DefPath "fixture" "0"
-          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 #f164660de04cc489b0724262e466e1306a178b1dcdea2481100648d4b1c20f2d 0)
+          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 #f5cf354b18a17c9ca2cf6c16b08bec657da088cd5e7b23b2c1a444977b5cc249 0)
       (list
         (LirType
           (Scalar
@@ -187,9 +187,13 @@
           (Local) 0))
       (list
         (AddressInfo
+          (none)
+          (list)
           (Slot 0)
           (range 0 0) 2)
         (AddressInfo
+          (none)
+          (list)
           (Slot 0)
           (range 0 1) 1))
       (list
@@ -318,11 +322,11 @@
         (list)))
     (LirUnit
       (UnitHeader
-        (Ready) 27
+        (Ready) 28
         (Source)
         (InputIdentity 11 #129a1e7efb7f261960cd22cf61a43afb3602da1616b6a941a635e4327915a243)
         (DefPath "fixture" "0"
-          (list "heap") "Res.drop") #faa69d999ad4db26c5eb5b1e05ff122ced0f68b8011ce0a678f9f4fe54198cd8 #faa69d999ad4db26c5eb5b1e05ff122ced0f68b8011ce0a678f9f4fe54198cd8 #86cc58f3ce156f43cdad245c297b30d2c462c80be27d63172f870441227b6dd1 #f164660de04cc489b0724262e466e1306a178b1dcdea2481100648d4b1c20f2d 1)
+          (list "heap") "Res.drop") #faa69d999ad4db26c5eb5b1e05ff122ced0f68b8011ce0a678f9f4fe54198cd8 #faa69d999ad4db26c5eb5b1e05ff122ced0f68b8011ce0a678f9f4fe54198cd8 #1cca5b22886a9bf8d594c561225117fdc4a0e37399074a03f12d912293b4dca9 #f5cf354b18a17c9ca2cf6c16b08bec657da088cd5e7b23b2c1a444977b5cc249 1)
       (list
         (LirType
           (Uncounted) 5)
@@ -341,9 +345,13 @@
       (list)
       (list
         (AddressInfo
+          (none)
+          (list)
           (Value 0)
           (range 0 1) 1)
         (AddressInfo
+          (none)
+          (list)
           (Value 1)
           (range 1 1) 2))
       (list

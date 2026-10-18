@@ -902,9 +902,10 @@ impl<'p, S: Stage> Machine<'p, S> {
             .get(address.index())
             .ok_or_else(|| err(V::Malformed, format!("unknown address {address:?}")))?;
         let steps = self.pool(info.projection, &u.pools.projections)?;
-        let own = steps
-            .iter()
-            .any(|s| !matches!(s, ProjectionStep::Field(_) | ProjectionStep::Slot(_)));
+        let own = steps.iter().enumerate().any(|(i, s)| {
+            !info.unchecked.contains(&(i as u32))
+                && !matches!(s, ProjectionStep::Field(_) | ProjectionStep::Slot(_))
+        });
         Ok(own
             || match info.base {
                 AddressBase::Address(a) => self.checked_steps(unit, a)?,
