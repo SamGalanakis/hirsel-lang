@@ -796,3 +796,77 @@ fn scalar_buffer_updates_audit_inline_and_counted_storage_and_require_mut_access
         }
     }
 }
+
+#[test]
+fn terminal_handle_close_failures_are_language_failures_with_a_clean_twin() {
+    struct CloseModel(bool);
+    impl Operations for CloseModel {
+        fn call(&mut self, _: &OperationId, _: &[OpValue], _: &mut Vec<u8>) -> OpOutcome {
+            OpOutcome::Value(OpValue::OpenHandle(41))
+        }
+        fn close_handle(
+            &mut self,
+            handle: u64,
+            output: &mut Vec<u8>,
+        ) -> Result<Option<String>, String> {
+            assert_eq!(handle, 41);
+            if self.0 {
+                output.extend_from_slice(b"unmet client\n");
+                Ok(Some("LANG-9".into()))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+    let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+    let handle = layouts.scalar(ScalarKind::U64);
+    let record = layouts.get_mut(handle);
+    record.kind = LayoutKind::Handle;
+    record.drop = vec![DropStep::CloseHandle { offset: 0 }];
+    record.copy = CopyRecipe::NotCopyable;
+    layouts.table.fn_abis[0].result = Some(hirsel_lir::abi_types::AbiResult {
+        borrowed_parameters: vec![],
+        layout: handle,
+        slots: vec![hirsel_lir::abi::slot(&layouts.target, ScalarKind::U64)],
+    });
+    let (target, table) = layouts.finish();
+    let mut b = UnitBuilder::<Ready>::new(fixture_unit(path("main")));
+    let entry = b.block(BlockKind::Body, &[]);
+    let failed = b.block(BlockKind::FailureCleanup, &[]);
+    b.term(failed, Terminator::Propagate);
+    let edge = b.edge(failed, &[]);
+    let failure = b.failure(edge, None, &[]);
+    let value = b.owned(ValueRepr::Handle, handle);
+    let open = operation(&mut b, "open");
+    let next = call(&mut b, entry, open, &[], Some(value), failure);
+    b.term(next, Terminator::Return(Some(value)));
+    let program = Program {
+        target,
+        layouts: table.clone(),
+        units: vec![b.finish_with_layouts(&table)],
+        statics: vec![],
+    };
+    for full_recount_every_step in [false, true] {
+        for fails in [false, true] {
+            let run = hirsel_heapcheck::run(
+                &program,
+                &path("main"),
+                &[],
+                &mut CloseModel(fails),
+                &Config {
+                    full_recount_every_step,
+                    ..Config::default()
+                },
+            );
+            let audit = run.result.unwrap();
+            assert_eq!(audit.observation.failures.len(), usize::from(fails));
+            if fails {
+                assert_eq!(audit.observation.failures[0].rule, "LANG-9");
+                assert_eq!(audit.observation.failures[0].definition, path("main"));
+                assert_eq!(audit.observation.failures[0].site, (0, 0));
+                assert_eq!(run.output, b"unmet client\n");
+                assert_eq!(audit.observation.output, run.output);
+            }
+        }
+    }
+}

@@ -222,6 +222,7 @@ pub(crate) struct Machine<'p, S> {
     ops: &'p mut dyn Operations,
     pub ledger: Ledger,
     stack: Vec<Activity>,
+    entry: usize,
     pub output: Vec<u8>,
     failures: Vec<ObservedFailure>,
     unanchored_failures: std::collections::BTreeSet<usize>,
@@ -323,6 +324,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             ops,
             ledger,
             stack: Vec::new(),
+            entry: 0,
             output: Vec::new(),
             failures: Vec::new(),
             unanchored_failures: std::collections::BTreeSet::new(),
@@ -2472,7 +2474,18 @@ impl<'p, S: Stage> Machine<'p, S> {
             Activity::Frame(f) => Some(f),
             Activity::Drain(_) => None,
         }) else {
-            return fail(V::Malformed, "a handle close failed outside a frame's drop");
+            // The harness owns a returned handle after the entry frame has gone.
+            // Its terminal drop still raises an ordinary language failure.
+            self.full_recount_due = true;
+            self.failures.push(ObservedFailure {
+                rule: rule.to_string(),
+                definition: self.unit(self.entry).header.definition.clone(),
+                site: (0, 0),
+            });
+            self.ledger.trace.push(Event::Failure {
+                rule: rule.to_string(),
+            });
+            return Ok(());
         };
         let u = self.unit(f.unit);
         let block = u
@@ -2837,6 +2850,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 "finite count bound does not fit the ABI v2 u32 counter",
             );
         }
+        self.entry = entry;
         let mut f = self.frame(entry, Role::Entry, None);
         let parameters = &self.unit(entry).parameters;
         if parameters.len() != args.len() {
@@ -8446,6 +8460,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         let mut observation = self.terminal.take().expect("prepared terminal observation");
         // Returned-value finalizers may fail during the harness drain.
         observation.failures = self.failures.clone();
+        observation.output = self.output.clone();
         self.audit()?;
         Ok((observation, self.ledger.exemptions.clone()))
     }

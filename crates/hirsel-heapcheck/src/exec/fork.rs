@@ -18,6 +18,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             ops,
             ledger: self.ledger.clone(),
             stack: self.stack.clone(),
+            entry: self.entry,
             output: self.output.clone(),
             failures: self.failures.clone(),
             unanchored_failures: self.unanchored_failures.clone(),

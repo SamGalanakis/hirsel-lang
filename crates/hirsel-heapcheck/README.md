@@ -488,3 +488,9 @@ region through its ledger: a hidden heap holder fails the count or leaked-credit
 audit, and an outside reference fails the region escape audit. The source-free controls
 in `tests/it/nested_regions.rs` also check C's independent field and lifetime
 proofs, with accepted twins.
+
+The harness's terminal drop can raise a language failure after the entry frame
+has gone. Handle-close failures retain the entry definition with no source site,
+join the failure observation, and keep their report in the terminal output.
+The source-free terminal handle control covers LANG-9 and a successful close
+under both holder audit modes.
