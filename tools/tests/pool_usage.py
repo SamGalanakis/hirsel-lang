@@ -21,12 +21,13 @@ class Report(unittest.TestCase):
     def test_repeated_keys_exclude_cache_hits_and_merged_execution_records(self):
         with tempfile.TemporaryDirectory() as temp:
             first, copy = Path(temp) / 'one.jsonl', Path(temp) / 'copy.jsonl'
-            first.write_text('\n'.join([action('target', 'rlib [pic]', 100, 1),
+            first.write_text('\n'.join([action('target', 'rlib [pic]', 100, 1, cached=True),
+                                        action('target', 'rlib [pic]', 100, 1),
                                         action('target', 'rlib [pic]', 105, 1),
                                         action('target', 'rlib [pic]', 110, 1, cached=True)]))
             copy.write_bytes(first.read_bytes())
             commands = list(pool_usage.event_logs.commands([first, copy]))
-        self.assertEqual(len(commands), 3)
+        self.assertEqual(len(commands), 4)
         text = pool_usage.repeated_actions(commands, 111, 1, 20)
         self.assertIn('repeated action keys: 1', text)
         self.assertIn('target: 2 executions, 2 successful; target-digest', text)

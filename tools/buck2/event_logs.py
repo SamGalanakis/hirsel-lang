@@ -153,7 +153,9 @@ def commands(paths):
                 if not remote or not metadata.get('start_time') or metadata.get('execution_time_us') is None:
                     continue
                 start = metadata['start_time']
-                key = (remote['action_digest'], tuple(start), metadata['execution_time_us'])
+                # A cache hit carries the original execution's timing. It must
+                # not hide a later-read miss for that execution in another log.
+                key = (remote['action_digest'], tuple(start), metadata['execution_time_us'], remote['cache_hit'])
                 if key in seen:
                     continue
                 seen.add(key)
