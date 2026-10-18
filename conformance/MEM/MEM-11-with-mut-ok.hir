@@ -1,0 +1,18 @@
+// rule: MEM-11
+// expect: accept
+// A Shared value is "read by borrowing": a local copy of a borrowed part is the
+// body's own, and writing it leaves the frozen value as it was.
+type Index {
+  items: List[u64],
+}
+
+fn grown(s: Shared[Index]) -> u64 {
+  shared.with(
+    s,
+    fn(i: Index) -> u64 {
+      let mut items = i.items
+      list.push(mut items, 3)
+      list.len(items)
+    }
+  )
+}

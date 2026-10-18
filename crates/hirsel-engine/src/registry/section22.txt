@@ -140,6 +140,7 @@ N fn region.with[T, R](mut r: Region[T], body: fn(root: T) -> R) -> R
 fn copy_to[T: copyable](a: Arena, x: T) -> T in a
 fn shared.freeze[T: inert](take x: unique T) -> Shared[T]
 fn shared.thaw[T](take s: Shared[T]) -> Result[unique T, Shared[T]]
+N fn shared.with[T, R](s: Shared[T], body: fn(v: T) -> R) -> R
 fn slots.empty[T]() -> Slots[T]
 @preserves_unique(s) fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s
 N fn slots.get[T](s: Slots[T], id: SlotId[T] of s) -> Option[T] in s

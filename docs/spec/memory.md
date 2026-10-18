@@ -227,7 +227,11 @@ resources, freezes a value deeply: its inner blocks become immortal and uncounte
 the root carries a count updated without data races under the run's scheduler. The current
 single-threaded scheduler uses plain counts; a threaded scheduler makes them atomic.
 `Shared[T]` is copyable (a root-count increment), sendable
-and read by borrowing; dropping the last root frees the whole value.
+and read by borrowing: `shared.with(s, body)` calls `body` with the frozen value as a
+borrowed parameter ([OWN-1](ownership.md#own-1-borrow)), changing no count, while the
+call's read loan on `s` keeps the root alive and unmoved. `body`'s result is global, so
+frozen content leaves it only as plain values, `unique` copies or copied nested roots.
+Dropping the last root frees the whole value.
 `shared.thaw(take s) -> Result[unique T, Shared[T]]` returns the value with ordinary counts
 restored when `s` is the last root, and gives `s` back otherwise. Freeze and thaw each walk
 the value and are allocation sites.

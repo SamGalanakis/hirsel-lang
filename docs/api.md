@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1162 exported definitions; 315 variants.
+1163 exported definitions; 315 variants.
 
 ## Types and roots
 
@@ -6928,6 +6928,10 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha512_256/State`](
 <a id="def-core_401_2fshared_2fthaw"></a>
 
 - `fn shared.thaw[T](take s: Shared[T]) -> Result[unique T, Shared[T]]`
+
+<a id="def-core_401_2fshared_2fwith"></a>
+
+- `@noalloc fn shared.with[T, R](s: Shared[T], body: fn(v: T) -> R) -> R`
 
 
 ## simd

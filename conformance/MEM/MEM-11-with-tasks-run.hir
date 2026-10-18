@@ -1,0 +1,76 @@
+// rule: MEM-11
+// expect: run
+// stdout: ok
+// "read by borrowing" across tasks: one value is frozen once, each child task reads
+// it through its own copy of the root, and the parent's thaw after they finish is the
+// last root's.
+fn output_error[E](take e: E) -> () {}
+
+type Config {
+  base: u64,
+  weights: List[u64],
+}
+
+fn weight(c: Config, at: u64) -> u64 {
+  c.base + c.weights[at]
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let built = Config(base: 10, weights: [1, 2, 3])
+  let config: Shared[Config] = shared.freeze(take built)
+  let summed: u64 = task.scope(
+    tasks,
+    fn(scope: Scope) -> u64 {
+      let first = copy config
+      let second = copy config
+      let a = task.async(
+        scope,
+        fn() -> u64 {
+          shared.with(
+            first,
+            fn(c: Config) -> u64 {
+              weight(c, 0)
+            }
+          )
+        }
+      )
+      let b = task.async(
+        scope,
+        fn() -> u64 {
+          shared.with(
+            second,
+            fn(c: Config) -> u64 {
+              weight(c, 2)
+            }
+          )
+        }
+      )
+      let here = shared.with(
+        config,
+        fn(c: Config) -> u64 {
+          weight(c, 1)
+        }
+      )
+      task.await(scope, take a) + task.await(scope, take b) + here
+    }
+  )
+  let last = match shared.thaw(take config) {
+    Ok(c) => c.base == 10,
+    Error(root) => false,
+  }
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if summed == 36 && last {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

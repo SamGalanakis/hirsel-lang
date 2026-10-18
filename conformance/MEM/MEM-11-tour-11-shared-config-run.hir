@@ -1,0 +1,76 @@
+// rule: MEM-11
+// expect: run
+// stdout: /api/users -> users
+// stdout: /api/orders -> orders
+// stdout: /static/logo.png -> files
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+type Route {
+  prefix: String,
+  backend: String,
+}
+
+type Config {
+  routes: List[Route],
+  fallback: String,
+}
+
+fn backend_for(c: Config, path: String) -> String {
+  for r in c.routes {
+    if string.starts_with(path, r.prefix) {
+      return unique r.backend
+    }
+  }
+  unique c.fallback
+}
+
+fn describe(config: Shared[Config], path: String) -> unique String {
+  let backend = shared.with(
+    config,
+    fn(c: Config) -> String {
+      backend_for(c, path)
+    }
+  )
+  f"{path} -> {backend}\n"
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let built = Config(
+    routes: [
+      Route(prefix: "/api/users", backend: "users"),
+      Route(prefix: "/api/orders", backend: "orders")
+    ],
+    fallback: "files"
+  )
+  let config: Shared[Config] = shared.freeze(take built)
+  let lines = task.scope(
+    tasks,
+    fn(s: Scope) -> List[String] {
+      let a = task.async(
+        s,
+        fn() -> String {
+          describe(config, "/api/users")
+        }
+      )
+      let b = task.async(
+        s,
+        fn() -> String {
+          describe(config, "/api/orders")
+        }
+      )
+      let c = task.async(
+        s,
+        fn() -> String {
+          describe(config, "/static/logo.png")
+        }
+      )
+      [task.await(s, take a), task.await(s, take b), task.await(s, take c)]
+    }
+  )
+  for line in lines {
+    out.print(output, line) ? Output
+  }
+  Ok(())
+}

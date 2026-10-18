@@ -1,0 +1,42 @@
+// rule: MEM-11
+// expect: run
+// stdout: ok
+// A Shared value is "read by borrowing": a `unique` copy owns fresh storage, so it
+// outlives the drop of the last root, which frees the whole frozen value.
+fn output_error[E](take e: E) -> () {}
+
+type Index {
+  items: List[u64],
+}
+
+fn release(take s: Shared[Index]) -> () {}
+
+fn after(take s: Shared[Index]) -> u64 {
+  let kept = shared.with(
+    s,
+    fn(i: Index) -> List[u64] {
+      unique i.items
+    }
+  )
+  release(take s)
+  kept[0] + kept[1]
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let built = Index(items: [4, 5])
+  let ok = after(shared.freeze(take built)) == 9
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

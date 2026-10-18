@@ -73,6 +73,7 @@ pub const BODIES: &[&LibraryBody] = &[
     &slots::REMOVE,
     &shared::FREEZE,
     &shared::THAW,
+    &shared::WITH,
     &failure::CHECK,
     &collection::POP,
     &collection::REMOVE,

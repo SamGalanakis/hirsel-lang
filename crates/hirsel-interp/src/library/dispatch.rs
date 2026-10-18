@@ -1340,6 +1340,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "shared.freeze" | "shared.thaw" => {
         return super::shared::call(name, a, &mut self.next_shared).map(Some);
     },
+    Primitive: "shared.with" => { return self.shared_with(a).map(Some); },
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },

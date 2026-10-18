@@ -1,0 +1,87 @@
+// rule: MEM-11
+// expect: run
+// stdout: ok
+// "read by borrowing": `shared.with` lends the frozen value to its body as a borrowed
+// parameter: fields, list elements and nested records read in place, a named function
+// with a borrowed parameter is the body, and the root's count is untouched, so the
+// thaw after the reads is the last root's.
+fn output_error[E](take e: E) -> () {}
+
+type Entry {
+  key: String,
+  hits: u64,
+}
+
+type Index {
+  items: List[u64],
+  entries: List[Entry],
+  meta: Entry,
+}
+
+fn total(i: Index) -> u64 {
+  i.items[0] + i.items[1]
+}
+
+fn hits_of(i: Index, key: String) -> u64 {
+  let mut n: u64 = 0
+  for e in i.entries {
+    if e.key == key {
+      n = n + e.hits
+    }
+  }
+  n
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let built = Index(
+    items: [1, 2],
+    entries: [Entry(key: "a", hits: 5), Entry(key: "b", hits: 6)],
+    meta: Entry(key: "m", hits: 7)
+  )
+  let index: Shared[Index] = shared.freeze(take built)
+  let element = shared.with(
+    index,
+    fn(i: Index) -> u64 {
+      i.items[1]
+    }
+  )
+  let summed = shared.with(index, total)
+  let key = "b"
+  let looked = shared.with(
+    index,
+    fn(i: Index) -> u64 {
+      hits_of(i, key)
+    }
+  )
+  let nested = shared.with(
+    index,
+    fn(i: Index) -> u64 {
+      i.entries[0].hits + i.meta.hits
+    }
+  )
+  let named = shared.with(
+    index,
+    fn(i: Index) -> bool {
+      i.meta.key == "m"
+    }
+  )
+  let last = match shared.thaw(take index) {
+    Ok(thawed) => list.len(thawed.items) == 2,
+    Error(root) => false,
+  }
+  let ok = element == 2 && summed == 3 && looked == 6 && nested == 12 && named && last
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

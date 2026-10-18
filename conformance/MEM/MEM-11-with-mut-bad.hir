@@ -1,0 +1,16 @@
+// rule: MEM-11
+// expect: reject OWN-1 at line 13
+// A Shared value is "read by borrowing": the frozen value is never written through
+// the view `shared.with` lends.
+type Index {
+  items: List[u64],
+}
+
+fn grow(s: Shared[Index]) -> () {
+  shared.with(
+    s,
+    fn(i: Index) -> () {
+      list.push(mut i.items, 3)
+    }
+  )
+}

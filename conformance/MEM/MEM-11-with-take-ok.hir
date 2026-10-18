@@ -1,0 +1,18 @@
+// rule: MEM-11
+// expect: accept
+// A Shared value is "read by borrowing": `unique` builds an owned copy of the borrowed
+// view, which the body may give away.
+type Index {
+  items: List[u64],
+}
+
+fn consume(take i: Index) -> () {}
+
+fn drain(s: Shared[Index]) -> () {
+  shared.with(
+    s,
+    fn(i: Index) -> () {
+      consume(unique i)
+    }
+  )
+}

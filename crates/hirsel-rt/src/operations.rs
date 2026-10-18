@@ -77,6 +77,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "slots.remove"
             | "shared.freeze"
             | "shared.thaw"
+            | "shared.with"
             | "arena.with"
             | "arena.bounded"
             | "copy_to"
@@ -1851,6 +1852,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "set.remove",
     "shared.freeze",
     "shared.thaw",
+    "shared.with",
     "simd.add",
     "simd.splat",
     "slots.empty",

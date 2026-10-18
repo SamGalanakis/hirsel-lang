@@ -1,0 +1,18 @@
+// rule: MEM-11
+// expect: reject OWN-1 at line 15
+// A Shared value is "read by borrowing": `shared.with`'s body gets a borrowed view,
+// which cannot be taken.
+type Index {
+  items: List[u64],
+}
+
+fn consume(take i: Index) -> () {}
+
+fn drain(s: Shared[Index]) -> () {
+  shared.with(
+    s,
+    fn(i: Index) -> () {
+      consume(take i)
+    }
+  )
+}

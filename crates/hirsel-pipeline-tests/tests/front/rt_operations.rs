@@ -190,6 +190,7 @@ fn inventory_set_equality_and_digest_control() {
         "$intrinsic.InlineConsume_next",
         "shared.freeze",
         "shared.thaw",
+        "shared.with",
         "task.scope",
         "task.async",
         "task.await",

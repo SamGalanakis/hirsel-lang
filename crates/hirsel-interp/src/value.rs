@@ -86,6 +86,14 @@ impl SharedRoot {
             None
         })
     }
+    /// A borrowed snapshot of the frozen value, for `shared.with`. It adds no root:
+    /// the graph stays frozen while the caller's root lends it.
+    pub(crate) fn view(&self) -> Result<Value, crate::Error> {
+        self.graph()
+            .value
+            .clone()
+            .ok_or_else(|| crate::invalid("read of a dead Shared root"))
+    }
     /// The owned value when this is the last root, else the root unchanged.
     pub(crate) fn thaw(self) -> Result<Result<Value, SharedRoot>, crate::Error> {
         let mut graph = self.graph();

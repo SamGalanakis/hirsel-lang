@@ -28,6 +28,8 @@ pub(super) enum Pending {
         hi: usize,
         index: usize,
     },
+    /// `shared.with`: the body's result is the operation's.
+    Read,
 }
 fn record(name: &str, fields: Vec<Value>) -> Value {
     Value::Record {
@@ -104,6 +106,14 @@ impl Library {
             consumed: vec![],
             continuation,
         }
+    }
+    /// `shared.with(s, body)`: call `body` with a borrowed view of the frozen value.
+    pub(super) fn shared_with(&mut self, args: &[Value]) -> Result<OperationResult, Error> {
+        let [Value::Shared(root), body] = args else {
+            return Err(invalid("shared.with arguments"));
+        };
+        let view = root.view()?;
+        Ok(self.schedule(Pending::Read, body.clone(), vec![view], vec![], vec![]))
     }
     pub(super) fn next_iterator(&mut self, mut it: Value) -> Result<OperationResult, Error> {
         let mut maps = vec![];
@@ -339,6 +349,17 @@ impl Library {
                     })
                 }
             }
+            Pending::Read => match result {
+                OperationResult::Complete {
+                    value, released, ..
+                } => Ok(OperationResult::Complete {
+                    value,
+                    arguments: vec![],
+                    consumed: vec![],
+                    released,
+                }),
+                other => Ok(other),
+            },
             Pending::Compare {
                 by,
                 entries,

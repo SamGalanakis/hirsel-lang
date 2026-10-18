@@ -1,0 +1,35 @@
+// rule: MEM-11
+// expect: accept
+// A Shared value is "read by borrowing": while `shared.with` lends `s`, a copy of the
+// root, an independent share, may be sent to another task.
+type Config {
+  port: u64,
+  hosts: List[String],
+}
+
+fn thawed(take s: Shared[Config]) -> bool {
+  match shared.thaw(take s) {
+    Ok(c) => c.port == 80,
+    Error(root) => false,
+  }
+}
+
+fn check(tasks: Tasks, take s: Shared[Config]) -> bool {
+  task.scope(
+    tasks,
+    fn(scope: Scope) -> bool {
+      shared.with(
+        s,
+        fn(c: Config) -> bool {
+          let h = task.async(
+            scope,
+            fn() -> bool {
+              thawed(copy s)
+            }
+          )
+          c.port == 80 && task.await(scope, take h)
+        }
+      )
+    }
+  )
+}

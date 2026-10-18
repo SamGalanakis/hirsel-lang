@@ -1300,6 +1300,100 @@ Expected:
 ```
 <!-- /tour -->
 
+To let several tasks read one large immutable value, such as a configuration or an
+index, build it once and freeze it with `shared.freeze`. Each task closure that names
+the `Shared` root captures its own copy of it: a count increment, never a copy of the
+value.
+`shared.with(root, body)` lends the frozen value to `body` as a borrowed parameter, so
+reading it copies nothing, and the body can neither keep nor change what it reads: a
+part leaves the body only as a plain value or a `unique` copy.
+
+<!-- tour: conformance/MEM/MEM-11-tour-11-shared-config-run.hir -->
+[Runnable source](../conformance/MEM/MEM-11-tour-11-shared-config-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+type Route {
+  prefix: String,
+  backend: String,
+}
+
+type Config {
+  routes: List[Route],
+  fallback: String,
+}
+
+fn backend_for(c: Config, path: String) -> String {
+  for r in c.routes {
+    if string.starts_with(path, r.prefix) {
+      return unique r.backend
+    }
+  }
+  unique c.fallback
+}
+
+fn describe(config: Shared[Config], path: String) -> unique String {
+  let backend = shared.with(
+    config,
+    fn(c: Config) -> String {
+      backend_for(c, path)
+    }
+  )
+  f"{path} -> {backend}\n"
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let built = Config(
+    routes: [
+      Route(prefix: "/api/users", backend: "users"),
+      Route(prefix: "/api/orders", backend: "orders")
+    ],
+    fallback: "files"
+  )
+  let config: Shared[Config] = shared.freeze(take built)
+  let lines = task.scope(
+    tasks,
+    fn(s: Scope) -> List[String] {
+      let a = task.async(
+        s,
+        fn() -> String {
+          describe(config, "/api/users")
+        }
+      )
+      let b = task.async(
+        s,
+        fn() -> String {
+          describe(config, "/api/orders")
+        }
+      )
+      let c = task.async(
+        s,
+        fn() -> String {
+          describe(config, "/static/logo.png")
+        }
+      )
+      [task.await(s, take a), task.await(s, take b), task.await(s, take c)]
+    }
+  )
+  for line in lines {
+    out.print(output, line) ? Output
+  }
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+/api/users -> users
+/api/orders -> orders
+/static/logo.png -> files
+```
+<!-- /tour -->
+
 `task.scope_until(tasks, deadline, body)` bounds a scope by a `Deadline` on a
 monotonic clock: when the clock reaches it, the scope is cancelled and returns
 `Expired(result)`; a body that ends first returns `Finished(result)`. Nothing polls:
