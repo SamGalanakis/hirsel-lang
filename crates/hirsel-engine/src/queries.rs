@@ -185,6 +185,25 @@ impl QueryEngine {
             .collect();
         let mut selected = self.semantic_program(roots)?.definitions;
         selected.retain(|path| self.items.contains_key(path));
+        // CT-3: a non-generic compile-time-only function never runs: no
+        // run-time code can hold the TypeShape or Body its signature mentions.
+        let mut compile_time = vec![];
+        for path in &selected {
+            let signature = self.item_signature(path)?.value;
+            if let hirsel_types::SignatureKind::Function(f) = &signature.kind
+                && f.generics.is_empty()
+                && f.parameters
+                    .iter()
+                    .map(|p| p.ty)
+                    .chain([f.result])
+                    .any(|t| hirsel_types::mentions_compile_time_only(&signature.types, t))
+            {
+                compile_time.push(path.clone());
+            }
+        }
+        for path in compile_time {
+            selected.remove(&path);
+        }
         Ok(selected)
     }
     pub(crate) fn native_builtin_signatures(

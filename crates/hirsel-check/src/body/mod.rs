@@ -184,6 +184,7 @@ fn check_inner(
     }
     c.check_contracts()?;
     c.check_closed_comptimes()?;
+    c.check_compile_time_values();
     c.publish_tails()?;
     for f in &c.frames {
         if let Some(result) = f.result {

@@ -1296,6 +1296,8 @@ macro_rules! primary_operations {
 primary_operations! { self, call, context, name, a, value;
     Primitive: "codec.encode" | "codec.decode" => super::codec::call(name, &call)?,
     Primitive: "type_shape.info" => super::shape::info(&call)?,
+    // Typed generation: a generated body is its text; only the compiler reads it.
+    Primitive: "codegen.body" => Value::String(text(arg(a, 0)?)?.to_owned()),
     Primitive: "$intrinsic.heap" => {
         if !a.is_empty() { return Err(invalid("heap operation arity")); }
         Value::Handle { kind: "$Heap".into(), id: 0 }

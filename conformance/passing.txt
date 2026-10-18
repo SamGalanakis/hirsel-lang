@@ -673,6 +673,9 @@ conformance/CT/CT-2-wrapper-failure-bad.hir
 conformance/CT/CT-2-wrapper-map-ok.hir
 conformance/CT/CT-2-wrapper-run.hir
 conformance/CT/CT-2-wrapper-tuple-bad.hir
+conformance/CT/CT-3-compile-time-definition-run.hir
+conformance/CT/CT-3-compile-time-value-call-bad.hir
+conformance/CT/CT-3-compile-time-value-call-ok.hir
 conformance/CT/CT-3-shape-generic-instance-run.hir
 conformance/CT/CT-3-shape-helper-bad.hir
 conformance/CT/CT-3-shape-helper-ok.hir

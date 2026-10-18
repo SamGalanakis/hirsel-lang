@@ -44,6 +44,10 @@ Variant of ArgError.
 
 - `resource type AtomicFile: noalloc_drop uses {Dir} = { dir: Dir, tmp: Path, dst: Path }`
 
+<a id="def-core_401_2fBody"></a>
+
+- `opaque type Body[F]: copyable + inert + noalloc_drop uses {}`
+
 <a id="def-core_401_2fBounded"></a>
 
 - `type Bounded[R] uses {R} = Finished(R) | Expired(R)`
@@ -2020,6 +2024,13 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 <a id="def-core_401_2fcodec_2fencode"></a>
 
 - `fn codec.encode[T: serializable](value: T) -> Bytes`
+
+
+## codegen
+
+<a id="def-core_401_2fcodegen_2fbody"></a>
+
+- `fn codegen.body[F](text: String) -> Body[F]`
 
 
 ## csv

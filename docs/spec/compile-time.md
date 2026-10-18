@@ -121,6 +121,15 @@ const USER_FIELDS: List[String] = comptime field_names(shape(User))
 - **Not data.** A `TypeShape` value never crosses CT-2's materialization boundary: it fails
   CT-2 at the enclosing initializer or comptime expression, as a callable does.
   `ShapeInfo` and its parts are ordinary data and materialize like any other constant.
+- **Compile-time-only values.** `TypeShape[T]` and the generated-body type `Body[F]`
+  ([typed generation](#typed-generation)) are compile-time-only types. A definition whose
+  signature mentions one in a parameter or result is a *compile-time-only definition*.
+  An expression whose type mentions a compile-time-only type is written only in
+  compile-time code or in the body of a compile-time-only definition; elsewhere it is
+  CT-3 at the outermost such expression. Run-time code therefore never holds a shape or a
+  body, and never calls or names a compile-time-only definition. A non-generic
+  compile-time-only definition never runs, so native code omits it; a generic one has
+  instances only in compile-time evaluation.
 - **Declarations only.** A shape is computed from the type's checked declaration (the owner
   view for an owner), never from a function body or source text. Evaluation records the
   declaration as a compile-time dependency, so editing it, private representation
@@ -188,7 +197,7 @@ fn record_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses {}],
 evaluation. `Error(message)` from a generator is CT-1 at the generated declaration, with the
 message as a note.
 
-**Bodies.** `body.source(text)` builds a `Body[F]`, taking `F` from the expected type. The
+**Bodies.** `codegen.body(text)` builds a `Body[F]`, taking `F` from the expected type. The
 text is one function literal of type `F`; its parameters bind the declared parameters by
 position. Because shapes spell types canonically, a generator can write parameter and field
 types that resolve the same way in every module.
@@ -235,7 +244,7 @@ fn record_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses {}],
   }
   list.push(mut lines, "  Object(take fields)")
   list.push(mut lines, "}")
-  Ok(body.source(string.join(lines, "\n")))
+  Ok(codegen.body(string.join(lines, "\n")))
 }
 ```
 

@@ -120,7 +120,7 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
 fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
     let r = BuiltinRegistry::new();
     assert_eq!(loop_protocols().len(), 6);
-    assert_eq!(r.signatures().count(), 393);
+    assert_eq!(r.signatures().count(), 395);
     let mut symbols = Interner::default();
     for ((protocol, open, next), generics) in loop_protocols().into_iter().zip([2, 2, 1, 1, 1, 2]) {
         assert_eq!(open.0.modules, ["$intrinsic"]);

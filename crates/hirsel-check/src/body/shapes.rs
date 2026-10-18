@@ -1,6 +1,62 @@
-//! CT-3 placement, GEN-3 eligibility and PROG-2 opacity of `shape(T)`.
+//! CT-3 placement, GEN-3 eligibility and PROG-2 opacity of `shape(T)`, and the
+//! compile-time-only values (TypeShape, Body) run-time code never holds.
 use super::*;
 impl Checker<'_, '_> {
+    /// CT-3: outside compile-time code and compile-time-only definitions (whose
+    /// signature mentions TypeShape or Body), no expression has a type that
+    /// mentions one, so no run-time code calls a compile-time-only definition.
+    pub(super) fn check_compile_time_values(&mut self) {
+        let types = &self.body.types;
+        let compile_time_only = match &self.input.signature.kind {
+            SignatureKind::Const { .. } => true,
+            SignatureKind::Function(f) => {
+                let types = &self.input.signature.types;
+                f.parameters
+                    .iter()
+                    .map(|p| p.ty)
+                    .chain([f.result])
+                    .any(|t| mentions_compile_time_only(types, t))
+            }
+            SignatureKind::Type(_) => false,
+        };
+        if compile_time_only {
+            return;
+        }
+        // A `comptime` result crossing into run-time code is CT-2's data judgment.
+        let regions: Vec<Span> = self
+            .input
+            .tree
+            .expressions
+            .iter()
+            .filter(|e| matches!(e.kind, ast::ExprKind::Comptime(_)))
+            .map(|e| e.origin.span)
+            .collect();
+        let mut sites: Vec<Span> = self
+            .body
+            .expressions
+            .iter()
+            .filter(|row| mentions_compile_time_only(types, row.ty))
+            .map(|row| self.span(row.expression))
+            .filter(|site| {
+                !regions
+                    .iter()
+                    .any(|r| r.file == site.file && r.start <= site.start && site.end <= r.end)
+            })
+            .collect();
+        sites.sort_by_key(|s| (s.start, std::cmp::Reverse(s.end)));
+        let mut outer: Option<Span> = None;
+        for site in sites {
+            if outer.is_some_and(|o| o.file == site.file && site.end <= o.end) {
+                continue;
+            }
+            outer = Some(site);
+            self.report(
+                const { RuleId::of("CT-3") },
+                site,
+                "a TypeShape or Body value exists only at compile time: use it inside comptime, a constant initializer or a definition whose signature mentions TypeShape or Body",
+            );
+        }
+    }
     /// The shaped type with transparent aliases followed, or None once a
     /// diagnostic is reported. Reads only declared signatures.
     pub(super) fn shape_subject(

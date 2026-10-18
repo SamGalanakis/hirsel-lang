@@ -1,0 +1,11 @@
+// rule: CT-3
+// expect: reject CT-3 at line 9
+// Run-time code never holds a Body, so it cannot call a definition returning one.
+fn generator() -> Body[fn() -> u64] {
+  codegen.body("fn() -> u64 { 1 }")
+}
+
+fn probe() -> () {
+  let made = generator()
+  ()
+}

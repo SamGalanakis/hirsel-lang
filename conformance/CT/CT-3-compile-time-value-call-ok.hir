@@ -1,0 +1,11 @@
+// rule: CT-3
+// expect: accept
+// A compile-time-only definition, whose signature mentions Body, may hold one.
+fn generator() -> Body[fn() -> u64] {
+  codegen.body("fn() -> u64 { 1 }")
+}
+
+fn probe() -> Body[fn() -> u64] {
+  let made = generator()
+  made
+}

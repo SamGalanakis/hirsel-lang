@@ -123,6 +123,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         }
         publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
     }
+    // Typed generation: a generated body for the function type `F`. Like a TypeShape it is
+    // compile-time only and not data; it holds text, never authority.
+    let b = Builder::new("F").with_declarations(&out);
+    let mut t = type_definition(b.generics.clone(), None);
+    t.bounds = vec![Bound::Copyable, Bound::Inert, Bound::NoallocDrop];
+    publish(b.signature("Body", SignatureKind::Type(t), true), &mut out);
     for (name, generic, variants) in [
         ("Result", "T,E", "Ok(T)|Error(E)"),
         (

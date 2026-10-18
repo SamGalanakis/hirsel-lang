@@ -1,0 +1,37 @@
+// rule: CT-3
+// expect: run
+// stdout: id
+// stdout: name
+// Non-generic compile-time-only definitions never run, so native code omits them.
+type User {
+  id: u64,
+  name: String,
+}
+
+fn user_fields(s: TypeShape[User]) -> List[String] {
+  let mut names: List[String] = []
+  match type_shape.info(s).body {
+    Record(fields) => {
+      for f in fields {
+        list.push(mut names, copy f.name)
+      }
+    },
+    Choice(_) => (),
+  }
+  take names
+}
+
+fn user_body() -> Body[fn(User) -> u64] {
+  codegen.body("fn(user: standalone@0/User) -> u64 { user.id }")
+}
+
+const USER_FIELDS: List[String] = comptime user_fields(shape(User))
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  for name in USER_FIELDS {
+    let _ = out.print(out, name)
+    let _ = out.print(out, "\n")
+  }
+  Ok(())
+}
