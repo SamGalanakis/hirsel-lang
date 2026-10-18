@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-692 exported definitions; 242 variants.
+694 exported definitions; 242 variants.
 
 
 ## Types and roots
@@ -1022,8 +1022,10 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir` <!-- core@1/test/dir -->
 - `@noalloc pub fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()` — Adapted from Zig lib/std/testing.zig expectEqualInner, commit bff490a23889750de7096d9057c0a432efc929a8. <!-- std@1/test/equal -->
 - `pub fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E` — Adapted from Zig lib/std/testing.zig expectError, commit bff490a23889750de7096d9057c0a432efc929a8. <!-- std@1/test/expect_error -->
+- `pub fn test.expect_ok[T, E](t: Test, take value: Result[T, E]) -> T` — Zig testing.zig assertion cleanup, mirrored for an unexpected Error payload. <!-- std@1/test/expect_ok -->
 - `@noalloc fn test.fail(t: Test) -> Never` <!-- core@1/test/fail -->
-- `pub fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()` — No matching Zig/Rust std property runner: the catalogue fixes this protocol at 100 sequential cases, with no shrinking callback or generator state API. <!-- std@1/test/for_all -->
+- `pub fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()` — Preserve the original hundred-case entry point over the shared kernel. <!-- std@1/test/for_all -->
+- `pub fn test.for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()` — Adapted from Go testing/quick: an explicit count bounds the property loop. <!-- std@1/test/for_all_cases -->
 - `fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net` <!-- core@1/test/net -->
 - `fn test.process(t: Test, runs: List[ProcessScript]) -> Proc` <!-- core@1/test/process -->
 

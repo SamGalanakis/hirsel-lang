@@ -1,0 +1,15 @@
+// rule: DROP-2
+// expect: fail LANG-9 at line 105
+// entry: trial
+resource type Watch {
+  n: u8,
+}
+@noalloc drop(w) {
+  core@1/failure.check(w.n == 7, Arithmetic())
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let unexpected: Result[(), Watch] = Error(Watch(n: 7))
+  std@1/test.expect_ok(t, take unexpected)
+  Ok(())
+}

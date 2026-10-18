@@ -1,0 +1,44 @@
+// rule: SEM-3
+// expect: run
+// entry: trial
+resource type Watch {
+  n: u8,
+}
+@noalloc drop(w) {
+  failure.check(w.n == 7, Arithmetic())
+}
+
+fn generate(t: Test) -> Watch {
+  Watch(n: 7)
+}
+
+fn law(value: Watch) -> bool uses {} {
+  value.n == 7
+}
+
+fn never_generate(t: Test) -> u64 {
+  failure.check(false, Arithmetic())
+  0
+}
+
+fn never_law(value: u64) -> bool uses {} {
+  failure.check(false, Arithmetic())
+  false
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let success: Result[Watch, Watch] = Ok(Watch(n: 7))
+  let value = std@1/test.expect_ok(t, take success)
+  failure.check(value.n == 7, Arithmetic())
+  {
+    let _ = take value
+  }
+  let error: Result[(), Watch] = Error(Watch(n: 7))
+  let recovered = std@1/test.expect_error(t, take error)
+  {
+    let _ = take recovered
+  }
+  std@1/test.for_all_cases(t, 3, generate, law)
+  std@1/test.for_all_cases(t, 0, never_generate, never_law)
+  Ok(())
+}

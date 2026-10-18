@@ -62,12 +62,12 @@ pub fn approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64)
   core@1/test.check(t, difference <= absolute || relative_ok)
 }
 
-// No matching Zig/Rust std property runner: the catalogue fixes this protocol
-// at 100 sequential cases, with no shrinking callback or generator state API.
+// Adapted from Go testing/quick: an explicit count bounds the property loop.
+// The for_all wrapper selects exactly 100 sequential cases, without shrinking.
 // The explicit generator receives the recorded Test grant unchanged.
-pub fn for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> () {
+pub fn for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> () {
   let mut index: u64 = 0
-  while index < 100 {
+  while index < cases {
     let passed = {
       let value = gen(t)
       law(value)
@@ -86,6 +86,22 @@ pub fn expect_error[T, E](t: Test, take value: Result[T, E]) -> E {
     Error(error) => take error,
     Ok(success) => {
       { let _ = take success }
+      core@1/test.fail(t)
+    },
+  }
+}
+
+// Preserve the original hundred-case entry point over the shared kernel.
+pub fn for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> () {
+  for_all_cases(t, 100, gen, law)
+}
+
+// Zig testing.zig assertion cleanup, mirrored for an unexpected Error payload.
+pub fn expect_ok[T, E](t: Test, take value: Result[T, E]) -> T {
+  match take value {
+    Ok(success) => take success,
+    Error(error) => {
+      { let _ = take error }
       core@1/test.fail(t)
     },
   }

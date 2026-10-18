@@ -1,0 +1,15 @@
+// rule: DROP-2
+// expect: fail SEM-1 at line 8
+// entry: trial
+resource type Watch {
+  n: u8,
+}
+@noalloc drop(w) {
+  core@1/failure.check(w.n == 7, Arithmetic())
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let unexpected: Result[(), Watch] = Error(Watch(n: 8))
+  std@1/test.expect_ok(t, take unexpected)
+  Ok(())
+}

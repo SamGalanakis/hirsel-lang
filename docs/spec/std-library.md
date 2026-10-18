@@ -705,6 +705,20 @@ propagates its error. There is no global logger, implicit sink, hidden clock or
 ambient level. Ordering/atomicity across tasks is not promised; callers needing
 ordering serialize through their explicit task/channel facilities.
 
+## Additional testing helpers
+
+`test.expect_ok[T,E](t: Test, take value: Result[T,E]) -> T` returns an owned
+Ok payload. An unexpected Error payload is destroyed before test.fail, matching
+expect_error's cleanup rule. A failing payload finalizer therefore precedes the
+assertion failure. `test.for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T,
+law: fn(T) -> bool uses {}) -> ()` runs exactly the requested sequential count,
+reporting deterministic zero-based case indices through check_case. Zero calls
+neither callback. Existing for_all selects 100 over the same kernel. Each generated
+value is destroyed before reporting its case, including a failing case. These are
+ordinary source operations using the existing Test capability, without shrinking
+or a new runtime assertion. The resource-valued conformance example is
+`conformance/SEM/SEM-3-test-extra-run.hir`.
+
 ## SHA-256
 
 `std@1/sha256` implements SHA-256 entirely in ordinary, allocation-free source.
