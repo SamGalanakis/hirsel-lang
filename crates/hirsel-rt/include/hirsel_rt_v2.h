@@ -367,21 +367,30 @@ uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t len
  *   TEXT      utf8, the slice's owner, start and length offsets, the byte sequence's index
  *   FIELDS    count, then (offset, node) per field in declaration order
  *   VARIANT   form (0 ordinal u32, 1 null-pointer niche), tag offset, the niche's nullary arm,
- *             arm count, then per arm in ordinal order: count, (offset, node) per field
- *   BOX       payload index, size, align, payload node
+ *             arm count, then per arm in ordinal order: count, (offset, node) per field;
+ *             finally one native active extent per arm
+ *   BOX       payload index, size (NO_NODE for variable flat), align, payload node
  *   SEQUENCE  payload index, element align, first element offset, stride, element node
  *   REPEAT    count, stride, element node
  *   MAP, SET  container payload index, size, align, entries and index field offsets, the entries
  *             sequence's index, element align, first element offset and stride, the index
  *             sequence's index, element align and stride, key node, key offset, value node (or
  *             CODEC_NO_NODE), value offset
+ *   FLAT_TEXT utf8; native storage is a u64 byte extent then bytes
+ *   FRAMED    content node; native storage adds a u64 content extent
+ *   FLAT_FIELDS count, then node per declaration-order field
+ *   FLAT_VARIANT arm count, then count and field nodes per arm (native u32 tag)
+ *   FLAT_SEQUENCE first element offset (8 fixed, 16 variable), fixed stride or 0, node
+ *   SEQUENTIAL payload index, align, first element offset, element node
+ *   COLUMNS   payload index, align, data offset, capacity quantum, element node,
+ *             column count, then (capacity multiplier, stride, field node) per column
  * Every walk is iterative: no native stack depth follows the data. codec_encode reads the value at
  * `value` (the root node's layout) and writes a fresh Bytes slice of the envelope at `out`.
  * codec_decode reads the Bytes slice at `bytes`, validates the envelope and the whole payload
  * first, then writes Result[T, DecodeError] at `out`: Ok of fresh owned data, or Error of the
  * first malformation in reading order. Neither fails; operational budgets (the reference's
  * limits) terminate environmentally. */
-#define HIRSEL_RT_V2_CODEC_VERSION 1
+#define HIRSEL_RT_V2_CODEC_VERSION 2
 #define HIRSEL_RT_V2_CODEC_NODE_SCALAR 0
 #define HIRSEL_RT_V2_CODEC_NODE_TEXT 1
 #define HIRSEL_RT_V2_CODEC_NODE_FIELDS 2
@@ -391,6 +400,13 @@ uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t len
 #define HIRSEL_RT_V2_CODEC_NODE_REPEAT 6
 #define HIRSEL_RT_V2_CODEC_NODE_MAP 7
 #define HIRSEL_RT_V2_CODEC_NODE_SET 8
+#define HIRSEL_RT_V2_CODEC_NODE_FLAT_TEXT 9
+#define HIRSEL_RT_V2_CODEC_NODE_FRAMED 10
+#define HIRSEL_RT_V2_CODEC_NODE_FLAT_FIELDS 11
+#define HIRSEL_RT_V2_CODEC_NODE_FLAT_VARIANT 12
+#define HIRSEL_RT_V2_CODEC_NODE_FLAT_SEQUENCE 13
+#define HIRSEL_RT_V2_CODEC_NODE_SEQUENTIAL 14
+#define HIRSEL_RT_V2_CODEC_NODE_COLUMNS 15
 #define HIRSEL_RT_V2_CODEC_NO_NODE UINT64_MAX
 typedef struct hirsel_rt_v2_codec {
     const uint8_t *descriptor;

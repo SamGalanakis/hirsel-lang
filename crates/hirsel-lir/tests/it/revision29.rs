@@ -23,6 +23,9 @@ enum Mutant {
     Operand,
     /// A result at another layout than the plan's.
     Result,
+    FlatText,
+    Framed,
+    FlatZero,
 }
 
 /// Push `record` onto the fixture table.
@@ -99,6 +102,50 @@ fn plan(t: &mut Lir<Value>, decode: bool, m: Mutant) -> (CodecPlan, LayoutId) {
             arms: vec![vec![CodecNodeId(0)], vec![CodecNodeId(2)]],
         });
     }
+    let text = CodecNodeId(nodes.len() as u32);
+    nodes.push(CodecNode::FlatText {
+        layout: l::FLAT_TEXT,
+        utf8: true,
+    });
+    let zero = m == Mutant::FlatZero;
+    let element = if zero { l::UNIT } else { l::U8 };
+    let mut flat = t.table.layouts[l::FLAT_TEXT.0 as usize].clone();
+    flat.fields = vec![at(8, element)];
+    let layout = push(t, flat);
+    let element_node = CodecNodeId(nodes.len() as u32);
+    nodes.push(if zero {
+        CodecNode::Fields {
+            layout: element,
+            fields: vec![],
+        }
+    } else {
+        CodecNode::Scalar(element)
+    });
+    nodes.push(CodecNode::Sequence {
+        layout,
+        element: element_node,
+    });
+    let fields = CodecNodeId(nodes.len() as u32);
+    nodes.push(CodecNode::Fields {
+        layout: l::FLAT_ITEM,
+        fields: vec![text, CodecNodeId(0)],
+    });
+    nodes.push(CodecNode::Framed {
+        layout: l::FLAT_WRAP,
+        value: if m == Mutant::Framed {
+            CodecNodeId(0)
+        } else {
+            fields
+        },
+    });
+    nodes.push(CodecNode::FlatText {
+        layout: if m == Mutant::FlatText {
+            l::FLAT_WRAP
+        } else {
+            l::FLAT_TEXT
+        },
+        utf8: true,
+    });
     let plan = CodecPlan {
         descriptor: vec![4],
         nodes,
@@ -189,4 +236,25 @@ fn a_decode_reads_bytes_and_yields_the_result() {
     for mutant in [Mutant::Operand, Mutant::Result] {
         pair(either(decode, mutant), |k| *k == K::Type("decode"));
     }
+}
+
+#[test]
+fn flat_text_requires_byte_length_framing() {
+    pair(either(encode, Mutant::FlatText), |k| {
+        *k == K::Type("codec plan")
+    });
+}
+
+#[test]
+fn framed_values_match_their_content_layout() {
+    pair(either(encode, Mutant::Framed), |k| {
+        *k == K::Type("codec plan")
+    });
+}
+
+#[test]
+fn byte_extent_flat_sequences_require_nonzero_stride() {
+    pair(either(encode, Mutant::FlatZero), |k| {
+        *k == K::Type("codec plan")
+    });
 }

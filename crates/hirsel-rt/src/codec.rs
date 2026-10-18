@@ -23,7 +23,7 @@ pub struct Codec {
     pub program_length: u64,
 }
 
-pub const CODEC_VERSION: u64 = 1;
+pub const CODEC_VERSION: u64 = 2;
 pub const NODE_SCALAR: u64 = 0;
 pub const NODE_TEXT: u64 = 1;
 pub const NODE_FIELDS: u64 = 2;
@@ -33,6 +33,13 @@ pub const NODE_SEQUENCE: u64 = 5;
 pub const NODE_REPEAT: u64 = 6;
 pub const NODE_MAP: u64 = 7;
 pub const NODE_SET: u64 = 8;
+pub const NODE_FLAT_TEXT: u64 = 9;
+pub const NODE_FRAMED: u64 = 10;
+pub const NODE_FLAT_FIELDS: u64 = 11;
+pub const NODE_FLAT_VARIANT: u64 = 12;
+pub const NODE_FLAT_SEQUENCE: u64 = 13;
+pub const NODE_SEQUENTIAL: u64 = 14;
+pub const NODE_COLUMNS: u64 = 15;
 pub const NO_NODE: u64 = u64::MAX;
 
 const MAGIC: &[u8; 4] = b"HSC1";
@@ -102,6 +109,7 @@ enum Node {
         tag: u64,
         nullary: u32,
         arms: Vec<Vec<(u64, usize)>>,
+        extents: Vec<u64>,
     },
     Box {
         index: u32,
@@ -119,6 +127,31 @@ enum Node {
         element: usize,
     },
     Container(Container),
+    FlatText {
+        utf8: bool,
+    },
+    Framed(usize),
+    FlatFields(Vec<usize>),
+    FlatVariant(Vec<Vec<usize>>),
+    FlatSequence {
+        offset: u64,
+        stride: u64,
+        element: usize,
+    },
+    Sequential {
+        index: u32,
+        align: u64,
+        offset: u64,
+        element: usize,
+    },
+    Columns {
+        index: u32,
+        align: u64,
+        data: u64,
+        quantum: u64,
+        element: usize,
+        columns: Vec<(u64, u64, usize)>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -219,6 +252,7 @@ impl Program {
                     let nullary = u32::try_from(w.next()).unwrap_or_else(|_| fault("niche arm"));
                     let n = w.next();
                     let arms = (0..n).map(|_| w.fields(count)).collect::<Vec<_>>();
+                    let extents = (0..n).map(|_| w.next()).collect();
                     if niche && (arms.len() != 2 || nullary > 1) {
                         fault("a codec niche that is not two arms");
                     }
@@ -227,6 +261,7 @@ impl Program {
                         tag,
                         nullary,
                         arms,
+                        extents,
                     }
                 }
                 NODE_BOX => Node::Box {
@@ -277,6 +312,56 @@ impl Program {
                         value_at,
                     })
                 }
+                NODE_FLAT_TEXT => Node::FlatText {
+                    utf8: w.next() != 0,
+                },
+                NODE_FRAMED => Node::Framed(w.node(count)),
+                NODE_FLAT_FIELDS => {
+                    let n = w.next();
+                    Node::FlatFields((0..n).map(|_| w.node(count)).collect())
+                }
+                NODE_FLAT_VARIANT => {
+                    let n = w.next();
+                    Node::FlatVariant(
+                        (0..n)
+                            .map(|_| {
+                                let fields = w.next();
+                                (0..fields).map(|_| w.node(count)).collect()
+                            })
+                            .collect(),
+                    )
+                }
+                NODE_FLAT_SEQUENCE => Node::FlatSequence {
+                    offset: w.next(),
+                    stride: w.next(),
+                    element: w.node(count),
+                },
+                NODE_SEQUENTIAL => Node::Sequential {
+                    index: w.index(),
+                    align: w.next(),
+                    offset: w.next(),
+                    element: w.node(count),
+                },
+                NODE_COLUMNS => {
+                    let (index, align, data, quantum, element, n) = (
+                        w.index(),
+                        w.next(),
+                        w.next(),
+                        w.next(),
+                        w.node(count),
+                        w.next(),
+                    );
+                    Node::Columns {
+                        index,
+                        align,
+                        data,
+                        quantum,
+                        element,
+                        columns: (0..n)
+                            .map(|_| (w.next(), w.next(), w.node(count)))
+                            .collect(),
+                    }
+                }
                 _ => fault("an unknown codec node kind"),
             };
             nodes.push(node);
@@ -304,6 +389,7 @@ impl Program {
             tag,
             nullary,
             arms,
+            ..
         } = &self.nodes[node]
         else {
             fault("a codec arm of a node that is not a variant");
@@ -395,6 +481,210 @@ fn nan64(bits: u64) -> bool {
     bits & 0x7fff_ffff_ffff_ffff > 0x7ff0_0000_0000_0000
 }
 
+/// The active native extent of a pointer-free flat value. Framed fields make
+/// variable children self delimiting; no maximum Packed storage enters a walk.
+unsafe fn flat_extent(program: &Program, node: usize, at: *const u8) -> u64 {
+    let mut extent = 0u64;
+    let mut work = vec![node];
+    while let Some(node) = work.pop() {
+        let cursor = at.wrapping_add(extent as usize);
+        let n = unsafe {
+            match &program.nodes[node] {
+                Node::Scalar(Scalar::Bool) => 1,
+                Node::Scalar(Scalar::Integer(n)) => *n as u64,
+                Node::Scalar(Scalar::F32) => 4,
+                Node::Scalar(Scalar::F64) => 8,
+                Node::FlatText { .. } | Node::Framed(_) | Node::FlatSequence { .. } => word(cursor)
+                    .checked_add(8)
+                    .unwrap_or_else(|| fault("flat extent overflow")),
+                Node::FlatFields(fields) => {
+                    work.extend(fields.iter().rev());
+                    0
+                }
+                Node::FlatVariant(arms) => {
+                    let ordinal = cursor.cast::<u32>().read_unaligned() as usize;
+                    let arm = arms
+                        .get(ordinal)
+                        .unwrap_or_else(|| fault("flat extent tag"));
+                    work.extend(arm.iter().rev());
+                    4
+                }
+                Node::Variant { tag, extents, .. } => {
+                    let ordinal = cursor.add(*tag as usize).cast::<u32>().read_unaligned() as usize;
+                    *extents
+                        .get(ordinal)
+                        .unwrap_or_else(|| fault("Packed extent tag"))
+                }
+                Node::Repeat { count, stride, .. } => count
+                    .checked_mul(*stride)
+                    .unwrap_or_else(|| fault("flat repeat extent")),
+                _ => fault("a non-flat codec node in a flat extent"),
+            }
+        };
+        extent = extent
+            .checked_add(n)
+            .unwrap_or_else(|| fault("flat extent overflow"));
+    }
+    extent
+}
+
+unsafe fn flat_fields(program: &Program, fields: &[usize], at: *const u8, work: &mut Vec<Put>) {
+    let mut cursor = at;
+    let mut children = Vec::with_capacity(fields.len());
+    for &child in fields {
+        children.push(Put::Visit(child, cursor));
+        cursor = cursor.wrapping_add(unsafe { flat_extent(program, child, cursor) } as usize);
+    }
+    work.extend(children.into_iter().rev());
+}
+
+/// Rebuild pointer-free ordinary Packed storage, respecting field offsets,
+/// native padding and its tag-selected active extent. This is separate from
+/// FlatFormatV0: only scalar leaves are copied from the validated wire.
+fn inline_decode(program: &Program, root: usize, input: &mut Input<'_>) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut work = vec![(root, 0usize)];
+    let checked = |r: Result<u128, DecodeError>| r.unwrap_or_else(|_| fault("Packed codec reread"));
+    while let Some((node, at)) = work.pop() {
+        match &program.nodes[node] {
+            Node::Scalar(scalar) => {
+                let n = match scalar {
+                    Scalar::Bool => 1,
+                    Scalar::Integer(n) => *n,
+                    Scalar::F32 => 4,
+                    Scalar::F64 => 8,
+                };
+                out.resize(out.len().max(at + n), 0);
+                out[at..at + n].copy_from_slice(&checked(input.number(n)).to_le_bytes()[..n]);
+            }
+            Node::Fields(fields) => work.extend(
+                fields
+                    .iter()
+                    .rev()
+                    .map(|&(offset, child)| (child, at + offset as usize)),
+            ),
+            Node::Variant {
+                niche,
+                tag,
+                arms,
+                extents,
+                ..
+            } => {
+                if *niche {
+                    fault("a pointer niche in a pointer-free Packed element");
+                }
+                let ordinal = checked(input.number(4)) as u32;
+                let extent = extents[ordinal as usize] as usize;
+                out.resize(out.len().max(at + extent), 0);
+                let tag = at + *tag as usize;
+                out[tag..tag + 4].copy_from_slice(&ordinal.to_le_bytes());
+                work.extend(
+                    arms[ordinal as usize]
+                        .iter()
+                        .rev()
+                        .map(|&(offset, child)| (child, at + offset as usize)),
+                );
+            }
+            Node::Repeat {
+                count,
+                stride,
+                element,
+            } => work.extend(
+                (0..*count)
+                    .rev()
+                    .map(|i| (*element, at + (i * stride) as usize)),
+            ),
+            Node::FlatFields(_)
+            | Node::FlatVariant(_)
+            | Node::Framed(_)
+            | Node::FlatText { .. }
+            | Node::FlatSequence { .. } => {
+                let bytes = flat_decode(program, node, input);
+                out.resize(out.len().max(at + bytes.len()), 0);
+                out[at..at + bytes.len()].copy_from_slice(&bytes);
+            }
+            _ => fault("a reference-bearing node in a pointer-free Packed element"),
+        }
+    }
+    out
+}
+
+/// Transcode validated wire data into private FlatFormatV0 framing. The work
+/// stack, prefix patches and output are runtime owned, including for nested lists.
+fn flat_decode(program: &Program, root: usize, input: &mut Input<'_>) -> Vec<u8> {
+    enum Job {
+        Visit(usize),
+        Elements(usize, u64),
+        Prefix(usize),
+    }
+    let mut work = vec![Job::Visit(root)];
+    let mut out = Vec::new();
+    let checked = |r: Result<u128, DecodeError>| r.unwrap_or_else(|_| fault("flat codec reread"));
+    while let Some(job) = work.pop() {
+        let node = match job {
+            Job::Visit(node) => node,
+            Job::Prefix(at) => {
+                let length = (out.len() - at - 8) as u64;
+                out[at..at + 8].copy_from_slice(&length.to_le_bytes());
+                continue;
+            }
+            Job::Elements(node, count) => {
+                if count > 0 {
+                    work.push(Job::Elements(node, count - 1));
+                    work.push(Job::Visit(node));
+                }
+                continue;
+            }
+        };
+        match &program.nodes[node] {
+            Node::Scalar(scalar) => {
+                let n = match scalar {
+                    Scalar::Bool => 1,
+                    Scalar::Integer(n) => *n,
+                    Scalar::F32 => 4,
+                    Scalar::F64 => 8,
+                };
+                out.extend_from_slice(&checked(input.number(n)).to_le_bytes()[..n]);
+            }
+            Node::FlatText { .. } => {
+                let n = checked(input.number(8)) as u64;
+                out.extend_from_slice(&n.to_le_bytes());
+                out.extend_from_slice(input.take(n).unwrap_or_else(|_| fault("flat text reread")));
+            }
+            Node::Framed(child) => {
+                work.push(Job::Prefix(out.len()));
+                out.extend_from_slice(&[0; 8]);
+                work.push(Job::Visit(*child));
+            }
+            Node::FlatFields(fields) => work.extend(fields.iter().rev().map(|&f| Job::Visit(f))),
+            Node::FlatVariant(arms) => {
+                let ordinal = checked(input.number(4)) as u32;
+                out.extend_from_slice(&ordinal.to_le_bytes());
+                let arm = arms
+                    .get(ordinal as usize)
+                    .unwrap_or_else(|| fault("flat variant reread"));
+                work.extend(arm.iter().rev().map(|&f| Job::Visit(f)));
+            }
+            Node::FlatSequence {
+                offset,
+                stride,
+                element,
+            } => {
+                let count = checked(input.number(8)) as u64;
+                work.push(Job::Prefix(out.len()));
+                out.extend_from_slice(&[0; 8]);
+                if *offset == 16 {
+                    out.extend_from_slice(&count.to_le_bytes());
+                }
+                work.push(Job::Elements(*element, count));
+            }
+            Node::Repeat { count, element, .. } => work.push(Job::Elements(*element, *count)),
+            _ => fault("a non-flat codec node in flat reconstruction"),
+        }
+    }
+    out
+}
+
 // ----- Encoding --------------------------------------------------------------------------
 
 enum Put {
@@ -406,6 +696,16 @@ enum Put {
         stride: u64,
         count: u64,
         set: bool,
+    },
+    Sequential {
+        node: usize,
+        at: *const u8,
+        count: u64,
+    },
+    Rows {
+        columns: Vec<(*const u8, u64, usize)>,
+        row: u64,
+        count: u64,
     },
     /// The next `count` map entries from `at`.
     Entries {
@@ -469,6 +769,41 @@ unsafe fn encode_payload(program: &Program, value: *const u8) -> Vec<u8> {
                 work.push(Put::Visit(node, at));
                 if set {
                     work.push(Put::Mark);
+                }
+            }
+            Put::Sequential { node, at, count } => {
+                if count > 0 {
+                    let extent = unsafe { flat_extent(program, node, at) };
+                    work.push(Put::Sequential {
+                        node,
+                        at: at.wrapping_add(extent as usize),
+                        count: count - 1,
+                    });
+                    work.push(Put::Visit(node, at));
+                }
+            }
+            Put::Rows {
+                columns,
+                row,
+                count,
+            } => {
+                if row < count {
+                    values += 1;
+                    if values > LIMIT_VALUES {
+                        budget();
+                    }
+                    let fields: Vec<_> = columns
+                        .iter()
+                        .map(|&(at, stride, child)| {
+                            Put::Visit(child, at.wrapping_add((row * stride) as usize))
+                        })
+                        .collect();
+                    work.push(Put::Rows {
+                        columns,
+                        row: row + 1,
+                        count,
+                    });
+                    work.extend(fields.into_iter().rev());
                 }
             }
             Put::Entries {
@@ -550,6 +885,7 @@ unsafe fn encode_node(
                 tag,
                 nullary,
                 arms,
+                ..
             } => {
                 let ordinal = if *niche {
                     if word(at.add(*tag as usize)) == 0 {
@@ -594,6 +930,73 @@ unsafe fn encode_node(
                 count: *count,
                 set: false,
             }),
+            Node::FlatText { .. } => {
+                let length = word(at);
+                out.extend_from_slice(&length.to_le_bytes());
+                out.extend_from_slice(read(at.add(8), length as usize));
+            }
+            Node::Framed(child) => work.push(Put::Visit(*child, at.add(8))),
+            Node::FlatFields(fields) => flat_fields(program, fields, at, work),
+            Node::FlatVariant(arms) => {
+                let ordinal = at.cast::<u32>().read_unaligned();
+                out.extend_from_slice(&ordinal.to_le_bytes());
+                let fields = arms
+                    .get(ordinal as usize)
+                    .unwrap_or_else(|| fault("flat variant ordinal"));
+                flat_fields(program, fields, at.add(4), work);
+            }
+            Node::FlatSequence {
+                offset,
+                stride,
+                element,
+            } => {
+                let count = if *offset == 16 {
+                    word(at.add(8))
+                } else {
+                    if *stride == 0 {
+                        fault("flat sequence without a count");
+                    }
+                    word(at) / *stride
+                };
+                out.extend_from_slice(&count.to_le_bytes());
+                work.push(Put::Sequential {
+                    node: *element,
+                    at: at.add(*offset as usize),
+                    count,
+                });
+            }
+            Node::Sequential {
+                offset, element, ..
+            } => {
+                let p = payload(pointer(at));
+                let count = word(p);
+                out.extend_from_slice(&count.to_le_bytes());
+                work.push(Put::Sequential {
+                    node: *element,
+                    at: p.add(*offset as usize),
+                    count,
+                });
+            }
+            Node::Columns { data, columns, .. } => {
+                let p = payload(pointer(at));
+                let (count, capacity) = (word(p), word(p.add(8)));
+                out.extend_from_slice(&count.to_le_bytes());
+                let columns = columns
+                    .iter()
+                    .map(|&(prefix, stride, child)| {
+                        (
+                            p.add((*data + capacity * prefix) as usize).cast_const(),
+                            stride,
+                            child,
+                        )
+                    })
+                    .collect();
+                work.push(Put::Rows {
+                    columns,
+                    row: 0,
+                    count,
+                });
+            }
             Node::Container(container) => {
                 let entries = payload(pointer(
                     payload(pointer(at)).add(container.entries_at as usize),
@@ -826,10 +1229,10 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
                             return Err(DecodeError::Scalar);
                         }
                     }
-                    Node::Text(text) => {
+                    Node::Text(Text { utf8, .. }) | Node::FlatText { utf8 } => {
                         let n = input.length()?;
                         let bytes = input.take(n)?;
-                        if text.utf8 && std::str::from_utf8(bytes).is_err() {
+                        if *utf8 && std::str::from_utf8(bytes).is_err() {
                             return Err(DecodeError::Utf8);
                         }
                     }
@@ -841,8 +1244,20 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
                         let arm = arms.get(tag as usize).ok_or(DecodeError::Tag)?;
                         work.extend(arm.iter().rev().map(|&(_, f)| Check::Visit(f)));
                     }
+                    Node::Framed(child) => work.push(Check::Visit(*child)),
+                    Node::FlatFields(fields) => {
+                        work.extend(fields.iter().rev().map(|&f| Check::Visit(f)))
+                    }
+                    Node::FlatVariant(arms) => {
+                        let tag = input.number(4)? as u32;
+                        let arm = arms.get(tag as usize).ok_or(DecodeError::Tag)?;
+                        work.extend(arm.iter().rev().map(|&f| Check::Visit(f)));
+                    }
                     Node::Box { payload, .. } => work.push(Check::Visit(*payload)),
-                    Node::Sequence { element, .. } => {
+                    Node::Sequence { element, .. }
+                    | Node::FlatSequence { element, .. }
+                    | Node::Sequential { element, .. }
+                    | Node::Columns { element, .. } => {
                         let count = input.length()?;
                         reserve(values, count);
                         work.push(Check::Elements {
@@ -1011,9 +1426,16 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
                     align,
                     payload: p,
                 } => {
-                    let b = block(ctx, *index, *size, *align);
-                    set_pointer(at, b);
-                    work.push(Build::Visit(*p, payload(b)));
+                    if *size == NO_NODE {
+                        let content = flat_decode(program, *p, &mut input);
+                        let b = block(ctx, *index, content.len() as u64, *align);
+                        write(payload(b), &content);
+                        set_pointer(at, b);
+                    } else {
+                        let b = block(ctx, *index, *size, *align);
+                        set_pointer(at, b);
+                        work.push(Build::Visit(*p, payload(b)));
+                    }
                 }
                 Node::Sequence { elements, element } => {
                     let count = checked(input.number(8)) as u64;
@@ -1036,6 +1458,66 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
                     stride: *stride,
                     count: *count,
                 }),
+                Node::FlatText { .. }
+                | Node::Framed(_)
+                | Node::FlatFields(_)
+                | Node::FlatVariant(_)
+                | Node::FlatSequence { .. } => {
+                    let content = flat_decode(program, node, &mut input);
+                    write(at, &content);
+                }
+                Node::Sequential {
+                    index,
+                    align,
+                    offset,
+                    element,
+                } => {
+                    let count = checked(input.number(8)) as u64;
+                    let mut content = Vec::new();
+                    for _ in 0..count {
+                        content.extend(inline_decode(program, *element, &mut input));
+                    }
+                    let used = content.len() as u64;
+                    let b = block(
+                        ctx,
+                        *index,
+                        offset.checked_add(used).unwrap_or_else(|| budget()),
+                        *align,
+                    );
+                    write(payload(b), &count.to_le_bytes());
+                    write(payload(b).add(8), &used.to_le_bytes());
+                    write(payload(b).add(*offset as usize), &content);
+                    set_pointer(at, b);
+                }
+                Node::Columns {
+                    index,
+                    align,
+                    data,
+                    quantum,
+                    columns,
+                    ..
+                } => {
+                    let count = checked(input.number(8)) as u64;
+                    let capacity =
+                        count.checked_add(quantum - 1).unwrap_or_else(|| budget()) & !(quantum - 1);
+                    let width: u64 = columns.iter().map(|&(_, stride, _)| stride).sum();
+                    let size = capacity
+                        .checked_mul(width)
+                        .and_then(|n| data.checked_add(n))
+                        .unwrap_or_else(|| budget());
+                    let b = block(ctx, *index, size, *align);
+                    write(payload(b), &count.to_le_bytes());
+                    write(payload(b).add(8), &capacity.to_le_bytes());
+                    set_pointer(at, b);
+                    for row in (0..count).rev() {
+                        for &(prefix, stride, child) in columns.iter().rev() {
+                            work.push(Build::Visit(
+                                child,
+                                payload(b).add((*data + capacity * prefix + row * stride) as usize),
+                            ));
+                        }
+                    }
+                }
                 Node::Container(container) => {
                     let count = checked(input.number(8)) as u64;
                     let c = block(ctx, container.index, container.size, container.align);

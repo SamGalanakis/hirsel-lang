@@ -306,7 +306,9 @@ producer that differs changes this crate or the producer):
 - `Index` projections are supported on byte `Slice`, `Inline`, `Simd` and flat sequence
   layouts and on sequence payloads (the u64 count, then the elements from
   their alignment). A String or Bytes literal block is such a payload, as
-  native literals are. Fixed inline repeats drop high to low. Map/Set construction is an ordinary private record over entries and index sequences. Structure-of-arrays payloads remain unsupported.
+  native literals are. Fixed inline repeats drop high to low. Map/Set construction is an ordinary private record over entries and index sequences. Structure-of-arrays scan and drop walks use stored capacity for column
+  placement, with reverse row/field cleanup; sequence construction and indexing
+  remain unsupported.
 
 An operation model may take and return capability handles and plain inline
 values: `Arg::Handle` passes a context handle to the entry, and `OpValue` has
@@ -520,3 +522,8 @@ under both holder audit modes.
 PS-13 unchecked arithmetic and projection guards do not take language failure
 edges. H still audits the domain of unchecked division/shifts and the validity
 of unchecked indices/tags; violations are model errors. Signed MIN % -1 remains zero.
+
+The SER-2 executor walks variable flat field offsets, sequential Packed active
+extents and SoA columns from the layout table, independently of runtime codec
+program words. Reconstruction validates wire data first, then patches private
+flat framing and allocates fresh counted storage with exact sequence headers.

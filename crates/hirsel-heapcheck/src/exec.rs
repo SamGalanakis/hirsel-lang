@@ -5924,8 +5924,40 @@ impl<'p, S: Stage> Machine<'p, S> {
                         element,
                     )?;
                 }
-                ScanStep::Columns(_) => {
-                    return fail(V::Unsupported, "copy of a structure-of-arrays payload");
+                ScanStep::Columns(columns) => {
+                    let word = |offset| -> Checked<u64> {
+                        let at = base + offset;
+                        image.check_range(at, 8)?;
+                        if !image.all_init(at, 8) {
+                            return fail(
+                                V::UninitializedRead,
+                                "column scan has an unwritten header",
+                            );
+                        }
+                        Ok(u64::from_le_bytes(
+                            image.read_bytes(at, 8).try_into().unwrap(),
+                        ))
+                    };
+                    let count = word(columns.count_offset)?;
+                    let capacity = word(columns.capacity_offset)?;
+                    if count > capacity || capacity % columns.capacity_quantum != 0 {
+                        return fail(V::OutOfExtent, "invalid column scan capacity");
+                    }
+                    for column in columns.columns {
+                        let start = capacity
+                            .checked_mul(column.prefix)
+                            .and_then(|n| n.checked_add(columns.data_offset))
+                            .and_then(|n| n.checked_add(base))
+                            .ok_or_else(|| err(V::OutOfExtent, "column scan offset overflow"))?;
+                        self.copy_scan_elements(
+                            image,
+                            &mut work,
+                            start,
+                            count,
+                            column.stride,
+                            column.layout,
+                        )?;
+                    }
                 }
             }
         }
@@ -8391,8 +8423,46 @@ impl<'p, S: Stage> Machine<'p, S> {
                             }
                         }
                     }
-                    DropStep::ColumnsReverse(_) => {
-                        return fail(V::Unsupported, "structure-of-arrays sequence payload");
+                    DropStep::ColumnsReverse(columns) => {
+                        if !gated(columns.data_offset) {
+                            let count = self.scan_scalar(base.at(columns.count_offset), 8)? as u64;
+                            let capacity =
+                                self.scan_scalar(base.at(columns.capacity_offset), 8)? as u64;
+                            if count > capacity || capacity % columns.capacity_quantum != 0 {
+                                return fail(V::OutOfExtent, "invalid column drop capacity");
+                            }
+                            // Pushed low to high: rows drop high to low, and each
+                            // row's fields in reverse declaration order.
+                            for i in 0..count {
+                                for column in &columns.columns {
+                                    let offset = capacity
+                                        .checked_mul(column.prefix)
+                                        .and_then(|n| n.checked_add(columns.data_offset))
+                                        .and_then(|n| {
+                                            i.checked_mul(column.stride)
+                                                .and_then(|j| n.checked_add(j))
+                                        })
+                                        .ok_or_else(|| {
+                                            err(V::OutOfExtent, "column drop offset overflow")
+                                        })?;
+                                    let row = self.ledger.project(
+                                        logical_base,
+                                        offset,
+                                        ProjectionStep::Index(i),
+                                    );
+                                    let at = self.ledger.project(
+                                        row,
+                                        0,
+                                        ProjectionStep::Field(column.field),
+                                    );
+                                    d.work.push(Work::DropAt {
+                                        at,
+                                        layout: column.layout,
+                                        mask: None,
+                                    });
+                                }
+                            }
+                        }
                     }
                     DropStep::CloseHandle { offset } => {
                         if !gated(offset) {

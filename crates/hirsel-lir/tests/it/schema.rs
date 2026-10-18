@@ -666,6 +666,14 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
                 layout: LayoutId(0),
                 arms: vec![vec![CodecNodeId(0)], Vec::new()],
             },
+            CodecNode::FlatText {
+                layout: LayoutId(0),
+                utf8: true,
+            },
+            CodecNode::Framed {
+                layout: LayoutId(0),
+                value: CodecNodeId(3),
+            },
         ],
         root: CodecNodeId(0),
         bytes: CodecNodeId(1),

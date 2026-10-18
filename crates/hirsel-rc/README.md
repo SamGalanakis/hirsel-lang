@@ -327,9 +327,11 @@ revision 29): it takes the call's concrete schema from the checker
 value it describes into a `CodecPlan` (memoized per schema node and layout,
 nominals over records, variants and nonempty tuples sharing their layout, Packed
 over its inner variant's arms), checks it against the table and emits
-`Inst::Encode` or `Inst::Decode` over a read-only operand. A schema node whose
-layout it cannot walk (variable flat records, sequential `List[Packed]`, SoA
-columns) declines the lowering as unsupported.
+`Inst::Encode` or `Inst::Decode` over a read-only operand. Variable flat values
+use explicit block, length framing and text nodes;
+flat lists distinguish byte extents from element counts. Sequences retain their
+ordinary, sequential Packed or SoA storage kind in the checked plan. The runtime
+and H walk fields and active extents rather than copying native storage to wire.
 
 A variant pattern reads its tag through a synthetic loan only when the
 variant's type owns counted storage; an uncounted variant that is not plain

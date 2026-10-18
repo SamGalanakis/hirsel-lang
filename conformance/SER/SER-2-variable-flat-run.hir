@@ -1,0 +1,104 @@
+// rule: SER-2
+// expect: run
+// Private flat extents are walked; SER-2 carries only each child's own prefix.
+@serializable
+flat type Named {
+  name: String,
+  n: u16,
+  data: Bytes,
+  tail: u32,
+}
+
+@serializable
+flat type Packet {
+  title: String,
+  rows: List[Named],
+  nested: List[List[u16]],
+  tail: u16,
+}
+
+fn word(data: Bytes, at: u64) -> u64 {
+  let mut value: u64 = 0
+  for i in 0u64..8u64 {
+    let byte: u64 = int.widen(data[at + i])
+    value = value | byte << i * 8
+  }
+  value
+}
+
+fn payload[T: serializable](t: Test, value: T, expected: Bytes) -> () {
+  let wire = codec.encode(value)
+  let at = 24 + word(wire, 8)
+  test.check(t, word(wire, at - 8) == bytes.len(expected))
+  test.check(t, bytes.slice(wire, at, bytes.len(wire)) == expected)
+}
+
+fn replace(data: Bytes, at: u64, value: u8) -> Bytes {
+  let mut out: List[u8] = []
+  for i in 0u64..bytes.len(data) {
+    list.push(
+      mut out,
+      if i == at {
+        value
+      } else {
+        data[i]
+      }
+    )
+  }
+  bytes.from_list(take out)
+}
+
+fn round[T: serializable](t: Test, value: T) -> Result[(), DecodeError] {
+  let bytes = codec.encode(value)
+  let decoded: T = codec.decode(bytes)?
+  test.check(t, codec.encode(decoded) == bytes)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let named = Named(name: "a", n: 1, data: b"\0\xff", tail: 16909060)
+  let decoded: Named = codec.decode(codec.encode(named))?
+  test.check(t, decoded.name == "a")
+  test.check(t, decoded.n == 1)
+  test.check(t, decoded.data == b"\0\xff")
+  test.check(t, decoded.tail == 16909060)
+  payload(
+    t,
+    named,
+    b"\x01\x00\x00\x00\x00\x00\x00\x00\x61\x01\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\xff\x04\x03\x02\x01"
+  )
+  let wire = codec.encode(named)
+  let rejected: Result[Named, DecodeError] = codec.decode(
+    replace(wire, 32 + word(wire, 8), 192)
+  )
+  match rejected {
+    Error(Utf8()) => {},
+    _ => test.check(t, false),
+  }
+  round(t, named)?
+  round(t, Named(name: "", n: 65535, data: b"", tail: 0))?
+  // Rust str::from_utf8 accepted UTF-8 boundary vectors, through flat storage.
+  let edges = string.from_bytes(
+    b"\xc2\x80\xdf\xbf\xe0\xa0\x80\xed\x9f\xbf\xee\x80\x80\xef\xbf\xbf\xf0\x90\x80\x80\xf4\x8f\xbf\xbf"
+  )
+  match edges {
+    Ok(text) => round(t, Named(name: text, n: 2, data: b"x", tail: 7))?,
+    Error(_) => test.check(t, false),
+  }
+  let rows: List[Named] = [
+    named,
+    Named(name: "second\0é", n: 258, data: b"end", tail: 9)
+  ]
+  round(t, rows)?
+  round(
+    t,
+    Packet(
+      title: "packet",
+      rows: rows,
+      nested: [[1u16, 258u16], [], [65535u16]],
+      tail: 4660
+    )
+  )?
+  round(t, Packet(title: "", rows: [], nested: [], tail: 0))?
+  Ok(())
+}

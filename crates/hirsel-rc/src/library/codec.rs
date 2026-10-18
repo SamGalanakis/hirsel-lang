@@ -298,8 +298,48 @@ impl<'a> Plan<'a> {
 
     fn describe(&mut self, s: SchemaId, layout: LayoutId) -> R<CodecNode> {
         let r = self.record(layout)?;
+        if let LayoutKind::Block { payload } = r.kind
+            && self.record(payload)?.kind == LayoutKind::Flat
+        {
+            return Ok(CodecNode::Box {
+                layout,
+                payload: self.node(s, payload),
+            });
+        }
+        let text = matches!(
+            self.schema.nodes[s.0 as usize],
+            SchemaNode::Scalar(Primitive::String | Primitive::Bytes)
+        );
+        let sequence = matches!(
+            self.schema.nodes[s.0 as usize],
+            SchemaNode::Builtin {
+                kind: BuiltinType::List | BuiltinType::Array,
+                ..
+            }
+        );
+        if r.kind == LayoutKind::Flat
+            && !text
+            && !sequence
+            && let [field] = r.fields.as_slice()
+            && field.offset == 8
+            && matches!(r.size, hirsel_lir::layout_types::SizeSpec::Dynamic(_))
+        {
+            return Ok(CodecNode::Framed {
+                layout,
+                value: self.node(s, field.layout),
+            });
+        }
         Ok(match &self.schema.nodes[s.0 as usize] {
+            SchemaNode::Scalar(Primitive::String) if r.kind == LayoutKind::Flat => {
+                CodecNode::FlatText { layout, utf8: true }
+            }
             SchemaNode::Scalar(Primitive::String) => self.text(layout, true)?,
+            SchemaNode::Scalar(Primitive::Bytes) if r.kind == LayoutKind::Flat => {
+                CodecNode::FlatText {
+                    layout,
+                    utf8: false,
+                }
+            }
             SchemaNode::Scalar(Primitive::Bytes) => self.text(layout, false)?,
             SchemaNode::Scalar(_) => CodecNode::Scalar(layout),
             SchemaNode::Tuple(items) => self.fields(layout, &items.clone())?,
@@ -331,12 +371,26 @@ impl<'a> Plan<'a> {
                 let arguments = arguments.clone();
                 match kind {
                     BuiltinType::List | BuiltinType::Array => {
-                        let LayoutKind::Sequence { element } =
-                            self.record(self.payload(layout)?)?.kind
-                        else {
-                            return unsupported(format!(
-                                "a {kind:?} whose storage is not an ordinary sequence"
-                            ));
+                        let element = if r.kind == LayoutKind::Flat {
+                            r.fields
+                                .first()
+                                .ok_or_else(|| {
+                                    PassError::Malformed(
+                                        "a flat sequence without an element".into(),
+                                    )
+                                })?
+                                .layout
+                        } else {
+                            match self.record(self.payload(layout)?)?.kind {
+                                LayoutKind::Sequence { element }
+                                | LayoutKind::Sequential { element }
+                                | LayoutKind::SoaColumns { element } => element,
+                                _ => {
+                                    return unsupported(format!(
+                                        "a {kind:?} off its sequence storage"
+                                    ));
+                                }
+                            }
                         };
                         CodecNode::Sequence {
                             layout,

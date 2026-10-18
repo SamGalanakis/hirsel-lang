@@ -131,6 +131,51 @@ impl<S: Stage> Machine<'_, S> {
         Ok((payload, element, start, stride))
     }
 
+    /// Native flat field addresses include every preceding variable field's
+    /// content extent; layout offsets already include its eight-byte prefix.
+    fn codec_field_offsets(
+        &self,
+        layout: LayoutId,
+        fields: &[FieldLayout],
+        at: At<'_>,
+    ) -> Checked<Vec<u64>> {
+        let r = self.record(layout)?;
+        let flat = r.kind == LayoutKind::Flat || r.kind == LayoutKind::Packed && r.align == 1;
+        let mut extra = 0;
+        let mut offsets = Vec::with_capacity(fields.len());
+        for f in fields {
+            let offset = f.offset + extra;
+            offsets.push(offset);
+            if flat && matches!(self.record(f.layout)?.size, SizeSpec::Dynamic(_)) {
+                extra += self.bits_at(at.at(offset), 8)? as u64;
+            }
+        }
+        Ok(offsets)
+    }
+
+    /// SoA columns use the stored capacity, including over-reserved sources.
+    fn codec_columns(&self, element: LayoutId) -> Checked<(u64, u64, Vec<(u64, u64)>)> {
+        let r = self.record(element)?;
+        let quantum = r
+            .fields
+            .iter()
+            .map(|f| self.record(f.layout).map(|r| u64::from(r.align)))
+            .collect::<Checked<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .unwrap_or(1);
+        let data = hirsel_lir::layout::soa_data_offset(quantum)
+            .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
+        let mut prefix = 0;
+        let mut columns = Vec::new();
+        for f in &r.fields {
+            let stride = self.size(f.layout)?;
+            columns.push((prefix, stride));
+            prefix += stride;
+        }
+        Ok((data, quantum, columns))
+    }
+
     /// The image of a root operand of `layout`, so every node reads at an `At`.
     fn codec_image(&self, val: &Val, layout: LayoutId) -> Checked<Extent> {
         Ok(match val {
@@ -218,10 +263,24 @@ impl<S: Stage> Machine<'_, S> {
                     out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
                     out.extend_from_slice(&bytes);
                 }
+                CodecNode::FlatText { .. } => {
+                    let length = self.bits_at(at, 8)? as u64;
+                    let (e, offset) = self.extent_at(at.at(8))?;
+                    e.check_range(offset, length)?;
+                    if !e.all_init(offset, length) {
+                        return fail(V::UninitializedRead, "flat codec text");
+                    }
+                    out.extend_from_slice(&length.to_le_bytes());
+                    out.extend_from_slice(e.read_bytes(offset, length));
+                }
+                CodecNode::Framed { value, .. } => work.push(Job::Visit(*value, at.at(8))),
                 CodecNode::Fields { fields, .. } => {
-                    for (ordinal, child) in fields.iter().enumerate().rev() {
-                        let f = self.field_at(layout, ordinal as u32)?;
-                        work.push(Job::Visit(*child, at.at(f.offset)));
+                    let layout_fields: Vec<_> = (0..fields.len())
+                        .map(|i| self.field_at(layout, i as u32))
+                        .collect::<Checked<_>>()?;
+                    let offsets = self.codec_field_offsets(layout, &layout_fields, at)?;
+                    for (child, offset) in fields.iter().zip(offsets).rev() {
+                        work.push(Job::Visit(*child, at.at(offset)));
                     }
                 }
                 CodecNode::Variant { arms, .. } => {
@@ -235,7 +294,12 @@ impl<S: Stage> Machine<'_, S> {
                         .get(ordinal as usize)
                         .ok_or_else(|| err(V::TypeConfusion, "a variant value off its arms"))?;
                     out.extend_from_slice(&ordinal.to_le_bytes());
-                    let (_, offsets) = self.arm_fields(layout, ordinal)?;
+                    let variant = tag
+                        .variants
+                        .iter()
+                        .find(|v| v.ordinal == ordinal)
+                        .ok_or_else(|| err(V::Malformed, "codec variant"))?;
+                    let offsets = self.codec_field_offsets(layout, &variant.fields, at)?;
                     for (child, offset) in arm.iter().zip(offsets).rev() {
                         work.push(Job::Visit(*child, at.at(offset)));
                     }
@@ -244,12 +308,73 @@ impl<S: Stage> Machine<'_, S> {
                     work.push(Job::Visit(*payload, At::Heap(self.ptr_at(at)?)));
                 }
                 CodecNode::Sequence { element, .. } => {
-                    let (_, _, start, stride) = self.codec_sequence(layout)?;
-                    let block = self.ptr_at(at)?;
-                    let count = self.bits_at(At::Heap(block), 8)? as u64;
-                    out.extend_from_slice(&count.to_le_bytes());
-                    for i in (0..count).rev() {
-                        work.push(Job::Visit(*element, At::Heap(block.at(start + i * stride))));
+                    if self.record(layout)?.kind == LayoutKind::Flat {
+                        let (start, _) = self
+                            .flat_prefixed(layout)?
+                            .ok_or_else(|| err(V::Malformed, "codec flat sequence"))?;
+                        let block = match at {
+                            At::Heap(p) => p,
+                            _ => return fail(V::TypeConfusion, "flat sequence outside a block"),
+                        };
+                        let count = self.flat_count(layout, block)?;
+                        out.extend_from_slice(&count.to_le_bytes());
+                        let mut cursor = start;
+                        let child_layout = self.plan_node(plan, *element)?.layout();
+                        let mut children = Vec::new();
+                        for _ in 0..count {
+                            children.push(Job::Visit(*element, At::Heap(block.at(cursor))));
+                            cursor += self.extent_of(child_layout, block.at(cursor))?;
+                        }
+                        work.extend(children.into_iter().rev());
+                    } else {
+                        let p = self.block_payload(layout)?;
+                        let block = self.ptr_at(at)?;
+                        let count = self.bits_at(At::Heap(block), 8)? as u64;
+                        out.extend_from_slice(&count.to_le_bytes());
+                        match self.record(p)?.kind {
+                            LayoutKind::Sequence { .. } => {
+                                let (_, _, start, stride) = self.codec_sequence(layout)?;
+                                for i in (0..count).rev() {
+                                    work.push(Job::Visit(
+                                        *element,
+                                        At::Heap(block.at(start + i * stride)),
+                                    ));
+                                }
+                            }
+                            LayoutKind::Sequential { element: e } => {
+                                let mut cursor =
+                                    hirsel_lir::layout::sequential_elements_offset(self.record(e)?)
+                                        .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
+                                let mut children = Vec::new();
+                                for _ in 0..count {
+                                    children.push(Job::Visit(*element, At::Heap(block.at(cursor))));
+                                    cursor += self.extent_of(e, block.at(cursor))?;
+                                }
+                                work.extend(children.into_iter().rev());
+                            }
+                            LayoutKind::SoaColumns { element: e } => {
+                                let CodecNode::Fields { fields, .. } =
+                                    self.plan_node(plan, *element)?
+                                else {
+                                    return fail(V::Malformed, "codec column element");
+                                };
+                                let capacity = self.bits_at(At::Heap(block.at(8)), 8)? as u64;
+                                let (data, _, columns) = self.codec_columns(e)?;
+                                for i in (0..count).rev() {
+                                    for (child, (prefix, stride)) in
+                                        fields.iter().zip(&columns).rev()
+                                    {
+                                        work.push(Job::Visit(
+                                            *child,
+                                            At::Heap(
+                                                block.at(data + capacity * prefix + i * stride),
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                            _ => return fail(V::TypeConfusion, "codec sequence payload"),
+                        }
                     }
                 }
                 CodecNode::Repeat { element, .. } => {
@@ -552,7 +677,7 @@ impl<S: Stage> Machine<'_, S> {
                         return Ok(Err(Malformed::Scalar));
                     }
                 }
-                CodecNode::Text { utf8, .. } => {
+                CodecNode::Text { utf8, .. } | CodecNode::FlatText { utf8, .. } => {
                     let n = check!(input.number(8)) as u64;
                     let text = check!(input.take(n));
                     if *utf8 && std::str::from_utf8(text).is_err() {
@@ -569,6 +694,7 @@ impl<S: Stage> Machine<'_, S> {
                     };
                     work.extend(arm.iter().rev().map(|f| Job::Visit(*f)));
                 }
+                CodecNode::Framed { value, .. } => work.push(Job::Visit(*value)),
                 CodecNode::Box { payload, .. } => work.push(Job::Visit(*payload)),
                 CodecNode::Sequence { element, .. } => {
                     let count = check!(input.number(8)) as u64;
@@ -662,6 +788,149 @@ impl<S: Stage> Machine<'_, S> {
         }
     }
 
+    /// Ordinary Packed elements retain native offsets and zeroed padding,
+    /// independently of flat framing and the runtime's arm extent constants.
+    fn codec_inline_build(
+        &self,
+        plan: &CodecPlan,
+        root: CodecNodeId,
+        input: &mut Input<'_>,
+    ) -> Checked<Vec<u8>> {
+        let layout = self.plan_node(plan, root)?.layout();
+        let mut bytes = vec![0; self.size(layout)? as usize];
+        let mut work = vec![(root, 0usize)];
+        let reread = |_| err(V::Malformed, "Packed codec reread");
+        while let Some((id, at)) = work.pop() {
+            let node = self.plan_node(plan, id)?;
+            let layout = node.layout();
+            if self.record(layout)?.kind == LayoutKind::Flat {
+                let part = self.codec_flat_build(plan, id, input)?;
+                bytes[at..at + part.len()].copy_from_slice(&part);
+                continue;
+            }
+            match node {
+                CodecNode::Scalar(_) => {
+                    let n = self.size(layout)? as usize;
+                    bytes[at..at + n].copy_from_slice(input.take(n as u64).map_err(reread)?);
+                }
+                CodecNode::Fields { fields, .. } => {
+                    for (i, child) in fields.iter().enumerate().rev() {
+                        work.push((
+                            *child,
+                            at + self.field_at(layout, i as u32)?.offset as usize,
+                        ));
+                    }
+                }
+                CodecNode::Variant { arms, .. } => {
+                    let ordinal = input.number(4).map_err(reread)? as u32;
+                    let (tag, offsets) = self.arm_fields(layout, ordinal)?;
+                    let offset = at + tag.offset as usize;
+                    bytes[offset..offset + 4].copy_from_slice(&ordinal.to_le_bytes());
+                    for (child, offset) in arms[ordinal as usize].iter().zip(offsets).rev() {
+                        work.push((*child, at + offset as usize));
+                    }
+                }
+                CodecNode::Repeat { element, .. } => {
+                    let LayoutKind::Inline { count, element: e } = self.record(layout)?.kind else {
+                        return fail(V::Malformed, "Packed inline codec");
+                    };
+                    for i in (0..count).rev() {
+                        work.push((*element, at + (i * self.size(e)?) as usize));
+                    }
+                }
+                _ => return fail(V::Malformed, "reference-bearing Packed codec element"),
+            }
+        }
+        let extent = hirsel_lir::layout::evaluate_size(&self.record(layout)?.size, &bytes)
+            .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
+        bytes.truncate(extent as usize);
+        Ok(bytes)
+    }
+
+    /// Rebuild private flat bytes from validated canonical fields. Prefix
+    /// patching is independent of the runtime's codec program and size walk.
+    fn codec_flat_build(
+        &self,
+        plan: &CodecPlan,
+        root: CodecNodeId,
+        input: &mut Input<'_>,
+    ) -> Checked<Vec<u8>> {
+        enum Job {
+            Visit(CodecNodeId),
+            Elements(CodecNodeId, u64),
+            Prefix(usize),
+        }
+        let mut work = vec![Job::Visit(root)];
+        let mut bytes = Vec::new();
+        let reread = |_| err(V::Malformed, "flat codec reread");
+        while let Some(job) = work.pop() {
+            let id = match job {
+                Job::Visit(id) => id,
+                Job::Prefix(at) => {
+                    let n = (bytes.len() - at - 8) as u64;
+                    bytes[at..at + 8].copy_from_slice(&n.to_le_bytes());
+                    continue;
+                }
+                Job::Elements(id, count) => {
+                    if count > 0 {
+                        work.push(Job::Elements(id, count - 1));
+                        work.push(Job::Visit(id));
+                    }
+                    continue;
+                }
+            };
+            let node = self.plan_node(plan, id)?;
+            match node {
+                CodecNode::Scalar(layout) => {
+                    bytes.extend_from_slice(input.take(self.size(*layout)?).map_err(reread)?)
+                }
+                CodecNode::FlatText { .. } => {
+                    let n = input.number(8).map_err(reread)? as u64;
+                    bytes.extend_from_slice(&n.to_le_bytes());
+                    bytes.extend_from_slice(input.take(n).map_err(reread)?);
+                }
+                CodecNode::Framed { value, .. } => {
+                    work.push(Job::Prefix(bytes.len()));
+                    bytes.extend_from_slice(&[0; 8]);
+                    work.push(Job::Visit(*value));
+                }
+                CodecNode::Fields { fields, .. } => {
+                    work.extend(fields.iter().rev().map(|&id| Job::Visit(id)))
+                }
+                CodecNode::Variant { arms, .. } => {
+                    let ordinal = input.number(4).map_err(reread)? as u32;
+                    bytes.extend_from_slice(&ordinal.to_le_bytes());
+                    work.extend(
+                        arms[ordinal as usize]
+                            .iter()
+                            .rev()
+                            .map(|&id| Job::Visit(id)),
+                    );
+                }
+                CodecNode::Sequence { layout, element } => {
+                    let n = input.number(8).map_err(reread)? as u64;
+                    let (at, _) = self
+                        .flat_prefixed(*layout)?
+                        .ok_or_else(|| err(V::Malformed, "flat codec sequence"))?;
+                    work.push(Job::Prefix(bytes.len()));
+                    bytes.extend_from_slice(&[0; 8]);
+                    if at == 16 {
+                        bytes.extend_from_slice(&n.to_le_bytes());
+                    }
+                    work.push(Job::Elements(*element, n));
+                }
+                CodecNode::Repeat { layout, element } => {
+                    let LayoutKind::Inline { count, .. } = self.record(*layout)?.kind else {
+                        return fail(V::Malformed, "flat codec repeat");
+                    };
+                    work.push(Job::Elements(*element, count));
+                }
+                _ => return fail(V::Malformed, "non-flat codec node in flat build"),
+            }
+        }
+        Ok(bytes)
+    }
+
     /// Build the validated `payload` of node `root` at `dest`.
     fn codec_build(
         &mut self,
@@ -680,7 +949,18 @@ impl<S: Stage> Machine<'_, S> {
         while let Some((id, dest)) = work.pop() {
             let node = self.plan_node(plan, id)?;
             let layout = node.layout();
+            if self.record(layout)?.kind == LayoutKind::Flat
+                || self.record(layout)?.kind == LayoutKind::Packed
+                    && self.record(layout)?.align == 1
+            {
+                let bytes = self.codec_flat_build(plan, id, &mut input)?;
+                self.codec_bytes(image, dest, &bytes);
+                continue;
+            }
             match node {
+                CodecNode::FlatText { .. } | CodecNode::Framed { .. } => {
+                    return fail(V::Malformed, "flat codec node off a flat layout");
+                }
                 CodecNode::Scalar(_) => {
                     let size = self.size(layout)?;
                     let bits = input.take(size).map_err(reread)?.to_vec();
@@ -707,17 +987,87 @@ impl<S: Stage> Machine<'_, S> {
                 }
                 CodecNode::Box { payload: p, .. } => {
                     let payload = self.block_payload(layout)?;
-                    let size = self.size(payload)?;
-                    let block = self.codec_block(payload, size, self.record(payload)?.align)?;
-                    self.codec_cell(image, dest, block);
-                    work.push((*p, Dest::Heap(block)));
+                    if matches!(self.record(payload)?.size, SizeSpec::Dynamic(_)) {
+                        let bytes = self.codec_flat_build(plan, *p, &mut input)?;
+                        let block = self.codec_block(
+                            payload,
+                            bytes.len() as u64,
+                            self.record(payload)?.align,
+                        )?;
+                        self.codec_bytes(image, Dest::Heap(block), &bytes);
+                        self.codec_cell(image, dest, block);
+                    } else {
+                        let size = self.size(payload)?;
+                        let block = self.codec_block(payload, size, self.record(payload)?.align)?;
+                        self.codec_cell(image, dest, block);
+                        work.push((*p, Dest::Heap(block)));
+                    }
                 }
                 CodecNode::Sequence { element, .. } => {
                     let count = input.number(8).map_err(reread)? as u64;
-                    let (block, start, stride) = self.codec_elements(layout, count)?;
-                    self.codec_cell(image, dest, block);
-                    for i in (0..count).rev() {
-                        work.push((*element, Dest::Heap(block.at(start + i * stride))));
+                    let p = self.block_payload(layout)?;
+                    match self.record(p)?.kind {
+                        LayoutKind::Sequence { .. } => {
+                            let (block, start, stride) = self.codec_elements(layout, count)?;
+                            self.codec_cell(image, dest, block);
+                            for i in (0..count).rev() {
+                                work.push((*element, Dest::Heap(block.at(start + i * stride))));
+                            }
+                        }
+                        LayoutKind::Sequential { element: e } => {
+                            let start =
+                                hirsel_lir::layout::sequential_elements_offset(self.record(e)?)
+                                    .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
+                            let mut bytes = Vec::new();
+                            for _ in 0..count {
+                                bytes.extend(self.codec_inline_build(plan, *element, &mut input)?);
+                            }
+                            let block = self.codec_block(
+                                p,
+                                start + bytes.len() as u64,
+                                self.record(p)?.align,
+                            )?;
+                            self.codec_bytes(image, Dest::Heap(block), &count.to_le_bytes());
+                            self.codec_bytes(
+                                image,
+                                Dest::Heap(block.at(8)),
+                                &(bytes.len() as u64).to_le_bytes(),
+                            );
+                            self.codec_bytes(image, Dest::Heap(block.at(start)), &bytes);
+                            self.codec_cell(image, dest, block);
+                        }
+                        LayoutKind::SoaColumns { element: e } => {
+                            let CodecNode::Fields { fields, .. } =
+                                self.plan_node(plan, *element)?
+                            else {
+                                return fail(V::Malformed, "codec column fields");
+                            };
+                            let (data, quantum, columns) = self.codec_columns(e)?;
+                            let capacity = hirsel_lir::layout::align_up(count, quantum)
+                                .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
+                            let stride: u64 = columns.iter().map(|&(_, stride)| stride).sum();
+                            let block = self.codec_block(
+                                p,
+                                data + capacity * stride,
+                                self.record(p)?.align,
+                            )?;
+                            self.codec_bytes(image, Dest::Heap(block), &count.to_le_bytes());
+                            self.codec_bytes(
+                                image,
+                                Dest::Heap(block.at(8)),
+                                &capacity.to_le_bytes(),
+                            );
+                            self.codec_cell(image, dest, block);
+                            for i in (0..count).rev() {
+                                for (child, (prefix, stride)) in fields.iter().zip(&columns).rev() {
+                                    work.push((
+                                        *child,
+                                        Dest::Heap(block.at(data + capacity * prefix + i * stride)),
+                                    ));
+                                }
+                            }
+                        }
+                        _ => return fail(V::Malformed, "codec sequence build payload"),
                     }
                 }
                 CodecNode::Repeat { element, .. } => {

@@ -1,0 +1,72 @@
+// rule: SER-2
+// expect: run
+// Every Packed element uses its active extent, including zero-field arms.
+@serializable
+type Choice = Empty | Byte(u8) | Wide(u64, u16)
+
+fn word(data: Bytes, at: u64) -> u64 {
+  let mut value: u64 = 0
+  for i in 0u64..8u64 {
+    let byte: u64 = int.widen(data[at + i])
+    value = value | byte << i * 8
+  }
+  value
+}
+
+fn payload[T: serializable](t: Test, value: T, expected: Bytes) -> () {
+  let wire = codec.encode(value)
+  let at = 24 + word(wire, 8)
+  test.check(t, word(wire, at - 8) == bytes.len(expected))
+  test.check(t, bytes.slice(wire, at, bytes.len(wire)) == expected)
+}
+
+fn replace(data: Bytes, at: u64, value: u8) -> Bytes {
+  let mut out: List[u8] = []
+  for i in 0u64..bytes.len(data) {
+    list.push(
+      mut out,
+      if i == at {
+        value
+      } else {
+        data[i]
+      }
+    )
+  }
+  bytes.from_list(take out)
+}
+
+fn round(t: Test, values: List[Packed[Choice]]) -> Result[(), DecodeError] {
+  let bytes = codec.encode(values)
+  let mut decoded: List[Packed[Choice]] = codec.decode(bytes)?
+  test.check(t, list.len(decoded) == list.len(values))
+  test.check(t, codec.encode(decoded) == bytes)
+  let extra: Packed[Choice] = Byte(17)
+  list.push(mut decoded, extra)
+  test.check(t, list.len(decoded) == list.len(values) + 1)
+  test.check(t, codec.encode(values) == bytes)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let empty: Packed[Choice] = Empty()
+  let byte: Packed[Choice] = Byte(255)
+  let wide: Packed[Choice] = Wide(72623859790382856, 4660)
+  round(t, [])?
+  round(t, [empty])?
+  let values: List[Packed[Choice]] = [wide, empty, byte, empty, wide, byte]
+  payload(
+    t,
+    values,
+    b"\x06\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x08\x07\x06\x05\x04\x03\x02\x01\x34\x12\x00\x00\x00\x00\x01\x00\x00\x00\xff\x00\x00\x00\x00\x02\x00\x00\x00\x08\x07\x06\x05\x04\x03\x02\x01\x34\x12\x01\x00\x00\x00\xff"
+  )
+  let wire = codec.encode(values)
+  let rejected: Result[List[Packed[Choice]], DecodeError] = codec.decode(
+    replace(wire, 32 + word(wire, 8), 3)
+  )
+  match rejected {
+    Error(Tag()) => {},
+    _ => test.check(t, false),
+  }
+  round(t, values)?
+  Ok(())
+}

@@ -4034,9 +4034,12 @@ conformance/SER/SER-2-noncanonical-nan-run.hir
 conformance/SER/SER-2-overflow-length-run.hir
 conformance/SER/SER-2-roundtrip-run.hir
 conformance/SER/SER-2-schema-mismatch-run.hir
+conformance/SER/SER-2-sequential-packed-run.hir
 conformance/SER/SER-2-set-order-run.hir
+conformance/SER/SER-2-soa-columns-run.hir
 conformance/SER/SER-2-trailing-envelope-run.hir
 conformance/SER/SER-2-trailing-payload-run.hir
 conformance/SER/SER-2-truncated-run.hir
 conformance/SER/SER-2-utf8-run.hir
+conformance/SER/SER-2-variable-flat-run.hir
 conformance/SER/SER-2-vectors-run.hir

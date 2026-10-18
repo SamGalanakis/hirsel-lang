@@ -169,7 +169,11 @@ Invariants and boundary:
   envelope, validates the whole payload in `hirsel_types::wire`'s detection order
   (each failure one `DecodeError` class) and only then materializes zeroed
   counted blocks and sequences, so a rejected input allocates nothing; a decoded
-  Map or Set carries an empty (unindexed) index. Both walks are iterative. Past
+  Map or Set carries an empty (unindexed) index. Program version 2 walks
+  private flat framing, active Packed extents and SoA columns in row order.
+  Flat reconstruction patches native byte extents separately from wire element
+  counts; sequential blocks retain exact used bytes and SoA blocks retain rounded
+  column capacity. Both walks are iterative. Past
   `hirsel_types::wire::Limits::default`'s byte and value budgets the run ends
   environmentally, as the interpreter's operational limit does.
 - No numeric Depth or frame charge exists until spec #16 rules.

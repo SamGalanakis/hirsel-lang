@@ -539,8 +539,8 @@ canonical descriptor bytes (`hirsel_types::wire::Codec::descriptor`) and one
 `CodecNode` per schema node at its native layout, plus the root, the Bytes node
 and, decoding, the `Result[T, DecodeError]` node. `CodecPlan::check` holds each
 node to its layout record: value scalars, byte slices over their storage
-sequence, record, tuple and fixed flat fields, ordinal or niche tags (Packed
-included), boxes, sequences, Inline/Simd repeats, and Map/Set containers of an
+sequence, record, tuple and flat fields, ordinal or niche tags (Packed
+included), boxes, ordinary/flat/sequential/SoA sequences, Inline/Simd repeats, and Map/Set containers of an
 entries list and an optional u32 index. `CodecPlan::program` lowers a plan to
 the u64 words the runtime walks, with descriptor indices from the linked
 registry rather than layout ids. Neither instruction fails: an operational
@@ -549,3 +549,10 @@ disagrees with the table or with the instruction's direction (`codec plan`)
 and an operand or result at another layout than the plan's (`encode`,
 `decode`); `tests/it/revision29.rs` pairs each rule with its valid twin.
 Runtime ABI 9 adds the `codec_encode` and `codec_decode` entries.
+
+LIR revision 30 extends codec plans with FlatText and Framed nodes. C verifies
+exact length framing, byte element layouts and each framed child's content
+layout. Variable flat blocks retain their payload nodes; native codec program
+version 2 distinguishes flat fields and Packed arms, sequential active extents,
+and declaration-order SoA columns addressed by stored capacity. Decoding checks
+wire data before rebuilding native framing or allocating counted storage.
