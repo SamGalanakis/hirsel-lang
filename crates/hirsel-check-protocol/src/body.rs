@@ -126,3 +126,70 @@ pub enum ContractParameter {
     Snapshot(ast::ExprId),
     Result,
 }
+
+/// The lexical size inputs needed to stage one checked expression. Sizes
+/// declared inside the expression belong to its ordinary nested calls instead.
+/// Result types count too: an empty Inline can receive its size from context.
+pub fn comptime_inputs(
+    tree: &ast::SyntaxTree,
+    checked: &CheckedBody,
+    expression: ast::ExprId,
+) -> Vec<SizeParameterRef> {
+    use std::collections::BTreeSet;
+    let region = tree.expressions[expression.0 as usize].origin.span;
+    let contains = |site: NameSite| {
+        let span = match site {
+            NameSite::Item(id) => tree.items[id.0 as usize].origin.span,
+            NameSite::Statement(id) => tree.statements[id.0 as usize].origin.span,
+            NameSite::Expression(id) => tree.expressions[id.0 as usize].origin.span,
+            NameSite::Pattern(id) => tree.patterns[id.0 as usize].origin.span,
+            NameSite::Type(id) => tree.types[id.0 as usize].origin.span,
+        };
+        span.start >= region.start && span.end <= region.end
+    };
+    let outer = |parameter: SizeParameterRef| match parameter.binder() {
+        GenericBinder::Body(scope) => !contains(scope),
+        GenericBinder::Bound(_) => false,
+    };
+    let mut inputs = BTreeSet::new();
+    for (id, name) in &checked.resolution.expressions {
+        if contains(NameSite::Expression(*id)) {
+            if let ResolvedName::Size(parameter) = name {
+                if outer(*parameter) {
+                    inputs.insert(*parameter);
+                }
+            }
+        }
+    }
+    let mut pending: Vec<_> = checked.expressions.iter()
+        .filter(|row| contains(NameSite::Expression(row.expression)))
+        .map(|row| row.ty).collect();
+    // Inferred generic call actuals may mention a size absent from the result.
+    for call in &checked.calls {
+        if contains(NameSite::Expression(call.expression)) {
+            for argument in &call.generic_arguments {
+                match argument {
+                    GenericArgument::Size(Size::Parameter(parameter)) if outer(*parameter) => {
+                        inputs.insert(*parameter);
+                    }
+                    GenericArgument::Type(ty) => pending.push(*ty),
+                    _ => (),
+                }
+            }
+        }
+    }
+    let mut seen = BTreeSet::new();
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) { continue; }
+        let row = checked.types.get(ty).unwrap();
+        if let TypeKind::Builtin { arguments, .. } | TypeKind::Named { arguments, .. } = &row.kind {
+            for argument in arguments.iter() {
+                if let GenericArgument::Size(Size::Parameter(parameter)) = argument {
+                    if outer(*parameter) { inputs.insert(*parameter); }
+                }
+            }
+        }
+        pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
+    }
+    inputs.into_iter().collect()
+}
