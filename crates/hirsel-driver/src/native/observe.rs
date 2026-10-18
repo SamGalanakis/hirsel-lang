@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 
 /// The comparison's own version: bump when a field is added or its meaning
 /// changes, so stored mismatch artifacts name what they compared.
-pub const OBSERVATION_SCHEMA: u32 = 2;
+pub const OBSERVATION_SCHEMA: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Failure {
@@ -23,6 +23,7 @@ pub struct Failure {
     pub definition: DefPath,
     pub line: u32,
     pub column: u32,
+    pub operation: Option<hirsel_interp::observation::SourceSite>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +52,7 @@ impl Observation {
                     definition: f.stable_site.definition.clone(),
                     line: f.stable_site.line,
                     column: f.stable_site.column,
+                    operation: f.operation.clone(),
                 })
                 .collect(),
         }
@@ -75,6 +77,13 @@ impl Observation {
                 "failure {} {} {}:{}",
                 f.rule, f.definition.0.name, f.line, f.column
             );
+            if let Some(operation) = &f.operation {
+                let _ = writeln!(
+                    out,
+                    "  in {} {}:{}",
+                    operation.definition, operation.line, operation.column
+                );
+            }
         }
         out
     }
@@ -117,6 +126,7 @@ impl<'a> Sites<'a> {
             definition: definition.clone(),
             line: location.0,
             column: location.1,
+            operation: None,
         })
     }
 
@@ -133,6 +143,32 @@ impl<'a> Sites<'a> {
         })
     }
 
+    pub(crate) fn report(&self, failure: &Failure, json: bool) -> Result<String, NativeError> {
+        let missing = || NativeError::new(StageName::Launch, "failure has no source site");
+        let site = self.failure_site(failure).ok_or_else(missing)?;
+        let operation = failure
+            .operation
+            .as_ref()
+            .map(|s| self.operation_site(s).ok_or_else(missing))
+            .transpose()?;
+        Ok(site.report(&failure.rule, json, operation.as_ref()))
+    }
+
+    pub fn operation_site(
+        &self,
+        source: &hirsel_interp::observation::SourceSite,
+    ) -> Option<hirsel_engine::FailureSite> {
+        let file = self
+            .input
+            .sources
+            .file(*self.files.get(&source.definition)?)?;
+        Some(hirsel_engine::FailureSite {
+            definition: source.definition.to_string(),
+            file: file.path.clone(),
+            line: source.line as usize,
+            column: source.column,
+        })
+    }
     /// The one-based line and column a failure site starts at.
     pub fn position(&self, definition: &DefPath, site: SiteRange) -> Option<(u32, u32)> {
         let file = self.files.get(definition)?;
@@ -169,8 +205,7 @@ pub fn site_codes(program: &ReadyProgram) -> BTreeMap<u64, (DefPath, SiteRange)>
     codes
 }
 
-/// Whether the program catches failures (`task.isolate`'s `Isolate` terminator): only then
-/// does its link register a failure table.
+/// Whether the program catches failures (`task.isolate`'s `Isolate` terminator).
 pub fn isolates(program: &ReadyProgram) -> bool {
     program.units.iter().any(|u| {
         u.unit()

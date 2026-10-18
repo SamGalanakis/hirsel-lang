@@ -417,9 +417,19 @@ pub fn run_path_on_host(
         .failures
         .first()
         .and_then(|f| hirsel_engine::FailureSite::from_anchor(&f.anchor, &sources));
+    let operation_site = execution
+        .failures
+        .first()
+        .and_then(|f| f.operation.as_ref())
+        .map(|a| {
+            hirsel_engine::FailureSite::from_anchor(a, &sources)
+                .ok_or_else(|| ToolError::Runtime("failure operation has no source site".into()))
+        })
+        .transpose()?;
     Ok(match execution.outcome {
         Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
         Outcome::Failed(f) => RunOutcome::Failure {
+            operation: operation_site,
             rule: f.rule,
             site: failure_site
                 .ok_or_else(|| ToolError::Runtime("failure has no source site".into()))?,

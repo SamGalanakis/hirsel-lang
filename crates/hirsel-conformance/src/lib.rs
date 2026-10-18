@@ -430,7 +430,9 @@ pub fn classify(driver: &(impl Driver + ?Sized), path: &Path, expect: &Expect) -
                 line,
                 stdout: expected,
             },
-            RunOutcome::Failure { rule: actual, site },
+            RunOutcome::Failure {
+                rule: actual, site, ..
+            },
         ) if rule == actual
             && *line == site.line
             && expected

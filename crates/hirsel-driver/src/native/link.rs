@@ -1540,7 +1540,7 @@ pub fn observe(
             ["status", s] => status = s.parse::<u8>().ok(),
             ["blocked"] => blocked = true,
             ["result", hex] => result = Some(*hex),
-            ["failure", _kind, rule, site] => {
+            ["failure", _kind, rule, site, operation] => {
                 let rule = rule
                     .parse::<u32>()
                     .ok()
@@ -1557,7 +1557,22 @@ pub fn observe(
                     .ok()
                     .and_then(|code| codes.get(&code))
                     .ok_or_else(|| bad(format!("an unknown failure site code in `{line}`")))?;
-                failures.push(sites.failure(&rule, definition, *range)?);
+                let mut failure = sites.failure(&rule, definition, *range)?;
+                if operation != site && *operation != "0000000000000000" {
+                    let (definition, range) = u64::from_str_radix(operation, 16)
+                        .ok()
+                        .and_then(|code| codes.get(&code))
+                        .ok_or_else(|| {
+                            bad(format!("an unknown operation site code in `{line}`"))
+                        })?;
+                    let operation = sites.failure(&rule, definition, *range)?;
+                    failure.operation = Some(hirsel_interp::observation::SourceSite {
+                        definition: operation.definition,
+                        line: operation.line,
+                        column: operation.column,
+                    });
+                }
+                failures.push(failure);
             }
             ["audit", live_blocks, _bytes, _immortal, regions, retained] => {
                 audit = Some((*live_blocks, *regions, *retained));

@@ -1218,7 +1218,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 self.b.switch_to_block(block);
                 let site = self.u64c(site);
                 let context = self.context;
-                self.rt(RuntimeEntry::FailureReanchor, &[context, site])?;
+                self.rt(RuntimeEntry::FailureReanchor, &[context, site, site])?;
                 self.b.ins().jump(then, &[]);
                 Ok(())
             }
@@ -1271,7 +1271,10 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let rule = self.b.ins().iconst(types::I32, i64::from(code.rule));
         let site = self.u64c(site);
         let context = self.context;
-        self.rt(RuntimeEntry::FailureBegin, &[context, kind, rule, site])?;
+        self.rt(
+            RuntimeEntry::FailureBegin,
+            &[context, kind, rule, site, site],
+        )?;
         Ok(())
     }
 

@@ -136,7 +136,10 @@ source site: package name and version, module and definition, file path, and one
 line and Unicode-scalar column. Human and JSON reports preserve the same location in
 interpreted and native execution. `hirsel run --json` writes a JSON failure report to
 standard error, with the rule and `site` fields `definition`, `file`, `line` and `column`;
-program output keeps its ordinary streams.
+program output keeps its ordinary streams. When the primary attribution differs from
+the operation that failed, a human report adds an `in` line and the JSON failure adds
+an `operation` object with the same complete location fields. The primary attribution
+and the original operation are retained independently through the failure chain.
 
 The primary span is the smallest complete syntactic operation that imposes the failed
 obligation: a call, arguments included, for argument, mode, brand and loan checks; a

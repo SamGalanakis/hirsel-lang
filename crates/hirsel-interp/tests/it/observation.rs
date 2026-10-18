@@ -17,6 +17,7 @@ fn fixture() -> (SourceMap, Execution) {
         .into_iter()
         .enumerate()
         .map(|(i, kind)| FailureRecord {
+            operation: None,
             failure: Failure {
                 kind: kind.into(),
                 rule: const { hirsel_diag::RuleId::of("FAIL-1") },
@@ -227,4 +228,27 @@ fn only_free_lexical_specialization_arguments_are_non_comparable() {
     assert_eq!(actual, &definition);
     assert!(arguments[0].is_none());
     assert!(arguments[1].is_some());
+}
+
+#[test]
+fn operation_sites_are_independent_semantic_failure_locations() {
+    let (mut sources, mut execution) = fixture();
+    let helper = sources.add("helper.hir", "operation\n".into()).unwrap();
+    let mut operation = execution.failures[0].anchor.clone();
+    operation.definition = hirsel_syntax::DefPath::core("helper");
+    operation.site = Span::new(helper, 0, 9).unwrap();
+    execution.failures[0].operation = Some(operation);
+    let first = execution.observable(&sources).unwrap();
+    assert_eq!(first.failures[0].operation.as_ref().unwrap().line, 1);
+    execution.failures[0].operation.as_mut().unwrap().body = BodyId(999);
+    assert!(first.equivalent(&execution.observable(&sources).unwrap()));
+    execution.failures[0].operation.as_mut().unwrap().site = Span::new(helper, 1, 9).unwrap();
+    let second = execution.observable(&sources).unwrap();
+    assert_eq!(
+        first.failures[0].stable_site,
+        second.failures[0].stable_site
+    );
+    assert!(!first.equivalent(&second));
+    execution.failures[0].operation.as_mut().unwrap().site = Span::new(helper, 0, 100).unwrap();
+    assert!(execution.observable(&sources).is_none());
 }

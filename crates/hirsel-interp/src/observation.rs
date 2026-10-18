@@ -28,6 +28,7 @@ pub struct OrderedEffect {
 pub struct FailureRecord {
     pub failure: Failure,
     pub anchor: Anchor,
+    pub operation: Option<Anchor>,
     pub cause: Option<usize>,
     pub spawn_path: Vec<u32>,
 }
@@ -88,6 +89,7 @@ pub struct ObservedFailure {
     pub kind: String,
     pub rule: hirsel_diag::RuleId,
     pub stable_site: SourceSite,
+    pub operation: Option<SourceSite>,
     pub spawn_path: Vec<u32>,
     pub cause_indices: Vec<usize>,
 }
@@ -309,6 +311,10 @@ impl Execution {
                     kind: f.failure.kind.clone(),
                     rule: f.failure.rule.clone(),
                     stable_site: site(&f.anchor)?,
+                    operation: match &f.operation {
+                        Some(op) => Some(site(op)?),
+                        None => None,
+                    },
                     spawn_path: f.spawn_path.clone(),
                     cause_indices: f.cause.into_iter().collect(),
                 })
@@ -353,7 +359,7 @@ impl Execution {
         };
         Some(Observable {
             blocked,
-            schema_version: 1,
+            schema_version: 2,
             returned_type: None,
             returned,
             exit_code,

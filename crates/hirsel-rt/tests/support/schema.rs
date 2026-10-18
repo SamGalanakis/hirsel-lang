@@ -125,7 +125,13 @@ pub unsafe extern "C" fn log_address(ctx: *mut RunCtx, value: *mut u8, anchor: u
     LOG.with(|log| log.borrow_mut().push(Event::Finalize(address)));
     match FAIL_AT.with(|f| f.borrow().iter().position(|&a| a == address)) {
         Some(index) => unsafe {
-            hirsel_rt::failure::hirsel_rt_v2_failure_begin(ctx, 1, 100 + index as u32, anchor)
+            hirsel_rt::failure::hirsel_rt_v2_failure_begin(
+                ctx,
+                1,
+                100 + index as u32,
+                anchor,
+                anchor,
+            )
         },
         None => 0,
     }

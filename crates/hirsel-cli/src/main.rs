@@ -973,8 +973,12 @@ fn run_result(result: Result<RunOutcome, ToolError>, json: bool) -> u8 {
     match result {
         // The launch boundary has already written the PROG-3 payload report.
         Ok(RunOutcome::Exit(code)) => u8::from(code != 0),
-        Ok(RunOutcome::Failure { rule, site }) => {
-            eprintln!("{}", site.report(rule.as_str(), json));
+        Ok(RunOutcome::Failure {
+            rule,
+            site,
+            operation,
+        }) => {
+            eprintln!("{}", site.report(rule.as_str(), json, operation.as_ref()));
             1
         }
         Ok(RunOutcome::UndefinedBehavior(u)) => {

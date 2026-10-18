@@ -71,11 +71,10 @@ fn run(
         let failure = match super::observe(&launched, &program, &sites) {
             Ok(observation) if observation.exit_code == Some(0) => None,
             Ok(observation) if observation.exit_code == Some(1) => Some("returned Error".into()),
-            Ok(observation) => observation
-                .failures
-                .first()
-                .map(|f| format!("runtime failure[{}] at line {}", f.rule, f.line))
-                .or_else(|| Some("runtime failure: blocked".into())),
+            Ok(observation) => Some(match observation.failures.first() {
+                Some(failure) => sites.report(failure, false)?,
+                None => "runtime failure: blocked".into(),
+            }),
             Err(error) => Some(format!("runtime error: {error}")),
         };
         results.push(TestResult {

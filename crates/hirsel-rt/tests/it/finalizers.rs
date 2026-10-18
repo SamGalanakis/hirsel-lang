@@ -117,7 +117,7 @@ fn finalizer_failures_keep_the_first_as_primary_and_release_everything_once() {
 fn an_earlier_language_failure_stays_primary_during_cleanup() {
     let ctx = context();
     index(ctx.0, resource(failing_drop));
-    unsafe { hirsel_rt_v2_failure_begin(ctx.0, 3, 900, 42) };
+    unsafe { hirsel_rt_v2_failure_begin(ctx.0, 3, 900, 42, 42) };
     let block = node(ctx.0, resource(failing_drop), 7);
     assert_eq!(release(ctx.0, block), 1);
     let first = primary(&ctx).unwrap();
@@ -127,6 +127,7 @@ fn an_earlier_language_failure_stays_primary_during_cleanup() {
         kind: 1,
         rule: 8,
         site: 0,
+        operation_site: 0,
     };
     unsafe { hirsel_rt_v2_failure_append(ctx.0, &external) };
     assert_eq!(cause_rules(&ctx), [7, 8]);
@@ -207,7 +208,7 @@ thread_local! {
 unsafe extern "C" fn close_probe(ctx: *mut RunCtx, handle: u64, anchor: u64) -> u8 {
     CLOSED.with(|seen| seen.set((handle, anchor, unsafe { hirsel_rt_v2_shielded(ctx) })));
     if handle == 13 {
-        unsafe { hirsel_rt_v2_failure_begin(ctx, 1, 77, anchor) };
+        unsafe { hirsel_rt_v2_failure_begin(ctx, 1, 77, anchor, anchor) };
         return 1;
     }
     0
@@ -425,13 +426,13 @@ fn library_failure_sites_rise_once_and_source_finalizer_sites_stay_put() {
     use support::schema::context;
     let ctx = context();
     unsafe {
-        hirsel_rt_v2_failure_begin(ctx.0, 1, 3, 0);
-        hirsel_rt_v2_failure_begin(ctx.0, 2, 7, 77);
-        hirsel_rt_v2_failure_begin(ctx.0, 3, 9, 0);
-        hirsel_rt_v2_failure_reanchor(ctx.0, 0);
+        hirsel_rt_v2_failure_begin(ctx.0, 1, 3, 0, 0);
+        hirsel_rt_v2_failure_begin(ctx.0, 2, 7, 77, 77);
+        hirsel_rt_v2_failure_begin(ctx.0, 3, 9, 0, 0);
+        hirsel_rt_v2_failure_reanchor(ctx.0, 0, 0);
     }
     assert_eq!(primary(&ctx).unwrap().site, 0);
-    unsafe { hirsel_rt_v2_failure_reanchor(ctx.0, 41) };
+    unsafe { hirsel_rt_v2_failure_reanchor(ctx.0, 41, 41) };
     assert_eq!(primary(&ctx).unwrap().site, 41);
     let mut first = MaybeUninit::uninit();
     let mut second = MaybeUninit::uninit();
@@ -440,7 +441,44 @@ fn library_failure_sites_rise_once_and_source_finalizer_sites_stay_put() {
         assert_eq!(hirsel_rt_v2_failure_cause(ctx.0, 1, second.as_mut_ptr()), 1);
         assert_eq!(first.assume_init().site, 77);
         assert_eq!(second.assume_init().site, 41);
-        hirsel_rt_v2_failure_reanchor(ctx.0, 99);
+        hirsel_rt_v2_failure_reanchor(ctx.0, 99, 99);
     }
     assert_eq!(primary(&ctx).unwrap().site, 41);
+}
+
+#[test]
+fn caller_attribution_keeps_operation_sites_and_ordered_causes() {
+    use hirsel_rt::failure::hirsel_rt_v2_failure_reanchor;
+    let ctx = support::schema::context();
+    unsafe {
+        hirsel_rt_v2_failure_begin(ctx.0, 1, 3, 0, 0);
+        hirsel_rt_v2_failure_begin(ctx.0, 2, 7, 77, 88);
+        hirsel_rt_v2_failure_begin(ctx.0, 3, 9, 31, 41);
+        hirsel_rt_v2_failure_reanchor(ctx.0, 31, 41);
+    }
+    let primary_record = primary(&ctx).unwrap();
+    assert_eq!(
+        (primary_record.site, primary_record.operation_site),
+        (31, 41)
+    );
+    let cause = |index| unsafe {
+        let mut record = MaybeUninit::uninit();
+        assert_eq!(
+            hirsel_rt_v2_failure_cause(ctx.0, index, record.as_mut_ptr()),
+            1
+        );
+        record.assume_init()
+    };
+    let first = cause(0);
+    let second = cause(1);
+    assert_eq!((first.rule, first.site, first.operation_site), (7, 77, 88));
+    assert_eq!(
+        (second.rule, second.site, second.operation_site),
+        (9, 31, 41)
+    );
+    // An enclosing call cannot overwrite an already attributed child failure.
+    unsafe { hirsel_rt_v2_failure_reanchor(ctx.0, 99, 99) };
+    assert_eq!(primary(&ctx), Some(primary_record));
+    assert_eq!(cause(0), first);
+    assert_eq!(cause(1), second);
 }

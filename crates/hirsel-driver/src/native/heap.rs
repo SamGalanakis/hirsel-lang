@@ -1412,7 +1412,23 @@ fn observation(
                     start: f.site.0,
                     end: f.site.1,
                 };
-                sites.failure(&f.rule, &f.definition, site)
+                let mut failure = sites.failure(&f.rule, &f.definition, site)?;
+                if let Some((definition, (start, end))) = &f.operation {
+                    let operation = sites.failure(
+                        &f.rule,
+                        definition,
+                        SiteRange {
+                            start: *start,
+                            end: *end,
+                        },
+                    )?;
+                    failure.operation = Some(hirsel_interp::observation::SourceSite {
+                        definition: operation.definition,
+                        line: operation.line,
+                        column: operation.column,
+                    });
+                }
+                Ok(failure)
             })
             .collect::<Result<_, _>>()?,
     })

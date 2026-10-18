@@ -556,3 +556,6 @@ flat framing and allocates fresh counted storage with exact sequence headers.
 
 Flat sequences of zero-size elements read their stored count independently
 of their byte extent and index at zero stride past both header words.
+
+Failure observations retain and compare the original operation site independently
+of the primary attribution. Tooling reports render both complete locations.

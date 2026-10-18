@@ -162,3 +162,6 @@ The compiled runtime (`hirsel-rt/src/host_waits.rs`) arms and polls the same req
 tapes replay in either engine.
 
 `testing` selects checked root-package `@test` functions, generates ordinary in-memory Test/Result launch adapters in each defining module, and runs independent interpreter contexts. `native::test_path` emits one executable with all selected adapters and starts one process per test; LLVM and Cranelift share selection, seeds and results.
+
+Failure observations retain and compare the original operation site independently
+of the primary attribution. Tooling reports render both complete locations.

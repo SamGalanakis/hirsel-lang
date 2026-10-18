@@ -414,7 +414,7 @@ static uint64_t finalized;
 uint8_t body(hirsel_rt_v2_ctx *ctx, uint64_t *value) __asm__("DROP_NAME");
 uint8_t body(hirsel_rt_v2_ctx *ctx, uint64_t *value) {
     finalized = *value;
-    if (*value == 13) { hirsel_rt_v2_failure_begin(ctx, 1, 101, 17); return 1; }
+    if (*value == 13) { hirsel_rt_v2_failure_begin(ctx, 1, 101, 17, 17); return 1; }
     return 0;
 }
 static hirsel_rt_v2_header *fresh(hirsel_rt_v2_ctx *ctx) {

@@ -117,15 +117,23 @@ fn rule(code: u32) -> &'static str {
 
 /// Human failure text for a standalone launch, outside program Io and replay tapes.
 pub(crate) fn report(record: &crate::failure::FailureRecord) -> String {
-    let site = site(record.site);
-    format!(
+    let source = site(record.site);
+    let mut text = format!(
         "runtime failure[{}] at {} ({}:{}:{})\n",
         rule(record.rule),
-        site.definition,
-        site.file,
-        site.line,
-        site.column
-    )
+        source.definition,
+        source.file,
+        source.line,
+        source.column
+    );
+    if record.operation_site != 0 && record.operation_site != record.site {
+        let operation = site(record.operation_site);
+        text.push_str(&format!(
+            "  in {} ({}:{}:{})\n",
+            operation.definition, operation.file, operation.line, operation.column
+        ));
+    }
+    text
 }
 
 /// The running task's caught chain.

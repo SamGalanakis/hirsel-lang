@@ -44,7 +44,7 @@ typedef hirsel_rt_v2_ctx ctx_t;
 /* The entry HOST_SCALE implements, of the ABI v1 signature `i64 -> i64`. Fails for a
  * negative argument. */
 static uint8_t host_scale_body(ctx_t *ctx, void *out, int64_t x) {
-  if (x < 0) return hirsel_rt_v2_failure_begin(ctx, 5, 50, 0x55);
+  if (x < 0) return hirsel_rt_v2_failure_begin(ctx, 5, 50, 0x55, 0x55);
   int64_t r = x * 3;
   memcpy(out, &r, sizeof r);
   return 0;
@@ -53,7 +53,7 @@ static uint8_t host_scale_body(ctx_t *ctx, void *out, int64_t x) {
 /* The closure body: context, environment, the result, then the declared parameter. */
 static uint8_t scale_body(ctx_t *ctx, void *environment, void *out, int64_t x) {
   int64_t k = *(const int64_t *)environment;
-  if (x > 1000) return hirsel_rt_v2_failure_begin(ctx, 7, 70, 0x77);
+  if (x > 1000) return hirsel_rt_v2_failure_begin(ctx, 7, 70, 0x77, 0x77);
   int64_t r = x * k;
   memcpy(out, &r, sizeof r);
   return 0;

@@ -56,7 +56,7 @@ static uint8_t failing_drop(hirsel_rt_v2_ctx *ctx, void *value, uint64_t anchor)
     log_drop(ctx, value, anchor);
     uint64_t id;
     memcpy(&id, value, sizeof id);
-    return hirsel_rt_v2_failure_begin(ctx, 1, (uint32_t)id, anchor);
+    return hirsel_rt_v2_failure_begin(ctx, 1, (uint32_t)id, anchor, anchor);
 }
 
 #define STEP(kind_, field_, offset_)                                                               \

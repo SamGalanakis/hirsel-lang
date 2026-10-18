@@ -158,6 +158,7 @@ fn fail_checks_before_running_and_matches_rule_and_line() {
         .expect;
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
+        operation: None,
         rule: const { RuleId::of("OWN-7") },
         site: hirsel_engine::FailureSite {
             line: 3,
@@ -166,6 +167,7 @@ fn fail_checks_before_running_and_matches_rule_and_line() {
     });
     assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
     driver.outcome = Ok(RunOutcome::Failure {
+        operation: None,
         rule: const { RuleId::of("OWN-6") },
         site: hirsel_engine::FailureSite {
             line: 3,
@@ -177,6 +179,7 @@ fn fail_checks_before_running_and_matches_rule_and_line() {
         Status::Fail(_)
     ));
     driver.outcome = Ok(RunOutcome::Failure {
+        operation: None,
         rule: const { RuleId::of("OWN-7") },
         site: hirsel_engine::FailureSite {
             line: 2,
@@ -641,6 +644,7 @@ fn fail_stdout_is_optional_and_exact_when_present() {
     let expect = header(source).unwrap().expect;
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
+        operation: None,
         rule: const { RuleId::of("OWN-6") },
         site: hirsel_engine::FailureSite {
             line: 6,
@@ -661,6 +665,7 @@ fn fail_stdout_is_optional_and_exact_when_present() {
         .expect;
     assert!(matches!(&unchecked, Expect::Fail { stdout: None, .. }));
     driver.outcome = Ok(RunOutcome::Failure {
+        operation: None,
         rule: const { RuleId::of("OWN-6") },
         site: hirsel_engine::FailureSite {
             line: 3,
@@ -683,6 +688,7 @@ fn runtime_failure_header_can_name_a_dependency_line_beyond_the_fixture() {
     let expect = header(&runtime).unwrap().expect;
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
+        operation: None,
         rule: const { RuleId::of("OWN-6") },
         site: hirsel_engine::FailureSite {
             line: 99,
@@ -691,6 +697,7 @@ fn runtime_failure_header_can_name_a_dependency_line_beyond_the_fixture() {
     });
     assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
     driver.outcome = Ok(RunOutcome::Failure {
+        operation: None,
         rule: const { RuleId::of("OWN-6") },
         site: hirsel_engine::FailureSite {
             line: 98,

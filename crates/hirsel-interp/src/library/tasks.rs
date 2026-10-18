@@ -982,6 +982,7 @@ mod tests {
         }
         for index in [2, 0, 1] {
             let failure = FailureRecord {
+                operation: None,
                 failure: crate::Failure {
                     rule: hirsel_diag::RuleId::of("SEM-1"),
                     site: Span::default(),

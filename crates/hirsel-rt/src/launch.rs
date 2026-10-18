@@ -45,7 +45,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 
 /// The observation record's format version (`hirsel-observation <n>` on its first line).
-pub const OBSERVATION_VERSION: u32 = 1;
+pub const OBSERVATION_VERSION: u32 = 2;
 /// Process exit code of a language failure (FAIL-1).
 pub const EXIT_FAILURE: i32 = 2;
 /// Process exit code of a refused launch: bad grants, ABI or entry contract.
@@ -1701,14 +1701,15 @@ unsafe fn execute(
                 kind: 0,
                 rule: 0,
                 site: 0,
+                operation_site: 0,
             };
             if unsafe { hirsel_rt_v2_failure_primary(ctx, &mut failure) } == 0 {
                 crate::fault("a failure status without a recorded failure");
             }
             let _ = writeln!(
                 record,
-                "failure {} {} {:016x}",
-                failure.kind, failure.rule, failure.site
+                "failure {} {} {:016x} {:016x}",
+                failure.kind, failure.rule, failure.site, failure.operation_site
             );
             if report_failures {
                 let _ = std::io::Write::write_all(
@@ -1722,8 +1723,8 @@ unsafe fn execute(
                 }
                 let _ = writeln!(
                     record,
-                    "failure {} {} {:016x}",
-                    failure.kind, failure.rule, failure.site
+                    "failure {} {} {:016x} {:016x}",
+                    failure.kind, failure.rule, failure.site, failure.operation_site
                 );
                 if report_failures {
                     let _ = std::io::Write::write_all(

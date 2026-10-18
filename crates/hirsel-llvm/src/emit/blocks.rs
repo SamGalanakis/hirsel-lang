@@ -185,6 +185,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.module.const_int(i32_ty, u128::from(code.kind)),
                     self.module.const_int(i32_ty, u128::from(code.rule)),
                     self.const_u64(site),
+                    self.const_u64(site),
                 ],
             );
         }

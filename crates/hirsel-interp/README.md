@@ -587,3 +587,6 @@ access instances are expanded transitively through mutable wrappers before the
 owner moves; ordinary binding/capture roots and real region/arena bounds remain.
 Mutable parameter roots retain their original incoming bounds separately from
 ordinary roots, so this transport cannot erase a genuine borrowed lifetime.
+
+Failure observations retain and compare the original operation site independently
+of the primary attribution. Tooling reports render both complete locations.

@@ -621,7 +621,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.builder.position(block);
             let reanchor = self.runtime(RuntimeEntry::FailureReanchor)?;
             let anchor = self.const_u64(self.anchor_code(site.anchor)?);
-            self.builder.call(reanchor, &[self.context, anchor]);
+            self.builder.call(reanchor, &[self.context, anchor, anchor]);
             self.builder.br(failure_block);
             self.builder.position(here);
             block
@@ -654,6 +654,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.context,
                     self.module.const_int(i32_ty, u128::from(code.kind)),
                     self.module.const_int(i32_ty, u128::from(code.rule)),
+                    self.const_u64(site),
                     self.const_u64(site),
                 ],
             );

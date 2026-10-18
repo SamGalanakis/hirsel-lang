@@ -896,3 +896,8 @@ input selection and schema validation before binding checks and admission.
 Every compiled source program registers complete runtime diagnostic locations.
 Standalone launches report the failure chain on stderr; observed tool launches
 leave reporting to the driver. Reports remain outside program Io and tapes.
+
+Failure records retain an optional original operation site independently of the
+primary attribution. Semantic observations compare both locations. Runtime ABI 17
+passes both site codes to failure_begin and failure_reanchor; a reanchor fills an
+unknown attribution or operation once, preserving already anchored causes.

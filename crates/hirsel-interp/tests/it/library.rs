@@ -1232,6 +1232,7 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
         site: support::site(7),
     };
     let original = hirsel_interp::observation::FailureRecord {
+        operation: None,
         failure: hirsel_interp::Failure {
             rule: hirsel_diag::RuleId::of("SEM-1"),
             line: 7,

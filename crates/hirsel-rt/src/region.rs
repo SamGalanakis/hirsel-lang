@@ -964,7 +964,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_exhausted(
         check_active(region);
         let index = (*ctx).failure.count();
         (*region).exhausted = failure_index(index) + 1;
-        crate::failure::hirsel_rt_v2_failure_begin(ctx, kind, rule, site)
+        crate::failure::hirsel_rt_v2_failure_begin(ctx, kind, rule, site, site)
     }
 }
 

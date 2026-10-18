@@ -202,6 +202,16 @@ impl InterpreterPhase for InterpreterAdapter {
             .failures
             .first()
             .and_then(|f| FailureSite::from_anchor(&f.anchor, sources));
+        let operation_site = execution
+            .failures
+            .first()
+            .and_then(|f| f.operation.as_ref())
+            .map(|a| {
+                FailureSite::from_anchor(a, sources).ok_or_else(|| {
+                    RuntimeError::Tool("failure operation has no source site".into())
+                })
+            })
+            .transpose()?;
         let outcome = match execution.outcome {
             hirsel_interp::Outcome::Blocked(_) => RunOutcome::Blocked(
                 observation
@@ -216,6 +226,7 @@ impl InterpreterPhase for InterpreterAdapter {
             hirsel_interp::Outcome::Trapped(trap) => RunOutcome::Trapped(trap),
             hirsel_interp::Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
             hirsel_interp::Outcome::Failed(failure) => RunOutcome::Failure {
+                operation: operation_site,
                 rule: failure.rule,
                 site: failure_site
                     .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,

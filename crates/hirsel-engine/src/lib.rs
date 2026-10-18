@@ -69,6 +69,7 @@ pub enum RunOutcome {
     Failure {
         rule: RuleId,
         site: FailureSite,
+        operation: Option<FailureSite>,
     },
 }
 /// A complete runtime diagnostic location, independent of session-local FileIds.
@@ -80,17 +81,22 @@ pub struct FailureSite {
     pub column: u32,
 }
 impl FailureSite {
-    pub fn report(&self, rule: &str, json: bool) -> String {
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({ "definition": self.definition, "file": self.file.to_string_lossy(), "line": self.line, "column": self.column })
+    }
+    pub fn report(&self, rule: &str, json: bool, operation: Option<&Self>) -> String {
         if json {
-            serde_json::json!({
-                "schema_version": 1,
-                "runtime_failure": {
-                    "rule": rule,
-                    "site": { "definition": self.definition, "file": self.file.to_string_lossy(), "line": self.line, "column": self.column }
-                }
-            }).to_string()
+            let mut report = serde_json::json!({ "schema_version": 1, "runtime_failure": { "rule": rule, "site": self.json() } });
+            if let Some(operation) = operation {
+                report["runtime_failure"]["operation"] = operation.json();
+            }
+            report.to_string()
         } else {
-            format!("runtime failure[{rule}] at {self}")
+            let mut text = format!("runtime failure[{rule}] at {self}");
+            if let Some(operation) = operation {
+                text.push_str(&format!("\n  in {operation}"));
+            }
+            text
         }
     }
 

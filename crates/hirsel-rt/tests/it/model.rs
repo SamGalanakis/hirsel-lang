@@ -265,7 +265,7 @@ unsafe extern "C" fn model_finalizer(ctx: *mut RunCtx, value: *mut u8, anchor: u
     if ok {
         0
     } else {
-        unsafe { hirsel_rt_v2_failure_begin(ctx, 1, 15, anchor) }
+        unsafe { hirsel_rt_v2_failure_begin(ctx, 1, 15, anchor, anchor) }
     }
 }
 

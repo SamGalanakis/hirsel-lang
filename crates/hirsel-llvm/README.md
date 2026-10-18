@@ -115,7 +115,7 @@ Invariants:
   `llvm.assume`, so a checked byte loop hoists its builder offset. These are
   ordinary mutable loads, and representation-changing stores remain unclassified.
 - Status edges: every Hirsel entry returns a `u8` status. A failure edge that starts a rule
-  calls `hirsel_rt_v2_failure_begin(ctx, kind, rule, site)` with the driver-assigned codes
+  calls `hirsel_rt_v2_failure_begin(ctx, kind, rule, site, operation_site)` with the driver-assigned codes
   and the anchor's site code, disposes of its listed tokens and enters its cleanup block;
   `Propagate` returns 1. A rule without a code is an error, never an invented code.
   A diverging call (LIR revision 19) is not `noreturn`: its failure still returns

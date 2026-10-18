@@ -1,5 +1,5 @@
 //! The executor's semantic observation, following semantic observation schema
-//! v1 (`hirsel_interp::observation`): the returned value structurally, output
+//! v2 (`hirsel_interp::observation`): the returned value structurally, output
 //! bytes and the ordered failure chain. It never contains allocation IDs,
 //! counts, reuse events or addresses. The executor cannot depend on the
 //! interpreter crate, so mapping this onto `Observable` (nominal identities,
@@ -7,7 +7,7 @@
 use hirsel_lir::layout_types::ScalarKind;
 use hirsel_syntax::DefPath;
 
-pub const OBSERVATION_SCHEMA_VERSION: u32 = 1;
+pub const OBSERVATION_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Observed {
@@ -40,6 +40,8 @@ pub struct ObservedFailure {
     pub definition: DefPath,
     /// Byte range of the failing site within its definition's source.
     pub site: (u32, u32),
+    /// Original operation definition and byte range when attribution differs.
+    pub operation: Option<(DefPath, (u32, u32))>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

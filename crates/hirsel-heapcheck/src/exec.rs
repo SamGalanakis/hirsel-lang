@@ -2617,6 +2617,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             self.unanchored_failures.insert(self.failures.len());
         }
         self.failures.push(ObservedFailure {
+            operation: None,
             rule: rule.to_string(),
             definition,
             site,
@@ -2637,6 +2638,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             // Its terminal drop still raises an ordinary language failure.
             self.full_recount_due = true;
             self.failures.push(ObservedFailure {
+                operation: None,
                 rule: rule.to_string(),
                 definition: self.unit(self.entry).header.definition.clone(),
                 site: (0, 0),
@@ -2669,6 +2671,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             .map_or((0, 0), |a| (a.site.start, a.site.end));
         self.full_recount_due = true;
         self.failures.push(ObservedFailure {
+            operation: None,
             rule: rule.to_string(),
             definition: u.header.definition.clone(),
             site,
@@ -8789,6 +8792,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                             d.failed = true;
                             let definition = finalizer.definition.clone();
                             self.failures.push(ObservedFailure {
+                                operation: None,
                                 rule: INJECTED_RULE.to_string(),
                                 definition,
                                 site: (0, 0),

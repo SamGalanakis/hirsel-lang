@@ -562,13 +562,13 @@ fn a_bounded_arena_recovers_only_its_own_sole_out_of_space() {
         assert_eq!(hirsel_rt_v2_failure_active(ctx.0), 0);
         // A cleanup failure after the arena's own keeps both.
         assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, inner, 1, 6, 0), 1);
-        assert_eq!(hirsel_rt_v2_failure_begin(ctx.0, 1, 2, 0), 1);
+        assert_eq!(hirsel_rt_v2_failure_begin(ctx.0, 1, 2, 0, 0), 1);
         assert_eq!(hirsel_rt_v2_arena_recover(ctx.0, inner), 0);
         assert_eq!(hirsel_rt_v2_failure_cause_count(ctx.0), 1);
         hirsel_rt_v2_failure_clear(ctx.0);
         assert_eq!(hirsel_rt_v2_region_exit(ctx.0, inner, 0), 0);
         // Bound while a failure is active: its own record is a cause, recovered alone.
-        assert_eq!(hirsel_rt_v2_failure_begin(ctx.0, 1, 2, 0), 1);
+        assert_eq!(hirsel_rt_v2_failure_begin(ctx.0, 1, 2, 0, 0), 1);
         hirsel_rt_v2_arena_enter(ctx.0, inner);
         hirsel_rt_v2_arena_bound(ctx.0, inner, 10);
         assert_eq!(hirsel_rt_v2_arena_exhausted(ctx.0, inner, 1, 6, 0), 1);

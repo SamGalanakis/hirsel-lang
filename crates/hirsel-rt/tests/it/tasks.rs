@@ -55,7 +55,7 @@ unsafe extern "C" fn yielding(ctx: *mut RunCtx, environment: *mut Header) -> u8 
 unsafe extern "C" fn failing(ctx: *mut RunCtx, environment: *mut Header) -> u8 {
     let id = read_u64(environment, 0);
     trace(id * 10 + 1);
-    unsafe { hirsel_rt_v2_failure_begin(ctx, 0, id as u32, id) }
+    unsafe { hirsel_rt_v2_failure_begin(ctx, 0, id as u32, id, id) }
 }
 
 fn spawn(ctx: *mut RunCtx, scope: u64, code: hirsel_rt::tasks::TaskCode, id: u64) -> u64 {

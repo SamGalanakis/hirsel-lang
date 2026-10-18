@@ -1953,6 +1953,7 @@ fn record_failure(
         execution.trace.push(TraceEvent::Failure(failure.clone()));
     }
     execution.failures.push(crate::observation::FailureRecord {
+        operation: None,
         failure,
         anchor,
         cause: None,

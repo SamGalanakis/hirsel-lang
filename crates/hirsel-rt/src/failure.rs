@@ -17,6 +17,7 @@ pub struct FailureRecord {
     pub kind: u32,
     pub rule: u32,
     pub site: u64,
+    pub operation_site: u64,
 }
 
 #[derive(Default)]
@@ -145,8 +146,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_begin(
     kind: u32,
     rule: u32,
     site: u64,
+    operation_site: u64,
 ) -> u8 {
-    unsafe { (*ctx).failure.record(FailureRecord { kind, rule, site }) };
+    unsafe {
+        (*ctx).failure.record(FailureRecord {
+            kind,
+            rule,
+            site,
+            operation_site,
+        })
+    };
     STATUS_FAILURE
 }
 
@@ -161,6 +170,7 @@ pub(crate) fn record_runtime(ctx: *mut RunCtx, rule: &str, site: u64) {
             kind: 1,
             rule,
             site,
+            operation_site: site,
         })
     };
 }
@@ -253,19 +263,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_clear(ctx: *mut RunCtx) {
 /// # Safety
 /// `ctx` is live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_failure_reanchor(ctx: *mut RunCtx, site: u64) {
+pub unsafe extern "C" fn hirsel_rt_v2_failure_reanchor(
+    ctx: *mut RunCtx,
+    site: u64,
+    operation_site: u64,
+) {
     if site == 0 {
         return;
     }
     let state = unsafe { &mut (*ctx).failure };
-    if let Some(primary) = &mut state.primary {
-        if primary.site == 0 {
-            primary.site = site;
+    for failure in state.primary.iter_mut().chain(&mut state.causes) {
+        if failure.site == 0 {
+            failure.site = site;
         }
-    }
-    for cause in &mut state.causes {
-        if cause.site == 0 {
-            cause.site = site;
+        if failure.operation_site == 0 {
+            failure.operation_site = operation_site;
         }
     }
 }
@@ -279,6 +291,7 @@ mod tests {
             kind: 1,
             rule: 1,
             site,
+            operation_site: site,
         }
     }
 

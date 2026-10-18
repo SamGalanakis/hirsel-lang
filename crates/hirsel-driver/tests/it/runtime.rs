@@ -689,7 +689,7 @@ fn strict_and_mixed_replacement_failures_keep_the_new_value_in_named_cleanup_ord
             )
             .unwrap();
             assert!(
-                matches!(result, RunOutcome::Failure { ref rule, ref site } if rule.as_str()=="SEM-1" && site.line == expected_line),
+                matches!(result, RunOutcome::Failure { ref rule, ref site, .. } if rule.as_str()=="SEM-1" && site.line == expected_line),
                 "{result:?}"
             );
             assert_eq!(stdout, b"old\nlater\nnew\n");

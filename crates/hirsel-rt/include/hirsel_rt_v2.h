@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 16
+#define HIRSEL_RT_V2_ABI_VERSION 17
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -297,6 +297,7 @@ typedef struct hirsel_rt_v2_failure {
     uint32_t kind;
     uint32_t rule;
     uint64_t site;
+    uint64_t operation_site;
 } hirsel_rt_v2_failure;
 
 #define HIRSEL_RT_V2_ASSERT_SIZE(type, bytes) _Static_assert(sizeof(type) == (bytes), #type " size")
@@ -311,7 +312,7 @@ HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_config, 56);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_stats, 88);
 #endif
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_audit, 40);
-HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_failure, 16);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_failure, 24);
 _Static_assert(offsetof(hirsel_rt_v2_header, count) == HIRSEL_RT_V2_COUNT_OFFSET, "header count offset");
 _Static_assert(sizeof(((hirsel_rt_v2_header *)0)->count) == 4, "header count width");
 _Static_assert(offsetof(hirsel_rt_v2_header, descriptor) == HIRSEL_RT_V2_LAYOUT_OFFSET, "header layout offset");
@@ -538,13 +539,13 @@ uint8_t hirsel_rt_v2_builder_grow(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_builder *b
 void hirsel_rt_v2_builder_publish(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_builder *builder, uint64_t used);
 
 /* Failures. */
-uint8_t hirsel_rt_v2_failure_begin(hirsel_rt_v2_ctx *ctx, uint32_t kind, uint32_t rule, uint64_t site);
+uint8_t hirsel_rt_v2_failure_begin(hirsel_rt_v2_ctx *ctx, uint32_t kind, uint32_t rule, uint64_t site, uint64_t operation_site);
 uint8_t hirsel_rt_v2_failure_append(hirsel_rt_v2_ctx *ctx, const hirsel_rt_v2_failure *failure);
 uint8_t hirsel_rt_v2_failure_active(hirsel_rt_v2_ctx *ctx);
 uint8_t hirsel_rt_v2_failure_primary(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_failure *out);
 uint64_t hirsel_rt_v2_failure_cause_count(hirsel_rt_v2_ctx *ctx);
 uint8_t hirsel_rt_v2_failure_cause(hirsel_rt_v2_ctx *ctx, uint64_t index, hirsel_rt_v2_failure *out);
-void hirsel_rt_v2_failure_reanchor(hirsel_rt_v2_ctx *ctx, uint64_t site);
+void hirsel_rt_v2_failure_reanchor(hirsel_rt_v2_ctx *ctx, uint64_t site, uint64_t operation_site);
 void hirsel_rt_v2_failure_clear(hirsel_rt_v2_ctx *ctx);
 void hirsel_rt_v2_isolate_catch(hirsel_rt_v2_ctx *ctx, uint64_t start);
 

@@ -342,7 +342,7 @@ pub unsafe extern "C" fn log_drop(_ctx: *mut RunCtx, value: *mut u8, anchor: u64
 pub unsafe extern "C" fn failing_drop(ctx: *mut RunCtx, value: *mut u8, anchor: u64) -> u8 {
     let id = unsafe { value.cast::<u64>().read_unaligned() };
     EVENTS.with(|events| events.borrow_mut().push((id, anchor)));
-    unsafe { hirsel_rt_v2_failure_begin(ctx, 1, id as u32, anchor) }
+    unsafe { hirsel_rt_v2_failure_begin(ctx, 1, id as u32, anchor, anchor) }
 }
 
 /// Whether this process is the child run of `test`.

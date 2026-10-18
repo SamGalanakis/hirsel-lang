@@ -67,6 +67,7 @@ impl Library {
                         kind: "DeadMutex".into(),
                     };
                     let mut failures = vec![FailureRecord {
+                        operation: None,
                         failure,
                         anchor: context.anchor().unwrap().clone(),
                         spawn_path: self.tasks.path(),

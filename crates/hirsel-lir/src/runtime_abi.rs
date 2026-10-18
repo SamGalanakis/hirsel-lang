@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 16;
+pub const ABI_VERSION: u32 = 17;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -905,7 +905,15 @@ impl RuntimeEntry {
             Self::FailureBegin => (
                 "hirsel_rt_v2_failure_begin",
                 U8,
-                const { &[CTX, p("kind", U32), p("rule", U32), p("site", U64)] },
+                const {
+                    &[
+                        CTX,
+                        p("kind", U32),
+                        p("rule", U32),
+                        p("site", U64),
+                        p("operation_site", U64),
+                    ]
+                },
             ),
             Self::FailureAppend => (
                 "hirsel_rt_v2_failure_append",
@@ -927,7 +935,7 @@ impl RuntimeEntry {
             Self::FailureReanchor => (
                 "hirsel_rt_v2_failure_reanchor",
                 VOID,
-                const { &[CTX, p("site", U64)] },
+                const { &[CTX, p("site", U64), p("operation_site", U64)] },
             ),
             Self::FailureClear => ("hirsel_rt_v2_failure_clear", VOID, const { &[CTX] }),
             Self::IsolateCatch => (

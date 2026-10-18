@@ -144,23 +144,31 @@ pub fn run_path_native_backend(
     .and_then(|observation| {
         let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
 
+        let sites = Sites::new(validated.snapshot());
+        let operation_site = |failure: &super::observe::Failure| {
+            failure
+                .operation
+                .as_ref()
+                .map(|s| {
+                    sites.operation_site(s).ok_or_else(|| {
+                        NativeError::new(StageName::Launch, "failure operation has no source site")
+                    })
+                })
+                .transpose()
+        };
         for failure in &observation.failures {
-            let site = Sites::new(validated.snapshot())
-                .failure_site(failure)
-                .ok_or_else(|| NativeError::new(StageName::Launch, "failure has no source site"))?;
-            writeln!(stderr, "{}", site.report(&failure.rule, json)).map_err(io)?;
+            writeln!(stderr, "{}", sites.report(failure, json)?).map_err(io)?;
         }
         Ok(
             match (observation.exit_code, observation.failures.first()) {
                 (Some(code), _) => RunOutcome::Exit(code),
                 (None, Some(failure)) => RunOutcome::Failure {
+                    operation: operation_site(failure)?,
                     rule: hirsel_diag::RuleId::new(&failure.rule)
                         .map_err(|_| NativeError::new(StageName::Launch, "a failure of no rule"))?,
-                    site: Sites::new(validated.snapshot())
-                        .failure_site(failure)
-                        .ok_or_else(|| {
-                            NativeError::new(StageName::Launch, "failure has no source site")
-                        })?,
+                    site: sites.failure_site(failure).ok_or_else(|| {
+                        NativeError::new(StageName::Launch, "failure has no source site")
+                    })?,
                 },
                 (None, None) => {
                     return Err(NativeError::new(

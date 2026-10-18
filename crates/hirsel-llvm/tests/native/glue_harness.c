@@ -72,7 +72,7 @@ static uint8_t *payload_of(uint32_t index) { return hirsel_rt_v2_payload(blocks[
 static uint8_t event(ctx_t *ctx, uint64_t anchor) {
     events++;
     if (fail_every == 0 || events % fail_every != 0) return 0;
-    hirsel_rt_v2_failure_begin(ctx, 1, 100 + events, anchor);
+    hirsel_rt_v2_failure_begin(ctx, 1, 100 + events, anchor, anchor);
     return 1;
 }
 
