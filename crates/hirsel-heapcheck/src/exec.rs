@@ -3605,7 +3605,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     );
                 }
                 let ty = self.value_type(unit, result)?;
-                let image = self.read_resolved(&r, false)?;
+                let image = self.read_resolved(&r, ty.layout, false)?;
                 let through_slot = u.addresses[address.index()]
                     .projection
                     .get(&u.pools.projections)
@@ -3618,7 +3618,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 match mode {
                     ReadMode::Take => {
                         self.check_writable(&r)?;
-                        let e = self.read_resolved(&r, true)?;
+                        let e = self.read_resolved(&r, ty.layout, true)?;
                         let e = self.widened(e, ty.layout)?;
                         let (val, borrow, credited) = self.val_from(e, ty.repr, ty.layout)?;
                         self.bind(
@@ -3677,7 +3677,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 let r = self.resolve_use(f, address)?;
                 let ty = self.value_type(unit, result)?;
-                let e = self.read_resolved(&r, false)?;
+                let e = self.read_resolved(&r, ty.layout, false)?;
                 let e = self.widened(e, ty.layout)?;
                 let (val, _, _) = self.val_from(e, ty.repr, ty.layout)?;
                 let (val, credited) = self.copy_value(val, ty.layout)?;
@@ -4505,7 +4505,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         Some((&[], &[])),
                     );
                 }
-                self.write_resolved(&r, m)?;
+                self.write_resolved(&r, layout, m)?;
                 if let Some(s) = r.root_slot {
                     f.versions[s.index()] = Some(version);
                 }
@@ -4538,7 +4538,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let layout = self.address_layout(unit, address)?;
                 let size = self.size(layout)?;
                 let live = if r.columns.is_some() {
-                    let image = self.read_resolved(&r, false)?;
+                    let image = self.read_resolved(&r, layout, false)?;
                     self.initialized(&image, 0, layout)?.1
                 } else {
                     self.ledger
@@ -4557,7 +4557,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                             "displaced slot already holds a value",
                         );
                     }
-                    let old = self.read_resolved(&r, true)?;
+                    let old = self.read_resolved(&r, layout, true)?;
                     self.ledger.get_mut(d.alloc).extent.place(0, old);
                 } else if !if_live {
                     return fail(V::UninitializedRead, "replace of uninitialized storage");
@@ -4594,7 +4594,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         Some((&[], &[])),
                     );
                 }
-                self.write_resolved(&r, m)?;
+                self.write_resolved(&r, layout, m)?;
                 if let Some(s) = r.root_slot {
                     f.versions[s.index()] = Some(version);
                 }
@@ -5775,7 +5775,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 for fv in fields {
                     let moved = self.take_value(f, fv.value)?;
                     let row = self.column_resolved(target, element, u64::from(fv.field))?;
-                    self.write_resolved(&row, moved)?;
+                    self.write_resolved(&row, element, moved)?;
                 }
                 return Ok(());
             }

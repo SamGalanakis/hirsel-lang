@@ -123,7 +123,12 @@ impl<S: Stage> Machine<'_, S> {
     }
 
     /// Gather without importing any producer's ownership or initialization facts.
-    pub(super) fn read_resolved(&mut self, r: &Resolved, take: bool) -> Checked<Extent> {
+    pub(super) fn read_resolved(
+        &mut self,
+        r: &Resolved,
+        layout: LayoutId,
+        take: bool,
+    ) -> Checked<Extent> {
         if r.columns.is_some() {
             let mut image = Extent::new(self.size(r.layout)?);
             for (field, at) in self.column_fields(r)? {
@@ -142,12 +147,12 @@ impl<S: Stage> Machine<'_, S> {
             }
             Ok(image)
         } else {
-            let size = self.bounded_size(r.ptr, r.layout)?;
+            let size = self.bounded_size(r.ptr, layout)?;
             self.ledger
                 .check(r.ptr)?
                 .extent
                 .check_range(r.ptr.offset, size)?;
-            let owned = self.resources_of(r.layout)?;
+            let owned = self.resources_of(layout)?;
             Ok(if take {
                 self.take_part(r.ptr, size, &owned)
             } else {
@@ -160,9 +165,14 @@ impl<S: Stage> Machine<'_, S> {
         }
     }
 
-    pub(super) fn write_resolved(&mut self, r: &Resolved, m: Moved) -> Checked<()> {
+    pub(super) fn write_resolved(
+        &mut self,
+        r: &Resolved,
+        layout: LayoutId,
+        m: Moved,
+    ) -> Checked<()> {
         if r.columns.is_none() {
-            return self.write_value(r.ptr, r.layout, m);
+            return self.write_value(r.ptr, layout, m);
         }
         let Val::Image(mut image) = m.val else {
             return fail(V::TypeConfusion, "column row is not an aggregate image");
@@ -238,7 +248,7 @@ impl<S: Stage> Machine<'_, S> {
             extent.write_bytes(8, &cap.to_le_bytes());
             for index in 0..count {
                 let from = self.column_resolved(block, element, index)?;
-                let image = self.read_resolved(&from, private)?;
+                let image = self.read_resolved(&from, element, private)?;
                 let val = if private {
                     Val::Image(image)
                 } else {
@@ -247,6 +257,7 @@ impl<S: Stage> Machine<'_, S> {
                 let to = self.column_resolved(grown, element, index)?;
                 self.write_resolved(
                     &to,
+                    element,
                     Moved {
                         val,
                         credited: true,
@@ -308,7 +319,7 @@ impl<S: Stage> Machine<'_, S> {
         let len = bits as u64;
         for index in 0..capacity {
             let row = self.column_resolved(block, element, index)?;
-            let image = self.read_resolved(&row, false)?;
+            let image = self.read_resolved(&row, element, false)?;
             let (initialized, live) = self.initialized(&image, 0, element)?;
             if index < len && !initialized {
                 return fail(V::UninitializedRead, "column length covers unwritten row");
