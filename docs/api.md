@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-687 exported definitions; 238 variants.
+692 exported definitions; 242 variants.
 
 
 ## Types and roots
@@ -795,6 +795,18 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn list.rotate[T](mut xs: unique List[T], amount: u64) -> ()` — Left rotation uses three reversals, each preserving element ownership. <!-- std@1/list/rotate -->
 - `@noalloc pub fn list.sort[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {}` — In-place, unstable heapsort, O(n log n), including move-only elements. <!-- std@1/list/sort -->
 - `@noalloc fn list.swap[T](mut xs: unique List[T], a: u64, b: u64) -> ()` <!-- core@1/list/swap -->
+
+## log
+
+- `pub type log.Entry { level: Level, message: String, fields: List[Field], timestamp: Option[time.Timestamp], }` <!-- std@1/log/Entry -->
+- `pub type log.Field { name: String, value: String, }` <!-- std@1/log/Field -->
+- `pub type log.Level = Debug | Info | Warn | Error` — Go log/slog JSON records/levels, using Hirsel's existing JSON escaping. <!-- std@1/log/Level -->
+- `Debug -> log.Level` — Variant of log.Level. <!-- std@1/log/Level#Debug -->
+- `Error -> log.Level` — Variant of log.Level. <!-- std@1/log/Level#Error -->
+- `Info -> log.Level` — Variant of log.Level. <!-- std@1/log/Level#Info -->
+- `Warn -> log.Level` — Variant of log.Level. <!-- std@1/log/Level#Warn -->
+- `pub fn log.format(entry: Entry) -> String uses {}` <!-- std@1/log/format -->
+- `pub fn log.write(sink: Stderr, minimum: Level, entry: Entry) -> Result[(), OutputError]` <!-- std@1/log/write -->
 
 ## map
 

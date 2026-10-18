@@ -418,6 +418,12 @@
       "module": [
         "cli"
       ]
+    },
+    {
+      "path": "log.hir",
+      "module": [
+        "log"
+      ]
     }
   ],
   "dependencies": []

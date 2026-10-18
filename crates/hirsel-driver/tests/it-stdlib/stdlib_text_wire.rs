@@ -127,3 +127,75 @@ fn csv_is_ordinary_source() {
 fn cli_is_ordinary_source() {
     source_codec("cli", "cli", &["parse", "usage"]);
 }
+
+#[test]
+fn log_is_ordinary_source() {
+    source_codec("log", "log", &["format", "write"]);
+}
+
+// The source corpus cannot inject Stderr provider faults. This additionally
+// proves that a filtered entry leaves the scripted write fault untouched.
+#[test]
+fn logging_filters_before_write_and_propagates_sink_errors() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/SEM/SEM-3-log-run.hir");
+        for fault in [false, true] {
+            let source = r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let sink = io.stderr(rt)?
+  let quiet = std@1/log.Entry(level: Debug(), message: "ignored", fields: [], timestamp: None())
+  failure.check(std@1/log.write(sink, Info(), quiet) == Ok(()), TextInvariant())
+  let entry = std@1/log.Entry(level: Info(), message: "a\n\"b", fields: [], timestamp: None())
+  let outcome = std@1/log.write(sink, Info(), entry)
+  $CHECK
+  Ok(())
+}
+"#
+            .replace(
+                "$CHECK",
+                if fault {
+                    "failure.check(outcome == Error(OutputFault(7)), TextInvariant())"
+                } else {
+                    "failure.check(outcome == Ok(()), TextInvariant())"
+                },
+            );
+            let mut loaded = load_program_source(&path, Some(&source)).unwrap();
+            loaded.check_for_execution().unwrap();
+            let mut simulation = SimulationConfig::default();
+            if fault {
+                simulation.faults.insert(
+                    "err.print".into(),
+                    std::collections::VecDeque::from([
+                        hirsel_interp::library::simulation::Fault::Fault {
+                            code: 7,
+                            partial: 0,
+                        },
+                    ]),
+                );
+            }
+            let observed = run_observed_snapshot(
+                &mut loaded.engine,
+                &RunConfiguration {
+                    entry: loaded.entry,
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                simulation,
+            )
+            .unwrap();
+            assert!(matches!(observed.outcome, Ok(RunOutcome::Exit(0))));
+            let observation = observed.observation.unwrap();
+            let writes = observation.effects.iter().filter(|effect| matches!(&effect.effect, hirsel_interp::observation::Effect::CapabilityConsumed(event) if event.operation == "err.print")).count();
+            assert_eq!(writes, 1);
+            let state = observation.final_state.unwrap();
+            let expected = if fault {
+                b"".as_slice()
+            } else {
+                b"{\"level\":\"info\",\"message\":\"a\\n\\\"b\",\"fields\":[],\"timestamp\":null}\n"
+                    .as_slice()
+            };
+            assert_eq!(state.stderr, expected);
+        }
+    });
+}

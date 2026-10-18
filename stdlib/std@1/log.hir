@@ -1,0 +1,73 @@
+// Go log/slog JSON records/levels, using Hirsel's existing JSON escaping.
+pub type Level = Debug | Info | Warn | Error
+
+pub type Field {
+  name: String,
+  value: String,
+}
+
+pub type Entry {
+  level: Level,
+  message: String,
+  fields: List[Field],
+  timestamp: Option[time.Timestamp],
+}
+
+@noalloc
+fn rank(level: Level) -> u8 uses {} {
+  match level {
+    Debug() => 0,
+    Info() => 1,
+    Warn() => 2,
+    Error() => 3,
+  }
+}
+
+pub fn format(entry: Entry) -> String uses {} {
+  let level = match entry.level {
+    Debug() => "debug",
+    Info() => "info",
+    Warn() => "warn",
+    Error() => "error",
+  }
+  let mut fields: List[box json.Value] = []
+  let mut i: u64 = 0
+  while i < core@1/list.len(entry.fields) {
+    let field = entry.fields[i]
+    let mut object: Map[String, box json.Value] = core@1/map.empty()
+    core@1/map.insert(mut object, "name", box Text(unique field.name))
+    core@1/map.insert(mut object, "value", box Text(unique field.value))
+    core@1/list.push(mut fields, box Object(take object))
+    i += 1
+  }
+  let mut object: Map[String, box json.Value] = core@1/map.empty()
+  core@1/map.insert(mut object, "level", box Text(level))
+  core@1/map.insert(mut object, "message", box Text(unique entry.message))
+  core@1/map.insert(mut object, "fields", box Array(take fields))
+  let timestamp: json.Value = match entry.timestamp {
+    Some(timestamp) => Number(i128.to_string(timestamp.unix_nanoseconds)),
+    None() => Null(),
+  }
+  core@1/map.insert(mut object, "timestamp", box take timestamp)
+  let value: json.Value = Object(take object)
+  let mut out: List[u8] = []
+  match json.stringify(value) {
+    Ok(encoded) => text.append(mut out, encoded),
+    Error(_) => core@1/failure.check(false, TextInvariant()),
+  }
+  text.append(mut out, "\n")
+  match text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+pub fn write(sink: Stderr, minimum: Level, entry: Entry) -> Result[(), OutputError] {
+  if rank(entry.level) < rank(minimum) {
+    return Ok(())
+  }
+  core@1/err.print(sink, format(entry))
+}

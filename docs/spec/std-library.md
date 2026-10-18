@@ -669,6 +669,29 @@ one line per spec in declaration order, and appends LF. Applications collect
 Args through arg.count/text once, parse typed values separately, and choose how
 to print help or errors. There is no registration, ambient Args access or exit.
 
+## Explicit-sink structured logging
+
+`std@1/log` defines `Level = Debug | Info | Warn | Error`, ordered in that
+severity order, `Field { name: String, value: String }`, and
+`Entry { level: Level, message: String, fields: List[Field], timestamp:
+Option[time.Timestamp] }`.
+
+```text
+fn log.format(entry: Entry) -> String uses {}
+fn log.write(sink: Stderr, minimum: Level, entry: Entry) -> Result[(), OutputError]
+```
+
+Format is pure source and emits one compact JSON object followed by exactly one
+LF, with keys in this order: level (lowercase name), message, fields (ordered
+objects with name/value strings), timestamp (integer Unix nanoseconds or null).
+The field list preserves duplicates and reserved names without shadowing core
+keys. Existing JSON escaping handles all strings, including embedded newlines.
+Timestamp is caller-supplied; no wall clock is read. Write filters below minimum
+before formatting, then calls err.print once with the complete record and
+propagates its error. There is no global logger, implicit sink, hidden clock or
+ambient level. Ordering/atomicity across tasks is not promised; callers needing
+ordering serialize through their explicit task/channel facilities.
+
 ## SHA-256
 
 `std@1/sha256` implements SHA-256 entirely in ordinary, allocation-free source.

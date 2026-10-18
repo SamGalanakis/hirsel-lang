@@ -1,0 +1,43 @@
+// rule: SEM-3
+// expect: run
+// slog JSON escaping/record ideas: duplicate fields stay ordered and never shadow keys.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let entry = std@1/log.Entry(
+    level: Warn(),
+    message: "a\n\"b\\c\t",
+    fields: [
+      std@1/log.Field(name: "level", value: "é"),
+      std@1/log.Field(name: "level", value: "two")
+    ],
+    timestamp: None()
+  )
+  let encoded = std@1/log.format(entry)
+  failure.check(
+    encoded == "{\"level\":\"warn\",\"message\":\"a\\n\\\"b\\\\c\\t\",\"fields\":[{\"name\":\"level\",\"value\":\"é\"},{\"name\":\"level\",\"value\":\"two\"}],\"timestamp\":null}\n",
+    TextInvariant()
+  )
+  let timestamped = std@1/log.Entry(
+    level: Info(),
+    message: "ok",
+    fields: [],
+    timestamp: Some(time.Timestamp(unix_nanoseconds: -1))
+  )
+  failure.check(
+    std@1/log.format(timestamped) == "{\"level\":\"info\",\"message\":\"ok\",\"fields\":[],\"timestamp\":-1}\n",
+    TextInvariant()
+  )
+  let empty = std@1/log.Entry(
+    level: Debug(),
+    message: "",
+    fields: [],
+    timestamp: None()
+  )
+  failure.check(
+    std@1/log.format(empty) == "{\"level\":\"debug\",\"message\":\"\",\"fields\":[],\"timestamp\":null}\n",
+    TextInvariant()
+  )
+  let sink = io.stderr(rt)?
+  failure.check(std@1/log.write(sink, Error(), entry) == Ok(()), TextInvariant())
+  failure.check(std@1/log.write(sink, Debug(), entry) == Ok(()), TextInvariant())
+  Ok(())
+}
