@@ -1,0 +1,385 @@
+// Zig crypto/sha2.zig portable SHA-256 rounds/update/final (MIT).
+pub opaque type State: plain + inert uses {} {
+  words: Inline[u32, 8],
+  block: Inline[u8, 64],
+  used: u64,
+  count: u64,
+}
+
+const K: Inline[u32, 64] = [
+  0x428A2F98,
+  0x71374491,
+  0xB5C0FBCF,
+  0xE9B5DBA5,
+  0x3956C25B,
+  0x59F111F1,
+  0x923F82A4,
+  0xAB1C5ED5,
+  0xD807AA98,
+  0x12835B01,
+  0x243185BE,
+  0x550C7DC3,
+  0x72BE5D74,
+  0x80DEB1FE,
+  0x9BDC06A7,
+  0xC19BF174,
+  0xE49B69C1,
+  0xEFBE4786,
+  0x0FC19DC6,
+  0x240CA1CC,
+  0x2DE92C6F,
+  0x4A7484AA,
+  0x5CB0A9DC,
+  0x76F988DA,
+  0x983E5152,
+  0xA831C66D,
+  0xB00327C8,
+  0xBF597FC7,
+  0xC6E00BF3,
+  0xD5A79147,
+  0x06CA6351,
+  0x14292967,
+  0x27B70A85,
+  0x2E1B2138,
+  0x4D2C6DFC,
+  0x53380D13,
+  0x650A7354,
+  0x766A0ABB,
+  0x81C2C92E,
+  0x92722C85,
+  0xA2BFE8A1,
+  0xA81A664B,
+  0xC24B8B70,
+  0xC76C51A3,
+  0xD192E819,
+  0xD6990624,
+  0xF40E3585,
+  0x106AA070,
+  0x19A4C116,
+  0x1E376C08,
+  0x2748774C,
+  0x34B0BCB5,
+  0x391C0CB3,
+  0x4ED8AA4A,
+  0x5B9CCA4F,
+  0x682E6FF3,
+  0x748F82EE,
+  0x78A5636F,
+  0x84C87814,
+  0x8CC70208,
+  0x90BEFFFA,
+  0xA4506CEB,
+  0xBEF9A3F7,
+  0xC67178F2
+]
+
+@noalloc
+pub fn new() -> State uses {} {
+  State(
+    words: [
+      0x6a09e667u32,
+      0xbb67ae85u32,
+      0x3c6ef372u32,
+      0xa54ff53au32,
+      0x510e527fu32,
+      0x9b05688cu32,
+      0x1f83d9abu32,
+      0x5be0cd19u32
+    ],
+    block: [
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8
+    ],
+    used: 0,
+    count: 0
+  )
+}
+
+@noalloc
+fn rotate(value: u32, bits: u32) -> u32 uses {} {
+  value >> bits | value << 32u32 - bits
+}
+
+@noalloc
+fn add(a: u32, b: u32) -> u32 uses {} {
+  core@1/int.wrapping_add(a, b)
+}
+
+@noalloc
+fn compress(mut state: State) -> () uses {} {
+  let mut schedule: Inline[u32, 64] = [
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32
+  ]
+  let mut i: u64 = 0
+  while i < 16 {
+    let at = i * 4
+    let a: u32 = core@1/int.widen(state.block[at])
+    let b: u32 = core@1/int.widen(state.block[at + 1])
+    let c: u32 = core@1/int.widen(state.block[at + 2])
+    let d: u32 = core@1/int.widen(state.block[at + 3])
+    schedule[i] = a << 24 | b << 16 | c << 8 | d
+    i += 1
+  }
+  while i < 64 {
+    let a = schedule[i - 15]
+    let b = schedule[i - 2]
+    let s0 = rotate(a, 7) ^ rotate(a, 18) ^ a >> 3
+    let s1 = rotate(b, 17) ^ rotate(b, 19) ^ b >> 10
+    schedule[i] = add(add(schedule[i - 16], s0), add(schedule[i - 7], s1))
+    i += 1
+  }
+  let mut a = state.words[0]
+  let mut b = state.words[1]
+  let mut c = state.words[2]
+  let mut d = state.words[3]
+  let mut e = state.words[4]
+  let mut f = state.words[5]
+  let mut g = state.words[6]
+  let mut h = state.words[7]
+  i = 0
+  while i < 64 {
+    let upper = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25)
+    let choice = e & f ^ ~e & g
+    let t1 = add(add(add(h, upper), choice), add(K[i], schedule[i]))
+    let lower = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22)
+    let majority = a & b ^ a & c ^ b & c
+    let t2 = add(lower, majority)
+    h = g
+    g = f
+    f = e
+    e = add(d, t1)
+    d = c
+    c = b
+    b = a
+    a = add(t1, t2)
+    i += 1
+  }
+  state.words[0] = add(state.words[0], a)
+  state.words[1] = add(state.words[1], b)
+  state.words[2] = add(state.words[2], c)
+  state.words[3] = add(state.words[3], d)
+  state.words[4] = add(state.words[4], e)
+  state.words[5] = add(state.words[5], f)
+  state.words[6] = add(state.words[6], g)
+  state.words[7] = add(state.words[7], h)
+}
+
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  let len = core@1/bytes.len(data)
+  core@1/failure.check(len <= 2305843009213693951u64 - state.count, Arithmetic())
+  state.count += len
+  let mut i: u64 = 0
+  while i < len {
+    state.block[state.used] = data[i]
+    state.used += 1
+    if state.used == 64 {
+      compress(mut state)
+      state.used = 0
+    }
+    i += 1
+  }
+}
+
+@noalloc
+pub fn finish(take state: State) -> Inline[u8, 32] uses {} {
+  let mut final_state = take state
+  final_state.block[final_state.used] = 128
+  final_state.used += 1
+  if final_state.used > 56 {
+    while final_state.used < 64 {
+      final_state.block[final_state.used] = 0
+      final_state.used += 1
+    }
+    compress(mut final_state)
+    final_state.used = 0
+  }
+  while final_state.used < 56 {
+    final_state.block[final_state.used] = 0
+    final_state.used += 1
+  }
+  let mut bits = final_state.count * 8u64
+  let mut i: u64 = 0
+  while i < 8 {
+    final_state.block[63 - i] = core@1/int.narrow(bits & 255u64)
+    bits >>= 8
+    i += 1
+  }
+  compress(mut final_state)
+  let mut out: Inline[u8, 32] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  i = 0
+  while i < 8 {
+    let value = final_state.words[i]
+    out[i * 4] = core@1/int.narrow(value >> 24)
+    out[i * 4 + 1] = core@1/int.narrow(value >> 16 & 255u32)
+    out[i * 4 + 2] = core@1/int.narrow(value >> 8 & 255u32)
+    out[i * 4 + 3] = core@1/int.narrow(value & 255u32)
+    i += 1
+  }
+  take out
+}
+
+@noalloc
+pub fn digest(data: Bytes) -> Inline[u8, 32] uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state)
+}

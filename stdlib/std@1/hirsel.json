@@ -330,6 +330,12 @@
       ]
     },
     {
+      "path": "sha256.hir",
+      "module": [
+        "sha256"
+      ]
+    },
+    {
       "path": "hex.hir",
       "module": [
         "hex"

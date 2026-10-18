@@ -3786,6 +3786,7 @@ conformance/SEM/SEM-3-regex-go-2-run.hir
 conformance/SEM/SEM-3-regex-go-3-run.hir
 conformance/SEM/SEM-3-regex-limits-run.hir
 conformance/SEM/SEM-3-scalar-safe-slices.hir
+conformance/SEM/SEM-3-sha256-run.hir
 conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-split-once-run.hir
 conformance/SEM/SEM-3-string-compare-run.hir

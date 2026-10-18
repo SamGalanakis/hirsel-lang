@@ -525,6 +525,27 @@ sequential listen/accept loop. A server maps malformed requests to a 400 respons
 invoking application handling. No routing, concurrency or persistent-connection framework
 is implied.
 
+## SHA-256
+
+`std@1/sha256` implements SHA-256 entirely in ordinary, allocation-free source.
+Its opaque `State` contains eight chaining words, a partial 64-byte block and a
+byte count. The public operations are:
+
+```text
+fn sha256.new() -> State uses {}
+fn sha256.update(mut state: State, data: Bytes) -> () uses {}
+fn sha256.finish(take state: State) -> Inline[u8, 32] uses {}
+fn sha256.digest(data: Bytes) -> Inline[u8, 32] uses {}
+```
+
+Update borrows bytes and accepts an empty chunk. Before changing state it checks
+that total input remains at most 2^61-1 bytes, the maximum whole-byte message
+whose bit length fits SHA-256's 64-bit length field; exceeding it fails SEM-1.
+Finish consumes state, pads once, and emits exactly 32 bytes in big-endian word
+order. Round additions wrap deliberately at 32 bits. `digest` is the one-shot
+form over the same kernel. Hexadecimal rendering is a separate codec. This is a
+digest, without password-hashing or signature operations.
+
 ## Common string helpers
 
 `string.contains(s: String, pattern: String) -> bool uses {}` delegates to

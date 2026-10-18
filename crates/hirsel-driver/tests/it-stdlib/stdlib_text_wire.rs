@@ -33,10 +33,8 @@ fn source_codec(name: &str, module: &str, functions: &[&str]) {
                 .unwrap_or_else(|| panic!("missing {module}/{function}"));
             assert_eq!(unit.unit().header.origin, UnitOrigin::Source);
         }
-        assert!(matches!(
-            run_path(&path, &mut Vec::new()).unwrap(),
-            RunOutcome::Exit(0)
-        ));
+        let outcome = run_path(&path, &mut Vec::new()).unwrap();
+        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
     });
 }
 
@@ -58,4 +56,28 @@ fn utf8_is_ordinary_source() {
 #[test]
 fn common_strings_are_ordinary_source() {
     source_codec("string-common", "string", &["contains", "lines", "replace"]);
+}
+
+#[test]
+fn sha256_is_ordinary_source() {
+    source_codec("sha256", "sha256", &["new", "update", "finish", "digest"]);
+}
+
+// The million-byte vector runs only as a built executable; bounded corpus
+// vectors exercise the same source kernel through the interpreter.
+#[test]
+#[ignore = "full gate: native million-byte reference"]
+fn full_gate_sha256_million_a_native_reference() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/sha256-million-native.hir");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let outcome = native::run_path_native(&path, &mut stdout, &mut stderr)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(stdout.is_empty(), "{stdout:?}");
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    });
 }

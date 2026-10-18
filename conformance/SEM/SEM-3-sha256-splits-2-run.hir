@@ -1,0 +1,29 @@
+// rule: SEM-3
+// expect: run
+// Zig SHA-256 reference vectors and padding boundaries.
+fn digest_hex(data: Inline[u8, 32]) -> String {
+  let mut out: List[u8] = []
+  for byte in data {
+    list.push(mut out, byte)
+  }
+  std@1/hex.encode(bytes.from_list(take out))
+}
+
+pub fn main() -> Result[(), ()] {
+  let data = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  let mut state4 = std@1/sha256.new()
+  std@1/sha256.update(mut state4, bytes.slice(data, 0, 4))
+  std@1/sha256.update(mut state4, bytes.slice(data, 4, 128))
+  failure.check(
+    digest_hex(std@1/sha256.finish(take state4)) == "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e",
+    TextInvariant()
+  )
+  let mut state5 = std@1/sha256.new()
+  std@1/sha256.update(mut state5, bytes.slice(data, 0, 5))
+  std@1/sha256.update(mut state5, bytes.slice(data, 5, 128))
+  failure.check(
+    digest_hex(std@1/sha256.finish(take state5)) == "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e",
+    TextInvariant()
+  )
+  Ok(())
+}
