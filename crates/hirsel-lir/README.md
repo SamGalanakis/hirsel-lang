@@ -102,6 +102,9 @@ Invariants:
   word; the first such field's word is null exactly when the fieldless
   variant is active (`TagForm::Niche`). Every tag reader goes through the
   form; `rt_program` lowers the niche's arm to `STEP_NONNULL`.
+- Externs have the `Foreign` FnAbi shape and only they do (PROG-4): no run context,
+  environment or destination, and a scalar result or none. `Ptr` and `FnPtr` are pointer
+  scalars.
 - Unavailable, never guessed. Open attribute combinations (#47), C interop
   beyond plain `@layout(c)` records (#6) and M2 builtins return
   `LayoutError::Unavailable` with their issue. A dynamic extent (Packed,

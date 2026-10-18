@@ -256,6 +256,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return self.invalid("a call outside the call table");
         };
         let abi = fn_abi(self.inputs.layouts, site.abi, self.definition())?;
+        if abi.shape == CallableShape::Foreign {
+            return self.foreign_call(call, abi, normal);
+        }
         let arguments = self.pool(site.arguments, &unit.pools.call_arguments)?;
         // The callee: a named function, or a code pointer and its environment.
         let (callee, environment, name): (Value<'m>, Option<Value<'m>>, Option<String>) = match site

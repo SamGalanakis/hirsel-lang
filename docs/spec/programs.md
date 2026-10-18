@@ -221,11 +221,14 @@ callbacks.
 **Determinism.** Foreign calls are outside DET-1. A run may be recorded and replayed only
 if every definition that calls an extern is a safe wrapper with a deterministic model, and
 replay calls that wrapper again; any other reachable use of an extern makes the program
-non-replayable, and recording or replaying it is a launch refusal naming that use.
+non-replayable, and recording or replaying it is a launch refusal: `hirsel run` names that
+use, and an executable built from the program refuses `--hirsel-record` and
+`--hirsel-replay`.
 
 **Engines.** The reference interpreter does not call C: launching a program whose entry
-reaches an extern in the interpreter is a tooling refusal naming the extern. Native builds
-link the root's `unsafe ffi` libraries after the runtime.
+reaches an extern in the interpreter is a tooling refusal naming the extern, and the heap
+executor refuses an extern call as unsupported. Native builds link the root's `unsafe ffi`
+libraries after the runtime.
 
 ### PROG-5: Topology
 

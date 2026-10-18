@@ -179,6 +179,9 @@ impl Importer<'_, '_> {
                 } else if self.program.definitions.contains_key(path) {
                     let (symbol, abi) = self.direct(path, arguments)?;
                     (Callee::Direct(symbol), abi)
+                } else if let Some(abi) = self.foreign_abi(path)? {
+                    let symbol = self.symbol(SymbolKind::Function, path, None);
+                    (Callee::Direct(symbol), abi)
                 } else {
                     return unsupported(format!(
                         "a call of {path:?}, neither an operation nor a definition"
@@ -488,6 +491,32 @@ impl Importer<'_, '_> {
         let e = self.enter(next);
         self.terminate(Terminator::Jump(e));
         Ok(())
+    }
+
+    /// The C convention of `path` when it is an extern (PROG-4), which is
+    /// monomorphic.
+    pub(super) fn foreign_abi(&mut self, path: &DefPath) -> R<Option<FnAbiId>> {
+        let Some(signature) = self.program.signatures.get(path).cloned() else {
+            return Ok(None);
+        };
+        let SignatureKind::Function(function) = &signature.kind else {
+            return Ok(None);
+        };
+        if function.foreign.is_none() {
+            return Ok(None);
+        }
+        let mut actuals = crate::instance::Actuals::none();
+        let callable = crate::instance::instantiate_function(
+            &signature,
+            function,
+            hirsel_types::Modes::global(),
+            &mut actuals,
+        )
+        .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
+        self.layouts
+            .fn_abi(&actuals.store, callable, CallableShape::Foreign)
+            .map(Some)
+            .map_err(|e| PassError::Layout(path.clone(), e))
     }
 
     pub(super) fn operation_abi(

@@ -61,6 +61,7 @@ mod construction;
 mod descriptors;
 mod flat;
 mod flow;
+mod foreign;
 mod instructions;
 mod ownership;
 mod pair;

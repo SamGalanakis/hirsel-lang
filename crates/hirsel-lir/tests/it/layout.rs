@@ -1325,16 +1325,10 @@ fn incomplete_and_foreign_types_are_named() {
         Err(LayoutError::Unavailable { issue: Some(6), .. })
     ));
     let u8_ = t.p(Primitive::U8);
-    for (kind, issue) in [
-        (BuiltinType::Ptr, Some(6)),
-        (BuiltinType::FnPtr, Some(6)),
-        (BuiltinType::Mutex, None),
-    ] {
-        let ty = t.builtin(kind, vec![GenericArgument::Type(u8_)]);
-        match b.layout(&t.store, ty) {
-            Err(LayoutError::Unavailable { issue: i, .. }) => assert_eq!(i, issue, "{kind:?}"),
-            other => panic!("{kind:?}: {other:?}"),
-        }
+    let mutex = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(u8_)]);
+    match b.layout(&t.store, mutex) {
+        Err(LayoutError::Unavailable { issue: None, .. }) => {}
+        other => panic!("Mutex: {other:?}"),
     }
     let free = t.param(0);
     assert_eq!(b.layout(&t.store, free), Err(LayoutError::Incomplete));
@@ -1346,6 +1340,18 @@ fn incomplete_and_foreign_types_are_named() {
     // Failed requests leave no partial records behind.
     let table = checked(b);
     assert!(table.layouts.len() <= 2, "{} records", table.layouts.len());
+    // Raw and callback pointers are pointer scalars (PROG-4).
+    let mut b = LayoutBuilder::new(&x86(), &owners);
+    for kind in [BuiltinType::Ptr, BuiltinType::FnPtr] {
+        let ty = t.builtin(kind, vec![GenericArgument::Type(u8_)]);
+        let id = b.layout(&t.store, ty).unwrap();
+        let table = b.table();
+        assert_eq!(
+            table.layouts[id.0 as usize].kind,
+            LayoutKind::Scalar(ScalarKind::Pointer),
+            "{kind:?}"
+        );
+    }
 }
 
 #[test]

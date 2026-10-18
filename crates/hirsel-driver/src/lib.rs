@@ -251,6 +251,16 @@ pub(crate) fn bind_host_run(
     mut host: hirsel_rt::host_launch::HostGrants,
 ) -> Result<HostRun, ToolError> {
     use hirsel_run_config::LaunchKind;
+    if matches!(
+        launch,
+        HostLaunch::Replay(_)
+            | HostLaunch::Live {
+                record: Some(_),
+                ..
+            }
+    ) {
+        program.refuse_unreplayable()?;
+    }
     let signature = launch_signature(program)?;
     let revision = program
         .engine

@@ -2929,7 +2929,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 if unit.tables.symbols[symbol.index()].kind != SymbolKind::Function
                     || !matches!(
                         abi.shape,
-                        CallableShape::Definition | CallableShape::CWrapper
+                        CallableShape::Definition | CallableShape::Foreign
                     )
                 {
                     self.add(site, K::CallShape("direct callee"));

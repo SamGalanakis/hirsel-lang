@@ -42,11 +42,10 @@ impl<'o> LayoutBuilder<'o> {
             TypeKind::Parameter(_) => return Err(LayoutError::Incomplete),
             _ => return Err(LayoutError::Invalid("an ABI of a non-callable type".into())),
         };
-        if shape == CallableShape::CWrapper || function.foreign.is_some() {
-            return Err(LayoutError::Unavailable {
-                issue: Some(6),
-                what: "C-facing wrappers and foreign callables".into(),
-            });
+        if (shape == CallableShape::Foreign) != function.foreign.is_some() {
+            return Err(LayoutError::Invalid(
+                "only an extern has the foreign shape, and an extern has only it".into(),
+            ));
         }
         if !function.generics.is_empty() {
             return Err(LayoutError::Incomplete);
@@ -163,7 +162,7 @@ impl<'o> LayoutBuilder<'o> {
             },
             shape,
             multiplicity,
-            context: true,
+            context: shape != CallableShape::Foreign,
             environment: matches!(
                 shape,
                 CallableShape::Closure | CallableShape::IterNext | CallableShape::IterDrop
@@ -298,6 +297,7 @@ impl<'o> LayoutBuilder<'o> {
                 | BuiltinType::Slots
                 | BuiltinType::Shared => Class::Value(vec![ScalarKind::Pointer]),
                 BuiltinType::Iter => Class::Value(vec![ScalarKind::Pointer; 3]),
+                BuiltinType::Ptr | BuiltinType::FnPtr => Class::Value(vec![ScalarKind::Pointer]),
                 _ => Class::Aggregate,
             },
             TypeKind::Named { definition, .. }
@@ -357,7 +357,7 @@ impl<'o> LayoutBuilder<'o> {
                 .iter()
                 .flat_map(|v| v.fields.iter().map(|(_, t)| *t)))?,
             TypeKind::Builtin {
-                kind: BuiltinType::Simd,
+                kind: BuiltinType::Simd | BuiltinType::Ptr | BuiltinType::FnPtr,
                 ..
             } => false,
             TypeKind::Builtin {
@@ -386,7 +386,7 @@ fn shape_name(shape: CallableShape) -> &'static str {
         CallableShape::Closure => "closure",
         CallableShape::IterNext => "iter-next",
         CallableShape::IterDrop => "iter-drop",
-        CallableShape::CWrapper => "c-wrapper",
+        CallableShape::Foreign => "foreign",
     }
 }
 

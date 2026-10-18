@@ -6625,6 +6625,19 @@ impl<'p, S: Stage> Machine<'p, S> {
             .get(call.index())
             .ok_or_else(|| err(V::Malformed, format!("unknown call {call:?}")))?;
         let arguments = self.pool(site.arguments, &u.pools.call_arguments)?;
+        if self
+            .program
+            .layouts
+            .fn_abis
+            .get(site.abi.0 as usize)
+            .map(|a| a.shape)
+            == Some(hirsel_lir::abi_types::CallableShape::Foreign)
+        {
+            return fail(
+                V::Unsupported,
+                "a call of an extern \"c\" function: H does not run C",
+            );
+        }
         let (callee, env) = match site.callee {
             Callee::Direct(symbol) => (self.program.function(self.symbol(f.unit, symbol)?)?, None),
             Callee::Indirect(v) => match self.read_use(f, v)? {

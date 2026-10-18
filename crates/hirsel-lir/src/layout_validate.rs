@@ -1618,11 +1618,12 @@ impl<'a> Validator<'a> {
         if abi.version != crate::ABI_VERSION || abi.key.abi_version != crate::ABI_VERSION {
             self.fail(s.clone(), Obligation::Identity, "stale ABI version");
         }
-        if !abi.context {
+        let foreign = abi.shape == CallableShape::Foreign;
+        if abi.context == foreign {
             self.fail(
                 s.clone(),
                 Obligation::Abi,
-                "every Hirsel entry takes the run context",
+                "every Hirsel entry takes the run context, and no extern does",
             );
         }
         let environment = matches!(
@@ -1636,11 +1637,18 @@ impl<'a> Validator<'a> {
                 "only closure and iterator thunks take an environment",
             );
         }
-        if abi.shape == CallableShape::CWrapper {
+        // A C function returns a number or pointer, or nothing.
+        if foreign
+            && (abi.destination
+                || abi.result.as_ref().is_some_and(|r| {
+                    !self.in_range(r.layout)
+                        || !matches!(self.get(r.layout).kind, LayoutKind::Scalar(_))
+                }))
+        {
             self.fail(
                 s.clone(),
                 Obligation::Abi,
-                "C-facing wrappers are unavailable pending #6",
+                "an extern returns a scalar or unit, with no destination",
             );
         }
         let pointer = PhysicalSlot {

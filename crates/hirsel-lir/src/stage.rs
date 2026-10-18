@@ -241,6 +241,9 @@ pub enum ObjectSymbolKind {
     Data,
     /// A `hirsel_rt_v2` runtime entry.
     Runtime,
+    /// An `extern "c"` function, which the root's `unsafe ffi` link inputs
+    /// define (PROG-4).
+    Foreign,
 }
 
 /// A symbol an object exports or imports, with the ABI digest it was built for.
@@ -328,7 +331,8 @@ snapshot_struct!(RawReceipt {
 snapshot_enum!(ObjectSymbolKind {
     Function,
     Data,
-    Runtime
+    Runtime,
+    Foreign
 });
 snapshot_struct!(ObjectSymbol {
     name,

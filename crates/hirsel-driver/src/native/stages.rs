@@ -161,6 +161,10 @@ pub struct ReadyProgram {
     /// The planned PS-13 sites some unit removed, as `validate_discharge`
     /// confirmed.
     pub discharged: Discharge,
+    /// The externs' libraries, bound with the revisions (PROG-4).
+    pub foreign_links: Vec<hirsel_engine::LinkInput>,
+    /// Executables refuse to record or replay (PROG-4).
+    pub foreign_unreplayable: bool,
 }
 
 impl ReadyProgram {
@@ -185,6 +189,8 @@ impl ReadyProgram {
                     })
             })
             .collect::<Result<_, _>>()?;
+        self.foreign_links = input.snapshot().foreign_links.clone();
+        self.foreign_unreplayable = input.snapshot().foreign_unreplayable;
         Ok(())
     }
     /// The Ready units, as the heap executor and dumps read them.
@@ -346,6 +352,8 @@ pub fn build_program(
         inline_instances: lowered.inline_instances,
         statics,
         discharged,
+        foreign_links: Vec::new(),
+        foreign_unreplayable: false,
     })
 }
 

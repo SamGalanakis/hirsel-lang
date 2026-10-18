@@ -36,6 +36,10 @@ pub struct NativeInput {
     pub audits: BTreeMap<DefPath, SourceAudit>,
     /// GEN-5 instance requirements; import recollects them and rejects growth.
     pub instances: InstanceGraph,
+    /// What the externs resolve against at link time (PROG-4).
+    pub foreign_links: Vec<crate::LinkInput>,
+    /// Whether executables refuse to record or replay (PROG-4).
+    pub foreign_unreplayable: bool,
 }
 /// Construction is private to successful revalidation, including current source stages.
 pub struct ValidatedNativeInput {
@@ -200,6 +204,8 @@ impl QueryEngine {
             completed_source_stages: NativeStatus::Complete,
             audits,
             instances: InstanceGraph::default(),
+            foreign_links: self.foreign_links.clone(),
+            foreign_unreplayable: self.foreign_unreplayable,
         };
         input.instances = InstanceGraph::native(&input)?;
         Ok(input)

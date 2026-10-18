@@ -955,6 +955,9 @@ pub struct Config {
     pub run_identity: [u8; 32],
 }
 
+const UNREPLAYABLE_REFUSAL: &str = "this program calls C outside a wrapper with a \
+     deterministic model, so its runs cannot be recorded or replayed (PROG-4)";
+
 fn refuse(message: &str) -> i32 {
     eprintln!("hirsel-rt: launch refused: {message}");
     EXIT_LAUNCH
@@ -978,6 +981,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_zero(
             layouts,
             layout_count,
             config,
+            false,
         )
     }
 }
@@ -1003,6 +1007,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch(
             layouts,
             layout_count,
             config,
+            false,
         )
     }
 }
@@ -1024,6 +1029,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_test(
             layouts,
             layout_count,
             config,
+            false,
         )
     }
 }
@@ -1039,6 +1045,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_roots(
     config: *const Config,
     roots: u8,
 ) -> i32 {
+    let (roots, unreplayable) = crate::standalone::unreplayable(roots);
     unsafe {
         launch(
             Launch::Roots(entry, roots),
@@ -1046,6 +1053,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_roots(
             layouts,
             layout_count,
             config,
+            unreplayable,
         )
     }
 }
@@ -1065,6 +1073,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
     name_len: u64,
     roots: u8,
 ) -> i32 {
+    let (roots, unreplayable) = crate::standalone::unreplayable(roots);
     let Some(program) = (unsafe { program.as_ref() }) else {
         return refuse("missing program binding");
     };
@@ -1087,6 +1096,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
         Ok(selected) => selected,
         Err(error) => return refuse(&error.to_string()),
     };
+    if unreplayable && selected.taped() {
+        return refuse(UNREPLAYABLE_REFUSAL);
+    }
     let config = selected.run().config();
     let config = Config {
         hash_seed: config.hash_seed(),
@@ -1112,6 +1124,7 @@ unsafe fn launch(
     layouts: *const *const Layout,
     layout_count: u32,
     launch_config: *const Config,
+    unreplayable: bool,
 ) -> i32 {
     let Some(launch_config) = (unsafe { launch_config.as_ref() }) else {
         return refuse("missing launch configuration");
@@ -1152,6 +1165,9 @@ unsafe fn launch(
         Ok(requested) => requested,
         Err(error) => return refuse(&error),
     };
+    if unreplayable && requested.as_ref().is_some_and(|s| s.taped()) {
+        return refuse(UNREPLAYABLE_REFUSAL);
+    }
     if let Some(run) = requested.as_ref().map(|selected| selected.run()) {
         if run.identity() != launch_config.run_identity
             || run.config().hash_seed() != launch_config.hash_seed

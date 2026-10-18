@@ -299,7 +299,7 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
         (CallableShape::Closure, CallMultiplicity::Once),
         (CallableShape::IterNext, CallMultiplicity::Many),
         (CallableShape::IterDrop, CallMultiplicity::Once),
-        (CallableShape::CWrapper, CallMultiplicity::Many),
+        (CallableShape::Foreign, CallMultiplicity::Many),
     ] {
         t.fn_abis.push(FnAbi {
             key: FnAbiKey {
@@ -308,7 +308,7 @@ fn fixture_table(target: &TargetSpec) -> LayoutTable {
             },
             shape,
             multiplicity,
-            context: shape != CallableShape::CWrapper,
+            context: shape != CallableShape::Foreign,
             environment: matches!(
                 shape,
                 CallableShape::Closure | CallableShape::IterNext | CallableShape::IterDrop

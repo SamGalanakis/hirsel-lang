@@ -124,6 +124,12 @@ Invariants:
   each declared parameter's physical slots. Emitted code provides the declared scalar
   extension (call-site attributes) but never assumes it from a caller or callee, because
   AAPCS64 C code does not extend narrow integers.
+- Extern calls (`CallableShape::Foreign`, PROG-4, `emit/foreign.rs`) are direct calls of
+  the C function by its name in the platform C convention: capability parameters are
+  dropped, scalars pass by value with their extension, a borrowed `Bytes` as (data, length),
+  a borrowed record as a read-only copy's address and a `mut` parameter as its place's
+  address. The import is an `ObjectSymbolKind::Foreign` symbol; the call is `nounwind`,
+  returns its scalar or `void`, and afterwards no cached length or uniqueness survives.
 - Register results: a Hirsel entry whose result is a plain scalar of at most 64 bits (an
   integer, Bool, float, Path, arena token, or block, box or header reference) has no result pointer and
   returns `{ i8 status, word }`, the word `ptr` for a reference and `i64` otherwise. On

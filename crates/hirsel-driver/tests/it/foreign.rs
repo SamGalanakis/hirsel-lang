@@ -155,3 +155,269 @@ fn unsafe_ffi_metadata_errors_are_tool_errors() {
         }
     });
 }
+
+/// A tiny C library: scalars, a byte view and a counter handle.
+const DEMO_C: &str = r#"#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+int32_t demo_add(int32_t a, int32_t b) { return a + b; }
+uint8_t demo_low(uint16_t x) { return (uint8_t)x; }
+int8_t demo_negate(int8_t x) { return (int8_t)-x; }
+double demo_scale(int64_t x, double factor) { return (double)x * factor; }
+uint64_t demo_sum(const uint8_t *data, size_t length) {
+    uint64_t sum = 0;
+    for (size_t i = 0; i < length; i++) sum += data[i];
+    return sum;
+}
+
+typedef struct { int32_t value; } counter;
+static int32_t freed;
+void *counter_new(int32_t start) {
+    counter *c = malloc(sizeof *c);
+    c->value = start;
+    return c;
+}
+int32_t counter_bump(void *c) { return ++((counter *)c)->value; }
+void counter_free(void *c) { freed++; free(c); }
+int32_t counter_freed(void) { return freed; }
+"#;
+
+/// Its safe wrapper: externs, a handle resource and wrappers.
+const DEMO_HIR: &str = "/// Reads its arguments only.
+extern \"c\" fn demo_add(u: Unsafe, a: i32, b: i32) -> i32
+
+/// Reads its argument only.
+extern \"c\" fn demo_low(u: Unsafe, x: u16) -> u8
+
+/// Reads its argument only.
+extern \"c\" fn demo_negate(u: Unsafe, x: i8) -> i8
+
+/// Reads its arguments only.
+extern \"c\" fn demo_scale(u: Unsafe, x: i64, factor: f64) -> f64
+
+/// Reads the bytes during the call and retains nothing.
+extern \"c\" fn demo_sum(u: Unsafe, data: Bytes) -> u64
+
+/// Returns a counter C owns until counter_free.
+extern \"c\" fn counter_new(u: Unsafe, start: i32) -> Ptr[u8]
+
+/// Updates the counter at h, which stays C's.
+extern \"c\" fn counter_bump(u: Unsafe, h: Ptr[u8]) -> i32
+
+/// Frees the counter at h; nothing holds it afterwards.
+extern \"c\" fn counter_free(u: Unsafe, take h: Ptr[u8]) -> ()
+
+/// Reads how many counters were freed.
+extern \"c\" fn counter_freed(u: Unsafe) -> i32
+
+pub resource type Counter {
+  u: Unsafe,
+  h: Ptr[u8],
+}
+drop(c) {
+  counter_free(c.u, c.h)
+}
+
+pub fn add(u: Unsafe, a: i32, b: i32) -> i32 {
+  demo_add(u, a, b)
+}
+
+pub fn sum(u: Unsafe, data: Bytes) -> u64 {
+  demo_sum(u, data)
+}
+
+pub fn counter(u: Unsafe, start: i32) -> Counter {
+  Counter(u: u, h: counter_new(u, start))
+}
+
+pub fn bump(c: Counter) -> i32 {
+  counter_bump(c.u, c.h)
+}
+
+pub fn freed(u: Unsafe) -> i32 {
+  counter_freed(u)
+}
+
+pub fn low(u: Unsafe, x: u16) -> u8 {
+  demo_low(u, x)
+}
+
+pub fn negate(u: Unsafe, x: i8) -> i8 {
+  demo_negate(u, x)
+}
+
+pub fn scale(u: Unsafe, x: i64, factor: f64) -> f64 {
+  demo_scale(u, x, factor)
+}
+";
+
+const NATIVE_MAIN: &str = "pub fn main(u: Unsafe) -> Result[(), ()] {
+  if lib.add(u, 40, 2) != 42 {
+    return Error(())
+  }
+  if lib.low(u, 0x1234u16) != 0x34u8 {
+    return Error(())
+  }
+  if lib.negate(u, -128i8 + 1i8) != 127i8 {
+    return Error(())
+  }
+  if lib.scale(u, 3i64, 0.5) != 1.5 {
+    return Error(())
+  }
+  if lib.sum(u, b\"\\x01\\x02\\xff\") != 258u64 {
+    return Error(())
+  }
+  if counted(u) != 12 {
+    return Error(())
+  }
+  if lib.freed(u) != 1 {
+    return Error(())
+  }
+  Ok(())
+}
+
+fn counted(u: Unsafe) -> i32 {
+  let c = lib.counter(u, 10)
+  let first = lib.bump(c)
+  first + lib.bump(c) - 11
+}
+";
+
+/// Builds `main` against the demo library, compiled with the pinned clang;
+/// returns the directory, its launch manifest and the executable.
+fn native_demo(name: &str, main: &str) -> (PathBuf, PathBuf, PathBuf) {
+    use std::process::Command;
+    let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("foreign-{name}"));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("lib")).unwrap();
+    let tools = native::Toolchain::in_tree(&root.join("runtime"), &[&target]).unwrap();
+    std::fs::write(root.join("lib/demo.c"), DEMO_C).unwrap();
+    let compiled = Command::new(&tools.clang)
+        .args(["-c", "-O1", "-fPIC"])
+        .arg(root.join("lib/demo.c"))
+        .arg("-o")
+        .arg(root.join("lib/demo.o"))
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    std::fs::write(root.join("lib/lib.hir"), DEMO_HIR).unwrap();
+    let wrappers: Vec<_> = ["add", "sum", "low", "negate", "scale"]
+        .into_iter()
+        .map(|name| json!({"module":[],"name":name,"kind":"pure","model":"deterministic"}))
+        .chain(
+            ["counter", "bump", "freed"]
+                .into_iter()
+                .map(|name| json!({"module":[],"name":name,"kind":"handle","model":"none"})),
+        )
+        .collect();
+    let lib = json!({"schema":1,"package":{"name":"lib","version":"1"},
+        "sources":[{"path":"lib.hir","module":[]}],"dependencies":[],
+        "unsafe_ffi":{"link":["demo.o"],"headers_checked":false,"wrappers":wrappers}});
+    std::fs::write(root.join("lib/hirsel.json"), lib.to_string()).unwrap();
+    std::fs::write(root.join("main.hir"), main).unwrap();
+    std::fs::write(root.join("grants.json"), r#"{"unsafe":true}"#).unwrap();
+    let path = launch(&root, json!([select_lib()]));
+    let executable = root.join("app");
+    let built = native::build_path_native(
+        &path,
+        &executable,
+        target,
+        native::BuildProfile::Default,
+        None,
+    )
+    .unwrap();
+    assert!(built.is_ok(), "{built:?}");
+    (root, path, executable)
+}
+fn execute(root: &Path, executable: &Path, record: bool) -> std::process::Output {
+    let mut command = std::process::Command::new(executable);
+    if record {
+        command.arg("--hirsel-record").arg(root.join("tape"));
+    }
+    command
+        .arg("--hirsel-grants")
+        .arg(root.join("grants.json"))
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn native_calls_c_with_scalars_a_byte_view_and_a_released_handle() {
+    with_compiler_stack(|| {
+        let (root, path, executable) = native_demo("native", NATIVE_MAIN);
+        let ran = execute(&root, &executable, false);
+        assert_eq!(ran.status.code(), Some(0), "{ran:?}");
+        // The handle wrappers have no deterministic model: no recording, from the
+        // executable or from the tool, which names the use.
+        let recorded = execute(&root, &executable, true);
+        assert_eq!(recorded.status.code(), Some(3), "{recorded:?}");
+        let stderr = String::from_utf8_lossy(&recorded.stderr);
+        assert!(
+            stderr.contains("cannot be recorded or replayed"),
+            "{stderr}"
+        );
+        assert!(!root.join("tape").exists());
+        let grants = root.join("grants.json");
+        let tape = root.join("tape");
+        let launch = HostLaunch::Live {
+            config: LaunchConfig::Grants {
+                path: &grants,
+                arguments: None,
+            },
+            record: Some(&tape),
+            revocations: None,
+        };
+        let refused = native::run_path_native_with_config(
+            &path,
+            Some(launch),
+            None,
+            &mut Vec::new(),
+            &mut Vec::new(),
+        );
+        let Err(ToolError::Runtime(message)) = refused else {
+            panic!(
+                "expected a launch refusal, got {:?}",
+                refused.map(|r| r.is_ok())
+            );
+        };
+        assert!(
+            message.contains("calls the extern lib@1/counter_"),
+            "{message}"
+        );
+        assert!(
+            message.contains("cannot be recorded or replayed"),
+            "{message}"
+        );
+        // H executes no C either: a clear refusal, not a malformed program.
+        let mut loaded = load_program(&path).unwrap();
+        loaded.check_for_execution().unwrap();
+        let input = loaded.engine.export_native_input().unwrap();
+        let validated = loaded.engine.import_native_input(input).unwrap();
+        let options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
+        let ready = native::build(&validated, &options).unwrap();
+        let sites = native::Sites::new(validated.snapshot());
+        let Err(error) = native::run_heap(&ready, &loaded.entry, &sites) else {
+            panic!("expected H to refuse the extern call");
+        };
+        assert!(error.to_string().contains("H does not run C"), "{error}");
+    });
+}
+
+#[test]
+fn native_runs_reaching_only_deterministic_wrappers_record() {
+    with_compiler_stack(|| {
+        let main = "pub fn main(u: Unsafe) -> Result[(), ()] {
+  if lib.add(u, 40, 2) != 42 {
+    return Error(())
+  }
+  Ok(())
+}
+";
+        let (root, _, executable) = native_demo("replayable", main);
+        let recorded = execute(&root, &executable, true);
+        assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
+        assert!(root.join("tape").exists());
+    });
+}

@@ -47,6 +47,12 @@ pub fn input_identity(input: &NativeInput) -> InputIdentity {
         parts.push(edge.callee.fingerprint().0.to_vec());
         parts.push(format!("{:?}", (edge.kind, edge.site.start, edge.site.end)).into_bytes());
     }
+    for link in &input.foreign_links {
+        parts.push(format!("{link:?}").into_bytes());
+    }
+    if input.foreign_unreplayable {
+        parts.push(b"foreign-unreplayable".to_vec());
+    }
     InputIdentity {
         interface_version: input.environment.interface_version,
         digest: ContentHash::of_parts("hirsel.native-input.v2", parts.iter().map(Vec::as_slice)),

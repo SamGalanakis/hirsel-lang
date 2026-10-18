@@ -39,6 +39,12 @@ retain their path and mark only the licensed bounds/tag guards unchecked.
 Append fusion carries source-site and canonical-place mappings through caller
 rewrites and derived builders, so reports and evidence keep their original ids.
 
+Extern calls (PROG-4): `ReadyProgram.foreign_links` are the root's `unsafe ffi` link
+inputs, passed after the runtime archive (`-l<name>` or the file); the link accepts
+`Foreign` imports beside runtime ones. `foreign_unreplayable` sets hirsel-rt's
+`UNREPLAYABLE` bit beside the root mask, so the executable refuses `--hirsel-record` and
+`--hirsel-replay`; H refuses an extern call as `Unsupported`.
+
 Native callable-target specializations retain their original instance's signature
 and placement proofs. `ReadyProgram.inline_instances` lets `native::link` include
 known callable bodies and their transitive specializations in each calling

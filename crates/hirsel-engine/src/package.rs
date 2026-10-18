@@ -239,7 +239,13 @@ impl LoadedProgram {
                 Ok(())
             }
         });
-        result.map_err(|error| self.error(error))
+        result.map_err(|error| self.error(error))?;
+        if !self.unsafe_ffi.is_empty() {
+            let entry = self.entry.clone();
+            let foreign = self.engine.foreign_use(&entry).map_err(|e| self.error(e))?;
+            self.engine.foreign_unreplayable = !foreign.unmodeled.is_empty();
+        }
+        Ok(())
     }
     /// The reference interpreter calls no C: a program whose entry reaches an
     /// extern refuses before entry (PROG-4).
@@ -254,6 +260,22 @@ impl LoadedProgram {
             Some(extern_) => Err(ToolError::Runtime(format!(
                 "launch: the reference interpreter does not call C, and {extern_} is an \
                  extern \"c\" function; build or run the program natively (PROG-4)"
+            ))),
+            None => Ok(()),
+        }
+    }
+    /// Recording or replaying a run whose entry reaches an extern through anything but
+    /// a deterministic wrapper is a launch refusal naming that use (PROG-4).
+    pub fn refuse_unreplayable(&mut self) -> Result<(), ToolError> {
+        if self.unsafe_ffi.is_empty() {
+            return Ok(());
+        }
+        let entry = self.entry.clone();
+        let foreign = self.engine.foreign_use(&entry).map_err(|e| self.error(e))?;
+        match foreign.unmodeled.first_key_value() {
+            Some((user, extern_)) => Err(ToolError::Runtime(format!(
+                "launch: {user} calls the extern {extern_} and is not a wrapper with a \
+                 deterministic model, so this run cannot be recorded or replayed (PROG-4)"
             ))),
             None => Ok(()),
         }
@@ -543,6 +565,10 @@ pub(crate) fn load_program_source_with_cache(
         }
         ids.push((file, context.clone()));
     }
+    engine.foreign_links = unsafe_ffi
+        .iter()
+        .flat_map(|p| p.link.iter().cloned())
+        .collect();
     engine.install_image(&image);
     let mut program = LoadedProgram {
         engine,

@@ -743,7 +743,8 @@ fn link_objects_impl(
     let declaration = format!(
         "declare i8 @\"{symbol}\"(ptr, ptr, ptr{parameters})\ndefine private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{\n{loads} %s = call i8 @\"{symbol}\"(ptr %ctx, ptr %dest, ptr %out{arguments})\n ret i8 %s\n}}"
     );
-    let mask = kind.mask();
+    // hirsel-rt's UNREPLAYABLE bit beside the roots (PROG-4).
+    let mask = kind.mask() | if program.foreign_unreplayable { 32 } else { 0 };
     let registry_declaration = format!(
         "@\"{}\" = external constant [{} x ptr]",
         registry.symbol(),
@@ -873,8 +874,11 @@ fn link_objects_impl(
         ));
     }
     for import in objects.iter().flat_map(|o| &o.imports) {
-        let declared = matches!(import.kind, hirsel_lir::stage::ObjectSymbolKind::Runtime)
-            || exported.contains(import.name.as_str())
+        let declared = matches!(
+            import.kind,
+            hirsel_lir::stage::ObjectSymbolKind::Runtime
+                | hirsel_lir::stage::ObjectSymbolKind::Foreign
+        ) || exported.contains(import.name.as_str())
             || hirsel_lir::emission::TOOLCHAIN_IMPORTS.contains(&import.name.as_str());
         if !declared {
             return Err(NativeError::new(
@@ -913,6 +917,13 @@ fn link_objects_impl(
         command.arg(write(&format!("unit-{index}.o"), &object.bytes)?);
     }
     command.arg(archive);
+    // The externs resolve against the root's `unsafe ffi` libraries (PROG-4).
+    for link in &program.foreign_links {
+        match link {
+            hirsel_engine::LinkInput::Library(name) => command.arg(format!("-l{name}")),
+            hirsel_engine::LinkInput::File(path) => command.arg(path),
+        };
+    }
     if standalone {
         // Bundle compiler support and math objects as well as the Rust runtime.
         // On glibc Linux the remaining system interfaces are supplied by libc.

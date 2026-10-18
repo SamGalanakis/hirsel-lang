@@ -140,6 +140,11 @@ pub struct QueryEngine {
     /// Dependency packages key on their own closure's manifests, not the whole
     /// graph's, so their queries are shared across programs (package images).
     pub(crate) package_manifests: BTreeMap<hirsel_syntax::PackageId, ContentHash>,
+    /// The selected `unsafe ffi` packages' link inputs, in package order (PROG-4).
+    pub foreign_links: Vec<crate::LinkInput>,
+    /// The checked entry reaches an extern outside a deterministic wrapper, so its
+    /// executables refuse to record or replay (PROG-4).
+    pub foreign_unreplayable: bool,
     pub(crate) execution_stack: Vec<ExecutionReads>,
     active: BTreeSet<(DefPath, QueryKind)>,
     validation_walk: Option<ValidationWalk>,
@@ -250,6 +255,8 @@ impl QueryEngine {
             lowered: Layered::default(),
             manifest_identity_hash: ContentHash::default(),
             package_manifests: BTreeMap::new(),
+            foreign_links: vec![],
+            foreign_unreplayable: false,
             execution_stack: vec![],
             active: BTreeSet::new(),
             validation_walk: None,

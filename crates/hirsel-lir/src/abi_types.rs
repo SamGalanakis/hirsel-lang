@@ -73,8 +73,11 @@ pub enum CallableShape {
     Closure,
     IterNext,
     IterDrop,
-    /// A monomorphic C-facing wrapper using the target's C classification (#6).
-    CWrapper,
+    /// An `extern "c"` function (PROG-4): the platform C convention, with no
+    /// run context, environment, destination or status. Emission passes the
+    /// declared parameters in C form (a byte view as pointer and length, a
+    /// capability not at all) and returns a scalar result directly.
+    Foreign,
 }
 
 /// One declared parameter in ordinal order.
@@ -157,7 +160,7 @@ snapshot_enum!(CallableShape {
     Closure,
     IterNext,
     IterDrop,
-    CWrapper
+    Foreign
 });
 snapshot_struct!(AbiParameter {
     source,

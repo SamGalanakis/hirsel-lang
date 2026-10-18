@@ -281,8 +281,8 @@ fn thunks_take_an_environment_and_keep_multiplicity() {
         clo
     );
     assert!(matches!(
-        b.fn_abi(&t.store, many, CallableShape::CWrapper),
-        Err(LayoutError::Unavailable { issue: Some(6), .. })
+        b.fn_abi(&t.store, many, CallableShape::Foreign),
+        Err(LayoutError::Invalid(_))
     ));
     assert_eq!(
         b.fn_abi(&t.store, generic, CallableShape::Definition),
@@ -489,4 +489,68 @@ fn direct_capture_parameters_have_no_hidden_environment_or_owned_result_loan() {
     assert_eq!(abi.parameters[2].layout, text);
     assert_eq!(abi.parameters[2].passing, ParameterPassing::ReadOnlyAddress);
     assert!(abi.result.as_ref().unwrap().borrowed_parameters.is_empty());
+}
+
+#[test]
+fn extern_abis_take_no_context_and_return_a_scalar_or_nothing() {
+    let owners = Owners::default();
+    let mut b = LayoutBuilder::new(&x86(), &owners);
+    let mut t = Ty::default();
+    let (i32_, s) = (t.p(Primitive::I32), t.p(Primitive::String));
+    let plain = t.function(&[(PassingMode::Borrow, i32_)], i32_, Multiplicity::Many, 0);
+    let text = t.function(&[], s, Multiplicity::Many, 0);
+    let row = t.store.get(plain).unwrap().clone();
+    let TypeKind::Function(mut function) = row.kind.clone() else {
+        unreachable!()
+    };
+    function.foreign = Some(ForeignContract {
+        abi: "c".into(),
+        blocking: false,
+        aliasing_contract: "Reads its argument only.".into(),
+    });
+    let foreign = t.add_with(TypeKind::Function(function), row.modes);
+    // Only an extern has the foreign shape, and an extern has only it.
+    assert!(matches!(
+        b.fn_abi(&t.store, plain, CallableShape::Foreign),
+        Err(LayoutError::Invalid(_))
+    ));
+    assert!(matches!(
+        b.fn_abi(&t.store, foreign, CallableShape::Definition),
+        Err(LayoutError::Invalid(_))
+    ));
+    let id = b.fn_abi(&t.store, foreign, CallableShape::Foreign).unwrap();
+    b.fn_abi(&t.store, text, CallableShape::Definition).unwrap();
+    let table = checked(b);
+    let abi = &table.fn_abis[id.0 as usize];
+    assert!(!abi.context && !abi.destination && !abi.environment);
+    let aggregate = table
+        .layouts
+        .iter()
+        .position(|l| !matches!(l.kind, LayoutKind::Scalar(_)))
+        .map(|i| LayoutId(i as u32))
+        .unwrap();
+    // Controls: each mutated extern ABI is rejected only by the extern rules.
+    type Mutation = Box<dyn Fn(&mut FnAbi)>;
+    let mutations: Vec<(Mutation, &str)> = vec![
+        (Box::new(|a| a.context = true), "no extern does"),
+        (
+            Box::new(|a| a.destination = true),
+            "an extern returns a scalar",
+        ),
+        (
+            Box::new(move |a| a.result.as_mut().unwrap().layout = aggregate),
+            "an extern returns a scalar",
+        ),
+    ];
+    for (i, (mutate, rule)) in mutations.iter().enumerate() {
+        let mut m = table.clone();
+        mutate(&mut m.fn_abis[id.0 as usize]);
+        let violations = validate_table(&m, &x86()).expect_err("mutation rejected");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.obligation == Obligation::Abi && v.detail.contains(rule)),
+            "mutation {i}: {violations:#?}"
+        );
+    }
 }

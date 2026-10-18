@@ -173,7 +173,12 @@ impl QueryEngine {
                 foreign.externs.insert(path.clone());
             }
         }
-        for (user, uses) in &program.uses {
+        // An extern's own node lists itself; only its callers use it.
+        for (user, uses) in program
+            .uses
+            .iter()
+            .filter(|(u, _)| !foreign.externs.contains(*u))
+        {
             let Some(called) = uses.iter().find(|d| foreign.externs.contains(*d)) else {
                 continue;
             };

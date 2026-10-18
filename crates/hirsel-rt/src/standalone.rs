@@ -7,6 +7,14 @@ pub(crate) const ROOT_ARGS: u8 = 2;
 pub(crate) const ROOT_ENV: u8 = 4;
 pub(crate) const ROOT_UNSAFE: u8 = 8;
 pub(crate) const ROOT_TEST: u8 = 16;
+/// Not a root: the program calls C outside a deterministic wrapper (PROG-4).
+pub(crate) const UNREPLAYABLE: u8 = 32;
+
+/// Splits the compiled selection into its roots and whether recording or
+/// replaying is refused.
+pub(crate) fn unreplayable(mask: u8) -> (u8, bool) {
+    (mask & !UNREPLAYABLE, mask & UNREPLAYABLE != 0)
+}
 
 pub(crate) fn required_roots(mask: u8) -> Result<Vec<Root>, RunRefusal> {
     if mask & !31 != 0 || mask & ROOT_TEST != 0 && mask != ROOT_TEST {
@@ -41,6 +49,10 @@ pub(crate) enum Selected {
     },
 }
 impl Selected {
+    /// Whether this launch records or replays a tape.
+    pub(crate) fn taped(&self) -> bool {
+        matches!(self, Self::Replay { .. } | Self::Live { tape: Some(_), .. })
+    }
     pub(crate) fn run(&self) -> &ValidatedRun {
         match self {
             Self::Live { run, .. } | Self::Replay { run, .. } => run,

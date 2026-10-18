@@ -2671,8 +2671,9 @@ impl<'o> LayoutBuilder<'o> {
                 record.key.owner_revision = Some(owner.representation_revision);
                 Ok(record)
             }
+            // Raw and callback pointers are plain machine addresses (PROG-4).
             BuiltinType::Ptr | BuiltinType::FnPtr => {
-                unavailable(Some(6), format!("{} (foreign interop)", builtin_name(kind)))
+                Ok(self.scalar_record(key, ScalarKind::Pointer))
             }
             BuiltinType::Shape => unavailable(None, "Shape materialization as static data"),
             // A run-local task-table word (CONC-2); a handle nobody awaited needs no drop:

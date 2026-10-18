@@ -36,6 +36,18 @@ pub fn run_path_native_with_config(
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
     let mut loaded = crate::load_program(path)?;
     loaded.check_for_execution()?;
+    if matches!(
+        launch,
+        Some(
+            crate::HostLaunch::Replay(_)
+                | crate::HostLaunch::Live {
+                    record: Some(_),
+                    ..
+                }
+        )
+    ) {
+        loaded.refuse_unreplayable()?;
+    }
     let host = hirsel_rt::host_launch::HostGrants::new(std::io::sink());
     let host = match launch {
         Some(crate::HostLaunch::Live {
