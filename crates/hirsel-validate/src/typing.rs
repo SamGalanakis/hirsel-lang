@@ -1719,6 +1719,44 @@ impl<'a> Checker<'a> {
                     || self.bound(types, p.ty, Bound::Plain, self.generic_declarations())
             })
     }
+    /// CLO-4: a taken capture of a whole slot moves that slot's current
+    /// content. A `let mut` slot's row is its storage contract, aliased and
+    /// unsendable at the root; the capture row may claim the root uniqueness
+    /// and data sendability its current content has, which flow proves as it
+    /// does for `let t = take s`. The rest of the row stays exact.
+    fn taken_current_content(
+        &self,
+        store: &mut TypeStore,
+        expected: TypeId,
+        actual: TypeId,
+        operand: &Operand,
+    ) -> TypeId {
+        if operand.usage != UseKind::Take
+            || !self.body.places[operand.place.0 as usize]
+                .projection
+                .is_empty()
+        {
+            return actual;
+        }
+        let claimed = store.get(expected).unwrap().modes.clone();
+        let mut row = store.get(actual).unwrap().clone();
+        if claimed.uniqueness == Uniqueness::Unique {
+            row.modes.uniqueness = Uniqueness::Unique;
+        }
+        if claimed.sendability == Sendability::Sendable
+            && !matches!(
+                row.kind,
+                TypeKind::Function(_)
+                    | TypeKind::Builtin {
+                        kind: BuiltinType::Iter,
+                        ..
+                    }
+            )
+        {
+            row.modes.sendability = Sendability::Sendable;
+        }
+        store.push(row)
+    }
     fn capture_type(&mut self, source: &TypeStore, root: TypeId, operand: &Operand) {
         let actual = self.place_type(operand.place);
         if matches!(operand.usage, UseKind::Borrow | UseKind::Mut) {
@@ -1739,7 +1777,18 @@ impl<'a> Checker<'a> {
             return;
         }
         if operand.usage != UseKind::Copy {
-            self.cross_type(source, root, actual, &[], "closure capture");
+            let mut target = self.working_store();
+            let matches = self
+                .imported(source, root, &mut target, &[])
+                .is_some_and(|expected| {
+                    let actual = self.taken_current_content(&mut target, expected, actual, operand);
+                    self.compatible(&mut target, expected, actual, TypeRelation::Exact)
+                });
+            if !matches {
+                self.error(ViolationKind::TypeMismatch {
+                    entity: "closure capture",
+                });
+            }
             return;
         }
         let mut target = self.working_store();

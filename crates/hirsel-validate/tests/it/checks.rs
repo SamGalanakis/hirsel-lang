@@ -998,6 +998,90 @@ fn take_capture_types_remain_exact() {
     }]);
 }
 
+/// A whole `let mut` slot whose storage row is aliased and unsendable, holding
+/// a fresh string (shared first when `shared`), taken into a once closure whose
+/// capture row claims `uniqueness` and `sendability` (CLO-4).
+fn taken_slot_capture_fixture(
+    uniqueness: Uniqueness,
+    sendability: Sendability,
+    shared: bool,
+) -> Fixture {
+    let mut f = Fixture::string();
+    let mut actions = vec![drop(1)];
+    let mut failure = 1;
+    if shared {
+        let alias = f.slot(TypeKind::Primitive(Primitive::String), Storage::Local);
+        f.assign(alias, Rvalue::Use(copy(1)), 1);
+        actions.insert(0, drop(alias));
+        failure = f.cleanup(actions.clone());
+    }
+    let mut nested = Fixture::unit();
+    nested.definition.types = f.definition.types.clone();
+    nested.body().locals[0].ty = f.body().result;
+    nested.body().places[0].ty = f.body().result;
+    nested.body().result = f.body().result;
+    let slot = nested.slot(TypeKind::Primitive(Primitive::String), Storage::Capture);
+    let capture_ty = nested.body().places[slot as usize].ty;
+    let mut capture_ty = nested.definition.types.get(capture_ty).unwrap().clone();
+    capture_ty.modes.uniqueness = uniqueness;
+    capture_ty.modes.sendability = sendability;
+    let capture_ty = nested.definition.types.push(capture_ty);
+    nested.body().locals[slot as usize].ty = capture_ty;
+    nested.body().places[slot as usize].ty = capture_ty;
+    let cleanup = nested.cleanup(vec![drop(slot)]);
+    nested.body().blocks[0].terminator = ret(0, cleanup);
+    f.definition.types = nested.definition.types;
+    f.definition.bodies.push(nested.definition.bodies.remove(0));
+
+    let mut fun = match function_signature("ignored", vec![], TypeKind::Tuple(vec![].into())).kind {
+        SignatureKind::Function(fun) => fun,
+        _ => unreachable!(),
+    };
+    fun.result = f.body().result;
+    let closure = f.slot(TypeKind::Function(fun), Storage::Temporary);
+    let ty = f.body().places[closure as usize].ty;
+    let mut row = f.definition.types.get(ty).unwrap().clone();
+    row.modes.multiplicity = Multiplicity::Once;
+    let ty = f.definition.types.push(row);
+    f.body().places[closure as usize].ty = ty;
+    f.body().locals[closure as usize].ty = ty;
+    f.assign(
+        closure,
+        Rvalue::Closure {
+            body: BodyId(1),
+            captures: vec![take(1)],
+            destination: Destination::Inferred,
+        },
+        failure,
+    );
+    actions.insert(0, drop(closure));
+    let cleanup = f.cleanup(actions);
+    f.body().blocks[0].terminator = ret(0, cleanup);
+    f
+}
+
+#[test]
+fn take_capture_of_a_mutable_slot_claims_its_current_content() {
+    taken_slot_capture_fixture(Uniqueness::Unique, Sendability::Sendable, false).valid();
+    taken_slot_capture_fixture(Uniqueness::Aliased, Sendability::NotSendable, false).valid();
+    taken_slot_capture_fixture(Uniqueness::Aliased, Sendability::NotSendable, true).valid();
+}
+
+#[test]
+fn take_capture_claims_need_current_unique_and_sendable_content() {
+    // Shared content is neither unique nor sendable: flow refutes each claim.
+    taken_slot_capture_fixture(Uniqueness::Unique, Sendability::NotSendable, true).broken(vec![
+        ViolationKind::TypeMismatch {
+            entity: "value modes",
+        },
+    ]);
+    taken_slot_capture_fixture(Uniqueness::Aliased, Sendability::Sendable, true).broken(vec![
+        ViolationKind::TypeMismatch {
+            entity: "closure capture",
+        },
+    ]);
+}
+
 #[test]
 fn returning_a_closure_cannot_outlive_its_borrowed_source() {
     let mut f = closure_fixture();

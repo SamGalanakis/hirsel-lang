@@ -1,0 +1,20 @@
+// rule: CLO-4
+// expect: run
+// "An owning once scope-body parameter may take captures without becoming global."
+// The minimized twin: a `let mut` binding's current content is unique and
+// sendable, so the scope body takes it as such and extends it in place.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let mut bytes: List[u8] = []
+  list.push(mut bytes, 7u8)
+  let total = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let mut owned = take bytes
+      list.push(mut owned, 8u8)
+      list.len(owned)
+    }
+  )
+  failure.check(total == 2u64, Arithmetic())
+  Ok(())
+}

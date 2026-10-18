@@ -833,6 +833,25 @@ impl Checker<'_> {
                 }
                 let mut store = self.working_store();
                 if let Ok(expected) = hirsel_types::import_type(&child_types, root, &mut store) {
+                    // A taken whole slot's capture row may claim sendability
+                    // its storage row lacks; only current content proves it.
+                    let claimed = store.get(expected).unwrap();
+                    let stored = self.definition.types.get(self.place_type(value.place));
+                    if value.usage == UseKind::Take
+                        && claimed.modes.sendability == Sendability::Sendable
+                        && !erased_environment(&claimed.kind)
+                        && stored.unwrap().modes.sendability != Sendability::Sendable
+                    {
+                        let current = self.transferred_type(state, value, &mut store);
+                        if store.get(current).unwrap().modes.sendability != Sendability::Sendable {
+                            self.flow_error(
+                                report,
+                                ViolationKind::TypeMismatch {
+                                    entity: "closure capture",
+                                },
+                            );
+                        }
+                    }
                     self.mode_transfer_in(
                         state,
                         &mut store,

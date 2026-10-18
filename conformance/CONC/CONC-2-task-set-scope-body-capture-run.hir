@@ -1,0 +1,35 @@
+// rule: CONC-2
+// expect: run
+// "A handle or set passed `take` to a parameter declared `Task` or `TaskSet` ... takes its
+// obligation along."
+// The accepted twin of CONC-2-task-set-scope-body-capture-bad: the nested scope body
+// hands the `let mut` task set it took to a function taking `TaskSet`.
+fn first(s: Scope, take set: TaskSet[u64] of s) -> u64 {
+  let mut owned = take set
+  let value = task.await_at(s, mut owned, 0u64)
+  task.cancel_all(s, take owned)
+  value
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let total = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let mut set: TaskSet[u64] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> u64 {
+            5
+          }
+        )
+      )
+      first(s, take set)
+    }
+  )
+  failure.check(total == 5u64, Arithmetic())
+  Ok(())
+}
