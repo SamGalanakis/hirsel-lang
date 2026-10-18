@@ -349,17 +349,61 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
   `FinalizeBegin` and `FinalizeEnd`) is shielded, as the runtime's finalizer shield makes it:
   no cancellation check (check_canceled, send, receive, spawn) observes its cancellation. The
   shield lives in the task's own stack, so it swaps with the task.
-- H grants no clock (`io.monotonic_clock` is `NotGranted()`), so no H run holds a `Deadline`
-  and none reaches `task.scope_until`'s `$intrinsic.TaskScopeEnterUntil` or
-  `TaskScopeExitUntil`; a hand-built unit calling either is Unsupported. Scope deadlines are
-  checked by the interpreter under virtual time and by the native runtime on the host clock.
-- When every task waits and none is parked on a source that can complete, the run is Blocked
-  (CONC-8): it stops with no cleanup and no terminal audit, and its observation says `blocked`.
+- `$intrinsic.TaskScopeEnterUntil` arms its scope's deadline (a `Deadline` record: the clock
+  handle, then the Instant's ticks), and a deadline already reached expires the scope before
+  the entry's yield. An expiry cancels the scope `DeadlineExceeded`, as it does each child,
+  and the children of scopes its owner entered inside it `Parent`. `TaskScopeExitUntil` exits
+  as `TaskScopeExit` does and returns whether the deadline fired, including while the exit
+  waited for children. Every poll expires the due scope deadlines first, by deadline with
+  ties in entry order, then polls the parked tasks: other waits in park order, then timer
+  waits by deadline with ties in park order.
+- When every task waits, none is parked on a source that can complete and no deadline is
+  pending, the run is Blocked (CONC-8): it stops with no cleanup and no terminal audit, and
+  its observation says `blocked`.
 - While the scheduler holds a spawned closure it is a harness root. Its environment is
   released after the child's frame returns.
 - Each task's failure chain is swapped with it, and merged into the parent's at a join or a
   scope exit.
 - The holder audits read every task's stack.
+
+`exec/clock.rs` is time (CONC-3, the core clock library). Time in H is abstract: no host
+clock is read, a reading is only ever a value the run's virtual time or a fired deadline
+produced, and no Instant arithmetic exists beyond the model's `instant.ticks` and
+`instant.checked_add`. The model grants monotonic clocks and owns the run's one virtual
+reading (`Operations::monotonic`, `advance_monotonic`); H owns what waits for it:
+
+- A timer wait not yet due (`OpOutcome::Wait`, from `clock.sleep_until`) parks its task, which
+  yields first. A poll completes it when its task is canceled (the model's `canceled`
+  outcome) or the reading reached its deadline (the operation is performed again); the task
+  then runs the call again and takes that completion, its yield spent.
+- A scope deadline is armed by `TaskScopeEnterUntil` (above).
+- `OpOutcome::Deadline` is an operation racing its own deadline (`proc.run` with
+  `Some(deadline)`): it completes, or times out when the deadline fires first.
+
+A run follows the deterministic simulation's virtual time, as the interpreter does: the
+reading moves only when no task is runnable, to the earliest pending timer wait or scope
+deadline, so a pending deadline is an event source and never leaves the run Blocked, and a
+racing operation completes (a scripted run takes no time). Its observation must equal the
+interpreter's. On a host, any pending deadline may pass while any operation runs, so H
+explores the other order too. A timer choice point is each operation (capability or task
+operation) a task starts, not resumes, while a deadline is pending, and each racing operation
+no other pending deadline precedes. `fault_campaign` runs once per choice point of the clean
+run with `Config::fire` naming it: there the reading jumps to the earliest pending deadline
+before the operation proceeds, so a scope deadline expires before the operation checks its
+cancellation, a sleeper wakes at the next poll, or the racing operation times out. After the
+firing the run follows virtual time again. Each such run must pass every check and the
+terminal audit, or be Blocked; its observation is another legal schedule's and is not
+compared. One early firing per run bounds the exploration, as one injected failure per run
+bounds fault injection; two early firings in one run, and clock samples other than the
+virtual and fired readings, are not explored. `tests/it/clock.rs` holds two hand-built
+controls whose leak lies only where the deadline fires first (a scope deadline cancelling a
+sleep, a run timing out): the clean run and every injected failure pass, the fired run finds
+the leak, and each fixed twin passes every run.
+
+The driver's model grants a monotonic clock only when its launch says so
+(`hirsel_driver::native::HeapWorld`); a wall clock is never granted. A host (non-scripted)
+process child, and a Main launch's scripted network or process world, remain outside H's
+model: their operations are Unsupported.
 
 `exec/channels.rs` is the runtime's channel table (CONC-6). Each queued message is a harness
 root, a send and a receive move it out of and into the bodies' `Option` slots, and the last

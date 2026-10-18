@@ -42,6 +42,8 @@ pub struct Run {
     pub output: Vec<u8>,
     /// Failure-capable sites executed (the fault-injection domain).
     pub sites: u64,
+    /// Timer choice points executed (the early-firing domain, `Config::fire`).
+    pub choices: u64,
     /// Executor steps completed or attempted, for diagnostic-localisation controls.
     pub steps: u64,
     pub trace: Trace,
@@ -84,6 +86,7 @@ pub fn run<S: Stage>(
     Run {
         output: machine.output.clone(),
         sites: machine.sites,
+        choices: machine.choices,
         steps: machine.steps,
         trace: machine.ledger.trace.clone(),
         counters: machine.ledger.counters,
@@ -110,23 +113,74 @@ fn blocked(result: Result<Audit, Violation>, output: &[u8]) -> Result<Audit, Vio
     }
 }
 
-/// A clean run, then one run per failure-capable site with that site failed.
+/// A clean run, then one run per failure-capable site with that site failed, and one per
+/// timer choice point with the earliest pending deadline fired there.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Campaign {
     pub clean: Run,
     pub injected: Vec<(u64, Run)>,
+    /// Another legal schedule each: only their audits are compared, never their observations.
+    pub fired: Vec<(u64, Run)>,
+}
+
+/// What a campaign run changed from the clean run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Perturbation {
+    Clean,
+    /// The failure-capable site with this index failed.
+    Injected(u64),
+    /// The earliest pending deadline fired at the timer choice point with this index.
+    Fired(u64),
+}
+
+impl std::fmt::Display for Perturbation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Clean => Ok(()),
+            Self::Injected(site) => write!(f, " (failure injected at site {site})"),
+            Self::Fired(choice) => write!(f, " (deadline fired at timer choice {choice})"),
+        }
+    }
 }
 
 impl Campaign {
-    /// The first run whose audit failed, with its injected site.
-    pub fn first_violation(&self) -> Option<(Option<u64>, &Violation)> {
+    /// The first run whose audit failed, with what it changed.
+    pub fn first_violation(&self) -> Option<(Perturbation, &Violation)> {
         if let Err(v) = &self.clean.result {
-            return Some((None, v));
+            return Some((Perturbation::Clean, v));
         }
-        self.injected
+        let injected = self
+            .injected
             .iter()
-            .find_map(|(site, run)| run.result.as_ref().err().map(|v| (Some(*site), v)))
+            .map(|(site, run)| (Perturbation::Injected(*site), run));
+        let fired = self
+            .fired
+            .iter()
+            .map(|(choice, run)| (Perturbation::Fired(*choice), run));
+        injected
+            .chain(fired)
+            .find_map(|(p, run)| run.result.as_ref().err().map(|v| (p, v)))
     }
+}
+
+/// One run per timer choice point of `clean`, each firing the earliest pending deadline there.
+fn fire_campaign<S: Stage>(
+    program: &Program<S>,
+    entry: &DefPath,
+    args: &[Arg],
+    ops: &mut dyn FnMut() -> Box<dyn Operations>,
+    config: &Config,
+    clean: &Run,
+) -> Vec<(u64, Run)> {
+    (0..clean.choices)
+        .map(|choice| {
+            let config = Config {
+                fire: Some(choice),
+                ..config.clone()
+            };
+            (choice, run(program, entry, args, &mut *ops(), &config))
+        })
+        .collect()
 }
 
 /// `run` at Ready, the stage the driver executes, instantiated here once
@@ -143,8 +197,22 @@ pub fn run_ready(
 
 /// Fault-inject at each deterministic failure-capable site the clean run
 /// executed. Each injected run takes that site's failure edge and must pass
-/// the terminal audit on the failure path.
+/// the terminal audit on the failure path. Then fire the earliest pending
+/// deadline early at each timer choice point of the clean run; each of those
+/// runs must pass the terminal audit too.
 pub fn fault_campaign<S: Stage>(
+    program: &Program<S>,
+    entry: &DefPath,
+    args: &[Arg],
+    ops: &mut dyn FnMut() -> Box<dyn Operations>,
+    config: &Config,
+) -> Campaign {
+    let mut campaign = injection_campaign(program, entry, args, ops, config);
+    campaign.fired = fire_campaign(program, entry, args, ops, config, &campaign.clean);
+    campaign
+}
+
+fn injection_campaign<S: Stage>(
     program: &Program<S>,
     entry: &DefPath,
     args: &[Arg],
@@ -159,7 +227,7 @@ pub fn fault_campaign<S: Stage>(
     {
         let campaign = exec::fork_campaign(program, entry, args, &mut *model, config);
         if config.compare_campaigns {
-            let reference = fault_campaign(
+            let reference = injection_campaign(
                 program,
                 entry,
                 args,
@@ -184,7 +252,11 @@ pub fn fault_campaign<S: Stage>(
             (site, run(program, entry, args, &mut *ops(), &config))
         })
         .collect();
-    Campaign { clean, injected }
+    Campaign {
+        clean,
+        injected,
+        fired: Vec::new(),
+    }
 }
 
 /// `fault_campaign` at Ready, instantiated here once.

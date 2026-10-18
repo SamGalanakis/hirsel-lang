@@ -30,6 +30,7 @@ mod frozen_revision;
 mod generic_graph;
 mod growth_ir;
 mod header_diagnostics;
+mod heap_clock;
 mod host_io;
 mod incremental_positions;
 mod invalidation;

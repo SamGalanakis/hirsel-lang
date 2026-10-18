@@ -237,7 +237,7 @@ fn campaign(b: &Built) {
 fn first_injected_violation<S: Stage>(
     table: &LayoutTable,
     units: &[LirUnit<S>],
-) -> Option<(Option<u64>, hirsel_heapcheck::Violation)> {
+) -> Option<(hirsel_heapcheck::Perturbation, hirsel_heapcheck::Violation)> {
     let program = hirsel_heapcheck::Program {
         target: target(),
         layouts: table.clone(),

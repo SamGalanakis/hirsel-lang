@@ -14,6 +14,7 @@
 //! failure a child contributed. A child's closure is a harness root while the
 //! scheduler holds it, and its environment is released after its frame
 //! returns, as the runtime releases it.
+use super::clock::{CANCEL_DEADLINE, ScopeDeadline, Timer};
 use super::*;
 use std::collections::VecDeque;
 
@@ -48,6 +49,9 @@ pub(super) enum Wait {
     Detach(u32),
     /// A receive, parked until a poll found a message, a closed channel or a cancellation.
     Receive,
+    /// A timer wait, parked until a poll found it due or its task canceled; its completion is
+    /// the task's [`Timer`](super::clock::Timer).
+    Timer,
 }
 
 /// What a parked task waits for; its poll performs the wait's effect.
@@ -63,6 +67,8 @@ pub(super) enum Park {
         slot: Ptr,
         layout: LayoutId,
     },
+    /// A timer wait due at `until` (`clock.sleep_until`).
+    Timer { until: u64 },
 }
 
 /// A holding child's result: its slot, the slot's layout and its `None` image.
@@ -138,8 +144,12 @@ impl Task {
 #[derive(Clone)]
 struct Scope {
     generation: u32,
+    /// The task that entered it.
+    owner: u32,
     children: Vec<u32>,
     canceled: Option<u32>,
+    /// `task.scope_until`'s deadline (CONC-3).
+    deadline: Option<ScopeDeadline>,
 }
 
 #[derive(Clone)]
@@ -160,6 +170,11 @@ pub(super) struct Tasks {
     spawns: Vec<Option<Vec<u32>>>,
     /// The chain the last `task.isolate` caught, which its body reads.
     pub(super) isolated: Vec<(ObservedFailure, Vec<u32>)>,
+    /// Each task's suspended timer wait.
+    pub(super) timers: std::collections::BTreeMap<u32, Timer>,
+    /// The live scopes' deadlines that have not fired, as (deadline, scope): by deadline, ties
+    /// in entry order.
+    armed: std::collections::BTreeSet<(u64, u32)>,
 }
 
 fn handle(index: u32, generation: u32) -> u64 {
@@ -181,7 +196,9 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         .join(".");
     [
         "$intrinsic.TaskScopeEnter",
+        "$intrinsic.TaskScopeEnterUntil",
         "$intrinsic.TaskScopeExit",
+        "$intrinsic.TaskScopeExitUntil",
         "$intrinsic.TaskSpawn",
         "$intrinsic.TaskFinish",
         "$intrinsic.TaskJoin",
@@ -225,6 +242,8 @@ impl Tasks {
             channels: Default::default(),
             sync: Default::default(),
             isolated: Vec::new(),
+            timers: Default::default(),
+            armed: Default::default(),
             switch: None,
             spawns: Vec::new(),
         }
@@ -307,6 +326,45 @@ impl Tasks {
                     .as_ref()
                     .is_some_and(|t| matches!(t.state, State::Holding | State::Done))
             })
+        })
+    }
+    /// `scope`'s deadline fired (CONC-3): the scope is canceled `DeadlineExceeded`, as is each
+    /// of its children, and the children of the scopes its owner entered inside it `Parent`.
+    pub(super) fn expire(&mut self, scope: u32) -> Checked<()> {
+        let row = self.scope(scope)?;
+        let Some(deadline) = &mut row.deadline else {
+            return fail(V::Malformed, "a scope without a deadline expired");
+        };
+        if deadline.expired {
+            return Ok(());
+        }
+        deadline.expired = true;
+        let at = deadline.at;
+        row.canceled.get_or_insert(CANCEL_DEADLINE);
+        let (owner, children) = (row.owner, row.children.clone());
+        self.armed.remove(&(at, scope));
+        for child in children {
+            self.cancel(child, CANCEL_DEADLINE)?;
+        }
+        let inner: Vec<u32> = self
+            .task(owner)?
+            .scopes
+            .iter()
+            .skip_while(|&&s| s != scope)
+            .skip(1)
+            .copied()
+            .collect();
+        for inner in inner {
+            for child in self.scope(inner)?.children.clone() {
+                self.cancel(child, CANCEL_PARENT)?;
+            }
+        }
+        Ok(())
+    }
+    /// Each live scope's deadline that has not fired, by deadline with ties in entry order.
+    pub(super) fn armed(&self) -> impl Iterator<Item = (u32, ScopeDeadline)> + '_ {
+        self.armed.iter().filter_map(|&(_, index)| {
+            Some((index, self.scopes[index as usize].as_ref()?.deadline?))
         })
     }
     /// Park the running task on `park`.
@@ -522,6 +580,15 @@ impl<S: Stage> Machine<'_, S> {
         let arguments = self
             .pool(site.arguments, &self.unit(f.unit).pools.call_arguments)?
             .to_vec();
+        // A task operation the running task starts, not one it resumes, is a timer choice point.
+        let resumed = self.tasks.as_deref().is_some_and(|s| {
+            s.tasks[s.current as usize]
+                .as_ref()
+                .is_some_and(|t| t.wait.is_some())
+        });
+        if !resumed {
+            self.timer_choice()?;
+        }
         match name {
             "channel.open"
             | "sender.dup"
@@ -553,17 +620,48 @@ impl<S: Stage> Machine<'_, S> {
             name if name.starts_with("$intrinsic.Isolate") => {
                 self.isolate_operation(f, site, name, &arguments, normal)
             }
-            "$intrinsic.TaskScopeEnter" => {
+            "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeEnterUntil" => {
+                // The deadline's clock handle, then its Instant's ticks.
+                let deadline = match name {
+                    "$intrinsic.TaskScopeEnterUntil" => {
+                        let (clock, at) =
+                            self.deadline_words(f, &Self::task_argument(&arguments, 1)?)?;
+                        let now = self.ops.monotonic(clock).ok_or_else(|| {
+                            err(
+                                V::Malformed,
+                                "a scope deadline on a clock the model did not grant",
+                            )
+                        })?;
+                        Some((
+                            ScopeDeadline {
+                                clock,
+                                at,
+                                expired: false,
+                            },
+                            at <= now,
+                        ))
+                    }
+                    _ => None,
+                };
                 let s = self.scheduler();
                 let generation = s.fresh_generation();
+                let current = s.current;
                 s.scopes.push(Some(Scope {
                     generation,
+                    owner: current,
                     children: Vec::new(),
                     canceled: None,
+                    deadline: deadline.map(|(d, _)| d),
                 }));
                 let index = (s.scopes.len() - 1) as u32;
-                let current = s.current;
                 s.task(current)?.scopes.push(index);
+                if let Some((d, reached)) = deadline {
+                    s.armed.insert((d.at, index));
+                    // A deadline already reached cancels the scope before its body runs.
+                    if reached {
+                        s.expire(index)?;
+                    }
+                }
                 self.task_yield()?;
                 let result = site
                     .result
@@ -727,7 +825,7 @@ impl<S: Stage> Machine<'_, S> {
                     None => self.task_return(f, &arguments, None, normal),
                 }
             }
-            "$intrinsic.TaskScopeExit" => {
+            "$intrinsic.TaskScopeExit" | "$intrinsic.TaskScopeExitUntil" => {
                 let word = self.task_word(f, &Self::task_argument(&arguments, 0)?)?;
                 let error = match self.read_use(
                     f,
@@ -786,9 +884,31 @@ impl<S: Stage> Machine<'_, S> {
                         self.merge_chain(&own, chain);
                     }
                 }
-                self.scheduler().scopes[index as usize] = None;
+                // An exit removes the scope's deadline; whether it fired is the result.
+                let s = self.scheduler();
+                let deadline = s.scopes[index as usize].take().and_then(|row| row.deadline);
+                if let Some(d) = deadline {
+                    s.armed.remove(&(d.at, index));
+                }
+                let expired = deadline.map(|d| d.expired);
                 if self.failures.is_empty() {
-                    self.task_return(f, &arguments, None, normal)
+                    let result = match (name, expired) {
+                        ("$intrinsic.TaskScopeExitUntil", Some(expired)) => {
+                            let result = site.result.ok_or_else(|| {
+                                err(V::Malformed, "a deadline scope's exit without its flag")
+                            })?;
+                            Some((
+                                result,
+                                Val::Bits {
+                                    scalar: ScalarKind::Bool,
+                                    bits: u128::from(expired),
+                                },
+                            ))
+                        }
+                        ("$intrinsic.TaskScopeExit", None) => None,
+                        _ => return fail(V::Malformed, "a scope exits as another kind"),
+                    };
+                    self.task_return(f, &arguments, result, normal)
                 } else {
                     self.task_fail(f, &arguments, failure)
                 }
@@ -847,7 +967,15 @@ impl<S: Stage> Machine<'_, S> {
     /// Poll every parked task in park order: each whose wait is over has its
     /// effect performed and joins the back of the queue.
     fn poll_parked(&mut self) -> Checked<()> {
-        let parked = std::mem::take(&mut self.scheduler().parked);
+        // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
+        self.expire_due()?;
+        let s = self.scheduler();
+        let mut parked = std::mem::take(&mut s.parked);
+        // Timer waits by deadline, ties in park order, after the other waits in park order.
+        parked.sort_by_cached_key(|&task| match s.tasks[task as usize].as_ref()?.park? {
+            Park::Timer { until } => Some(until),
+            _ => None,
+        });
         let mut waiting = Vec::with_capacity(parked.len());
         for task in parked {
             if self.poll(task)? {
@@ -883,6 +1011,7 @@ impl<S: Stage> Machine<'_, S> {
                 State::Ready | State::Parked => Ok(false),
             },
             Some(Park::Exit(scope)) => Ok(s.settled(scope)),
+            Some(Park::Timer { .. }) => self.poll_timer(task),
             Some(Park::Receive {
                 channel,
                 slot,
@@ -907,6 +1036,11 @@ impl<S: Stage> Machine<'_, S> {
         loop {
             let s = self.scheduler();
             let Some(next) = s.runnable.pop_front() else {
+                // Virtual time: a pending deadline is an outstanding event source.
+                if self.advance()? {
+                    self.poll_parked()?;
+                    continue;
+                }
                 // CONC-8: the run's outcome, which `run` reports as Blocked.
                 return fail(V::Blocked, "every task of the run is blocked (CONC-8)");
             };
@@ -1144,7 +1278,7 @@ impl<S: Stage> Machine<'_, S> {
         f.shields() || stack_shields(&self.stack)
     }
     /// Whether a task polled while parked is shielded, from its kept stack.
-    fn task_shielded(&mut self, task: u32) -> Checked<bool> {
+    pub(super) fn task_shielded(&mut self, task: u32) -> Checked<bool> {
         if task == self.scheduler().current {
             return Ok(stack_shields(&self.stack));
         }

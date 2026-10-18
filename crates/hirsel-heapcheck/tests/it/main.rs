@@ -2,6 +2,7 @@
 mod arena;
 mod box_payload;
 mod capture_mask;
+mod clock;
 mod defuse;
 mod entry_return;
 #[path = "../fixtures/mod.rs"]

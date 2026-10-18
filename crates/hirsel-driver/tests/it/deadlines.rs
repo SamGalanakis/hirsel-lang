@@ -2,8 +2,9 @@
 //! deadline cancels its scope during a sleep, a channel receive, a network read and a
 //! streaming child's read; one that never fires leaves no timer; nested deadlines expire in
 //! either order; a deadline already reached cancels the scope before its body runs. Each run
-//! replays exactly from its recorded events.
-use crate::source_std;
+//! replays exactly from its recorded events, and H checks it with every deadline also fired
+//! early at each of its timer choice points (`crate::heap_clock`).
+use crate::{heap_clock, source_std};
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_interp::observation::Effect;
@@ -45,10 +46,15 @@ fn run(program: &str, config: SimulationConfig) -> (String, Vec<String>) {
             inputs: events.clone(),
             ..run
         },
-        config,
+        config.clone(),
     )
     .unwrap();
     assert_eq!(replay.observation, execution.observation);
+    // H's model has no scripted network or process world for a Main launch.
+    if config.net.is_none() && config.process.is_none() {
+        let expected = native::Observation::of_reference(execution.observation.as_ref().unwrap());
+        heap_clock::check(&mut engine, &expected, config.monotonic);
+    }
     (
         String::from_utf8(execution.observation.unwrap().output).unwrap(),
         events.iter().map(|e| e.operation.clone()).collect(),

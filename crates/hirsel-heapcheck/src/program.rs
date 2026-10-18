@@ -213,6 +213,7 @@ pub enum OpValue {
     },
 }
 
+#[derive(Clone, Debug)]
 pub enum OpOutcome {
     /// Completion with taken operands consumed by the external operation itself.
     /// Ordinals must name Take arguments; H removes their storage and closes handle IDs.
@@ -228,6 +229,21 @@ pub enum OpOutcome {
     },
     /// A deterministic language failure with its rule.
     Fail(String),
+    /// A timer wait (`clock.sleep_until`) on monotonic clock `clock` that is not yet due: its
+    /// task suspends until the reading reaches `until`, then the operation is performed again
+    /// (`call`), or completes `canceled` once its task is canceled first.
+    Wait {
+        clock: u64,
+        until: u64,
+    },
+    /// An operation that races a deadline of monotonic clock `clock` at `at` (`proc.run`):
+    /// it ends as `completed` unless the deadline fires first, then as `timed_out`.
+    Deadline {
+        clock: u64,
+        at: u64,
+        completed: Box<OpOutcome>,
+        timed_out: Box<OpOutcome>,
+    },
     /// The model has no implementation: the run is an `Unsupported` violation.
     Unsupported,
 }
@@ -274,6 +290,13 @@ pub trait Operations {
     fn yielded(&mut self) -> bool {
         false
     }
+    /// The run's virtual monotonic reading, when `clock` is a monotonic clock this model
+    /// granted. The model owns the reading; H owns what waits for it and when it advances.
+    fn monotonic(&self, _clock: u64) -> Option<u64> {
+        None
+    }
+    /// Advance the virtual monotonic reading to `ticks`; it never moves backward.
+    fn advance_monotonic(&mut self, _ticks: u64) {}
     /// Implicit File close/AtomicFile abort or network close, after H has checked its
     /// linear identity. `Some(rule)`: the close raised that language failure, after
     /// appending its report to `output`.
@@ -322,6 +345,8 @@ pub struct Config {
     pub compare_campaigns: bool,
     /// Harness-owned context handles, open for the whole run.
     pub context_handles: Vec<(u64, String)>,
+    /// Fire the earliest pending deadline at the timer choice point with this execution index.
+    pub fire: Option<u64>,
 }
 
 /// Default executor instruction budget: tooling under ratified spec issue #34,
@@ -343,6 +368,7 @@ impl Default for Config {
             compare_campaigns: std::env::var_os("HIRSEL_HEAPCHECK_COMPARE_CAMPAIGNS")
                 .is_some_and(|v| v == "1"),
             context_handles: Vec::new(),
+            fire: None,
         }
     }
 }

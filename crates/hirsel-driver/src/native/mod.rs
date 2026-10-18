@@ -31,7 +31,7 @@ pub use emit::{
     Backend, KIND_BUG, check_runtime_calls, emit, emit_clif, emit_ir, failure_codes, failure_rules,
 };
 pub use executable::{BuildProfile, build_path_native, build_path_native_backend};
-pub use heap::{HeapRun, heap_campaign, run_heap};
+pub use heap::{HeapRun, HeapWorld, heap_campaign, heap_campaign_in, run_heap, run_heap_in};
 pub use hirsel_lir::emission::OptLevel;
 pub use hirsel_lir::layout_types::TargetSpec;
 pub use hirsel_llvm::{ProfileSource, ProfileSources, c_call};

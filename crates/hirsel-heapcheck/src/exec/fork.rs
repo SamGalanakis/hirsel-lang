@@ -23,6 +23,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             failures: self.failures.clone(),
             unanchored_failures: self.unanchored_failures.clone(),
             sites: self.sites,
+            choices: self.choices,
             steps: self.steps,
             runtime_iterators: self.runtime_iterators.clone(),
             version_slots: self.version_slots.clone(),
@@ -97,6 +98,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         Run {
             output: self.output.clone(),
             sites: self.sites,
+            choices: self.choices,
             steps: self.steps,
             trace: self.ledger.trace.clone(),
             counters: self.ledger.counters,
@@ -198,6 +200,7 @@ pub(crate) fn campaign<S: Stage>(
     Campaign {
         clean: machine.report(result),
         injected,
+        fired: Vec::new(),
     }
 }
 

@@ -496,7 +496,12 @@ impl Io {
 mod tests {
     use super::*;
     fn model(tls: OpValue, connections: Vec<OpValue>) -> (Io, OpValue) {
-        let mut io = Io::for_launch(&crate::native::link::LaunchKind::Test, 7, 0);
+        let mut io = Io::for_launch(
+            &crate::native::link::LaunchKind::Test,
+            7,
+            0,
+            &super::super::HeapWorld::default(),
+        );
         let peers = OpValue::Sequence(vec![OpValue::Aggregate(vec![
             OpValue::Bytes(b"example.com".to_vec()),
             bits(ScalarKind::U16, 80u16),

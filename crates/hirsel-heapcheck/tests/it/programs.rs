@@ -277,7 +277,7 @@ fn a_failure_cleanup_that_skips_a_release_is_found_at_its_site() {
     let campaign = fault_campaign(&p, &path("main"), &[], &mut printer, &Config::default());
     ok(&campaign.clean);
     let (site, violation) = campaign.first_violation().expect("the leak is found");
-    assert_eq!(site, Some(1));
+    assert_eq!(site, hirsel_heapcheck::Perturbation::Injected(1));
     assert_eq!(violation.kind, ViolationKind::LeakedCredit);
 }
 

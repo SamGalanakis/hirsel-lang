@@ -35,6 +35,9 @@ struct Io {
     random: hirsel_rt::io::RandomSource,
     /// The last call was a capability operation (a scheduling point).
     yielded: bool,
+    /// The virtual monotonic reading when the launch grants a monotonic clock. H owns what
+    /// waits for it and when it advances (`hirsel-heapcheck/src/exec/clock.rs`).
+    monotonic: Option<u64>,
     detached_directories: BTreeSet<u64>,
     resolved_directories: BTreeMap<u64, String>,
     /// Each failure site's line and column, for a program that isolates (FAIL-2).
@@ -63,9 +66,15 @@ fn positions(program: &ReadyProgram, sites: &Sites<'_>) -> Positions {
 }
 
 impl Io {
-    fn for_launch(kind: &super::link::LaunchKind, test_seed: u64, random_seed: u64) -> Self {
+    fn for_launch(
+        kind: &super::link::LaunchKind,
+        test_seed: u64,
+        random_seed: u64,
+        world: &HeapWorld,
+    ) -> Self {
         let mut io = Self::new();
         io.test_seed = test_seed;
+        io.monotonic = world.monotonic;
         io.random = hirsel_rt::io::RandomSource::SplitMix64(random_seed);
         io.network = hirsel_rt::io_net_script::ScriptIo::new(
             matches!(kind, super::link::LaunchKind::Test).then_some(test_seed),
@@ -93,6 +102,7 @@ impl Io {
             network_handles: BTreeMap::new(),
             random: hirsel_rt::io::RandomSource::SplitMix64(0),
             yielded: false,
+            monotonic: None,
             detached_directories: BTreeSet::new(),
             resolved_directories: BTreeMap::new(),
             positions: Positions::default(),
@@ -152,6 +162,16 @@ impl Operations for Io {
     fn yielded(&mut self) -> bool {
         std::mem::take(&mut self.yielded)
     }
+    fn monotonic(&self, clock: u64) -> Option<u64> {
+        matches!(self.grants.get(&clock), Some(IoGrant::Monotonic))
+            .then_some(self.monotonic)
+            .flatten()
+    }
+    fn advance_monotonic(&mut self, ticks: u64) {
+        if let Some(now) = &mut self.monotonic {
+            *now = (*now).max(ticks);
+        }
+    }
     /// The runtime's cancellation points (`hirsel-rt/src/host_waits.rs`): a canceled stdin
     /// read, print or waiting network request completes `Canceled(cause)` with no effect,
     /// before its handle is consulted, and is still a capability operation.
@@ -198,6 +218,17 @@ impl Operations for Io {
             ) => {
                 return None;
             }
+            // WaitError::Canceled(cause).
+            (Some("clock"), "sleep_until", _) => OpValue::Variant {
+                tag: 1,
+                value: Box::new(OpValue::Variant {
+                    tag: 1,
+                    value: Box::new(OpValue::Variant {
+                        tag: cause,
+                        value: Box::new(OpValue::Unit),
+                    }),
+                }),
+            },
             // A canceled wait drops the Child it took.
             (Some("child"), "wait", [_, c]) => {
                 self.yielded = true;
@@ -222,6 +253,9 @@ impl Operations for Io {
         }
         if let Some(outcome) = text(module, &path.name, args) {
             return outcome;
+        }
+        if let Some(value) = instant(module, &path.name, args) {
+            return OpOutcome::Value(value);
         }
         // Everything below is a capability operation, as the runtime's Io entries are.
         self.yielded = true;
@@ -291,6 +325,7 @@ impl Operations for Io {
 
 #[derive(Clone)]
 enum IoGrant {
+    Monotonic,
     Stdin,
     Stderr,
     Root,
@@ -319,6 +354,38 @@ enum IoGrant {
         identity: std::sync::Arc<()>,
     },
 }
+/// The pure Instant operations: no capability, no scheduling point.
+fn instant(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpValue> {
+    Some(match (module, name, args) {
+        (Some("instant"), "ticks", [OpValue::Handle(ticks)]) => OpValue::Bits {
+            scalar: ScalarKind::U64,
+            bits: u128::from(*ticks),
+        },
+        (
+            Some("instant"),
+            "checked_add",
+            [
+                OpValue::Handle(_),
+                OpValue::Handle(ticks),
+                OpValue::Bits {
+                    scalar: ScalarKind::U64,
+                    bits,
+                },
+            ],
+        ) => match ticks.checked_add(*bits as u64) {
+            Some(ticks) => OpValue::Variant {
+                tag: 1,
+                value: Box::new(OpValue::Handle(ticks)),
+            },
+            None => OpValue::Variant {
+                tag: 0,
+                value: Box::new(OpValue::Unit),
+            },
+        },
+        _ => return None,
+    })
+}
+
 fn io_ok(value: OpValue) -> OpValue {
     OpValue::Variant {
         tag: 0,
@@ -493,6 +560,11 @@ impl Io {
                 scalar: ScalarKind::U64,
                 bits: 0,
             },
+            (Some("io"), "monotonic_clock", [OpValue::Handle(IO_HANDLE)])
+                if self.monotonic.is_some() =>
+            {
+                io_ok(OpValue::Handle(self.grant(IoGrant::Monotonic)))
+            }
             (Some("io"), "monotonic_clock" | "wall_clock", [OpValue::Handle(IO_HANDLE)]) => {
                 OpValue::Variant {
                     tag: 1,
@@ -502,6 +574,25 @@ impl Io {
                     }),
                 }
             }
+            (Some("clock"), "monotonic", [OpValue::Handle(clock)]) => {
+                match self.monotonic(*clock) {
+                    Some(now) => io_ok(OpValue::Handle(now)),
+                    None => return Some(OpOutcome::Fail("CAP-2".into())),
+                }
+            }
+            // A deadline not yet reached suspends the task: H owns the wait.
+            (Some("clock"), "sleep_until", [OpValue::Handle(clock), OpValue::Handle(until)]) => {
+                match self.monotonic(*clock) {
+                    Some(now) if now >= *until => io_ok(OpValue::Unit),
+                    Some(_) => {
+                        return Some(OpOutcome::Wait {
+                            clock: *clock,
+                            until: *until,
+                        });
+                    }
+                    None => return Some(OpOutcome::Fail("CAP-2".into())),
+                }
+            }
             (Some("io"), name @ ("random" | "tasks"), [OpValue::Handle(IO_HANDLE)]) => {
                 let grant = match name {
                     "random" => IoGrant::Random,
@@ -509,31 +600,6 @@ impl Io {
                 };
                 io_ok(OpValue::Handle(self.grant(grant)))
             }
-            (Some("instant"), "ticks", [OpValue::Handle(ticks)]) => OpValue::Bits {
-                scalar: ScalarKind::U64,
-                bits: u128::from(*ticks),
-            },
-            (
-                Some("instant"),
-                "checked_add",
-                [
-                    OpValue::Handle(_),
-                    OpValue::Handle(ticks),
-                    OpValue::Bits {
-                        scalar: ScalarKind::U64,
-                        bits,
-                    },
-                ],
-            ) => match ticks.checked_add(*bits as u64) {
-                Some(ticks) => OpValue::Variant {
-                    tag: 1,
-                    value: Box::new(OpValue::Handle(ticks)),
-                },
-                None => OpValue::Variant {
-                    tag: 0,
-                    value: Box::new(OpValue::Unit),
-                },
-            },
             (
                 Some("random"),
                 "bytes",
@@ -1342,6 +1408,8 @@ pub struct HeapRun {
     pub observation: Observation,
     /// Failure-capable sites the run executed: the fault campaign's domain.
     pub sites: u64,
+    /// Timer choice points the run executed: the early-firing domain.
+    pub choices: u64,
     /// Instrumentation only; no check reads them.
     pub counters: Counters,
 }
@@ -1370,13 +1438,14 @@ fn heap_program(program: &ReadyProgram) -> hirsel_heapcheck::Program<hirsel_lir:
     }
 }
 
-fn violation(entry: &DefPath, v: &hirsel_heapcheck::Violation, site: Option<u64>) -> NativeError {
-    let injected = site.map_or(String::new(), |s| {
-        format!(" (failure injected at site {s})")
-    });
+fn violation(
+    entry: &DefPath,
+    v: &hirsel_heapcheck::Violation,
+    run: hirsel_heapcheck::Perturbation,
+) -> NativeError {
     NativeError {
         definition: Some(entry.clone()),
-        ..NativeError::new(StageName::Heap, format!("{:?}: {v}{injected}", v.kind))
+        ..NativeError::new(StageName::Heap, format!("{:?}: {v}{run}", v.kind))
     }
 }
 
@@ -1434,11 +1503,29 @@ fn observation(
     })
 }
 
+/// What a launch grants H's model beyond its entry's handles.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HeapWorld {
+    /// A monotonic clock (`io.monotonic_clock`), whose virtual reading starts here, as the
+    /// deterministic simulation's does.
+    pub monotonic: Option<u64>,
+}
+
 /// Run `entry` once and audit it.
 pub fn run_heap(
     program: &ReadyProgram,
     entry: &DefPath,
     sites: &Sites<'_>,
+) -> Result<HeapRun, NativeError> {
+    run_heap_in(program, entry, sites, &HeapWorld::default())
+}
+
+/// Run `entry` once in `world` and audit it.
+pub fn run_heap_in(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    sites: &Sites<'_>,
+    world: &HeapWorld,
 ) -> Result<HeapRun, NativeError> {
     let heap = heap_program(program);
     let kind = program
@@ -1453,23 +1540,43 @@ pub fn run_heap(
             .map(|root| Arg::Handle(super::link::root_handle(*root)))
             .collect(),
     };
-    let mut io = Io::for_launch(kind, program.launch.test_seed, program.launch.random_seed);
+    let mut io = Io::for_launch(
+        kind,
+        program.launch.test_seed,
+        program.launch.random_seed,
+        world,
+    );
     io.positions = positions(program, sites);
     let run = hirsel_heapcheck::run_ready(&heap, entry, &args, &mut io, &config(None, kind));
-    let audit = run.result.as_ref().map_err(|v| violation(entry, v, None))?;
+    let audit = run
+        .result
+        .as_ref()
+        .map_err(|v| violation(entry, v, hirsel_heapcheck::Perturbation::Clean))?;
     Ok(HeapRun {
         observation: observation(audit, &run.output, sites)?,
         sites: run.sites,
+        choices: run.choices,
         counters: run.counters,
     })
 }
 
-/// A clean run, then one run per failure-capable site with that site failed:
-/// every failure path must pass the terminal audit. Returns the clean run.
+/// A clean run, then one run per failure-capable site with that site failed and one per
+/// timer choice point with a deadline fired there: every one must pass the terminal audit.
+/// Returns the clean run.
 pub fn heap_campaign(
     program: &ReadyProgram,
     entry: &DefPath,
     sites: &Sites<'_>,
+) -> Result<HeapRun, NativeError> {
+    heap_campaign_in(program, entry, sites, &HeapWorld::default())
+}
+
+/// [`heap_campaign`] in `world`.
+pub fn heap_campaign_in(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    sites: &Sites<'_>,
+    world: &HeapWorld,
 ) -> Result<HeapRun, NativeError> {
     let heap = heap_program(program);
     let kind = program
@@ -1490,7 +1597,12 @@ pub fn heap_campaign(
         entry,
         &args,
         &mut || {
-            let mut io = Io::for_launch(kind, program.launch.test_seed, program.launch.random_seed);
+            let mut io = Io::for_launch(
+                kind,
+                program.launch.test_seed,
+                program.launch.random_seed,
+                world,
+            );
             io.positions = positions.clone();
             Box::new(io)
         },
@@ -1503,6 +1615,7 @@ pub fn heap_campaign(
     Ok(HeapRun {
         observation: observation(audit, &campaign.clean.output, sites)?,
         sites: campaign.clean.sites,
+        choices: campaign.clean.choices,
         counters: campaign.clean.counters,
     })
 }

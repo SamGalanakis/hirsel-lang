@@ -200,6 +200,22 @@ is open. A unit with no open element checks as it did before revision 24, and th
 ABI is unchanged. The rewrite is an optimization: without it, such byte lists are ordinary
 lists, and no program's meaning changes.
 
+### Time in the checked heap executor
+
+The checked heap executor audits programs that hold a monotonic clock, its timer waits,
+scope deadlines and a `proc.run` deadline ([CONC-3](concurrency.md#conc-3-cancellation)),
+without a host clock. Its run follows the deterministic simulation's virtual time and must
+observe what the interpreter does. A host may let any pending deadline pass while any
+operation runs, so the executor also runs the program once per timer choice point (an
+operation a task starts while a deadline is pending, or a run racing its own deadline) with
+the earliest pending deadline fired there: the reading jumps to that deadline before the
+operation proceeds, so the deadline cancels the operation, wakes a sleeper first or times
+the run out. Each such run must pass the executor's terminal audit; its observation belongs
+to another legal schedule and is not compared. One early firing per run bounds the
+exploration, as one injected failure per run bounds fault injection. Readings are only the
+virtual ones and the deadlines a run armed, so samples stay monotonic per clock. A host
+process child is outside the executor's model.
+
 **Runtime.** One runtime library provides counted allocation and release, region and
 arena storage, hashing (SipHash-1-3 keyed from the run's hash seed), `Io` providers,
 recording and replay, and the network and TLS providers. Compiled code reaches it only

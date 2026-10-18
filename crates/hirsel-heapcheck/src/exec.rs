@@ -32,6 +32,7 @@ use soa::ColumnRow;
 mod fork;
 pub(crate) use fork::campaign as fork_campaign;
 mod channels;
+mod clock;
 mod holders;
 mod isolate;
 mod sync;
@@ -244,6 +245,8 @@ pub(crate) struct Machine<'p, S> {
     failures: Vec<ObservedFailure>,
     unanchored_failures: std::collections::BTreeSet<usize>,
     pub sites: u64,
+    /// Timer choice points executed: the early-firing domain ([`clock`]).
+    pub choices: u64,
     pub(crate) steps: u64,
     runtime_iterators: Snapshot<std::sync::Arc<[OpValue]>>,
     version_slots: std::sync::Arc<Vec<Vec<Option<SlotId>>>>,
@@ -382,6 +385,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             arena_no_drop: Default::default(),
             open_elements: BTreeMap::new(),
             tasks: None,
+            choices: 0,
             full_recount_due: false,
         }
     }
@@ -7566,16 +7570,44 @@ impl<'p, S: Stage> Machine<'p, S> {
                 other => return fail(V::Unsupported, format!("operation operand {other:?}")),
             });
         }
-        let shielded = self.shielded(f);
-        let cause = self.tasks.as_deref().and_then(|s| s.canceled(shielded));
-        let outcome = match cause.and_then(|cause| self.ops.canceled(&id, &args, cause)) {
+        let outcome = match self.timer_resumed()? {
             Some(outcome) => outcome,
-            None => self.ops.call(&id, &args, &mut self.output),
+            None => {
+                self.timer_choice()?;
+                let shielded = self.shielded(f);
+                let cause = self.tasks.as_deref().and_then(|s| s.canceled(shielded));
+                let outcome = match cause.and_then(|cause| self.ops.canceled(&id, &args, cause)) {
+                    Some(outcome) => outcome,
+                    None => self.ops.call(&id, &args, &mut self.output),
+                };
+                let outcome = match outcome {
+                    OpOutcome::Wait { clock, until } => {
+                        // The wait yields when it parks; its call runs again once it is over.
+                        self.ops.yielded();
+                        self.timer_wait(clock, until, id, args)?;
+                        return Ok(Control::Continue);
+                    }
+                    OpOutcome::Deadline {
+                        clock,
+                        at,
+                        completed,
+                        timed_out,
+                    } => {
+                        if self.deadline_choice(clock, at)? {
+                            *timed_out
+                        } else {
+                            *completed
+                        }
+                    }
+                    outcome => outcome,
+                };
+                // Every capability operation is a scheduling point (CONC-1).
+                if self.ops.yielded() {
+                    self.task_yield()?;
+                }
+                outcome
+            }
         };
-        // Every capability operation is a scheduling point (CONC-1).
-        if self.ops.yielded() {
-            self.task_yield()?;
-        }
         let outcome = match outcome {
             OpOutcome::Updated {
                 value,
@@ -7755,6 +7787,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
             }
             OpOutcome::Complete { .. } => unreachable!(),
+            OpOutcome::Wait { .. } | OpOutcome::Deadline { .. } => {
+                return fail(V::Malformed, "a nested timer outcome");
+            }
             OpOutcome::Updated { .. } => {
                 return fail(V::Malformed, "unexpected exclusive operation update");
             }

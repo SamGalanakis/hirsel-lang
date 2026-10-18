@@ -1,5 +1,7 @@
 //! Timer waits under the simulator's virtual time (core clock.sleep_until, std time.sleep).
-use crate::source_std;
+//! H checks each run without injected clock faults, with every deadline also fired early at
+//! each of its timer choice points (`crate::heap_clock`).
+use crate::{heap_clock, source_std};
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_interp::observation::Effect;
@@ -38,10 +40,15 @@ fn run(source: &str, config: SimulationConfig) -> RunObservation {
             inputs: events.clone(),
             ..run
         },
-        config,
+        config.clone(),
     )
     .unwrap();
     assert_eq!(replay.observation, execution.observation);
+    // H's model injects no clock fault.
+    if config.faults.is_empty() {
+        let expected = native::Observation::of_reference(execution.observation.as_ref().unwrap());
+        heap_clock::check(&mut engine, &expected, config.monotonic);
+    }
     RunObservation {
         operations: events.iter().map(|e| e.operation.clone()).collect(),
     }
