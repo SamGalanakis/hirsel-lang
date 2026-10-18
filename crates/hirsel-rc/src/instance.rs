@@ -1653,7 +1653,14 @@ fn taken_capture_locals(body: &hirsel_tir::Body) -> BTreeSet<u32> {
                 take(left);
                 take(right);
             }
-            Rvalue::Construct { fields, .. } => {
+            Rvalue::Construct {
+                constructor,
+                fields,
+                ..
+            } => {
+                if let hirsel_tir::Constructor::SortedMap { by } = constructor {
+                    take(by);
+                }
                 for f in fields {
                     take(&f.value);
                 }

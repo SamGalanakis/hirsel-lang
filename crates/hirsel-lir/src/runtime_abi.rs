@@ -168,12 +168,12 @@ pub const LAYOUT_FROZEN: u32 = 32;
 /// The payload is a sequence's (descriptor version 7): a deep copy into an arena tracks
 /// a block of it (MEM-6) unless it lies below a [`LAYOUT_UNTRACKED_BELOW`] block.
 pub const LAYOUT_SEQUENCE: u32 = 64;
-/// A block of this payload (a SortedMap's, a Slots', a closure environment's) keeps the
+/// A block of this payload (a Slots', a closure environment's) keeps the
 /// sequences it reaches untracked when a deep copy puts them in an arena (descriptor
 /// version 7).
 pub const LAYOUT_UNTRACKED_BELOW: u32 = 128;
-/// A Map's or Set's block payload (descriptor version 8, MEM-6): its entries List at
-/// payload offset 0, then its index. Its own block charges nothing. A deep copy into a
+/// A Map's, Set's or SortedMap's block payload (descriptor version 8, MEM-6): its entries List at
+/// payload offset 0, then its index when it has one. Its own block charges nothing. A deep copy into a
 /// bounded arena tracks the block and its entries List, charged as any List, and neither
 /// tracks nor charges its index.
 pub const LAYOUT_KEYED: u32 = 256;

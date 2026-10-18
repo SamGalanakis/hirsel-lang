@@ -8409,3 +8409,119 @@ fn a_unique_part_receives_a_currently_unique_value() {
         entity: "constructor field",
     }]);
 }
+
+/// This IR cannot be written in source: it claims one dictionary's brand while
+/// constructing from another dictionary of the same Order[K] type.
+#[test]
+fn sorted_map_constructor_replays_dictionary_identity() {
+    let mut f = Fixture::unit();
+    let mut order = capability_signature("Order");
+    order.definition = DefPath::core("Order");
+    let SignatureKind::Type(declared) = &mut order.kind else {
+        unreachable!()
+    };
+    declared.generics = vec![GenericParameter::Type {
+        name: "K".into(),
+        bounds: vec![].into(),
+    }];
+    declared.capability = None;
+    declared.authority = AuthoritySummary::inert();
+    declared.bounds = vec![Bound::Copyable];
+    f.signatures.insert(order.definition.clone(), order);
+    let scalar = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::U64)));
+    let order_kind = TypeKind::Named {
+        definition: DefPath::core("Order"),
+        arguments: vec![GenericArgument::Type(scalar)].into(),
+    };
+    let by = param(&mut f, order_kind.clone());
+    let other = param(&mut f, order_kind);
+    let scalar_by = param(&mut f, TypeKind::Primitive(Primitive::U64));
+    // Order's real callable payload may allocate during cleanup; the witness
+    // borrows that contract rather than manufacturing NoallocDrop evidence.
+    for place in [by, other] {
+        revise_comparison_place(&mut f, place, |row| {
+            row.drop_allocation = DropAllocation::MayAllocate
+        });
+    }
+    let map = f.slot(
+        TypeKind::Builtin {
+            kind: BuiltinType::SortedMap,
+            arguments: vec![GenericArgument::Type(scalar), GenericArgument::Type(scalar)].into(),
+        },
+        Storage::Local,
+    );
+    let map_ty = f.body().places[map as usize].ty;
+    let mut row = f.definition.types.get(map_ty).unwrap().clone();
+    row.brand.alternatives = vec![Origin {
+        root: OriginRoot::Parameter(ParameterRef::body(f.body().parameter_scope, ParamId(0))),
+        fields: Default::default(),
+    }]
+    .into();
+    let row = f.definition.types.push(row);
+    f.body().locals[map as usize].ty = row;
+    f.body().places[map as usize].ty = row;
+    f.assign(
+        map,
+        Rvalue::Construct {
+            constructor: Constructor::SortedMap {
+                by: operand(by, UseKind::Borrow),
+            },
+            fields: vec![],
+            destination: Destination::Inferred,
+        },
+        0,
+    );
+    let cleanup = f.cleanup(vec![drop(map)]);
+    f.body().blocks[0].terminator = ret(0, cleanup);
+    owner_signature(&mut f, PassingMode::Borrow);
+    f.valid();
+    let accepted = f.definition.clone();
+    let Rvalue::Construct {
+        constructor: Constructor::SortedMap { by },
+        ..
+    } = f.body().rvalues.last_mut().unwrap()
+    else {
+        unreachable!()
+    };
+    *by = operand(other, UseKind::Borrow);
+    f.broken(vec![ViolationKind::InvalidConstructor]);
+    f.definition = accepted.clone();
+    let Rvalue::Construct {
+        constructor: Constructor::SortedMap { by },
+        ..
+    } = f.body().rvalues.last_mut().unwrap()
+    else {
+        unreachable!()
+    };
+    by.usage = UseKind::Copy;
+    assert!(f.kinds().contains(&ViolationKind::InvalidConstructor));
+    f.definition = accepted.clone();
+    let Rvalue::Construct { fields, .. } = f.body().rvalues.last_mut().unwrap() else {
+        unreachable!()
+    };
+    fields.push(ConstructField {
+        field: 0,
+        value: copy(0),
+    });
+    assert!(f.kinds().contains(&ViolationKind::InvalidConstructor));
+    f.definition = accepted;
+    let scope = f.body().parameter_scope;
+    revise_comparison_place(&mut f, map, |row| {
+        row.brand.alternatives[0].root =
+            OriginRoot::Parameter(ParameterRef::body(scope, ParamId(2)))
+    });
+    let Rvalue::Construct {
+        constructor: Constructor::SortedMap { by },
+        ..
+    } = f.body().rvalues.last_mut().unwrap()
+    else {
+        unreachable!()
+    };
+    *by = operand(scalar_by, UseKind::Borrow);
+    assert!(f.kinds().contains(&ViolationKind::TypeMismatch {
+        entity: "constructor field"
+    }));
+}

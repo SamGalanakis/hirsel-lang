@@ -309,7 +309,7 @@ never a physical layout, and no header, extent, slab, segment or padding is char
 |---|---|
 | `box T` | `T` |
 | a `List` or `Array` literal of `n` elements of `T` | `n` times `T` |
-| a `Map[K, V]` or `Set[K]` of `n` entries | `n` times `K` plus `V`, or `K` |
+| a `Map[K, V]`, `SortedMap[K, V]` or `Set[K]` of `n` entries | `n` times `K` plus `V`, or `K` |
 | a `String` or `Bytes` | its length |
 | a closure environment | the sum of its captures |
 | `copy_to(a, x)` | every block of `x`'s tree at its length, one charge before anything is copied |
@@ -324,7 +324,10 @@ extent words unused) charges nothing itself, its entries List at payload offset 
 tracked and charged as any List, so an insert of a new key charges one entry through the
 entries' push and the first write after a copy-on-write copy of the shared block charges the
 entry count, and its index is neither tracked nor charged. `map.empty()` and `set.empty()` construct
-that block where their relation places them (PROV-4), as a literal does. An Io read into an
+that block where their relation places them (PROV-4), as a literal does.
+SortedMap uses the same `LAYOUT_KEYED` contract, with only its entries List at offset 0
+and no index: `sorted_map.empty(by)` places both blocks in the expected arena,
+and a vacant insert charges its entry before taking its arguments. An Io read into an
 arena List (`stdin.read`, `file.read`, `net.read`) is charged its maximum bytes before its
 effect (runtime ABI 13): compiled code first calls `hirsel_rt_v2_arena_reserve`, which charges
 them and copies or relocates the List as a push does, so the read appends in place. An

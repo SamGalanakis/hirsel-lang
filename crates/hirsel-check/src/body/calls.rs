@@ -1017,7 +1017,7 @@ impl Checker<'_, '_> {
                 }
             }
         }
-        // `map.empty()` and `set.empty()` are the Map and Set constructors:
+        // `map.empty()`, `set.empty()` and `sorted_map.empty(by)` are the keyed constructors:
         // their result is placed by its expected relation (PROV-4).
         let placed = !bad
             && matches!(&target, CallTarget::Definition(path)

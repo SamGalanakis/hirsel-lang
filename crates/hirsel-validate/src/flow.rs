@@ -4765,6 +4765,16 @@ impl Checker<'_> {
                             ..
                         } = rvalue
                         {
+                            let witness;
+                            let fields = if let Constructor::SortedMap { by } = constructor {
+                                witness = vec![ConstructField {
+                                    field: 0,
+                                    value: by.clone(),
+                                }];
+                                &witness
+                            } else {
+                                fields
+                            };
                             let arguments: Vec<_> = fields
                                 .iter()
                                 .map(|field| CallArgument {
@@ -4897,10 +4907,20 @@ impl Checker<'_> {
                             origin_proof.insert(root.clone(), identities.clone());
                         }
                     }
-                    let mut sources: BTreeSet<_> = typing::operands(rvalue)
-                        .into_iter()
-                        .flat_map(|o| self.sources(model, state, o))
-                        .collect();
+                    let mut sources: BTreeSet<_> = if matches!(
+                        rvalue,
+                        Rvalue::Construct {
+                            constructor: Constructor::SortedMap { .. },
+                            ..
+                        }
+                    ) {
+                        BTreeSet::new()
+                    } else {
+                        typing::operands(rvalue)
+                            .into_iter()
+                            .flat_map(|o| self.sources(model, state, o))
+                            .collect()
+                    };
                     let authority = self.rvalue_authority(model, state, rvalue);
                     let unique = self.rvalue_unique(state, rvalue);
                     let fresh_receipt = self.rvalue_fresh_receipt(state, rvalue);

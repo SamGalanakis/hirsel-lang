@@ -601,3 +601,9 @@ work carry the selected policy explicitly, so temporary cleanup cannot recover a
 surrounding marked frame's attribution after a function-value boundary. Failure
 records retain the actual operation separately; existing anchored child failures
 and ordered cleanup causes keep their original sites.
+
+SortedMap keeps its arena storage tag on its entries sequence across comparator
+continuations. Once comparison succeeds, an `OperationResult::ArenaCharge`
+checks entry growth and any shared copy before completion transfers incoming
+owners. Comparator failure charges nothing; deep copy retags entries in the
+destination arena.

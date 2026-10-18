@@ -2145,6 +2145,7 @@ conformance/MEM/MEM-6-packed-list-push-charges-run.hir
 conformance/MEM/MEM-6-set-insert-charges-member-run.hir
 conformance/MEM/MEM-6-soa-list-push-charges-run.hir
 conformance/MEM/MEM-6-soa-list-push-run.hir
+conformance/MEM/MEM-6-sorted-map-arena-run.hir
 conformance/MEM/MEM-6-std-sorted-map-arena-get-run.hir
 conformance/MEM/MEM-6-stdin-read-charges-maximum-run.hir
 conformance/MEM/MEM-7-align-8.hir
@@ -3862,6 +3863,8 @@ conformance/PROV/PROV-4-plain-placement-inert.hir
 conformance/PROV/PROV-4-read-only-placement-annotated.hir
 conformance/PROV/PROV-4-read-only-placement-ok.hir
 conformance/PROV/PROV-4-signature-placement-names-arena-ok.hir
+conformance/PROV/PROV-4-sorted-map-placement-bad.hir
+conformance/PROV/PROV-4-sorted-map-placement-ok.hir
 conformance/PROV/PROV-4-spec-parse-signature.hir
 conformance/PROV/PROV-4-spec-push-signature.hir
 conformance/PROV/PROV-4-taken-arena-result-clause-bad.hir

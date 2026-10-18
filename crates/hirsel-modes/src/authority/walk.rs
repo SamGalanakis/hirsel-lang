@@ -905,7 +905,7 @@ impl<'a> Checker<'a> {
         if let ExprKind::Call { callee, arguments } = kind {
             let expected = context.and_then(|(_, expected, _)| expected);
             self.call(e, callee, &arguments, expected);
-            // PROV-4: `map.empty()` and `set.empty()` construct where their
+            // PROV-4: `map.empty()`, `set.empty()` and `sorted_map.empty(by)` construct where their
             // relation places them, as a literal does.
             if let (
                 Some(expected),

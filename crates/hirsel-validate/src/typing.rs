@@ -58,6 +58,13 @@ pub(super) fn operands(r: &Rvalue) -> Vec<&Operand> {
             vec![o]
         }
         Rvalue::Binary { left, right, .. } => vec![left, right],
+        Rvalue::Construct {
+            constructor: Constructor::SortedMap { by },
+            fields,
+            ..
+        } => std::iter::once(by)
+            .chain(fields.iter().map(|f| &f.value))
+            .collect(),
         Rvalue::Construct { fields, .. } => fields.iter().map(|f| &f.value).collect(),
         Rvalue::Closure { captures, .. } => captures.iter().collect(),
         _ => vec![],
@@ -2600,7 +2607,16 @@ impl<'a> Checker<'a> {
                 | Rvalue::Construct { .. }
                 | Rvalue::Closure { .. }
         ) || matches!(r, Rvalue::Unary { op, .. } if *op != U::Unique);
+        // SortedMap derives its brand from the dictionary; flow independently
+        // replays that identity in constructor_origin_types.
         if computed
+            && !matches!(
+                r,
+                Rvalue::Construct {
+                    constructor: Constructor::SortedMap { .. },
+                    ..
+                }
+            )
             && !self
                 .definition
                 .types
@@ -2901,6 +2917,19 @@ impl<'a> Checker<'a> {
                 destination: placement,
             } => {
                 self.construction_placement(ty, placement, "constructor placement");
+                let witness;
+                let fields = if let Constructor::SortedMap { by } = constructor {
+                    if !fields.is_empty() || by.usage != UseKind::Borrow {
+                        self.error(ViolationKind::InvalidConstructor);
+                    }
+                    witness = vec![ConstructField {
+                        field: 0,
+                        value: by.clone(),
+                    }];
+                    &witness
+                } else {
+                    fields
+                };
                 if matches!(constructor, Constructor::Map | Constructor::Set) {
                     let values = self
                         .static_data
@@ -3560,6 +3589,47 @@ impl<'a> Checker<'a> {
     ) -> Option<Vec<TypeId>> {
         let layout = self.layout(store, ty);
         let fields = match (constructor, layout) {
+            (
+                Constructor::SortedMap { .. },
+                Some(TypeKind::Builtin {
+                    kind: BuiltinType::SortedMap,
+                    arguments,
+                }),
+            ) => {
+                let [GenericArgument::Type(key), GenericArgument::Type(_)] = arguments.as_slice()
+                else {
+                    return None;
+                };
+                let mut order = Type::with_kind(TypeKind::Named {
+                    definition: DefPath::core("Order"),
+                    arguments: vec![GenericArgument::Type(*key)].into(),
+                });
+                order.modes.relation = Relation::environment();
+                let declaration = self.signatures.get(&DefPath::core("Order"))?;
+                let SignatureKind::Type(declared) = &declaration.kind else {
+                    return None;
+                };
+                order.drop_allocation = hirsel_types::declared_cleanup(
+                    declared,
+                    &declaration.types,
+                    &[GenericArgument::Type(*key)],
+                    |ty| store.get(ty).unwrap().drop_allocation.clone(),
+                );
+                let order = store.push(order);
+                let order = normalize_type_properties(
+                    store,
+                    order,
+                    &self.generic_declarations(),
+                    &mut |path| {
+                        Ok::<_, hirsel_types::QueryError>(
+                            self.signatures.get(path).cloned().map(std::sync::Arc::new),
+                        )
+                    },
+                )
+                .ok()?;
+                // The dictionary selects the brand; it is not an entry stored in the arena.
+                return Some(vec![order]);
+            }
             (Constructor::Tuple, Some(TypeKind::Tuple(ts))) => Some(ts.to_vec()),
             (Constructor::Box, Some(TypeKind::Box(t))) => Some(vec![t]),
             (Constructor::Record(path), Some(TypeKind::Record(fs))) => {
@@ -3717,6 +3787,16 @@ impl<'a> Checker<'a> {
         fields: &[ConstructField],
         origins: &super::flow_origins::CallOriginProof,
     ) {
+        let witness;
+        let fields = if let Constructor::SortedMap { by } = constructor {
+            witness = vec![ConstructField {
+                field: 0,
+                value: by.clone(),
+            }];
+            &witness
+        } else {
+            fields
+        };
         let mut store = self.working_store();
         let Some(expected) = self.constructor_layout(
             &mut store,
@@ -3726,6 +3806,30 @@ impl<'a> Checker<'a> {
         ) else {
             return;
         };
+        if matches!(constructor, Constructor::SortedMap { .. }) {
+            let result = super::flow_origins::canonical(
+                &mut store,
+                self.place_type(destination),
+                &origins.names,
+                &|o| self.arena_place(o),
+            )
+            .ok();
+            let brand = result.and_then(|ty| {
+                store
+                    .get(ty)?
+                    .brand
+                    .alternatives
+                    .first()
+                    .cloned()
+                    .filter(|_| store.get(ty).unwrap().brand.alternatives.len() == 1)
+            });
+            let by = origins
+                .arguments
+                .get(&ParameterRef::bound(hirsel_types::ParamId(0)));
+            if !brand.is_some_and(|brand| by.is_some_and(|by| by.identity == brand)) {
+                self.error(ViolationKind::InvalidConstructor);
+            }
+        }
         let siblings: BTreeMap<_, _> = origins
             .arguments
             .iter()

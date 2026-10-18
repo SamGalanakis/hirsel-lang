@@ -24,9 +24,9 @@
 //! `logical` size (per element: times its u64 count). A copy the budget does not cover
 //! returns [`STATUS_EXHAUSTED`] and copies nothing; the caller records the failure.
 //!
-//! Into a bounded arena, every copied sequence block ([`LAYOUT_SEQUENCE`]) and Map or Set block
+//! Into a bounded arena, every copied sequence block ([`LAYOUT_SEQUENCE`]) and Map, Set or SortedMap block
 //! ([`LAYOUT_KEYED`]) is a tracked arena block, unshared, except a Map's or Set's index and
-//! anything below a SortedMap, Slots or environment ([`LAYOUT_UNTRACKED_BELOW`]); the root is
+//! anything below Slots or an environment ([`LAYOUT_UNTRACKED_BELOW`]); the root is
 //! tracked when the caller says so. A Map's or Set's index is never charged. A detach of a
 //! tracked arena block copies it within its arena, charged its count.
 

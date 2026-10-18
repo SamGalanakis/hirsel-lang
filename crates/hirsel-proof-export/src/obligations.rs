@@ -5,8 +5,8 @@ use hirsel_diag::RuleId;
 use hirsel_span::Span;
 use hirsel_syntax::{BinaryOp, ContentHash, ContractKind, DefPath, UnaryOp};
 use hirsel_tir::{
-    BlockId, Body, BodyId, Callee, Definition, Instruction, InstructionKind, LocalId, Operand,
-    PlaceId, Projection, Rvalue, Terminator,
+    BlockId, Body, BodyId, Callee, Constructor, Definition, Instruction, InstructionKind, LocalId,
+    Operand, PlaceId, Projection, Rvalue, Terminator,
 };
 use hirsel_types::{Contract, Primitive, Signature, SignatureKind, TypeKind};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -529,6 +529,13 @@ fn rvalue_places(rvalue: &Rvalue) -> Vec<PlaceId> {
     match rvalue {
         Rvalue::Use(value) | Rvalue::Unary { value, .. } => vec![value.place],
         Rvalue::Binary { left, right, .. } => vec![left.place, right.place],
+        Rvalue::Construct {
+            constructor: Constructor::SortedMap { by },
+            fields,
+            ..
+        } => std::iter::once(by.place)
+            .chain(fields.iter().map(|f| f.value.place))
+            .collect(),
         Rvalue::Construct { fields, .. } => fields.iter().map(|f| f.value.place).collect(),
         Rvalue::Closure { captures, .. } => captures.iter().map(|c| c.place).collect(),
         Rvalue::Constant(_)

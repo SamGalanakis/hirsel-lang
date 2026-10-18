@@ -94,6 +94,13 @@ fn rvalue_places(rvalue: &tir::Rvalue) -> Vec<tir::PlaceId> {
     match rvalue {
         tir::Rvalue::Use(op) | tir::Rvalue::Unary { value: op, .. } => vec![op.place],
         tir::Rvalue::Binary { left, right, .. } => vec![left.place, right.place],
+        tir::Rvalue::Construct {
+            constructor: tir::Constructor::SortedMap { by },
+            fields,
+            ..
+        } => std::iter::once(by.place)
+            .chain(fields.iter().map(|f| f.value.place))
+            .collect(),
         tir::Rvalue::Construct { fields, .. } => fields.iter().map(|f| f.value.place).collect(),
         tir::Rvalue::Closure { captures, .. } => captures.iter().map(|c| c.place).collect(),
         tir::Rvalue::Constant(_)

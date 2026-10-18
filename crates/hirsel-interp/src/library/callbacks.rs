@@ -21,6 +21,7 @@ pub(super) enum Pending {
     Compare {
         by: Value,
         entries: Vec<Value>,
+        storage: Option<crate::value::ArenaStorage>,
         key: Value,
         action: Comparison,
         lo: usize,
@@ -206,7 +207,9 @@ impl Library {
             return Err(invalid("sorted_map.insert arguments"));
         };
         let mut fields = unpack(map.clone(), "SortedMap")?;
-        let entries = collection::elements(&fields.pop().unwrap(), BuiltinType::Array)?;
+        let sequence = fields.pop().unwrap();
+        let storage = sequence.arena_storage().cloned();
+        let entries = collection::elements(&sequence, BuiltinType::Array)?;
         // The dictionary brand is checked statically; runtime also keeps its value.
         if fields[0] != *by {
             return Err(invalid("sorted map comparator brand mismatch"));
@@ -215,10 +218,10 @@ impl Library {
         self.compare_next(
             by.clone(),
             entries,
+            storage,
             key.clone(),
             Comparison::Insert(value.clone()),
-            0,
-            hi,
+            0..hi,
         )
     }
     pub(super) fn sorted_access(
@@ -230,7 +233,9 @@ impl Library {
             return Err(invalid("sorted map access arguments"));
         };
         let mut fields = unpack(map.clone(), "SortedMap")?;
-        let entries = collection::elements(&fields.pop().unwrap(), BuiltinType::Array)?;
+        let sequence = fields.pop().unwrap();
+        let storage = sequence.arena_storage().cloned();
+        let entries = collection::elements(&sequence, BuiltinType::Array)?;
         if fields[0] != *by {
             return Err(invalid("sorted map comparator brand mismatch"));
         }
@@ -238,27 +243,28 @@ impl Library {
         self.compare_next(
             by.clone(),
             entries,
+            storage,
             key.clone(),
             if remove {
                 Comparison::Remove
             } else {
                 Comparison::Get
             },
-            0,
-            hi,
+            0..hi,
         )
     }
     fn compare_next(
         &mut self,
         by: Value,
         entries: Vec<Value>,
+        storage: Option<crate::value::ArenaStorage>,
         key: Value,
         action: Comparison,
-        lo: usize,
-        hi: usize,
+        range: std::ops::Range<usize>,
     ) -> Result<OperationResult, Error> {
+        let (lo, hi) = (range.start, range.end);
         if lo == hi {
-            return finish_comparison(by, entries, key, action, None, lo);
+            return finish_comparison(by, entries, storage, key, action, None, lo);
         }
         // SEM-5, spec #94: the fixed binary-search probes are observable through failure.
         let index = lo + (hi - lo) / 2;
@@ -275,6 +281,7 @@ impl Library {
             Pending::Compare {
                 by,
                 entries,
+                storage,
                 key: key.clone(),
                 action,
                 lo,
@@ -335,6 +342,7 @@ impl Library {
             Pending::Compare {
                 by,
                 entries,
+                storage,
                 key,
                 action,
                 lo,
@@ -352,12 +360,12 @@ impl Library {
                     return Err(invalid("comparator width"));
                 }
                 if order.signed() > 0 {
-                    return self.compare_next(by, entries, key, action, index + 1, hi);
+                    return self.compare_next(by, entries, storage, key, action, index + 1..hi);
                 }
                 if order.signed() < 0 {
-                    return self.compare_next(by, entries, key, action, lo, index);
+                    return self.compare_next(by, entries, storage, key, action, lo..index);
                 }
-                finish_comparison(by, entries, key, action, Some(index), index)
+                finish_comparison(by, entries, storage, key, action, Some(index), index)
             }
         }
     }
@@ -366,6 +374,7 @@ impl Library {
 fn finish_comparison(
     by: Value,
     mut entries: Vec<Value>,
+    mut storage: Option<crate::value::ArenaStorage>,
     key: Value,
     action: Comparison,
     found: Option<usize>,
@@ -373,6 +382,25 @@ fn finish_comparison(
 ) -> Result<OperationResult, Error> {
     let mut consumed = vec![];
     let mut released = vec![];
+    let writes = matches!(action, Comparison::Insert(_))
+        || matches!(action, Comparison::Remove) && found.is_some();
+    let charge = storage.as_mut().filter(|_| writes).map(|storage| {
+        let adds = u64::from(matches!(action, Comparison::Insert(_)) && found.is_none());
+        let copied = if storage.shared() {
+            entries.len() as u64
+        } else {
+            0
+        };
+        let charge = (
+            storage.arena,
+            storage.element.saturating_mul(adds.saturating_add(copied)),
+        );
+        if storage.shared() {
+            entries.iter().for_each(Value::share_arena_storage);
+            *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+        }
+        charge
+    });
     let update = !matches!(action, Comparison::Get);
     let value = match action {
         Comparison::Insert(value) => {
@@ -427,15 +455,21 @@ fn finish_comparison(
             }
         }
     };
-    Ok(OperationResult::Complete {
+    let mut updated = sorted(by, entries);
+    *updated.arena_storage_mut().unwrap() = storage;
+    let result = OperationResult::Complete {
         value,
         consumed,
         released,
-        arguments: if update {
-            vec![(1, sorted(by, entries))]
-        } else {
-            vec![]
+        arguments: if update { vec![(1, updated)] } else { vec![] },
+    };
+    Ok(match charge {
+        Some((arena, bytes)) => OperationResult::ArenaCharge {
+            arena,
+            bytes,
+            result: Box::new(result),
         },
+        None => result,
     })
 }
 

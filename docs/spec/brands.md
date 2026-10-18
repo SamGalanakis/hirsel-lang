@@ -76,9 +76,10 @@ read-only, nonallocating functions; no body inspection decides whether it is nec
 typical use is `push[T](a: Arena, mut xs: unique List[T] in a, take x: T in a)`.
 
 A relation names at most one arena directly. Constructors, among them `map.empty()` and
-`set.empty()`, building a value whose relation names an arena place fresh blocks there;
+`set.empty()` and `sorted_map.empty(by)`, building a value whose relation names an arena place fresh blocks there;
 otherwise they are placed by the expected type, else as [MEM-10](memory.md#mem-10-regions)
-chooses. A relation that names parameters places fresh blocks where they agree: one arena
+chooses. `sorted_map.empty(by)` carries a borrowed order witness, stores no entries,
+and brands its result with `by`'s identity. A relation that names parameters places fresh blocks where they agree: one arena
 reached by every named source is the destination, global sources add no bound, and distinct
 arenas or local sources without an arena leave the destination to MEM-10. A branch or match
 join holds the union of its arms' loan sets at every payload depth, so joining arena

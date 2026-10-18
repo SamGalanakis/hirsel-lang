@@ -342,6 +342,12 @@ pub struct CallbackWriteback {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperationResult {
+    /// Deferred arena charge, before transferring any incoming owners.
+    ArenaCharge {
+        arena: u64,
+        bytes: u64,
+        result: Box<OperationResult>,
+    },
     /// Runtime-owned wait. The evaluator retains the operation and all its loans.
     Park {
         token: u64,

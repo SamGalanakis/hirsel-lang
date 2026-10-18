@@ -1,0 +1,147 @@
+// rule: MEM-6
+// expect: run
+// stdout: 16 out of space
+// stdout: 1600 fits
+// stdout: 1599 out of space
+// stdout: remove fits
+// stdout: remove out of space
+// stdout: shared fits
+// stdout: shared out of space
+// stdout: copy fits
+// stdout: copy out of space
+// stdout: empty fits
+// stdout: nested fits
+// stdout: nested out of space
+// SortedMap's expected arena relation places its constructor; each new u64 pair costs 16.
+fn grow(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let by = u64.order
+      let mut m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
+      for i in 0u64..100u64 {
+        sorted_map.insert(by, mut m, i, i)
+      }
+      sorted_map.len(by, m)
+    }
+  )
+}
+
+// Replacing does not add an entry; removing neither charges nor refunds.
+fn removed(cap: u64) -> Result[u64, OutOfSpace] {
+  let by = u64.order
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
+      sorted_map.insert(by, mut m, 1u64, 1u64)
+      sorted_map.insert(by, mut m, 1u64, 9u64)
+      let _ = sorted_map.remove(by, mut m, 8u64)
+      let _ = sorted_map.remove(by, mut m, 1u64)
+      sorted_map.insert(by, mut m, 2u64, 2u64)
+      sorted_map.len(by, m)
+    }
+  )
+}
+
+// Sharing forces a copy on replacement, then a second write stays unshared.
+fn shared(cap: u64) -> Result[u64, OutOfSpace] {
+  let by = u64.order
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
+      sorted_map.insert(by, mut m, 1u64, 1u64)
+      let snapshot = copy m
+      sorted_map.insert(by, mut m, 1u64, 9u64)
+      sorted_map.insert(by, mut m, 2u64, 2u64)
+      sorted_map.len(by, snapshot) + sorted_map.len(by, m)
+    }
+  )
+}
+
+// Deep copies charge entries once, then grow in their destination arena.
+fn copied(cap: u64) -> Result[u64, OutOfSpace] {
+  let by = u64.order
+  let mut source: SortedMap[u64, u64] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut source, 1u64, 1u64)
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m = copy_to(a, source)
+      sorted_map.insert(by, mut m, 2u64, 2u64)
+      sorted_map.len(by, m)
+    }
+  )
+}
+
+// Empty creation costs no bytes, even when the arena budget is zero.
+fn empty() -> Result[u64, OutOfSpace] {
+  let by = u64.order
+  arena.bounded(
+    0u64,
+    fn(a: Arena) -> u64 {
+      let m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
+      sorted_map.len(by, m)
+    }
+  )
+}
+
+// Nested storage remains tracked; get shares the stored List before its write.
+fn list_value(cap: u64) -> Result[u64, OutOfSpace] {
+  let by = u64.order
+  let mut source: SortedMap[u64, List[u64]] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut source, 1u64, [1u64, 2u64])
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let m = copy_to(a, source)
+      match sorted_map.get(by, m, 1u64) {
+        Some(xs) => {
+          let mut ys = xs
+          list.push(mut ys, 3u64)
+          list.len(ys)
+        },
+        None => 0u64,
+      }
+    }
+  )
+}
+
+fn report(
+  stdout: Stdout,
+  fits: String,
+  over: String,
+  r: Result[u64, OutOfSpace],
+  value: u64
+) -> () {
+  if r == Ok(value) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  report(stdout, "16 fits\n", "16 out of space\n", grow(16u64), 100u64)
+  report(stdout, "1600 fits\n", "1600 out of space\n", grow(1600u64), 100u64)
+  report(stdout, "1599 fits\n", "1599 out of space\n", grow(1599u64), 100u64)
+  report(stdout, "remove fits\n", "remove out of space\n", removed(32u64), 1u64)
+  report(stdout, "remove fits\n", "remove out of space\n", removed(31u64), 1u64)
+  report(stdout, "shared fits\n", "shared out of space\n", shared(48u64), 3u64)
+  report(stdout, "shared fits\n", "shared out of space\n", shared(47u64), 3u64)
+  report(stdout, "copy fits\n", "copy out of space\n", copied(32u64), 2u64)
+  report(stdout, "copy fits\n", "copy out of space\n", copied(31u64), 2u64)
+  report(stdout, "empty fits\n", "empty out of space\n", empty(), 0u64)
+  report(stdout, "nested fits\n", "nested out of space\n", list_value(56u64), 3u64)
+  report(stdout, "nested fits\n", "nested out of space\n", list_value(55u64), 3u64)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

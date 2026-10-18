@@ -701,6 +701,26 @@ fn execute_frames(
                         });
                     }
                 }
+                OperationResult::ArenaCharge {
+                    arena,
+                    bytes,
+                    result,
+                } => {
+                    let result = match budgets.charge(arena, bytes) {
+                        Ok(()) => *result,
+                        Err(arena) => {
+                            crate::resources::discard_result(*result);
+                            budgets.exhausted(arena, execution.failures.len());
+                            OperationResult::Failed(failure(
+                                sources,
+                                state.anchor.site,
+                                "MEM-6",
+                                "OutOfSpace",
+                            )?)
+                        }
+                    };
+                    frame.operation = Some((result, state));
+                }
                 OperationResult::Complete {
                     value,
                     arguments,
@@ -2309,8 +2329,15 @@ fn rvalue(
                     .charge(arena, bytes)
                     .map_err(EvalError::OutOfSpace)?;
             }
-            let mut values = vec![None; fields.len()];
-            let mut parts = vec![Shadow::default(); fields.len()];
+            let (mut values, mut parts) = if let Constructor::SortedMap { by } = &constructor {
+                let (value, shadow) = frame.operand_shadow(by)?;
+                (vec![Some(value)], vec![shadow])
+            } else {
+                (
+                    vec![None; fields.len()],
+                    vec![Shadow::default(); fields.len()],
+                )
+            };
             for field in fields {
                 let (value, bound) = frame.operand_shadow(&field.value)?;
                 let slot = values
@@ -2335,7 +2362,10 @@ fn rvalue(
                     })
                 );
                 let block = match constructor {
-                    Constructor::Map | Constructor::Set | Constructor::Box => true,
+                    Constructor::Map
+                    | Constructor::Set
+                    | Constructor::SortedMap { .. }
+                    | Constructor::Box => true,
                     Constructor::Sequence => !inline_sequence,
                     _ => false,
                 };
@@ -2386,6 +2416,11 @@ fn rvalue(
                     Value::Sequence { kind, .. } => Some(*kind),
                     Value::Map { .. } => Some(hirsel_types::BuiltinType::Map),
                     Value::Set { .. } => Some(hirsel_types::BuiltinType::Set),
+                    Value::Record { definition, .. }
+                        if *definition == hirsel_syntax::DefPath::core("SortedMap") =>
+                    {
+                        Some(hirsel_types::BuiltinType::SortedMap)
+                    }
                     _ => None,
                 };
                 if let Some(kind) = kind {
@@ -3544,6 +3579,7 @@ fn release_operation_result(
                 ));
             }
         }
+        OperationResult::ArenaCharge { result, .. } => crate::resources::discard_result(*result),
         OperationResult::Failed(_)
         | OperationResult::UndefinedBehavior(_)
         | OperationResult::Park { .. }

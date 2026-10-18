@@ -6,8 +6,9 @@ use hirsel_types::QueryError;
 use hirsel_types::{Destination, GenericArgument, TypeId, TypeStore, UseKind};
 
 /// Borrowed-association receipts revised the formerly implicit v1 TIR schema;
-/// v3 adds diverging calls; v4 retains named-entry caller attribution.
-pub const TIR_VERSION: u32 = 4;
+/// v3 adds diverging calls; v4 retains named-entry caller attribution;
+/// v5 adds the order-bearing SortedMap constructor.
+pub const TIR_VERSION: u32 = 5;
 
 pub mod representation;
 
@@ -99,6 +100,10 @@ pub enum Constructor {
     Map,
     /// Materialized elements in insertion order.
     Set,
+    /// Empty ordered map; the borrowed dictionary selects its brand, not stored content.
+    SortedMap {
+        by: Operand,
+    },
     Box,
 }
 /// A constructor input maps source evaluation order to declaration layout (LANG-3/12).

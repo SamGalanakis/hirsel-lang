@@ -170,7 +170,11 @@ pub(crate) fn storage<'a>(
 ) -> Result<Option<ArenaStorage>, Error> {
     if !matches!(
         kind,
-        BuiltinType::List | BuiltinType::Array | BuiltinType::Map | BuiltinType::Set
+        BuiltinType::List
+            | BuiltinType::Array
+            | BuiltinType::Map
+            | BuiltinType::Set
+            | BuiltinType::SortedMap
     ) {
         return Ok(None);
     }
@@ -234,6 +238,23 @@ pub(crate) fn retag<'a>(
             continue;
         };
         let mismatch = || invalid("a copied value that does not match its type");
+        let value = if matches!(
+            &row.kind,
+            TypeKind::Builtin {
+                kind: BuiltinType::SortedMap,
+                ..
+            }
+        ) {
+            match value {
+                Value::Record { fields, .. } => fields
+                    .get_mut(1)
+                    .and_then(Option::as_mut)
+                    .ok_or_else(mismatch)?,
+                _ => return Err(mismatch()),
+            }
+        } else {
+            value
+        };
         match (&row.kind, value) {
             (TypeKind::Box(payload), Value::Box(fields)) => {
                 for field in fields.iter_mut().flatten() {
@@ -273,11 +294,16 @@ pub(crate) fn retag<'a>(
                         }
                     }
                     (
-                        BuiltinType::Map,
+                        BuiltinType::Map | BuiltinType::SortedMap,
                         [key, item, ..],
                         Value::Map {
                             entries,
                             arena: tag,
+                        }
+                        | Value::Sequence {
+                            elements: entries,
+                            arena: tag,
+                            ..
                         },
                     ) => {
                         let each = logical
@@ -376,6 +402,23 @@ pub(crate) fn copy<'a>(
         };
         let size = |ty: TypeId| logical.size(ty, &scope).map_err(logical_error);
         let mismatch = || invalid("a copied value that does not match its type");
+        let value = if matches!(
+            &row.kind,
+            TypeKind::Builtin {
+                kind: BuiltinType::SortedMap,
+                ..
+            }
+        ) {
+            match value {
+                Value::Record { fields, .. } => fields
+                    .get(1)
+                    .and_then(Option::as_ref)
+                    .ok_or_else(mismatch)?,
+                _ => return Err(mismatch()),
+            }
+        } else {
+            value
+        };
         match (&row.kind, value) {
             (TypeKind::Primitive(Primitive::String), Value::String(text)) => {
                 total = total.saturating_add(text.len() as u64);
@@ -423,7 +466,14 @@ pub(crate) fn copy<'a>(
                             work.push((element_value, *element, scope.clone()));
                         }
                     }
-                    (BuiltinType::Map, [key, item, ..], Value::Map { entries, .. }) => {
+                    (
+                        BuiltinType::Map | BuiltinType::SortedMap,
+                        [key, item, ..],
+                        Value::Map { entries, .. }
+                        | Value::Sequence {
+                            elements: entries, ..
+                        },
+                    ) => {
                         let each = size(*key)?.saturating_add(size(*item)?);
                         total = total.saturating_add(each.saturating_mul(entries.len() as u64));
                         for entry in entries.iter().flatten() {

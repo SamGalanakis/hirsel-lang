@@ -537,9 +537,10 @@ impl Builder<'_, '_> {
                                 Constructor::Sequence | Constructor::Map | Constructor::Set => {
                                     Part::Element
                                 }
-                                Constructor::Tuple | Constructor::Record(_) | Constructor::Box => {
-                                    Part::Field(field.field)
-                                }
+                                Constructor::Tuple
+                                | Constructor::Record(_)
+                                | Constructor::SortedMap { .. }
+                                | Constructor::Box => Part::Field(field.field),
                             };
                             held.extend(self.handed(content, &field.value).into_iter().map(
                                 |(path, loans)| {
@@ -627,6 +628,13 @@ fn rvalue_operands(rvalue: &Rvalue) -> Vec<&Operand> {
     match rvalue {
         Rvalue::Use(value) | Rvalue::Unary { value, .. } => vec![value],
         Rvalue::Binary { left, right, .. } => vec![left, right],
+        Rvalue::Construct {
+            constructor: Constructor::SortedMap { by },
+            fields,
+            ..
+        } => std::iter::once(by)
+            .chain(fields.iter().map(|field| &field.value))
+            .collect(),
         Rvalue::Construct { fields, .. } => fields.iter().map(|field| &field.value).collect(),
         Rvalue::Closure { captures, .. } => captures.iter().collect(),
         _ => vec![],

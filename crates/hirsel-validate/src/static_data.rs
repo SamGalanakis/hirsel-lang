@@ -185,6 +185,7 @@ impl Values {
             Constructor::Sequence => Node::Sequence(children),
             Constructor::Box if children.len() == 1 => Node::Box(children[0]),
             Constructor::Box => return None,
+            Constructor::SortedMap { .. } => return None,
             Constructor::Map => {
                 let entries = children
                     .into_iter()

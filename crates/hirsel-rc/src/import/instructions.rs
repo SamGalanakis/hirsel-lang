@@ -709,9 +709,23 @@ impl Importer<'_, '_> {
                 fields,
                 destination,
             } => {
+                if let tir::Constructor::SortedMap { by } = constructor {
+                    let by = self.operand(by)?;
+                    self.consumed(by);
+                    return self.keyed_construct(
+                        hirsel_types::BuiltinType::SortedMap,
+                        &[],
+                        self.destination_class(destination)?,
+                        ty,
+                    );
+                }
                 if matches!(constructor, tir::Constructor::Map | tir::Constructor::Set) {
                     return self.keyed_construct(
-                        matches!(constructor, tir::Constructor::Map),
+                        if matches!(constructor, tir::Constructor::Map) {
+                            hirsel_types::BuiltinType::Map
+                        } else {
+                            hirsel_types::BuiltinType::Set
+                        },
                         fields,
                         self.destination_class(destination)?,
                         ty,
@@ -809,7 +823,11 @@ impl Importer<'_, '_> {
                         variant: *variant,
                     },
                     tir::Constructor::Sequence => ConstructorKind::Sequence,
-                    tir::Constructor::Map | tir::Constructor::Set => unreachable!("handled above"),
+                    tir::Constructor::Map
+                    | tir::Constructor::Set
+                    | tir::Constructor::SortedMap { .. } => {
+                        unreachable!("handled above")
+                    }
                     tir::Constructor::Box => ConstructorKind::Box,
                 };
                 let site = self.out.tables.constructs.len();
@@ -1105,7 +1123,7 @@ impl Importer<'_, '_> {
     /// calls. No backend container-constructor vocabulary survives import.
     pub(super) fn keyed_construct(
         &mut self,
-        is_map: bool,
+        kind: hirsel_types::BuiltinType,
         fields: &[tir::ConstructField],
         destination: DestinationClass,
         ty: LirTypeId,
@@ -1149,7 +1167,12 @@ impl Importer<'_, '_> {
         }
         let symbol = self.symbol(
             SymbolKind::Type,
-            &hirsel_syntax::DefPath::core(if is_map { "Map" } else { "Set" }),
+            &hirsel_syntax::DefPath::core(match kind {
+                hirsel_types::BuiltinType::Map => "Map",
+                hirsel_types::BuiltinType::Set => "Set",
+                hirsel_types::BuiltinType::SortedMap => "SortedMap",
+                _ => return malformed("keyed constructor kind"),
+            }),
             None,
         );
         let site = self.out.tables.constructs.len();
@@ -1182,11 +1205,7 @@ impl Importer<'_, '_> {
             anchor: (INSTRUCTION_DROP, self.statement_action()),
         };
         self.failure.before.insert(0, release.clone());
-        let kind = if is_map {
-            hirsel_types::BuiltinType::Map
-        } else {
-            hirsel_types::BuiltinType::Set
-        };
+        let is_map = kind == hirsel_types::BuiltinType::Map;
         let candidates: Vec<_> = self
             .store
             .iter()

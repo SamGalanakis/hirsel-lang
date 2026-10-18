@@ -101,12 +101,13 @@ Evidence is current for an obligation exactly when its recorded `(ObligationId, 
 equals the export's. The export header names the `TIR_VERSION`, compiler version, spec hash
 and interface version that produced it; a consumer that pins a checker also records them.
 
-## The export: `hirsel.tir.export.v2`
+## The export: `hirsel.tir.export.v3`
 
 ### PS-8: Encoding
 
-Version 2 carries caller-attribution declaration metadata and the explicit tracked
-body set and indirect-call boundaries of TIR version 4. Imports reject earlier formats.
+Version 3 carries the order-bearing empty SortedMap constructor of TIR version 5,
+as well as caller-attribution declaration metadata and the explicit tracked body set
+and indirect-call boundaries. Imports reject earlier formats.
 
 The export is one canonical text in the S-expression form of the `hirsel-codec` crate: one
 spelling per value, so decode-then-encode is byte-identical and two runs of one build on one
@@ -128,7 +129,7 @@ iteration order, file id, type-id provenance, address or host path appears.
 
 ### PS-9: Contents
 
-- **Header:** the format `hirsel.tir.export.v2`, `TIR_VERSION`, compiler version, spec hash,
+- **Header:** the format `hirsel.tir.export.v3`, `TIR_VERSION`, compiler version, spec hash,
   interface version, and the launch entry with its semantic program revision when the
   program declares one.
 - **Definitions,** sorted by `DefPath`: path, location table, TIR, TIR digest, references

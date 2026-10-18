@@ -644,6 +644,7 @@ snapshot_enum!(Constructor {
     Sequence,
     Map,
     Set,
+    SortedMap { by },
     Box
 } in Cx);
 snapshot_struct!(ConstructField { field, value } in Cx);

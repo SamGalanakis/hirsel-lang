@@ -61,6 +61,7 @@ impl Drop for OperationState {
 }
 pub(crate) fn discard_result(result: crate::OperationResult) {
     match result {
+        crate::OperationResult::ArenaCharge { result, .. } => discard_result(*result),
         crate::OperationResult::Complete {
             value,
             arguments,

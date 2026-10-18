@@ -1,0 +1,19 @@
+// rule: PROV-4
+// expect: accept
+// The result and binding supply the constructor's expected placement.
+fn direct(a: Arena, by: Order[u64]) -> SortedMap[u64, u64] of by in a {
+  sorted_map.empty(by)
+}
+
+fn keep(a: Arena, by: Order[u64]) -> SortedMap[u64, u64] of by in a {
+  let m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)
+  m
+}
+
+fn on_heap(by: Order[u64]) -> SortedMap[u64, u64] of by {
+  sorted_map.empty(by)
+}
+
+fn generic[K, V](a: Arena, by: Order[K]) -> SortedMap[K, V] of by in a {
+  sorted_map.empty(by)
+}

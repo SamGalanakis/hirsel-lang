@@ -70,3 +70,8 @@ the entry and its own internal contract bodies. Ordinary closures and their
 contracts remain separate invocation boundaries. Indirect
 calls retain whether they are internal contract calls or source function-value
 invocations. V derives this set from the independently supplied signature and clause producers.
+
+TIR revision 5 adds `Constructor::SortedMap { by }`: the Order operand selects its brand,
+its stored fields are empty,
+and the ordinary Construct destination places its hidden empty entries storage.
+V independently checks the dictionary type and result brand against its value identity.

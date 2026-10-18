@@ -231,12 +231,14 @@ pub fn arena_parameter(
     }
 }
 
-/// The Map or Set a call of `path` constructs empty: `map.empty()` and
+/// The keyed collection a call of `path` constructs empty: `map.empty()` and
 /// `set.empty()` are those collections' constructors, placed by the expected
 /// relation like a literal (PROV-4).
 pub fn keyed_constructor(path: &hirsel_syntax::DefPath) -> Option<crate::BuiltinType> {
     if *path == hirsel_syntax::DefPath::core("map.empty") {
         Some(crate::BuiltinType::Map)
+    } else if *path == hirsel_syntax::DefPath::core("sorted_map.empty") {
+        Some(crate::BuiltinType::SortedMap)
     } else if *path == hirsel_syntax::DefPath::core("set.empty") {
         Some(crate::BuiltinType::Set)
     } else {

@@ -353,7 +353,14 @@ impl Refs {
                                 operand(&mut r, body, at, left);
                                 operand(&mut r, body, at, right);
                             }
-                            Rvalue::Construct { fields, .. } => {
+                            Rvalue::Construct {
+                                constructor,
+                                fields,
+                                ..
+                            } => {
+                                if let tir::Constructor::SortedMap { by } = constructor {
+                                    operand(&mut r, body, at, by);
+                                }
                                 for f in fields {
                                     operand(&mut r, body, at, &f.value);
                                 }
@@ -893,7 +900,14 @@ fn rvalue_fails(body: &Body, rvalue: &Rvalue) -> bool {
                         | BinaryOp::Or
                 )
         }
-        Rvalue::Construct { fields, .. } => fields.iter().any(|f| indexed(&f.value)),
+        Rvalue::Construct {
+            constructor,
+            fields,
+            ..
+        } => {
+            matches!(constructor, tir::Constructor::SortedMap { by } if indexed(by))
+                || fields.iter().any(|f| indexed(&f.value))
+        }
         Rvalue::Closure { captures, .. } => captures.iter().any(indexed),
         Rvalue::Constant(_)
         | Rvalue::ReadConstant { .. }
@@ -1409,8 +1423,13 @@ fn touches(body: &Body, inst: &Instruction, list: LocalId, loan: LoanId) -> bool
                     Rvalue::Use(op) => named(&op.place),
                     Rvalue::Unary { value, .. } => named(&value.place),
                     Rvalue::Binary { left, right, .. } => named(&left.place) || named(&right.place),
-                    Rvalue::Construct { fields, .. } => {
-                        fields.iter().any(|f| named(&f.value.place))
+                    Rvalue::Construct {
+                        constructor,
+                        fields,
+                        ..
+                    } => {
+                        matches!(constructor, tir::Constructor::SortedMap { by } if named(&by.place))
+                            || fields.iter().any(|f| named(&f.value.place))
                     }
                     Rvalue::Closure { captures, .. } => captures.iter().any(|c| named(&c.place)),
                     _ => false,
@@ -1757,6 +1776,13 @@ fn operand_places(body: &Body, inst: &Instruction) -> Vec<PlaceId> {
             Rvalue::Use(op) => vec![op.place],
             Rvalue::Unary { value, .. } => vec![value.place],
             Rvalue::Binary { left, right, .. } => vec![left.place, right.place],
+            Rvalue::Construct {
+                constructor: tir::Constructor::SortedMap { by },
+                fields,
+                ..
+            } => std::iter::once(by.place)
+                .chain(fields.iter().map(|f| f.value.place))
+                .collect(),
             Rvalue::Construct { fields, .. } => fields.iter().map(|f| f.value.place).collect(),
             Rvalue::Closure { captures, .. } => captures.iter().map(|c| c.place).collect(),
             _ => vec![],

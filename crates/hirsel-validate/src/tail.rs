@@ -294,6 +294,13 @@ fn rvalue_operands(value: &Rvalue) -> Vec<&Operand> {
             vec![o]
         }
         Rvalue::Binary { left, right, .. } => vec![left, right],
+        Rvalue::Construct {
+            constructor: Constructor::SortedMap { by },
+            fields,
+            ..
+        } => std::iter::once(by)
+            .chain(fields.iter().map(|field| &field.value))
+            .collect(),
         Rvalue::Construct { fields, .. } => fields.iter().map(|f| &f.value).collect(),
         Rvalue::Closure { captures, .. } => captures.iter().collect(),
         Rvalue::Constant(_)

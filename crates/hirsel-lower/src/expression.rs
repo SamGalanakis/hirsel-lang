@@ -854,8 +854,12 @@ impl Builder<'_, '_> {
             })?;
         let pending = self.evaluation_holders.len();
         let mut retain_callee_access = false;
+        enum Construction {
+            Fields(Constructor),
+            SortedMap,
+        }
         let (callee, constructor) = match plan.target {
-            // `map.empty()` and `set.empty()` construct an empty Map or Set
+            // `map.empty()`, `set.empty()` and `sorted_map.empty(by)` construct an empty keyed collection
             // in the arena their relation names, as a literal does (PROV-4).
             // Elsewhere the call builds the same empty Map or Set, whose
             // values need not be literal data.
@@ -869,8 +873,11 @@ impl Builder<'_, '_> {
                 (
                     None,
                     Some(match hirsel_types::keyed_constructor(&path) {
-                        Some(hirsel_types::BuiltinType::Map) => Constructor::Map,
-                        _ => Constructor::Set,
+                        Some(hirsel_types::BuiltinType::Map) => {
+                            Construction::Fields(Constructor::Map)
+                        }
+                        Some(hirsel_types::BuiltinType::SortedMap) => Construction::SortedMap,
+                        _ => Construction::Fields(Constructor::Set),
                     }),
                 )
             }
@@ -883,12 +890,12 @@ impl Builder<'_, '_> {
             ),
             CallTarget::Constructor(name) => (
                 None,
-                Some(
+                Some(Construction::Fields(
                     super::checked::constructor(&name).ok_or_else(|| LowerError {
                         site: span,
                         message: "invalid checked constructor".into(),
                     })?,
-                ),
+                )),
             ),
             CallTarget::Value(_) => {
                 let Some(mut value) = self.expression(callee_id, bodies)? else {
@@ -1197,7 +1204,7 @@ impl Builder<'_, '_> {
                 }
                 self.fact_check(&fact, prepared[0].1, span)?;
             }
-            let fields = prepared
+            let fields: Vec<_> = prepared
                 .into_iter()
                 .map(|(field, v)| ConstructField {
                     field,
@@ -1207,6 +1214,19 @@ impl Builder<'_, '_> {
                     },
                 })
                 .collect();
+            let (constructor, fields) = match constructor {
+                Construction::Fields(constructor) => (constructor, fields),
+                Construction::SortedMap => {
+                    let [field] = fields.as_slice() else {
+                        return self.error(span, "sorted constructor requires its dictionary");
+                    };
+                    let by = Operand {
+                        place: field.value.place,
+                        usage: UseKind::Borrow,
+                    };
+                    (Constructor::SortedMap { by }, vec![])
+                }
+            };
             let rv = Rvalue::Construct {
                 constructor,
                 fields,

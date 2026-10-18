@@ -862,6 +862,13 @@ impl<'a, 'b> Builder<'a, 'b> {
         let operands: Vec<&Operand> = match value {
             Rvalue::Use(value) | Rvalue::Unary { value, .. } => vec![value],
             Rvalue::Binary { left, right, .. } => vec![left, right],
+            Rvalue::Construct {
+                constructor: Constructor::SortedMap { by },
+                fields,
+                ..
+            } => std::iter::once(by)
+                .chain(fields.iter().map(|field| &field.value))
+                .collect(),
             Rvalue::Construct { fields, .. } => fields.iter().map(|field| &field.value).collect(),
             Rvalue::Closure { captures, .. } => captures.iter().collect(),
             _ => vec![],

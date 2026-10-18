@@ -372,6 +372,7 @@ fn insert(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     b.set_reaching(map.slot, vacant_version);
     b.hold(key.slot, key.address);
     b.hold(value.slot, value.address);
+    b.arena_push(entries)?;
     let local = b.slot(pair_layout, SlotKind::Temporary);
     b.push(Inst::StorageLive { slot: local });
     let local_address = b.place(AddressBase::Slot(local), &[], pair_layout, None)?;

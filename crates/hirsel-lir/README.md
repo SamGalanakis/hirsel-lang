@@ -622,3 +622,8 @@ LIR revision 36 (MEM-6) tracks a sequential `Packed` List in a bounded arena the
 payload size: the element's logical size is in its charge, and its block is copied when
 shared, never relocated. `SeqAppend`'s growth, `hirsel_rt_v2_block_grow` (runtime ABI 15),
 regrows an unshared tracked block in its arena and empties the abandoned one.
+
+SortedMap reuses `LAYOUT_KEYED`: its sole payload field is the entries List at
+offset zero. It has no index. Its placed constructor tracks both blocks, and
+`sorted_map.insert` charges a vacant entry with `ArenaPush` before taking the
+key/value. Existing detach and deep-copy machinery charges and tracks its entries.

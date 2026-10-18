@@ -115,6 +115,32 @@ pub(crate) fn construct(
                 arena: None,
             }
         }
+        Constructor::SortedMap { .. } => {
+            if !matches!(
+                kind,
+                TypeKind::Builtin {
+                    kind: BuiltinType::SortedMap,
+                    ..
+                }
+            ) || values.len() != 1
+                || values[0].is_none()
+            {
+                return Err(invalid(
+                    "sorted map constructor requires Order and SortedMap type",
+                ));
+            }
+            Value::Record {
+                definition: DefPath::core("SortedMap"),
+                fields: vec![
+                    values.into_iter().next().unwrap(),
+                    Some(Value::Sequence {
+                        kind: BuiltinType::Array,
+                        elements: vec![],
+                        arena: None,
+                    }),
+                ],
+            }
+        }
         Constructor::Map => {
             if !matches!(
                 kind,

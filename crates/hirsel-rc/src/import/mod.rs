@@ -1607,6 +1607,13 @@ fn rvalue_operands(value: &tir::Rvalue) -> Vec<&tir::Operand> {
     match value {
         tir::Rvalue::Use(o) | tir::Rvalue::Unary { value: o, .. } => vec![o],
         tir::Rvalue::Binary { left, right, .. } => vec![left, right],
+        tir::Rvalue::Construct {
+            constructor: tir::Constructor::SortedMap { by },
+            fields,
+            ..
+        } => std::iter::once(by)
+            .chain(fields.iter().map(|field| &field.value))
+            .collect(),
         tir::Rvalue::Construct { fields, .. } => fields.iter().map(|f| &f.value).collect(),
         tir::Rvalue::Closure { captures, .. } => captures.iter().collect(),
         _ => Vec::new(),

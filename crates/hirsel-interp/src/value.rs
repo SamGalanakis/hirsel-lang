@@ -549,6 +549,9 @@ impl Value {
             Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
                 arena.as_ref()
             }
+            Self::Record { definition, fields } if *definition == DefPath::core("SortedMap") => {
+                fields.get(1)?.as_ref()?.arena_storage()
+            }
             _ => None,
         }
     }
@@ -556,6 +559,9 @@ impl Value {
         match self {
             Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
                 Some(arena)
+            }
+            Self::Record { definition, fields } if *definition == DefPath::core("SortedMap") => {
+                fields.get_mut(1)?.as_mut()?.arena_storage_mut()
             }
             _ => None,
         }

@@ -48,7 +48,7 @@ opens a named arena, freed at scope end; arenas are scoped capabilities
 ([MODE-6](ownership.md#mode-6-scoped-capabilities)) and hold no resources. Arena values
 are built bottom-up and are immutable once built, except that a `unique` builder mutates
 its root block in place; mutating a nested arena block detaches it onto the heap, except a
-List, Map or Set, which [MEM-6](#mem-6-bounded-arenas) copies within its arena. Arena
+List, Map, Set or SortedMap, which [MEM-6](#mem-6-bounded-arenas) copies within its arena. Arena
 blocks carry no count; the heap blocks they hold are released when the arena closes.
 `copy_to(heap, x)` deep-copies out of an arena (an allocation site).
 
@@ -125,26 +125,31 @@ proven, and an inferred closure literal carries the evidence its body proves.
 
 `arena.bounded(cap, body) -> Result[R, OutOfSpace]`: each constructor into that arena
 charges a logical size, each `list.push` to a List in it charges its element's logical size
-before it consumes its argument, and each `map.insert` or `set.insert` of a key a Map or
-Set in it does not hold charges that entry's logical size (key plus value, or the member)
+before it consumes its argument, and each `map.insert`, `set.insert` or `sorted_map.insert`
+of a key a Map, Set or SortedMap in it does not hold charges that entry's logical size
+(key plus value, or the member)
 before it consumes its arguments, and each Io read into a List in it (`stdin.read`,
 `file.read`, `net.read`) charges its maximum bytes before its effect, whatever it then
 reads; exceeding `cap` is a failure that unwinds to this call, which returns
 `Error(OutOfSpace)`, and a read that exceeds it reads nothing. A key that fails `Depth`
 ([MEM-3](#mem-3-freeing)) charges nothing. Spare capacity, growth relocation, a Map's or
 Set's hash index and abandoned storage are not charged, so the charge is the same on every
-engine. The logical size table is in the Bounded arenas section of
+engine. A SortedMap insert completes its order comparisons before charging or consuming
+its key and value; a failing comparator charges nothing. The logical size table is in the
+Bounded arenas section of
 [the runtime README](../../crates/hirsel-rt/README.md).
 
-A List, Array, Map or Set built in an arena (a literal, `map.empty()` or `set.empty()`
-placed there as [PROV-4](brands.md#prov-4-arena-placement) says, `copy_to` or a copy made
-by this rule) is **unshared**. It becomes **shared** for good when it or a value holding it
+A List, Array, Map, Set or SortedMap built in an arena (a literal, `map.empty()`, `set.empty()`
+or `sorted_map.empty(by)` placed there as [PROV-4](brands.md#prov-4-arena-placement) says,
+`copy_to` or a copy made by this rule) is **unshared**. It becomes **shared** for good when
+it or a value holding it
 is copied (`copy`, a capture by copy, an owned read of a part, a counted local result such
 as `map.get`'s), and when it is written or lent `mut` through another block (a box payload,
 a sequence element, a map entry), since that block's holders are not tracked. The first
 write to a shared arena List or Array (a push, an Io read, an element store, `pop`,
-`remove` or `swap` that moves an element), or Map or Set (an insert of a new key, a
-`map.insert` that replaces a value, or a `remove` of a held key), copies it into the same
+`remove` or `swap` that moves an element), or Map, Set or SortedMap (an insert of a new key, a
+`map.insert` or `sorted_map.insert` that replaces a value, or a `remove` of a held key),
+copies it into the same
 arena as a new unshared one, charged its copied length or entry count, whose elements or
 entries are then held twice and so shared, then the write proceeds; a write that fails its
 bounds check, and a `set.insert` of a member the Set holds, copies nothing, and
@@ -154,9 +159,9 @@ together. A List of `Packed[T]` values ([MEM-13](#mem-13-packed-variants)), whos
 sequential, is tracked too: an element is charged `T`'s logical size whatever extent it
 takes, and its active extents are copied and relocated together. An unshared List grows in place,
 relocating within its arena by doubling from four elements when full, so its storage is at
-most four times its charged bytes plus four elements; an unshared Map or Set keeps its
+most four times its charged bytes plus four elements; an unshared Map, Set or SortedMap keeps its
 entries the same way. Consequently a push or insert through a nested place
-(`list.push(mut adj[i], x)` in an arena) copies the inner List, Map or Set each time,
+(`list.push(mut adj[i], x)` in an arena) copies the inner List, Map, Set or SortedMap each time,
 charged; one held by a binding or an inline record field grows in amortized constant time.
 
 ### MEM-7: Layout

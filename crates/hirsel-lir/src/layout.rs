@@ -590,15 +590,15 @@ pub fn block_charge(table: &LayoutTable, payload: LayoutId) -> Option<LogicalCha
     }
 }
 
-/// Whether `payload` is a Map's or Set's block payload (MEM-6): its field 0 is
+/// Whether `payload` is a Map's, Set's or SortedMap's block payload (MEM-6): its field 0 is
 /// the dense entries List, a bounded arena's charge and tracking of its
-/// contents, and its field 1 the index, which a bounded arena neither charges
+/// contents. Map and Set also have field 1, their index, which a bounded arena neither charges
 /// nor tracks.
 pub fn keyed(table: &LayoutTable, payload: LayoutId) -> bool {
     matches!(
         table.layout(payload).map(|r| &r.kind),
         Some(LayoutKind::Opaque { owner })
-            if [hirsel_syntax::DefPath::core("Map"), hirsel_syntax::DefPath::core("Set")]
+            if [hirsel_syntax::DefPath::core("Map"), hirsel_syntax::DefPath::core("Set"), hirsel_syntax::DefPath::core("SortedMap")]
                 .contains(owner)
     )
 }

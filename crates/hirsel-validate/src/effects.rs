@@ -366,6 +366,7 @@ impl Checker<'_> {
                     constructor: Constructor::Sequence
                         | Constructor::Map
                         | Constructor::Set
+                        | Constructor::SortedMap { .. }
                         | Constructor::Box,
                     ..
                 }
