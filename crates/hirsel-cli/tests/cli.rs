@@ -1222,6 +1222,46 @@ fn standalone_admits_selected_roots_and_explicit_argv_without_ambient_grants() {
 }
 
 #[test]
+fn cranelift_builds_and_runs_what_llvm_builds_and_runs() {
+    let source = file(
+        "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"backend\\n\"); Ok(()) }\n",
+    );
+    let grants = file(r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":[]}"#);
+    for backend in ["llvm", "cranelift"] {
+        // A standalone executable (`hirsel_rt_v2_launch_standalone`)...
+        let executable = build_executable(&source, &["--debug", "--backend", backend]);
+        let output = Command::new(&executable)
+            .arg("--hirsel-grants")
+            .arg(&grants)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{backend}: {output:?}");
+        assert_eq!(output.stdout, b"backend\n", "{backend}");
+        std::fs::remove_file(executable).unwrap();
+        // ...and a launched one (`hirsel_rt_v2_launch_roots`).
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["run", "--native", "--backend", backend])
+            .arg(&source)
+            .arg("--grants")
+            .arg(&grants)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{backend}: {output:?}");
+        assert_eq!(output.stdout, b"backend\n", "{backend}");
+    }
+    for args in [
+        vec!["run", "--backend", "cranelift", "source.hir"],
+        vec!["build", "--backend", "gcc", "source.hir", "-o", "unused"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {output:?}");
+    }
+}
+
+#[test]
 fn build_rejects_invalid_options_and_source_before_writing_an_executable() {
     for args in [
         vec!["build", "source.hir"],
