@@ -462,12 +462,14 @@ independent Python reader/writer; `tests/wire.rs` runs it in the crate tests.
 The codec is a shared data API; source-language generic encode/decode bindings
 are a separate library integration, not privileged constructor hooks.
 
-`core_roles` holds the two role tables the driver's core library registry and the checkers
+`core_roles` holds the role tables the driver's core library registry and the checkers
 share: `LOOP_PROTOCOLS`/`loop_protocols()` (the borrowed-loop protocols and their
 `$intrinsic` open/next paths) and `Intrinsic`/`intrinsic_roles()` (the authority
 role of each core operation). The registry declares the operations; these tables
 are the only source of their roles, so check and modes tests read them without the
-driver.
+driver. `LoweredIntrinsic` enumerates nominal core declarations whose calls lower
+into existing TIR instructions; they have no runtime dispatch or operation-manifest
+row. Lowering and the operation inventory consume the same classification.
 
 The opt-in `testing` feature exports `testing::Types`, the hand-built type-store
 fixture used by the LIR, LLVM and runtime test suites. It derives no property evidence.

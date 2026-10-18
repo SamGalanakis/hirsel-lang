@@ -78,3 +78,26 @@ pub fn intrinsic_roles() -> Vec<(DefPath, Intrinsic)> {
     .map(|(name, role)| (hirsel_syntax::DefPath::core(name), role))
     .collect()
 }
+
+/// Operations eliminated into existing TIR instructions by source lowering.
+/// They have declarations but no runtime dispatch entry or operation-manifest row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoweredIntrinsic {
+    Replace,
+}
+
+impl LoweredIntrinsic {
+    pub const ALL: [Self; 1] = [Self::Replace];
+
+    pub fn definition(self) -> DefPath {
+        match self {
+            Self::Replace => DefPath::core("replace"),
+        }
+    }
+
+    pub fn for_definition(path: &DefPath) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|intrinsic| intrinsic.definition() == *path)
+    }
+}
