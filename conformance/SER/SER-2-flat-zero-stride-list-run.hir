@@ -18,7 +18,17 @@ flat type More {
 @serializable
 flat type FlatEmpty {}
 
+const STATIC: More = comptime More(
+  tuples: [((), ())],
+  records: [Empty(), Empty()],
+  flats: [FlatEmpty(), FlatEmpty(), FlatEmpty()]
+)
+
 pub fn main(t: Test) -> Result[(), DecodeError] {
+  let stored = STATIC
+  test.check(t, list.len(stored.tuples) == 1)
+  test.check(t, list.len(stored.records) == 2)
+  test.check(t, list.len(stored.flats) == 3)
   let original = Z(items: [(), ()])
   test.check(t, list.len(original.items) == 2)
   let wire = codec.encode(original)

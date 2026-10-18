@@ -378,6 +378,11 @@ impl Encoder<'_, '_> {
     /// count in that extent. No reference cells or separate child blocks are created.
     fn flat_image(&self, layout: LayoutId, node: &ValueNode) -> Result<Vec<u8>, StaticError> {
         let record = self.layouts.record(layout);
+        // Empty aggregates retain their ordinary layout identity in a flat
+        // sequence; only its stored count contributes bytes.
+        if record.size == SizeSpec::Fixed(0) {
+            return Ok(Vec::new());
+        }
         if record.kind == LayoutKind::Flat
             && let [content] = record.fields.as_slice()
             && matches!(content.offset, 8 | 16)
