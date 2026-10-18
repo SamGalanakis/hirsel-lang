@@ -187,6 +187,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("OutputError", "", "OutputFault(u32)|Canceled(CancelCause)"),
         ("ClockError", "", "Unavailable()|OutOfRange()"),
         ("RandomError", "", "Unavailable()"),
+        ("WaitError", "", "Clock(ClockError)|Canceled(CancelCause)"),
         ("ArgError", "", "MissingArgument()|InvalidUtf8()"),
         ("FloatIntError", "", "NotFinite()|OutOfRange()"),
         ("OutOfSpace", "", "OutOfSpace()"),

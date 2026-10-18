@@ -247,3 +247,40 @@ pub fn format(value: Timestamp) -> Result[String, TimeError] uses {} {
     },
   }
 }
+
+pub type SleepError = NegativeDuration | OutOfRange | Wait(WaitError)
+
+// Relative-to-absolute conversion adapted from Zig lib/std/Io.zig Timeout.toDeadline,
+// Clock.Timestamp.fromNow and Timeout.sleep, commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig
+// contributors (third-party/NOTICES.md). Ticks are nanoseconds (clock.monotonic.ns@1).
+@noalloc
+pub fn deadline(clock: MonotonicClock, interval: Duration) -> Result[
+  Instant of clock,
+  SleepError
+] {
+  if interval.nanoseconds < 0 {
+    return Error(NegativeDuration())
+  }
+  let narrowed: Option[u64] = core@1/int.try_narrow(interval.nanoseconds)
+  let nanoseconds = match narrowed {
+    Some(n) => n,
+    None() => return Error(OutOfRange()),
+  }
+  let now = match core@1/clock.monotonic(clock) {
+    Ok(now) => now,
+    Error(e) => return Error(Wait(Clock(e))),
+  }
+  match core@1/instant.checked_add(clock, now, nanoseconds) {
+    Some(until) => Ok(until),
+    None() => Error(OutOfRange()),
+  }
+}
+
+@noalloc
+pub fn sleep(clock: MonotonicClock, interval: Duration) -> Result[(), SleepError] {
+  let until = deadline(clock, interval)?
+  match core@1/clock.sleep_until(clock, until) {
+    Ok(()) => Ok(()),
+    Error(e) => Error(Wait(e)),
+  }
+}

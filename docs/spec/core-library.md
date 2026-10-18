@@ -35,7 +35,9 @@ N fn io.monotonic_clock(rt: Io) -> Result[MonotonicClock, GrantError]
 N fn io.wall_clock(rt: Io) -> Result[WallClock, GrantError]
 N fn clock.monotonic(clock: MonotonicClock) -> Result[Instant of clock, ClockError]
 N fn clock.wall(clock: WallClock) -> Result[i64, ClockError]
+N fn clock.sleep_until(clock: MonotonicClock, deadline: Instant of clock) -> Result[(), WaitError]
 N fn instant.ticks(value: Instant) -> u64 uses {}
+N fn instant.checked_add(clock: MonotonicClock, start: Instant of clock, nanoseconds: u64) -> Option[Instant of clock]
 N fn io.net(rt: Io) -> Result[Net, GrantError]
 N fn io.random(rt: Io) -> Result[Random, GrantError]
 fn random.bytes(r: Random, count: u64) -> Result[Bytes, RandomError]
@@ -216,6 +218,8 @@ GrantError    = NotGranted()
 type FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice()
 InputError    = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
+ClockError    = Unavailable() | OutOfRange()
+WaitError     = Clock(ClockError) | Canceled(CancelCause)
 RandomError   = Unavailable()
 EnvError      = NotGranted() | InvalidUtf8()
 ArgError      = MissingArgument() | InvalidUtf8()
@@ -334,6 +338,28 @@ a string returns `Ok(Some(value))`. No enumeration or ambient process lookup is
 provided. Invalid UTF-8 from a host provider returns `InvalidUtf8()`; run-description
 admission may reject an invalid snapshot before entry. Io presence alone grants
 neither input nor output: stdin and stderr require their own configured projections.
+
+`clock.monotonic` samples an `Instant` of its clock. Its `instant.ticks` are nanoseconds
+since an origin fixed for the run (`clock.monotonic.ns@1`), and later samples never
+decrease. `instant.checked_add(clock, start, n)` advances an `Instant of clock` by `n`
+nanoseconds, or returns `None()` when the ticks would pass `u64` MAX; it reads no clock
+and records nothing. `clock.wall` returns signed Unix nanoseconds. A failed sample returns
+`Unavailable()`, or `OutOfRange()` when the reading does not fit.
+
+`clock.sleep_until(clock, deadline)` is a blocking `Io` call. In a cancelled scope it
+returns `Canceled(cause)` first ([CONC-3](concurrency.md#conc-3-cancellation)); it returns
+`Ok(())` at once when the deadline has passed, and otherwise suspends its task, without
+polling, until the clock reaches the deadline. After `Ok(())`, a sample of the same clock is
+at least the deadline. Cancelling a suspended wait removes its timer and returns
+`Canceled(cause)`: waiting has no effect, so that is always allowed. `Clock(e)` reports a
+provider that cannot read its clock. A host waits on its monotonic clock. A deterministic
+simulation never waits: its monotonic clock is a virtual reading that starts at the
+configured value, and when no task is runnable the simulator advances it to the earliest
+pending deadline and resumes the waits due then, in the order they suspended. Pending
+waits are an outstanding event source, so they never make a run Blocked
+([CONC-8](concurrency.md#conc-8-global-quiescence)), and a run whose only live tasks are
+waiting still terminates. A wait is recorded when it completes, with its outcome; replay
+returns the recorded outcome without waiting.
 
 `random.bytes(r, count)` returns exactly `count` bytes from the run's Random provider,
 or `Unavailable()` with no bytes; it never publishes a partial draw. A zero count returns

@@ -439,10 +439,10 @@ Expected:
 ## Standard library: paths and time
 
 Path normalization and RFC 3339 parsing are pure algorithms. Normalizing a path
-does not grant access or resolve symlinks. `time.Duration` is a signed
-nanosecond value used for formatting and parsing; core `Duration` is a separate
-type. Sampling real time needs `io.monotonic_clock` or `io.wall_clock` and its
-explicit grant. An `Instant of clock` belongs to that clock; time sampling is
+does not grant access or resolve symlinks. `time.Duration` is the one duration
+type: signed nanoseconds, used for formatting, parsing, `time.between` and
+`time.sleep`. Sampling or waiting on real time needs `io.monotonic_clock` or
+`io.wall_clock` and its explicit grant. An `Instant of clock` belongs to that clock; time sampling is
 never an ambient pure operation.
 
 <!-- tour: conformance/LANG/LANG-8-tour-07-path-time-run.hir -->

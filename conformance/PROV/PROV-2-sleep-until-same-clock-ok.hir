@@ -1,0 +1,12 @@
+// rule: PROV-2
+// expect: accept
+fn example(c: MonotonicClock) -> Result[(), WaitError] {
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(e) => return Error(Clock(e)),
+  }
+  match instant.checked_add(c, now, 1000u64) {
+    Some(until) => clock.sleep_until(c, until),
+    None() => Ok(()),
+  }
+}

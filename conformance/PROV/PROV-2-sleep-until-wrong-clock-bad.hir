@@ -1,0 +1,9 @@
+// rule: PROV-2
+// expect: reject PROV-1 at line 8
+fn example(c: MonotonicClock, other: MonotonicClock) -> Result[(), WaitError] {
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(e) => return Error(Clock(e)),
+  }
+  clock.sleep_until(other, now)
+}

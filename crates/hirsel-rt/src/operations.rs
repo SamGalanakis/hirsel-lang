@@ -1141,6 +1141,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "io.process",
     "proc.run",
     "random.bytes",
+    "clock.sleep_until",
+    "instant.checked_add",
     "test.process",
     "iter.from",
     "iter.map",

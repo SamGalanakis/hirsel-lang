@@ -65,3 +65,4 @@ mod source_profile;
 mod source_std;
 mod tail_calls;
 mod value_transport;
+mod waits;

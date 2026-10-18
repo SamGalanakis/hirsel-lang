@@ -52,6 +52,7 @@ channel.open	0c609ffe745adba49b5645746a4ee00cb7d6d16e7dfbb16a60b9914b2b5c6988	0:
 channel.receive	7ae16e2e0ae01a16cdee13f36c9210f977ba31425e3a38b41b069007f90b1ed7	0:b:n;1:m:[0]->[0]
 channel.send	e047cc0e7fa76a65f4681e7019646a45c54c157ea88970b59ae754b4e7baaec4	0:b:n;1:m:[0];2:t:[0]->[0]
 clock.monotonic	a49c9a6e6525c2a446c0e18657b2fa5997aeb6a0df045387c53575a74accc3c9	0:b:n->n
+clock.sleep_until	08dadcb17382e76359dc21eb09d7e33c6252ef451bc8d6cb65af81cc2addf4f4	0:b:n;1:b:n->n
 clock.wall	b9b5c21daa4a30ffec092e8413b51c0f4280b50c217bcdb479bc6a88c6d659a1	0:b:n->n
 codec.decode	f9c27dfb95279580fba3a680e96bb2470cb198736ad54db9d78b856cda49b470	0:b:n->[0]
 codec.encode	a4909affd474592566e7c69ba98358fbd0aa477fa4ca96d4ab196ebb189db864	0:b:[0]->n
@@ -91,6 +92,7 @@ float.min_number	4200af0fddcb54e133e6a37736805aea7e1974399364907099f10167fd0879b
 float.mul_add	e8bed4c24824b745507ffc5e8b7dc446cc8303d4e9723e17e8d02e2652859ef6	0:b:n;1:b:n;2:b:n->n
 float.to_i32	144d2da9de6e4331a8cc666e4770ea46d36289676e9832349cf02a81e37692a7	0:b:n->n
 float.total_order	bc0bb001ae56172c9fa6c43dcdeabbd7a957dcd3370fa038c3dcf68baaedc735	0:b:n;1:b:n->n
+instant.checked_add	165c2e5d705c6a8e5f6b0daae4b601f36d09143d2a96d01c73427311a60609c6	0:b:n;1:b:n;2:b:n->n
 instant.ticks	008b2e30a582ed1c15d279d47907593986b2c16f875d63f095f73c50f88ce6ae	0:b:n->n
 int.checked_add	2ac360eab7357b62ef23df8236ef0a2a2de445ee6e9ff2a833960e77046e83c5	0:b:n;1:b:n->n
 int.div_exact	dac340064d2e90d25fb224dc4e18b88bdcc8a6fb14525d89735a8fc9b1559e30	0:b:n;1:b:n->n

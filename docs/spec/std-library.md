@@ -58,9 +58,11 @@ N fn duration.parse(text: String) -> Result[time.Duration, scalar.ParseError] us
 fn duration.format(value: time.Duration) -> String uses {}
 N fn time.parse(text: String) -> Result[time.Timestamp, scalar.ParseError] uses {}
 fn time.format(value: time.Timestamp) -> Result[String, time.TimeError] uses {}
-N fn time.elapsed(clock: MonotonicClock, start: Instant of clock) -> Result[Duration, ClockError]
-N fn time.between(clock: MonotonicClock, start: Instant of clock, end: Instant of clock) -> Duration
+N fn time.elapsed(clock: MonotonicClock, start: Instant of clock) -> Result[time.Duration, ClockError]
+N fn time.between(clock: MonotonicClock, start: Instant of clock, end: Instant of clock) -> time.Duration
 N fn time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of clock) -> i32
+N fn time.deadline(clock: MonotonicClock, interval: time.Duration) -> Result[Instant of clock, time.SleepError]
+N fn time.sleep(clock: MonotonicClock, interval: time.Duration) -> Result[(), time.SleepError]
 fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src
 N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
 N fn unicode.graphemes(s: String) -> GraphemeView in s
@@ -120,8 +122,16 @@ second 60, a missing offset and trailing data are invalid. Numeric offsets norma
 fractional zeros, or `TimeError.OutOfRange` outside years 0000–9999. These are ordinary
 algorithms with no clock authority, locale or time-zone database.
 
-`time.elapsed`, `time.between` and `time.compare` work on `Instant`s of one
-`MonotonicClock`; their brand ties both instants to that clock.
+`time.Duration` is the only duration type. `time.elapsed`, `time.between` and
+`time.compare` work on `Instant`s of one `MonotonicClock`; their brand ties both instants
+to that clock, and `time.between` subtracts nanosecond ticks.
+
+`time.deadline(clock, d)` returns the instant `d` after a fresh sample of `clock`, and
+`time.sleep(clock, d)` waits until that instant with `clock.sleep_until`. A negative `d` is
+`NegativeDuration()` and a deadline that does not fit the clock's `u64` ticks is
+`OutOfRange()`, both before any wait; a failed sample is `Wait(Clock(e))` and a wait's own
+error is `Wait(e)`. `time.SleepError` is `NegativeDuration() | OutOfRange() |
+Wait(WaitError)`. Retrying with a delay is a loop around `time.sleep`; nothing polls.
 
 ## JSON
 

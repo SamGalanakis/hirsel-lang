@@ -695,6 +695,13 @@ impl Simulation {
             Err(invalid("wrong directory grant"))
         }
     }
+    /// The virtual monotonic reading: the configured value, advanced only by timer waits.
+    pub(crate) fn monotonic_now(&self) -> u64 {
+        self.config.monotonic
+    }
+    pub(crate) fn advance_monotonic(&mut self, ticks: u64) {
+        self.config.monotonic = self.config.monotonic.max(ticks);
+    }
     pub(crate) fn fault(&mut self, op: &str) -> Option<Fault> {
         self.config.faults.get_mut(op).and_then(VecDeque::pop_front)
     }

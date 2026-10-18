@@ -3324,6 +3324,8 @@ conformance/PROV/PROV-2-branded-comparison-ok.hir
 conformance/PROV/PROV-2-call-substitution-bad.hir
 conformance/PROV/PROV-2-call-substitution-ok.hir
 conformance/PROV/PROV-2-callable-generic-relay-ok.hir
+conformance/PROV/PROV-2-checked-add-same-clock-ok.hir
+conformance/PROV/PROV-2-checked-add-wrong-clock-bad.hir
 conformance/PROV/PROV-2-closure-own-brand-bad.hir
 conformance/PROV/PROV-2-closure-own-brand-ok.hir
 conformance/PROV/PROV-2-closure-own-placement-bad.hir
@@ -3356,6 +3358,8 @@ conformance/PROV/PROV-2-nested-brand-unbranded-parameter-bad.hir
 conformance/PROV/PROV-2-nested-brand-unbranded-parameter-ok.hir
 conformance/PROV/PROV-2-record-callable-two-relays-ok.hir
 conformance/PROV/PROV-2-runtime-handle-narrow.hir
+conformance/PROV/PROV-2-sleep-until-same-clock-ok.hir
+conformance/PROV/PROV-2-sleep-until-wrong-clock-bad.hir
 conformance/PROV/PROV-2-unary-annotation-bad.hir
 conformance/PROV/PROV-2-unary-annotation-ok.hir
 conformance/PROV/PROV-2-unary-assignment-bad.hir

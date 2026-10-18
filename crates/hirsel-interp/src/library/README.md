@@ -36,6 +36,13 @@ String views preserve UTF-8 spelling. Grapheme segmentation and NFC normalizatio
 execute ordinary std@1 source over vendored Unicode16 tables. Their official
 oracles live in hirsel-driver/tests/stdlib_graphemes.rs and stdlib_nfc.rs.
 Clock sampling and Instant access execute the split core library contracts.
+`clock.sleep_until` runs under virtual time (`timers.rs`): the simulated
+monotonic reading starts at the configured value and advances only when no task
+is runnable, to the earliest pending deadline; the waits due then resume in the
+order they suspended. Pending timers are the simulation's outstanding event
+source (`Operations::wait`), so sleepers never make a run Blocked. A suspended
+wait records `clock.sleep_until.suspend`, and its completion (Ok, Canceled or an
+injected Clock fault) records `clock.sleep_until`; cancellation drops its timer.
 `random.bytes` draws `random.splitmix64@1`: successive SplitMix64 words of the
 run's Random seed, little-endian, the last cut short; a zero count touches
 nothing. A host adapter supplies its own provider's draw through `supply_random`.

@@ -1,0 +1,6 @@
+// rule: PROV-2
+// expect: accept
+fn example(c: MonotonicClock) -> Result[Option[Instant of c], ClockError] {
+  let now = clock.monotonic(c)?
+  Ok(instant.checked_add(c, now, 1u64))
+}

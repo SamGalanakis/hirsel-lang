@@ -143,6 +143,8 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "time.elapsed",
                 "time.between",
                 "time.compare",
+                "time.deadline",
+                "time.sleep",
                 "bytes.replace",
                 "map.same_entries",
                 "unicode.graphemes",
@@ -302,7 +304,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         assert_eq!(normalized.metadata.visibility, Visibility::Public);
         checked += 1;
     }
-    assert_eq!(checked, 129);
+    assert_eq!(checked, 131);
 }
 
 #[test]

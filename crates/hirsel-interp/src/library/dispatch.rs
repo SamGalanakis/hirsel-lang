@@ -19,6 +19,7 @@ pub struct Library {
     pub(super) channels: super::channels::Channels,
     pub(super) synchronizers: super::synchronization::Synchronizers,
     pub(super) network_waits: std::collections::BTreeMap<u64, super::net::NetworkWait>,
+    pub(super) timers: super::timers::Timers,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
     pub(super) next_shared: u64,
@@ -33,6 +34,7 @@ impl Library {
             channels: Default::default(),
             synchronizers: Default::default(),
             network_waits: Default::default(),
+            timers: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
             next_shared: 0,
@@ -1002,6 +1004,10 @@ impl Operations for Library {
     fn take_yield(&mut self) -> bool {
         std::mem::take(&mut self.tasks.yield_now)
     }
+    /// Virtual time: pending timer waits are the simulation's only outstanding event source.
+    fn wait(&mut self) -> Result<bool, Error> {
+        Ok(self.advance_virtual_time())
+    }
     fn handles_failure(&self, token: u64) -> bool {
         self.tasks.pending.contains_key(&token) || self.synchronizers.pending.contains_key(&token)
     }
@@ -1012,6 +1018,16 @@ impl Operations for Library {
     ) -> Result<Option<OperationResult>, Error> {
         if self.network_waits.contains_key(&token) {
             return self.poll_network(token, context);
+        }
+        if self.timers.contains(token) {
+            let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
+            let result = self.poll_timer(token, context);
+            if result.is_err()
+                && let Some(saved) = saved
+            {
+                self.simulation = saved;
+            }
+            return result;
         }
         if self.channels.waits.contains_key(&token) {
             let saved = (!context.configuration.inputs.is_empty()).then(|| self.channels.clone());
@@ -1228,6 +1244,14 @@ primary_operations! { self, call, context, name, a, value;
     Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
     Unavailable: "reservations.insert" | "stock.get" | "stock.put" | "store.transact" => { return Err(Error::Unavailable(format!("{name} is a signature-only application fixture"))); },
     Primitive: "path.of" => path(text(arg(a, 0)?)?),
+    Capability: "clock.sleep_until" => {
+        // A rejected replay never publishes effects, consumes faults or keeps a timer.
+        let saved = (!context.configuration.inputs.is_empty()).then(|| (self.simulation.clone(), self.timers.clone()));
+        let result = self.sleep_until(&call, context);
+        if result.is_err() && let Some((simulation, timers)) = saved { self.simulation = simulation; self.timers = timers; }
+        return result.map(Some);
+    },
+    Primitive: "instant.checked_add" => self.instant_checked_add(a)?,
     Primitive: "instant.ticks" => {
         match arg(a, 0)? {
             Value::Handle { kind, id } if kind == "Instant" => u64_value(*id),
