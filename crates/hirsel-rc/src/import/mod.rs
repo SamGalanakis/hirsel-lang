@@ -1324,10 +1324,13 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<tir::PlaceId>>>, Vec<bo
                             if o.usage == UseKind::Borrow && whole(*destination) =>
                         {
                             let viewed = &body.places[o.place.0 as usize];
-                            let computed = viewed
-                                .projection
-                                .iter()
-                                .any(|p| matches!(p, tir::Projection::Index(_)));
+                            let computed = viewed.projection.iter().any(|p| {
+                                matches!(
+                                    p,
+                                    tir::Projection::Index(_)
+                                        | tir::Projection::VariantField { .. }
+                                )
+                            });
                             assigned[r]
                                 .push((viewed.loan.is_some() && !computed).then_some(o.place));
                         }

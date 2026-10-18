@@ -1538,6 +1538,8 @@ conformance/MEM/MEM-13-packed-sequence-walk-run.hir
 conformance/MEM/MEM-13-packed-tuple-list-run.hir
 conformance/MEM/MEM-13-payload-tag-fail.hir
 conformance/MEM/MEM-13-payload-tag-ok.hir
+conformance/MEM/MEM-13-proof-removal-view-fail.hir
+conformance/MEM/MEM-13-proof-removal-view-ok.hir
 conformance/MEM/MEM-13-replace-variant-bad.hir
 conformance/MEM/MEM-13-replace-variant-ok.hir
 conformance/MEM/MEM-13-sequence-index-bad.hir

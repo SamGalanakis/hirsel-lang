@@ -47,7 +47,7 @@ fn unchecked_projections_require_the_exact_accepted_site_place_and_rule() {
         let plan = BTreeSet::from([site.clone()]);
         let accepted = Discharge([(unit.header.definition.clone(), plan.clone())].into());
         let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
-        let validate = |unit: &LirUnit<Value>, discharge| {
+        let validate = |unit: &LirUnit<Value>, discharge: Option<&Discharge>| {
             check(
                 unit,
                 &Inputs {

@@ -110,7 +110,29 @@ fn checks(ready: &ReadyProgram) -> BTreeMap<(Opcode, String), usize> {
         }
         for block in &unit.blocks {
             for inst in block.instructions.get(&unit.instructions).unwrap() {
-                if let Some(f) = inst.failure()
+                if let hirsel_lir::ir::Inst::Address { address, .. } = inst {
+                    let address = &unit.addresses[address.index()];
+                    for (i, step) in address
+                        .projection
+                        .get(&unit.pools.projections)
+                        .unwrap()
+                        .iter()
+                        .enumerate()
+                    {
+                        if address.unchecked.contains(&(i as u32)) {
+                            continue;
+                        }
+                        let rule = match step {
+                            hirsel_lir::ir::ProjectionStep::Index(_)
+                            | hirsel_lir::ir::ProjectionStep::FlatAt { .. } => Some("MEM-14"),
+                            hirsel_lir::ir::ProjectionStep::VariantField { .. } => Some("MEM-13"),
+                            _ => None,
+                        };
+                        if let Some(rule) = rule {
+                            *out.entry((Opcode::Address, rule.into())).or_default() += 1;
+                        }
+                    }
+                } else if let Some(f) = inst.failure()
                     && let Some(rule) = &unit.tables.failures[f.index()].rule
                 {
                     *out.entry((inst.opcode(), rule.clone())).or_default() += 1;
@@ -563,6 +585,92 @@ fn accepted_removal_forms_run_on_heap_and_both_native_targets() {
                     target.triple
                 );
             }
+        }
+    });
+}
+
+#[test]
+fn nested_projection_evidence_removes_only_the_licensed_guard_kind() {
+    with_compiler_stack(|| {
+        let source = "type Choice = Small(values: Inline[u64, 1]) | Large(value: u64, extra: u64)\nfn bump(x: Packed[Choice], i: u64) -> u64 { x.Small.values[i] }\npub fn main() -> Result[(), ()] { let x: Packed[Choice] = Small(values: [3u64]); let n = bump(x, 0u64); Ok(()) }\n";
+        let (reference, _) = ready(source, None);
+        for (id, rule) in [
+            (BOUNDS, "MEM-14"),
+            ("standalone@0/bump#MEM-13/failure-edge/0", "MEM-13"),
+        ] {
+            let text = sidecar(source, &[(id, "proved")], |_| {});
+            let (accepted, _) = ready(source, Some(&text));
+            let before = checks(&reference);
+            let after = checks(&accepted);
+            let other = if rule == "MEM-13" { "MEM-14" } else { "MEM-13" };
+            assert!(
+                before[&(Opcode::Address, rule.into())]
+                    > after
+                        .get(&(Opcode::Address, rule.into()))
+                        .copied()
+                        .unwrap_or(0)
+            );
+            assert_eq!(
+                before.get(&(Opcode::Address, other.into())),
+                after.get(&(Opcode::Address, other.into()))
+            );
+            emit_ir(&accepted, OptLevel::None).unwrap();
+        }
+    });
+}
+
+#[test]
+fn flat_walk_keeps_the_proved_bounds_guard_unchecked() {
+    with_compiler_stack(|| {
+        let source = "flat type Item { text: String, value: u64 }\nflat type Items { items: List[Item] }\nfn bump(xs: Items) -> u64 { let mut n = 0u64; for x in xs.items { n += x.value }; n }\npub fn main() -> Result[(), ()] { let n = bump(Items(items: [Item(text: \"x\", value: 7u64)])); Ok(()) }\n";
+        let (reference, _) = ready(source, None);
+        let mut text: serde_json::Value = serde_json::from_str(&all_records(source)).unwrap();
+        text["records"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|r| r["obligation"].as_str().unwrap().contains("#MEM-14/"));
+        let (accepted, _) = ready(source, Some(&text.to_string()));
+        assert!(
+            accepted
+                .raw_units()
+                .iter()
+                .any(|u| u.header.definition.0.name == "bump"
+                    && u.instructions
+                        .iter()
+                        .any(|i| matches!(i, hirsel_lir::ir::Inst::FlatNext { .. }))),
+            "the accepted unit must actually use a flat walk"
+        );
+        assert!(
+            checks(&reference)
+                .get(&(Opcode::Address, "MEM-14".into()))
+                .copied()
+                .unwrap_or(0)
+                > 0
+        );
+        assert_eq!(
+            checks(&accepted).get(&(Opcode::Address, "MEM-14".into())),
+            None
+        );
+        emit_ir(&accepted, OptLevel::None).unwrap();
+    });
+}
+
+#[test]
+fn borrowed_variant_views_keep_their_parent_and_child_obligations_separate() {
+    with_compiler_stack(|| {
+        let source = "type Inner = A(value: u64) | B(value: u64, other: u64)\ntype Outer = Node(inner: Packed[Inner]) | Leaf()\nfn bump(x: Packed[Outer]) -> u64 { let inner = x.Node.inner; inner.A.value }\npub fn main() -> Result[(), ()] { let x: Packed[Outer] = Node(inner: A(value: 3u64)); let n = bump(x); Ok(()) }\n";
+        let (reference, _) = ready(source, None);
+        for id in [
+            "standalone@0/bump#MEM-13/failure-edge/0",
+            "standalone@0/bump#MEM-13/failure-edge/1",
+        ] {
+            let text = sidecar(source, &[(id, "proved")], |_| {});
+            let (accepted, _) = ready(source, Some(&text));
+            assert_eq!(
+                checks(&accepted),
+                without(checks(&reference), Opcode::Address, "MEM-13")
+            );
+            emit_ir(&accepted, OptLevel::None).unwrap();
         }
     });
 }

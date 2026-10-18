@@ -87,12 +87,15 @@ at each stage and H against the interpreter, and keeps the declined twins.
   planning and import and seals units against the finished layout table).
   `lower_discharging` imports under a PS-13 check-removal plan
   (`hirsel_lir::discharge`): a licensed TIR `Check` emits no `Check` and no
-  failure edge, and a licensed SEM-1 integer `Add` is a wrapping `IntArith`.
+  failure edge; licensed integer operators use wrapping `IntArith` (Neg is
+  subtraction from zero), and projected places mark only licensed bounds/tag
+  guards unchecked.
   Each planned definition's units are imported twice, first with every check
   as the reference, and both are kept in `Lowered::discharged` for the
-  driver's `validate_discharge`. A definition that append fusion rewrote keeps
-  every check (`Lowered::undischarged`), since plans number the TIR before
-  fusion.
+  driver's `validate_discharge`. Append fusion carries original sites and
+  canonical places through retained instructions and derived appending bodies;
+  inserted instructions have no obligation. `Lowered::native_discharge` keys
+  the accepted source sites by native definition.
   Slots hold mutable storage; every write names a fresh version, merges join
   versions through block parameters. Operands are read in TIR order with their
   declaration ordinals. Failure successors are TIR cleanup chains expanded and
@@ -577,8 +580,6 @@ Generation zero is reserved: the first id uses one, and removal at the maximum
 wraps to zero and retires that vacancy. Reads check both words before observing
 the payload. Ordinary placement, COW, counting and drop passes own all storage.
 
-PS-13 import consumes accepted integer-operation and canonical-place projection
-sites. `append_into::SourceMap` preserves original instruction/terminator sites
-and canonical places through caller rewrites and derived appending bodies;
-inserted instructions have no obligation. Reference and discharged imports use
-the same mapping, and the driver validates their independent guard inventories.
+Computed borrowed views (index or variant projections) materialize at their
+binding, keeping the parent check at its own source obligation before any child
+projection. Only total field paths flatten through a view alias.

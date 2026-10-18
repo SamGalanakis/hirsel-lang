@@ -130,13 +130,15 @@ pub(crate) fn fuse_with_origins(
     discharge: &hirsel_lir::discharge::Discharge,
 ) -> (Program, BTreeMap<DefPath, SourceMap>) {
     let mut p = program.clone();
-    let mut fuser = Fuser::default();
-    fuser.origins = program
-        .definitions
-        .iter()
-        .filter(|(path, _)| discharge.sites(path).is_some())
-        .map(|(path, def)| (path.clone(), SourceMap::new(def)))
-        .collect();
+    let mut fuser = Fuser {
+        origins: program
+            .definitions
+            .iter()
+            .filter(|(path, _)| discharge.sites(path).is_some())
+            .map(|(path, def)| (path.clone(), SourceMap::new(def)))
+            .collect(),
+        ..Fuser::default()
+    };
     loop {
         let mut changed = false;
         let paths: Vec<DefPath> = p.definitions.keys().cloned().collect();

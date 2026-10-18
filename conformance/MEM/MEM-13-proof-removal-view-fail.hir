@@ -1,0 +1,16 @@
+// rule: MEM-13
+// expect: fail MEM-13 at line 8
+type Inner = A(value: u64) | B(value: u64, other: u64)
+
+type Outer = Node(inner: Packed[Inner]) | Leaf
+
+fn probe(x: Packed[Outer]) -> u64 {
+  let inner = x.Node.inner
+  inner.A.value
+}
+
+pub fn main() -> Result[(), ()] {
+  let x: Packed[Outer] = Leaf()
+  let n = probe(x)
+  Ok(())
+}

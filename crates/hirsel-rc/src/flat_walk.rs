@@ -619,8 +619,13 @@ fn commit_into(ed: &mut Editor<Value>, p: Plan) {
     let element_at = AddressId(ed.unit.addresses.len() as u32);
     let element_ty = crate::insert::type_of(&mut ed.unit, ValueRepr::Aggregate, c.element);
     ed.unit.addresses.push(AddressInfo {
-        source_place: None,
-        unchecked: Vec::new(),
+        source_place: ed.unit.addresses[a.index()].source_place,
+        unchecked: ed.unit.addresses[a.index()]
+            .unchecked
+            .iter()
+            .copied()
+            .filter(|i| *i as usize <= position)
+            .collect(),
         base: AddressBase::Slot(c.root),
         projection: PoolRange::push(&mut ed.unit.pools.projections, element_path.drain(..)),
         ty: element_ty,
