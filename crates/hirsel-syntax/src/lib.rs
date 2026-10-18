@@ -339,6 +339,39 @@ pub enum Literal {
     Bytes(String),
     Bool(bool),
 }
+/// The two's-complement bits, at `width`, of an integer, character or byte
+/// literal; an integer spelled with a leading `-` is negated. None for any other
+/// literal or an unreadable spelling. Range checks belong to the type checker.
+pub fn scalar_bits(literal: &Literal, width: u32) -> Option<u128> {
+    match literal {
+        Literal::Character(s) => character_value(s).map(u128::from),
+        Literal::Byte(s) => byte_value(s).map(u128::from),
+        Literal::Integer(s) => {
+            let (negative, s) = match s.strip_prefix('-') {
+                Some(rest) => (true, rest),
+                None => (false, s.as_str()),
+            };
+            let s = s.replace('_', "");
+            let end = s
+                .find(|c| c == 'u' || c == 'i')
+                .unwrap_or(s.len());
+            let s = &s[..end];
+            let (radix, digits) = if let Some(d) = s.strip_prefix("0x") {
+                (16, d)
+            } else if let Some(d) = s.strip_prefix("0o") {
+                (8, d)
+            } else if let Some(d) = s.strip_prefix("0b") {
+                (2, d)
+            } else {
+                (10, s)
+            };
+            let n = u128::from_str_radix(digits, radix).ok()?;
+            let mask = u128::MAX >> (128 - width.clamp(1, 128));
+            Some(if negative { 0u128.wrapping_sub(n) & mask } else { n & mask })
+        }
+        _ => None,
+    }
+}
 /// Decode a single-quoted Unicode scalar spelling, retaining no source state.
 /// Invalid delimiters, escapes and scalar counts return None.
 pub fn character_value(spelling: &str) -> Option<char> {
@@ -585,6 +618,12 @@ pub enum PatternKind {
     Wildcard,
     Binding(Symbol),
     Literal(Literal),
+    /// Closed scalar range `start..=end`; bounds are literals, a negative integer
+    /// spelled with its sign as in `Literal` (LANG-13).
+    Range {
+        start: Literal,
+        end: Literal,
+    },
     Tuple(Vec<PatternId>),
     Constructor {
         path: Path,

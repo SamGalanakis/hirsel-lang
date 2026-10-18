@@ -66,6 +66,44 @@ pub enum Primitive {
     Bytes,
     Never,
 }
+impl Primitive {
+    /// Bit width and signedness of an integer primitive.
+    pub fn integer_width(self) -> Option<(u32, bool)> {
+        use Primitive::*;
+        Some(match self {
+            U8 => (8, false),
+            U16 => (16, false),
+            U32 => (32, false),
+            U64 => (64, false),
+            U128 => (128, false),
+            I8 => (8, true),
+            I16 => (16, true),
+            I32 => (32, true),
+            I64 => (64, true),
+            I128 => (128, true),
+            _ => return None,
+        })
+    }
+    /// The values a range pattern of this type ranges over, as ascending
+    /// inclusive intervals of `pattern_key`s: every integer, and every Unicode
+    /// scalar for `char` (LANG-13). None for every other primitive.
+    pub fn pattern_domain(self) -> Option<Vec<(u128, u128)>> {
+        if self == Primitive::Char {
+            return Some(vec![(0, 0xD7FF), (0xE000, 0x10FFFF)]);
+        }
+        let (width, _) = self.integer_width()?;
+        Some(vec![(0, u128::MAX >> (128 - width))])
+    }
+    /// The order-preserving key of a value's two's-complement bits: a signed
+    /// integer flips its sign bit, so keys compare as the values do.
+    pub fn pattern_key(self, bits: u128) -> Option<u128> {
+        if self == Primitive::Char {
+            return Some(bits);
+        }
+        let (width, signed) = self.integer_width()?;
+        Some(if signed { bits ^ (1 << (width - 1)) } else { bits })
+    }
+}
 /// Equality-only generic sizes (LANG-7); arithmetic sizes are not a type language.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Size {
