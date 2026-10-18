@@ -31,7 +31,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
+            b"usage: hirsel [--verbose] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -2663,6 +2663,61 @@ fn check_reports_each_unsafe_ffi_package_in_both_formats() {
         String::from_utf8_lossy(&output.stdout),
         "{\"schema_version\":1,\"unsafe_ffi_package\":{\"headers_checked\":false,\"link\":[\"-ldemo\"],\"name\":\"app\",\"version\":\"1\"}}\n"
     );
+}
+
+#[test]
+fn check_safe_reports_the_path_to_the_first_escape() {
+    // CAP-6 is a host admission verdict, outside the conformance header schema.
+    let ffi = |body: &str| {
+        let path = file(&format!(
+            "/// Reads its arguments and retains nothing.\nextern \"c\" fn demo_add(u: Unsafe, a: i32, b: i32) -> i32\n\n{body}"
+        ));
+        let sidecar = format!("{}.json", path.display());
+        std::fs::write(&sidecar, format!(r#"{{"schema":1,"package":{{"name":"app","version":"1"}},"entry":{{"module":[],"name":"main"}},"sources":[{{"path":"{}","module":[]}}],"dependencies":[],"unsafe_ffi":{{"link":["demo"],"headers_checked":false,"wrappers":[]}}}}"#, path.display())).unwrap();
+        path
+    };
+    let main = "pub fn main(u: Unsafe) -> Result[(), ()] {\n  let _ = relay(u, 2)\n  Ok(())\n}\n";
+    let cases = [
+        (
+            ffi(&format!(
+                "fn sum(u: Unsafe, a: i32) -> i32 {{\n  demo_add(u, a, 1)\n}}\n\nfn relay(u: Unsafe, a: i32) -> i32 {{\n  sum(u, a) + 1\n}}\n\n{main}"
+            )),
+            1,
+            "unsafe: app@1/main reaches the extern \"c\" function app@1/demo_add: app@1/main -> app@1/relay -> app@1/sum -> app@1/demo_add\n",
+        ),
+        // Holding Unsafe, or selecting an unsafe ffi package, is not an escape.
+        (
+            ffi(&format!(
+                "fn sum(u: Unsafe, a: i32) -> i32 {{\n  a + 1\n}}\n\nfn relay(u: Unsafe, a: i32) -> i32 {{\n  sum(u, a) + 1\n}}\n\n{main}"
+            )),
+            0,
+            "safe: app@1/main reaches no extern \"c\" function or Unsafe operation\n",
+        ),
+        (
+            file(&format!(
+                "fn relay(u: Unsafe, a: i64) -> i64 {{\n  int.unchecked_add(u, a, 1)\n}}\n\n{main}"
+            )),
+            1,
+            "unsafe: standalone@0/main reaches the Unsafe operation core@1/int/unchecked_add: standalone@0/main -> standalone@0/relay -> core@1/int/unchecked_add\n",
+        ),
+        // Std uses no Unsafe; core operations behind safe signatures are the runtime's.
+        (
+            std_file(
+                "pub fn main(rt: Io) -> Result[(), String] {\n  let _ = match json.parse(\"{\\\"a\\\": [1, 2]}\") {\n    Ok(v) => v,\n    Error(_) => return Error(\"bad json\"),\n  }\n  let _ = crc32.digest(string.as_bytes(\"abc\"))\n  let _ = sha256.digest(string.as_bytes(\"abc\"))\n  let out = match io.stdout(rt) { Ok(s) => s, Error(_) => return Ok(()) }\n  match out.print(out, \"ok\\n\") { Ok(_) => Ok(()), Error(_) => Error(\"print\") }\n}\n",
+            ),
+            0,
+            "safe: standalone@0/main reaches no extern \"c\" function or Unsafe operation\n",
+        ),
+    ];
+    for (path, code, verdict) in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["check", "--safe"])
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(code), "{output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), verdict);
+    }
 }
 
 #[test]

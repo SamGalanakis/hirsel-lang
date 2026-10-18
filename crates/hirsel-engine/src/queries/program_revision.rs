@@ -19,7 +19,7 @@ pub(crate) struct SemanticProgram {
     /// Every definition the closure visited.
     pub(crate) definitions: BTreeSet<DefPath>,
     /// Each visited definition's direct dependencies.
-    uses: BTreeMap<DefPath, BTreeSet<DefPath>>,
+    pub(crate) uses: BTreeMap<DefPath, BTreeSet<DefPath>>,
 }
 
 /// The foreign functions a program reaches (PROG-4).

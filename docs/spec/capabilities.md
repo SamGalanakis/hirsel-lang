@@ -171,3 +171,30 @@ run grants are present. `Env` grants a set of exact names: `env.get` returns
 `EnvError.NotGranted()` for every other name, independently of whether that name
 exists on the host. Granted but unset names return `None`; the Env object
 in the run configuration records both the name grants and their snapshots.
+
+### CAP-6: Safe code
+
+A definition is **safe** when its dependency closure reaches no **escape** from capability
+checking. The closure is the one program identity covers
+([run configuration](determinism.md#run-configuration)): every definition the checked
+signature, body, private representations, implicit finalizers, compile-time execution and
+selected generated instances read, transitively. The escapes are:
+
+- an `extern "c"` function ([PROG-4](programs.md#prog-4-interop)), whose foreign code acts
+  outside every grant;
+- a core operation that requires `Unsafe` ([MEM-9](memory.md#mem-9-unsafe)): unchecked
+  arithmetic (`int.unchecked_add`) and any later raw-pointer, manual-memory or
+  weaker-atomic operation, each identified by its core role, never by its spelling.
+
+Holding or passing `Unsafe`, `Ptr` or `FnPtr` values is not an escape: those values act
+only through an escape. Selecting an `unsafe ffi` package is not one unless one of its
+externs is reached. Core operations with safe signatures are not escapes: their native
+implementations belong to the runtime, whose revision every program identity binds, and
+are trusted as the runtime is. Std is checked, not trusted: it uses no `Unsafe`
+([standard library](std-library.md)), so its operations are safe on their own closure, and
+a std definition reaching an escape would be refused like any other. No package is exempt
+by name or hash.
+
+The **verdict** for a definition is either safe or the shortest dependency path from it to
+an escape, both included, found breadth-first in definition-path order, so equal programs
+report equal paths. `hirsel check --safe` prints the verdict for the program's entry.

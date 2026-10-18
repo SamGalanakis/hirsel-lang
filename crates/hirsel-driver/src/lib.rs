@@ -45,6 +45,19 @@ pub fn load_program_source_with_cache(
 pub fn check_path(path: &Path) -> Result<CheckOutput, ToolError> {
     COMPILER.check_path(path)
 }
+/// `check_path`, then the escape from capability checking an accepted program's
+/// entry reaches (CAP-6).
+pub fn check_safe_path(
+    path: &Path,
+) -> Result<
+    (
+        CheckOutput,
+        Option<(hirsel_syntax::DefPath, Option<hirsel_engine::UnsafeReach>)>,
+    ),
+    ToolError,
+> {
+    COMPILER.check_safe_path(path)
+}
 pub fn format_path(path: &Path) -> Result<String, ToolError> {
     COMPILER.format_path(path)
 }

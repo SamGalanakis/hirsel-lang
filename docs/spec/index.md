@@ -68,7 +68,7 @@ not use it. Cost reports (where layer-0 code counts, copies or keeps checks) are
 | [Generics](generics.md): bounds and dictionaries | GEN-1 to GEN-5 |
 | [Serialization](serialization.md): schemas and the canonical codec | SER-1, SER-2 |
 | [Memory](memory.md): counting, arenas, regions, layout, flat and packed data, slots | MEM-1 to MEM-14 |
-| [Capabilities and authority](capabilities.md) | CAP-1 to CAP-5 |
+| [Capabilities and authority](capabilities.md) | CAP-1 to CAP-6 |
 | [Concurrency](concurrency.md) | CONC-1 to CONC-8 |
 | [Failure and destruction](failure.md) | FAIL-1 to FAIL-4, DROP-1 to DROP-4 |
 | [Determinism and replay](determinism.md): run configuration, recording, Blocked | DET-1 to DET-4 |

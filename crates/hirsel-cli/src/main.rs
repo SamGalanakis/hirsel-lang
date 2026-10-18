@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
 use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
@@ -470,6 +470,11 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         flag: Some("--json"),
                         file: source_arg(&mut args)?,
                     },
+                    Some(Long("safe")) if name == "check" => Command::Source {
+                        command: name,
+                        flag: Some("--safe"),
+                        file: source_arg(&mut args)?,
+                    },
                     Some(Long("check")) if name == "fmt" => Command::Source {
                         command: name,
                         flag: Some("--check"),
@@ -861,8 +866,12 @@ fn execute(mut args: Vec<OsString>) -> u8 {
     let path = Path::new(&file);
     let json = flag == Some("--json");
     match command {
-        "check" => match hirsel_driver::check_path(path) {
-            Ok(output) => {
+        "check" => match if flag == Some("--safe") {
+            hirsel_driver::check_safe_path(path)
+        } else {
+            hirsel_driver::check_path(path).map(|output| (output, None))
+        } {
+            Ok((output, verdict)) => {
                 for d in &output.diagnostics {
                     if json {
                         println!("{}", d.to_json(&output.sources));
@@ -917,6 +926,22 @@ fn execute(mut args: Vec<OsString>) -> u8 {
                         eprintln!("{} is not implemented yet", phase.phase_name());
                         return 2;
                     }
+                }
+                // The verdict exists only for a complete, accepted program (CAP-6).
+                match verdict {
+                    Some((entry, None)) => println!(
+                        "safe: {entry} reaches no extern \"c\" function or Unsafe operation"
+                    ),
+                    Some((entry, Some(reach))) => {
+                        println!(
+                            "unsafe: {entry} reaches {} {}: {}",
+                            reach.escape,
+                            reach.path.last().expect("a reach path ends at its escape"),
+                            reach.spelled().join(" -> ")
+                        );
+                        return 1;
+                    }
+                    None => {}
                 }
                 let rejected = output
                     .diagnostics

@@ -19,6 +19,10 @@ Commands (arguments use the shared lexopt parser):
 - `hirsel check [--json] <file>` emits human diagnostics on stderr or one schema-v1
   diagnostic JSON object per stdout line. A clean complete check exits 0; any error
   diagnostic exits 1; an unavailable phase exits 2 with a tool message on stderr.
+- `hirsel check --safe <file>` also prints, for an accepted program, one verdict
+  line on stdout: `safe: <entry> ...` (exit 0), or `unsafe: <entry> reaches
+  <escape>: <entry> -> ... -> <escape>` (exit 1), the shortest dependency path
+  from the entry to an extern or `Unsafe` operation (CAP-6).
 - `hirsel run <file>` requires complete checking/lowering and writes exact stdout
   bytes. Exit 0 is success; any runtime failure/nonzero program exit becomes 1.
 - `hirsel fmt [--check] <file>` writes canonical source to the file, or compares

@@ -41,6 +41,12 @@ Comments/spaces, source positions, file order, compiler provenance and native
 instances/options are excluded. Newline boundaries remain because LANG-1 uses
 them. Unrelated source definitions do not participate.
 
+`QueryEngine::unsafe_reach(root)` walks that same closure breadth-first from any
+root definition and returns the shortest path to the first extern or
+`UnsafeOperation`-role core operation it reaches (CAP-6), or none. It is the
+checker query behind `hirsel check --safe` and the `admit.safe@1` admission
+policy; it adds nothing to TIR or LIR.
+
 Successful native import retains that same semantic graph privately in
 `ValidatedNativeInput`. Its `semantic_program_revision(entry)` works after the
 engine is dropped, closes only the requested entry's dependencies, and preserves

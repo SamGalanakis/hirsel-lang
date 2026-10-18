@@ -132,6 +132,24 @@ impl Compiler {
             program.check().map_err(|error| program.error(error))
         })
     }
+    /// `check_path`, then, when the program checks complete and accepted, the
+    /// escape from capability checking its entry reaches (CAP-6).
+    pub fn check_safe_path(
+        &self,
+        path: &Path,
+    ) -> Result<(CheckOutput, Option<(DefPath, Option<UnsafeReach>)>), ToolError> {
+        with_compiler_stack(|| {
+            let mut program = self.load_program(path)?;
+            let output = program.check().map_err(|error| program.error(error))?;
+            if crate::queries::has_errors(&output.diagnostics)
+                || output.completion != CheckCompletion::Complete
+            {
+                return Ok((output, None));
+            }
+            let reach = program.unsafe_reach()?;
+            Ok((output, Some((program.entry.clone(), reach))))
+        })
+    }
     pub fn format_path(&self, path: &Path) -> Result<String, ToolError> {
         with_compiler_stack(|| {
             let (mut engine, file) = self.load(path)?;

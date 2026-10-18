@@ -362,6 +362,11 @@ impl LoadedProgram {
         }
         Ok(())
     }
+    /// The escape from capability checking the entry reaches, if any (CAP-6).
+    pub fn unsafe_reach(&mut self) -> Result<Option<crate::UnsafeReach>, ToolError> {
+        let entry = self.entry.clone();
+        self.engine.unsafe_reach(&entry).map_err(|e| self.error(e))
+    }
     /// The precheck of `package`, a dependency of this program, which must check
     /// complete with no diagnostics at all (`Precheck`).
     pub fn precheck(&mut self, package: &PackageId) -> Result<Vec<u8>, ToolError> {
