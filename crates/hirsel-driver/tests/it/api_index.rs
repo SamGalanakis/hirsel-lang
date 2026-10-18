@@ -10,6 +10,14 @@ fn published_index_matches_every_core_and_std_export() {
     hirsel_engine::with_compiler_stack(|| {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let entries = api_index::entries(&root).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .find(|e| e.identity == "core@1/slots/insert")
+                .unwrap()
+                .declaration,
+            "@preserves_unique(s) fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s"
+        );
         let actual: BTreeSet<_> = entries.iter().map(|e| e.identity.clone()).collect();
         assert_eq!(actual.len(), entries.len(), "duplicate index row");
         let mut exports = BTreeSet::new();

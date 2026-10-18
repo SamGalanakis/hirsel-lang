@@ -343,7 +343,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## bytes
 
-- `fn bytes.from_list(take src: List[u8]) -> Bytes` <!-- core@1/bytes/from_list -->
+- `@preserves_unique(src) fn bytes.from_list(take src: List[u8]) -> Bytes` <!-- core@1/bytes/from_list -->
 - `@noalloc fn bytes.len(src: Bytes) -> u64` <!-- core@1/bytes/len -->
 - `pub fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src` — Left-to-right nonoverlapping byte replacement, including arbitrary UTF-8 errors. <!-- std@1/bytes/replace -->
 - `@noalloc fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src` <!-- core@1/bytes/slice -->
@@ -739,9 +739,9 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn list.map[T, U](xs: List[T], f: fn(T) -> U) -> List[U] uses {xs, f}` <!-- std@1/list/map -->
 - `pub fn list.partition[T](take xs: List[T], predicate: fn(T) -> bool) -> (List[T], List[T]) uses {xs, predicate}` <!-- std@1/list/partition -->
 - `@noalloc fn list.pop[T](mut xs: unique List[T]) -> Option[T]` <!-- core@1/list/pop -->
-- `fn list.push[T](mut xs: List[T], take value: T) -> ()` — Appends 'v: T' to a mutable 'List[T]'. <!-- core@1/list/push -->
+- `@preserves_unique(xs) fn list.push[T](mut xs: List[T], take value: T) -> ()` — Appends 'v: T' to a mutable 'List[T]'. <!-- core@1/list/push -->
 - `@noalloc fn list.remove[T](mut xs: unique List[T], index: u64) -> T` <!-- core@1/list/remove -->
-- `fn list.reserve[T](mut xs: List[T], capacity: u64) -> ()` <!-- core@1/list/reserve -->
+- `@preserves_unique(xs) fn list.reserve[T](mut xs: List[T], capacity: u64) -> ()` <!-- core@1/list/reserve -->
 - `@noalloc pub fn list.reverse[T](mut xs: unique List[T]) -> ()` — Collection algorithms use ordinary source calls and ownership. <!-- std@1/list/reverse -->
 - `@noalloc pub fn list.rotate[T](mut xs: unique List[T], amount: u64) -> ()` — Left rotation uses three reversals, each preserving element ownership. <!-- std@1/list/rotate -->
 - `@noalloc pub fn list.sort[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {}` — In-place, unstable heapsort, O(n log n), including move-only elements. <!-- std@1/list/sort -->
@@ -872,7 +872,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `@noalloc fn set.contains[T: key](s: Set[T], value: T) -> bool` <!-- core@1/set/contains -->
 - `fn set.empty[T: key]() -> Set[T]` <!-- core@1/set/empty -->
-- `fn set.insert[T: key](mut s: Set[T], take value: T) -> ()` <!-- core@1/set/insert -->
+- `@preserves_unique(s) fn set.insert[T: key](mut s: Set[T], take value: T) -> ()` <!-- core@1/set/insert -->
 
 ## sha256
 
@@ -896,7 +896,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `fn slots.empty[T]() -> Slots[T]` <!-- core@1/slots/empty -->
 - `@noalloc fn slots.get[T](s: Slots[T], id: SlotId[T] of s) -> Option[T] in s` <!-- core@1/slots/get -->
-- `fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T]` <!-- core@1/slots/insert -->
+- `@preserves_unique(s) fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s` <!-- core@1/slots/insert -->
 - `fn slots.remove[T](mut s: Slots[T], id: SlotId[T] of s) -> Option[T]` <!-- core@1/slots/remove -->
 
 ## sorted_map
@@ -929,7 +929,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn string.contains(s: String, pattern: String) -> bool uses {}` <!-- std@1/string/contains -->
 - `@noalloc pub fn string.ends_with(s: String, pattern: String) -> bool uses {}` <!-- std@1/string/ends_with -->
 - `@noalloc pub fn string.find(s: String, pattern: String) -> Option[StrPos of s] uses {}` <!-- std@1/string/find -->
-- `fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]` <!-- core@1/string/from_bytes -->
+- `@preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]` <!-- core@1/string/from_bytes -->
 - `pub fn string.join(parts: List[String], separator: String) -> String uses {}` <!-- std@1/string/join -->
 - `pub fn string.lines(take s: String) -> List[String] uses {}` — Rust str::lines: only LF and CRLF terminate lines; omit a final empty line. <!-- std@1/string/lines -->
 - `@noalloc fn string.position(s: String, offset: u64) -> Option[StrPos of s]` <!-- core@1/string/position -->

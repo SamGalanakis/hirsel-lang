@@ -50,7 +50,10 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
         .lines()
         .filter_map(|line| {
             let declaration = line.strip_prefix("N ").unwrap_or(line);
-            let name = declaration.strip_prefix("fn ")?.split(['[', '(']).next()?;
+            if !declaration.starts_with("fn ") && !declaration.starts_with('@') {
+                return None;
+            }
+            let name = declaration.split_once("fn ")?.1.split(['[', '(']).next()?;
             Some((name, line.replacen("N fn ", "@noalloc fn ", 1)))
         })
         .collect();
