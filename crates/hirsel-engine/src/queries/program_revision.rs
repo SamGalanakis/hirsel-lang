@@ -167,7 +167,11 @@ impl QueryEngine {
             }
         }
         for ((constant, _), value) in &self.staged_values {
-            if self.staged_constants.get(constant).is_some_and(|c| c.owner == *path) {
+            if self
+                .staged_constants
+                .get(constant)
+                .is_some_and(|c| c.owner == *path)
+            {
                 dependencies.extend(value.executed.bodies.keys().cloned());
                 dependencies.extend(value.executed.signatures.keys().cloned());
             }

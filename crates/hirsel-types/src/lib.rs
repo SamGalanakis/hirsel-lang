@@ -679,7 +679,10 @@ pub struct TypeDefinition {
 pub enum SignatureKind {
     Function(FunctionType),
     Type(TypeDefinition),
-    Const { ty: TypeId, generics: SharedSlice<GenericParameter> },
+    Const {
+        ty: TypeId,
+        generics: SharedSlice<GenericParameter>,
+    },
 }
 mod parameters;
 pub use parameters::*;

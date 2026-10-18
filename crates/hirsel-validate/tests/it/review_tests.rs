@@ -6340,7 +6340,10 @@ fn constant_reads_require_the_declared_constant_type_without_initializer_operand
             let SignatureKind::Function(function) = &signature.kind else {
                 unreachable!()
             };
-            signature.kind = SignatureKind::Const { ty: function.result, generics: Default::default() };
+            signature.kind = SignatureKind::Const {
+                ty: function.result,
+                generics: Default::default(),
+            };
         }
         f.signatures.insert(path("DATA"), signature);
         f.body().rvalues[0] = Rvalue::ReadConstant {
@@ -6447,7 +6450,10 @@ fn counted_constant_reads_independently_require_shared_root_modes() {
         row.modes.uniqueness = Uniqueness::Unique;
         row.modes.sendability = Sendability::Sendable;
         let root = signature.types.push(row);
-        signature.kind = SignatureKind::Const { ty: root, generics: Default::default() };
+        signature.kind = SignatureKind::Const {
+            ty: root,
+            generics: Default::default(),
+        };
         f.signatures.insert(path("DATA"), signature);
         f.assign(
             target,
@@ -8023,7 +8029,10 @@ fn constant_field_places_keep_declared_modes_independently_of_copy_receipts() {
         f.body().places[root as usize].ty = root_ty;
         let mut signature = function_signature("DATA", vec![], TypeKind::Tuple(vec![].into()));
         let constant = import_type(&f.definition.types, root_ty, &mut signature.types).unwrap();
-        signature.kind = SignatureKind::Const { ty: constant, generics: Default::default() };
+        signature.kind = SignatureKind::Const {
+            ty: constant,
+            generics: Default::default(),
+        };
         f.signatures.insert(path("DATA"), signature);
         // Reading the constant copies its counted owner; physical field
         // contracts survive, while current whole-value evidence does not.
@@ -10161,7 +10170,9 @@ fn constant_size_actuals_are_complete_and_lexically_declared() {
     for variant in 0..3 {
         let mut f = Fixture::unit();
         let mut signature = function_signature("DATA", vec![], TypeKind::Tuple(vec![].into()));
-        let SignatureKind::Function(function) = &signature.kind else { unreachable!() };
+        let SignatureKind::Function(function) = &signature.kind else {
+            unreachable!()
+        };
         signature.kind = SignatureKind::Const {
             ty: function.result,
             generics: vec![GenericParameter::Size { name: "n".into() }].into(),
@@ -10172,13 +10183,31 @@ fn constant_size_actuals_are_complete_and_lexically_declared() {
             arguments: match variant {
                 0 => vec![Size::Constant(2)],
                 1 => vec![],
-                _ => vec![Size::Parameter(SizeParameterRef::body(NameSite::Item(hirsel_syntax::ItemId(99)), SizeParamId(0)))],
+                _ => vec![Size::Parameter(SizeParameterRef::body(
+                    NameSite::Item(hirsel_syntax::ItemId(99)),
+                    SizeParamId(0),
+                ))],
             },
         };
         match variant {
             0 => f.valid(),
-            1 => assert!(f.kinds().contains(&ViolationKind::Arity { entity: "constant size arguments", expected: 1, actual: 0 }), "{:?}", f.kinds()),
-            _ => assert!(f.kinds().contains(&ViolationKind::InvalidId { arena: "size parameter", index: 0 }), "{:?}", f.kinds()),
+            1 => assert!(
+                f.kinds().contains(&ViolationKind::Arity {
+                    entity: "constant size arguments",
+                    expected: 1,
+                    actual: 0
+                }),
+                "{:?}",
+                f.kinds()
+            ),
+            _ => assert!(
+                f.kinds().contains(&ViolationKind::InvalidId {
+                    arena: "size parameter",
+                    index: 0
+                }),
+                "{:?}",
+                f.kinds()
+            ),
         }
     }
 }
@@ -10187,10 +10216,17 @@ fn constant_size_actuals_are_complete_and_lexically_declared() {
 fn constant_size_actuals_instantiate_the_declared_result() {
     for actual in [2, 3] {
         let mut f = Fixture::unit();
-        let element = f.definition.types.push(ty(TypeKind::Primitive(Primitive::U8)));
+        let element = f
+            .definition
+            .types
+            .push(ty(TypeKind::Primitive(Primitive::U8)));
         let result = f.definition.types.push(ty(TypeKind::Builtin {
             kind: BuiltinType::Inline,
-            arguments: vec![GenericArgument::Type(element), GenericArgument::Size(Size::Constant(2))].into(),
+            arguments: vec![
+                GenericArgument::Type(element),
+                GenericArgument::Size(Size::Constant(2)),
+            ]
+            .into(),
         }));
         f.body().locals[0].ty = result;
         f.body().places[0].ty = result;
@@ -10199,13 +10235,31 @@ fn constant_size_actuals_instantiate_the_declared_result() {
         let element = signature.types.push(ty(TypeKind::Primitive(Primitive::U8)));
         let root = signature.types.push(ty(TypeKind::Builtin {
             kind: BuiltinType::Inline,
-            arguments: vec![GenericArgument::Type(element), GenericArgument::Size(Size::Parameter(SizeParameterRef::bound(SizeParamId(0))))].into(),
+            arguments: vec![
+                GenericArgument::Type(element),
+                GenericArgument::Size(Size::Parameter(SizeParameterRef::bound(SizeParamId(0)))),
+            ]
+            .into(),
         }));
-        signature.kind = SignatureKind::Const { ty: root, generics: vec![GenericParameter::Size { name: "n".into() }].into() };
+        signature.kind = SignatureKind::Const {
+            ty: root,
+            generics: vec![GenericParameter::Size { name: "n".into() }].into(),
+        };
         f.signatures.insert(path("DATA"), signature);
-        f.body().rvalues[0] = Rvalue::ReadConstant { definition: path("DATA"), arguments: vec![Size::Constant(actual)] };
-        if actual == 2 { f.valid(); } else {
-            assert!(f.kinds().contains(&ViolationKind::TypeMismatch { entity: "constant declaration" }), "{:?}", f.kinds());
+        f.body().rvalues[0] = Rvalue::ReadConstant {
+            definition: path("DATA"),
+            arguments: vec![Size::Constant(actual)],
+        };
+        if actual == 2 {
+            f.valid();
+        } else {
+            assert!(
+                f.kinds().contains(&ViolationKind::TypeMismatch {
+                    entity: "constant declaration"
+                }),
+                "{:?}",
+                f.kinds()
+            );
         }
     }
 }
@@ -10215,13 +10269,35 @@ fn constant_declarations_exclude_type_parameters() {
     for size in [true, false] {
         let mut f = Fixture::unit();
         let mut signature = function_signature("DATA", vec![], TypeKind::Tuple(vec![].into()));
-        let SignatureKind::Function(function) = &signature.kind else { unreachable!() };
+        let SignatureKind::Function(function) = &signature.kind else {
+            unreachable!()
+        };
         signature.kind = SignatureKind::Const {
             ty: function.result,
-            generics: vec![if size { GenericParameter::Size { name: "n".into() } } else { GenericParameter::Type { name: "T".into(), bounds: vec![].into() } }].into(),
+            generics: vec![if size {
+                GenericParameter::Size { name: "n".into() }
+            } else {
+                GenericParameter::Type {
+                    name: "T".into(),
+                    bounds: vec![].into(),
+                }
+            }]
+            .into(),
         };
         f.signatures.insert(path("DATA"), signature);
-        f.body().rvalues[0] = Rvalue::ReadConstant { definition: path("DATA"), arguments: vec![Size::Constant(2)] };
-        if size { f.valid(); } else { assert!(f.kinds().contains(&ViolationKind::InvalidSignature(path("DATA"))), "{:?}", f.kinds()); }
+        f.body().rvalues[0] = Rvalue::ReadConstant {
+            definition: path("DATA"),
+            arguments: vec![Size::Constant(2)],
+        };
+        if size {
+            f.valid();
+        } else {
+            assert!(
+                f.kinds()
+                    .contains(&ViolationKind::InvalidSignature(path("DATA"))),
+                "{:?}",
+                f.kinds()
+            );
+        }
     }
 }

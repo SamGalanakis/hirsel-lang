@@ -31,8 +31,10 @@ form `= comptime expression` is reserved for generated bodies and is not executa
 
 Evaluated values become ordinary constants or expression values before dependents use
 them. Only materializable data crosses this boundary: resource, capability and callable
-graphs fail CT-2 at the enclosing initializer or explicit comptime expression, after
-ordinary checking and evaluation-failure precedence. This does not forbid evaluating a
+graphs fail CT-2 at the enclosing initializer or explicit comptime expression. An
+explicit comptime result must have a data type, checked statically after ordinary
+type checking, including in unselected generic definitions. Never and recovery
+types do not impose this check; evaluation failures retain CT-1 precedence there. This does not forbid evaluating a
 callable internally and publishing its data result. Named constants materialize dependency
 first, with ties broken by stable source path and declaration position, and decode once
 into immutable storage that lives for the whole program, before entry. Reads share that

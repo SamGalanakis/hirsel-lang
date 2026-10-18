@@ -35,10 +35,14 @@ impl Constants {
         arguments: &[u64],
         runtime: &aggregate::RuntimeTypes,
     ) -> Result<Value, Error> {
-        if arguments.is_empty() { return self.read(provider, path, runtime); }
+        if arguments.is_empty() {
+            return self.read(provider, path, runtime);
+        }
         let key = hirsel_tir::constant_instance_path(path, arguments);
         if !self.0.contains_key(&key) {
-            let data = provider.constant_instance(path, arguments).map_err(Error::Query)?;
+            let data = provider
+                .constant_instance(path, arguments)
+                .map_err(Error::Query)?;
             self.0.insert(key.clone(), decode(&data, runtime)?);
         }
         Ok(self.0[&key].clone())

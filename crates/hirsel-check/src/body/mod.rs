@@ -182,7 +182,7 @@ fn check_inner(
         c.step(work)?;
     }
     c.check_contracts()?;
-    c.check_closed_comptimes();
+    c.check_closed_comptimes()?;
     c.publish_tails()?;
     for f in &c.frames {
         if let Some(result) = f.result {

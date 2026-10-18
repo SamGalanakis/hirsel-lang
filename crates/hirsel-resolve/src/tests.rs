@@ -383,7 +383,10 @@ fn constant(d: DefPath, kind: ty::TypeKind) -> ty::Signature {
 
         definition: d,
         types,
-        kind: ty::SignatureKind::Const { ty: id, generics: Default::default() },
+        kind: ty::SignatureKind::Const {
+            ty: id,
+            generics: Default::default(),
+        },
         fingerprint: ContentHash::of_bytes(b"const-signature"),
     }
 }

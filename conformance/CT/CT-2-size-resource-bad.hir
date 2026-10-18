@@ -1,0 +1,19 @@
+// rule: CT-2
+// expect: reject CT-2 at line 12
+resource type Token {
+  value: u64,
+}
+drop(x) {
+  ()
+}
+
+fn probe[n: size](xs: Inline[u8, n]) -> Token {
+  let _ = xs
+  comptime Token(value: n)
+}
+
+pub fn main() -> Result[(), ()] {
+  let xs: Inline[u8, 1] = [1]
+  let _ = probe(xs)
+  Ok(())
+}

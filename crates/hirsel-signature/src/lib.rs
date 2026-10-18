@@ -222,7 +222,10 @@ fn normalize_inner(
                     "pub opaque applies only to types",
                 ));
             }
-            SignatureKind::Const { ty: n.ty(*ty, Position::Result)?, generics: Default::default() }
+            SignatureKind::Const {
+                ty: n.ty(*ty, Position::Result)?,
+                generics: Default::default(),
+            }
         }
         ast::ItemKind::Type {
             flavor,

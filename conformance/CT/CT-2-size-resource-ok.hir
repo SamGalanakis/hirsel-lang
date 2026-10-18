@@ -1,0 +1,22 @@
+// rule: CT-2
+// expect: run
+resource type Token {
+  value: u64,
+}
+drop(x) {
+  ()
+}
+
+fn probe[n: size](xs: Inline[u8, n]) -> u64 {
+  let _ = xs
+  comptime {
+    let token = Token(value: n)
+    token.value
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let xs: Inline[u8, 1] = [1]
+  test.check(t, probe(xs) == 1u64)
+  Ok(())
+}

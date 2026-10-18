@@ -277,7 +277,9 @@ parameters or contracts; nested callable frames retain their normal inputs.
 The check walks sorted source intervals rather than rescanning the expression
 arena for each wrapper. Abstract type mentions are rejected at definition time;
 size parameters are staged per selected instantiation. Closed expressions inside
-generic definitions remain valid.
+generic definitions remain valid. Result types must prove Data from declared
+signatures before lowering, even in unselected definitions; Never and recovery
+types retain evaluation-failure behavior.
 
 H publishes source places through a primary expression-keyed map during checking.
 Projection, access, contract and tail queries use that same map; CheckedBody's

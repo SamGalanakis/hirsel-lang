@@ -487,7 +487,14 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             let mut b = Builder::new("").with_declarations(&out);
             let ty = b.ty(&format!("Order[{name}]"), PassingMode::Take);
             publish(
-                b.signature(&format!("{name}.order"), SignatureKind::Const { ty, generics: Default::default() }, false),
+                b.signature(
+                    &format!("{name}.order"),
+                    SignatureKind::Const {
+                        ty,
+                        generics: Default::default(),
+                    },
+                    false,
+                ),
                 &mut out,
             );
         }

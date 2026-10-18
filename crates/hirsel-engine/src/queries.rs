@@ -745,8 +745,11 @@ impl QueryEngine {
         retire!(checked, body_hashes);
         retire!(modes, body_hashes);
         retire!(lowered, body_hashes);
-        self.staged_constants.retain(|_, constant| !affected.contains(&constant.owner) || self.modes.contains_key(&constant.owner));
-        self.staged_values.retain(|(path, _), _| self.staged_constants.contains_key(path));
+        self.staged_constants.retain(|_, constant| {
+            !affected.contains(&constant.owner) || self.modes.contains_key(&constant.owner)
+        });
+        self.staged_values
+            .retain(|(path, _), _| self.staged_constants.contains_key(path));
         if let Some(state) = &self.adapters.compiler_state {
             let mut state = state.borrow_mut();
             state.constant_values.retain(|_, value| {
@@ -1459,9 +1462,16 @@ impl TirProvider for QueryEngine {
     fn constant(&mut self, path: &DefPath) -> Result<hirsel_tir::MaterializedRef, QueryError> {
         self.materialize_value(path).map(std::sync::Arc::new)
     }
-    fn constant_instance(&mut self, path: &DefPath, arguments: &[u64]) -> Result<hirsel_tir::MaterializedRef, QueryError> {
-        if arguments.is_empty() { return self.constant(path); }
-        self.materialize_staged(path, arguments).map(|value| Arc::new(value.value))
+    fn constant_instance(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+        if arguments.is_empty() {
+            return self.constant(path);
+        }
+        self.materialize_staged(path, arguments)
+            .map(|value| Arc::new(value.value))
     }
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
         // #63: dependency-first; ties use source file path and declaration position.

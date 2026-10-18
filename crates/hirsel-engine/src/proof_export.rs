@@ -137,6 +137,32 @@ impl QueryEngine {
                 }),
             }
         }
+        self.prepare_staged_instances()?;
+        for (path, constant) in &self.staged_constants {
+            if program.definitions.contains(&constant.owner) {
+                signatures.insert(
+                    path.clone(),
+                    SignatureSection {
+                        path: path.clone(),
+                        dependencies: vec![],
+                        public: (*constant.signature).clone(),
+                        owner_view: None,
+                    },
+                );
+            }
+        }
+        for ((path, arguments), value) in &self.staged_values {
+            if self
+                .staged_constants
+                .get(path)
+                .is_some_and(|c| program.definitions.contains(&c.owner))
+            {
+                constants.insert(
+                    hirsel_tir::constant_instance_path(path, arguments),
+                    value.value.clone(),
+                );
+            }
+        }
         let sources = Rc::new(self.sources.clone());
         let locator: Locator = Rc::new(move |span| {
             let file = sources.file(span.file);
@@ -169,7 +195,7 @@ impl QueryEngine {
         })
     }
 
-    /// `hirsel.tir.export.v3` text of the entry's closure.
+    /// `hirsel.tir.export.v4` text of the entry's closure.
     pub fn export_tir(&mut self, entry: &DefPath) -> Result<String, QueryError> {
         Ok(hirsel_proof_export::export(
             &self.proof_export_input(entry)?,

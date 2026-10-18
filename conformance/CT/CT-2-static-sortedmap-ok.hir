@@ -1,0 +1,5 @@
+// rule: CT-2
+// expect: accept
+fn unused[n: size]() {
+  let m: Map[u32, u8] = comptime map.empty()
+}

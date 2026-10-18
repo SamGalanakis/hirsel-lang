@@ -193,7 +193,10 @@ impl SignaturePhase for Fake {
             metadata: Default::default(),
             definition: item.definition.clone(),
             types,
-            kind: SignatureKind::Const { ty: unit, generics: Default::default() },
+            kind: SignatureKind::Const {
+                ty: unit,
+                generics: Default::default(),
+            },
             fingerprint,
         }))
     }

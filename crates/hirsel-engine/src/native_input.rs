@@ -180,8 +180,15 @@ impl QueryEngine {
             }
         }
         for ((path, arguments), value) in &self.staged_values {
-            if self.staged_constants.get(path).is_some_and(|c| paths.contains(&c.owner)) {
-                constants.insert(hirsel_tir::constant_instance_path(path, arguments), value.value.clone());
+            if self
+                .staged_constants
+                .get(path)
+                .is_some_and(|c| paths.contains(&c.owner))
+            {
+                constants.insert(
+                    hirsel_tir::constant_instance_path(path, arguments),
+                    value.value.clone(),
+                );
             }
         }
         let mut input = NativeInput {

@@ -411,7 +411,10 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
                 },
                 definition: core(&name),
                 types,
-                kind: SignatureKind::Const { ty: dictionary, generics: Default::default() },
+                kind: SignatureKind::Const {
+                    ty: dictionary,
+                    generics: Default::default(),
+                },
                 fingerprint: ast::ContentHash::of_bytes(name.as_bytes()),
             }),
         );

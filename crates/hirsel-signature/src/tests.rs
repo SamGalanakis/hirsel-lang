@@ -812,7 +812,10 @@ fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
     let mut s = Fixture::new().sig();
     let absent = s.types.id(0).unwrap();
     s.types = TypeStore::default();
-    s.kind = SignatureKind::Const { ty: absent, generics: Default::default() };
+    s.kind = SignatureKind::Const {
+        ty: absent,
+        generics: Default::default(),
+    };
     assert_eq!(
         fingerprint(&s, &[]),
         Err(EncodingError::MissingType(absent))
@@ -826,7 +829,10 @@ fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
         }]
     });
     let cycle = s.types.id(0).unwrap();
-    s.kind = SignatureKind::Const { ty: cycle, generics: Default::default() };
+    s.kind = SignatureKind::Const {
+        ty: cycle,
+        generics: Default::default(),
+    };
     assert_eq!(
         fingerprint(&s, &[]),
         Err(EncodingError::StructuralCycle(cycle))
@@ -835,7 +841,10 @@ fn hash_rejects_invalid_graphs_and_conflicting_dependencies() {
         kind: TypeKind::Error,
         ..template
     });
-    s.kind = SignatureKind::Const { ty: recovery, generics: Default::default() };
+    s.kind = SignatureKind::Const {
+        ty: recovery,
+        generics: Default::default(),
+    };
     assert_eq!(
         fingerprint(&s, &[]),
         Err(EncodingError::RecoveryType(recovery))
@@ -941,7 +950,7 @@ fn golden_vectors() {
         std::fs::write(
             concat!(env!("CARGO_MANIFEST_DIR"), "/src/golden.txt"),
             format!(
-                "# Canonical signature encoding v13 and SHA-256 vectors\n{}\n",
+                "# Canonical signature encoding v15 and SHA-256 vectors\n{}\n",
                 rows.join("\n")
             ),
         )

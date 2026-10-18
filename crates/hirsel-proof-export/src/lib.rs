@@ -1,6 +1,6 @@
 //! The prover-neutral proof seam: stable obligation ids,
 //! per-definition TIR digests and obligation checksums, and the canonical
-//! `hirsel.tir.export.v3` text that consumers read out of process. Import
+//! `hirsel.tir.export.v4` text that consumers read out of process. Import
 //! decodes, re-derives every signature fingerprint, recomputes every digest
 //! and table, and re-validates each definition with V; any difference is a
 //! located refusal.
@@ -25,7 +25,7 @@ use std::fmt;
 use std::rc::Rc;
 
 /// PS-8 format; bumped on TIR_VERSION or a ruled change, never on LIR churn.
-pub const FORMAT: &str = "hirsel.tir.export.v3";
+pub const FORMAT: &str = "hirsel.tir.export.v4";
 /// PS-5.
 pub const TIR_DIGEST_DOMAIN: &str = "hirsel.tir.digest.v1";
 /// PS-6.

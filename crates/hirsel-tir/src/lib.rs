@@ -636,8 +636,16 @@ pub trait TirProvider {
     /// Compiled immutable data; this never executes initializer code.
     fn constant(&mut self, path: &DefPath) -> Result<MaterializedRef, QueryError>;
     /// Data of a selected size-generic constant. Ordinary constants have no actuals.
-    fn constant_instance(&mut self, path: &DefPath, arguments: &[u64]) -> Result<MaterializedRef, QueryError> {
-        if arguments.is_empty() { self.constant(path) } else { Err(QueryError::NotImplemented) }
+    fn constant_instance(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Result<MaterializedRef, QueryError> {
+        if arguments.is_empty() {
+            self.constant(path)
+        } else {
+            Err(QueryError::NotImplemented)
+        }
     }
     /// Program constants in dependency order, with source-order ties (#63).
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError>;
@@ -677,8 +685,15 @@ pub struct ToolingLimit {
 pub fn constant_instance_path(definition: &DefPath, arguments: &[u64]) -> DefPath {
     let mut path = definition.clone();
     if !arguments.is_empty() {
-        path.0.name = format!("$constant:{}:{}", definition.0.name,
-            arguments.iter().map(u64::to_string).collect::<Vec<_>>().join(":"));
+        path.0.name = format!(
+            "$constant:{}:{}",
+            definition.0.name,
+            arguments
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(":")
+        );
     }
     path
 }

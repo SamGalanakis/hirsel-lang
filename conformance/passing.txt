@@ -613,8 +613,13 @@ conformance/CT/CT-2-resource-constant-ok.hir
 conformance/CT/CT-2-resource-map-constant-bad.hir
 conformance/CT/CT-2-resource-map-constant-ok.hir
 conformance/CT/CT-2-size-data-run.hir
+conformance/CT/CT-2-size-local-run.hir
+conformance/CT/CT-2-size-resource-bad.hir
+conformance/CT/CT-2-size-resource-ok.hir
 conformance/CT/CT-2-sortedmap-constant-bad.hir
 conformance/CT/CT-2-sortedmap-constant-ok.hir
+conformance/CT/CT-2-static-sortedmap-bad.hir
+conformance/CT/CT-2-static-sortedmap-ok.hir
 conformance/CT/CT-2-wrapper-block-bad.hir
 conformance/CT/CT-2-wrapper-branch-bad.hir
 conformance/CT/CT-2-wrapper-direct-bad.hir

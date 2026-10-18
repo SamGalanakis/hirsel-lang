@@ -1,7 +1,7 @@
 //! CT-2 (#65): inline evaluations have no ambient run-time frame.
 use super::*;
 impl Checker<'_, '_> {
-    pub(super) fn check_closed_comptimes(&mut self) {
+    pub(super) fn check_closed_comptimes(&mut self) -> Result<(), QueryError> {
         let mut regions: Vec<_> = self
             .body
             .expressions
@@ -16,7 +16,7 @@ impl Checker<'_, '_> {
             )
             .collect();
         if regions.is_empty() {
-            return;
+            return Ok(());
         }
         regions.sort_by_key(|(child, _)| (child.start, std::cmp::Reverse(child.end)));
         let span = |site| match site {
@@ -203,7 +203,20 @@ impl Checker<'_, '_> {
                 }
                 pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
             }
-            let Some(parameter) = parameter else { continue };
+            let Some(parameter) = parameter else {
+                if !matches!(
+                    self.body.types.get(ty).unwrap().kind,
+                    TypeKind::Error | TypeKind::Primitive(hirsel_types::Primitive::Never)
+                ) && !self.bound(ty, ast::Bound::Data)?
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        const { RuleId::of("CT-2") },
+                        wrapper,
+                        "comptime result must have a data type",
+                    ));
+                }
+                continue;
+            };
             // Expected types can carry an abstract argument into an empty
             // construction without a textual reference inside the wrapper.
             let at = match parameter {
@@ -224,5 +237,6 @@ impl Checker<'_, '_> {
             });
             self.diagnostics.push(diagnostic);
         }
+        Ok(())
     }
 }

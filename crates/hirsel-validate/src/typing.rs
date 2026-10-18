@@ -73,7 +73,10 @@ pub(super) fn operands(r: &Rvalue) -> Vec<&Operand> {
 
 pub(super) fn signature_valid(s: &Signature) -> bool {
     if let SignatureKind::Const { generics, .. } = &s.kind {
-        if generics.iter().any(|parameter| !matches!(parameter, GenericParameter::Size { .. })) {
+        if generics
+            .iter()
+            .any(|parameter| !matches!(parameter, GenericParameter::Size { .. }))
+        {
             return false;
         }
     }
@@ -2785,7 +2788,10 @@ impl<'a> Checker<'a> {
                     });
                 }
             }
-            Rvalue::ReadConstant { definition, arguments } => {
+            Rvalue::ReadConstant {
+                definition,
+                arguments,
+            } => {
                 let Some(signature) = self.signatures.get(definition) else {
                     self.error(ViolationKind::InvalidOrigin(destination));
                     return;
@@ -2797,16 +2803,24 @@ impl<'a> Checker<'a> {
                 if generics.len() != arguments.len() {
                     self.error(ViolationKind::Arity {
                         entity: "constant size arguments",
-                        expected: generics.len(), actual: arguments.len(),
+                        expected: generics.len(),
+                        actual: arguments.len(),
                     });
                     return;
                 }
                 for argument in arguments {
-                    if let Size::Parameter(parameter) = argument { self.size_parameter(*parameter); }
+                    if let Size::Parameter(parameter) = argument {
+                        self.size_parameter(*parameter);
+                    }
                 }
-                let actuals: Vec<_> = arguments.iter().cloned().map(GenericArgument::Size).collect();
+                let actuals: Vec<_> = arguments
+                    .iter()
+                    .cloned()
+                    .map(GenericArgument::Size)
+                    .collect();
                 let mut store = self.working_store();
-                let Some(mut expected) = self.imported(&signature.types, *root, &mut store, &actuals)
+                let Some(mut expected) =
+                    self.imported(&signature.types, *root, &mut store, &actuals)
                 else {
                     self.error(ViolationKind::InvalidTypeGraph);
                     return;

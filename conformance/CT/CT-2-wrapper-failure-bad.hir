@@ -1,8 +1,8 @@
 // rule: CT-2
 // expect: reject CT-1 at line 4
 fn probe() {
-  let m: SortedMap[u32, u8] of u32.order = comptime {
+  let m: Map[u32, u8] = comptime {
     let n = 1u8 / 0u8
-    sorted_map.empty(u32.order)
+    map.empty()
   }
 }

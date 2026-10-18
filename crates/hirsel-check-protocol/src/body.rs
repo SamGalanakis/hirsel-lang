@@ -161,9 +161,12 @@ pub fn comptime_inputs(
             }
         }
     }
-    let mut pending: Vec<_> = checked.expressions.iter()
+    let mut pending: Vec<_> = checked
+        .expressions
+        .iter()
         .filter(|row| contains(NameSite::Expression(row.expression)))
-        .map(|row| row.ty).collect();
+        .map(|row| row.ty)
+        .collect();
     // Inferred generic call actuals may mention a size absent from the result.
     for call in &checked.calls {
         if contains(NameSite::Expression(call.expression)) {
@@ -180,12 +183,16 @@ pub fn comptime_inputs(
     }
     let mut seen = BTreeSet::new();
     while let Some(ty) = pending.pop() {
-        if !seen.insert(ty) { continue; }
+        if !seen.insert(ty) {
+            continue;
+        }
         let row = checked.types.get(ty).unwrap();
         if let TypeKind::Builtin { arguments, .. } | TypeKind::Named { arguments, .. } = &row.kind {
             for argument in arguments.iter() {
                 if let GenericArgument::Size(Size::Parameter(parameter)) = argument {
-                    if outer(*parameter) { inputs.insert(*parameter); }
+                    if outer(*parameter) {
+                        inputs.insert(*parameter);
+                    }
                 }
             }
         }
@@ -195,8 +202,18 @@ pub fn comptime_inputs(
 }
 
 /// Private constant declaration owned by an inline staged expression.
-pub fn comptime_path(owner: &ast::DefPath, expression: ast::ExprId) -> ast::DefPath {
+pub fn comptime_path(
+    owner: &ast::DefPath,
+    checked: &CheckedBody,
+    expression: ast::ExprId,
+) -> ast::DefPath {
     let mut path = owner.clone();
-    path.0.name = format!("$comptime:{}:{}", owner.0.name, expression.0);
+    // Expression ids are file-wide; unrelated definitions must not rename this constant.
+    let ordinal = checked
+        .expressions
+        .iter()
+        .filter(|row| row.expression < expression)
+        .count();
+    path.0.name = format!("$comptime:{}:{}", owner.0.name, ordinal);
     path
 }

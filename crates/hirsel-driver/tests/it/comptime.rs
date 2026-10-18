@@ -347,26 +347,51 @@ fn source_comptime_values_have_no_data_nesting_cutoff() {
 fn size_constant_instances_cache_separately_and_refresh_executed_dependencies() {
     with_compiler_stack(|| {
         use hirsel_tir::{Rvalue, TirProvider, ValueKind};
-        let source = |factor| format!("fn square(n:u64)->u64{{n*n*{factor}u64}}\nfn scaled[n:size](xs:Inline[u8,n])->u64{{let _=xs;comptime square(n)}}\n");
+        let source = |factor| {
+            format!(
+                "fn square(n:u64)->u64{{n*n*{factor}u64}}\nfn scaled[n:size](xs:Inline[u8,n])->u64{{let _=xs;comptime square(n)}}\n"
+            )
+        };
         let mut engine = engine(&source(1));
         let definition = engine.lower_to_tir(&path("scaled")).unwrap().value;
-        let constant = definition.bodies[0].rvalues.iter().find_map(|value| match value {
-            Rvalue::ReadConstant { definition, arguments } if !arguments.is_empty() => Some(definition.clone()),
-            _ => None,
-        }).unwrap();
+        let constant = definition.bodies[0]
+            .rvalues
+            .iter()
+            .find_map(|value| match value {
+                Rvalue::ReadConstant {
+                    definition,
+                    arguments,
+                } if !arguments.is_empty() => Some(definition.clone()),
+                _ => None,
+            })
+            .unwrap();
         for (size, expected) in [(2, 4), (4, 16), (2, 4)] {
             let value = engine.constant_instance(&constant, &[size]).unwrap();
-            assert_eq!(value.root.kind, ValueKind::Constant(Constant::Integer(expected)));
+            assert_eq!(
+                value.root.kind,
+                ValueKind::Constant(Constant::Integer(expected))
+            );
         }
         let file = engine.sources.add("comptime.hir", source(2)).unwrap();
         engine.parse_file(file, &default_context()).unwrap();
-        assert_eq!(engine.constant_instance(&constant, &[2]).unwrap().root.kind, ValueKind::Constant(Constant::Integer(8)));
-        assert_eq!(engine.constant_instance(&constant, &[4]).unwrap().root.kind, ValueKind::Constant(Constant::Integer(32)));
+        assert_eq!(
+            engine.constant_instance(&constant, &[2]).unwrap().root.kind,
+            ValueKind::Constant(Constant::Integer(8))
+        );
+        assert_eq!(
+            engine.constant_instance(&constant, &[4]).unwrap().root.kind,
+            ValueKind::Constant(Constant::Integer(32))
+        );
         engine.comptime_limits.steps = Some(1);
-        let Err(QueryError::Diagnostics(ds)) = engine.constant_instance(&constant, &[2]) else { panic!("expected CT-1 after budget change") };
+        let Err(QueryError::Diagnostics(ds)) = engine.constant_instance(&constant, &[2]) else {
+            panic!("expected CT-1 after budget change")
+        };
         assert_eq!(ds[0].rule.as_str(), "CT-1");
         engine.comptime_limits.steps = Some(1000);
-        assert_eq!(engine.constant_instance(&constant, &[2]).unwrap().root.kind, ValueKind::Constant(Constant::Integer(8)));
+        assert_eq!(
+            engine.constant_instance(&constant, &[2]).unwrap().root.kind,
+            ValueKind::Constant(Constant::Integer(8))
+        );
     });
 }
 
@@ -377,8 +402,58 @@ fn a_failed_size_instantiation_retains_its_selecting_site() {
         let mut engine = engine(source);
         let file = engine.sources.add("comptime.hir", source.into()).unwrap();
         let output = check_progress(&mut engine, file, &default_context()).unwrap();
-        let diagnostic = output.diagnostics.iter().find(|d| d.rule.as_str() == "CT-1").unwrap();
-        assert!(engine.sources.slice(diagnostic.primary).unwrap().starts_with("comptime"));
-        assert!(diagnostic.secondary.iter().any(|label| engine.sources.slice(label.span) == Some("inverse(second)") && label.message.contains("[0]")), "{diagnostic:?}");
+        let diagnostic = output
+            .diagnostics
+            .iter()
+            .find(|d| d.rule.as_str() == "CT-1")
+            .unwrap();
+        assert!(
+            engine
+                .sources
+                .slice(diagnostic.primary)
+                .unwrap()
+                .starts_with("comptime")
+        );
+        assert!(
+            diagnostic
+                .secondary
+                .iter()
+                .any(
+                    |label| engine.sources.slice(label.span) == Some("inverse(second)")
+                        && label.message.contains("[0]")
+                ),
+            "{diagnostic:?}"
+        );
+    });
+}
+
+#[test]
+fn staged_constants_survive_proof_export_and_unrelated_item_insertion() {
+    with_compiler_stack(|| {
+        let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\npub fn main()->Result[(),()]{let xs:Inline[u8,2]=[1,2];let _=scaled(xs);Ok(())}\n";
+        let mut first = engine(source);
+        let text = first.export_tir(&path("main")).unwrap();
+        let export = first.import_tir(&text).unwrap();
+        assert!(export.skipped.is_empty(), "{:?}", export.skipped);
+        let constant = export
+            .signatures
+            .iter()
+            .find(|s| s.path.0.name.starts_with("$comptime:scaled:"))
+            .unwrap();
+        assert_eq!(constant.public.generics().len(), 1);
+        assert!(
+            export
+                .constants
+                .iter()
+                .any(|c| c.path == hirsel_tir::constant_instance_path(&constant.path, &[2]))
+        );
+        assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
+        let mut second = engine(&format!("fn unrelated()->u64{{3}}\n{source}"));
+        let export = second.proof_export_input(&path("main")).unwrap();
+        assert!(export.signatures.contains_key(&constant.path));
+        assert_eq!(
+            export.signatures[&constant.path].public.fingerprint,
+            constant.public.fingerprint
+        );
     });
 }

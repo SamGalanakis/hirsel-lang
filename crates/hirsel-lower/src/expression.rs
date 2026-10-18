@@ -667,23 +667,57 @@ impl Builder<'_, '_> {
             }
             ExprKind::Comptime(_) => {
                 let inputs = hirsel_check_protocol::body::comptime_inputs(
-                    self.input.tree, self.input.checked, id);
+                    self.input.tree,
+                    self.input.checked,
+                    id,
+                );
                 if inputs.is_empty() {
                     return self.error(span, "comptime requires O's materialized constant plan");
                 }
-                let shared = self.input.plans.staged.iter().find(|(expression, _)| *expression == id)
-                    .map(|(_, ty)| *ty).ok_or_else(|| LowerError { site: span, message: "missing staged constant reception".into() })?;
-                let mut value = self.rvalue(shared, Rvalue::ReadConstant {
-                    definition: hirsel_check_protocol::body::comptime_path(&self.input.path, id),
-                    arguments: inputs.into_iter().map(hirsel_types::Size::Parameter).collect(),
-                }, span);
-                if self.types.get(row.ty).unwrap().modes.uniqueness == hirsel_types::Uniqueness::Unique
-                    && self.types.get(shared).unwrap().modes.uniqueness != hirsel_types::Uniqueness::Unique {
+                let shared = self
+                    .input
+                    .plans
+                    .staged
+                    .iter()
+                    .find(|(expression, _)| *expression == id)
+                    .map(|(_, ty)| *ty)
+                    .ok_or_else(|| LowerError {
+                        site: span,
+                        message: "missing staged constant reception".into(),
+                    })?;
+                let mut value = self.rvalue(
+                    shared,
+                    Rvalue::ReadConstant {
+                        definition: hirsel_check_protocol::body::comptime_path(
+                            &self.input.path,
+                            self.input.checked,
+                            id,
+                        ),
+                        arguments: inputs
+                            .into_iter()
+                            .map(hirsel_types::Size::Parameter)
+                            .collect(),
+                    },
+                    span,
+                );
+                if self.types.get(row.ty).unwrap().modes.uniqueness
+                    == hirsel_types::Uniqueness::Unique
+                    && self.types.get(shared).unwrap().modes.uniqueness
+                        != hirsel_types::Uniqueness::Unique
+                {
                     value.usage = UseKind::Copy;
                     let _ = self.loan(&mut value, span);
                     let failure = self.cleanup();
                     let operand = self.consume(value);
-                    value = self.rvalue_with_failure(row.ty, Rvalue::Unary { op: UnaryOp::Unique, value: operand }, span, failure);
+                    value = self.rvalue_with_failure(
+                        row.ty,
+                        Rvalue::Unary {
+                            op: UnaryOp::Unique,
+                            value: operand,
+                        },
+                        span,
+                        failure,
+                    );
                 }
                 return Ok(Some(value));
             }
