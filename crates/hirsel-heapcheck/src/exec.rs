@@ -155,8 +155,18 @@ pub(crate) struct Frame {
     regions: Vec<usize>,
     resume: Resume,
     role: Role,
+    /// Inline drop bodies entered and not yet ended (`FinalizeBegin`..`FinalizeEnd`).
+    finalizing: u32,
     /// Set by a control transfer, so the instruction pointer does not advance.
     jumped: bool,
+}
+
+impl Frame {
+    /// The frame runs destruction, which no cancellation check observes (CONC-3), as the
+    /// runtime's finalizer shield suppresses them.
+    fn shields(&self) -> bool {
+        self.role == Role::Finalizer || self.finalizing > 0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -429,6 +439,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             regions: Vec::new(),
             resume: Resume::Running,
             role,
+            finalizing: 0,
             jumped: false,
         }
     }
@@ -5015,6 +5026,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     );
                 }
                 res.state = ResourceState::Finalizing;
+                f.finalizing += 1;
                 self.ledger.counters.finalizers += 1;
                 self.ledger.trace.push(Event::Finalize { resource: rid });
             }
@@ -5029,6 +5041,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     );
                 }
                 res.state = ResourceState::FieldsPending;
+                f.finalizing = f.finalizing.saturating_sub(1);
             }
             Inst::Forget { value } => {
                 let m = self.take_owned(f, value, "forget")?;

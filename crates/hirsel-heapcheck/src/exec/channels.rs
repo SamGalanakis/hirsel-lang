@@ -140,9 +140,10 @@ impl<S: Stage> Machine<'_, S> {
             "$intrinsic.ChannelSend" => {
                 let word = self.task_word(f, &Self::task_argument(arguments, 0)?)?;
                 let r = self.task_slot(f, &Self::task_argument(arguments, 1)?)?;
+                let shielded = self.shielded(f);
                 let s = self.scheduler();
                 let channel = s.channels.channel(word, true)?;
-                let status = match s.canceled() {
+                let status = match s.canceled(shielded) {
                     Some(cause) => CANCELED + cause,
                     None if s.channels.row(channel)?.receivers == 0 => CLOSED,
                     None => {
@@ -166,7 +167,8 @@ impl<S: Stage> Machine<'_, S> {
                 let word = self.task_word(f, &Self::task_argument(arguments, 0)?)?;
                 let r = self.task_slot(f, &Self::task_argument(arguments, 1)?)?;
                 let channel = self.scheduler().channels.channel(word, false)?;
-                match self.receive_ready(current, channel, r.ptr, r.layout)? {
+                let shielded = self.shielded(f);
+                match self.receive_ready(current, shielded, channel, r.ptr, r.layout)? {
                     Some(status) => {
                         self.task_yield()?;
                         self.channel_status(f, arguments, result, status, normal)
@@ -243,12 +245,13 @@ impl<S: Stage> Machine<'_, S> {
     pub(super) fn receive_ready(
         &mut self,
         task: u32,
+        shielded: bool,
         channel: u32,
         at: Ptr,
         layout: LayoutId,
     ) -> Checked<Option<u32>> {
         let s = self.scheduler();
-        if let Some(cause) = s.canceled_task(task)? {
+        if let Some(cause) = s.canceled_task(task, shielded)? {
             return Ok(Some(CANCELED + cause));
         }
         let row = s.channels.row(channel)?;

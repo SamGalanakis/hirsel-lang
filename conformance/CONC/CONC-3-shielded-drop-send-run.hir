@@ -1,0 +1,43 @@
+// rule: CONC-3
+// expect: run
+// stdout: shielded
+// A canceled task's resource drops are shielded, so a send in a drop body is no cancellation
+// point: the message arrives.
+resource type Note {
+  tasks: Tasks,
+  tx: Sender[u8],
+}
+drop(x) {
+  let mut tx = sender.dup(x.tasks, x.tx)
+  let _ = channel.send(x.tasks, mut tx, 7u8)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let (wake, sleep): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() {
+          let note = Note(tasks: tasks, tx: take sender)
+          let mut r = take sleep
+          let _ = channel.receive(tasks, mut r)
+        }
+      )
+      task.cancel(s, h)
+      task.await(s, take h)
+      let mut r = take receiver
+      let text: String = match channel.receive(tasks, mut r) {
+        Ok(7u8) => "shielded\n",
+        _ => "canceled\n",
+      }
+      let _ = out.print(stdout, text)
+      let _ = wake
+    }
+  )
+  Ok(())
+}

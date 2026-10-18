@@ -264,16 +264,21 @@ impl Tasks {
             ),
         }
     }
-    pub(super) fn canceled(&self) -> Option<u32> {
-        self.canceled_of(self.current)
+    /// The running task's cancellation, none while it is `shielded` ([`Machine::shielded`]).
+    pub(super) fn canceled(&self, shielded: bool) -> Option<u32> {
+        self.canceled_of(self.current, shielded)
     }
-    pub(super) fn canceled_task(&self, task: u32) -> Checked<Option<u32>> {
+    /// `task`'s cancellation, none while it is `shielded`.
+    pub(super) fn canceled_task(&self, task: u32, shielded: bool) -> Checked<Option<u32>> {
         if self.tasks.get(task as usize).is_none_or(Option::is_none) {
             return fail(V::Malformed, "a vacant task row");
         }
-        Ok(self.canceled_of(task))
+        Ok(self.canceled_of(task, shielded))
     }
-    fn canceled_of(&self, task: u32) -> Option<u32> {
+    fn canceled_of(&self, task: u32, shielded: bool) -> Option<u32> {
+        if shielded {
+            return None;
+        }
         let task = self.tasks[task as usize].as_ref()?;
         task.canceled.or_else(|| {
             task.scopes
@@ -530,7 +535,11 @@ impl<S: Stage> Machine<'_, S> {
                 self.sync_operation(f, site, name, &arguments, normal)
             }
             "$intrinsic.TaskCanceled" => {
-                let status = self.scheduler().canceled().map_or(0, |cause| cause + 1);
+                let shielded = self.shielded(f);
+                let status = self
+                    .scheduler()
+                    .canceled(shielded)
+                    .map_or(0, |cause| cause + 1);
                 self.task_yield()?;
                 let result = site
                     .result
@@ -583,9 +592,10 @@ impl<S: Stage> Machine<'_, S> {
                 let mut frame = self.frame(code, Role::Callee, env);
                 self.bind_parameter_slots(&mut frame, &[])?;
                 self.bind_captures(&mut frame)?;
+                let shielded = self.shielded(f);
                 let s = self.scheduler();
                 let scope = s.scope_handle(word)?;
-                let canceled = s.canceled().map(|_| CANCEL_PARENT);
+                let canceled = s.canceled(shielded).map(|_| CANCEL_PARENT);
                 let current = s.current;
                 let parent = s.task(current)?;
                 let mut path = parent.path.clone();
@@ -877,7 +887,10 @@ impl<S: Stage> Machine<'_, S> {
                 channel,
                 slot,
                 layout,
-            }) => match self.receive_ready(task, channel, slot, layout)? {
+            }) => match {
+                let shielded = self.task_shielded(task)?;
+                self.receive_ready(task, shielded, channel, slot, layout)?
+            } {
                 Some(status) => {
                     self.scheduler().task(task)?.status = status;
                     Ok(true)
@@ -1112,6 +1125,30 @@ impl<S: Stage> Machine<'_, S> {
     /// Every activity of every task: the running stack and the suspended ones.
     pub(super) fn all_activities(&self) -> Vec<&Activity> {
         activities(&self.stack, self.tasks.as_deref())
+    }
+}
+
+/// A task whose activities are `stack` runs destruction: a drain, a finalizer, or an inline drop
+/// body. Its finalizer shield (`hirsel-rt/src/finalize.rs`) is up, so no cancellation check
+/// observes its cancellation (CONC-3).
+fn stack_shields(stack: &[Activity]) -> bool {
+    stack.iter().any(|activity| match activity {
+        Activity::Frame(frame) => frame.shields(),
+        Activity::Drain(_) => true,
+    })
+}
+
+impl<S: Stage> Machine<'_, S> {
+    /// Whether the running task, whose operation's frame is `f`, is shielded.
+    pub(super) fn shielded(&self, f: &Frame) -> bool {
+        f.shields() || stack_shields(&self.stack)
+    }
+    /// Whether a task polled while parked is shielded, from its kept stack.
+    fn task_shielded(&mut self, task: u32) -> Checked<bool> {
+        if task == self.scheduler().current {
+            return Ok(stack_shields(&self.stack));
+        }
+        Ok(stack_shields(&self.scheduler().task(task)?.stack))
     }
 }
 
