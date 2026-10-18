@@ -307,7 +307,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Omitted -> base64.Padding` — Variant of base64.Padding. <!-- std@1/base64/Padding#Omitted -->
 - `Required -> base64.Padding` — Variant of base64.Padding. <!-- std@1/base64/Padding#Required -->
 - `pub fn base64.decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[ Bytes, DecodeError ] uses {}` <!-- std@1/base64/decode -->
-- `pub fn base64.encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> String uses {}` <!-- std@1/base64/encode -->
+- `pub fn base64.encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique String uses {}` <!-- std@1/base64/encode -->
 
 ## bool
 
@@ -349,7 +349,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `@preserves_unique(src) fn bytes.from_list(take src: List[u8]) -> Bytes` <!-- core@1/bytes/from_list -->
 - `@noalloc fn bytes.len(src: Bytes) -> u64` <!-- core@1/bytes/len -->
-- `pub fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src` — Left-to-right nonoverlapping byte replacement, including arbitrary UTF-8 errors. <!-- std@1/bytes/replace -->
+- `pub fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src` — Left-to-right nonoverlapping byte replacement, including arbitrary UTF-8 errors. <!-- std@1/bytes/replace -->
 - `@noalloc fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src` <!-- core@1/bytes/slice -->
 
 ## channel
@@ -474,7 +474,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `InvalidDigit(u64) -> hex.DecodeError` — Variant of hex.DecodeError. <!-- std@1/hex/DecodeError#InvalidDigit -->
 - `OddLength -> hex.DecodeError` — Variant of hex.DecodeError. <!-- std@1/hex/DecodeError#OddLength -->
 - `pub fn hex.decode(text: String) -> Result[Bytes, DecodeError] uses {}` <!-- std@1/hex/decode -->
-- `pub fn hex.encode(data: Bytes) -> String uses {}` <!-- std@1/hex/encode -->
+- `pub fn hex.encode(data: Bytes) -> unique String uses {}` <!-- std@1/hex/encode -->
 
 ## http
 
@@ -948,7 +948,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn string.lines(take s: String) -> List[String] uses {}` — Rust str::lines: only LF and CRLF terminate lines; omit a final empty line. <!-- std@1/string/lines -->
 - `@noalloc fn string.position(s: String, offset: u64) -> Option[StrPos of s]` <!-- core@1/string/position -->
 - `@noalloc fn string.positions(s: String) -> PositionView of s in s` <!-- core@1/string/positions -->
-- `pub fn string.replace(s: String, old: String, new: String) -> String uses {}` <!-- std@1/string/replace -->
+- `pub fn string.replace(s: String, old: String, new: String) -> unique String uses {}` <!-- std@1/string/replace -->
 - `@noalloc fn string.scalars(s: String) -> ScalarView in s` <!-- core@1/string/scalars -->
 - `@noalloc fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in s` <!-- core@1/string/slice -->
 - `pub fn string.split(take s: String, separator: String) -> List[String] uses {}` — Nonoverlapping substring delimiter; preserve leading, trailing and empty fields. <!-- std@1/string/split -->
@@ -1134,4 +1134,4 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub type utf8.EncodeError = InvalidScalar(u32)` — Zig unicode.utf8Encode and Rust str validation/lossy error-span semantics. <!-- std@1/utf8/EncodeError -->
 - `InvalidScalar(u32) -> utf8.EncodeError` — Variant of utf8.EncodeError. <!-- std@1/utf8/EncodeError#InvalidScalar -->
 - `@preserves_unique(out) pub fn utf8.append_scalar(mut out: List[u8], scalar: u32) -> Result[(), EncodeError] uses {}` <!-- std@1/utf8/append_scalar -->
-- `pub fn utf8.decode_lossy(data: Bytes) -> String uses {}` <!-- std@1/utf8/decode_lossy -->
+- `pub fn utf8.decode_lossy(data: Bytes) -> unique String uses {}` <!-- std@1/utf8/decode_lossy -->
