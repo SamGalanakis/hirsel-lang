@@ -1097,17 +1097,10 @@ done:
     Ok(executable)
 }
 
-/// The encoded failure table a program that isolates registers before its entry runs
-/// (`hirsel_rt::isolate`); None for any other program.
+/// The encoded failure table every source program registers before its entry runs.
 fn failure_table(program: &ReadyProgram) -> Result<Option<Vec<u8>>, NativeError> {
-    if !super::observe::isolates(program) {
-        return Ok(None);
-    }
     let table = program.failure_table.as_ref().ok_or_else(|| {
-        NativeError::new(
-            StageName::Link,
-            "a program that isolates links without its failure table",
-        )
+        NativeError::new(StageName::Link, "a program links without its failure table")
     })?;
     Ok(Some(table.encode()))
 }

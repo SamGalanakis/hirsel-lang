@@ -1511,6 +1511,7 @@ unsafe fn execute(
         Ok(file) => file,
         Err(error) => return refuse(&error.to_string()),
     };
+    let report_failures = observation.is_none();
     #[cfg(feature = "measurement")]
     let measurement = match std::env::var_os("HIRSEL_RT_MEASUREMENT")
         .map(|path| prepare_tool_file(std::path::Path::new(&path)))
@@ -1709,6 +1710,12 @@ unsafe fn execute(
                 "failure {} {} {:016x}",
                 failure.kind, failure.rule, failure.site
             );
+            if report_failures {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    crate::isolate::report(&failure).as_bytes(),
+                );
+            }
             for index in 0..unsafe { hirsel_rt_v2_failure_cause_count(ctx) } {
                 if unsafe { hirsel_rt_v2_failure_cause(ctx, index, &mut failure) } == 0 {
                     crate::fault("a failure cause out of range");
@@ -1718,6 +1725,12 @@ unsafe fn execute(
                     "failure {} {} {:016x}",
                     failure.kind, failure.rule, failure.site
                 );
+                if report_failures {
+                    let _ = std::io::Write::write_all(
+                        &mut std::io::stderr(),
+                        crate::isolate::report(&failure).as_bytes(),
+                    );
+                }
             }
             EXIT_FAILURE
         }

@@ -206,7 +206,7 @@ impl ReadyProgram {
                     .map(|report| (entry.clone(), report))
             })
             .collect::<Result<_, _>>()?;
-        self.failure_table = super::observe::isolates(self).then(|| {
+        self.failure_table = Some({
             super::observe::failure_table(self, &super::observe::Sites::new(input.snapshot()))
         });
         Ok(())

@@ -10,7 +10,9 @@ use std::path::Path;
 /// Output destinations for a user launch. Inheriting the two OS streams preserves
 /// the program's cross-stream write order; custom writers receive each stream.
 pub enum Output<'a> {
-    Inherit,
+    Inherit {
+        json: bool,
+    },
     Streams {
         stdout: &'a mut dyn Write,
         stderr: &'a mut dyn Write,
@@ -56,9 +58,10 @@ pub fn run_path_native_backend(
     output: Output<'_>,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
     let (mut host_stdout, mut host_stderr) = (std::io::stdout(), std::io::stderr());
-    let (inherit, stdout, stderr): (bool, &mut dyn Write, &mut dyn Write) = match output {
-        Output::Inherit => (true, &mut host_stdout, &mut host_stderr),
-        Output::Streams { stdout, stderr } => (false, stdout, stderr),
+    let (inherit, json, stdout, stderr): (bool, bool, &mut dyn Write, &mut dyn Write) = match output
+    {
+        Output::Inherit { json } => (true, json, &mut host_stdout, &mut host_stderr),
+        Output::Streams { stdout, stderr } => (false, false, stdout, stderr),
     };
     let mut loaded = crate::load_program(path)?;
     loaded.check_for_execution()?;
@@ -142,12 +145,10 @@ pub fn run_path_native_backend(
         let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
 
         for failure in &observation.failures {
-            writeln!(
-                stderr,
-                "runtime failure[{}] at line {}",
-                failure.rule, failure.line
-            )
-            .map_err(io)?;
+            let site = Sites::new(validated.snapshot())
+                .failure_site(failure)
+                .ok_or_else(|| NativeError::new(StageName::Launch, "failure has no source site"))?;
+            writeln!(stderr, "{}", site.report(&failure.rule, json)).map_err(io)?;
         }
         Ok(
             match (observation.exit_code, observation.failures.first()) {
@@ -155,7 +156,11 @@ pub fn run_path_native_backend(
                 (None, Some(failure)) => RunOutcome::Failure {
                     rule: hirsel_diag::RuleId::new(&failure.rule)
                         .map_err(|_| NativeError::new(StageName::Launch, "a failure of no rule"))?,
-                    line: failure.line as usize,
+                    site: Sites::new(validated.snapshot())
+                        .failure_site(failure)
+                        .ok_or_else(|| {
+                            NativeError::new(StageName::Launch, "failure has no source site")
+                        })?,
                 },
                 (None, None) => {
                     return Err(NativeError::new(

@@ -484,7 +484,7 @@ into the caught chain, the task's own failures attributed to its spawn path. The
 the `Failure` value innermost first from the `isolate_*` entries: kind (from the rule:
 MEM-3 `Depth`, MEM-6 `OutOfSpace`, FAIL-4 `DeadMutex`, else `Check`), rule ID, definition path,
 line, column and spawn path, each a fresh block. A record holds compiler codes, so a program
-that isolates registers its failure table before the entry runs
+registers its failure table before the entry runs
 (`hirsel_rt_v2_failure_table`, called by `main` of the launcher object from either backend):
 one pointer-free byte string holding each site code's definition path and one-based position
 (0 and 0 for a site inside a library body, which only a resource failure reaches), sorted by
@@ -878,3 +878,7 @@ are written; zero-size record fields retain their ordinary layout identity.
 Standalone `--hirsel-run` and `--hirsel-grants` accept inline JSON when their
 argument starts with `{`, otherwise a path. Both forms use the shared RunConfig
 input selection and schema validation before binding checks and admission.
+
+Every compiled source program registers complete runtime diagnostic locations.
+Standalone launches report the failure chain on stderr; observed tool launches
+leave reporting to the driver. Reports remain outside program Io and tapes.

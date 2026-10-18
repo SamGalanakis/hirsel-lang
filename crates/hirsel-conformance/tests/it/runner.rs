@@ -159,12 +159,18 @@ fn fail_checks_before_running_and_matches_rule_and_line() {
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
         rule: const { RuleId::of("OWN-7") },
-        line: 3,
+        site: hirsel_engine::FailureSite {
+            line: 3,
+            ..Default::default()
+        },
     });
     assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
     driver.outcome = Ok(RunOutcome::Failure {
         rule: const { RuleId::of("OWN-6") },
-        line: 3,
+        site: hirsel_engine::FailureSite {
+            line: 3,
+            ..Default::default()
+        },
     });
     assert!(matches!(
         classify(&driver, Path::new("test"), &expect),
@@ -172,7 +178,10 @@ fn fail_checks_before_running_and_matches_rule_and_line() {
     ));
     driver.outcome = Ok(RunOutcome::Failure {
         rule: const { RuleId::of("OWN-7") },
-        line: 2,
+        site: hirsel_engine::FailureSite {
+            line: 2,
+            ..Default::default()
+        },
     });
     assert!(matches!(
         classify(&driver, Path::new("test"), &expect),
@@ -633,7 +642,10 @@ fn fail_stdout_is_optional_and_exact_when_present() {
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
         rule: const { RuleId::of("OWN-6") },
-        line: 6,
+        site: hirsel_engine::FailureSite {
+            line: 6,
+            ..Default::default()
+        },
     });
     driver.stdout = "before\ndropped\n";
     assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
@@ -650,7 +662,10 @@ fn fail_stdout_is_optional_and_exact_when_present() {
     assert!(matches!(&unchecked, Expect::Fail { stdout: None, .. }));
     driver.outcome = Ok(RunOutcome::Failure {
         rule: const { RuleId::of("OWN-6") },
-        line: 3,
+        site: hirsel_engine::FailureSite {
+            line: 3,
+            ..Default::default()
+        },
     });
     assert_eq!(
         classify(&driver, Path::new("test"), &unchecked),
@@ -669,12 +684,18 @@ fn runtime_failure_header_can_name_a_dependency_line_beyond_the_fixture() {
     let mut driver = fake();
     driver.outcome = Ok(RunOutcome::Failure {
         rule: const { RuleId::of("OWN-6") },
-        line: 99,
+        site: hirsel_engine::FailureSite {
+            line: 99,
+            ..Default::default()
+        },
     });
     assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
     driver.outcome = Ok(RunOutcome::Failure {
         rule: const { RuleId::of("OWN-6") },
-        line: 98,
+        site: hirsel_engine::FailureSite {
+            line: 98,
+            ..Default::default()
+        },
     });
     assert!(matches!(
         classify(&driver, Path::new("test"), &expect),

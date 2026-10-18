@@ -68,8 +68,56 @@ pub enum RunOutcome {
     Exit(i32),
     Failure {
         rule: RuleId,
-        line: usize,
+        site: FailureSite,
     },
+}
+/// A complete runtime diagnostic location, independent of session-local FileIds.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FailureSite {
+    pub definition: String,
+    pub file: std::path::PathBuf,
+    pub line: usize,
+    pub column: u32,
+}
+impl FailureSite {
+    pub fn report(&self, rule: &str, json: bool) -> String {
+        if json {
+            serde_json::json!({
+                "schema_version": 1,
+                "runtime_failure": {
+                    "rule": rule,
+                    "site": { "definition": self.definition, "file": self.file.to_string_lossy(), "line": self.line, "column": self.column }
+                }
+            }).to_string()
+        } else {
+            format!("runtime failure[{rule}] at {self}")
+        }
+    }
+
+    pub fn from_anchor(
+        anchor: &hirsel_interp::observation::Anchor,
+        sources: &SourceMap,
+    ) -> Option<Self> {
+        let location = sources.location(anchor.site)?;
+        Some(Self {
+            definition: anchor.definition.to_string(),
+            file: sources.file(anchor.site.file)?.path.clone(),
+            line: location.line as usize,
+            column: location.column,
+        })
+    }
+}
+impl fmt::Display for FailureSite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} ({}:{}:{})",
+            self.definition,
+            self.file.display(),
+            self.line,
+            self.column
+        )
+    }
 }
 /// Rich execution export. Execution API errors retain output beside their cause.
 #[derive(Debug)]

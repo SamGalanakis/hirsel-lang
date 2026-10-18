@@ -131,6 +131,13 @@ folding cannot change which diagnostic is first.
 
 ## Primary sites
 
+Runtime failure reports, including LANG-9 test-check failures, identify the complete
+source site: package name and version, module and definition, file path, and one-based
+line and Unicode-scalar column. Human and JSON reports preserve the same location in
+interpreted and native execution. `hirsel run --json` writes a JSON failure report to
+standard error, with the rule and `site` fields `definition`, `file`, `line` and `column`;
+program output keeps its ordinary streams.
+
 The primary span is the smallest complete syntactic operation that imposes the failed
 obligation: a call, arguments included, for argument, mode, brand and loan checks; a
 projection or read for use after move; an assignment for write access; a constructor for

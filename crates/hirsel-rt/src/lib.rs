@@ -83,7 +83,7 @@ pub use release::{
 };
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 15;
+pub const ABI_VERSION: u32 = 16;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 15
+#define HIRSEL_RT_V2_ABI_VERSION 16
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or

@@ -21,7 +21,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] check [--json] <source|manifest.json> | run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>\n",
+            b"usage: hirsel [--verbose] check [--json] <source|manifest.json> | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -139,7 +139,7 @@ fn command_options_and_operand_counts_remain_specific_to_each_command() {
         vec!["check"],
         vec!["check", "--native", "file.hir"],
         vec!["check", "file.hir", "--json"],
-        vec!["run", "--json", "file.hir"],
+        vec!["run", "--json", "--json", "file.hir"],
         vec!["run", "--simulation", "config.json"],
         vec!["run", "--native", "file.hir", "extra"],
         vec!["fmt", "--json", "file.hir"],
@@ -2623,4 +2623,141 @@ fn doc_index_prints_the_current_public_signature_page() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert!(output.stderr.is_empty(), "{output:?}");
     assert_eq!(output.stdout, include_bytes!("../../../docs/api.md"));
+}
+
+#[test]
+fn runtime_failure_reports_a_complete_site_in_human_and_json() {
+    let path = file(
+        "fn fail() -> u64 {\n  1u64 / 0u64\n}\npub fn main() -> Result[(), ()] {\n  failure.check(fail() == 0, Arithmetic())\n  Ok(())\n}\n",
+    );
+    for json in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.arg("run");
+        if json {
+            command.arg("--json");
+        }
+        let output = command.arg(&path).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let text = String::from_utf8(output.stderr).unwrap();
+        if json {
+            let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(report["runtime_failure"]["rule"], "SEM-1");
+            let site = &report["runtime_failure"]["site"];
+            assert_eq!(site["definition"], "standalone@0/fail");
+            assert_eq!(site["file"], path.to_str().unwrap());
+            assert_eq!(site["line"], 2);
+            assert_eq!(site["column"], 3);
+        } else {
+            assert_eq!(
+                text,
+                format!(
+                    "runtime failure[SEM-1] at standalone@0/fail ({}:2:3)\n",
+                    path.display()
+                )
+            );
+        }
+    }
+    // Source paths are OS strings. JSON uses the same lossy display as human text.
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let mut bytes = path.as_os_str().as_bytes().to_vec();
+    bytes.extend(b"\xff.hir");
+    let non_utf8 = std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    std::fs::rename(&path, &non_utf8).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--json"])
+        .arg(&non_utf8)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(
+        report["runtime_failure"]["site"]["file"],
+        non_utf8.to_string_lossy().as_ref()
+    );
+    std::fs::remove_file(non_utf8).unwrap();
+}
+
+#[test]
+fn native_runtime_failure_reports_match_the_interpreter_and_standalone() {
+    let path =
+        file("pub fn main(t: Test) -> Result[(), ()] {\n  test.check(t, false)\n  Ok(())\n}\n");
+    let expected = format!(
+        "runtime failure[LANG-9] at standalone@0/main ({}:2:3)\n",
+        path.display()
+    );
+    for backend in ["llvm", "cranelift"] {
+        for json in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.args(["run", "--native", "--backend", backend]);
+            if json {
+                command.arg("--json");
+            }
+            let output = command.arg(&path).output().unwrap();
+            assert_eq!(output.status.code(), Some(1), "{backend}: {output:?}");
+            let text = String::from_utf8(output.stderr).unwrap();
+            if json {
+                let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(report["runtime_failure"]["rule"], "LANG-9");
+                assert_eq!(
+                    report["runtime_failure"]["site"]["file"],
+                    path.to_str().unwrap()
+                );
+                assert_eq!(
+                    report["runtime_failure"]["site"]["definition"],
+                    "standalone@0/main"
+                );
+                assert_eq!(report["runtime_failure"]["site"]["line"], 2);
+                assert_eq!(report["runtime_failure"]["site"]["column"], 3);
+            } else {
+                assert_eq!(text, expected);
+            }
+        }
+        let exe = build_executable(&path, &["--debug", "--backend", backend]);
+        let output = Command::new(&exe).output().unwrap();
+        assert_eq!(output.status.code(), Some(2), "{backend}: {output:?}");
+        assert_eq!(String::from_utf8(output.stderr).unwrap(), expected);
+        std::fs::remove_file(exe).unwrap();
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn runtime_failure_reports_the_dependency_file_and_identity() {
+    let library = file("pub fn fail() -> u64 {\n  1u64 / 0u64\n}\n");
+    let manifest = library.with_extension("json");
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "schema": 1, "package": {"name": "dep", "version": "2"},
+            "sources": [{"path": library, "module": ["helper"]}], "dependencies": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let source = file(
+        "pub fn main() -> Result[(), ()] { failure.check(helper.fail() == 0, Arithmetic()); Ok(()) }\n",
+    );
+    let sidecar = source.with_extension("hir.json");
+    std::fs::write(&sidecar, serde_json::json!({
+        "schema": 1, "package": {"name": "app", "version": "1"},
+        "sources": [{"path": source, "module": []}],
+        "dependencies": [{"manifest": manifest, "package": {"name": "dep", "version": "2"}, "expose": []}],
+        "entry": {"module": [], "name": "main"}
+    }).to_string()).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--json"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let site = &report["runtime_failure"]["site"];
+    assert_eq!(site["definition"], "dep@2/helper/fail");
+    assert_eq!(site["file"], library.to_str().unwrap());
+    assert_eq!(site["line"], 2);
+    assert_eq!(site["column"], 3);
+    for path in [library, manifest, source, sidecar] {
+        std::fs::remove_file(path).unwrap();
+    }
 }

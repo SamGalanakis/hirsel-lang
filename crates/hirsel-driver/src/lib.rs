@@ -412,11 +412,16 @@ pub fn run_path_on_host(
             .finish()
             .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?,
     }
+    let failure_site = execution
+        .failures
+        .first()
+        .and_then(|f| hirsel_engine::FailureSite::from_anchor(&f.anchor, &sources));
     Ok(match execution.outcome {
         Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
         Outcome::Failed(f) => RunOutcome::Failure {
             rule: f.rule,
-            line: f.line as usize,
+            site: failure_site
+                .ok_or_else(|| ToolError::Runtime("failure has no source site".into()))?,
         },
         Outcome::ToolingLimit(l) => RunOutcome::ToolingLimit(l),
         Outcome::UndefinedBehavior(u) => RunOutcome::UndefinedBehavior(u),

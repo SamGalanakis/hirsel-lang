@@ -419,11 +419,29 @@ fn observe(body: &str) -> Observed {
 fn failure(rule: &str, line: usize) -> RunOutcome {
     RunOutcome::Failure {
         rule: hirsel_diag::RuleId::new(rule).unwrap(),
-        line,
+        site: hirsel_engine::FailureSite {
+            line,
+            ..Default::default()
+        },
     }
 }
 fn assert_run(observed: &Observed, outcome: RunOutcome, stdout: &str) {
-    assert_eq!(observed.outcome, outcome);
+    match (&observed.outcome, &outcome) {
+        (
+            RunOutcome::Failure { rule, site },
+            RunOutcome::Failure {
+                rule: expected,
+                site: expected_site,
+            },
+        ) => {
+            assert_eq!(rule, expected);
+            assert_eq!(site.line, expected_site.line);
+            assert!(!site.definition.is_empty());
+            assert!(!site.file.as_os_str().is_empty());
+            assert!(site.column > 0);
+        }
+        _ => assert_eq!(observed.outcome, outcome),
+    }
     assert_eq!(observed.stdout, stdout);
 }
 

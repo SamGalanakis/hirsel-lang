@@ -74,7 +74,7 @@ Malformed operation schemas remain API errors.
 `hirsel run --native <file>` checks the program as `run` does (the same first
 diagnostics), then builds it as an optimized x86-64 Linux executable, links it
 against the runtime built from this checkout and runs it. Output, exit status
-and the `runtime failure[RULE] at line N` line match `run`. A program a native
+and the `runtime failure[RULE] at PACKAGE@VERSION/module/definition (FILE:LINE:COLUMN)` line match `run`. A program a native
 stage cannot build yet prints `hirsel: native <stage>: ...` and exits 2; that is
 a tool outcome and says nothing about the source. `--backend cranelift` builds
 the same LIR with Cranelift, unoptimized, for a fast debug loop
@@ -163,3 +163,6 @@ snapshot through host admission, with the simulated CLI's default step budget.
 The examples harness supplies the same default step budget as the simulated CLI
 when invoking the interpreter in process; explicit test budgets remain selected
 by their callers. Bench-lite exercises both 40-word and 200-word corpora.
+
+`run --json` writes runtime failure reports to stderr with the complete definition,
+file, line and column. Program output retains its original streams.

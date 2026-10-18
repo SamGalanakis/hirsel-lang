@@ -9,7 +9,7 @@
 //! A record holds compiler codes only, so the program's failure table names their text: the
 //! launcher object registers each site code's definition path and one-based line and column,
 //! and each program rule code's rule ID, before the entry runs
-//! ([`hirsel_rt_v2_failure_table`]). Only a program that isolates registers one.
+//! ([`hirsel_rt_v2_failure_table`]). Every source program registers one, also for runtime reports.
 
 use std::sync::OnceLock;
 
@@ -24,6 +24,7 @@ use crate::{STATUS_OK, fault};
 struct Site {
     code: u64,
     definition: String,
+    file: String,
     line: u64,
     column: u64,
 }
@@ -39,7 +40,8 @@ static TABLE: OnceLock<Table> = OnceLock::new();
 
 /// Register the program's encoded failure table, once per process: little-endian u64 words,
 /// the site count, then each site's code, line, column and definition length followed by the
-/// definition's bytes, in code order, then the rule count and each rule's length and bytes.
+/// definition's bytes and a length-prefixed file path, in code order, then the rule
+/// count and each rule's length and bytes.
 ///
 /// # Safety
 /// `table` is readable for `length` bytes.
@@ -77,6 +79,7 @@ fn decode(mut bytes: &[u8]) -> Option<Table> {
                 definition: text(&mut bytes)?,
                 line,
                 column,
+                file: text(&mut bytes)?,
             })
         })
         .collect::<Option<_>>()?;
@@ -110,6 +113,19 @@ fn rule(code: u32) -> &'static str {
             .map(String::as_str),
     };
     rule.unwrap_or_else(|| fault("a failure rule the program's table does not list"))
+}
+
+/// Human failure text for a standalone launch, outside program Io and replay tapes.
+pub(crate) fn report(record: &crate::failure::FailureRecord) -> String {
+    let site = site(record.site);
+    format!(
+        "runtime failure[{}] at {} ({}:{}:{})\n",
+        rule(record.rule),
+        site.definition,
+        site.file,
+        site.line,
+        site.column
+    )
 }
 
 /// The running task's caught chain.

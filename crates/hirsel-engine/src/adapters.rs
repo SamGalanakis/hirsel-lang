@@ -198,6 +198,10 @@ impl InterpreterPhase for InterpreterAdapter {
                 }
             }
         }
+        let failure_site = execution
+            .failures
+            .first()
+            .and_then(|f| FailureSite::from_anchor(&f.anchor, sources));
         let outcome = match execution.outcome {
             hirsel_interp::Outcome::Blocked(_) => RunOutcome::Blocked(
                 observation
@@ -213,7 +217,8 @@ impl InterpreterPhase for InterpreterAdapter {
             hirsel_interp::Outcome::Returned { exit_code, .. } => RunOutcome::Exit(exit_code),
             hirsel_interp::Outcome::Failed(failure) => RunOutcome::Failure {
                 rule: failure.rule,
-                line: failure.line as usize,
+                site: failure_site
+                    .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,
             },
         };
         Ok(ObservedExecution {

@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
 use execution_policy::DEFAULT_RUN_MAX_STEPS;
@@ -36,6 +36,7 @@ enum Command {
         config: OsString,
         file: OsString,
         max_steps: Option<u64>,
+        json: bool,
     },
     Run {
         file: OsString,
@@ -45,6 +46,7 @@ enum Command {
         proofs: Proofs,
         arguments: Option<Vec<OsString>>,
         max_steps: Option<u64>,
+        json: bool,
     },
     Source {
         command: &'static str,
@@ -226,6 +228,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 let mut revocations = None;
                 let mut replay = None;
                 let mut native = false;
+                let mut json = false;
                 let mut selected = None;
                 let mut simulation = None;
                 let mut max_steps = None;
@@ -247,6 +250,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         }
                         Long("trust") => proofs.trust(args.value()?)?,
                         Long("native") if !native => native = true,
+                        Long("json") if !json => json = true,
                         Long("backend") if selected.is_none() => {
                             selected = Some(backend(args.value()?)?)
                         }
@@ -348,6 +352,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         config,
                         file,
                         max_steps,
+                        json,
                     }
                 } else {
                     Command::Run {
@@ -358,6 +363,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         proofs,
                         arguments,
                         max_steps,
+                        json,
                     }
                 }
             } else {
@@ -508,6 +514,7 @@ fn execute(mut args: Vec<OsString>) -> u8 {
             config,
             file,
             max_steps,
+            json,
         } => {
             let simulation = match read_simulation(Path::new(&config)) {
                 Ok(config) => config,
@@ -516,13 +523,16 @@ fn execute(mut args: Vec<OsString>) -> u8 {
                     return 2;
                 }
             };
-            return run_result(hirsel_driver::run_path_with_step_budget(
-                Path::new(&file),
-                simulation,
-                max_steps,
-                &mut std::io::stdout().lock(),
-                &mut std::io::stderr().lock(),
-            ));
+            return run_result(
+                hirsel_driver::run_path_with_step_budget(
+                    Path::new(&file),
+                    simulation,
+                    max_steps,
+                    &mut std::io::stdout().lock(),
+                    &mut std::io::stderr().lock(),
+                ),
+                json,
+            );
         }
         Command::Run {
             file,
@@ -532,6 +542,7 @@ fn execute(mut args: Vec<OsString>) -> u8 {
             proofs,
             arguments,
             max_steps: _,
+            json,
         } => {
             let evidence = match proofs.evidence() {
                 Ok(evidence) => evidence,
@@ -547,11 +558,11 @@ fn execute(mut args: Vec<OsString>) -> u8 {
                     .map(|launch| launch.host(arguments.as_deref())),
                 evidence.as_ref(),
                 backend.unwrap_or_default(),
-                hirsel_driver::native::Output::Inherit,
+                hirsel_driver::native::Output::Inherit { json },
             ) {
                 // The native driver already wrote the complete failure chain.
                 Ok(Ok(RunOutcome::Failure { .. })) => 1,
-                Ok(Ok(outcome)) => run_result(Ok(outcome)),
+                Ok(Ok(outcome)) => run_result(Ok(outcome), json),
                 Ok(Err(error)) => {
                     eprintln!("hirsel: {error}");
                     2
@@ -567,22 +578,26 @@ fn execute(mut args: Vec<OsString>) -> u8 {
             proofs: _,
             arguments,
             max_steps,
+            json,
         } => {
-            return run_result(match &launch {
-                Some(launch) => hirsel_driver::run_path_on_host(
-                    Path::new(&file),
-                    launch.host(arguments.as_deref()),
-                    max_steps,
-                ),
-                // Without a record the simulated world grants no host authority.
-                None => hirsel_driver::run_path_with_step_budget(
-                    Path::new(&file),
-                    hirsel_engine::SimulationConfig::default(),
-                    max_steps,
-                    &mut std::io::stdout().lock(),
-                    &mut std::io::stderr().lock(),
-                ),
-            });
+            return run_result(
+                match &launch {
+                    Some(launch) => hirsel_driver::run_path_on_host(
+                        Path::new(&file),
+                        launch.host(arguments.as_deref()),
+                        max_steps,
+                    ),
+                    // Without a record the simulated world grants no host authority.
+                    None => hirsel_driver::run_path_with_step_budget(
+                        Path::new(&file),
+                        hirsel_engine::SimulationConfig::default(),
+                        max_steps,
+                        &mut std::io::stdout().lock(),
+                        &mut std::io::stderr().lock(),
+                    ),
+                },
+                json,
+            );
         }
         Command::Source {
             command,
@@ -852,12 +867,12 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
     Ok(config)
 }
 
-fn run_result(result: Result<RunOutcome, ToolError>) -> u8 {
+fn run_result(result: Result<RunOutcome, ToolError>, json: bool) -> u8 {
     match result {
         // The launch boundary has already written the PROG-3 payload report.
         Ok(RunOutcome::Exit(code)) => u8::from(code != 0),
-        Ok(RunOutcome::Failure { rule, line }) => {
-            eprintln!("runtime failure[{rule}] at line {line}");
+        Ok(RunOutcome::Failure { rule, site }) => {
+            eprintln!("{}", site.report(rule.as_str(), json));
             1
         }
         Ok(RunOutcome::UndefinedBehavior(u)) => {
@@ -876,6 +891,6 @@ fn run_result(result: Result<RunOutcome, ToolError>) -> u8 {
             eprintln!("evaluator tooling limit: {:?}", l.kind);
             2
         }
-        Err(e) => tool_error(e, false),
+        Err(e) => tool_error(e, json),
     }
 }

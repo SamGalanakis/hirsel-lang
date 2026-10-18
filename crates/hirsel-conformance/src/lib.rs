@@ -416,12 +416,9 @@ pub fn classify(driver: &(impl Driver + ?Sized), path: &Path, expect: &Expect) -
                 line,
                 stdout: expected,
             },
-            RunOutcome::Failure {
-                rule: actual,
-                line: site,
-            },
+            RunOutcome::Failure { rule: actual, site },
         ) if rule == actual
-            && line == site
+            && *line == site.line
             && expected
                 .as_ref()
                 .is_none_or(|expected| expected.as_bytes() == stdout) =>

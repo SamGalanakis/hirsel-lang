@@ -120,6 +120,19 @@ impl<'a> Sites<'a> {
         })
     }
 
+    pub fn failure_site(&self, failure: &Failure) -> Option<hirsel_engine::FailureSite> {
+        let file = self
+            .input
+            .sources
+            .file(*self.files.get(&failure.definition)?)?;
+        Some(hirsel_engine::FailureSite {
+            definition: failure.definition.to_string(),
+            file: file.path.clone(),
+            line: failure.line as usize,
+            column: failure.column,
+        })
+    }
+
     /// The one-based line and column a failure site starts at.
     pub fn position(&self, definition: &DefPath, site: SiteRange) -> Option<(u32, u32)> {
         let file = self.files.get(definition)?;
@@ -172,19 +185,20 @@ pub fn isolates(program: &ReadyProgram) -> bool {
 /// rule code's rule ID.
 #[derive(Clone, Debug)]
 pub struct FailureTable {
-    pub sites: Vec<(u64, String, u32, u32)>,
+    pub sites: Vec<(u64, String, u32, u32, String)>,
     pub rules: Vec<String>,
 }
 
 impl FailureTable {
     /// The table as `hirsel_rt_v2_failure_table` reads it: little-endian u64 words, the site
     /// count, then each site's code, line, column and definition length followed by the
-    /// definition's bytes, then the rule count and each rule's length and bytes.
+    /// definition's bytes and a length-prefixed file path, then the rule count and
+    /// each rule's length and bytes.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         let word = |out: &mut Vec<u8>, w: u64| out.extend(w.to_le_bytes());
         word(&mut out, self.sites.len() as u64);
-        for (code, definition, line, column) in &self.sites {
+        for (code, definition, line, column, file) in &self.sites {
             for w in [
                 *code,
                 u64::from(*line),
@@ -194,6 +208,8 @@ impl FailureTable {
                 word(&mut out, w);
             }
             out.extend(definition.as_bytes());
+            word(&mut out, file.len() as u64);
+            out.extend(file.as_bytes());
         }
         word(&mut out, self.rules.len() as u64);
         for rule in &self.rules {
@@ -211,7 +227,13 @@ pub fn failure_table(program: &ReadyProgram, sites: &Sites<'_>) -> FailureTable 
             .map(|(code, (definition, range))| {
                 // A site inside a library body has no source position: line and column 0.
                 let (line, column) = sites.position(&definition, range).unwrap_or((0, 0));
-                (code, definition.to_string(), line, column)
+                let file = sites
+                    .files
+                    .get(&definition)
+                    .and_then(|id| sites.input.sources.file(*id))
+                    .map(|f| f.path.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "<core>".into());
+                (code, definition.to_string(), line, column, file)
             })
             .collect(),
         rules: super::emit::failure_rules(program),
