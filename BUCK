@@ -179,6 +179,9 @@ hirsel_test(
         "examples/udp-query/grants.json",
         "examples/udp-query/hirsel.json",
         "examples/udp-query/main.hir",
+        "examples/unix-http/grants.json",
+        "examples/unix-http/hirsel.json",
+        "examples/unix-http/main.hir",
         "examples/wordscan/demo.json",
         "examples/wordscan/hirsel.json",
         "examples/wordscan/main.hir",
@@ -204,7 +207,7 @@ hirsel_test(
     bin_exes = {
         "hirsel": "//:hirsel-cli-bin-hirsel",
     },
-    shards = 39,
+    shards = 40,
     data = glob([
         "conformance/**",
         "packages/**",
@@ -281,6 +284,9 @@ hirsel_test(
         "examples/udp-query/grants.json",
         "examples/udp-query/hirsel.json",
         "examples/udp-query/main.hir",
+        "examples/unix-http/grants.json",
+        "examples/unix-http/hirsel.json",
+        "examples/unix-http/main.hir",
         "examples/wordscan/demo.json",
         "examples/wordscan/hirsel.json",
         "examples/wordscan/main.hir",

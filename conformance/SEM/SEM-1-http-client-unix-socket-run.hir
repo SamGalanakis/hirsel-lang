@@ -1,0 +1,95 @@
+// rule: SEM-1
+// expect: run
+// entry: exercise
+// curl --unix-socket: a configured socket path carries every connection, including a
+// redirect's, while the URL names the host header and target; a Client reuses one
+// socket connection across exchanges; without the setting the same URL needs a TCP rule.
+fn socket() -> Path uses {} {
+  path.of("/run/engine.sock")
+}
+
+fn unix_config() -> http.Config uses {} {
+  let mut config = http.default_config()
+  config.unix_socket = Some(socket())
+  config.idle_timeout = None()
+  config
+}
+
+pub fn exercise(t: Test) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "/run/engine.sock",
+        port: 0u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"GET /v1/info HTTP/1.1\r\nhost: localhost\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 302 Found\r\nLocation: /v1/version\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+              ),
+              Close()
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /v1/version HTTP/1.1\r\nhost: localhost\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nv1"
+              ),
+              Close()
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /a HTTP/1.1\r\nhost: localhost:2375\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+              ),
+              Send(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\na"),
+              Expect(
+                b"GET /b HTTP/1.1\r\nhost: localhost:2375\r\nuser-agent: hirsel-std/1\r\nconnection: keep-alive\r\n\r\n"
+              ),
+              Send(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nb")
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let response = http.fetch(
+    n,
+    unix_config(),
+    Get(),
+    "http://localhost/v1/info",
+    [],
+    None()
+  )?
+  test.check(t, response.status == 200 && response.body == b"v1")
+  test.check(t, response.url == "http://localhost/v1/version")
+  let mut client = http.client(n, None(), unix_config())?
+  let a = http.client_fetch(mut client, Get(), "http://localhost:2375/a", [], None())?
+  let b = http.client_fetch(mut client, Get(), "http://localhost:2375/b", [], None())?
+  test.check(t, a.body == b"a" && b.body == b"b")
+  let tcp = http.fetch(
+    n,
+    http.default_config(),
+    Get(),
+    "http://localhost/v1/info",
+    [],
+    None()
+  )
+  let refused = match tcp {
+    Error(Net(NotGranted())) => true,
+    _ => false,
+  }
+  test.check(t, refused)
+  Ok(())
+}

@@ -1,0 +1,41 @@
+// One HTTP exchange over a Unix domain socket the program serves itself, as curl
+// --unix-socket would reach a local service. The listener's backlog holds the client's
+// connection until the program accepts it, so no task is needed.
+pub type ExchangeError = Grant(GrantError) | Usage(ArgError) | Network(NetError) | Http(
+  http.HttpError
+) | Output(OutputError)
+
+fn serve(n: Net, mut listener: Listener of n) -> Result[String, ExchangeError] {
+  let (stream, _) = net.accept(n, mut listener) ? Network
+  let mut connection = http.server_connection(n, take stream, http.default_config())
+  let incoming = http.receive_request(mut connection, None()) ? Http
+  let reply = f"served {incoming.target}"
+  http.respond(
+    mut connection,
+    200u16,
+    [http.Header(name: "Content-Type", value: "text/plain")],
+    string.as_bytes(reply),
+    true
+  ) ? Http
+  Ok(incoming.target)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ExchangeError] {
+  let n = io.net(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let socket = arg.path(args, 0u64) ? Usage
+  let mut listener = net.unix_listen(n, socket) ? Network
+  let mut config = http.default_config()
+  config.unix_socket = Some(socket)
+  let mut request = http.request(n, config, Get(), "http://localhost/status", []) ? Http
+  http.send_bodiless(mut request) ? Http
+  let target = serve(n, mut listener)?
+  let head = http.receive_head(mut request) ? Http
+  let body = http.read_all(mut request, 1024u64) ? Http
+  let text = match string.from_bytes(take body) {
+    Ok(s) => s,
+    Error(_) => "",
+  }
+  let _ = out.print(output, f"request {target}; status {head.status}; body {text}\n") ? Output
+  Ok(())
+}

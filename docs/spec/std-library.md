@@ -918,7 +918,8 @@ Config       = { max_redirects: u32, connect_timeout: Option[Duration],
                  max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[Duration],
                  max_idle_connections: u64, max_idle_connections_per_host: u64,
                  max_headers: u64, user_agent: String,
-                 roots: TlsRoots, status_as_error: bool, decompress: bool }
+                 roots: TlsRoots, status_as_error: bool, decompress: bool,
+                 unix_socket: Option[Path] }
 ResponseHead = { version: Version, status: u16, reason: String, headers: List[Header],
                  content_length: Option[u64], chunked: bool, keep_alive: bool,
                  location: Option[String], content_type: Option[String] }
@@ -947,7 +948,7 @@ fn fetch(n: Net, config: Config, method: Method, url: String, headers: List[Head
 ```
 
 `default_config()` is 3 redirects, no timeouts, 64 KiB of head, 100 headers, user agent
-`hirsel-std/1`, `WebPki()` roots, `status_as_error` true and `decompress` false. A `Request` holds its `Net`, a
+`hirsel-std/1`, `WebPki()` roots, `status_as_error` true, `decompress` false and no `unix_socket`. A `Request` holds its `Net`, a
 `Stream` branded by it, the parsed URL, the redirect budget, an input buffer and the
 response state, so its operations take only `mut r` and its authority is `{Net}`; dropping
 it drops the stream.
@@ -958,6 +959,13 @@ it drops the stream.
   configured roots, so the timeouts also bound the handshake. Header names and values
   containing CR or LF, and names containing `:`, are `Malformed(...)`: this is the
   header-injection boundary for agent-supplied strings.
+- With `unix_socket` set to `Some(path)`, as with curl's `--unix-socket`, every connection,
+  including each redirect's, is `net.unix_connect(n, path)` in place of the TCP connect, so
+  the `Net` needs `(path, 0, UnixConnect())` and no TCP rule. The URL still supplies the
+  scheme, the `host` header, the request target and, for `https`, the `tls.connect` server
+  name; its port is unused. `net.unix_connect` takes no timeout, so `connect_timeout` does
+  not apply; the read and write timeouts do. A `Client` pools these connections by the
+  URL's origin as usual.
 - `send_bodiless` and `send_body` write the request head (`METHOD target HTTP/1.1`, `host`,
   `user-agent`, `connection: close`, the caller's headers, and `content-length` for a
   body) and the body. `send_chunk` and `end_body` stream a `transfer-encoding: chunked`

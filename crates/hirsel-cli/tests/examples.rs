@@ -79,6 +79,10 @@ impl Fixture {
                 serde_json::from_str(include_str!("../../../examples/udp-query/hirsel.json"))
                     .unwrap()
             }
+            "unix-http" => {
+                serde_json::from_str(include_str!("../../../examples/unix-http/hirsel.json"))
+                    .unwrap()
+            }
             _ => {
                 serde_json::json!({"schema":1,"package":{"name":name,"version":"1"},"entry":{"module":[],"name":"main"},"sources":[{"path":"main.hir","module":[]},{"path":"common.hir","module":["common"]}],"dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}]})
             }
@@ -1804,6 +1808,95 @@ fn udp_query_records_and_replays_across_cli_backends() {
     assert!(live.stderr.is_empty());
     // The live world and grants are gone: only the tape remains.
     std::fs::remove_file(grants).unwrap();
+    for backend in ["llvm", "cranelift"] {
+        let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["run", "--native", "--backend", backend])
+            .arg(fixture.0.join("hirsel.json"))
+            .arg("--replay")
+            .arg(&tape)
+            .output()
+            .unwrap();
+        assert!(
+            replay.status.success(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&replay.stderr)
+        );
+        assert_eq!(replay.stdout, expected.as_bytes(), "{backend}");
+        assert!(replay.stderr.is_empty());
+    }
+}
+
+/// A real Unix socket the program serves itself: the std client's `unix_socket` transport
+/// reaches the program's own listener in the interpreter and on both native backends, a
+/// stale socket file is replaced only under the granted rule, closing the listener removes
+/// the file, and the interpreter's tape replays natively with no socket at all.
+#[test]
+fn unix_http_serves_itself_over_a_real_socket_and_replays_across_cli_backends() {
+    use std::os::unix::fs::FileTypeExt;
+    let fixture = Fixture::new(
+        "unix-http",
+        include_str!("../../../examples/unix-http/main.hir"),
+    );
+    // Socket paths are at most 107 bytes, so the socket lives in a short directory.
+    let sockets = PathBuf::from(format!(
+        "/tmp/hirsel-unix-http-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&sockets).unwrap();
+    let socket = sockets.join("s.sock");
+    let socket_text = socket.to_str().unwrap();
+    let grants_text = include_str!("../../../examples/unix-http/grants.json")
+        .replace("/tmp/hirsel-unix-http.sock", socket_text);
+    let grants = fixture.0.join("grants.json");
+    let expected = "request /status; status 200; body served /status\n";
+    let run = |args: &[&str], grants_text: &str| {
+        std::fs::write(&grants, grants_text).unwrap();
+        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .args(args)
+            .arg(fixture.0.join("hirsel.json"))
+            .arg("--grants")
+            .arg(&grants)
+            .output()
+            .unwrap()
+    };
+    // A listener that exits without closing leaves its socket file behind.
+    drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+    assert!(
+        std::fs::symlink_metadata(&socket)
+            .unwrap()
+            .file_type()
+            .is_socket()
+    );
+    let narrowed = grants_text.replace("unix_listen_remove_stale", "unix_listen");
+    let refused = run(&[], &narrowed);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("AddrInUse"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(std::fs::symlink_metadata(&socket).is_ok());
+    let tape = fixture.0.join("unix.tape");
+    let tape_text = tape.to_str().unwrap().to_owned();
+    for args in [
+        vec!["--record", tape_text.as_str()],
+        vec!["--native", "--backend", "llvm"],
+        vec!["--native", "--backend", "cranelift"],
+    ] {
+        let live = run(&args, &grants_text);
+        assert!(
+            live.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&live.stderr)
+        );
+        assert_eq!(live.stdout, expected.as_bytes(), "{args:?}");
+        assert!(live.stderr.is_empty(), "{args:?}");
+        assert!(std::fs::symlink_metadata(&socket).is_err(), "{args:?}");
+    }
+    std::fs::remove_file(grants).unwrap();
+    std::fs::remove_dir(&sockets).unwrap();
     for backend in ["llvm", "cranelift"] {
         let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .args(["run", "--native", "--backend", backend])

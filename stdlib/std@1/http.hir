@@ -38,6 +38,7 @@ pub type Config {
   roots: TlsRoots,
   status_as_error: bool,
   decompress: bool,
+  unix_socket: Option[Path],
 }
 
 pub type ResponseHead {
@@ -105,7 +106,8 @@ pub fn default_config() -> Config uses {} {
     user_agent: "hirsel-std/1",
     roots: WebPki(),
     status_as_error: true,
-    decompress: false
+    decompress: false,
+    unix_socket: None()
   )
 }
 
@@ -354,7 +356,12 @@ fn http_open(n: Net, config: Config, parsed_uri: uri.Uri) -> Result[
   let ct = http_timeout(config.connect_timeout)?
   let rt = http_timeout(config.read_timeout)?
   let wt = http_timeout(config.write_timeout)?
-  let mut plain = core@1/net.connect(n, name, http_port(parsed_uri), ct) ? http_net_error
+  // A configured socket path carries every connection, as curl --unix-socket does; the
+  // URL still names the Host header, the TLS server name and the pool origin.
+  let mut plain = match config.unix_socket {
+    Some(socket) => core@1/net.unix_connect(n, socket) ? http_net_error,
+    None() => core@1/net.connect(n, name, http_port(parsed_uri), ct) ? http_net_error,
+  }
   // ConnectTls allows options before upgrade; these also bound the handshake.
   core@1/net.set_read_timeout(n, mut plain, rt) ? http_net_error
   core@1/net.set_write_timeout(n, mut plain, wt) ? http_net_error
