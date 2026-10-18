@@ -1,0 +1,218 @@
+// Port of Go src/net/http/cookie.go ParseCookie, Cookie.String, isToken and
+// the RFC 6265 section 4.1.1 cookie-octet and path-value checks, golang/go
+// ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause; third-party/NOTICES.md).
+// Invalid names, values and paths are errors; Go sanitizes or drops them.
+pub type SameSite = Strict | Lax | None
+
+/// One Set-Cookie header value: the RFC 6265 name, value, Path, Max-Age,
+/// HttpOnly and Secure attributes plus SameSite.
+pub type SetCookie {
+  name: String,
+  value: String,
+  path: Option[String],
+  max_age: Option[u64],
+  http_only: bool,
+  secure: bool,
+  same_site: Option[SameSite],
+}
+
+/// Offsets are byte positions in the parsed header, or in the offending field
+/// when formatting.
+pub type CookieError = Blank | MissingEquals(u64) | InvalidName(u64) | InvalidValue(u64) | InvalidPath(
+  u64
+) | InsecureSameSiteNone
+
+/// A cookie with no attributes.
+pub fn new(name: String, value: String) -> SetCookie uses {} {
+  SetCookie(
+    name: unique name,
+    value: unique value,
+    path: None(),
+    max_age: None(),
+    http_only: false,
+    secure: false,
+    same_site: None()
+  )
+}
+
+// RFC 9110 tchar, as Go httpguts.IsTokenRune.
+@noalloc
+fn token_byte(byte: u8) -> bool uses {} {
+  std@1/ascii.is_alnum(byte) || byte == b'!' || byte == b'#' || byte == b'$' || byte == b'%' || byte == b'&' || byte == b'\'' || byte == b'*' || byte == b'+' || byte == b'-' || byte == b'.' || byte == b'^' || byte == b'_' || byte == b'`' || byte == b'|' || byte == b'~'
+}
+
+// Go validCookieValueByte: printable ASCII except DQUOTE, semicolon and
+// backslash. Space and comma are accepted, as in Go.
+@noalloc
+fn value_byte(byte: u8) -> bool uses {} {
+  byte >= 0x20 && byte < 0x7F && byte != b'"' && byte != b';' && byte != b'\\'
+}
+
+// Go validCookiePathByte.
+@noalloc
+fn path_byte(byte: u8) -> bool uses {} {
+  byte >= 0x20 && byte < 0x7F && byte != b';'
+}
+
+// Go textproto.TrimString's whitespace.
+@noalloc
+fn space(byte: u8) -> bool uses {} {
+  byte == b' ' || byte == b'\t' || byte == b'\n' || byte == b'\r'
+}
+
+fn piece(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+/// Parses a Cookie request header value into its name-value pairs, in order and
+/// with repeated names kept, as Go ParseCookie. Pairs are separated by `;` and
+/// trimmed; every pair needs `=`, a token name and a cookie-octet value, which
+/// may be enclosed in double quotes (removed). Errors return no pairs.
+pub fn parse(header: String) -> Result[
+  unique List[(unique String, unique String)],
+  CookieError
+] uses {} {
+  let data = core@1/string.as_bytes(header)
+  let size = core@1/bytes.len(data)
+  let mut pairs: List[(unique String, unique String)] = []
+  let mut start: u64 = 0
+  while start <= size {
+    let mut stop = start
+    while stop < size && data[stop] != b';' {
+      stop += 1
+    }
+    let mut first = start
+    let mut last = stop
+    while first < last && space(data[first]) {
+      first += 1
+    }
+    while last > first && space(data[last - 1]) {
+      last -= 1
+    }
+    if first == last && start == 0 && stop == size {
+      return Error(Blank())
+    }
+    let mut equals = first
+    while equals < last && data[equals] != b'=' {
+      equals += 1
+    }
+    if equals == last {
+      return Error(MissingEquals(first))
+    }
+    if equals == first {
+      return Error(InvalidName(first))
+    }
+    let mut i = first
+    while i < equals {
+      if !token_byte(data[i]) {
+        return Error(InvalidName(first))
+      }
+      i += 1
+    }
+    let mut value_start = equals + 1
+    let mut value_end = last
+    if value_end - value_start > 1 && data[value_start] == b'"' && data[value_end - 1] == b'"' {
+      value_start += 1
+      value_end -= 1
+    }
+    i = value_start
+    while i < value_end {
+      if !value_byte(data[i]) {
+        return Error(InvalidValue(equals + 1))
+      }
+      i += 1
+    }
+    core@1/list.push(
+      mut pairs,
+      (piece(data, first, equals), piece(data, value_start, value_end))
+    )
+    start = stop + 1
+  }
+  Ok(take pairs)
+}
+
+/// Formats a Set-Cookie header value in Go's attribute order. A value
+/// containing a space or comma is double-quoted, as in Go. SameSite=None
+/// requires Secure (RFC 6265bis section 4.1.2.7).
+pub fn format(c: SetCookie) -> Result[unique String, CookieError] uses {} {
+  let name = core@1/string.as_bytes(c.name)
+  if core@1/bytes.len(name) == 0 {
+    return Error(InvalidName(0))
+  }
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(name) {
+    if !token_byte(name[i]) {
+      return Error(InvalidName(i))
+    }
+    i += 1
+  }
+  let value = core@1/string.as_bytes(c.value)
+  let mut quote = false
+  i = 0
+  while i < core@1/bytes.len(value) {
+    if !value_byte(value[i]) {
+      return Error(InvalidValue(i))
+    }
+    if value[i] == b' ' || value[i] == b',' {
+      quote = true
+    }
+    i += 1
+  }
+  if c.same_site == Some(None()) && !c.secure {
+    return Error(InsecureSameSiteNone())
+  }
+  let mut out: List[u8] = []
+  text.append(mut out, c.name)
+  core@1/list.push(mut out, b'=')
+  if quote {
+    core@1/list.push(mut out, b'"')
+  }
+  text.append(mut out, c.value)
+  if quote {
+    core@1/list.push(mut out, b'"')
+  }
+  match c.path {
+    Some(path) => {
+      let bytes = core@1/string.as_bytes(path)
+      if core@1/bytes.len(bytes) == 0 {
+        return Error(InvalidPath(0))
+      }
+      i = 0
+      while i < core@1/bytes.len(bytes) {
+        if !path_byte(bytes[i]) {
+          return Error(InvalidPath(i))
+        }
+        i += 1
+      }
+      text.append(mut out, "; Path=")
+      text.append(mut out, path)
+    },
+    None() => (),
+  }
+  match c.max_age {
+    Some(seconds) => {
+      text.append(mut out, "; Max-Age=")
+      std@1/u64.format_into(seconds, mut out)
+    },
+    None() => (),
+  }
+  if c.http_only {
+    text.append(mut out, "; HttpOnly")
+  }
+  if c.secure {
+    text.append(mut out, "; Secure")
+  }
+  match c.same_site {
+    Some(Strict()) => text.append(mut out, "; SameSite=Strict"),
+    Some(Lax()) => text.append(mut out, "; SameSite=Lax"),
+    Some(None()) => text.append(mut out, "; SameSite=None"),
+    None() => (),
+  }
+  Ok(text.finish_valid(take out))
+}

@@ -111,6 +111,11 @@ fn flate_large_vectors_execute_std_source() {
 }
 
 #[test]
+fn cookie_is_ordinary_source() {
+    source_codec("cookie", "cookie", &["new", "parse", "format"]);
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",

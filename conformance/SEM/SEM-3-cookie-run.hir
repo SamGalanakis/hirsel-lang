@@ -1,0 +1,182 @@
+// rule: SEM-3
+// expect: run
+// Go src/net/http/cookie_test.go TestParseCookie, writeSetCookiesTests,
+// TestCookieSanitizeValue and TestCookieSanitizePath (golang/go ebe2feef), and
+// the cookie 0.18 crate's format test. Invalid input that Go sanitizes or drops
+// is an error here, and SameSite=None requires Secure.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+fn named(name: String, value: String) -> String uses {} {
+  match cookie.format(cookie.new(name, value)) {
+    Ok(header) => take header,
+    Error(_) => "error",
+  }
+}
+
+pub fn main(t: Test) -> Result[(), cookie.CookieError] {
+  // TestParseCookie.
+  check(cookie.parse("Cookie-1=v$1")? == [("Cookie-1", "v$1")])
+  check(cookie.parse("Cookie-1=v$1;c2=v2")? == [("Cookie-1", "v$1"), ("c2", "v2")])
+  check(
+    cookie.parse("Cookie-1=\"v$1\";c2=\"v2\"")? == [("Cookie-1", "v$1"), ("c2", "v2")]
+  )
+  check(cookie.parse("k1=")? == [("k1", "")])
+  check(cookie.parse("") == Error(Blank()))
+  check(cookie.parse("equal-not-found") == Error(MissingEquals(0u64)))
+  check(cookie.parse("=v1") == Error(InvalidName(0u64)))
+  check(cookie.parse("k1=\\") == Error(InvalidValue(3u64)))
+  // Browser spacing, repeated names, trimming and quoting.
+  check(cookie.parse("a=1; b=2; a=3")? == [("a", "1"), ("b", "2"), ("a", "3")])
+  check(cookie.parse(" \tsid=x y \r\n")? == [("sid", "x y")])
+  check(cookie.parse("q=\"b c\"; e=\"\"")? == [("q", "b c"), ("e", "")])
+  check(cookie.parse("token=abc=def")? == [("token", "abc=def")])
+  check(cookie.parse("  ") == Error(Blank()))
+  check(cookie.parse("a=1;") == Error(MissingEquals(4u64)))
+  check(cookie.parse("a=1;;b=2") == Error(MissingEquals(4u64)))
+  check(cookie.parse("a=1; b c=2") == Error(InvalidName(5u64)))
+  check(cookie.parse("a=\"") == Error(InvalidValue(2u64)))
+  check(cookie.parse("a=1; b=\"x") == Error(InvalidValue(7u64)))
+  check(cookie.parse("a=é") == Error(InvalidValue(2u64)))
+  check(cookie.parse("a=b,c")? == [("a", "b,c")])
+  // writeSetCookiesTests without Domain, Expires and Partitioned.
+  check(named("cookie-1", "v$1") == "cookie-1=v$1")
+  let mut two = cookie.new("cookie-2", "two")
+  two.max_age = Some(3600)
+  check(cookie.format(two)? == "cookie-2=two; Max-Age=3600")
+  let mut four = cookie.new("cookie-4", "four")
+  four.path = Some("/restricted/")
+  check(cookie.format(four)? == "cookie-4=four; Path=/restricted/")
+  let mut lax = cookie.new("cookie-13", "samesite-lax")
+  lax.same_site = Some(Lax())
+  check(cookie.format(lax)? == "cookie-13=samesite-lax; SameSite=Lax")
+  let mut strict = cookie.new("cookie-14", "samesite-strict")
+  strict.same_site = Some(Strict())
+  check(cookie.format(strict)? == "cookie-14=samesite-strict; SameSite=Strict")
+  let mut none = cookie.new("cookie-15", "samesite-none")
+  none.same_site = Some(None())
+  check(cookie.format(none) == Error(InsecureSameSiteNone()))
+  none.secure = true
+  check(cookie.format(none)? == "cookie-15=samesite-none; Secure; SameSite=None")
+  check(named("special-1", "a z") == "special-1=\"a z\"")
+  check(named("special-2", " z") == "special-2=\" z\"")
+  check(named("special-3", "a ") == "special-3=\"a \"")
+  check(named("special-4", " ") == "special-4=\" \"")
+  check(named("special-5", "a,z") == "special-5=\"a,z\"")
+  check(named("special-6", ",z") == "special-6=\",z\"")
+  check(named("special-7", "a,") == "special-7=\"a,\"")
+  check(named("special-8", ",") == "special-8=\",\"")
+  check(named("empty-value", "") == "empty-value=")
+  check(cookie.format(cookie.new("", "")) == Error(InvalidName(0u64)))
+  check(cookie.format(cookie.new("\t", "")) == Error(InvalidName(0u64)))
+  check(cookie.format(cookie.new("\r", "")) == Error(InvalidName(0u64)))
+  check(cookie.format(cookie.new("a\nb", "v")) == Error(InvalidName(1u64)))
+  check(cookie.format(cookie.new("a\rb", "v")) == Error(InvalidName(1u64)))
+  // TestCookieSanitizeValue: bytes Go drops are errors.
+  check(named("c", "foo") == "c=foo")
+  check(cookie.format(cookie.new("c", "foo;bar")) == Error(InvalidValue(3u64)))
+  check(cookie.format(cookie.new("c", "foo\\bar")) == Error(InvalidValue(3u64)))
+  check(cookie.format(cookie.new("c", "foo\"bar")) == Error(InvalidValue(3u64)))
+  check(cookie.format(cookie.new("c", "\0~")) == Error(InvalidValue(0u64)))
+  check(cookie.format(cookie.new("c", "~\u{7f}")) == Error(InvalidValue(1u64)))
+  check(cookie.format(cookie.new("c", "é")) == Error(InvalidValue(0u64)))
+  // TestCookieSanitizePath.
+  let mut scoped = cookie.new("p", "v")
+  scoped.path = Some("/path with space/")
+  check(cookie.format(scoped)? == "p=v; Path=/path with space/")
+  scoped.path = Some("/just;no;semicolon")
+  check(cookie.format(scoped) == Error(InvalidPath(5u64)))
+  scoped.path = Some("")
+  check(cookie.format(scoped) == Error(InvalidPath(0u64)))
+  // cookie 0.18 lib.rs format, in Go's attribute order.
+  let mut c = cookie.new("foo", "bar")
+  c.http_only = true
+  check(cookie.format(c)? == "foo=bar; HttpOnly")
+  c = cookie.new("foo", "bar")
+  c.max_age = Some(10)
+  check(cookie.format(c)? == "foo=bar; Max-Age=10")
+  c = cookie.new("foo", "bar")
+  c.secure = true
+  check(cookie.format(c)? == "foo=bar; Secure")
+  c = cookie.new("foo", "bar")
+  c.path = Some("/")
+  check(cookie.format(c)? == "foo=bar; Path=/")
+  // Every attribute, and Max-Age=0 to delete.
+  let mut session = cookie.new("id", "a3fWa")
+  session.path = Some("/")
+  session.max_age = Some(2592000)
+  session.http_only = true
+  session.secure = true
+  session.same_site = Some(Strict())
+  check(
+    cookie.format(session)? == "id=a3fWa; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Strict"
+  )
+  session.max_age = Some(0)
+  session.same_site = None()
+  check(cookie.format(session)? == "id=a3fWa; Path=/; Max-Age=0; HttpOnly; Secure")
+  // Parsed strings are unique at the public boundary.
+  let mut pairs = cookie.parse("name=owned")?
+  let (key, value) = list.remove(mut pairs, 0)
+  let moved_key: unique String = take key
+  let moved_value: unique String = take value
+  check(moved_key == "name" && moved_value == "owned")
+  // A server reads the Cookie header and answers with Set-Cookie.
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: example.com\r\nCookie: theme=dark; sid=\"7f\"\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nset-cookie: sid=8a; Path=/; HttpOnly; SameSite=Lax\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndark"
+              ),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let mut stream = match net.connect(n, "example.com", 80u16, Unbounded()) {
+    Ok(stream) => take stream,
+    Error(_) => {
+      check(false)
+      return Ok(())
+    },
+  }
+  let mut connection = http.server_connection(n, take stream, http.default_config())
+  let request = match http.receive_request(mut connection, None()) {
+    Ok(request) => take request,
+    Error(_) => {
+      check(false)
+      return Ok(())
+    },
+  }
+  let header = match http.header(request.headers, "cookie") {
+    Some(found) => take found,
+    None() => "",
+  }
+  let received = cookie.parse(header)?
+  check(received == [("theme", "dark"), ("sid", "7f")])
+  let mut reply = cookie.new("sid", "8a")
+  reply.path = Some("/")
+  reply.http_only = true
+  reply.same_site = Some(Lax())
+  let set_cookie = http.Header(name: "set-cookie", value: cookie.format(reply)?)
+  let (_, theme) = received[0]
+  match http.respond(mut connection, 200u16, [set_cookie], string.as_bytes(theme), true) {
+    Ok(()) => (),
+    Error(_) => check(false),
+  }
+  Ok(())
+}

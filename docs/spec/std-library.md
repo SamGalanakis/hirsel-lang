@@ -1562,3 +1562,37 @@ are `Truncated()`, and a wrong magic number, a method other than 8, a reserved f
 bit (RFC 1952 section 2.3.1.2; Go ignores them) or a header CRC mismatch is
 `Header()`. Extra fields, names and comments are skipped. A CRC-32 or size
 mismatch is `Checksum()`. No partial output is returned.
+
+## Cookies
+
+`std@1/cookie` parses Cookie request headers and formats Set-Cookie response
+headers, adapted from Go `net/http` with its tests (RFC 6265 section 4.1):
+
+```text
+SameSite    = Strict | Lax | None
+SetCookie   = { name: String, value: String, path: Option[String], max_age: Option[u64],
+                http_only: bool, secure: bool, same_site: Option[SameSite] }
+CookieError = Blank | MissingEquals(u64) | InvalidName(u64) | InvalidValue(u64)
+            | InvalidPath(u64) | InsecureSameSiteNone
+fn cookie.new(name: String, value: String) -> SetCookie uses {}
+fn cookie.parse(header: String) -> Result[unique List[(unique String, unique String)], CookieError] uses {}
+fn cookie.format(c: SetCookie) -> Result[unique String, CookieError] uses {}
+```
+
+`parse` follows Go `ParseCookie`: it splits at every `;`, trims space, tab, CR and
+LF, and returns the pairs in order with repeated names kept. Every pair needs `=`
+(`MissingEquals`, so a trailing `;` is an error), a token name (`InvalidName`) and a
+value of cookie-octets, space and comma (`InvalidValue`); one pair of enclosing
+double quotes is removed. A blank header is `Blank()`. Offsets are those of the
+trimmed pair, or of its value. Errors return no pairs.
+
+`new` gives a cookie with no attributes; `format` writes `name=value` and then
+`Path`, `Max-Age`, `HttpOnly`, `Secure` and `SameSite` in Go's order, double-quoting
+a value that contains a space or comma. Where Go sanitizes or drops input, `format`
+fails: an empty or non-token name is `InvalidName`, a value byte outside Go's
+cookie value bytes is `InvalidValue`, and an empty path or a control character or
+`;` in it is `InvalidPath`, each at the offending byte offset within that field.
+`Max-Age=0` asks the client to delete the cookie. `SameSite=None` without `Secure`
+is `InsecureSameSiteNone()`, since clients reject it (RFC 6265bis section 4.1.2.7).
+Domain, Expires and Partitioned attributes, Set-Cookie parsing and cookie jars are
+not provided.

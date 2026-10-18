@@ -607,6 +607,12 @@
       "module": [
         "derive"
       ]
+    },
+    {
+      "path": "cookie.hir",
+      "module": [
+        "cookie"
+      ]
     }
   ],
   "dependencies": []

@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-966 exported definitions; 287 variants.
+972 exported definitions; 296 variants.
 
 ## Types and roots
 
@@ -2045,6 +2045,122 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_4
 <a id="def-core_401_2fcodegen_2fbody"></a>
 
 - `fn codegen.body[F](text: String) -> Body[F]`
+
+
+## cookie
+
+<a id="def-std_401_2fcookie_2fCookieError"></a>
+
+- `pub type cookie.CookieError = Blank | MissingEquals(u64) | InvalidName(u64) | InvalidValue(u64) | InvalidPath( u64 ) | InsecureSameSiteNone`
+
+Offsets are byte positions in the parsed header, or in the offending field
+when formatting.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fcookie_2fCookieError_23Blank"></a>
+
+- `Blank -> cookie.CookieError`
+
+Variant of cookie.CookieError.
+
+<a id="def-std_401_2fcookie_2fCookieError_23InsecureSameSiteNone"></a>
+
+- `InsecureSameSiteNone -> cookie.CookieError`
+
+Variant of cookie.CookieError.
+
+<a id="def-std_401_2fcookie_2fCookieError_23InvalidName"></a>
+
+- `InvalidName(u64) -> cookie.CookieError`
+
+Variant of cookie.CookieError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fcookie_2fCookieError_23InvalidPath"></a>
+
+- `InvalidPath( u64 ) -> cookie.CookieError`
+
+Variant of cookie.CookieError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fcookie_2fCookieError_23InvalidValue"></a>
+
+- `InvalidValue(u64) -> cookie.CookieError`
+
+Variant of cookie.CookieError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fcookie_2fCookieError_23MissingEquals"></a>
+
+- `MissingEquals(u64) -> cookie.CookieError`
+
+Variant of cookie.CookieError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fcookie_2fSameSite"></a>
+
+- `pub type cookie.SameSite = Strict | Lax | None`
+
+<a id="def-std_401_2fcookie_2fSameSite_23Lax"></a>
+
+- `Lax -> cookie.SameSite`
+
+Variant of cookie.SameSite.
+
+<a id="def-std_401_2fcookie_2fSameSite_23None"></a>
+
+- `None -> cookie.SameSite`
+
+Variant of cookie.SameSite.
+
+<a id="def-std_401_2fcookie_2fSameSite_23Strict"></a>
+
+- `Strict -> cookie.SameSite`
+
+Variant of cookie.SameSite.
+
+<a id="def-std_401_2fcookie_2fSetCookie"></a>
+
+- `pub type cookie.SetCookie { name: String, value: String, path: Option[String], max_age: Option[u64], http_only: bool, secure: bool, same_site: Option[SameSite], }`
+
+One Set-Cookie header value: the RFC 6265 name, value, Path, Max-Age,
+HttpOnly and Secure attributes plus SameSite.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`std@1/cookie/SameSite`](#def-std_401_2fcookie_2fSameSite)
+
+<a id="def-std_401_2fcookie_2fformat"></a>
+
+- `pub fn cookie.format(c: SetCookie) -> Result[unique String, CookieError] uses {}`
+
+Formats a Set-Cookie header value in Go's attribute order. A value
+containing a space or comma is double-quoted, as in Go. SameSite=None
+requires Secure (RFC 6265bis section 4.1.2.7).
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/cookie/CookieError`](#def-std_401_2fcookie_2fCookieError), [`std@1/cookie/SetCookie`](#def-std_401_2fcookie_2fSetCookie)
+
+<a id="def-std_401_2fcookie_2fnew"></a>
+
+- `pub fn cookie.new(name: String, value: String) -> SetCookie uses {}`
+
+A cookie with no attributes.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/cookie/SetCookie`](#def-std_401_2fcookie_2fSetCookie)
+
+<a id="def-std_401_2fcookie_2fparse"></a>
+
+- `pub fn cookie.parse(header: String) -> Result[ unique List[(unique String, unique String)], CookieError ] uses {}`
+
+Parses a Cookie request header value into its name-value pairs, in order and
+with repeated names kept, as Go ParseCookie. Pairs are separated by `;` and
+trimmed; every pair needs `=`, a token name and a cookie-octet value, which
+may be enclosed in double quotes (removed). Errors return no pairs.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/cookie/CookieError`](#def-std_401_2fcookie_2fCookieError)
 
 
 ## csv

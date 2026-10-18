@@ -34,6 +34,8 @@ the license named in its row; the license texts follow once each.
 | Go standard library | `src/encoding/csv/{reader,writer}.go` quoted-field transitions/fieldNeedsQuotes and `reader_test.go`, `writer_test.go`, `fuzz_test.go` record/quote/error/boundary ideas (Hirsel preserves its existing CSV example dialect) | `stdlib/std@1/csv.hir`, CSV conformance; `examples/csvjson` uses std and its private parser is removed | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/crypto/internal/fips140/sha256/{sha256.go,sha256block.go}` cross-check of constants, scalar schedule/rounds and big-endian padding/output | `stdlib/std@1/sha256.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/compress/flate/{inflate.go,flate_test.go}`, `src/compress/gzip/{gunzip.go,gunzip_test.go}`, `src/compress/zlib/{reader.go,reader_test.go}` block decoding, code completeness rule, member and header checks, TestStreams, TestTruncatedStreams, gunzipTests and zlibTests | `stdlib/std@1/flate.hir`, `conformance/SEM/SEM-3-flate-*`, `crates/hirsel-driver/tests/fixtures/flate-large.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| Go standard library | `src/net/http/{cookie.go,cookie_test.go}` ParseCookie, Cookie.String, token and cookie-octet checks, TestParseCookie, writeSetCookiesTests and sanitize vectors | `stdlib/std@1/cookie.hir`, `conformance/SEM/SEM-3-cookie-run.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| cookie | `src/lib.rs` `format` test vectors | `conformance/SEM/SEM-3-cookie-run.hir` | cookie 0.18.2 crate release | MIT |
 | Go standard library | `src/encoding/base64/{base64.go,base64_test.go}` quanta, strict unused-bit checks and four-mode reference pairs | `stdlib/std@1/base64.hir`, base64 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/encoding/hex/{hex.go,hex_test.go}` nibble codec and vectors | `stdlib/std@1/hex.hir`, hex conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/path/match.go`, `src/path/match_test.go` slash grammar, scalar classes and matching vectors | `stdlib/std@1/glob.hir`, `conformance/SEM/SEM-3-glob-*.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
@@ -130,6 +132,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - httparse: Copyright (c) 2015-2026 Sean McArthur
 - rustls: Copyright (c) 2016 Joseph Birr-Pixton
 - ureq: Copyright (c) 2019 Martin Algesten
+- cookie: Copyright (c) 2017 Sergio Benitez, Copyright (c) 2014 Alex Crichton
 - The Computer Language Benchmarks Game: Copyright (c) 2004-2008 Brent Fulgham,
   2005-2025 Isaac Gouy. The binarytrees programs are by Jeremy Zerfas, based on
   the C++ program by Jon Harrop, Alex Mizrahi and Bruno Coutinho.
