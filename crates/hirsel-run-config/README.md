@@ -96,6 +96,12 @@ ProcessError tag such as `"not_found"`, `"timed_out"` or `{"fault":7}`, never
 child entries whose steps are `{"print":[..]}`, `{"print_err":[..]}`, `{"expect":[..]}` or
 `{"exit":status}`. Runs and children grant nothing beyond the rules.
 
+`grants_within(a, b)` is the CAP-3 grant subset relation over two validated records:
+Unsafe, Io projections with exact providers, mounts (virtual path and host root extended
+by the same components, access no wider), Net and process rules under the same provider
+(`net_rule_within`, `process_rule_within`) and Env names with equal snapshots. Absent Io or
+Env is within anything; scripted provider data and non-grant fields take no part.
+
 `RunConfig::read_path` accepts only an explicit absolute record path.
 `ValidatedRun::io_projections`, `clock_grants`, `net_grant` and `process_grant` derive adapter policy
 from the validated grants, with no projections for absent or empty Io. An explicit

@@ -1840,6 +1840,12 @@
           "name": "rustls-webpki",
           "req": "=0.103.15",
           "uses_default_features": false
+        },
+        {
+          "kind": "dev",
+          "name": "proptest",
+          "req": "^1",
+          "uses_default_features": true
         }
       ],
       "name": "hirsel-run-config"

@@ -832,6 +832,7 @@ dependencies = [
 name = "hirsel-run-config"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "rustls",
  "rustls-pki-types",
  "rustls-webpki",

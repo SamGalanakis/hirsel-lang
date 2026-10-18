@@ -131,6 +131,21 @@ fn probe(d: Dir, p: Path) -> u64 {
 }
 ```
 
+**Grant subset.** One run configuration's grants are *within* another's when they hold no
+authority the other lacks: `Unsafe` only if the other grants it; each Io projection (stdin,
+stderr, stdout, tasks, each clock, random) only under the other's exact provider contract;
+each mount only beneath one of the other's, its virtual path and its host root extending
+that mount's by the same components, its access no wider (`read` is within `read_write`);
+a network or process grant only under the same provider, each of its rules within one of
+the other's rules by `net.narrow` coverage, or, for a process rule, naming the same program
+and passing through a subset of its environment names; and each Env name only when the
+other grants it with the same snapshot, set or unset. Absent Io or Env is within any
+grants, and a present one only within a present one. The relation is total and lexical over
+validated records and reads no host state; program, entry, inputs, Args, admission and
+scripted provider data (peers, listeners, runs, children) are not authority and take no
+part. It is reflexive and transitive, removing a grant or narrowing one stays within the
+original, and adding one never does.
+
 ### CAP-4: Synchronisation
 
 Every atomic operation and every mutex acquisition takes the `Tasks` capability, so code

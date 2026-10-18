@@ -5,6 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt;
 
+mod grants;
+pub use grants::{
+    grants_within, mount_within, net_operation_within, net_rule_within, process_rule_within,
+};
 mod program;
 pub use program::{ProgramNode, ProgramRevision, RevisionError};
 mod net;

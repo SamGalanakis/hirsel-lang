@@ -3093,6 +3093,7 @@ hirsel_library(
 hirsel_test(
     name = "hirsel-run-config-unittest",
     deps = [
+        "//third-party:proptest",
         "//third-party:rustls",
         "//third-party:rustls-pki-types",
         "//third-party:rustls-webpki",
@@ -3115,6 +3116,7 @@ hirsel_test(
     name = "hirsel-run-config-test-it",
     deps = [
         "//:hirsel-run-config",
+        "//third-party:proptest",
         "//third-party:rustls",
         "//third-party:rustls-pki-types",
         "//third-party:rustls-webpki",
@@ -3124,6 +3126,7 @@ hirsel_test(
     ],
     bin_exes = {},
     data = glob(["crates/hirsel-run-config/Cargo.toml"]) + glob(["crates/hirsel-run-config/tests/it/**"], exclude = ["crates/hirsel-run-config/tests/it/**/*.rs"]),
+    seeded = True,
     crate = "it",
     crate_root = "crates/hirsel-run-config/tests/it/main.rs",
     srcs = glob(["crates/hirsel-run-config/tests/it/**"]),
