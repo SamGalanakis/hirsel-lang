@@ -1443,7 +1443,7 @@ fn host_io_records_use_piped_stdin_distinct_stderr_and_exact_environment_snapsho
                 if stdin_granted {
                     "λ--flag".as_bytes()
                 } else {
-                    b""
+                    b"error: NotGranted\n"
                 }
             );
             std::fs::remove_file(record).unwrap();
