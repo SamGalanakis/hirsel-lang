@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "container_empty_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "MODE-2-std-container-empty-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

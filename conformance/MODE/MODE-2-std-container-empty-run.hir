@@ -1,0 +1,25 @@
+// rule: MODE-2
+// expect: run
+// Each fresh container can transfer a unique owner independently.
+fn consume_map(take m: unique Map[u64, String]) -> () uses {} {}
+
+fn consume_set(take s: unique Set[String]) -> () uses {} {}
+
+fn consume_sorted(by: Order[u64], take m: unique SortedMap[u64, String] of by) -> () uses {} {}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let a: unique Map[u64, String] = map.empty()
+  let b: unique Map[u64, String] = map.empty()
+  consume_map(take a)
+  consume_map(take b)
+  let c: unique Set[String] = set.empty()
+  let d: unique Set[String] = set.empty()
+  consume_set(take c)
+  consume_set(take d)
+  let by = u64.order
+  let e: unique SortedMap[u64, String] of by = sorted_map.empty(by)
+  let f: unique SortedMap[u64, String] of by = sorted_map.empty(by)
+  consume_sorted(by, take e)
+  consume_sorted(by, take f)
+  Ok(())
+}

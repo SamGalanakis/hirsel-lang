@@ -180,13 +180,13 @@ N fn string.position(s: String, offset: u64) -> Option[StrPos of s]
 N fn string.byte_offset(s: String, pos: StrPos of s) -> u64
 fn path.text(p: Path) -> String
 N fn failure.check(condition: bool, rule: CheckRule) -> () uses {}
-fn map.empty[K: key, V]() -> Map[K, V]
+fn map.empty[K: key, V]() -> unique Map[K, V]
 fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()
 N fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
-fn set.empty[T: key]() -> Set[T]
+fn set.empty[T: key]() -> unique Set[T]
 @preserves_unique(s) fn set.insert[T: key](mut s: Set[T], take value: T) -> ()
 N fn set.contains[T: key](s: Set[T], value: T) -> bool
-fn sorted_map.empty[K, V](by: Order[K]) -> SortedMap[K, V] of by
+fn sorted_map.empty[K, V](by: Order[K]) -> unique SortedMap[K, V] of by
 fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()
 N fn simd.splat[A, n: size](value: A) -> Simd[A, n]
 N fn simd.add[I, n: size](a: Simd[I, n], b: Simd[I, n]) -> Simd[I, n]
@@ -689,6 +689,10 @@ transfers them. `SortedMap` uses the supplied comparator (negative, zero or posi
 keeps its brand; combining two sorted maps is an ordinary function that requires the same
 brand. Dictionary callbacks may allocate unless individually `@noalloc`, so a containing
 operation's allocation joins them.
+
+`map.empty`, `set.empty` and `sorted_map.empty` each return a fresh unique
+container. Two constructor calls produce independent owners; SortedMap retains
+its existing `of by` brand.
 
 ## Example application definitions
 
