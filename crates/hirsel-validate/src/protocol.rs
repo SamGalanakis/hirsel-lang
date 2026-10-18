@@ -612,7 +612,9 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
         if let TypeKind::Function(f) = &row.kind {
             let mut selectors = BTreeSet::new();
             for p in &f.state_promises {
-                if !selectors.insert(p.selector.clone()) || !(p.advance_only || p.preserve_captures)
+                if !selectors.insert(p.selector.clone())
+                    || !(p.advance_only || p.preserve_captures || p.preserve_unique)
+                    || p.preserve_unique && !p.selector.fields.is_empty()
                 {
                     return false;
                 }
@@ -626,7 +628,12 @@ pub(super) fn selectors(signature: &Signature, signatures: &dyn SignatureLookup)
                 let Some(parameter) = f.parameters.get(parameter.0 as usize) else {
                     return false;
                 };
-                if parameter.passing != PassingMode::Mut {
+                if parameter.passing != PassingMode::Mut
+                    && !(parameter.passing == PassingMode::Take
+                        && p.preserve_unique
+                        && !p.preserve_captures
+                        && !p.advance_only)
+                {
                     return false;
                 }
                 if !field(

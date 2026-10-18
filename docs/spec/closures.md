@@ -84,7 +84,7 @@ distinct invariant contract.
 or a function value) can declare what it preserves. These are general declaration
 attributes, open to every package; omitting one promises nothing. Each selector names one
 of that callable's own parameters, optionally with an explicit field path, and a selected
-state parameter is `mut`.
+state parameter is `mut` (`@preserves_unique` may also select a `take` parameter).
 
 - `@preserves_captures(it)`: on every normal return, returned error and failure unwind,
   the selected surviving state keeps its incoming nominal type arguments, ownership mode,
@@ -97,6 +97,19 @@ state parameter is `mut`.
   path. Traversal bookkeeping may change, visited items may be transferred or dropped, and
   each `Some` payload moves to the caller. A call through an attenuated static `Iter` type
   hands the stronger actual contract back unchanged.
+- `@preserves_unique(p)` on a `mut` or `take` parameter
+  ([MODE-2](ownership.md#mode-2-uniqueness)): when the selected argument and every other
+  non-plain `take` or `mut` argument are unique at the call, a selected `mut` argument is
+  handed back unique and a selected `take` parameter's call returns a unique result.
+  Borrowed arguments impose nothing, since the body can only share out of them. The body
+  is checked again with the selected parameter and every non-plain `take` and `mut`
+  parameter entering unique; the selected `mut` parameter must then be unique at every
+  exit (MODE-2's hand-back), and for a selected `take` parameter every returned value must
+  be unique. A claim this check cannot prove is MODE-2. The selection names a whole
+  parameter, with no field path. It prefixes only a function declaration, never a
+  function type (LANG-7), so a closure literal never receives it, and only a direct
+  call to that declaration uses it: a call through a function value hands its `mut`
+  arguments back shared.
 - `@captures(state, next)` on a callable returning an `Iter` or function value: the
   selected parameters (or their field paths) determine the returned environment's
   complete authority, source bounds, brands, multiplicity, sendability and
@@ -119,7 +132,7 @@ public promise is inferred from a body. Calls through direct or indirect declara
 the same guarantee for the same selector before they preserve incoming evidence. A
 stronger declaration satisfies a weaker receiving contract; mutable hand-back stays exact.
 A claimed promise that cannot be proved is rejected: MEM-14 for `@advance_only`, CLO-4 for
-`@preserves_captures` and `@captures`.
+`@preserves_captures` and `@captures`, MODE-2 for `@preserves_unique`.
 
 The proof follows the selected state, a parameter of this callable with its field path,
 through every reachable operation on every exit. A place meets the selection when one field

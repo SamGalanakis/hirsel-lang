@@ -523,6 +523,9 @@ pub struct StatePromise {
     pub selector: RelationPlace,
     pub advance_only: bool,
     pub preserve_captures: bool,
+    /// MODE-2: a unique selected argument comes back unique when every other
+    /// non-plain taken or `mut` argument is unique too.
+    pub preserve_unique: bool,
 }
 /// Preserve the selected incoming erased environment in the callable interface.
 /// Field selectors remain on the header: a nominal's representation is immutable.
@@ -572,6 +575,7 @@ pub fn state_promises_satisfy(actual: &[StatePromise], expected: &[StatePromise]
             actual.selector == expected.selector
                 && (!expected.advance_only || actual.advance_only)
                 && (!expected.preserve_captures || actual.preserve_captures)
+                && (!expected.preserve_unique || actual.preserve_unique)
         })
     })
 }

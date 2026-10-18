@@ -32,6 +32,8 @@ mod protocol_controls;
 mod state_controls;
 #[path = "typing_gap_controls.rs"]
 mod typing_gap_controls;
+#[path = "unique_handback_controls.rs"]
+mod unique_handback_controls;
 #[path = "value_controls.rs"]
 mod value_controls;
 #[path = "wave1_controls.rs"]

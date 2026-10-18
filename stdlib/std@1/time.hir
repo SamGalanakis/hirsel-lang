@@ -163,6 +163,7 @@ pub fn parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {} {
   Ok(Timestamp(unix_nanoseconds: seconds * 1000000000 + fraction))
 }
 
+@preserves_unique(builder)
 fn write_digits(mut builder: List[u8], value: i128, width: u64) -> () uses {} {
   let mut divisor: i128 = 1
   let mut i: u64 = 1

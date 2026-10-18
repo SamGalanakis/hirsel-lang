@@ -93,7 +93,8 @@ diagnostic.
 names in bounds; `sendable` is also a contextual type modifier when a type follows it,
 and `env` is a contextual place name inside a relation. Attribute names (`noalloc`,
 `layout`, `packed`, `align`, `soa`, `blocking`, `incomplete`, `capability`,
-`serializable`, `loop_source`, `advance_only`, `preserves_captures`, `captures`) are
+`serializable`, `loop_source`, `advance_only`, `preserves_captures`, `preserves_unique`,
+`captures`) are
 contextual. `c`, `ffi`, primitive types and library types and functions are identifiers.
 `_` is the discard pattern, not a value binding.
 
@@ -235,8 +236,10 @@ attribute    = "@", ( "noalloc" | "soa" | "packed" | "blocking" | "incomplete" |
              | "capability", "(", ("global" | "local"), ")"
              | "loop_source", "(", value-path, ",", value-path, ")"
              | state-attribute ) ;      (* MEM-5/7, CONC-2, MODE-6, CAP-5, SER-1, SEM-4, CLO-2 *)
-state-attribute = ("advance_only" | "preserves_captures" | "captures"),
+state-attribute = ("advance_only" | "preserves_captures" | "preserves_unique" | "captures"),
                   "(", nonempty(value-path), ")" ; (* CLO-2 *)
+type-state-attribute = ("advance_only" | "preserves_captures" | "captures"),
+                  "(", nonempty(value-path), ")" ; (* CLO-2, LANG-7 *)
 function     = [ "extern", string ], "fn", name, fn-header,
                [ block | "=", "comptime", expression ] ; (* LANG-6/10, PROG-4, CT-1 *)
 fn-header    = [ generics ], "(", list(parameter), ")",
@@ -326,7 +329,7 @@ type-atom    = type-path, [ "[", nonempty(type-argument), "]" ]
              | "(", ")" | "(", type, ")"
              | "(", part-type, ",", list(part-type), ")"
              | "box", part-type
-             | { "@", ("noalloc" | state-attribute) }, "fn", "(", list(type-parameter), ")",
+             | { "@", ("noalloc" | type-state-attribute) }, "fn", "(", list(type-parameter), ")",
                [ "->", type ], [ uses ] ;                (* LANG-7, MEM-5/7, CLO-1/4 *)
 type-argument= part-type | integer ;                     (* LANG-7, GEN-1 *)
 part-type    = { modifier }, type-atom, [ brand ] ;      (* no relation: LANG-7, OWN-8 *)

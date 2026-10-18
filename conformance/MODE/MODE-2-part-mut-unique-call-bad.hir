@@ -10,6 +10,10 @@ fn bump(mut st: unique Store) -> () uses {} {
 }
 
 fn add(mut st: unique Store) -> () uses {} {
-  list.push(mut st.items, 1)
+  put(mut st.items)
   bump(mut st)
+}
+
+fn put(mut xs: List[u64]) -> () uses {} {
+  list.push(mut xs, 1)
 }

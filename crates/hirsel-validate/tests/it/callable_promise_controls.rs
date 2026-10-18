@@ -54,6 +54,7 @@ fn callback(f: &mut Fixture, guarantee: Guarantee, promised: bool) -> FunctionTy
                 selector: ParameterRef::bound(ParamId(0)).into(),
                 advance_only: true,
                 preserve_captures: true,
+                preserve_unique: false,
             }]
             .into()
         } else {

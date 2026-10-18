@@ -1,0 +1,15 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+// An aliased taken input yields an aliased result.
+@preserves_unique(builder)
+fn finish(take builder: List[u8]) -> Bytes uses {} {
+  bytes.from_list(take builder)
+}
+
+fn build() -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  list.push(mut out, 104u8)
+  let kept = copy out
+  let built = finish(take out)
+  built
+}

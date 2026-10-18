@@ -15,6 +15,7 @@ pub fn format[n: size](value: i128, mut buffer: Inline[u8, n]) -> Result[
 
 // Appends the decimal text of `value` to `out`; to_string is that text,
 // built from the same digits in a list reserved to its exact length.
+@preserves_unique(out)
 pub fn format_into(value: i128, mut out: List[u8]) -> () uses {} {
   let wide = value
   let raw: u128 = core@1/int.truncate(wide)

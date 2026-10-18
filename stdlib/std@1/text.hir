@@ -1,4 +1,5 @@
 // An ordinary List[u8] is the UTF-8 builder.
+@preserves_unique(builder)
 pub fn append(mut builder: List[u8], text: String) -> () uses {} {
   let data = core@1/string.as_bytes(text)
   let mut i: u64 = 0
@@ -8,6 +9,7 @@ pub fn append(mut builder: List[u8], text: String) -> () uses {} {
   }
 }
 
+@preserves_unique(builder)
 pub fn finish(take builder: List[u8]) -> Result[String, Bytes] uses {} {
   core@1/string.from_bytes(core@1/bytes.from_list(take builder))
 }

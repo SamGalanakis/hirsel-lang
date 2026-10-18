@@ -167,10 +167,22 @@ inside it is a boundary (its contents are not owned and never traversed). Fresh
 constructions from unique parts are unique; `unique x` deep-copies when `x` is not
 provably unique (an allocation site). Copying, sharing a part, or passing as a plain `mut`
 argument ends a binding's uniqueness; borrowing does not, including a borrow-only use of a
-part of any type ([OWN-8](#own-8-parts)). A `mut x: unique T` parameter accepts only unique
-arguments and only unique whole-value assignments, so its root is updated in place.
-Without `unique`, in-place update still happens whenever the run-time count allows
+part of any type ([OWN-8](#own-8-parts)). A plain `mut` argument that is a part ends its
+owner's uniqueness, since the callee may install a share there. A `mut x: unique T` parameter
+accepts only unique arguments and only unique whole-value assignments, so its root is
+updated in place. Without `unique`,
+in-place update still happens whenever the run-time count allows
 ([OWN-7](#own-7-uniqueness-test)).
+
+A part reached by field and element steps from a currently unique owner, up to a `Shared`
+boundary, is itself unique, so `mut st.items` may be passed to a `mut` parameter declared
+`unique`; the owner stays unique when the part comes back unique. A callable may declare
+`@preserves_unique` ([CLO-2](closures.md#clo-2-transparent)) on a `mut` or `take`
+parameter: a call whose selected argument and every other non-plain `take` or `mut`
+argument are currently unique hands the selected `mut` argument back unique, or returns a
+unique result for a selected `take` parameter. Any other call is an ordinary call. So
+`list.push`, which declares it, keeps a list built from a literal and unique elements
+unique, while a list copied first, or given an aliased element, stays aliased.
 
 Uniqueness describes actual owned contents, independently of how fields are declared.
 Taking or destructuring a currently unique owner keeps uniqueness on what it yields

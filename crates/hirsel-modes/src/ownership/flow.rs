@@ -692,6 +692,7 @@ impl State {
 }
 /// Primary frame inputs shared across the definition's ownership graphs. Source
 /// binding modes are refreshed when publication changes the binding's type.
+#[derive(Clone)]
 pub(super) struct InitialStorage {
     inactive: hirsel_types::rows::Rows<Slot>,
     owned: hirsel_types::rows::Rows<Slot>,
@@ -1084,12 +1085,21 @@ struct Checker<'a> {
     parameters: Vec<usize>,
     return_uniqueness: BTreeMap<ParamId, bool>,
     return_sendability: BTreeMap<ParamId, bool>,
+    /// `mut x: unique T` parameters already reported for a lost hand-back.
+    lost_handbacks: BTreeSet<usize>,
+    /// Proving `@preserves_unique` on this parameter: it and every non-plain
+    /// taken or `mut` parameter enter unique, and it must leave unique.
+    unique_proof: Option<ParamId>,
     arenas: crate::arenas::Arenas,
     /// The holders live after each graph node (LANG-3).
     live: &'a [BTreeSet<Holder>],
     /// The callable type this graph implements, once computed.
     callable: std::cell::OnceCell<Option<(FunctionType, bool)>>,
 }
+
+/// The diagnostic of a `@preserves_unique` body that cannot prove its promise.
+pub(super) const UNIQUE_PROOF_FAILED: &str =
+    "this body does not prove its @preserves_unique promise";
 
 pub(super) struct FlowOutput {
     pub mutation_sites: Vec<ExprId>,
@@ -1334,6 +1344,7 @@ pub(super) fn check(
     diagnostics: &mut Vec<Diagnostic>,
     frame_results: &BTreeMap<NameSite, TypeId>,
     introductions: &BTreeMap<NameSite, Vec<(NameSite, Origin, usize)>>,
+    proof: Option<ParamId>,
 ) -> Result<FlowOutput, QueryError> {
     let live = super::liveness::Liveness {
         tree,
@@ -1427,9 +1438,11 @@ pub(super) fn check(
         parameters,
         return_uniqueness: BTreeMap::new(),
         return_sendability: BTreeMap::new(),
+        lost_handbacks: BTreeSet::new(),
+        unique_proof: proof,
         live: &live,
     };
-    let initial = initial_storage.initial(&checker);
+    let initial = checker.proof_entry(initial_storage.initial(&checker));
     let finalizer = matches!(graph.owner, NameSite::Item(item)
         if matches!(tree.items[item.0 as usize].kind, hirsel_syntax::ItemKind::Type { drop: Some(_), .. }));
     for &index in initial_storage
@@ -1466,7 +1479,7 @@ pub(super) fn check(
     }
     if !checker.explanations.is_empty() {
         // Only a graph that reported a diagnostic pays for its explanation.
-        let initial = initial_storage.initial(&checker);
+        let initial = checker.proof_entry(initial_storage.initial(&checker));
         checker.explain(initial, &live);
         checker.emit = true;
     }
@@ -2414,6 +2427,55 @@ impl Checker<'_> {
                 })
             })
     }
+    /// A `@preserves_unique` proof of a taken parameter checks the result.
+    fn proves_result(&self) -> bool {
+        self.unique_proof.is_some_and(|selected| {
+            self.parameters.iter().any(|&index| {
+                let binding = &self.body.bindings[index];
+                binding.binding == ResolvedName::Parameter(selected)
+                    && self.parameter_passing(&binding.owner, selected) == PassingMode::Take
+            })
+        })
+    }
+    fn proof_entry(&self, mut state: State) -> State {
+        if self.unique_proof.is_some() {
+            for &index in &self.parameters {
+                let binding = &self.body.bindings[index];
+                let ResolvedName::Parameter(parameter) = binding.binding else {
+                    continue;
+                };
+                if self.parameter_passing(&binding.owner, parameter) != PassingMode::Borrow
+                    && !self.properties[binding.ty.index()].plain
+                {
+                    state.slots[index].value.modes.uniqueness = Uniqueness::Unique;
+                }
+            }
+        }
+        state
+    }
+    /// Only a direct call to a declaration uses `@preserves_unique`: its body or
+    /// ledger entry proves it, while a function value may come from anywhere.
+    fn callee_preserves_unique(&self, callee: ExprId, ordinal: usize) -> bool {
+        let promised = self
+            .ty(callee)
+            .and_then(|ty| self.body.types.get(ty))
+            .is_some_and(|row| {
+                let TypeKind::Function(function) = &row.kind else {
+                    return false;
+                };
+                function.state_promises.iter().any(|p| {
+                    p.selector.parameter == ParameterRef::bound(ParamId(ordinal as u32))
+                        && p.preserve_unique
+                })
+            });
+        promised
+            && self
+                .body
+                .resolution
+                .expressions
+                .iter()
+                .any(|(e, name)| *e == callee && matches!(name, ResolvedName::Definition(_)))
+    }
     fn mutable_crossing_exit(&mut self, state: &State, site: Span) {
         if !self.emit {
             return;
@@ -2427,6 +2489,30 @@ impl Checker<'_> {
             if self.parameter_passing(&binding.owner, parameter) != PassingMode::Mut {
                 continue;
             }
+            // MODE-2: a `@preserves_unique` proof hands its selection back unique.
+            let promised = self.unique_proof == Some(parameter);
+            if self.graph.clause.is_none()
+                && state.slots[index].available == LIVE
+                && promised
+                && state.slots[index].value.modes.uniqueness != Uniqueness::Unique
+                && !self.properties[binding.ty.index()].plain
+                && !self.properties[binding.ty.index()].shared
+                && self.lost_handbacks.insert(index)
+            {
+                self.report(
+                    const { RuleId::of("MODE-2") },
+                    site,
+                    UNIQUE_PROOF_FAILED,
+                    |c| {
+                        let (name, declaration) = c.binding_site(index);
+                        Explanation::default()
+                            .provided(Fact::new(Cause::Aliased, site, &[]))
+                            .required(Fact::new(Requirement::Unique, declaration, &[&name]))
+                            .into()
+                    },
+                );
+            }
+            let binding = &self.body.bindings[index];
             let nested_lost =
                 self.crossing_receipts(binding.ty)
                     .iter()
@@ -3626,7 +3712,13 @@ impl Checker<'_> {
                         (usage != UseKind::Copy)
                             .then_some((place.binding, Site::Expression(*expression))),
                     );
-                    if !property.plain && !(usage == UseKind::Copy && property.flat) {
+                    if *context == Context::Mut
+                        && state.slots[place.binding].value.modes.uniqueness == Uniqueness::Unique
+                    {
+                        // MODE-2: a unique owner exclusively owns each part, so
+                        // exclusive access to a part is unique access.
+                        value.modes.uniqueness = Uniqueness::Unique;
+                    } else if !property.plain && !(usage == UseKind::Copy && property.flat) {
                         value.modes.uniqueness = Uniqueness::Aliased;
                     }
                 }
@@ -5761,6 +5853,20 @@ impl Checker<'_> {
                     value.modes.relation = Relation::global();
                     value.content = Content::default();
                 }
+                // MODE-2: what a `@preserves_unique` callee may install comes
+                // from its taken and `mut` arguments only.
+                let unique_inputs = arguments
+                    .iter()
+                    .zip(requirements)
+                    .all(|(arg, requirement)| {
+                        requirement
+                            .as_ref()
+                            .is_none_or(|r| r.passing == PassingMode::Borrow)
+                            || self
+                                .property(arg.value)
+                                .is_some_and(|p| p.plain || p.shared)
+                            || self.value(state, arg.value).modes.uniqueness == Uniqueness::Unique
+                    });
                 for (storage, mutable, argument) in &loans {
                     let declared = self
                         .body
@@ -5776,20 +5882,32 @@ impl Checker<'_> {
                     if *mutable && preserves_state {
                         continue;
                     }
+                    // MODE-2: a plain `mut` callee may install a share anywhere
+                    // in the place it receives, which ends its root's uniqueness.
+                    // A `unique` parameter, or a declared preservation whose
+                    // inputs are all unique, hands it back unique; a Plain or
+                    // Shared part holds no counted content of the owner's.
+                    let preserves_unique =
+                        arguments
+                            .iter()
+                            .zip(requirements)
+                            .any(|(arg, requirement)| {
+                                arg.value == *argument
+                                    && requirement.as_ref().is_some_and(|r| {
+                                        r.modes.uniqueness == Uniqueness::Unique
+                                            || unique_inputs
+                                                && self
+                                                    .callee_preserves_unique(*callee, r.parameter)
+                                    })
+                            })
+                            || !storage.projections.is_empty()
+                                && self
+                                    .property(*argument)
+                                    .is_some_and(|p| p.plain || p.shared);
+                    if *mutable && !preserves_unique {
+                        state.slots[storage.binding].value.share();
+                    }
                     if *mutable && storage.projections.is_empty() {
-                        let preserves_unique =
-                            arguments
-                                .iter()
-                                .zip(requirements)
-                                .any(|(arg, requirement)| {
-                                    arg.value == *argument
-                                        && requirement.as_ref().is_some_and(|r| {
-                                            r.modes.uniqueness == Uniqueness::Unique
-                                        })
-                                });
-                        if !preserves_unique {
-                            state.slots[storage.binding].value.share();
-                        }
                         let receipts =
                             self.crossing_receipts(self.body.bindings[storage.binding].ty);
                         state.slots[storage.binding].value.crossing_parts =
@@ -5813,20 +5931,6 @@ impl Checker<'_> {
                             crossing
                         };
                     } else if *mutable {
-                        // A plain mutable part may receive aliased counted
-                        // content, ending the whole owner's deep uniqueness.
-                        let preserves_unique =
-                            arguments.iter().zip(requirements).any(|(arg, req)| {
-                                arg.value == *argument
-                                    && req
-                                        .as_ref()
-                                        .is_some_and(|r| r.modes.uniqueness == Uniqueness::Unique)
-                            }) || self
-                                .property(*argument)
-                                .is_some_and(|p| p.plain || p.shared);
-                        if !preserves_unique {
-                            state.slots[storage.binding].value.share();
-                        }
                         let preserves_crossing =
                             arguments
                                 .iter()
@@ -5860,6 +5964,17 @@ impl Checker<'_> {
                 value.usage = UseKind::Take;
                 self.usage(*expression, value.usage);
                 self.record(*expression, &mut value);
+                // MODE-2: a `@preserves_unique` taken input passes its
+                // uniqueness on to the result. This is flow evidence, as V
+                // derives it; the call's published row stays the declared one.
+                if unique_inputs
+                    && requirements.iter().flatten().any(|r| {
+                        r.passing == PassingMode::Take
+                            && self.callee_preserves_unique(*callee, r.parameter)
+                    })
+                {
+                    value.modes.uniqueness = Uniqueness::Unique;
+                }
                 state.values.insert(*expression, value);
             }
             Op::Capture {
@@ -5894,6 +6009,22 @@ impl Checker<'_> {
                     let site = self.tree.expressions[cause.unwrap_or(*value).0 as usize]
                         .origin
                         .span;
+                    if self.proves_result()
+                        && actual.modes.uniqueness != Uniqueness::Unique
+                        && !self.property(*value).is_some_and(|p| p.plain || p.shared)
+                    {
+                        self.report(
+                            const { RuleId::of("MODE-2") },
+                            site,
+                            UNIQUE_PROOF_FAILED,
+                            |_| {
+                                Explanation::default()
+                                    .provided(Fact::new(Cause::Aliased, site, &[]))
+                                    .required(Fact::new(Requirement::Unique, site, &[]))
+                                    .into()
+                            },
+                        );
+                    }
                     if actual.invalid {
                         return;
                     }

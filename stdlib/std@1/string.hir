@@ -155,6 +155,7 @@ pub fn trim(s: String) -> String in s uses {} {
 }
 
 // Builders below only append valid UTF-8 or change one ASCII byte to another.
+@preserves_unique(builder)
 fn finish_valid(take builder: List[u8]) -> String uses {} {
   match text.finish(take builder) {
     Ok(text) => take text,

@@ -33,6 +33,7 @@ pub fn write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u
 }
 
 // The UTF-8 text a formatter appended to an empty builder.
+@preserves_unique(builder)
 pub fn finish(take builder: List[u8]) -> String uses {} {
   match core@1/string.from_bytes(core@1/bytes.from_list(take builder)) {
     Ok(text) => take text,
@@ -44,6 +45,7 @@ pub fn finish(take builder: List[u8]) -> String uses {} {
 }
 
 // Appends the first `count` bytes of a `format` buffer.
+@preserves_unique(out)
 pub fn append_prefix(mut out: List[u8], buffer: Inline[u8, 40], count: u64) -> () uses {} {
   core@1/list.reserve(mut out, core@1/list.len(out) + count)
   let mut i: u64 = 0
@@ -331,6 +333,7 @@ fn fill_digits(magnitude: u128, mut buffer: Inline[u8, 39]) -> u64 uses {} {
 // u64 is written inline into a local 20-byte scratch: passing the scratch to
 // a helper by `mut` costs about twice the digit work. Wider magnitudes take
 // `fill_digits`.
+@preserves_unique(out)
 pub fn append(mut out: List[u8], magnitude: u128, negative: bool) -> () uses {} {
   let sign: u64 = if negative {
     1

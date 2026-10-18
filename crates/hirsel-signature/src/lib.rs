@@ -644,9 +644,8 @@ impl Normalizer<'_, '_> {
             let function = matches!(kind, ast::ItemKind::Function { .. });
             let type_ = matches!(kind, ast::ItemKind::Type { .. });
             let valid = match name.as_str() {
-                "noalloc" | "incomplete" | "advance_only" | "preserves_captures" | "captures" => {
-                    function
-                }
+                "noalloc" | "incomplete" | "advance_only" | "preserves_captures"
+                | "preserves_unique" | "captures" => function,
                 "blocking" => matches!(kind, ast::ItemKind::Function { abi: Some(_), .. }),
                 "layout" | "packed" | "align" | "soa" | "capability" | "loop_source"
                 | "serializable" => type_,
@@ -660,7 +659,7 @@ impl Normalizer<'_, '_> {
                 ));
             }
             match name.as_str() {
-                "advance_only" | "preserves_captures" | "captures" => {
+                "advance_only" | "preserves_captures" | "preserves_unique" | "captures" => {
                     if !matches!(a.arguments.as_slice(), [ast::AttributeArgument::StatePromise(s)] if !s.selectors.is_empty())
                     {
                         return Err(diagnostic(
@@ -993,11 +992,20 @@ impl Normalizer<'_, '_> {
                 if promise.kind == ast::StatePromiseKind::Captures {
                     captures.push(selector);
                 } else {
-                    if parameters[ordinal.0 as usize].passing != PassingMode::Mut {
+                    let unique = promise.kind == ast::StatePromiseKind::PreserveUnique;
+                    let passing = parameters[ordinal.0 as usize].passing;
+                    if passing != PassingMode::Mut && !(unique && passing == PassingMode::Take) {
                         return Err(diagnostic(
                             const { RuleId::of("MEM-14") },
                             promise.origin.span,
                             "a state preservation selector requires a mut parameter",
+                        ));
+                    }
+                    if unique && !selector.fields.is_empty() {
+                        return Err(diagnostic(
+                            const { RuleId::of("MODE-2") },
+                            promise.origin.span,
+                            "@preserves_unique selects a whole mut parameter",
                         ));
                     }
                     let row = state_promises
@@ -1006,9 +1014,11 @@ impl Normalizer<'_, '_> {
                             selector,
                             advance_only: false,
                             preserve_captures: false,
+                            preserve_unique: false,
                         });
                     row.advance_only |= promise.kind == ast::StatePromiseKind::AdvanceOnly;
-                    row.preserve_captures = true;
+                    row.preserve_captures |= !unique;
+                    row.preserve_unique |= unique;
                 }
             }
         }

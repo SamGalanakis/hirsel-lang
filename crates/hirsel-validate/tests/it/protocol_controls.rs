@@ -186,6 +186,7 @@ fn selector_fields_are_checked_on_declaration_only_boundaries() {
         selector: ParameterRef::bound(ParamId(0)).into(),
         advance_only: false,
         preserve_captures: true,
+        preserve_unique: false,
     }]
     .into();
     f.signatures.insert(boundary.definition.clone(), boundary);
@@ -231,6 +232,7 @@ fn executable_state_claims_on_any_parameter_are_proved_by_flow() {
             selector: ParameterRef::bound(ParamId(0)).into(),
             advance_only: advance,
             preserve_captures: true,
+            preserve_unique: false,
         }]
         .into();
         // Closed content may be rewritten under preservation; advance-only

@@ -49,6 +49,7 @@ pub fn format[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[
 
 // Appends the shortest round-trip text of `value` to `out`; to_string is that
 // text.
+@preserves_unique(out)
 pub fn format_into(value: f32, mut out: List[u8]) -> () uses {} {
   let mut buffer: Inline[u8, 40] = [
     0u8,

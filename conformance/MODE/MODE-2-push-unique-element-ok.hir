@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: accept
+// Unique and fresh pushed elements keep the list unique.
+fn build(take s: unique String) -> unique List[String] uses {} {
+  let mut xs: List[String] = []
+  list.push(mut xs, take s)
+  list.push(mut xs, "fresh")
+  take xs
+}

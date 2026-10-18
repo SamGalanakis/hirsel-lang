@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: accept
+// A unique field of a unique owner, in a concrete or generic opaque container,
+// stays unique through push, swap and pop. Twin is MODE-2-unique-field-push-pop-aliased-bad.
+type Queue {
+  items: unique List[u64],
+}
+
+fn queue(mut q: unique Queue) -> () {
+  list.push(mut q.items, 1u64)
+  let item = list.pop(mut q.items)
+}
+
+pub opaque type Deque[T]: () uses {T} {
+  items: unique List[T],
+}
+
+fn deque[T](mut q: unique Deque[T], take x: unique T) -> Option[T] {
+  list.push(mut q.items, take x)
+  list.swap(mut q.items, 0, 0)
+  list.pop(mut q.items)
+}

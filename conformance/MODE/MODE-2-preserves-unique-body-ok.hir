@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: accept
+// A source @preserves_unique body is re-checked with its selected parameter
+// entering unique; pushes keep it unique. Twin is MODE-2-preserves-unique-body-bad.
+@preserves_unique(out)
+fn append(mut out: List[u8], text: List[u8]) -> () uses {} {
+  for b in text {
+    list.push(mut out, b)
+  }
+}
+
+fn build() -> unique List[u8] uses {} {
+  let mut out: List[u8] = []
+  append(mut out, [104u8, 105u8])
+  take out
+}

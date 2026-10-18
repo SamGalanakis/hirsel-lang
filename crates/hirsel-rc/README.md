@@ -38,7 +38,10 @@ call to a function whose whole body is one) instead appends to `D`, and its
 result slot gets the static empty value, so the copy runs zero times.
 Producers: std@1 `T.to_string` appends as `T.format_into`; a *builder*
 (`bytes.from_list(take L)` of a local list created empty and otherwise only
-appended to) gets a derived `f$into(.., mut out: List[u8]) -> ()`. A site
+appended to by `list.push`, `list.reserve` or an appending form, not a copy
+function) gets a derived `@preserves_unique(out) f$into(.., mut out:
+List[u8]) -> ()`, as `T.format_into` declares it, so a destination the copy
+kept unique stays unique for the IR checker (MODE-2). A site
 fuses only when the instructions between call and copy are total and leave
 `D` untouched and the producer's arguments do not name `D`; a builder only
 when nothing can fail after its first append (FAIL-1 cleanup could otherwise

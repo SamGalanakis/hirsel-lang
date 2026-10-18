@@ -941,7 +941,8 @@ impl Checker<'_> {
             // A declared unique payload may move from an unshared owned
             // receipt. Otherwise the parent must prove deep uniqueness;
             // neither proof survives a counted share or a Shared boundary.
-            return value.usage == UseKind::Take
+            // Exclusive access to such a part is unique access too (MODE-2).
+            return matches!(value.usage, UseKind::Take | UseKind::Mut)
                 && !state.shared[root]
                 && (state.current_unique[root]
                     || state.must[root].has(MustFacts::OWNED)

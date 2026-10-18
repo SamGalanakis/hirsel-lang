@@ -324,6 +324,7 @@ pub fn parse(take text: String) -> Result[Value, JsonError] uses {} {
 // Adapted serde_json src/ser.rs format_escaped_str_contents at
 // 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. Compact ASCII escape spelling,
 // preserving UTF-8 runs; no escaping of solidus or non-ASCII scalars.
+@preserves_unique(builder)
 fn json_write_text(text: String, mut builder: List[u8]) -> () uses {} {
   core@1/list.push(mut builder, 34)
   let data = core@1/string.as_bytes(text)
@@ -368,6 +369,7 @@ fn json_write_text(text: String, mut builder: List[u8]) -> () uses {} {
 
 // Adapted serde_json src/ser.rs NumberStrEmitter/write_number_str,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8; validate public Number strings.
+@preserves_unique(builder)
 fn json_write_number(text: String, mut builder: List[u8]) -> Result[(), JsonError] uses {} {
   let data = core@1/string.as_bytes(text)
   let mut pos: u64 = 0
@@ -385,6 +387,7 @@ fn json_write_number(text: String, mut builder: List[u8]) -> Result[(), JsonErro
 // Adapted serde_json src/ser.rs compact Serializer sequence/map dispatch,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
 // #98: matching a box uses implicit payload projections and borrows the DOM.
+@preserves_unique(builder)
 fn json_write_box(value: box Value, mut builder: List[u8], depth: u64) -> Result[
   (),
   JsonError
@@ -450,6 +453,7 @@ fn json_write_box(value: box Value, mut builder: List[u8], depth: u64) -> Result
 // Adapted serde_json src/ser.rs compact Serializer dispatch and sequence/map
 // emission, commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
 // Borrow input, append to the caller's counted builder, retain prefixes on error.
+@preserves_unique(builder)
 pub fn write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {} {
   json_write_box(box copy value, mut builder, 0)
 }

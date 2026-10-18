@@ -19,6 +19,7 @@ pub type UriError = UnexpectedCharacter | InvalidFormat | InvalidPort | InvalidH
 
 pub type Part = Unreserved | User | Password | Host | Path | Query | Fragment
 
+@preserves_unique(builder)
 fn finish(take builder: List[u8]) -> String uses {} {
   match text.finish(take builder) {
     Ok(s) => take s,

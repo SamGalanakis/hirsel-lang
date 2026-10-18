@@ -22,9 +22,12 @@
 //! - std@1's `T.to_string(v)` appends as `T.format_into(v, mut D)`: std's
 //!   contract is the same text, and no failure but allocation exhaustion.
 //! - A *builder*: a function returning `bytes.from_list(take L)` of a local
-//!   list `L` created empty and otherwise only appended to. Its derived
-//!   `f$into(.., mut out: List[u8]) -> ()` is the same body with `L` replaced
-//!   by the trailing parameter, the freeze and its result removed.
+//!   list `L` created empty and otherwise only appended to, by
+//!   `list.push`, `list.reserve` or an appending form. Its derived
+//!   `@preserves_unique(out) f$into(.., mut out: List[u8]) -> ()` is the same
+//!   body with `L` replaced by the trailing parameter, the freeze and its
+//!   result removed, so a unique destination stays unique as it did when the
+//!   copy pushed onto it (MODE-2); std's `T.format_into` declares the same.
 //!
 //! Exactness. The bytes reach `D` in the same order; capacity is
 //! unobservable. A failure (FAIL-1) runs cleanup, and a finalizer could then
@@ -45,8 +48,8 @@ use hirsel_tir::{
     Place, PlaceId, Rvalue, RvalueId, Storage, Terminator,
 };
 use hirsel_types::{
-    BinderRef, BuiltinType, GenericArgument, Origin, OriginRoot, ParamId, Parameter, Primitive,
-    Signature, SignatureKind, Type, TypeId, TypeKind, TypeStore, UseKind,
+    BinderRef, BuiltinType, GenericArgument, Origin, OriginRoot, ParamId, Parameter, ParameterRef,
+    Primitive, Signature, SignatureKind, StatePromise, Type, TypeId, TypeKind, TypeStore, UseKind,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -1504,8 +1507,9 @@ struct Shape {
 }
 
 /// `path` is a builder: its result is `bytes.from_list` of a local list that
-/// is created empty and otherwise only appended to, and nothing can fail
-/// after its first append.
+/// is created empty and otherwise only appended to, by `@preserves_unique`
+/// operations (so not by a copy function), and nothing can fail after its
+/// first append.
 fn builder(program: &Program, path: &DefPath, fuser: &mut Fuser) -> Option<Shape> {
     let def = program.definitions.get(path)?;
     let SignatureKind::Function(f) = &program.signatures.get(path)?.kind else {
@@ -1604,10 +1608,7 @@ fn builder(program: &Program, path: &DefPath, fuser: &mut Fuser) -> Option<Shape
                                 == program.signatures.get(callee).and_then(|s| match &s.kind {
                                     SignatureKind::Function(f) => Some(f.parameters.len()),
                                     _ => None,
-                                }))
-                        || fuser
-                            .copy_function(program, callee)
-                            .is_some_and(|(list, _)| list == *parameter);
+                                }));
                     if !appending || place(body, *p).loan.is_none() {
                         return None;
                     }
@@ -2198,7 +2199,17 @@ fn derive_signature(signature: &Signature, into: &DefPath, derived: &Definition)
         passing: PassingMode::Mut,
         ty: list,
     });
+    // MODE-2: the list is only appended to through `@preserves_unique`
+    // operations, so the appending form hands a unique list back unique.
+    let mut promises: Vec<StatePromise> = f.state_promises.iter().cloned().collect();
+    promises.push(StatePromise {
+        selector: ParameterRef::bound(ParamId(parameters.len() as u32 - 1)).into(),
+        advance_only: false,
+        preserve_captures: false,
+        preserve_unique: true,
+    });
     f.parameters = parameters.into();
+    f.state_promises = promises.into();
     f.result = unit;
     f.contracts = Vec::new().into();
     s.fingerprint = ContentHash::of_parts(

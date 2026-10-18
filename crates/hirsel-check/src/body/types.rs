@@ -1043,20 +1043,33 @@ impl Checker<'_, '_> {
                     captures_span = Some(span);
                     continue;
                 }
-                if parameters[ordinal].passing != ast::PassingMode::Mut {
+                let unique = promise.kind == ast::StatePromiseKind::PreserveUnique;
+                let passing = parameters[ordinal].passing;
+                if passing != ast::PassingMode::Mut
+                    && !(unique && passing == ast::PassingMode::Take)
+                {
                     return Err(fail(
                         const { RuleId::of("MEM-14") },
                         span,
                         "a state preservation selector requires a mut parameter",
                     ));
                 }
+                if unique && !selector.fields.is_empty() {
+                    return Err(fail(
+                        const { RuleId::of("MODE-2") },
+                        span,
+                        "@preserves_unique selects a whole mut parameter",
+                    ));
+                }
                 let row = promises.entry(selector.clone()).or_insert(StatePromise {
                     selector,
                     advance_only: false,
                     preserve_captures: false,
+                    preserve_unique: false,
                 });
                 row.advance_only |= promise.kind == ast::StatePromiseKind::AdvanceOnly;
-                row.preserve_captures = true;
+                row.preserve_captures |= !unique;
+                row.preserve_unique |= unique;
             }
         }
         if !captures.is_empty() {

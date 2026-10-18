@@ -1,0 +1,16 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 15
+// A call through a function value does not use `@preserves_unique`, so `ys` is
+// shared after it. Twin is MODE-2-preserves-unique-direct-ok.
+@preserves_unique(xs)
+fn keep(mut xs: List[u64]) -> () {
+  list.push(mut xs, 1)
+}
+
+fn need(mut xs: unique List[u64]) -> () {}
+
+fn f(mut ys: unique List[u64]) -> () {
+  let step = keep
+  step(mut ys)
+  need(mut ys)
+}

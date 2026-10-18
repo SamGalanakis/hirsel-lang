@@ -436,9 +436,14 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     {
         publish(signature, &mut out);
     }
-    for line in SECTION22
-        .lines()
-        .filter(|l| l.starts_with("fn ") || l.starts_with("N fn "))
+    // `@preserves_unique(p)` may prefix a ledger line (MODE-2, CLO-2).
+    let ledger = SECTION22.lines().map(|line| {
+        line.strip_prefix("@preserves_unique(")
+            .and_then(|rest| rest.split_once(") "))
+            .map_or((None, line), |(selected, rest)| (Some(selected), rest))
+    });
+    for (preserves_unique, line) in
+        ledger.filter(|(_, l)| l.starts_with("fn ") || l.starts_with("N fn "))
     {
         let noalloc = line.starts_with("N ");
         let text = line.trim_start_matches("N ").trim_start_matches("fn ");
@@ -476,9 +481,24 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 selector: ParameterRef::bound(ParamId(0)).into(),
                 advance_only: true,
                 preserve_captures: true,
+                preserve_unique: false,
             }]
             .into();
             apply_state_promises(&mut b.types, &mut f.parameters, &f.state_promises);
+        }
+        if let Some(selected) = preserves_unique {
+            let ordinal = f
+                .parameters
+                .iter()
+                .position(|p| p.name.as_deref() == Some(selected))
+                .unwrap();
+            f.state_promises = vec![StatePromise {
+                selector: ParameterRef::bound(ParamId(ordinal as u32)).into(),
+                advance_only: false,
+                preserve_captures: false,
+                preserve_unique: true,
+            }]
+            .into();
         }
         publish(
             b.signature(name, SignatureKind::Function(f), false),

@@ -130,8 +130,11 @@ fn value_parameters_valid(store: &TypeStore, f: &FunctionType) -> bool {
     let promises_valid = |f: &FunctionType| {
         let mut seen = BTreeSet::new();
         f.state_promises.iter().all(|p| {
-            seen.insert(p.selector.clone()) && (p.advance_only || p.preserve_captures)
-                && matches!(p.selector.parameter, ParameterRef::Bound { depth: 0, parameter } if f.parameters.get(parameter.0 as usize).is_some_and(|p| p.passing == PassingMode::Mut))
+            seen.insert(p.selector.clone())
+                && (p.advance_only || p.preserve_captures || p.preserve_unique)
+                && (!p.preserve_unique || p.selector.fields.is_empty())
+                && matches!(p.selector.parameter, ParameterRef::Bound { depth: 0, parameter } if f.parameters.get(parameter.0 as usize).is_some_and(|q| q.passing == PassingMode::Mut
+                    || q.passing == PassingMode::Take && p.preserve_unique && !p.preserve_captures && !p.advance_only))
         })
     };
     if !promises_valid(f) {

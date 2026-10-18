@@ -1,0 +1,13 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 9
+// `@preserves_unique` prefixes only a function declaration, whose body proves it,
+// never a function type a closure literal would receive unproved. Twin is
+// LANG-7-preserves-unique-fn-type-ok.
+fn plain_mut(mut xs: List[u64]) -> () {}
+
+fn f(mut ys: unique List[u64]) -> () {
+  let step: @preserves_unique(xs) fn(mut xs: List[u64]) -> () = fn(mut xs: List[u64]) -> () {
+    plain_mut(mut xs)
+  }
+  step(mut ys)
+}

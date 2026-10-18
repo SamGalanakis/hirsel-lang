@@ -1,0 +1,17 @@
+// rule: MODE-2
+// expect: accept
+// list.push preserves a unique list, so the part comes back unique and the owner
+// stays unique for bump. Twin is MODE-2-part-mut-unique-call-bad.
+type Store {
+  version: u64,
+  items: List[u64],
+}
+
+fn bump(mut st: unique Store) -> () uses {} {
+  st.version += 1
+}
+
+fn add(mut st: unique Store) -> () uses {} {
+  list.push(mut st.items, 1)
+  bump(mut st)
+}

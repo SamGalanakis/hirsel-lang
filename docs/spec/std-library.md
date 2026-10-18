@@ -66,7 +66,7 @@ N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
 N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[String, JsonError] uses {}
-fn json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}
+@preserves_unique(builder) fn json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}
 N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
 N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
 fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()

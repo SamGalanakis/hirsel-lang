@@ -9,7 +9,8 @@ impl Parser<'_> {
         let mut arguments = vec![];
         match spelling.as_str() {
             "noalloc" | "soa" | "packed" | "blocking" | "incomplete" | "serializable" => {}
-            "loop_source" | "advance_only" | "preserves_captures" | "captures" => {
+            "loop_source" | "advance_only" | "preserves_captures" | "preserves_unique"
+            | "captures" => {
                 self.expect("(", const { RuleId::of("LANG-1") })?;
                 if self.at(")") {
                     return self.fail(
@@ -37,6 +38,7 @@ impl Parser<'_> {
                         kind: match spelling.as_str() {
                             "advance_only" => StatePromiseKind::AdvanceOnly,
                             "preserves_captures" => StatePromiseKind::PreserveCaptures,
+                            "preserves_unique" => StatePromiseKind::PreserveUnique,
                             _ => StatePromiseKind::Captures,
                         },
                         selectors: paths,
@@ -389,7 +391,8 @@ impl Parser<'_> {
         }
         for attr in attrs {
             let valid = match self.symbols.resolve(attr.name).unwrap_or("") {
-                "noalloc" | "incomplete" | "advance_only" | "preserves_captures" | "captures" => {
+                "noalloc" | "incomplete" | "advance_only" | "preserves_captures"
+                | "preserves_unique" | "captures" => {
                     matches!(kind, ItemKind::Function { .. })
                 }
                 "blocking" => matches!(kind, ItemKind::Function { abi: Some(_), .. }),

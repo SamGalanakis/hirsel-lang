@@ -498,7 +498,8 @@ snapshot_struct!(ForeignWrapper { kind, deterministic } in Cx);
 snapshot_struct!(StatePromise {
     selector,
     advance_only,
-    preserve_captures
+    preserve_captures,
+    preserve_unique
 } in Cx);
 snapshot_struct!(FunctionType {
     state_promises,

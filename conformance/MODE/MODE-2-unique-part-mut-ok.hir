@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: accept
+// A part of a unique owner is unique, so it can be passed to a `mut unique`
+// parameter, and the owner stays unique. Twin is MODE-2-plain-mut-part-ends-owner-bad.
+type Store {
+  next: u64,
+  todos: List[u64],
+}
+
+fn drop_at(mut st: unique Store, i: u64) -> u64 uses {} {
+  list.push(mut st.todos, 4)
+  list.remove(mut st.todos, i)
+}

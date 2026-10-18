@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+// A body whose result shares a constant cannot keep a taken @preserves_unique
+// promise. Twin is MODE-2-preserves-unique-take-ok.
+const EMPTY: List[u8] = []
+
+@preserves_unique(builder)
+fn finish(take builder: List[u8]) -> List[u8] uses {} {
+  EMPTY
+}

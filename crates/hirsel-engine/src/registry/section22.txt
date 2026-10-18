@@ -104,16 +104,16 @@ fn copy_to[T: copyable](a: Arena, x: T) -> T in a
 fn shared.freeze[T: inert](take x: unique T) -> Shared[T]
 fn shared.thaw[T](take s: Shared[T]) -> Result[unique T, Shared[T]]
 fn slots.empty[T]() -> Slots[T]
-fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s
+@preserves_unique(s) fn slots.insert[T](mut s: Slots[T], take value: T) -> SlotId[T] of s
 N fn slots.get[T](s: Slots[T], id: SlotId[T] of s) -> Option[T] in s
 fn slots.remove[T](mut s: Slots[T], id: SlotId[T] of s) -> Option[T]
 N fn list.len[T](xs: List[T]) -> u64
 N fn array.len[T](xs: Array[T]) -> u64
-fn list.push[T](mut xs: List[T], take value: T) -> ()
+@preserves_unique(xs) fn list.push[T](mut xs: List[T], take value: T) -> ()
 N fn list.pop[T](mut xs: unique List[T]) -> Option[T]
 N fn list.remove[T](mut xs: unique List[T], index: u64) -> T
 N fn list.swap[T](mut xs: unique List[T], a: u64, b: u64) -> ()
-fn list.reserve[T](mut xs: List[T], capacity: u64) -> ()
+@preserves_unique(xs) fn list.reserve[T](mut xs: List[T], capacity: u64) -> ()
 fn iter.from[S, T](take state: S, take next: fn(mut S) -> Option[T]) -> Iter[T] uses {state, next}
 fn iter.map[T, U](take it: Iter[T], take f: fn(T) -> U) -> Iter[U] uses {it, f}
 fn iter.next[T](mut it: Iter[T]) -> Option[T]
@@ -146,9 +146,9 @@ N fn string.byte_len(s: String) -> u64
 N fn string.scalars(s: String) -> ScalarView in s
 N fn string.positions(s: String) -> PositionView of s in s
 N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in s
-fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
+@preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
 N fn bytes.len(src: Bytes) -> u64
-fn bytes.from_list(take src: List[u8]) -> Bytes
+@preserves_unique(src) fn bytes.from_list(take src: List[u8]) -> Bytes
 N fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src
 N fn string.as_bytes(s: String) -> Bytes in s
 N fn string.position(s: String, offset: u64) -> Option[StrPos of s]
@@ -159,7 +159,7 @@ fn map.empty[K: key, V]() -> Map[K, V]
 fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()
 N fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
 fn set.empty[T: key]() -> Set[T]
-fn set.insert[T: key](mut s: Set[T], take value: T) -> ()
+@preserves_unique(s) fn set.insert[T: key](mut s: Set[T], take value: T) -> ()
 N fn set.contains[T: key](s: Set[T], value: T) -> bool
 fn sorted_map.empty[K, V](by: Order[K]) -> SortedMap[K, V] of by
 fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()

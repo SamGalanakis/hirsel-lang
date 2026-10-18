@@ -93,6 +93,7 @@ fn composite(a: u32, b: u32) -> u32 uses {} {
 }
 
 // Stable insertion within the final combining sequence; starters are barriers.
+@preserves_unique(points)
 fn ordered(mut points: List[u32], cp: u32) -> () uses {} {
   let cc = combining_class(cp)
   core@1/list.push(mut points, cp)
@@ -104,6 +105,7 @@ fn ordered(mut points: List[u32], cp: u32) -> () uses {} {
   points[i] = cp
 }
 
+@preserves_unique(points)
 fn decompose(mut points: List[u32], cp: u32) -> () uses {} {
   if cp >= 0xac00 && cp < 0xd7a4 {
     let syllable = cp - 0xac00

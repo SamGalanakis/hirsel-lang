@@ -477,6 +477,20 @@ root, retaining an existing source dependency before falling back to its binder.
 MODE-1 local-result source checks therefore name the original parameter, including
 field sources; Plain elements still copy independently.
 
+A plain `mut` argument ends its root's uniqueness, whole or projected, since the
+callee may install a share anywhere in it (MODE-2). A `mut` argument that is a part of
+a currently unique root is itself unique, so it meets a `mut unique` parameter and
+keeps the root unique. A directly called declaration with `@preserves_unique(p)`
+(`callee_preserves_unique` checks the callee resolves to a definition) hands a selected
+`mut` argument back unique, or returns a unique result for a selected `take`
+parameter, when every non-plain taken and `mut` argument is unique at the call; that
+result uniqueness is flow evidence only, so the published call row stays the
+declared one, as V derives it. A `@preserves_unique` body is checked a second time
+(`flow::check` with a proof parameter) with its selected and taken or `mut` parameters
+entering unique; a selected `mut` parameter must be unique at every return and
+evaluation failure site (`mutable_crossing_exit`), a selected `take` parameter's
+result at every return, and only the promise's own diagnostic is kept from that run.
+
 Projected replacement preserves the root's uniqueness for Plain bits and Shared
 boundaries. Storing aliased counted contents weakens that evidence, so a later
 unique call is rejected under MODE-2 at the call. Whole-storage contracts remain

@@ -395,6 +395,7 @@ impl KeyEncoder<'_> {
                     }
                     self.number(u64::from(promise.advance_only));
                     self.number(u64::from(promise.preserve_captures));
+                    self.number(u64::from(promise.preserve_unique));
                 }
                 self.number(f.generics.len() as u64);
                 for g in f.generics.iter() {

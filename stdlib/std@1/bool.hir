@@ -27,6 +27,7 @@ pub fn format[n: size](value: bool, mut buffer: Inline[u8, n]) -> Result[
 }
 
 // Appends `true` or `false` to `out`; to_string is that text.
+@preserves_unique(out)
 pub fn format_into(value: bool, mut out: List[u8]) -> () uses {} {
   text.append(
     mut out,

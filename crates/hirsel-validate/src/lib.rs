@@ -489,11 +489,56 @@ fn validate_input(
         };
         if let Some(captures) = environments.get(&(index as u32)) {
             checker.flow(captures, true);
+            if index as u32 == definition.entry.0 {
+                for parameter in unique_promises(signatures.get(&definition.path)) {
+                    let mut proof = Checker {
+                        definition,
+                        body,
+                        signatures,
+                        declarations: &declarations,
+                        scratch: &scratch,
+                        contract: false,
+                        site: Site {
+                            body: BodyId(index as u32),
+                            block: None,
+                            instruction: None,
+                        },
+                        errors: vec![],
+                        captured: BTreeMap::new(),
+                        returned: BTreeMap::new(),
+                        static_data: None,
+                        proof_errors: std::cell::RefCell::new(Vec::new()),
+                    };
+                    proof.flow_with(captures, true, Some(parameter));
+                    checker.errors.extend(proof.errors.into_iter().filter(|v| {
+                        matches!(v.kind, ViolationKind::TypeMismatch { entity }
+                            if entity == flow::UNIQUE_PROOF_FAILED)
+                    }));
+                }
+            }
         }
         errors.extend(checker.proof_errors.into_inner());
         errors.extend(checker.errors);
     }
     Validation { violations: errors }
+}
+
+/// The parameters a function declares `@preserves_unique` on (MODE-2).
+fn unique_promises(signature: Option<&Signature>) -> Vec<hirsel_types::ParamId> {
+    let Some(hirsel_types::SignatureKind::Function(f)) = signature.map(|s| &s.kind) else {
+        return Vec::new();
+    };
+    f.state_promises
+        .iter()
+        .filter(|p| p.preserve_unique && p.selector.fields.is_empty())
+        .filter_map(|p| match p.selector.parameter {
+            hirsel_types::ParameterRef::Bound {
+                depth: 0,
+                parameter,
+            } => Some(parameter),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Lowering-test helper: make invariant failures readable at their publication

@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+// A body that installs a share cannot keep a @preserves_unique promise.
+const EMPTY: List[u8] = []
+
+@preserves_unique(out)
+fn reset(mut out: List[u8]) -> () uses {} {
+  out = EMPTY
+}

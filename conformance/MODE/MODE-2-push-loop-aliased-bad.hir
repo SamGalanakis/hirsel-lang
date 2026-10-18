@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 10
+// A loop of pushes keeps a list unique only while no copy shares it.
+fn looped() -> Result[unique List[u64], ()] {
+  let mut xs: List[u64] = []
+  let kept = copy xs
+  for i in 0u64..3u64 {
+    list.push(mut xs, i)
+  }
+  Ok(take xs)
+}

@@ -354,6 +354,21 @@ checkers share these tables; no operand causes a whole-definition scan. The
 additive `work::read(Counter::ValidateDeclarationRows)` thread-local work counter guards that
 bound independently of elapsed time.
 
+A `mut` call argument marks its root shared unless the callee declares the parameter
+`unique`, preserves its state, or is a `Callee::Definition` declaring
+`@preserves_unique` on it (never an indirect callee, whose function value may come
+from an unproved closure) with every
+counted taken and `mut` argument currently unique; the same promise on a taken
+parameter makes the call's destination currently unique. A `mut` use of a part of a
+currently unique root is unique. A `@preserves_unique` body is re-proved by a
+second flow run (`flow_with`) whose entry makes the selected and taken or `mut`
+parameters current-unique; `mutable_storage_exit` then requires a selected `mut`
+parameter to be unique at each exit and at each evaluation failure edge, but not on
+a release's failure edge, where source checking sees no evaluation, and a selected
+`take` parameter's returned value must be unique. Only its "preserved unique
+hand-back" violations are kept. Hand-built controls are in
+`tests/it/unique_handback_controls.rs`.
+
 Projected writes affect current uniqueness only when their contents belong to
 the parent's counted owned graph. Plain bits and Shared boundaries preserve that
 evidence; an aliased counted replacement cannot establish a unique whole read.

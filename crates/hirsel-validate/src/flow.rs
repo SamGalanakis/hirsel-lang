@@ -182,6 +182,9 @@ impl State {
     }
 }
 
+/// The violation of a `@preserves_unique` body whose re-proof fails (MODE-2).
+pub(super) const UNIQUE_PROOF_FAILED: &str = "preserved unique hand-back";
+
 struct Model {
     creation: bool,
     crossing_depth: usize,
@@ -217,6 +220,11 @@ struct Model {
     selected_sources: BTreeSet<usize>,
     environment_paths: std::rc::Rc<BTreeSet<Vec<super::flow_origins::EnvironmentField>>>,
     origin_paths: BTreeSet<Vec<hirsel_types::FieldId>>,
+    /// The parameter root a `@preserves_unique` re-proof hands back (MODE-2).
+    unique_proof: Option<usize>,
+    /// The failure edge being checked is a release's, which ends no uniqueness
+    /// hand-back proof: source checking sees failures at evaluation sites.
+    releasing: std::cell::Cell<bool>,
 }
 impl Model {
     fn new(checker: &mut Checker<'_>) -> Self {
@@ -795,6 +803,8 @@ impl Model {
             release,
             temporary,
             depth,
+            unique_proof: None,
+            releasing: std::cell::Cell::new(false),
         }
     }
     fn refresh_cleanup(&self, state: &mut State, root: usize) {
@@ -1327,7 +1337,21 @@ impl Checker<'_> {
 
 impl Checker<'_> {
     pub(super) fn flow(&mut self, captures: &[super::flow_origins::CapturedOrigin], report: bool) {
-        let model = Model::new(self);
+        self.flow_with(captures, report, None);
+    }
+    /// With `proof`, re-prove a `@preserves_unique` body (MODE-2): the selected
+    /// parameter and every counted taken or `mut` parameter enter unique, and
+    /// the selected parameter must leave unique.
+    pub(super) fn flow_with(
+        &mut self,
+        captures: &[super::flow_origins::CapturedOrigin],
+        report: bool,
+        proof: Option<hirsel_types::ParamId>,
+    ) {
+        let mut model = Model::new(self);
+        model.unique_proof = proof
+            .and_then(|p| self.body.parameters.get(p.0 as usize))
+            .map(|l| l.0 as usize);
         let loop_expirations = super::flow_origins::loop_expirations(self.body);
         // Dead-edge audits never contaminate executable predecessor joins.
         let mut incoming = vec![[None, None]; self.body.blocks.len()];
@@ -1364,6 +1388,14 @@ impl Checker<'_> {
                 // remains Local, while owned extraction can acquire its Global
                 // content independently of the access relation.
                 initial.must[root].set(MustFacts::GLOBAL, true);
+            }
+        }
+        if model.unique_proof.is_some() {
+            for local in &self.body.parameters {
+                let root = local.0 as usize;
+                if !model.borrowed[root] || model.mutable_parameters[root] {
+                    initial.current_unique[root] = true;
+                }
             }
         }
         self.initial_authority(&model, &mut initial);
@@ -4084,12 +4116,45 @@ impl Checker<'_> {
             })
         })
     }
+    fn callee_preserves_unique(&self, callee: &Callee, ordinal: hirsel_types::ParamId) -> bool {
+        let function = match callee {
+            Callee::Definition { path, .. } => {
+                self.signatures.get(path).and_then(|s| match &s.kind {
+                    SignatureKind::Function(f) => Some(f),
+                    _ => None,
+                })
+            }
+            // MODE-2: a function value's promise may come from an unproved body.
+            Callee::Indirect { .. } => None,
+        };
+        function.is_some_and(|f| {
+            f.state_promises
+                .iter()
+                .any(|p| p.selector.parameter == ParameterRef::bound(ordinal) && p.preserve_unique)
+        })
+    }
     fn mutable_storage_exit(&mut self, model: &Model, state: &State, report: bool) {
         for root in 0..model.mutable_parameters.len() {
             if !model.mutable_parameters[root] {
                 continue;
             }
             let place = model.body_roots[root].unwrap();
+            // MODE-2: a `@preserves_unique` re-proof hands its selection back unique.
+            let ty = self.place_type(place);
+            let promised = model.unique_proof == Some(root);
+            if promised
+                && !model.releasing.get()
+                && needs_release(self, ty, &self.definition.types)
+                && !super::handle_root(&self.definition.types, ty)
+                && (state.shared[root] || !state.current_unique[root])
+            {
+                self.flow_error(
+                    report,
+                    ViolationKind::TypeMismatch {
+                        entity: UNIQUE_PROOF_FAILED,
+                    },
+                );
+            }
             for i in model.contents(model.roots[root]) {
                 if state.places[i] != LIVE {
                     self.flow_error(report, ViolationKind::ReadBeforeInit(place));
@@ -5001,7 +5066,9 @@ impl Checker<'_> {
                     let may_fail = state.places[model.mapping[place.0 as usize]] & LIVE != 0
                         && needs_release(self, self.place_type(*place), &self.definition.types);
                     self.drop_place(model, state, *place, *if_live, report, true);
+                    model.releasing.set(true);
                     self.failure_cleanup(model, state, instruction.on_failure, report, may_fail);
+                    model.releasing.set(false);
                 }
                 InstructionKind::RunCleanup(id) => {
                     // An empty/dead cleanup can never enter its emergency edge.
@@ -5011,7 +5078,9 @@ impl Checker<'_> {
                             if state.places[model.mapping[place.0 as usize]] & LIVE != 0
                                 && needs_release(self, self.place_type(*place), &self.definition.types)));
                     self.cleanup(model, state, *id, false, report, true);
+                    model.releasing.set(true);
                     self.failure_cleanup(model, state, instruction.on_failure, report, may_fail);
+                    model.releasing.set(false);
                 }
                 InstructionKind::Check { condition, .. } => {
                     self.read(model, state, condition, report);
@@ -5321,10 +5390,26 @@ impl Checker<'_> {
                 if let Callee::Indirect { value: o, .. } = callee {
                     self.read(model, state, o, report);
                 }
+                // MODE-2: a `@preserves_unique` callee installs content from its
+                // taken and `mut` arguments only.
+                let unique_inputs = arguments.iter().all(|a| {
+                    a.value.usage == UseKind::Borrow
+                        || !needs_release(
+                            self,
+                            self.place_type(a.value.place),
+                            &self.definition.types,
+                        )
+                        || super::handle_root(
+                            &self.definition.types,
+                            self.place_type(a.value.place),
+                        )
+                        || self.operand_unique(state, &a.value)
+                });
                 for a in arguments {
                     if a.value.usage == UseKind::Mut
                         && !self.callee_preserves_state(callee, a.parameter, false)
                         && !self.mut_requires_unique(callee, a.parameter)
+                        && !(unique_inputs && self.callee_preserves_unique(callee, a.parameter))
                     {
                         state.shared[self.body.places[a.value.place.0 as usize].root.0 as usize] =
                             true;
@@ -5482,16 +5567,25 @@ impl Checker<'_> {
                 };
                 self.reset_unique(state, destination);
                 self.set_fresh_receipt(state, destination, true);
+                // MODE-2: a `@preserves_unique` taken input passes its
+                // uniqueness on to the result.
+                let promised = unique_inputs
+                    && arguments.iter().any(|a| {
+                        a.value.usage == UseKind::Take
+                            && self.callee_preserves_unique(callee, a.parameter)
+                    });
                 self.set_current_unique(
                     state,
                     destination,
-                    self.definition
-                        .types
-                        .get(self.place_type(destination))
-                        .unwrap()
-                        .modes
-                        .uniqueness
-                        == hirsel_types::Uniqueness::Unique,
+                    promised
+                        || self
+                            .definition
+                            .types
+                            .get(self.place_type(destination))
+                            .unwrap()
+                            .modes
+                            .uniqueness
+                            == hirsel_types::Uniqueness::Unique,
                 );
                 self.set_current_global(
                     state,
@@ -5556,6 +5650,20 @@ impl Checker<'_> {
             }
             Terminator::Return { value, cleanup } => {
                 self.return_creation(model, state, value, report);
+                if model
+                    .unique_proof
+                    .is_some_and(|root| !model.mutable_parameters[root])
+                    && needs_release(self, self.place_type(value.place), &self.definition.types)
+                    && !super::handle_root(&self.definition.types, self.place_type(value.place))
+                    && !self.operand_unique(state, value)
+                {
+                    self.flow_error(
+                        report,
+                        ViolationKind::TypeMismatch {
+                            entity: UNIQUE_PROOF_FAILED,
+                        },
+                    );
+                }
                 if !state.audit {
                     let mut types = self.working_store();
                     let actual = self.transferred_type(state, value, &mut types);

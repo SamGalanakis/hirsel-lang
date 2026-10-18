@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: accept
+// list.push preserves uniqueness (@preserves_unique), so a list built locally from a
+// literal and pushes stays unique. Twin is MODE-2-push-after-copy-aliased-bad.
+fn build() -> unique List[u64] uses {} {
+  let mut xs: List[u64] = []
+  list.push(mut xs, 1)
+  take xs
+}

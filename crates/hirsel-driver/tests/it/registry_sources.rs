@@ -47,7 +47,15 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
             );
         }
         let mut checked = Vec::new();
-        for declaration in catalogue.lines() {
+        for line in catalogue.lines() {
+            // A `@preserves_unique(p) ` prefix is the declaration's own attribute.
+            let (promise, declaration) = match line.strip_prefix("@preserves_unique(") {
+                Some(rest) => {
+                    let (selected, declaration) = rest.split_once(") ").unwrap();
+                    (format!("@preserves_unique({selected})\n"), declaration)
+                }
+                None => (String::new(), line),
+            };
             let noalloc = declaration.starts_with("N ");
             let text = declaration
                 .trim_start_matches("N ")
@@ -62,7 +70,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 modules: path.0.modules.clone(),
             };
             let source = format!(
-                "{}pub fn {}{}\n",
+                "{promise}{}pub fn {}{}\n",
                 if noalloc { "@noalloc\n" } else { "" },
                 path.0.name,
                 &text[qualified.len()..]
@@ -164,10 +172,18 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
     use hirsel_syntax::Visibility;
     let registry = BuiltinRegistry::new();
     let mut checked = 0;
-    for declaration in SECTION22
-        .lines()
-        .filter(|l| l.starts_with("fn ") || l.starts_with("N fn "))
-    {
+    for line in SECTION22.lines() {
+        // A `@preserves_unique(p) ` prefix is the declaration's own attribute.
+        let (promise, declaration) = match line.strip_prefix("@preserves_unique(") {
+            Some(rest) => {
+                let (selected, declaration) = rest.split_once(") ").unwrap();
+                (format!("@preserves_unique({selected})\n"), declaration)
+            }
+            None => (String::new(), line),
+        };
+        if !(declaration.starts_with("fn ") || declaration.starts_with("N fn ")) {
+            continue;
+        }
         let noalloc = declaration.starts_with("N ");
         let text = declaration
             .trim_start_matches("N ")
@@ -185,7 +201,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         }
         let path = hirsel_syntax::DefPath::core(name);
         let source = format!(
-            "{}pub fn {}{}\n",
+            "{promise}{}pub fn {}{}\n",
             if noalloc { "@noalloc\n" } else { "" },
             "ledger",
             &text[name.len()..]

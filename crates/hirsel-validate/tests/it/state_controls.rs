@@ -20,6 +20,7 @@ fn promise(f: &mut Fixture, advance: bool) {
         selector: ParameterRef::bound(ParamId(0)).into(),
         advance_only: advance,
         preserve_captures: true,
+        preserve_unique: false,
     }]
     .into();
 }
@@ -695,6 +696,7 @@ fn referenced_callback(promised: bool) -> Fixture {
             selector: ParameterRef::bound(ParamId(0)).into(),
             advance_only: false,
             preserve_captures: true,
+            preserve_unique: false,
         }]
         .into();
     }
@@ -913,6 +915,7 @@ fn select_field(f: &mut Fixture, fields: Vec<FieldId>, advance: bool) {
         },
         advance_only: advance,
         preserve_captures: true,
+        preserve_unique: false,
     }]
     .into();
 }
@@ -960,6 +963,7 @@ fn field_call(callee_fields: Vec<FieldId>) -> Fixture {
         },
         advance_only: true,
         preserve_captures: true,
+        preserve_unique: false,
     }]
     .into();
     f.signatures.insert(callee.definition.clone(), callee);

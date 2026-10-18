@@ -110,6 +110,62 @@ pub fn check_ownership_with_clauses(
     let frame_results: std::collections::BTreeMap<_, _> = results.iter().cloned().collect();
     let capture_crossing_uses =
         flow::capture_crossing_uses(body, &graphs, &rows, signature, &signatures)?;
+    // MODE-2: a `@preserves_unique` body is checked again with its selected
+    // parameter and its taken and `mut` inputs entering unique; only whether
+    // the selected parameter leaves unique is kept from that run.
+    let promised: Vec<ParamId> = match &signature.kind {
+        SignatureKind::Function(f) => f
+            .state_promises
+            .iter()
+            .filter(|p| p.preserve_unique && p.selector.fields.is_empty())
+            .filter_map(|p| match p.selector.parameter {
+                ParameterRef::Bound {
+                    depth: 0,
+                    parameter,
+                } => Some(parameter),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    for parameter in promised {
+        for graph in graphs
+            .iter()
+            .filter(|g| g.owner == NameSite::Item(item) && g.clause.is_none())
+        {
+            let mut proof_body = body.clone();
+            let mut proof_properties = properties.clone();
+            let mut proof_storage = initial_storage.clone();
+            let mut proof_facts = facts.clone();
+            let mut proof_diagnostics = Vec::new();
+            flow::check(
+                tree,
+                symbols,
+                signature,
+                &mut proof_body,
+                &signatures,
+                &mut proof_properties,
+                &mut proof_storage,
+                &rows,
+                &result_sharing,
+                &projection_lifetimes,
+                &pattern_declarations,
+                &field_loan_places,
+                graph.clone(),
+                &capture_crossing_uses,
+                &mut proof_facts,
+                &mut proof_diagnostics,
+                &frame_results,
+                &introductions,
+                Some(parameter),
+            )?;
+            diagnostics.extend(
+                proof_diagnostics
+                    .into_iter()
+                    .filter(|d| d.message.starts_with(flow::UNIQUE_PROOF_FAILED)),
+            );
+        }
+    }
     for graph in &graphs {
         let checked = flow::check(
             tree,
@@ -130,6 +186,7 @@ pub fn check_ownership_with_clauses(
             &mut diagnostics,
             &frame_results,
             &introductions,
+            None,
         )?;
         initial_storage.postcondition_inputs(
             tree,

@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: accept
+// A @preserves_unique taken parameter passes a unique argument's uniqueness on
+// to the result. Twin is MODE-2-preserves-unique-take-aliased-bad.
+@preserves_unique(builder)
+fn finish(take builder: List[u8]) -> Bytes uses {} {
+  bytes.from_list(take builder)
+}
+
+fn build() -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  list.push(mut out, 104u8)
+  finish(take out)
+}

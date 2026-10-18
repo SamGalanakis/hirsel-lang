@@ -610,6 +610,7 @@ pub struct LoopSourceSyntax {
 pub enum StatePromiseKind {
     AdvanceOnly,
     PreserveCaptures,
+    PreserveUnique,
     Captures,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
