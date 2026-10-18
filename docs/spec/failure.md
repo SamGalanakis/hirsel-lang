@@ -20,6 +20,20 @@ after any partial or complete effect and before its outcome is observed or recor
 promises neither rollback nor exactly-once execution across such termination; the absence
 of a recorded completion is not evidence that the effect did not occur.
 
+An ordinary function marked `@track_caller` attributes failures raised in its body or
+contracts to its application call. Direct calls through other marked functions forward
+that caller transitively. An unmarked function starts attribution at its own operations.
+A call through a function value starts a new boundary at that invocation, including when
+the target is statically known or specialized. Argument evaluation precedes entry and
+retains the evaluating body's attribution. A marked entry with no language caller uses
+the true operation site. Callback and task entry use their invocation site as the boundary.
+
+The caller is an implicit constant source identity resolved at each call: forwarding it
+requires no allocation, stack inspection or authority. The original failing operation is
+retained separately. Human reports show it as a secondary `in` line when it differs from
+the primary attribution; JSON reports retain the same pair. Repropagation and cleanup do
+not replace an already attributed failure or its causes.
+
 ### FAIL-2: Boundary
 
 `task.isolate(tasks, body) -> Result[R, Failure]` is the only place a failure is caught,
@@ -27,8 +41,8 @@ besides `arena.bounded` for its own `OutOfSpace`. Elsewhere a failure propagates
 child cancels its siblings, the scope joins them, and the failure continues outward; with
 several, the first in spawn order is reported. `Failure` is `data`: its kind, rule ID,
 source site, the path of spawn indices and an optional boxed cause
-([core library](core-library.md#concurrency)). The site belongs to the failing operation,
-not to the isolation boundary.
+([core library](core-library.md#concurrency)). The site follows the failing operation
+and `@track_caller` attribution above, rather than the isolation boundary.
 
 ### FAIL-3: What runs
 

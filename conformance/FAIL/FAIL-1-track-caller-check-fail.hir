@@ -1,0 +1,12 @@
+// rule: FAIL-1
+// expect: fail SEM-1 at line 10
+@track_caller
+fn helper(n: u8) -> u8 {
+  failure.check(n < 255, Arithmetic())
+  n
+}
+
+pub fn main() -> Result[(), ()] {
+  let _ = helper(255u8)
+  Ok(())
+}

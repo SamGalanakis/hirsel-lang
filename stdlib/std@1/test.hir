@@ -2,6 +2,7 @@
 // bff490a23889750de7096d9057c0a432efc929a8. Copyright (c) Zig contributors.
 // Hirsel borrows Data and uses its structural equality, including IEEE floats.
 @noalloc
+@track_caller
 pub fn equal[T: data](t: Test, actual: T, expected: T) -> () {
   core@1/test.check(t, actual == expected)
 }
@@ -11,6 +12,7 @@ pub fn equal[T: data](t: Test, actual: T, expected: T) -> () {
 // Copyright (c) Zig contributors. Hirsel combines both explicit tolerances,
 // allows zero relative tolerance, and rejects unequal nonfinite inputs.
 @noalloc
+@track_caller
 pub fn approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> () {
   core@1/test.check(t, absolute >= 0.0 && relative >= 0.0)
   if actual == expected {
@@ -65,6 +67,7 @@ pub fn approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64)
 // Adapted from Go testing/quick: an explicit count bounds the property loop.
 // The for_all wrapper selects exactly 100 sequential cases, without shrinking.
 // The explicit generator receives the recorded Test grant unchanged.
+@track_caller
 pub fn for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> () {
   let mut index: u64 = 0
   while index < cases {
@@ -81,6 +84,7 @@ pub fn for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T, law: fn(T) -> b
 // bff490a23889750de7096d9057c0a432efc929a8. Copyright (c) Zig contributors.
 // Hirsel transfers any error payload instead of comparing a fixed error code.
 // An unexpected Ok value is destroyed before core test.fail ends the test.
+@track_caller
 pub fn expect_error[T, E](t: Test, take value: Result[T, E]) -> E {
   match take value {
     Error(error) => take error,
@@ -92,11 +96,13 @@ pub fn expect_error[T, E](t: Test, take value: Result[T, E]) -> E {
 }
 
 // Preserve the original hundred-case entry point over the shared kernel.
+@track_caller
 pub fn for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> () {
   for_all_cases(t, 100, gen, law)
 }
 
 // Zig testing.zig assertion cleanup, mirrored for an unexpected Error payload.
+@track_caller
 pub fn expect_ok[T, E](t: Test, take value: Result[T, E]) -> T {
   match take value {
     Ok(success) => take success,

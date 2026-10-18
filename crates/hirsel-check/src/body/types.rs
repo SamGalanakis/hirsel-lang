@@ -944,6 +944,19 @@ impl Checker<'_, '_> {
         frame: usize,
         owner: NameSite,
     ) -> Result<FunctionType, QueryError> {
+        if let Some(attribute) = s
+            .attributes
+            .iter()
+            .find(|a| self.name(a.name) == "track_caller")
+        {
+            return Err(QueryError::Diagnostics(vec![
+                hirsel_diag::Diagnostic::error(
+                    const { RuleId::of("LANG-6") },
+                    attribute.origin.span,
+                    "@track_caller applies only to ordinary named function items",
+                ),
+            ]));
+        }
         let mut parameters = vec![];
         for p in &s.parameters {
             self.environment_relation(p.ty, "a parameter");

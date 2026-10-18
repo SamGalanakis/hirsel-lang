@@ -123,7 +123,13 @@ fn property_reports_use_the_recorded_test_seed_and_first_failing_case(seed: u64)
         );
         assert_eq!(expected.failures.len(), 1);
         assert_eq!(expected.failures[0].rule, "LANG-9");
-        assert_eq!(expected.failures[0].definition.0.package.name, "std");
+        assert_eq!(
+            expected.failures[0].definition.0.package.name,
+            "application"
+        );
+        let operation = expected.failures[0].operation.as_ref().unwrap();
+        assert_eq!(operation.definition.0.package.name, "std");
+        assert_eq!(operation.definition.0.name, "for_all_cases");
         let mut options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
         options.launch.test_seed = seed;
         options.launch.random_seed = 17;

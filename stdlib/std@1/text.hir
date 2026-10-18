@@ -18,6 +18,7 @@ pub fn finish(take builder: List[u8]) -> Result[String, Bytes] uses {} {
 // builder: `format_into` and `append` only add valid UTF-8, so every
 // `to_string` and every f-string finishes here; invalid bytes fail TextInvariant.
 @preserves_unique(builder)
+@track_caller
 pub fn finish_valid(take builder: List[u8]) -> String uses {} {
   match finish(take builder) {
     Ok(text) => take text,

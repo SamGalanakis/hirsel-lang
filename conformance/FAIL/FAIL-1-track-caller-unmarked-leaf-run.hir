@@ -1,0 +1,15 @@
+// rule: FAIL-1
+// expect: run
+fn leaf(n: u8) -> u8 {
+  n + 1
+}
+
+@track_caller
+fn middle(n: u8) -> u8 {
+  leaf(n)
+}
+
+pub fn main() -> Result[(), ()] {
+  let _ = middle(254u8)
+  Ok(())
+}

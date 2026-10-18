@@ -1,5 +1,5 @@
 // rule: LANG-9
-// expect: fail LANG-9 at line 6
+// expect: fail LANG-9 at line 5
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
   test.equal(t, 1u64, 2u64)

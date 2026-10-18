@@ -627,3 +627,8 @@ Entry selection uses source-anchor body identities to distinguish the named entr
 from nested contract and closure units sharing its definition path. This also
 covers contract constructions eliminated by lowering. Units without source anchors
 retain the closure/bound-symbol convention used by hand-built IR fixtures.
+
+Frames and cleanup drains carry inert caller and operation identities explicitly.
+Marked source units forward their incoming caller on direct calls; function-value
+calls and task entry start at their invocation. Library units preserve the pair,
+and failure observations resolve it without searching the machine stack.

@@ -1,5 +1,5 @@
 // rule: LANG-9
-// expect: fail LANG-9 at line 89
+// expect: fail LANG-9 at line 6
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
   let unexpected: Result[String, u64] = Ok("value")

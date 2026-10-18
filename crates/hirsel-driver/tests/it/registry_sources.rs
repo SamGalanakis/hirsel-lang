@@ -48,6 +48,10 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
         }
         let mut checked = Vec::new();
         for line in catalogue.lines() {
+            let (caller, line) = match line.strip_prefix("@track_caller ") {
+                Some(declaration) => ("@track_caller\n", declaration),
+                None => ("", line),
+            };
             // A `@preserves_unique(p) ` prefix is the declaration's own attribute.
             let (promise, declaration) = match line.strip_prefix("@preserves_unique(") {
                 Some(rest) => {
@@ -70,7 +74,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 modules: path.0.modules.clone(),
             };
             let source = format!(
-                "{promise}{}pub fn {}{}\n",
+                "{caller}{promise}{}pub fn {}{}\n",
                 if noalloc { "@noalloc\n" } else { "" },
                 path.0.name,
                 &text[qualified.len()..]

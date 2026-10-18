@@ -173,3 +173,26 @@ fn test_selection_excludes_dependencies_and_seeds_survive_file_moves() {
     std::fs::write(&path, manifest.to_string()).unwrap();
     assert_eq!(run(), original);
 }
+
+#[test]
+fn tracked_test_entries_have_no_synthetic_caller() {
+    let path =
+        suite("@test\n@track_caller\nfn broken() {\n  let n: u8 = 255\n  let _ = n + 1\n}\n");
+    let run = |backend: Option<&str>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.args(["test", "--json"]).arg(&path);
+        if let Some(backend) = backend {
+            command.args(["--native", "--backend", backend]);
+        }
+        let output = command.output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let expected = run(None);
+    let failure = expected["tests"][0]["failure"].as_str().unwrap();
+    assert!(failure.contains("suite@1/broken"), "{failure}");
+    assert!(failure.contains(":5:11)"), "{failure}");
+    assert_eq!(run(Some("llvm")), expected);
+    assert_eq!(run(Some("cranelift")), expected);
+}

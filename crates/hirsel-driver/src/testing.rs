@@ -117,12 +117,12 @@ pub fn discover(
         // before translating its tag to the ordinary launch ABI.
         let source = if unit {
             format!(
-                "pub fn {}({}: core@1/Test) -> core@1/Result[(), ()] {{\n  {call}\n  Ok(())\n}}\n",
+                "@track_caller\npub fn {}({}: core@1/Test) -> core@1/Result[(), ()] {{\n  {call}\n  Ok(())\n}}\n",
                 entry.0.name, context_name.0.name
             )
         } else {
             format!(
-                "pub fn {}({}: core@1/Test) -> core@1/Result[(), ()] {{\n  match {call} {{ Ok(_) => Ok(()), Error(_) => Error(()) }}\n}}\n",
+                "@track_caller\npub fn {}({}: core@1/Test) -> core@1/Result[(), ()] {{\n  match {call} {{ Ok(_) => Ok(()), Error(_) => Error(()) }}\n}}\n",
                 entry.0.name, context_name.0.name
             )
         };

@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "LANG-6-track-caller-extern-bad.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "unsafe_ffi": {
+    "link": [],
+    "headers_checked": false,
+    "wrappers": []
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

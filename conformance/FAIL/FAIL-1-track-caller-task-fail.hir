@@ -1,0 +1,24 @@
+// rule: FAIL-1
+// expect: fail SEM-1 at line 14
+@track_caller
+fn child() -> u8 {
+  let n: u8 = 255
+  n + 1
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt) ? grant_error
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let worker = task.async(s, child)
+      let _ = task.await(s, take worker)
+    }
+  )
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> GrantError uses {} {
+  refusal
+}

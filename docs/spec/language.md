@@ -173,6 +173,12 @@ calls an incomplete signature; complete definitions cannot call it. Bodyless dec
 are signature fragments, and execution requires an implementation. Inference of a closure
 literal's type happens inside its enclosing body and never becomes an exported signature.
 
+The zero-argument `@track_caller` attribute applies to ordinary named function items,
+including generic functions and signature fragments. It is invalid on extern declarations,
+closure literals, local closure declarations and callable types. It declares failure
+attribution ([FAIL-1](failure.md#fail-1-kinds)); it is declaration metadata and does not
+change the source callable type, allocation contract or authority.
+
 A known named function value carries `uses` evidence derived only from its declared
 signature; an unannotated closure literal derives its evidence from its captures and its
 header. Every written callable type keeps its contract, including an unrestricted `uses`.

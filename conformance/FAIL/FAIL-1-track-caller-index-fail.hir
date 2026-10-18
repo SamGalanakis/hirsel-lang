@@ -1,0 +1,11 @@
+// rule: FAIL-1
+// expect: fail MEM-14 at line 9
+@track_caller
+fn helper(xs: List[u8], at: u64) -> u8 {
+  xs[at]
+}
+
+pub fn main() -> Result[(), ()] {
+  let _ = helper([4u8], 1u64)
+  Ok(())
+}

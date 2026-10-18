@@ -404,27 +404,34 @@ fn an_earlier_check_shifts_only_its_own_rule_and_kind() {
 #[test]
 fn a_runtime_failure_maps_to_its_obligation() {
     with_compiler_stack(|| {
-        let source = "fn add(x: u64, y: u64) -> u64 {\n  x + y\n}\npub fn main() -> Result[(), ()] {\n  let n = add(18446744073709551615u64, 1u64)\n  Ok(())\n}\n";
-        let mut engine = engine(source);
-        let entry = entry_path(&default_context());
-        let text = engine.export_tir(&entry).unwrap();
-        let export = engine.import_tir(&text).unwrap();
-        let config = RunConfiguration {
-            entry,
-            hash_seed: 0,
-            inputs: vec![],
-        };
-        let run = run_observed_snapshot(&mut engine, &config, SimulationConfig::default())
-            .unwrap_or_else(|e| panic!("{e:?}"));
-        let observation = run.observation.expect("an observation");
-        let failure = observation.failures.first().expect("a failure");
-        let site = &failure.stable_site;
-        let ids: Vec<String> = export
-            .failure_obligations(&site.definition, &failure.rule, site.line, site.column)
-            .into_iter()
-            .map(|id| id.to_string())
-            .collect();
-        assert_eq!(ids, ["standalone@0/add#SEM-1/failure-edge/0"]);
+        for tracked in [false, true] {
+            let source = "fn add(x: u64, y: u64) -> u64 {\n  x + y\n}\npub fn main() -> Result[(), ()] {\n  let n = add(18446744073709551615u64, 1u64)\n  Ok(())\n}\n";
+            let source = format!("{}{source}", if tracked { "@track_caller\n" } else { "" });
+            let mut engine = engine(&source);
+            let entry = entry_path(&default_context());
+            let text = engine.export_tir(&entry).unwrap();
+            let export = engine.import_tir(&text).unwrap();
+            let config = RunConfiguration {
+                entry,
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let run = run_observed_snapshot(&mut engine, &config, SimulationConfig::default())
+                .unwrap_or_else(|e| panic!("{e:?}"));
+            let observation = run.observation.expect("an observation");
+            let failure = observation.failures.first().expect("a failure");
+            let site = failure.operation.as_ref().unwrap_or(&failure.stable_site);
+            assert_eq!(
+                failure.stable_site.definition.0.name,
+                if tracked { "main" } else { "add" }
+            );
+            let ids: Vec<String> = export
+                .failure_obligations(&site.definition, &failure.rule, site.line, site.column)
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect();
+            assert_eq!(ids, ["standalone@0/add#SEM-1/failure-edge/0"]);
+        }
     });
 }
 

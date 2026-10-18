@@ -2907,3 +2907,72 @@ fn doc_requires_a_valid_explicit_package_manifest() {
     assert!(output.stdout.is_empty());
     assert!(!output.stderr.is_empty());
 }
+
+#[test]
+fn tracked_runtime_reports_keep_application_and_dependency_operation_sites() {
+    let library = file("@track_caller\npub fn fail(n: u8) -> u8 {\n  n + 1\n}\n");
+    let manifest = library.with_extension("json");
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "schema": 1, "package": {"name": "dep", "version": "2"},
+            "sources": [{"path": library, "module": ["helper"]}], "dependencies": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let source =
+        file("pub fn main() -> Result[(), ()] {\n  let _ = helper.fail(255u8)\n  Ok(())\n}\n");
+    let sidecar = source.with_extension("hir.json");
+    std::fs::write(&sidecar, serde_json::json!({
+        "schema": 1, "package": {"name": "app", "version": "1"},
+        "sources": [{"path": source, "module": []}],
+        "dependencies": [{"manifest": manifest, "package": {"name": "dep", "version": "2"}, "expose": []}],
+        "entry": {"module": [], "name": "main"}
+    }).to_string()).unwrap();
+    let expected = format!(
+        "runtime failure[SEM-1] at app@1/main ({}:2:11)\n  in dep@2/helper/fail ({}:3:3)\n",
+        source.display(),
+        library.display()
+    );
+    for backend in [None, Some("llvm"), Some("cranelift")] {
+        for json in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run");
+            if let Some(backend) = backend {
+                command.args(["--native", "--backend", backend]);
+            }
+            if json {
+                command.arg("--json");
+            }
+            let output = command.arg(&source).output().unwrap();
+            assert_eq!(output.status.code(), Some(1), "{backend:?}: {output:?}");
+            if json {
+                let report: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+                let failure = &report["runtime_failure"];
+                assert_eq!(failure["rule"], "SEM-1");
+                for (field, definition, path, line, column) in [
+                    ("site", "app@1/main", &source, 2, 11),
+                    ("operation", "dep@2/helper/fail", &library, 3, 3),
+                ] {
+                    assert_eq!(failure[field]["definition"], definition);
+                    assert_eq!(failure[field]["file"], path.to_str().unwrap());
+                    assert_eq!(failure[field]["line"], line);
+                    assert_eq!(failure[field]["column"], column);
+                }
+            } else {
+                assert_eq!(String::from_utf8(output.stderr).unwrap(), expected);
+            }
+        }
+        if let Some(backend) = backend {
+            let exe = build_executable(&source, &["--debug", "--backend", backend]);
+            let output = Command::new(&exe).output().unwrap();
+            assert_eq!(output.status.code(), Some(2), "{backend}: {output:?}");
+            assert_eq!(String::from_utf8(output.stderr).unwrap(), expected);
+            std::fs::remove_file(exe).unwrap();
+        }
+    }
+    for path in [library, manifest, source, sidecar] {
+        std::fs::remove_file(path).unwrap();
+    }
+}

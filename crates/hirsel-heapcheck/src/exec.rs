@@ -140,9 +140,17 @@ enum Role {
     Finalizer,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CallerSite {
+    unit: usize,
+    range: (u32, u32),
+}
+
 #[derive(Clone)]
 pub(crate) struct Frame {
     unit: usize,
+    caller: Option<CallerSite>,
+    operation: Option<CallerSite>,
     block: BlockId,
     statement: u32,
     values: Snapshot<Option<Held>>,
@@ -206,6 +214,8 @@ enum Work {
 
 #[derive(Clone)]
 pub(crate) struct Drain {
+    caller: Option<CallerSite>,
+    operation: Option<CallerSite>,
     work: Vec<Work>,
     failed: bool,
 }
@@ -452,6 +462,8 @@ impl<'p, S: Stage> Machine<'p, S> {
         let u = self.unit(unit);
         Frame {
             unit,
+            caller: None,
+            operation: None,
             block: u.entry,
             statement: 0,
             values: (0..u.values.len()).map(|_| None).collect(),
@@ -2607,21 +2619,108 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     // ---- Failures --------------------------------------------------------
 
-    fn record_failure(&mut self, f: &Frame, rule: &str, anchor: SourceAnchorId) {
-        self.full_recount_due = true;
+    /// Inert source identities; a library forwards the actual source invocation.
+    fn caller_sites(
+        &self,
+        f: &Frame,
+        range: (u32, u32),
+        forward: bool,
+    ) -> (Option<CallerSite>, Option<CallerSite>) {
+        let header = &self.unit(f.unit).header;
+        let operation = if header.origin == UnitOrigin::Library {
+            f.operation
+        } else {
+            Some(CallerSite {
+                unit: f.unit,
+                range,
+            })
+        };
+        let caller = if forward && (header.track_caller || header.origin == UnitOrigin::Library) {
+            f.caller
+        } else {
+            operation
+        };
+        (caller, operation)
+    }
+
+    fn active_call(&self, f: &Frame) -> Option<&'p CallSite> {
         let u = self.unit(f.unit);
-        let site = u
+        let block = u.blocks.get(f.block.index())?;
+        if f.statement < block.instructions.len {
+            return None;
+        }
+        let Terminator::Call { call, .. } = u.terminators.get(f.block.index())? else {
+            return None;
+        };
+        u.tables.calls.get(call.index())
+    }
+
+    fn source_range(&self, f: &Frame, anchor: SourceAnchorId) -> (u32, u32) {
+        self.unit(f.unit)
             .tables
             .source_anchors
             .get(anchor.index())
-            .map_or((0, 0), |a| (a.site.start, a.site.end));
-        let definition = u.header.definition.clone();
-        let library = u.header.origin == UnitOrigin::Library;
-        if library {
+            .map_or((0, 0), |a| (a.site.start, a.site.end))
+    }
+
+    fn cleanup_sites(
+        &self,
+        f: &Frame,
+        failure: Option<FailureId>,
+    ) -> (Option<CallerSite>, Option<CallerSite>) {
+        let u = self.unit(f.unit);
+        let inst = u
+            .blocks
+            .get(f.block.index())
+            .and_then(|b| b.instructions.get(&u.instructions))
+            .and_then(|instructions| instructions.get(f.statement as usize));
+        if let Some(
+            Inst::Drop { anchor, .. } | Inst::Release { anchor, .. } | Inst::Reset { anchor, .. },
+        ) = inst
+        {
+            let range = u
+                .tables
+                .cleanup_anchors
+                .get(anchor.index())
+                .map_or((0, 0), |a| (a.site.start, a.site.end));
+            return self.caller_sites(f, range, true);
+        }
+        if let Some(call) = self.active_call(f) {
+            return self.caller_sites(f, self.source_range(f, call.anchor), call.forward_caller);
+        }
+        let range = failure
+            .and_then(|id| u.tables.failures.get(id.index()))
+            .map_or((0, 0), |edge| self.source_range(f, edge.anchor));
+        self.caller_sites(f, range, true)
+    }
+
+    fn observe_site(&self, site: CallerSite) -> (hirsel_syntax::DefPath, (u32, u32)) {
+        (self.unit(site.unit).header.definition.clone(), site.range)
+    }
+
+    fn record_sites(
+        &mut self,
+        rule: &str,
+        caller: Option<CallerSite>,
+        operation: Option<CallerSite>,
+        fallback: usize,
+        unanchored: bool,
+    ) {
+        self.full_recount_due = true;
+        let primary = caller.or(operation);
+        let (definition, site) = primary
+            .map(|site| self.observe_site(site))
+            .unwrap_or_else(|| (self.unit(fallback).header.definition.clone(), (0, 0)));
+        let operation = operation.map(|site| self.observe_site(site)).filter(
+            |(operation_definition, operation_range)| {
+                operation_definition != &definition || operation_range != &site
+            },
+        );
+        if primary.is_none() && unanchored {
             self.unanchored_failures.insert(self.failures.len());
         }
         self.failures.push(ObservedFailure {
-            operation: None,
+            operation,
             rule: rule.to_string(),
             definition,
             site,
@@ -2631,59 +2730,15 @@ impl<'p, S: Stage> Machine<'p, S> {
         });
     }
 
-    /// A handle close failing inside a drop, anchored at the cleanup anchor of the
-    /// instruction that began the drop, as the native close thunk's failure is.
-    fn record_close_failure(&mut self, rule: &str) -> Checked<()> {
-        let Some(f) = self.stack.iter().rev().find_map(|a| match a {
-            Activity::Frame(f) => Some(f),
-            Activity::Drain(_) => None,
-        }) else {
-            // The harness owns a returned handle after the entry frame has gone.
-            // Its terminal drop still raises an ordinary language failure.
-            self.full_recount_due = true;
-            self.failures.push(ObservedFailure {
-                operation: None,
-                rule: rule.to_string(),
-                definition: self.unit(self.entry).header.definition.clone(),
-                site: (0, 0),
-            });
-            self.ledger.trace.push(Event::Failure {
-                rule: rule.to_string(),
-            });
-            return Ok(());
-        };
-        let u = self.unit(f.unit);
-        let block = u
-            .blocks
-            .get(f.block.index())
-            .ok_or_else(|| err(V::Malformed, format!("unknown block {:?}", f.block)))?;
-        let anchor = match self
-            .pool(block.instructions, &u.instructions)?
-            .get(f.statement as usize)
-        {
-            Some(
-                Inst::Drop { anchor, .. }
-                | Inst::Release { anchor, .. }
-                | Inst::Reset { anchor, .. },
-            ) => *anchor,
-            _ => return fail(V::Malformed, "a handle close failed outside a drop"),
-        };
-        let site = u
-            .tables
-            .cleanup_anchors
-            .get(anchor.index())
-            .map_or((0, 0), |a| (a.site.start, a.site.end));
-        self.full_recount_due = true;
-        self.failures.push(ObservedFailure {
-            operation: None,
-            rule: rule.to_string(),
-            definition: u.header.definition.clone(),
-            site,
-        });
-        self.ledger.trace.push(Event::Failure {
-            rule: rule.to_string(),
-        });
-        Ok(())
+    fn record_failure(&mut self, f: &Frame, rule: &str, anchor: SourceAnchorId) {
+        let forward = self.active_call(f).is_none_or(|call| call.forward_caller);
+        let (caller, operation) = self.caller_sites(f, self.source_range(f, anchor), forward);
+        self.record_sites(rule, caller, operation, f.unit, true);
+    }
+
+    /// A cleanup retains its pair independently of any user finalizer it calls.
+    fn record_close_failure(&mut self, rule: &str, drain: &Drain) {
+        self.record_sites(rule, drain.caller, drain.operation, self.entry, false);
     }
 
     /// Take a failure edge: record its failure, dispose its tokens, enter cleanup.
@@ -5282,8 +5337,11 @@ impl<'p, S: Stage> Machine<'p, S> {
         after: After,
         failure: Option<FailureId>,
     ) -> Control {
+        let (caller, operation) = self.cleanup_sites(f, failure);
         f.resume = Resume::Drain { after, failure };
         Control::Push(Activity::Drain(Drain {
+            caller,
+            operation,
             work,
             failed: false,
         }))
@@ -7357,6 +7415,12 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
         let cu = self.unit(callee);
         let mut new = self.frame(callee, Role::Callee, env);
+        let (caller, operation) =
+            self.caller_sites(f, self.source_range(f, site.anchor), site.forward_caller);
+        if cu.header.track_caller || cu.header.origin == UnitOrigin::Library {
+            new.caller = caller;
+        }
+        new.operation = operation;
         new.destination = site.destination.clone();
         let mut bound = vec![false; cu.parameters.len()];
         let mut by_address = vec![None; cu.parameters.len()];
@@ -8405,12 +8469,23 @@ impl<'p, S: Stage> Machine<'p, S> {
                     Exit::Fail => {
                         let unit = self.unit(caller.unit);
                         if unit.header.origin != UnitOrigin::Library {
-                            let definition = unit.header.definition.clone();
-                            let anchor = unit.tables.calls[call.index()].anchor;
-                            let range = unit.tables.source_anchors[anchor.index()].site;
-                            for i in std::mem::take(&mut self.unanchored_failures) {
-                                self.failures[i].definition = definition.clone();
-                                self.failures[i].site = (range.start, range.end);
+                            let call = &unit.tables.calls[call.index()];
+                            let (inherited, operation) = self.caller_sites(
+                                &caller,
+                                self.source_range(&caller, call.anchor),
+                                call.forward_caller,
+                            );
+                            let primary = inherited.or(operation);
+                            if let Some(primary) = primary {
+                                let (definition, range) = self.observe_site(primary);
+                                let operation = operation
+                                    .filter(|site| *site != primary)
+                                    .map(|site| self.observe_site(site));
+                                for i in std::mem::take(&mut self.unanchored_failures) {
+                                    self.failures[i].definition = definition.clone();
+                                    self.failures[i].site = range;
+                                    self.failures[i].operation = operation.clone();
+                                }
                             }
                         }
                         self.take_failure(&mut caller, failure, false)?;
@@ -8863,6 +8938,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                             );
                         }
                         let mut frame = self.frame(unit, Role::Finalizer, None);
+                        if finalizer_unit.header.track_caller
+                            || finalizer_unit.header.origin == UnitOrigin::Library
+                        {
+                            frame.caller = d.caller;
+                        }
+                        frame.operation = d.operation;
                         let parameters = &self.unit(unit).parameters;
                         let [p] = parameters.as_slice() else {
                             return fail(
@@ -9082,7 +9163,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                                 .close_handle(h, &mut self.output)
                                 .map_err(|message| err(V::Malformed, message))?
                             {
-                                self.record_close_failure(&rule)?;
+                                self.record_close_failure(&rule, d);
                                 d.failed = true;
                             }
                             self.ledger.get_mut(base.alloc).extent.take(
@@ -9245,6 +9326,8 @@ impl<'p, S: Stage> Machine<'p, S> {
         let mutexes = self.end_mutexes()?;
         if !mutexes.is_empty() {
             self.stack.push(Activity::Drain(Drain {
+                caller: None,
+                operation: None,
                 work: mutexes,
                 failed: false,
             }));
@@ -9264,6 +9347,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                 },
             )?;
             self.stack.push(Activity::Drain(Drain {
+                caller: None,
+                operation: None,
                 work: vec![
                     Work::Death {
                         alloc: temp.alloc,

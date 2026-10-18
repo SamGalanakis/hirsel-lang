@@ -135,6 +135,7 @@ pub(super) struct Task {
     chain: Option<Vec<(ObservedFailure, Vec<u32>)>>,
     /// The layout of the closure the scheduler holds for this child.
     main: Option<LayoutId>,
+    entry_site: Option<CallerSite>,
     /// Its place in completion order, set when it holds its result or failed.
     completed: u64,
 }
@@ -164,6 +165,7 @@ impl Task {
             exited: false,
             chain: None,
             main: None,
+            entry_site: None,
             completed: 0,
         }
     }
@@ -790,6 +792,14 @@ impl<S: Stage> Machine<'_, S> {
                     return fail(V::TypeConfusion, "a spawned task without code");
                 };
                 let mut frame = self.frame(code, Role::Callee, env);
+                let actual = self
+                    .caller_sites(f, self.source_range(f, site.anchor), false)
+                    .1;
+                let header = &self.unit(code).header;
+                if header.track_caller || header.origin == UnitOrigin::Library {
+                    frame.caller = actual;
+                }
+                frame.operation = actual;
                 self.bind_parameter_slots(&mut frame, &[])?;
                 self.bind_captures(&mut frame)?;
                 let shielded = self.shielded(f);
@@ -804,6 +814,7 @@ impl<S: Stage> Machine<'_, S> {
                 let generation = s.fresh_generation();
                 let mut task = Task::new(generation, Some(scope), path, canceled);
                 task.main = Some(main_layout);
+                task.entry_site = actual;
                 task.stack.push(Activity::Frame(Box::new(frame)));
                 s.tasks.push(Some(task));
                 let index = (s.tasks.len() - 1) as u32;
@@ -1443,7 +1454,10 @@ impl<S: Stage> Machine<'_, S> {
                 borrow: None,
             },
         )?;
+        let actual = self.scheduler().task(current)?.entry_site;
         self.stack.push(Activity::Drain(Drain {
+            caller: actual,
+            operation: actual,
             work: vec![
                 Work::Death {
                     alloc: temp.alloc,

@@ -1,0 +1,40 @@
+// rule: FAIL-3
+// expect: run
+resource type Guard {
+  n: u8,
+}
+drop(g) {
+  let _ = g.n + 1
+}
+
+@track_caller
+fn helper() {
+  let guard = Guard(n: 255u8)
+  failure.check(false, Arithmetic())
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt) ? grant_error
+  let caught: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      helper()
+    }
+  )
+  match caught {
+    Ok(_) => failure.check(false, Arithmetic()),
+    Error(primary) => {
+      failure.check(primary.site.line == 21, Arithmetic())
+      match primary.cause {
+        None => failure.check(false, Arithmetic()),
+        Some(cause) => failure.check(cause.site.line == 7, Arithmetic()),
+      }
+    },
+  }
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> GrantError uses {} {
+  refusal
+}

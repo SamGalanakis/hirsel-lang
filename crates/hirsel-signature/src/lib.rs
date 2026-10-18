@@ -500,7 +500,7 @@ fn normalize_inner(
     };
     let mut signature = Signature {
         metadata: SignatureMetadata {
-            track_caller: false,
+            track_caller: attrs.track_caller,
             visibility: item.visibility,
             alias: item.visibility != ast::Visibility::PublicOpaque
                 && matches!(
@@ -567,6 +567,7 @@ enum Position {
 }
 #[derive(Default)]
 struct Attributes {
+    track_caller: bool,
     noalloc: bool,
     incomplete: bool,
     blocking: bool,
@@ -684,6 +685,7 @@ impl Normalizer<'_, '_> {
             let valid = match name.as_str() {
                 "test" | "noalloc" | "incomplete" | "advance_only" | "preserves_captures"
                 | "preserves_unique" | "captures" => function,
+                "track_caller" => matches!(kind, ast::ItemKind::Function { abi: None, .. }),
                 "blocking" => matches!(kind, ast::ItemKind::Function { abi: Some(_), .. }),
                 "layout" | "packed" | "align" | "soa" | "capability" | "loop_source" | "format"
                 | "serializable" => type_,
@@ -728,8 +730,8 @@ impl Normalizer<'_, '_> {
                         ));
                     }
                 }
-                "test" | "noalloc" | "incomplete" | "blocking" | "packed" | "soa"
-                | "serializable" => {
+                "test" | "track_caller" | "noalloc" | "incomplete" | "blocking" | "packed"
+                | "soa" | "serializable" => {
                     if !a.arguments.is_empty() {
                         return Err(diagnostic(
                             const { RuleId::of("LANG-6") },
@@ -739,6 +741,7 @@ impl Normalizer<'_, '_> {
                     }
                     match name.as_str() {
                         "test" => (),
+                        "track_caller" => result.track_caller = true,
                         "noalloc" => result.noalloc = true,
                         "incomplete" => result.incomplete = true,
                         "blocking" => result.blocking = true,
@@ -951,6 +954,18 @@ impl Normalizer<'_, '_> {
                 const { RuleId::of("LANG-9") },
                 self.span,
                 "@test selects only an ordinary function definition",
+            ));
+        }
+        if closure
+            && let Some(attribute) = s
+                .attributes
+                .iter()
+                .find(|a| self.input.symbols.resolve(a.name) == Some("track_caller"))
+        {
+            return Err(diagnostic(
+                const { RuleId::of("LANG-6") },
+                attribute.origin.span,
+                "@track_caller applies only to ordinary named function items",
             ));
         }
         let attrs = self.attributes(&s.attributes, &dummy)?;

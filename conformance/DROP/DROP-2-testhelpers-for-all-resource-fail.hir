@@ -1,5 +1,5 @@
 // rule: DROP-2
-// expect: fail LANG-9 at line 75
+// expect: fail LANG-9 at line 21
 // stdout: test failure: seed=0 case=0
 // entry: trial
 resource type Watch {

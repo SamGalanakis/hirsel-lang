@@ -454,6 +454,11 @@ the buffer and position unchanged; non-canceled write errors may follow a prefix
 Narrowing preserves a File's mode and position. An opened handle continues to refer
 to its file after unlink or replacement; it does not reopen the stored path.
 
+The ordinary `std@1/test` assertion helpers (`equal`, `approx`, `for_all_cases`,
+`expect_error`, `for_all` and `expect_ok`) and `std@1/text.finish_valid` are
+`@track_caller`: a failing check identifies their application call, while reports retain
+the helper's original operation as secondary context.
+
 `test.check(t, false)` fails LANG-9. `test.check_case` behaves like `test.check`; on false
 it first reports `test failure: seed=S case=C` and a newline through Test reporting, using
 the run's Test seed and the supplied zero-based case index. `test.fail` records a LANG-9
@@ -497,8 +502,10 @@ waits due at it resume.
 `{ kind: FailureKind, rule: String, site: SourceSite, spawn: List[u64], cause: Option[box Failure] }`,
 where `SourceSite` is `{ definition: String, line: u64, column: u64 }`, using a fully
 qualified definition path and one-based source coordinates, and `FailureKind` is
-`Check | Contract | Depth | OutOfSpace | DeadMutex`. The site belongs to the failing
-operation, not to the isolation boundary.
+`Check | Contract | Depth | OutOfSpace | DeadMutex`. The site follows the failing
+operation and [`@track_caller`](failure.md#fail-1-kinds), rather than the isolation
+boundary. Tooling additionally retains the original operation and the complete file
+identity for human and JSON reports.
 
 ## Network
 

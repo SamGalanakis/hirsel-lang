@@ -1,0 +1,17 @@
+// rule: FAIL-1
+// expect: fail SEM-1 at line 11
+@track_caller
+fn leaf(n: u8) -> u8 {
+  n + 1
+}
+
+@track_caller
+fn middle(n: u8) -> u8 {
+  let f = leaf
+  f(n)
+}
+
+pub fn main() -> Result[(), ()] {
+  let _ = middle(255u8)
+  Ok(())
+}

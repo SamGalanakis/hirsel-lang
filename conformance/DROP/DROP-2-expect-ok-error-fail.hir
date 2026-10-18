@@ -1,5 +1,5 @@
 // rule: DROP-2
-// expect: fail LANG-9 at line 105
+// expect: fail LANG-9 at line 13
 // entry: trial
 resource type Watch {
   n: u8,

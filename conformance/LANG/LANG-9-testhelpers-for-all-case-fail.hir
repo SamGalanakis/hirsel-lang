@@ -1,5 +1,5 @@
 // rule: LANG-9
-// expect: fail LANG-9 at line 75
+// expect: fail LANG-9 at line 14
 // stdout: test failure: seed=0 case=0
 // entry: trial
 fn generate(t: Test) -> u64 {

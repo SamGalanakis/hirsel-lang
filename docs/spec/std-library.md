@@ -39,6 +39,7 @@ otherwise. These are pure, nonallocating algorithms adapted from Zig's ASCII mod
 
 These declarations are normative: the source package must declare exactly these
 signatures. `N` keeps the ledger's meaning of an explicit `@noalloc` promise.
+`@track_caller` retains the caller attribution declared by the source helper.
 
 ```text
 N fn ascii.is_digit(c: u8) -> bool uses {}
@@ -76,10 +77,10 @@ N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 @preserves_unique(builder) fn json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}
-N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
-N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
-fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
-fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
+@track_caller N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
+@track_caller N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
+@track_caller fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()
+@track_caller fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E
 fn input.read_all(s: Stdin) -> Result[unique Bytes, InputError]
 fn input.read_line(s: Stdin) -> Result[Option[unique String], InputError]
 N fn prng.seed(value: u64) -> prng.Generator uses {}

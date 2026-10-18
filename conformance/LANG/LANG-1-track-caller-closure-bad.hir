@@ -1,0 +1,7 @@
+// rule: LANG-1
+// expect: reject LANG-1 at line 4
+pub fn main() -> Result[(), ()] {
+  let f = @track_caller fn(n: u8) -> u8 { n }
+  let _ = f(1u8)
+  Ok(())
+}

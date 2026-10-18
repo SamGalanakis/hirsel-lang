@@ -1,0 +1,12 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 6
+@track_caller
+fn check(t: Test, passed: bool) {
+  let call = core@1/test.check
+  call(t, passed)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  check(t, false)
+  Ok(())
+}

@@ -86,3 +86,8 @@ the declaring type's own parameters and no error result. The association implies
 Both share the receiver inference in `specialize`.
 
 LANG-9 validates `@test` functions as complete monomorphic ordinary definitions, with zero parameters or one borrowed core Test, and unit or core Result[unit, E] results. Selection is tooling metadata and does not change a function's ordinary callable contract.
+
+`@track_caller` is zero-argument declaration metadata for ordinary named functions.
+It is rejected on extern declarations and nested callable headers; callable types
+retain their ordinary shape. The independently checked body metadata identifies
+the entry and its generated contract bodies.

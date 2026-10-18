@@ -1,0 +1,12 @@
+// rule: LANG-9
+// expect: run
+@track_caller
+fn check(t: Test, passed: bool) {
+  let call = core@1/test.check
+  call(t, passed)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  check(t, true)
+  Ok(())
+}

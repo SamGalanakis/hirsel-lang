@@ -5175,7 +5175,7 @@ References: [`core@1/Scope`](#def-core_401_2fScope), [`core@1/TaskSet`](#def-cor
 
 <a id="def-std_401_2ftest_2fapprox"></a>
 
-- `@noalloc pub fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()`
+- `@noalloc @track_caller pub fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()`
 
 References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/f64`](#def-core_401_2ff64)
 
@@ -5193,19 +5193,19 @@ References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/f64`](#def-core_401_
 
 <a id="def-std_401_2ftest_2fequal"></a>
 
-- `@noalloc pub fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()`
+- `@noalloc @track_caller pub fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()`
 
 References: [`core@1/Test`](#def-core_401_2fTest)
 
 <a id="def-std_401_2ftest_2fexpect_5ferror"></a>
 
-- `pub fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E`
+- `@track_caller pub fn test.expect_error[T, E](t: Test, take value: Result[T, E]) -> E`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/Test`](#def-core_401_2fTest)
 
 <a id="def-std_401_2ftest_2fexpect_5fok"></a>
 
-- `pub fn test.expect_ok[T, E](t: Test, take value: Result[T, E]) -> T`
+- `@track_caller pub fn test.expect_ok[T, E](t: Test, take value: Result[T, E]) -> T`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/Test`](#def-core_401_2fTest)
 
@@ -5215,13 +5215,13 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/Test`](#def-core
 
 <a id="def-std_401_2ftest_2ffor_5fall"></a>
 
-- `pub fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()`
+- `@track_caller pub fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()`
 
 References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/bool`](#def-core_401_2fbool)
 
 <a id="def-std_401_2ftest_2ffor_5fall_5fcases"></a>
 
-- `pub fn test.for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()`
+- `@track_caller pub fn test.for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()`
 
 References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64)
 
@@ -5260,7 +5260,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 
 <a id="def-std_401_2ftext_2ffinish_5fvalid"></a>
 
-- `@preserves_unique(builder) pub fn text.finish_valid(take builder: List[u8]) -> String uses {}`
+- `@preserves_unique(builder) @track_caller pub fn text.finish_valid(take builder: List[u8]) -> String uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
 

@@ -181,8 +181,9 @@ dependency cycle cites its earliest dependency reference
 ([CT-4](compile-time.md#ct-4-order)). A well-typed comptime operation that fails during
 evaluation cites CT-1 at the comptime expression, with the underlying failure as a note;
 step exhaustion cites CT-1 at the comptime expression too. Static errors inside comptime keep
-their ordinary owners. Run-time failures keep their operative rule and failing expression or
-contract site; a false `ensures` cites the declared clause, not a `return`. Run-time order is
+their ordinary owners. Run-time failures keep their operative rule. Their primary location follows
+[`@track_caller`](failure.md#fail-1-kinds); the original operation remains available
+independently. A false `ensures` has the declared clause as its operation site. Run-time order is
 execution order, except for the spawn-order selection of
 [FAIL-2](failure.md#fail-2-boundary).
 

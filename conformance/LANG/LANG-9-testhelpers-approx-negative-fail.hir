@@ -1,5 +1,5 @@
 // rule: LANG-9
-// expect: fail LANG-9 at line 15
+// expect: fail LANG-9 at line 5
 // entry: trial
 pub fn trial(t: Test) -> Result[(), ()] {
   test.approx(t, 1.0, 1.0, -1.0, 0.0)

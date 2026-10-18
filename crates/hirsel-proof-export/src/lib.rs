@@ -494,7 +494,8 @@ impl Export {
     }
     /// Attach a run-time failure to obligations without touching `Failure`:
     /// every obligation of `path` with `rule` that has a site starting at
-    /// `line` and `column` (an observed failure's stable site). MEM-13/14
+    /// `line` and `column` (an observed failure's operation site when present,
+    /// otherwise its stable primary site). MEM-13/14
     /// report at the first instruction touching the place, so several
     /// candidates may match (G7).
     pub fn failure_obligations(

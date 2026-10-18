@@ -1,0 +1,54 @@
+// rule: FAIL-1
+// expect: run
+// Adapted from Rust core panic/location.rs new_location/constant_location examples.
+@track_caller
+fn new_location(n: u8) -> u8 {
+  n + 1
+}
+
+fn constant_location() -> u8 {
+  new_location(255u8)
+}
+
+fn site(outcome: Result[u8, Failure]) -> u64 {
+  match outcome {
+    Ok(_) => 0,
+    Error(failed) => failed.site.line,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt) ? grant_error
+  let a = task.isolate(
+    tasks,
+    fn() -> u8 {
+      constant_location()
+    }
+  )
+  let b = task.isolate(
+    tasks,
+    fn() -> u8 {
+      constant_location()
+    }
+  )
+  let c = task.isolate(
+    tasks,
+    fn() -> u8 {
+      new_location(255u8)
+    }
+  )
+  let d = task.isolate(
+    tasks,
+    fn() -> u8 {
+      new_location(255u8)
+    }
+  )
+  failure.check(site(a) == 10 && site(b) == 10, Arithmetic())
+  failure.check(site(c) == 37 && site(d) == 43, Arithmetic())
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> GrantError uses {} {
+  refusal
+}
