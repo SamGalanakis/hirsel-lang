@@ -18,6 +18,7 @@ conformance/LANG/LANG-13-nested-variant-payload-drop-run.hir
 conformance/LANG/LANG-3-take-temporaries-early-exit.hir
 conformance/OWN/OWN-2-callee-owns-on-error.hir
 conformance/PROV/PROV-1-copied-prefix-write-run.hir
+conformance/MEM/MEM-3-borrowed-call-compare-run.hir
 conformance/SEM/SEM-1-signed-add-fail.hir
 conformance/SEM/SEM-3-character-literals-run.hir
 native-tests/regressions/match-on-variant-value.hir

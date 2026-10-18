@@ -1,6 +1,7 @@
 # Corpus cases the per-push native smoke also runs as Cranelift executables
 # (`native --smoke`): every one must agree with the reference. Keep it a handful.
 conformance/LANG/LANG-11-block-captured-value-run.hir
+conformance/MEM/MEM-3-borrowed-call-compare-run.hir
 conformance/SEM/SEM-1-signed-add-fail.hir
 native-tests/regressions/match-on-variant-value.hir
 conformance/PROG/PROG-3-exit-report-variant-error-run.hir

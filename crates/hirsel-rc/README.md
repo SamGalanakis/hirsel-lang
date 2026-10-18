@@ -114,7 +114,9 @@ at each stage and H against the interpreter, and keeps the declined twins.
   owned operands read through views under synthetic loans and the taken ones
   released after. Taken comparison and flat-construction operands move into
   fresh operation-owned temporaries, so their cleanup precedes kept sources
-  and intermediate copies on failure; a many callable received by once storage or an owned once parameter is
+  and intermediate copies on failure. Prepared comparison operands are covered
+  by that cleanup while later operands' bounds/tag checks run too; a many callable
+  received by once storage or an owned once parameter is
   `Inst::Weaken`ed; mutable aliases require exact multiplicity. An origin event (`BindOrigin`, `BindFields`,
   `EndOrigin`) names its places without preparing them, so a bounds or tag
   check runs only where the place is accessed (after an assignment's

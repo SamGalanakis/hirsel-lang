@@ -142,7 +142,13 @@ impl Importer<'_, '_> {
         let mut loans = Vec::new();
         let mut taken = Vec::new();
         let l = self.compared(left, &mut loans, &mut taken)?;
+        // Preparing the right place can fail (bounds/tag checks). The left
+        // operand's operation-owned storage and loan already exist then,
+        // but TIR cleanup cannot name them.
+        let prepared = self.reading_actions(&loans, &taken);
+        self.failure.before.splice(0..0, prepared.iter().cloned());
         let r = self.compared(right, &mut loans, &mut taken)?;
+        self.failure.before.drain(0..prepared.len());
         let layout = self.layout_of(self.value_type(l));
         let result = self.fresh(ty);
         self.reading(loans, taken, |this| {
@@ -160,25 +166,33 @@ impl Importer<'_, '_> {
         Ok(result)
     }
 
+    /// Cleanup for prepared read-only operands, also used while preparing
+    /// later operands that can fail before the operation is entered.
+    pub(super) fn reading_actions(&self, loans: &[LoanId], taken: &[SlotId]) -> Vec<Action> {
+        // Temporaries of one scope release in descending slot order.
+        let mut taken = taken.to_vec();
+        taken.sort_by(|a, b| b.cmp(a));
+        loans
+            .iter()
+            .copied()
+            .map(|loan| Action::EndLoan { loan })
+            .chain(taken.into_iter().map(|slot| Action::Release {
+                slot,
+                anchor: (INSTRUCTION_DROP, self.statement_action()),
+            }))
+            .collect()
+    }
+
     /// Emit an operation that only reads operands `compared` prepared: their
     /// synthetic loans end and the taken slots are released after it, and on
     /// its failure edge before the frame's cleanup.
     pub(super) fn reading(
         &mut self,
         loans: Vec<LoanId>,
-        mut taken: Vec<SlotId>,
+        taken: Vec<SlotId>,
         emit: impl FnOnce(&mut Self) -> R<()>,
     ) -> R<()> {
-        // Temporaries of one scope release in descending slot order.
-        taken.sort_by(|a: &SlotId, b| b.cmp(a));
-        let release: Vec<Action> = loans
-            .into_iter()
-            .map(|loan| Action::EndLoan { loan })
-            .chain(taken.into_iter().map(|slot| Action::Release {
-                slot,
-                anchor: (INSTRUCTION_DROP, self.statement_action()),
-            }))
-            .collect();
+        let release = self.reading_actions(&loans, &taken);
         self.failure.before.splice(0..0, release.iter().cloned());
         emit(self)?;
         self.failure.before.drain(0..release.len());

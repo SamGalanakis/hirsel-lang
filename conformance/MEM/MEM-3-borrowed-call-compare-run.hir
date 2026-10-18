@@ -1,0 +1,46 @@
+// rule: MEM-3
+// expect: run
+// stdout: clean
+fn contents() -> unique Bytes {
+  bytes.from_list([97])
+}
+
+fn compare(op: u64, index: u64) -> bool {
+  let values: List[Bytes] = [b"a"]
+  match op {
+    0 => contents() == values[index],
+    1 => contents() != values[index],
+    2 => contents() < values[index],
+    3 => contents() <= values[index],
+    4 => contents() > values[index],
+    _ => contents() >= values[index],
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let expected: List[bool] = [true, false, false, true, false, true]
+  let mut clean = true
+  for op in 0u64..6u64 {
+    clean = clean && compare(op, 0) == expected[op]
+    let status: Result[bool, Failure] = task.isolate(
+      tasks,
+      fn() -> bool {
+        compare(op, 1)
+      }
+    )
+    clean = clean && match status {
+      Error(caught) => caught.rule == "MEM-14",
+      Ok(_) => false,
+    }
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if clean {
+      "clean\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

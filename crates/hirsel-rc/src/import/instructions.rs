@@ -1026,15 +1026,7 @@ impl Importer<'_, '_> {
             // Preparing a later operand can fail after earlier encoded
             // sources have entered construction-owned temporaries.
             if let Some(before) = &before {
-                let mut prepared: Vec<Action> = loans
-                    .iter()
-                    .copied()
-                    .map(|loan| Action::EndLoan { loan })
-                    .collect();
-                prepared.extend(taken.iter().rev().copied().map(|slot| Action::Release {
-                    slot,
-                    anchor: (INSTRUCTION_DROP, self.statement_action()),
-                }));
+                let mut prepared = self.reading_actions(&loans, &taken);
                 prepared.extend(before.iter().cloned());
                 self.failure.before = prepared;
             }

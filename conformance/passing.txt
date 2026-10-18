@@ -1750,6 +1750,7 @@ conformance/MEM/MEM-2-acyclic-tree.hir
 conformance/MEM/MEM-2-immutable-capture.hir
 conformance/MEM/MEM-2-self-capture-bad.hir
 conformance/MEM/MEM-2-self-capture-ok.hir
+conformance/MEM/MEM-3-borrowed-call-compare-run.hir
 conformance/MEM/MEM-3-keyed-depth-boundary-run.hir
 conformance/MEM/MEM-3-keyed-read-nested-key-run.hir
 conformance/MEM/MEM-3-map-get-deep-key-fail.hir
