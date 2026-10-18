@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-807 exported definitions; 255 variants.
+813 exported definitions; 255 variants.
 
 
 ## Types and roots
@@ -254,6 +254,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Clock(ClockError) -> WaitError` — Variant of WaitError. <!-- core@1/WaitError#Clock -->
 - `@capability(global) opaque type WallClock: plain + copyable + sendable + noalloc_drop uses {WallClock}` <!-- core@1/WallClock -->
 - `type bool: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/bool -->
+- `type char: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/char -->
 - `fn copy_to[T: copyable](a: Arena, x: T) -> T in a` <!-- core@1/copy_to -->
 - `type f32: copyable + data + inert + noalloc_drop + plain + sendable uses {}` <!-- core@1/f32 -->
 - `type f64: copyable + data + inert + noalloc_drop + plain + sendable uses {}` <!-- core@1/f64 -->
@@ -369,6 +370,14 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `fn channel.open[T: sendable](tasks: Tasks) -> (Sender[T], Receiver[T])` <!-- core@1/channel/open -->
 - `fn channel.receive[T](tasks: Tasks, mut r: Receiver[T]) -> Result[T, ChannelError]` <!-- core@1/channel/receive -->
 - `fn channel.send[T: sendable](tasks: Tasks, mut s: Sender[T], take v: T) -> Result[(), (T, ChannelError)]` <!-- core@1/channel/send -->
+
+## char
+
+- `@preserves_unique(out) pub fn char.format_into(value: char, mut out: List[u8]) -> () uses {}` — Appends the UTF-8 encoding of 'value', one to four bytes; to_string is that text. <!-- std@1/char/format_into -->
+- `@noalloc pub fn char.from_ascii(byte: u8) -> Option[char] uses {}` — The char of an ASCII byte; None for a byte above 0x7F. <!-- std@1/char/from_ascii -->
+- `@noalloc fn char.from_u32(value: u32) -> Option[char]` <!-- core@1/char/from_u32 -->
+- `pub fn char.to_string(value: char) -> unique String uses {}` <!-- std@1/char/to_string -->
+- `@noalloc fn char.to_u32(c: char) -> u32` <!-- core@1/char/to_u32 -->
 
 ## child
 

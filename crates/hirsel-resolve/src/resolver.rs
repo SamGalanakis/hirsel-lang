@@ -2276,6 +2276,7 @@ fn primitive(name: &str) -> Option<ty::Primitive> {
         "i128" => I128,
         "f32" => F32,
         "f64" => F64,
+        "char" => Char,
         "String" => String,
         "Bytes" => Bytes,
         "Never" => Never,

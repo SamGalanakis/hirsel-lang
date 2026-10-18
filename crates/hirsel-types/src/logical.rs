@@ -245,7 +245,7 @@ pub fn primitive(p: Primitive) -> u64 {
         Primitive::Never => 0,
         Primitive::Bool | Primitive::U8 | Primitive::I8 => 1,
         Primitive::U16 | Primitive::I16 => 2,
-        Primitive::U32 | Primitive::I32 | Primitive::F32 => 4,
+        Primitive::U32 | Primitive::I32 | Primitive::F32 | Primitive::Char => 4,
         Primitive::U64 | Primitive::I64 | Primitive::F64 => 8,
         Primitive::U128 | Primitive::I128 => 16,
         Primitive::String | Primitive::Bytes => REFERENCE,

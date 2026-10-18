@@ -1,0 +1,6 @@
+// rule: LANG-7
+// expect: accept
+// Accepted twin: chars compare by scalar value, and arithmetic is on u32.
+fn after(a: char, b: char) -> bool {
+  a > b && char.to_u32(a) + 1u32 > char.to_u32(b)
+}

@@ -453,6 +453,7 @@ pub(crate) fn holds_storage(value: &Value) -> bool {
             Value::Unit
             | Value::Bool(_)
             | Value::Integer(_)
+            | Value::Char(_)
             | Value::F32(_)
             | Value::F64(_)
             | Value::FunctionReference(_) => (),

@@ -227,6 +227,7 @@ pub(super) fn integer(p: Primitive) -> bool {
         Primitive::Bool
             | Primitive::F32
             | Primitive::F64
+            | Primitive::Char
             | Primitive::String
             | Primitive::Bytes
             | Primitive::Never
@@ -234,6 +235,32 @@ pub(super) fn integer(p: Primitive) -> bool {
 }
 fn numeric(p: Primitive) -> bool {
     integer(p) || matches!(p, Primitive::F32 | Primitive::F64)
+}
+/// Whether a constant's bits are a value of its scalar type: an integer fits
+/// its width and a char is a Unicode scalar value (LANG-7).
+pub(super) fn constant_valid(c: &Constant, kind: &TypeKind) -> bool {
+    match (c, kind) {
+        (Constant::Unit, TypeKind::Tuple(ts)) => ts.is_empty(),
+        (Constant::Bool(_), TypeKind::Primitive(Primitive::Bool))
+        | (Constant::F32(_), TypeKind::Primitive(Primitive::F32))
+        | (Constant::F64(_), TypeKind::Primitive(Primitive::F64))
+        | (Constant::String(_), TypeKind::Primitive(Primitive::String))
+        | (Constant::Bytes(_), TypeKind::Primitive(Primitive::Bytes)) => true,
+        (Constant::Integer(bits), TypeKind::Primitive(Primitive::Char)) => {
+            u32::try_from(*bits).ok().and_then(char::from_u32).is_some()
+        }
+        (Constant::Integer(bits), TypeKind::Primitive(p)) if integer(*p) => {
+            let width = match p {
+                Primitive::U8 | Primitive::I8 => 8,
+                Primitive::U16 | Primitive::I16 => 16,
+                Primitive::U32 | Primitive::I32 => 32,
+                Primitive::U64 | Primitive::I64 => 64,
+                _ => 128,
+            };
+            width == 128 || *bits < (1u128 << width)
+        }
+        _ => false,
+    }
 }
 
 impl<'a> Checker<'a> {
@@ -2568,25 +2595,7 @@ impl<'a> Checker<'a> {
         }
         match r {
             Rvalue::Constant(c) => {
-                let valid = match (c, kind) {
-                    (Constant::Unit, TypeKind::Tuple(ts)) => ts.is_empty(),
-                    (Constant::Bool(_), TypeKind::Primitive(Primitive::Bool))
-                    | (Constant::F32(_), TypeKind::Primitive(Primitive::F32))
-                    | (Constant::F64(_), TypeKind::Primitive(Primitive::F64))
-                    | (Constant::String(_), TypeKind::Primitive(Primitive::String))
-                    | (Constant::Bytes(_), TypeKind::Primitive(Primitive::Bytes)) => true,
-                    (Constant::Integer(bits), TypeKind::Primitive(p)) if integer(*p) => {
-                        let width = match p {
-                            Primitive::U8 | Primitive::I8 => 8,
-                            Primitive::U16 | Primitive::I16 => 16,
-                            Primitive::U32 | Primitive::I32 => 32,
-                            Primitive::U64 | Primitive::I64 => 64,
-                            _ => 128,
-                        };
-                        width == 128 || *bits < (1u128 << width)
-                    }
-                    _ => false,
-                };
+                let valid = constant_valid(c, kind);
                 if !valid {
                     self.error(ViolationKind::TypeMismatch { entity: "constant" });
                 }

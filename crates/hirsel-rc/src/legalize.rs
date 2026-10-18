@@ -72,6 +72,8 @@ enum ScalarOp {
     /// `total_order`.
     Binary(BinaryOp),
     MulAdd,
+    /// `char.from_u32`: a scalar-value test of the u32 word into an `Option`.
+    CharFromU32,
 }
 
 /// What one call site legalizes into.
@@ -136,6 +138,9 @@ fn scalar_op(definition: &DefPath) -> Option<ScalarOp> {
         ([m], "bits" | "from_bits") if m == "f32" || m == "f64" => {
             S::Convert(ConvertMode::Reinterpret)
         }
+        // A char's layout is its scalar value's u32 word.
+        ([m], "to_u32") if m == "char" => S::Convert(ConvertMode::Widen),
+        ([m], "from_u32") if m == "char" => S::CharFromU32,
         ([m], name) if m == "float" => match name {
             "min" => S::Binary(BinaryOp::Min),
             "max" => S::Binary(BinaryOp::Max),
@@ -405,6 +410,9 @@ impl Lowering<'_> {
             (ScalarOp::Convert(ConvertMode::FloatToI32), &[x]) => {
                 self.to_i32(b, &site, x, normal, failure)?;
             }
+            (ScalarOp::CharFromU32, &[x]) => {
+                self.char_from_u32(b, &site, x, normal, failure)?;
+            }
             _ => {
                 return Err(PassError::Malformed(format!(
                     "{op:?} with {} arguments",
@@ -628,6 +636,60 @@ impl Lowering<'_> {
             no,
         };
         Ok(())
+    }
+
+    /// `char.from_u32`: `Some` exactly when `x` is a Unicode scalar value,
+    /// tested as Rust's `char::from_u32` does: `x ^ 0xD800` moves the
+    /// surrogates to 0..0x800, and subtracting 0x800 modulo 2^32 leaves
+    /// below 0x10F800 exactly the 0x10F800 scalar values.
+    fn char_from_u32(
+        &mut self,
+        b: BlockId,
+        site: &CallSite,
+        x: ValueId,
+        normal: EdgeId,
+        failure: FailureId,
+    ) -> Result<(), PassError> {
+        let result = site.result.expect("a result");
+        let word = self.ed.unit.values[x.index()].ty;
+        let surrogate = self.constant(b, word, 0xD800);
+        let moved = self.ed.value(word, Holding::Plain);
+        let never = self.like(failure, None);
+        self.ed.code[b.index()].push(Inst::Binary {
+            result: moved,
+            op: BinaryOp::BitXor,
+            left: x,
+            right: surrogate,
+            failure: never,
+        });
+        let minus = self.constant(b, word, 0xFFFF_F800);
+        let shifted = self.ed.value(word, Holding::Plain);
+        self.ed.code[b.index()].push(Inst::IntArith {
+            result: shifted,
+            flag: None,
+            op: BinaryOp::Add,
+            mode: ArithMode::Wrapping,
+            left: moved,
+            right: minus,
+        });
+        let count = self.constant(b, word, 0x10_F800);
+        let valid = self.bool_value()?;
+        let never = self.like(failure, None);
+        self.ed.code[b.index()].push(Inst::Binary {
+            result: valid,
+            op: BinaryOp::Lt,
+            left: shifted,
+            right: count,
+            failure: never,
+        });
+        let value = self.payload_value(result, OPTION_SOME)?;
+        self.ed.code[b.index()].push(Inst::Convert {
+            result: value,
+            flag: None,
+            operand: x,
+            mode: ConvertMode::Widen,
+        });
+        self.option(b, site, valid, true, value, normal, failure)
     }
 
     /// `float.to_i32`: the conversion and a switch on its status into

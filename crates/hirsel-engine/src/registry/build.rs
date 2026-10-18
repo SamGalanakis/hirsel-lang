@@ -436,7 +436,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     }
     for name in [
         "bool", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "f32", "f64",
-        "String", "Bytes",
+        "char", "String", "Bytes",
     ] {
         let mut b = Builder::new("").with_declarations(&out);
         let repr = b.ty(name, PassingMode::Take);
@@ -1278,6 +1278,7 @@ pub(super) fn primitive(n: &str) -> Option<Primitive> {
         "i128" => I128,
         "f32" => F32,
         "f64" => F64,
+        "char" => Char,
         "String" => String,
         "Bytes" => Bytes,
         "Never" => Never,

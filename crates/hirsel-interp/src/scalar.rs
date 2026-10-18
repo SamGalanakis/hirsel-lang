@@ -18,6 +18,11 @@ pub fn constant(value: &Constant, ty: &TypeKind) -> Result<Value, ScalarError> {
     match (value, ty) {
         (Unit, TypeKind::Tuple(fields)) if fields.is_empty() => Ok(Value::Unit),
         (Bool(v), TypeKind::Primitive(Primitive::Bool)) => Ok(Value::Bool(*v)),
+        (Integer(v), TypeKind::Primitive(Primitive::Char)) => u32::try_from(*v)
+            .ok()
+            .and_then(char::from_u32)
+            .map(Value::Char)
+            .ok_or(ScalarError::InvalidOperation),
         (Integer(v), TypeKind::Primitive(k)) => crate::value::Integer::new(*k, *v)
             .map(Value::Integer)
             .ok_or(ScalarError::InvalidOperation),
@@ -131,6 +136,9 @@ pub fn binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, ScalarEr
                     },
                 )
             }
+        }
+        (Value::Char(a), Value::Char(b)) => {
+            comparison(op, Some(a.cmp(&b))).ok_or(ScalarError::InvalidOperation)
         }
         (Value::F32(a), Value::F32(b)) => {
             let (a, b) = (f32::from_bits(a), f32::from_bits(b));

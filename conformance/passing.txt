@@ -1361,6 +1361,10 @@ conformance/LANG/LANG-7-callback-passing-inferred-bad.hir
 conformance/LANG/LANG-7-callback-passing-inferred-ok.hir
 conformance/LANG/LANG-7-casts-bad.hir
 conformance/LANG/LANG-7-casts-ok.hir
+conformance/LANG/LANG-7-char-arithmetic-bad.hir
+conformance/LANG/LANG-7-char-arithmetic-ok.hir
+conformance/LANG/LANG-7-char-from-integer-bad.hir
+conformance/LANG/LANG-7-char-from-integer-ok.hir
 conformance/LANG/LANG-7-distinct-construction-bad.hir
 conformance/LANG/LANG-7-distinct-construction-ok.hir
 conformance/LANG/LANG-7-distinct-extraction-bad.hir
@@ -3922,6 +3926,7 @@ conformance/SEM/SEM-3-byte-len-empty.hir
 conformance/SEM/SEM-3-byte-len-unicode.hir
 conformance/SEM/SEM-3-bytes-freeze-run.hir
 conformance/SEM/SEM-3-bytewise-order.hir
+conformance/SEM/SEM-3-char-run.hir
 conformance/SEM/SEM-3-character-literals-run.hir
 conformance/SEM/SEM-3-combining-graphemes.hir
 conformance/SEM/SEM-3-combining-scalars.hir
@@ -3947,6 +3952,8 @@ conformance/SEM/SEM-3-format-unique-bad.hir
 conformance/SEM/SEM-3-format-unique-ok.hir
 conformance/SEM/SEM-3-fstring-bool-radix-bad.hir
 conformance/SEM/SEM-3-fstring-bool-radix-ok.hir
+conformance/SEM/SEM-3-fstring-char-precision-bad.hir
+conformance/SEM/SEM-3-fstring-char-precision-ok.hir
 conformance/SEM/SEM-3-fstring-control-fill-bad.hir
 conformance/SEM/SEM-3-fstring-control-fill-ok.hir
 conformance/SEM/SEM-3-fstring-dynamic-run.hir

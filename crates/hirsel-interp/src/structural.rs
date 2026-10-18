@@ -241,11 +241,13 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                     Value::Sequence { .. } => 10,
                     Value::Map { .. } => 11,
                     Value::Set { .. } => 12,
+                    Value::Char(_) => 13,
                     _ => return Err(StructuralError::InvalidValue),
                 };
                 let mut bytes = vec![tag];
                 match v {
                     Value::Bool(b) => bytes.push(u8::from(*b)),
+                    Value::Char(c) => bytes.extend_from_slice(&u32::from(*c).to_le_bytes()),
                     Value::Integer(i) => {
                         bytes.extend_from_slice(&i.width().to_le_bytes());
                         bytes.push(u8::from(i.is_signed()));

@@ -37,6 +37,7 @@ unit_enum!(Primitive {
     I128,
     F32,
     F64,
+    Char,
     String,
     Bytes,
     Never
@@ -86,6 +87,7 @@ mod tests {
             (Primitive::I128, "I128"),
             (Primitive::F32, "F32"),
             (Primitive::F64, "F64"),
+            (Primitive::Char, "Char"),
             (Primitive::String, "String"),
             (Primitive::Bytes, "Bytes"),
             (Primitive::Never, "Never"),

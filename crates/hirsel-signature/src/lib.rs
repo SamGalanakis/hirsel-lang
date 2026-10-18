@@ -2487,6 +2487,7 @@ fn primitive(s: &str) -> Option<Primitive> {
         "i128" => Primitive::I128,
         "f32" => Primitive::F32,
         "f64" => Primitive::F64,
+        "char" => Primitive::Char,
         "String" => Primitive::String,
         "Bytes" => Primitive::Bytes,
         "Never" => Primitive::Never,

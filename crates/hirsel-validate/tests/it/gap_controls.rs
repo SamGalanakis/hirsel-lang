@@ -631,3 +631,21 @@ fn an_entry_body_has_no_capture_storage() {
         index: 1,
     }]);
 }
+
+/// A char constant is a Unicode scalar value: never a surrogate or a value
+/// above 0x10FFFF, whose bits no char literal can spell.
+#[test]
+fn a_char_constant_is_a_unicode_scalar_value() {
+    let constant = |value: u128| {
+        let mut f = Fixture::unit();
+        let p = f.slot(TypeKind::Primitive(Primitive::Char), Storage::Temporary);
+        f.assign(p, Rvalue::Constant(Constant::Integer(value)), 0);
+        f
+    };
+    for value in [0, 0x61, 0xd7ff, 0xe000, 0x10_ffff] {
+        constant(value).valid();
+    }
+    for value in [0xd800, 0xdfff, 0x11_0000, 1 << 40] {
+        constant(value).broken(vec![ViolationKind::TypeMismatch { entity: "constant" }]);
+    }
+}

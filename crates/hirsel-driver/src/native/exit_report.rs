@@ -156,7 +156,7 @@ pub(crate) fn derive(
                 use Primitive::*;
                 node.kind = match p {
                     Bool => 1,
-                    U8 | U16 | U32 | U64 | U128 => 2,
+                    U8 | U16 | U32 | U64 | U128 | Char => 2,
                     I8 | I16 | I32 | I64 | I128 => 3,
                     F32 | F64 => 4,
                     String => 5,

@@ -285,6 +285,7 @@ pub fn data_equal(a: &Value, b: &Value) -> bool {
         (Value::Unit, Value::Unit) => true,
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Integer(a), Value::Integer(b)) => a == b,
+        (Value::Char(a), Value::Char(b)) => a == b,
         (Value::String(a), Value::String(b)) => a == b,
         (Value::Bytes(a), Value::Bytes(b)) => a == b,
         // Functions/capabilities/resources are not data, even if handles match.

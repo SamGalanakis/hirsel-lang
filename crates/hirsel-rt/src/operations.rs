@@ -1216,6 +1216,8 @@ pub const SCALAR_INTRINSICS: &[&str] = &[
     "f32.from_bits",
     "f64.bits",
     "f64.from_bits",
+    "char.to_u32",
+    "char.from_u32",
 ];
 pub fn manifest(rows: impl IntoIterator<Item = OperationRow>) -> Result<Manifest, String> {
     let rows: Vec<_> = rows.into_iter().collect();
@@ -1356,6 +1358,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "f32.from_bits",
     "f64.bits",
     "f64.from_bits",
+    "char.from_u32",
+    "char.to_u32",
     "float.from_int",
     "float.max",
     "float.max_number",

@@ -161,6 +161,8 @@ pub enum Value {
     Integer(Integer),
     F32(u32),
     F64(u64),
+    /// A Unicode scalar value (`char`).
+    Char(char),
     String(String),
     Bytes(Vec<u8>),
     /// A Map's entries in insertion order; `arena` as for a Sequence (MEM-6):
@@ -365,6 +367,7 @@ impl Clone for Value {
                 Value::Integer(x) => Value::Integer(*x),
                 Value::F32(x) => Value::F32(*x),
                 Value::F64(x) => Value::F64(*x),
+                Value::Char(x) => Value::Char(*x),
                 Value::String(x) => Value::String(x.clone()),
                 Value::Bytes(x) => Value::Bytes(x.clone()),
                 Value::Handle { kind, id } => Value::Handle {

@@ -270,6 +270,7 @@ fn primitive_name(p: Primitive) -> &'static str {
         Primitive::I128 => "i128",
         Primitive::F32 => "f32",
         Primitive::F64 => "f64",
+        Primitive::Char => "char",
         Primitive::String => "String",
         Primitive::Bytes => "Bytes",
         Primitive::Never => "never",
@@ -281,7 +282,8 @@ fn primitive_scalar(p: Primitive) -> Option<ScalarKind> {
         Primitive::Bool => ScalarKind::Bool,
         Primitive::U8 => ScalarKind::U8,
         Primitive::U16 => ScalarKind::U16,
-        Primitive::U32 => ScalarKind::U32,
+        // A char is its scalar value's u32 word (0..=0x10FFFF, no surrogates).
+        Primitive::U32 | Primitive::Char => ScalarKind::U32,
         Primitive::U64 => ScalarKind::U64,
         Primitive::U128 => ScalarKind::U128,
         Primitive::I8 => ScalarKind::I8,

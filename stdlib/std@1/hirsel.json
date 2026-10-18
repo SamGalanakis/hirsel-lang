@@ -18,6 +18,12 @@
       ]
     },
     {
+      "path": "char.hir",
+      "module": [
+        "char"
+      ]
+    },
+    {
       "path": "priority_queue.hir",
       "module": [
         "priority_queue"

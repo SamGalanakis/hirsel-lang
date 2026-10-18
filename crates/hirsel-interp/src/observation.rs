@@ -105,6 +105,7 @@ pub enum ObservedNode {
     Integer(crate::Integer),
     F32(u32),
     F64(u64),
+    Char(char),
     String(String),
     Bytes(Vec<u8>),
     Handle {
@@ -158,6 +159,10 @@ impl ObservedValue {
                 }
                 Value::Integer(v) => {
                     nodes.push(O::Integer(*v));
+                    continue;
+                }
+                Value::Char(v) => {
+                    nodes.push(O::Char(*v));
                     continue;
                 }
                 Value::F32(v) => {

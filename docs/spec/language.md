@@ -187,11 +187,25 @@ implicit conversion (including between error types), no textual macro expansion,
 exception, no `any` and no cast. Typed compile-time generation is reserved
 ([CT-3](compile-time.md#ct-3-shapes)).
 
-The forms are `bool`, sized integers and floats, `String`, `Bytes`, aliases `type A = B`,
+The forms are `bool`, `char`, sized integers and floats, `String`, `Bytes`, aliases `type A = B`,
 single variants `type A = Only()`, records, variants, tuples (`(x,)` for one element),
 `box e`, sequence literals, and match arms with guards `Pattern if condition =>
 expression`; guards are pure and do not establish exhaustiveness. Bounds join with `+`;
 opaque bounds and authority are written explicitly.
+
+`char` is a Unicode scalar value: an integer in 0 to 0x10FFFF other than a surrogate
+(0xD800 to 0xDFFF), stored in 4 bytes, and plain, sendable and a key like the integers.
+It is not an integer. `==` and `!=` compare chars, and `<`, `<=`, `>` and `>=` order them
+by scalar value; every other operator on a `char`, a `u32` where a `char` is expected and
+a `char` where a `u32` is expected are LANG-7. `char.to_u32` and `char.from_u32`
+([core library](core-library.md#numeric-and-string-details)) convert explicitly, the
+latter returning `None` for a value that is not a scalar value.
+
+```hirsel
+fn later(a: char, b: char) -> bool { a > b }              // a + b is LANG-7
+fn code(c: char) -> u32 { char.to_u32(c) }
+fn scalar(n: u32) -> Option[char] { char.from_u32(n) }     // `n` alone is LANG-7
+```
 
 The modifiers `unique`, `once` and `sendable` precede the type they qualify and cover all
 of it, a function type's result included. A brand `of p` and a relation `in S` follow the

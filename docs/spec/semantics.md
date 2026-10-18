@@ -81,8 +81,8 @@ of `==`; it is checked with no expected type, so an unsuffixed literal hole need
 suffix. The f-string's `uses` are its holes' `uses`, because the std protocol operations
 use nothing, and it allocates only its builder, plus whatever its holes' `@format`
 functions use and allocate. A hole of type `String` is appended as is,
-and `bool`, the integers and the floats as `to_string` spells them. A character literal
-is a `u32` and formats as its number. A hole of a declared type with a `@format`
+and `bool`, `char`, the integers and the floats as `to_string` spells them: a `char` is its
+UTF-8 encoding. A character literal is a `u32` and formats as its number. A hole of a declared type with a `@format`
 association calls that association's function, below. Any other hole type, including
 `Bytes`, tuples, type parameters and declared types without `@format`, is SEM-3 naming
 the type; the message for a declared type names `@format`.
@@ -110,12 +110,12 @@ as a loop source's association grants loops ([SEM-4](#sem-4-iteration)).
 
 A hole may carry a format specification, such as `{n:08}`, `{mean:.2}` or `{name:>w$}`.
 Options of only fill, alignment and width pad the hole's text: the parser binds the
-builder's byte length before a plain append, then calls `text.pad_from` (`String`, `bool`
+builder's byte length before a plain append, then calls `text.pad_from` (`String`, `bool`, `char`
 and `@format` types, left-aligned by default) or `text.pad_number_from` (integers and
 floats, right-aligned by default) with that start, the fill, alignment and width. Any
 other options pass to the selected scalar or `String` module's `format_into_spec`. On a
-`@format` type, precision, sign, `#`, `0` and radix formats are SEM-3: its text pads
-like a string but has no numeric or truncating options. A width or precision written
+`char` or a `@format` type, precision, sign, `#`, `0` and radix formats are SEM-3: its text
+pads like a string but has no numeric or truncating options. A width or precision written
 `name$` is the value of the local or constant `name`, passed in place of the constant as
 an ordinary `u64` argument, so a name of another type is LANG-7; `{x:w$}`, `{x:.p$}` and
 `{x:>w$.p$}` are the same operations as their constant forms. Positional `1$` and `*`

@@ -87,7 +87,7 @@ impl Checker<'_> {
                             || !guarded.contains(&(index as u32)))
                             && (*usage != UseKind::Copy || self.plain_or_copyable(ty))
                     }
-                    (MatchPatternKind::Literal(c), Some(k)) => literal_valid(c, k),
+                    (MatchPatternKind::Literal(c), Some(k)) => crate::typing::constant_valid(c, k),
                     (MatchPatternKind::Tuple(fields), Some(TypeKind::Tuple(ts))) => {
                         fields.len() == ts.len()
                             && fields.iter().all(|(f, _)| (*f as usize) < ts.len())
@@ -594,24 +594,5 @@ impl Checker<'_> {
         }
         work::count_by(Counter::ValidateMatchWork, work);
         Ok(true)
-    }
-}
-fn literal_valid(c: &Constant, kind: &TypeKind) -> bool {
-    match (c, kind) {
-        (Constant::Unit, TypeKind::Tuple(ts)) => ts.is_empty(),
-        (Constant::Bool(_), TypeKind::Primitive(Primitive::Bool))
-        | (Constant::F32(_), TypeKind::Primitive(Primitive::F32))
-        | (Constant::F64(_), TypeKind::Primitive(Primitive::F64))
-        | (Constant::String(_), TypeKind::Primitive(Primitive::String))
-        | (Constant::Bytes(_), TypeKind::Primitive(Primitive::Bytes)) => true,
-        (Constant::Integer(bits), TypeKind::Primitive(p)) => match p {
-            Primitive::I8 | Primitive::U8 => *bits <= u8::MAX as u128,
-            Primitive::I16 | Primitive::U16 => *bits <= u16::MAX as u128,
-            Primitive::I32 | Primitive::U32 => *bits <= u32::MAX as u128,
-            Primitive::I64 | Primitive::U64 => *bits <= u64::MAX as u128,
-            Primitive::I128 | Primitive::U128 => true,
-            _ => false,
-        },
-        _ => false,
     }
 }

@@ -29,7 +29,8 @@ Integer kernels cover all ten sized types. The library division family rejects
 MIN/-1 even for mod; the ordinary `%` kernel retains SEM-1's zero exception.
 Float kernels separately round binary32/64 and canonicalize NaNs. The four
 bits/from_bits operations preserve all finite IEEE patterns, signed zeros and
-infinities. Numeric text and concrete reductions execute ordinary std source;
+infinities. `char.to_u32` and `char.from_u32` convert between `Value::Char` and
+u32 scalar values, `None` for surrogates and values above U+10FFFF. Numeric text and concrete reductions execute ordinary std source;
 there is no core formatter, float reduction dispatcher or shared host accumulator.
 
 String views preserve UTF-8 spelling. Grapheme segmentation and NFC normalization

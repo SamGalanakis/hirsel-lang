@@ -49,6 +49,9 @@ N fn ascii.is_lower(c: u32) -> bool uses {}
 N fn ascii.to_upper(c: u32) -> u32 uses {}
 N fn ascii.to_lower(c: u32) -> u32 uses {}
 N fn ascii.digit_value(c: u32) -> Option[u32] uses {}
+N fn char.from_ascii(byte: u8) -> Option[char] uses {}
+@preserves_unique(out) fn char.format_into(value: char, mut out: List[u8]) -> () uses {}
+fn char.to_string(value: char) -> unique String uses {}
 fn path.normalize(p: Path) -> Result[Path, path.PathError] uses {}
 fn path.join(base: Path, child: Path) -> Result[Path, path.PathError] uses {}
 fn path.parent(p: Path) -> Option[Path] uses {}
@@ -278,6 +281,13 @@ output. Only signed types accept a leading minus. No plus, whitespace, underscor
 or implicit radix prefix is accepted. Invalid radix or grammar yields `Invalid`,
 including invalid syntax following overflowing digits; otherwise overflow yields
 `OutOfRange`. Decimal `parse` delegates to the same kernel with radix 10.
+
+`char` has a module of its own ([the catalogue](#the-catalogue)): `format_into` appends
+the char's UTF-8 encoding, one to four bytes, `to_string` is that text, and `from_ascii`
+returns the char of a byte below 0x80 and `None` otherwise. A char has no `format`,
+`format_into_spec` or `parse`; f-string holes of type `char` take only fill, alignment
+and width ([SEM-3](semantics.md#sem-3-strings)). Its integer conversions are the core
+`char.to_u32` and `char.from_u32`.
 
 Floats format with the shortest decimal digits that round-trip, ties to even. Fixed
 notation is used for decimal exponents in [-6, 21), and `d[.ddd]e[-]N` otherwise (the

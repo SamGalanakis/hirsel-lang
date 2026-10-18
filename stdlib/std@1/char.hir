@@ -1,0 +1,37 @@
+// Appends the UTF-8 encoding of `value`, one to four bytes; to_string is that text.
+// Adapted from Rust core::char encode_utf8_raw; see third-party/NOTICES.md.
+@preserves_unique(out)
+pub fn format_into(value: char, mut out: List[u8]) -> () uses {} {
+  let code = core@1/char.to_u32(value)
+  if code < 0x80u32 {
+    core@1/list.push(mut out, core@1/int.narrow(code))
+  } else if code < 0x800u32 {
+    core@1/list.push(mut out, core@1/int.narrow(0xc0u32 | code >> 6))
+    core@1/list.push(mut out, core@1/int.narrow(0x80u32 | code & 0x3fu32))
+  } else if code < 0x10000u32 {
+    core@1/list.push(mut out, core@1/int.narrow(0xe0u32 | code >> 12))
+    core@1/list.push(mut out, core@1/int.narrow(0x80u32 | code >> 6 & 0x3fu32))
+    core@1/list.push(mut out, core@1/int.narrow(0x80u32 | code & 0x3fu32))
+  } else {
+    core@1/list.push(mut out, core@1/int.narrow(0xf0u32 | code >> 18))
+    core@1/list.push(mut out, core@1/int.narrow(0x80u32 | code >> 12 & 0x3fu32))
+    core@1/list.push(mut out, core@1/int.narrow(0x80u32 | code >> 6 & 0x3fu32))
+    core@1/list.push(mut out, core@1/int.narrow(0x80u32 | code & 0x3fu32))
+  }
+}
+
+pub fn to_string(value: char) -> unique String uses {} {
+  let mut out: List[u8] = []
+  format_into(value, mut out)
+  text.finish_valid(take out)
+}
+
+// The char of an ASCII byte; None for a byte above 0x7F.
+@noalloc
+pub fn from_ascii(byte: u8) -> Option[char] uses {} {
+  if byte < 0x80 {
+    core@1/char.from_u32(core@1/int.widen(byte))
+  } else {
+    None()
+  }
+}

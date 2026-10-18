@@ -82,6 +82,7 @@ impl QueryEngine {
                 Value::Unit => ValueKind::Constant(Constant::Unit),
                 Value::Bool(v) => ValueKind::Constant(Constant::Bool(v)),
                 Value::Integer(v) => ValueKind::Constant(Constant::Integer(v.bits())),
+                Value::Char(v) => ValueKind::Constant(Constant::Integer(v.into())),
                 Value::F32(v) => ValueKind::Constant(Constant::F32(v)),
                 Value::F64(v) => ValueKind::Constant(Constant::F64(v)),
                 Value::String(v) => ValueKind::Constant(Constant::String(v)),

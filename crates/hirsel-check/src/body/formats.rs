@@ -22,6 +22,7 @@ fn append_operation(primitive: Primitive) -> Option<(&'static str, &'static str,
         I128 => "i128",
         F32 => "f32",
         F64 => "f64",
+        Char => "char",
         _ => return None,
     };
     Some((module, "format_into", [0, 1]))
@@ -38,7 +39,10 @@ fn std_operation(module: &str, name: &str) -> ast::DefPath {
 }
 /// Integers and floats pad on the right by default, other text on the left.
 fn numeric(primitive: Primitive) -> bool {
-    !matches!(primitive, Primitive::String | Primitive::Bool)
+    !matches!(
+        primitive,
+        Primitive::String | Primitive::Bool | Primitive::Char
+    )
 }
 impl Checker<'_, '_> {
     /// An append checks its value first, with no expected type, because the
@@ -150,6 +154,15 @@ impl Checker<'_, '_> {
                 let (module, name, ordinals) = append_operation(primitive).unwrap();
                 (std_operation(module, name), ordinals.to_vec())
             }
+            (Some(Primitive::Char), _, Some(_)) => {
+                self.report(
+                    const { RuleId::of("SEM-3") },
+                    self.span(value),
+                    "a char hole takes only fill, alignment and width; precision, sign, `#`, \
+                     `0` and radix formats apply to bool, integers, floats and String",
+                );
+                return self.recover_format(id, callee, &arguments, expected, frame, 1);
+            }
             (Some(primitive), _, Some(spec)) => {
                 let integer =
                     numeric(primitive) && !matches!(primitive, Primitive::F32 | Primitive::F64);
@@ -196,7 +209,7 @@ impl Checker<'_, '_> {
                     self.span(value),
                     &format!(
                         "an f-string hole of type `{}` has no text formatting; String, bool, \
-                         integers and floats format, {}",
+                         char, integers and floats format, {}",
                         self.type_spelling(ty),
                         if named {
                             "and a declared type formats when it names its function with \

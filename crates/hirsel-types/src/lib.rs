@@ -60,6 +60,8 @@ pub enum Primitive {
     I128,
     F32,
     F64,
+    /// A Unicode scalar value: 0..=0x10FFFF excluding surrogates (LANG-2, SEM-3).
+    Char,
     String,
     Bytes,
     Never,

@@ -70,6 +70,8 @@ bytes.slice	e1921884cdd5a64d5d0b02b30773a2e3c6760207850cefb903c0c9e3928637bc	0:b
 channel.open	af6f7bb2ca54ef7ab669b42ece35e28a76a06fae8e19352062f5d1d5ba50f5b5	0:b:n->[0]
 channel.receive	1eaff70e76ac427b45ce141dba08321fa7bd547ed2b03a8c38dbb33a1739972a	0:b:n;1:m:[0]->[0]
 channel.send	74319a6a9b51c38b9c0bc0a3b335b27cd8b79ddee2d0ec184f4dd6c6a14c7b79	0:b:n;1:m:[0];2:t:[0]->[0]
+char.from_u32	ee8e1283f62a5acc1f00457ff12d1caa3ada232528f747c5e7948067115eea8b	0:b:n->n
+char.to_u32	19a8a0254d853cc60a6df197cb432cfc59cde66d567ddad5cfe22764387153ed	0:b:n->n
 child.close_stdin	b568b31ba747499d885adb50d8a57307b15901e6519e5acdf27ab115ac30fc30	0:b:n;1:m:n->n
 child.kill	8f688126c3eb6ff59a192478fb6acd1bc17b0f3299a2bc0fbc881b06326a368c	0:b:n;1:m:n->n
 child.read_stderr	97e781f5193793b0d61d7cff4101b088c580323db896540a1f178f3e6b732b78	0:b:n;1:m:n;2:m:n;3:b:n->n

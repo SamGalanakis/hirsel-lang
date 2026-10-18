@@ -37,6 +37,7 @@ impl Checker<'_> {
                     Primitive::I128 => "i128",
                     Primitive::F32 => "f32",
                     Primitive::F64 => "f64",
+                    Primitive::Char => "char",
                     _ => return None,
                 }
                 .into(),

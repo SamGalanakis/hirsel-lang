@@ -47,6 +47,7 @@ pub enum Primitive {
     I128,
     F32,
     F64,
+    Char,
     String,
     Bytes,
     Never,
@@ -65,6 +66,7 @@ snapshot_enum!(Primitive {
     I128,
     F32,
     F64,
+    Char,
     String,
     Bytes,
     Never

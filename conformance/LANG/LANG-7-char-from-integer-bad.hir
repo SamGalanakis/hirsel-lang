@@ -1,0 +1,6 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 5
+// A u32 is not a char: there is no implicit conversion.
+fn scalar(n: u32) -> char {
+  n
+}

@@ -86,6 +86,8 @@ pub fn returned_error(
             } else {
                 v.bits().to_string()
             }),
+            // The scalar value, as the native report reads a char's word.
+            Value::Char(v) => out.push_str(&u32::from(*v).to_string()),
             Value::F32(v) => out.push_str(&format!("{:?}", f32::from_bits(*v))),
             Value::F64(v) => out.push_str(&format!("{:?}", f64::from_bits(*v))),
             Value::String(v) if top => out.push_str(v),

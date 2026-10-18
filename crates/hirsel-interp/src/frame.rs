@@ -377,6 +377,7 @@ impl Frame {
                         (Constant::Unit, Value::Unit) => true,
                         (Constant::Bool(a), Value::Bool(b)) => a == b,
                         (Constant::Integer(a), Value::Integer(b)) => *a == b.bits(),
+                        (Constant::Integer(a), Value::Char(b)) => *a == u128::from(*b),
                         (Constant::F32(a), Value::F32(b)) => {
                             f32::from_bits(*a) == f32::from_bits(*b)
                         }

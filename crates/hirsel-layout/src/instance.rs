@@ -336,6 +336,7 @@ impl KeyEncoder<'_> {
                     P::I128 => "i128",
                     P::F32 => "f32",
                     P::F64 => "f64",
+                    P::Char => "char",
                     P::String => "String",
                     P::Bytes => "Bytes",
                     P::Never => "never",

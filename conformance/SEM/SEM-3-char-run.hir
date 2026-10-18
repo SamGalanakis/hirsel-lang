@@ -1,0 +1,61 @@
+// rule: SEM-3
+// expect: run
+// A char is a Unicode scalar value. char.from_u32 accepts exactly the scalar
+// values, char.to_u32 reads one back, == and < compare scalar values, and an
+// f-string hole of type char appends its UTF-8 encoding, padded by scalars.
+// Conversion and encoding vectors from Rust's coretests char.rs.
+fn scalar(t: Test, n: u32) -> char {
+  match char.from_u32(n) {
+    Some(c) => c,
+    None() => test.fail(t),
+  }
+}
+
+fn valid(n: u32) -> bool {
+  match char.from_u32(n) {
+    Some(c) => char.to_u32(c) == n,
+    None() => false,
+  }
+}
+
+fn utf8(c: char) -> List[u8] {
+  let mut out: List[u8] = []
+  char.format_into(c, mut out)
+  out
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, valid(0) && valid(0x61) && valid(0xd7ff) && valid(0xe000))
+  test.check(t, valid(0x10ffff) && !valid(0xd800) && !valid(0xdfff))
+  test.check(t, !valid(0x110000) && !valid(0xffffffff))
+  let x = scalar(t, 0x78)
+  let e = scalar(t, 0xe9)
+  let m = scalar(t, 0xa66e)
+  let p = scalar(t, 0x1f4a9)
+  test.check(t, utf8(x) == [0x78])
+  test.check(t, utf8(e) == [0xc3, 0xa9])
+  test.check(t, utf8(m) == [0xea, 0x99, 0xae])
+  test.check(t, utf8(p) == [0xf0, 0x9f, 0x92, 0xa9])
+  test.check(t, f"{x}{e}{m}{p}" == "x\u{e9}\u{a66e}\u{1f4a9}")
+  test.check(t, char.to_string(p) == "\u{1f4a9}")
+  test.check(t, f"[{e:>3}][{e:<3}][{e:*^5}]" == "[  \u{e9}][\u{e9}  ][**\u{e9}**]")
+  test.check(t, f"[{e:3}]" == "[\u{e9}  ]")
+  test.check(t, x < e && e < m && m < p && !(p < x) && x <= x && p >= m)
+  test.check(t, x == scalar(t, 0x78) && x != e)
+  test.check(
+    t,
+    char.from_ascii(0x78) == Some(x) && char.from_ascii(0) == char.from_u32(0)
+  )
+  test.check(t, char.from_ascii(0x80) == None() && char.from_ascii(0xff) == None())
+  let mut counts: Map[char, u64] = map.empty()
+  let scalars: List[u32] = [0x78, 0xe9, 0x78, 0x1f4a9]
+  for n in scalars {
+    let c = scalar(t, n)
+    match map.get(counts, c) {
+      Some(k) => map.insert(mut counts, c, k + 1),
+      None() => map.insert(mut counts, c, 1),
+    }
+  }
+  test.check(t, map.get(counts, x) == Some(2u64) && map.get(counts, p) == Some(1u64))
+  Ok(())
+}

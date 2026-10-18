@@ -181,6 +181,8 @@ N fn f32.bits(value: f32) -> u32
 N fn f32.from_bits(value: u32) -> f32
 N fn f64.bits(value: f64) -> u64
 N fn f64.from_bits(value: u64) -> f64
+N fn char.to_u32(c: char) -> u32
+N fn char.from_u32(value: u32) -> Option[char]
 N fn string.byte_len(s: String) -> u64
 N fn string.scalars(s: String) -> ScalarView in s
 N fn string.positions(s: String) -> PositionView of s in s
@@ -796,6 +798,12 @@ NaN is the positive quiet canonical NaN. `f32.bits` and `f64.bits` expose the IE
 binary32 and binary64 representation, and `from_bits` reinterprets an unsigned word of the
 same width. These allocate nothing, preserve signed zero, infinities and every finite bit
 pattern, and canonicalize NaNs as [SEM-2](semantics.md#sem-2-floats) requires.
+
+`char.to_u32` returns a `char`'s Unicode scalar value. `char.from_u32` returns `Some` of
+the `char` whose scalar value is its argument, and `None` for a surrogate (0xD800 to
+0xDFFF) or a value above 0x10FFFF. Neither allocates or fails. These are the only
+conversions between `char` and the integers; the standard library's `char` module builds
+the rest on them ([scalars](std-library.md#scalars)).
 
 The library reductions `f32.sum` and `f64.sum` repeatedly add adjacent pairs
 left to right, carry an odd tail, and repeat until one value is left; an empty sum is +0.

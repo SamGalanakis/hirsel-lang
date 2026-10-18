@@ -403,7 +403,7 @@ fn scalar_of(p: Primitive) -> ScalarKind {
         Primitive::Bool => ScalarKind::Bool,
         Primitive::U8 => ScalarKind::U8,
         Primitive::U16 => ScalarKind::U16,
-        Primitive::U32 => ScalarKind::U32,
+        Primitive::U32 | Primitive::Char => ScalarKind::U32,
         Primitive::U64 => ScalarKind::U64,
         Primitive::U128 => ScalarKind::U128,
         Primitive::I8 => ScalarKind::I8,

@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 5
+// A char hole takes only fill, alignment and width.
+fn label(c: char) -> String {
+  f"{c:.2}"
+}

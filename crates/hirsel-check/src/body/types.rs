@@ -1605,7 +1605,7 @@ impl Checker<'_, '_> {
                 if !self.numeric(a)
                     && !matches!(
                         self.kind(a),
-                        TypeKind::Primitive(Primitive::String | Primitive::Bytes)
+                        TypeKind::Primitive(Primitive::Char | Primitive::String | Primitive::Bytes)
                     )
                 {
                     self.report(

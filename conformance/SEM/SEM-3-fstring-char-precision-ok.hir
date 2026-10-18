@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: accept
+// Accepted twin: fill, alignment and width pad a char by scalars.
+fn label(c: char) -> String {
+  f"{c:*>4}"
+}

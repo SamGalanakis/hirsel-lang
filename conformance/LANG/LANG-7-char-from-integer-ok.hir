@@ -1,0 +1,7 @@
+// rule: LANG-7
+// expect: accept
+// Accepted twin: char.from_u32 checks the value, None for a surrogate or
+// a value above 0x10FFFF.
+fn scalar(n: u32) -> Option[char] {
+  char.from_u32(n)
+}

@@ -2926,10 +2926,13 @@ fn execute_terminator(
                     Some(*variant)
                 }
                 Value::Integer(i) => u32::try_from(i.bits()).ok(),
+                Value::Char(c) => Some(u32::from(*c)),
                 Value::Bool(b) => Some(u32::from(*b)),
                 _ => {
                     value.discard();
-                    return Err(invalid("Switch requires an integer, bool or variant tag").into());
+                    return Err(
+                        invalid("Switch requires an integer, char, bool or variant tag").into(),
+                    );
                 }
             };
             value.discard();

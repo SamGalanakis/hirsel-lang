@@ -1369,6 +1369,14 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "f32.from_bits" | "f64.from_bits" => {
         float::from_bits(int(arg(a, 0)?)?).ok_or_else(|| invalid("expected u32 or u64"))?
     },
+    Primitive: "char.to_u32" => match arg(a, 0)? {
+        Value::Char(c) => u32_value((*c).into()),
+        _ => return Err(invalid("expected char")),
+    },
+    Primitive: "char.from_u32" => {
+        let n = u32::try_from(int(arg(a, 0)?)?.bits()).map_err(|_| invalid("expected u32"))?;
+        char::from_u32(n).map_or_else(none, |c| some(Value::Char(c)))
+    },
     Primitive: "float.min" | "float.max" | "float.min_number" | "float.max_number" => {
                 float::minmax(&call.path.0.name, arg(a, 0)?.clone(), arg(a, 1)?.clone())
                     .ok_or_else(|| invalid("float type mismatch"))?
@@ -1918,6 +1926,10 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
             Value::Tuple(items) => {
                 out.push(9);
                 fields(&mut out, &mut work, items);
+            }
+            Value::Char(c) => {
+                out.push(21);
+                out.extend_from_slice(&u32::from(*c).to_le_bytes());
             }
             Value::F32(b) => {
                 out.push(10);
