@@ -281,6 +281,13 @@ class NativePrograms(unittest.TestCase):
                  'conformance/MEM/rejected.hir', 'conformance/MEM/deleted.hir'],
                 {crate}, self.root), ['conformance/MEM/soa.hir'])
 
+    def test_each_native_producer_selects_changed_test_suites(self):
+        (self.root / 'conformance/MEM/suite.hir').write_text('// expect: test\n')
+        for crate in impact.NATIVE_PARITY_CRATES:
+            self.assertEqual(impact.native_programs(
+                ['conformance/MEM/suite.hir', 'conformance/MEM/suite.hir.json'],
+                {crate}, self.root), ['conformance/MEM/suite.hir'])
+
     def test_producer_without_changed_programs_uses_bounded_smoke_controls(self):
         self.assertEqual(impact.native_programs(['crates/hirsel-llvm/src/emit.rs'],
                          {'hirsel-llvm'}, self.root), ['smoke-a.hir', 'smoke-b.hir'])

@@ -103,7 +103,7 @@ def native_programs(paths, crates, root):
                        and path.endswith(('.hir', '.hir.json'))
                        and (root / path.removesuffix('.json')).is_file()
                        and (path.startswith('native-tests/') or
-                            any(line.startswith(('// expect: run', '// expect: fail', '// expect: blocked'))
+                            any(line.startswith(('// expect: run', '// expect: fail', '// expect: blocked', '// expect: test'))
                                 for line in (root / path.removesuffix('.json')).read_text().splitlines()))})
     if programs:
         return programs

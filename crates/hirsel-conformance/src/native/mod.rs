@@ -459,6 +459,51 @@ fn run_test_suite(
     toolchain: &Toolchain,
     dir: &Path,
 ) -> CaseResult {
+    visit_test_suite(
+        id,
+        source,
+        path,
+        dir,
+        matrix
+            .first()
+            .map(|c| c.options.launch.clone())
+            .unwrap_or_default(),
+        |validated, test, reference, test_dir| {
+            let mut configurations = matrix.to_vec();
+            for c in &mut configurations {
+                c.options.launch.test_seed = test.seed;
+            }
+            differential(
+                validated,
+                &test.entry,
+                reference,
+                &configurations,
+                toolchain,
+                test_dir,
+            )
+            .into_iter()
+            .zip(matrix)
+            .map(|((_, outcome), c)| (c.name(), Class::of(c), outcome))
+            .collect()
+        },
+    )
+}
+
+/// Share package checking, isolated reference launches and outcome aggregation
+/// between differential execution and real-Io record/replay.
+fn visit_test_suite(
+    id: &str,
+    source: &str,
+    path: Option<&Path>,
+    dir: &Path,
+    launch: hirsel_driver::native::LaunchInputs,
+    probe: impl Fn(
+        &hirsel_engine::ValidatedNativeInput,
+        &hirsel_driver::testing::Test,
+        &Observation,
+        &Path,
+    ) -> Vec<(String, Class, Outcome)>,
+) -> CaseResult {
     let run = || -> Result<CaseResult, String> {
         let fallback = dir.join("test-suite.hir");
         if path.is_none() {
@@ -481,19 +526,17 @@ fn run_test_suite(
             .engine
             .import_native_input(input)
             .map_err(|e| format!("import: {e:?}"))?;
-        let mut outcomes: Vec<_> = matrix
-            .iter()
-            .map(|c| (c.name(), Class::of(c), Outcome::Agree))
-            .collect();
+        let mut outcomes: Vec<(String, Class, Outcome)> = Vec::new();
         let mut first_reference = None;
         for (index, test) in tests.iter().enumerate() {
             let config = hirsel_engine::RunConfiguration {
                 entry: test.entry.clone(),
-                hash_seed: 0,
+                hash_seed: launch.hash_seed,
                 inputs: vec![],
             };
             let simulation = hirsel_engine::SimulationConfig {
                 grants: Default::default(),
+                random_seed: launch.random_seed,
                 test_seed: test.seed,
                 ..Default::default()
             };
@@ -508,22 +551,16 @@ fn run_test_suite(
             if reference.exit_code != Some(0) {
                 return Err(format!("{} failed: {reference:?}", test.definition));
             }
-            let mut configurations = matrix.to_vec();
-            for c in &mut configurations {
-                c.options.launch.test_seed = test.seed;
-            }
             let test_dir = dir.join(format!("test-{index}"));
             std::fs::create_dir_all(&test_dir).map_err(|e| e.to_string())?;
-            for ((_, _, current), (_, result)) in outcomes.iter_mut().zip(differential(
-                &validated,
-                &test.entry,
-                &reference,
-                &configurations,
-                toolchain,
-                &test_dir,
-            )) {
-                if matches!(current, Outcome::Agree) {
-                    *current = result;
+            let results = probe(&validated, test, &reference, &test_dir);
+            if outcomes.is_empty() {
+                outcomes = results;
+            } else {
+                for ((_, _, current), (_, _, result)) in outcomes.iter_mut().zip(results) {
+                    if matches!(current, Outcome::Agree) {
+                        *current = result;
+                    }
                 }
             }
             if first_reference.is_none() {
@@ -561,6 +598,31 @@ pub fn replay_source_with_config(
     dir: &Path,
     launch: hirsel_driver::native::LaunchInputs,
 ) -> CaseResult {
+    if source.lines().any(|line| line.trim() == "// expect: test") {
+        return visit_test_suite(
+            id,
+            source,
+            path,
+            dir,
+            launch.clone(),
+            |validated, test, reference, test_dir| {
+                let mut inputs = launch.clone();
+                inputs.test_seed = test.seed;
+                vec![(
+                    "x86_64/real-io-record-and-replay".into(),
+                    Class::Llvm,
+                    hirsel_driver::native::real_io_replay_with_config(
+                        validated,
+                        &test.entry,
+                        reference,
+                        toolchain,
+                        test_dir,
+                        inputs,
+                    ),
+                )]
+            },
+        );
+    }
     let mut engine = hirsel_engine::QueryEngine::new(
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),

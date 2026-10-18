@@ -414,4 +414,4 @@ including an empty prefix. Ordinary and checked interpretation must agree.
 smoke matrix, with real Io record/replay. `tools/gate` gives this and Cranelift
 parity the same changed-program filters; an empty selection fails.
 
-`// expect: test` checks and runs all `@test` functions with ordinary and checked interpretation. Native matrices run every selected test independently under every configured engine, using its stable default seed. A suite selecting no tests fails conformance.
+`// expect: test` checks and runs all `@test` functions with ordinary and checked interpretation. Native matrices run every selected test independently under every configured engine, using its stable default seed. Smoke record/replay records and replays each test independently. A suite selecting no tests fails conformance.
