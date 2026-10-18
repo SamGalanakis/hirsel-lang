@@ -156,6 +156,12 @@
           "name": "serde_json",
           "req": "^1",
           "uses_default_features": true
+        },
+        {
+          "kind": "dev",
+          "name": "rustls",
+          "req": "=0.23.46",
+          "uses_default_features": false
         }
       ],
       "name": "hirsel-cli"
@@ -1799,6 +1805,12 @@
     },
     {
       "dependencies": [
+        {
+          "kind": null,
+          "name": "rustls",
+          "req": "=0.23.46",
+          "uses_default_features": false
+        },
         {
           "kind": null,
           "name": "rustls-pki-types",

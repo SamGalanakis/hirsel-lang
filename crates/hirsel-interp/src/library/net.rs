@@ -56,6 +56,8 @@ pub(super) struct ScriptListener {
     pub net: u64,
     world: u64,
     address: SocketAddr,
+    /// Opened under a ListenTls rule alone: its streams carry no plaintext before tls.accept.
+    tls_only: bool,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ScriptStream {
@@ -73,7 +75,7 @@ pub(super) struct ScriptStream {
     read_closed: bool,
     write_closed: bool,
     /// An accepted stream's client index and listen address: its `Expect`
-    /// mismatches fail the test instead of resetting.
+    /// mismatches fail the test instead of resetting. Its `peer` is the client's TLS.
     client: Option<(usize, SocketAddr)>,
     mismatch: Option<String>,
 }
@@ -340,31 +342,35 @@ fn listener(v: &Value) -> Result<NetListener, Error> {
         clients: collection::elements(f[1], BuiltinType::List)?
             .iter()
             .map(|c| {
-                let f = fields(c, "NetClient", 2)?;
+                let f = fields(c, "NetClient", 3)?;
                 let from = socket_addr(f[0])?;
                 Ok(NetClient {
                     address: from.ip().to_string(),
                     port: from.port(),
-                    steps: steps(f[1])?,
+                    tls: peer_tls(f[1])?,
+                    steps: steps(f[2])?,
                 })
             })
             .collect::<Result<_, Error>>()?,
     })
 }
-fn peer(v: &Value) -> Result<NetPeer, Error> {
-    let f = fields(v, "NetPeer", 5)?;
-    let (tag, tls) = variant_fields(f[3])?;
-    let tls = match (tag, tls) {
+fn peer_tls(v: &Value) -> Result<PeerTls, Error> {
+    let (tag, tls) = variant_fields(v)?;
+    Ok(match (tag, tls) {
         (0, []) => PeerTls::Plain,
         (1, [Some(names)]) => PeerTls::Certificate(
             collection::elements(names, BuiltinType::List)?
                 .iter()
-                .map(|v| text(v).map(str::to_owned))
+                .map(|n| text(n).map(str::to_owned))
                 .collect::<Result<_, _>>()?,
         ),
         (2, [Some(failure)]) => PeerTls::Fails(tls_failure(failure)?),
         _ => return Err(invalid("PeerTls representation")),
-    };
+    })
+}
+fn peer(v: &Value) -> Result<NetPeer, Error> {
+    let f = fields(v, "NetPeer", 5)?;
+    let tls = peer_tls(f[3])?;
     let mut connections = vec![];
     for c in collection::elements(f[4], BuiltinType::List)? {
         let (tag, params) = variant_fields(&c)?;
@@ -435,14 +441,20 @@ fn rules(v: &Value) -> Result<Vec<NetRule>, Error> {
         .map(|v| {
             let f = fields(v, "NetRule", 3)?;
             let (op, payload) = variant_fields(f[2])?;
-            if !payload.is_empty() || op > 4 {
+            if !payload.is_empty() || op > 5 {
                 return Err(invalid("NetOperation representation"));
             }
             Ok(NetRule {
                 address: text(f[0])?.into(),
                 service: port(f[1])?.to_string(),
-                operation: ["connect", "connect_tls", "listen", "udp_bind", "udp_peer"]
-                    [op as usize]
+                operation: [
+                    "connect",
+                    "connect_tls",
+                    "listen",
+                    "udp_bind",
+                    "udp_peer",
+                    "listen_tls",
+                ][op as usize]
                     .into(),
             })
         })
@@ -798,7 +810,8 @@ impl Simulation {
                             p.address == r.address
                                 && p.service == r.service
                                 && (p.operation == r.operation
-                                    || p.operation == "connect" && r.operation == "connect_tls")
+                                    || p.operation == "connect" && r.operation == "connect_tls"
+                                    || p.operation == "listen" && r.operation == "listen_tls")
                         })
                     }) {
                         Err(NetFault::NotGranted)
@@ -904,9 +917,14 @@ impl Simulation {
                     let mut address = socket_addr(arg(a, 1)?)?;
                     let host = address.ip().to_string();
                     let service = address.port().to_string();
-                    if !ruleset.iter().any(|r| {
-                        r.address == host && r.service == service && r.operation == "listen"
-                    }) {
+                    // A Listen rule is the wider grant and wins over ListenTls.
+                    let granted = |operation: &str| {
+                        ruleset.iter().any(|r| {
+                            r.address == host && r.service == service && r.operation == operation
+                        })
+                    };
+                    let tls_only = !granted("listen");
+                    if tls_only && !granted("listen_tls") {
                         Err(NetFault::NotGranted)
                     } else {
                         if address.port() == 0 {
@@ -951,6 +969,7 @@ impl Simulation {
                                     net,
                                     world,
                                     address,
+                                    tls_only,
                                 },
                             );
                             Ok(listener)
@@ -970,7 +989,9 @@ impl Simulation {
                     {
                         break 'operation Err(injected(fault)?);
                     }
-                    let address = self.net_listeners[&id].address;
+                    let ScriptListener {
+                        address, tls_only, ..
+                    } = self.net_listeners[&id];
                     let w = self.net_worlds.get_mut(&world).unwrap();
                     let next = w
                         .listeners
@@ -999,8 +1020,8 @@ impl Simulation {
                         net,
                         client.address,
                         client.port,
-                        PeerTls::Plain,
-                        false,
+                        client.tls,
+                        tls_only,
                         client.steps,
                     );
                     script.client = Some((index, address));
@@ -1037,24 +1058,29 @@ impl Simulation {
                     }
                     let access = {
                         let s = &self.net_streams[&id];
-                        let invalid_tls = if name == "tls.connect" {
-                            let invalid_roots = match variant_fields(arg(a, 3)?)? {
-                                (0, []) => false,
-                                (1, [Some(pem)]) => {
-                                    hirsel_run_config::tls::pem_roots(bytes(pem)?).is_none()
-                                }
-                                _ => return Err(invalid("TlsRoots representation")),
-                            };
-                            invalid_roots
-                                || hirsel_run_config::tls::server_name(text(arg(a, 2)?)?).is_none()
-                        } else {
-                            false
+                        let invalid_tls = match name {
+                            "tls.connect" => {
+                                let invalid_roots = match variant_fields(arg(a, 3)?)? {
+                                    (0, []) => false,
+                                    (1, [Some(pem)]) => {
+                                        hirsel_run_config::tls::pem_roots(bytes(pem)?).is_none()
+                                    }
+                                    _ => return Err(invalid("TlsRoots representation")),
+                                };
+                                invalid_roots
+                                    || hirsel_run_config::tls::server_name(text(arg(a, 2)?)?)
+                                        .is_none()
+                            }
+                            "tls.accept" => identity(arg(a, 2)?)?.is_none(),
+                            _ => false,
                         };
-                        if name == "tls.connect" && (s.tls || invalid_tls) {
+                        let upgrade = matches!(name, "tls.connect" | "tls.accept");
+                        if upgrade && (s.tls || invalid_tls) {
                             Err(NetFault::InvalidInput)
                         } else if name == "tls.connect"
                             && s.requires_tls
-                            && text(arg(a, 2)?)? != s.host
+                            && (s.client.is_some() || text(arg(a, 2)?)? != s.host)
+                            || name == "tls.accept" && s.client.is_none()
                             || s.requires_tls
                                 && !s.tls
                                 && matches!(
@@ -1078,10 +1104,11 @@ impl Simulation {
                             | "net.write"
                             | "net.write_all"
                             | "tls.connect"
+                            | "tls.accept"
                             | "tls.close"
                     );
                     if let Err(e) = access {
-                        if matches!(name, "tls.connect" | "tls.close")
+                        if matches!(name, "tls.connect" | "tls.accept" | "tls.close")
                             && let Some(report) = self.close_net(id)
                         {
                             break 'operation Err(NetFault::Unmet(report));
@@ -1089,7 +1116,7 @@ impl Simulation {
                         break 'operation Err(e);
                     }
                     if let Some(cause) = cancellation.filter(|_| blocking) {
-                        if matches!(name, "tls.connect" | "tls.close")
+                        if matches!(name, "tls.connect" | "tls.accept" | "tls.close")
                             && let Some(report) = self.close_net(id)
                         {
                             break 'operation Err(NetFault::Unmet(report));
@@ -1105,7 +1132,7 @@ impl Simulation {
                     let s = self.net_streams.get_mut(&id).unwrap();
                     s.advance();
                     if matches!(s.steps.front(), Some(NetStep::Reset)) {
-                        if matches!(name, "tls.connect" | "tls.close")
+                        if matches!(name, "tls.connect" | "tls.accept" | "tls.close")
                             && let Some(report) = self.close_net(id)
                         {
                             break 'operation Err(NetFault::Unmet(report));
@@ -1131,7 +1158,7 @@ impl Simulation {
                                 }
                             }
                         }
-                        if matches!(name, "tls.connect" | "tls.close")
+                        if matches!(name, "tls.connect" | "tls.accept" | "tls.close")
                             && let Some(report) = self.close_net(id)
                         {
                             break 'operation Err(NetFault::Unmet(report));
@@ -1148,6 +1175,9 @@ impl Simulation {
                                 } else {
                                     NetFault::Blocked
                                 })
+                            } else if s.client.is_some() {
+                                // An accepted stream's client runs no TLS server.
+                                Err(NetFault::Tls(TlsFailure::HandshakeFailure))
                             } else {
                                 match &s.peer {
                                     PeerTls::Certificate(names)
@@ -1158,6 +1188,43 @@ impl Simulation {
                                     }
                                     PeerTls::Certificate(_) => {
                                         Err(NetFault::Tls(TlsFailure::NameMismatch))
+                                    }
+                                    PeerTls::Plain => {
+                                        Err(NetFault::Tls(TlsFailure::HandshakeFailure))
+                                    }
+                                    PeerTls::Fails(failure) => Err(NetFault::Tls(*failure)),
+                                }
+                            };
+                            if outcome.as_ref().is_err_and(|e| *e != NetFault::Blocked)
+                                && let Some(report) = self.close_net(id)
+                            {
+                                break 'operation Err(NetFault::Unmet(report));
+                            }
+                            outcome
+                        }
+                        "tls.accept" => {
+                            let identity = identity(arg(a, 2)?)?
+                                .ok_or_else(|| invalid("identity checked before accept"))?;
+                            let s = self.net_streams.get_mut(&id).unwrap();
+                            let outcome = if matches!(s.steps.front(), Some(NetStep::Stall)) {
+                                Err(if s.read_timeout.is_some() {
+                                    NetFault::TimedOut
+                                } else {
+                                    NetFault::Blocked
+                                })
+                            } else {
+                                match &s.peer {
+                                    PeerTls::Certificate(names)
+                                        if names.iter().any(|n| {
+                                            hirsel_run_config::tls::serves(&identity, n)
+                                        }) =>
+                                    {
+                                        s.tls = true;
+                                        Ok(arg(a, 1)?.clone())
+                                    }
+                                    // A verifying client sends bad_certificate.
+                                    PeerTls::Certificate(_) => {
+                                        Err(NetFault::Tls(TlsFailure::AlertReceived(42)))
                                     }
                                     PeerTls::Plain => {
                                         Err(NetFault::Tls(TlsFailure::HandshakeFailure))
@@ -1315,6 +1382,14 @@ impl Simulation {
                 _ => return Err(invalid("TlsRoots representation")),
             };
             encode_arguments(&[a[0].clone(), a[1].clone(), a[2].clone(), digest])
+        } else if name == "tls.accept" {
+            // The record names the chain by digest; key material is never recorded.
+            let chain = bytes(fields(arg(a, 2)?, "TlsIdentity", 2)?[0])?;
+            encode_arguments(&[
+                a[0].clone(),
+                a[1].clone(),
+                Value::Bytes(Sha256::digest(chain).to_vec()),
+            ])
         } else if name == "net.read" || name == "net.read_into" || name == "udp.recv_from" {
             let max = if name == "net.read" || name == "udp.recv_from" {
                 arg(a, 3)?.clone()
@@ -1356,13 +1431,18 @@ impl Simulation {
             *arguments = updates;
             if matches!(
                 name,
-                "net.close" | "udp.close" | "tls.connect" | "tls.close"
+                "net.close" | "udp.close" | "tls.connect" | "tls.accept" | "tls.close"
             ) {
                 consumed.push(1);
             }
         }
         Ok(result)
     }
+}
+/// A `TlsIdentity` record loaded by the shared argument check; `None` when invalid.
+fn identity(v: &Value) -> Result<Option<hirsel_run_config::tls::Identity>, Error> {
+    let f = fields(v, "TlsIdentity", 2)?;
+    Ok(hirsel_run_config::tls::identity(bytes(f[0])?, bytes(f[1])?))
 }
 fn validate_peers(peers: &[NetPeer]) -> Result<(), Error> {
     let mut seen = BTreeMap::new();
@@ -1397,7 +1477,7 @@ pub(super) fn configured_world(grant: Option<&NetGrant>) -> Result<BTreeMap<u64,
                     .is_ok_and(|p| p.to_string() != r.service)
                 || !matches!(
                     r.operation.as_str(),
-                    "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer"
+                    "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer" | "listen_tls"
                 )
         }) {
             return Err(invalid("invalid simulation network rules"));

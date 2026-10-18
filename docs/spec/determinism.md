@@ -88,7 +88,8 @@ resource, and their effects are still recorded.
 **Network grants** name a provider and sorted, unique rules `{address, service,
 operation}`: `address` is a canonical host name or IP literal
 ([CAP-1](capabilities.md#cap-1-authority)), `service` a canonical decimal port `0`–`65535`
-without leading zeros, and `operation` one of `connect`, `connect_tls`, `listen`, `udp_bind` and `udp_peer`.
+without leading zeros, and `operation` one of `connect`, `connect_tls`, `listen`, `udp_bind`,
+`udp_peer` and `listen_tls`.
 
 **Process grants** name a provider and rules `{program, env}` sorted and unique by
 `program`: `program` is a canonical absolute path ([processes](core-library.md#processes)),
@@ -273,7 +274,11 @@ request records the server name and the identity of the root set: `webpki:` and 
 hex-encoded version of the compiled root store for `WebPki()`, or `pem:` and the SHA-256 of
 the original PEM bytes for `Pem(b)`, so replay under a different trust configuration
 refuses instead of succeeding. TLS records, keys, randomness and verification time are
-internal to the provider and never recorded. A replayable ciphertext recording would have to
+internal to the provider and never recorded. A `tls.accept` request records the SHA-256 of
+the identity's certificate-chain PEM bytes and its completion the handshake outcome; the
+private key, and any digest of it, is never recorded. Replay re-derives the identity's
+validity from the material the program supplies again, and a different chain refuses. A
+replayable ciphertext recording would have to
 contain the key material, so recording plaintext loses no confidentiality; recordings are
 secret-bearing in any case, since their run record holds granted `Env` values.
 

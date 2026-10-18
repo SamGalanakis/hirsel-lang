@@ -187,6 +187,45 @@ impl CooperativeNet {
             }
         }
     }
+    /// Start a handshake on its first issue, then drive it across readiness waits.
+    fn handshake(
+        &mut self,
+        stream: u64,
+        start: impl FnOnce() -> Result<rustls::Connection, NetError>,
+    ) -> Provided<()> {
+        let fd = match self.host.socket(stream) {
+            Ok(fd) => fd,
+            Err(e) => return Ok(Err(e)),
+        };
+        if let std::collections::btree_map::Entry::Vacant(entry) = self.host.tls.entry(stream) {
+            match start() {
+                Ok(conn) => entry.insert(conn),
+                Err(e) => return Ok(Err(e)),
+            };
+        }
+        loop {
+            match self.flush_tls(stream)? {
+                Ok(()) => {}
+                Err(e) => return Ok(Err(e)),
+            }
+            let conn = self.host.tls.get_mut(&stream).unwrap();
+            if !conn.is_handshaking() {
+                return Ok(Ok(()));
+            }
+            match conn.read_tls(&mut crate::net_tls::Transport(fd)) {
+                Ok(0) => return Ok(Err(NetError::Tls(crate::net::TlsFailure::Truncated))),
+                Ok(_) => {
+                    if let Err(e) = conn.process_new_packets() {
+                        return Ok(Err(NetError::Tls(crate::net_tls::failure(&e))));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    return self.blocked(fd, libc::POLLIN, self.timeout(stream, false));
+                }
+                Err(e) => return Ok(Err(crate::net_tls::error(e))),
+            }
+        }
+    }
     fn flush_tls(&mut self, stream: u64) -> Provided<()> {
         let fd = match self.host.socket(stream) {
             Ok(fd) => fd,
@@ -394,39 +433,19 @@ impl NetProvider for CooperativeNet {
         self.host.peer_addr(stream)
     }
     fn tls_connect(&mut self, stream: u64, name: &str, roots: &RootsDigest) -> Provided<()> {
-        let fd = match self.host.socket(stream) {
-            Ok(fd) => fd,
-            Err(e) => return Ok(Err(e)),
-        };
-        if let std::collections::btree_map::Entry::Vacant(entry) = self.host.tls.entry(stream) {
-            let conn = match crate::net_tls::client(name, roots, self.host.pem.take()) {
-                Ok(c) => c,
-                Err(e) => return Ok(Err(e)),
-            };
-            entry.insert(conn);
-        }
-        loop {
-            match self.flush_tls(stream)? {
-                Ok(()) => {}
-                Err(e) => return Ok(Err(e)),
-            }
-            let conn = self.host.tls.get_mut(&stream).unwrap();
-            if !conn.is_handshaking() {
-                return Ok(Ok(()));
-            }
-            match conn.read_tls(&mut crate::net_tls::Transport(fd)) {
-                Ok(0) => return Ok(Err(NetError::Tls(crate::net::TlsFailure::Truncated))),
-                Ok(_) => {
-                    if let Err(e) = conn.process_new_packets() {
-                        return Ok(Err(NetError::Tls(crate::net_tls::failure(&e))));
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    return self.blocked(fd, libc::POLLIN, self.timeout(stream, false));
-                }
-                Err(e) => return Ok(Err(crate::net_tls::error(e))),
-            }
-        }
+        let pem = self.host.pem.take();
+        self.handshake(stream, || {
+            crate::net_tls::client(name, roots, pem).map(rustls::Connection::from)
+        })
+    }
+    fn tls_accept(
+        &mut self,
+        stream: u64,
+        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
+    ) -> Provided<()> {
+        self.handshake(stream, || {
+            crate::net_tls::server(identity).map(rustls::Connection::from)
+        })
     }
     fn tls_close(&mut self, stream: u64) -> Provided<()> {
         if let Some(conn) = self.host.tls.get_mut(&stream) {

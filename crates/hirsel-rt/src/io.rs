@@ -379,6 +379,12 @@ pub enum Request {
         server_name: String,
         roots: RootsDigest,
     },
+    /// The identity is the SHA-256 of its certificate-chain PEM; the key never appears.
+    TlsAccept {
+        net: u64,
+        stream: u64,
+        identity: [u8; 32],
+    },
     TlsClose {
         net: u64,
         stream: u64,
@@ -722,6 +728,8 @@ pub(crate) struct State {
     pub net_world: NetWorld,
     pub net_scripts: BTreeMap<u64, crate::io_net_script::ScriptNet>,
     pub(crate) pem_validity: BTreeMap<u64, ([u8; 32], bool)>,
+    /// The identity material supplied for each stream's pending `tls.accept`.
+    pub(crate) tls_identities: BTreeMap<u64, crate::net::TlsIdentity>,
     /// The admitted rules of the root Proc and the world serving it.
     pub process_rules: Vec<hirsel_run_config::ProcessRule>,
     pub process_world: crate::process::ProcessWorld,
@@ -753,6 +761,7 @@ impl Default for State {
             net_world: NetWorld::Host,
             net_scripts: BTreeMap::new(),
             pem_validity: BTreeMap::new(),
+            tls_identities: BTreeMap::new(),
             process_rules: vec![],
             process_world: crate::process::ProcessWorld::Host,
             process_scripts: BTreeMap::new(),
@@ -1621,6 +1630,9 @@ pub trait Adapter {
     /// Supply the next handshake's PEM material without adding it to the tape.
     /// Replay and scripted worlds use only the digest in TlsConnect.
     fn tls_roots(&mut self, _stream: u64, _pem: &[u8]) {}
+    /// Supply the next server handshake's identity material without adding it to the tape.
+    /// Every world loads it to check validity; the request records only the chain digest.
+    fn tls_identity(&mut self, _stream: u64, _chain: &[u8], _key: &[u8]) {}
     /// Confirmed replay output, used only when reporting a tool refusal.
     fn replay_stdout(&self) -> Vec<u8> {
         vec![]
@@ -1661,6 +1673,9 @@ pub struct Binding {
 impl Binding {
     pub(crate) fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.adapter.tls_roots(stream, pem);
+    }
+    pub(crate) fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
+        self.adapter.tls_identity(stream, chain, key);
     }
     pub fn new(adapter: impl Adapter + 'static) -> Self {
         Self {

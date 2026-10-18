@@ -1,0 +1,119 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+}
+
+fn clients(count: u16) -> List[NetClient] uses {} {
+  let mut out: List[NetClient] = []
+  let mut i: u16 = 0
+  while i < count {
+    list.push(
+      mut out,
+      NetClient(
+        from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40000u16 + i),
+        tls: Certificate(["localhost"]),
+        steps: [Send(b"hi")]
+      )
+    )
+    i += 1
+  }
+  out
+}
+
+// A self-signed ECDSA P-256 identity for localhost and 127.0.0.1; it secures nothing.
+fn identity() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn upgrade_error(n: Net, take upgraded: Result[Stream of n, NetError]) -> Option[
+  NetError
+] {
+  match upgraded {
+    Ok(_) => None(),
+    Error(e) => Some(e),
+  }
+}
+
+// A ListenTls stream carries no plaintext before its handshake: reads, writes,
+// shutdown and a client handshake are denied with no effect. The listener closes
+// when this returns.
+fn secure_only_streams(t: Test, tls_only: Net) -> Result[(), NetError] {
+  let mut l = net.listen(tls_only, home())?
+  let mut (first, _) = net.accept(tls_only, mut l)?
+  let mut buf: List[u8] = []
+  test.check(t, net.read(tls_only, mut first, mut buf, 8u64) == Error(NotGranted()))
+  test.check(t, net.write_all(tls_only, mut first, b"plain") == Error(NotGranted()))
+  test.check(t, net.shutdown(tls_only, mut first, Both()) == Error(NotGranted()))
+  // Options are allowed, so a timeout can bound the handshake.
+  net.set_read_timeout(tls_only, mut first, Nanos(1000000u64))?
+  test.check(t, net.peer_addr(tls_only, first)?.port == 40000u16)
+  let mut secure = tls.accept(tls_only, take first, identity())?
+  test.check(t, net.read(tls_only, mut secure, mut buf, 8u64)? == 2u64)
+  let (second, _) = net.accept(tls_only, mut l)?
+  test.check(
+    t,
+    upgrade_error(tls_only, tls.connect(tls_only, take second, "localhost", WebPki())) == Some(
+      NotGranted()
+    )
+  )
+  Ok(())
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "plain.example",
+        port: 80u16,
+        resolves_to: [V4([127u8, 0u8, 0u8, 2u8])],
+        tls: Plain(),
+        connections: [Open([]), Open([])]
+      )
+    ],
+    [NetListener(address: home(), clients: clients(5u16))]
+  )
+  // ListenTls is the narrowing of Listen, never the reverse.
+  let secure_only = net.narrow(
+    n,
+    [NetRule(address: "127.0.0.1", port: 8443u16, operation: ListenTls())]
+  )?
+  test.check(
+    t,
+    match net.narrow(
+      secure_only,
+      [NetRule(address: "127.0.0.1", port: 8443u16, operation: Listen())]
+    ) {
+      Error(NotGranted()) => true,
+      _ => false,
+    }
+  )
+  secure_only_streams(t, secure_only)?
+  // A Listen rule also permits a server handshake on its accepted streams.
+  let mut buf: List[u8] = []
+  let mut plain_listener = net.listen(n, home())?
+  let (third, _) = net.accept(n, mut plain_listener)?
+  let mut upgraded = tls.accept(n, take third, identity())?
+  test.check(t, net.read(n, mut upgraded, mut buf, 8u64)? == 2u64)
+  let mut (fourth, _) = net.accept(n, mut plain_listener)?
+  test.check(t, net.read(n, mut fourth, mut buf, 8u64)? == 2u64)
+  // A connected stream is no server's: tls.accept is denied, after argument validity.
+  let connected = net.connect(n, "plain.example", 80u16, Unbounded())?
+  test.check(
+    t,
+    upgrade_error(n, tls.accept(n, take connected, identity())) == Some(NotGranted())
+  )
+  let invalid = net.connect(n, "plain.example", 80u16, Unbounded())?
+  test.check(
+    t,
+    upgrade_error(n, tls.accept(n, take invalid, TlsIdentity(chain: b"", key: b""))) == Some(
+      InvalidInput()
+    )
+  )
+  Ok(())
+}

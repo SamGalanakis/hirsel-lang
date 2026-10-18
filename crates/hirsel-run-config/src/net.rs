@@ -49,13 +49,17 @@ pub struct NetListener {
     pub clients: Vec<NetClient>,
 }
 
-/// One incoming connection: its source address and what it sends and expects.
+/// One incoming connection: its source address, its TLS client and what it sends and
+/// expects.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NetClient {
     /// A canonical IP literal.
     pub address: String,
     pub port: u16,
+    /// `Plain` never starts TLS; `Certificate(names)` accepts a server certificate valid
+    /// for one of `names`; `Fails(f)` fails every server handshake with `Tls(f)`.
+    pub tls: PeerTls,
     pub steps: Vec<NetStep>,
 }
 
@@ -266,11 +270,11 @@ impl NetGrant {
             }
             if !matches!(
                 rule.operation.as_str(),
-                "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer"
+                "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer" | "listen_tls"
             ) {
                 return Err(invalid(
                     "io.net.rules.operation",
-                    "expected connect, connect_tls, listen, udp_bind or udp_peer",
+                    "expected connect, connect_tls, listen, udp_bind, udp_peer or listen_tls",
                 ));
             }
         }

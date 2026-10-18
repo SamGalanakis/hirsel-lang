@@ -608,7 +608,7 @@ fn a_net_script_1_document_refuses_as_an_unknown_version_and_its_twin_admits() {
 #[test]
 fn scripted_listeners_are_script_only_canonical_and_round_trip() {
     let listener = json!({"address": "127.0.0.1", "port": 8080, "clients": [
-        {"address": "192.0.2.1", "port": 40001, "steps": [{"send": [71]}, {"expect": [72]}, "close"]}
+        {"address": "192.0.2.1", "port": 40001, "tls": "plain", "steps": [{"send": [71]}, {"expect": [72]}, "close"]}
     ]});
     let mut net = script();
     net["listeners"] = json!([listener]);

@@ -156,7 +156,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "NetOperation",
             "",
-            "Connect()|ConnectTls()|Listen()|UdpBind()|UdpPeer()",
+            "Connect()|ConnectTls()|Listen()|UdpBind()|UdpPeer()|ListenTls()",
         ),
         ("NetTimeout", "", "Unbounded()|Nanos(u64)"),
         ("Shutdown", "", "Read()|Write()|Both()"),
@@ -302,6 +302,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ),
         ("DirEntry", "", "path: Path,kind: FileKind"),
         ("SocketAddr", "", "ip: IpAddr,port: u16"),
+        ("TlsIdentity", "", "chain: Bytes,key: Bytes"),
         (
             "NetRule",
             "",
@@ -342,7 +343,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "count: u64,peer: SocketAddr,truncated: bool",
         ),
-        ("NetClient", "", "from: SocketAddr,steps: List[NetStep]"),
+        (
+            "NetClient",
+            "",
+            "from: SocketAddr,tls: PeerTls,steps: List[NetStep]",
+        ),
         ("FieldShape", "", "name: String,ty: String"),
         ("PayloadShape", "", "label: Option[String],ty: String"),
         (

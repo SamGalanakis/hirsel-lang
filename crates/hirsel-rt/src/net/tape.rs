@@ -276,6 +276,11 @@ pub(crate) fn render_request(request: &Request) -> String {
             hex(server_name.as_bytes()),
             roots(r)
         ),
+        R::TlsAccept {
+            net,
+            stream,
+            identity,
+        } => format!("tls_accept {net} {stream} pem:{}", hex(identity)),
         R::TlsClose { net, stream } => format!("tls_close {net} {stream}"),
         R::Listen { net, addr } => format!("listen {net} {}", address(addr)),
         R::Accept { net, listener } => format!("accept {net} {listener}"),
@@ -404,6 +409,16 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             stream: number(s)?,
             server_name: text(name)?,
             roots: parse_roots(r)?,
+        },
+        ["tls_accept", n, s, i] => R::TlsAccept {
+            net: number(n)?,
+            stream: number(s)?,
+            identity: i
+                .strip_prefix("pem:")
+                .ok_or("bad tape identity")
+                .map(unhex)??
+                .try_into()
+                .map_err(|_| "bad tape identity digest")?,
         },
         ["tls_close", n, s] => R::TlsClose {
             net: number(n)?,

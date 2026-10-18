@@ -14,6 +14,7 @@ pub enum NetOperation {
     Listen,
     UdpBind,
     UdpPeer,
+    ListenTls,
 }
 impl NetOperation {
     pub fn name(self) -> &'static str {
@@ -23,6 +24,7 @@ impl NetOperation {
             Self::Listen => "listen",
             Self::UdpBind => "udp_bind",
             Self::UdpPeer => "udp_peer",
+            Self::ListenTls => "listen_tls",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -32,6 +34,7 @@ impl NetOperation {
             "listen" => Self::Listen,
             "udp_bind" => Self::UdpBind,
             "udp_peer" => Self::UdpPeer,
+            "listen_tls" => Self::ListenTls,
             _ => return None,
         })
     }
@@ -175,6 +178,38 @@ pub enum RootsDigest {
     Pem([u8; 32]),
 }
 
+/// The identity a `TlsAccept` request names: the SHA-256 of the certificate-chain PEM, which
+/// the request records, and the key loaded from material supplied outside the tape, absent
+/// when the identity is invalid. Key bytes never reach the tape, a digest or a debug print.
+#[derive(Clone)]
+pub struct TlsIdentity {
+    pub chain: [u8; 32],
+    pub key: Option<std::sync::Arc<rustls::sign::CertifiedKey>>,
+}
+impl TlsIdentity {
+    pub fn load(chain: &[u8], key: &[u8]) -> Self {
+        Self {
+            chain: crate::net_tls::chain_digest(chain),
+            key: hirsel_run_config::tls::identity(chain, key).map(std::sync::Arc::new),
+        }
+    }
+}
+/// A valid key is determined by its chain, so the digest and validity are the whole identity.
+impl PartialEq for TlsIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.chain == other.chain && self.key.is_some() == other.key.is_some()
+    }
+}
+impl Eq for TlsIdentity {}
+impl std::fmt::Debug for TlsIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TlsIdentity")
+            .field("chain", &self.chain)
+            .field("valid", &self.key.is_some())
+            .finish()
+    }
+}
+
 /// Which world serves a Net: the host network, or a scripted world kept in `io::State`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetWorld {
@@ -208,6 +243,13 @@ pub trait NetProvider {
     -> Provided<()>;
     fn peer_addr(&mut self, stream: u64) -> Provided<SocketAddr>;
     fn tls_connect(&mut self, stream: u64, server_name: &str, roots: &RootsDigest) -> Provided<()>;
+    /// A server handshake presenting a valid identity. The policy layer closes the stream
+    /// after a failure, as for `tls_connect`.
+    fn tls_accept(
+        &mut self,
+        stream: u64,
+        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
+    ) -> Provided<()>;
     /// Send close_notify. The policy layer closes the stream afterwards, on every outcome,
     /// as it does after a failed `tls_connect`.
     fn tls_close(&mut self, stream: u64) -> Provided<()>;
@@ -262,6 +304,13 @@ impl NetProvider for NoNet {
     fn tls_connect(&mut self, _: u64, _: &str, _: &RootsDigest) -> Provided<()> {
         Err(AdapterError::InvalidCompletion)
     }
+    fn tls_accept(
+        &mut self,
+        _: u64,
+        _: &std::sync::Arc<rustls::sign::CertifiedKey>,
+    ) -> Provided<()> {
+        Err(AdapterError::InvalidCompletion)
+    }
     fn tls_close(&mut self, _: u64) -> Provided<()> {
         Err(AdapterError::InvalidCompletion)
     }
@@ -301,23 +350,30 @@ pub fn permits(
         .map(|rule| rule.operation)
         .filter(|op| match operation {
             None => true,
-            Some(NetOperation::Listen | NetOperation::UdpBind | NetOperation::UdpPeer) => {
-                Some(*op) == operation
+            Some(NetOperation::UdpBind | NetOperation::UdpPeer) => Some(*op) == operation,
+            // Listen and Connect are the wider grants; `min` prefers them so a stream is
+            // plaintext-capable.
+            Some(NetOperation::Listen) => {
+                matches!(op, NetOperation::Listen | NetOperation::ListenTls)
             }
-            // Connect is the wider grant; prefer it so a stream is plaintext-capable.
             Some(_) => matches!(op, NetOperation::Connect | NetOperation::ConnectTls),
         })
         .min()
 }
 
-/// `net.narrow` coverage: equality, or `(a, p, ConnectTls)` under `(a, p, Connect)`.
+/// `net.narrow` coverage: equality, or a TLS-only rule under its plaintext rule:
+/// `(a, p, ConnectTls)` under `(a, p, Connect)`, `(a, p, ListenTls)` under `(a, p, Listen)`.
 pub fn covers(rules: &BTreeSet<NetRule>, requested: &NetRule) -> bool {
+    let plaintext = match requested.operation {
+        NetOperation::ConnectTls => NetOperation::Connect,
+        NetOperation::ListenTls => NetOperation::Listen,
+        _ => return rules.contains(requested),
+    };
     rules.contains(requested)
-        || (requested.operation == NetOperation::ConnectTls
-            && rules.contains(&NetRule {
-                operation: NetOperation::Connect,
-                ..requested.clone()
-            }))
+        || rules.contains(&NetRule {
+            operation: plaintext,
+            ..requested.clone()
+        })
 }
 
 pub(crate) fn is_net_request(request: &crate::io::Request) -> bool {
@@ -336,6 +392,7 @@ pub(crate) fn is_net_request(request: &crate::io::Request) -> bool {
             | R::SetTimeout { .. }
             | R::PeerAddr { .. }
             | R::TlsConnect { .. }
+            | R::TlsAccept { .. }
             | R::TlsClose { .. }
             | R::Listen { .. }
             | R::Accept { .. }
@@ -362,6 +419,11 @@ struct StreamGrant {
 }
 
 impl crate::io::State {
+    pub(crate) fn remember_tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
+        self.tls_identities
+            .insert(stream, TlsIdentity::load(chain, key));
+    }
+
     pub(crate) fn remember_tls_roots(&mut self, stream: u64, pem: &[u8]) {
         let RootsDigest::Pem(digest) = crate::net_tls::pem_digest(pem) else {
             unreachable!()
@@ -407,10 +469,18 @@ impl crate::io::State {
             _ => Err(AdapterError::InvalidHandle(stream)),
         }
     }
-    fn listener_grant(&self, net: u64, listener: u64) -> Result<NetWorld, AdapterError> {
+    /// The listener's world and the operation of the rule that opened it.
+    fn listener_grant(
+        &self,
+        net: u64,
+        listener: u64,
+    ) -> Result<(NetWorld, NetOperation), AdapterError> {
         let (_, world) = self.net_grant(net)?;
         match self.handles.rows.get(&listener) {
-            Some(crate::handles::Grant::Listener { net: owner }) if *owner == net => Ok(world),
+            Some(crate::handles::Grant::Listener {
+                net: owner,
+                operation,
+            }) if *owner == net => Ok((world, *operation)),
             _ => Err(AdapterError::InvalidHandle(listener)),
         }
     }
@@ -538,6 +608,7 @@ impl crate::io::State {
             | R::SetTimeout { net, stream, .. }
             | R::PeerAddr { net, stream }
             | R::TlsConnect { net, stream, .. }
+            | R::TlsAccept { net, stream, .. }
             | R::TlsClose { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
                 let invalid_tls = match request {
@@ -554,25 +625,44 @@ impl crate::io::State {
                                 }
                             }
                     }
+                    R::TlsAccept { identity, .. } => self
+                        .tls_identities
+                        .get(stream)
+                        .is_none_or(|known| known.chain != *identity || known.key.is_none()),
                     _ => false,
                 };
+                // A TLS-only rule's stream carries no plaintext before its handshake.
+                let plaintext = !grant.tls
+                    && matches!(
+                        request,
+                        R::NetRead { .. }
+                            | R::NetWrite { .. }
+                            | R::NetWriteAll { .. }
+                            | R::Shutdown { .. }
+                    );
+                let denied = match grant.operation {
+                    NetOperation::ConnectTls => {
+                        plaintext
+                            || matches!(request, R::TlsConnect { server_name, .. } if *server_name != grant.address)
+                    }
+                    NetOperation::ListenTls => plaintext || matches!(request, R::TlsConnect { .. }),
+                    // Streams never carry a UDP rule.
+                    NetOperation::Connect
+                    | NetOperation::Listen
+                    | NetOperation::UdpBind
+                    | NetOperation::UdpPeer => false,
+                } || matches!(request, R::TlsAccept { .. })
+                    && !matches!(
+                        grant.operation,
+                        NetOperation::Listen | NetOperation::ListenTls
+                    );
                 if invalid_tls
                     || matches!(request, R::NetRead { max: 0, .. })
                     || matches!(request, R::SetTimeout { timeout, .. } if zero(timeout))
-                    || matches!(request, R::TlsConnect { .. } if grant.tls)
+                    || matches!(request, R::TlsConnect { .. } | R::TlsAccept { .. } if grant.tls)
                 {
                     Some(NetError::InvalidInput)
-                } else if grant.operation == NetOperation::ConnectTls
-                    && (matches!(request, R::TlsConnect { server_name, .. } if *server_name != grant.address)
-                        || !grant.tls
-                            && matches!(
-                                request,
-                                R::NetRead { .. }
-                                    | R::NetWrite { .. }
-                                    | R::NetWriteAll { .. }
-                                    | R::Shutdown { .. }
-                            ))
-                {
+                } else if denied {
                     Some(NetError::NotGranted)
                 } else {
                     None
@@ -595,7 +685,7 @@ impl crate::io::State {
         use crate::handles::Grant;
         use crate::io::{Completion as C, Request as R};
         if let Some(error) = self.net_error(request)? {
-            if let R::TlsConnect { stream, .. } = request {
+            if let R::TlsConnect { stream, .. } | R::TlsAccept { stream, .. } = request {
                 let closed = self.execute_net(host, &R::Close { handle: *stream })?;
                 if matches!(closed, C::Checked(false)) {
                     return Ok(closed);
@@ -833,6 +923,30 @@ impl crate::io::State {
                 }
                 Ok(C::NetUnit(value))
             }
+            R::TlsAccept { net, stream, .. } => {
+                let grant = self.stream_grant(*net, *stream)?;
+                let identity = self
+                    .tls_identities
+                    .get(stream)
+                    .and_then(|identity| identity.key.clone())
+                    .ok_or(AdapterError::InvalidCompletion)?;
+                // The stream is taken: it is closed on every failure. A parked handshake
+                // keeps its identity for the re-issued request.
+                let value = provided(
+                    self.world(grant.world, host)?
+                        .tls_accept(*stream, &identity),
+                )?;
+                self.tls_identities.remove(stream);
+                if value.is_ok() {
+                    self.mark_tls(*stream);
+                } else {
+                    let closed = self.execute_net(host, &R::Close { handle: *stream })?;
+                    if matches!(closed, C::Checked(false)) {
+                        return Ok(closed);
+                    }
+                }
+                Ok(C::NetUnit(value))
+            }
             R::TlsClose { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
                 let value = provided(self.world(grant.world, host)?.tls_close(*stream))?;
@@ -846,9 +960,11 @@ impl crate::io::State {
             R::Listen { net, addr } => {
                 let (rules, world) = self.net_grant(*net)?;
                 let literal = ip_literal(addr.ip);
-                if permits(&rules, &literal, addr.port, Some(NetOperation::Listen)).is_none() {
+                let Some(operation) =
+                    permits(&rules, &literal, addr.port, Some(NetOperation::Listen))
+                else {
                     return Ok(C::Listened(Err(NetError::NotGranted)));
-                }
+                };
                 let id = self.handles.next();
                 if let Err(error) = provided(self.world(world, host)?.listen(id, *addr))? {
                     return Ok(C::Listened(Err(error)));
@@ -861,37 +977,42 @@ impl crate::io::State {
                 {
                     return Err(AdapterError::InvalidCompletion);
                 }
-                let id = self.handles.insert(Grant::Listener { net: *net });
+                let id = self.handles.insert(Grant::Listener {
+                    net: *net,
+                    operation,
+                });
                 Ok(C::Listened(Ok((id, local))))
             }
             R::Accept { net, listener } => {
-                let world = self.listener_grant(*net, *listener)?;
+                let (world, operation) = self.listener_grant(*net, *listener)?;
                 let id = self.handles.next();
                 let value = provided(self.world(world, host)?.accept(*listener, id))?;
-                // Accepted peers are not checked: the listen rule is the authority.
+                // Accepted peers are not checked: the listen rule is the authority, and the
+                // stream keeps its operation.
                 Ok(C::Accepted(value.map(|peer| {
                     let id = self.handles.insert(Grant::Stream {
                         net: *net,
                         address: ip_literal(peer.ip),
                         port: peer.port,
-                        operation: NetOperation::Connect,
+                        operation,
                         tls: false,
                     });
                     (id, peer)
                 })))
             }
             R::LocalAddr { net, listener } => {
-                let world = self.listener_grant(*net, *listener)?;
+                let (world, _) = self.listener_grant(*net, *listener)?;
                 Ok(C::Address(provided(
                     self.world(world, host)?.local_addr(*listener),
                 )?))
             }
             R::Close { handle } => {
                 self.pem_validity.remove(handle);
+                self.tls_identities.remove(handle);
                 let world = match self.handles.rows.remove(handle) {
                     Some(
                         Grant::Stream { net, .. }
-                        | Grant::Listener { net }
+                        | Grant::Listener { net, .. }
                         | Grant::UdpSocket { net },
                     ) => self.net_grant(net)?.1,
                     _ => return Err(AdapterError::InvalidHandle(*handle)),

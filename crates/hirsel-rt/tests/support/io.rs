@@ -32,6 +32,7 @@ pub fn replay_interpreter_with_mounts(
         ReplayFixture {
             events: tape,
             pem_roots: &[],
+            tls_identities: &[],
         },
         initial_tree,
         tree,
@@ -41,12 +42,14 @@ pub fn replay_interpreter_with_mounts(
     );
 }
 
-/// Original fixture inputs, independent of the tape being compared. PEM roots
-/// are supplied explicitly because the tape stores only their one-way digest.
+/// Original fixture inputs, independent of the tape being compared. PEM roots and
+/// server identities (chain, key) are supplied explicitly because the tape stores only
+/// their chains' one-way digests.
 #[derive(Clone, Copy)]
 pub struct ReplayFixture<'a> {
     pub events: &'a [Event],
     pub pem_roots: &'a [&'a [u8]],
+    pub tls_identities: &'a [(&'a [u8], &'a [u8])],
 }
 
 /// Keep the script source separate from the comparison tape so corruption
@@ -405,10 +408,11 @@ pub fn replay_interpreter_with_fixture(
                 | Request::SetTimeout { .. }
                 | Request::PeerAddr { .. }
                 | Request::TlsConnect { .. }
+                | Request::TlsAccept { .. }
                 | Request::TlsClose { .. }
                 | Request::Listen { .. }
                 | Request::Accept { .. }
-                | Request::LocalAddr { .. } => network::arguments(event, fixture.pem_roots),
+                | Request::LocalAddr { .. } => network::arguments(event, fixture),
                 Request::Close { handle: id } => {
                     let grant = library.simulation.observed_state().handles[id].clone();
                     let kind = match grant {
@@ -590,7 +594,7 @@ pub fn replay_interpreter_with_fixture(
                         hirsel_rt::handles::Grant::UdpSocket { net } => {
                             ObservedGrant::UdpSocket { net: *net }
                         }
-                        hirsel_rt::handles::Grant::Listener { net } => {
+                        hirsel_rt::handles::Grant::Listener { net, .. } => {
                             ObservedGrant::Listener { net: *net }
                         }
                         hirsel_rt::handles::Grant::Test { .. } => {

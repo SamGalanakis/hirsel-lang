@@ -8,7 +8,11 @@ fn home() -> SocketAddr uses {} {
 }
 
 fn client(port: u16, take steps: List[NetStep]) -> NetClient uses {} {
-  NetClient(from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port), steps: steps)
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port),
+    tls: Plain(),
+    steps: steps
+  )
 }
 
 fn serve(n: Net) -> Result[(), NetError] {

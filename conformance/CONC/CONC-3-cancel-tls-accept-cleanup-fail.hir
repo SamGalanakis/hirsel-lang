@@ -1,0 +1,49 @@
+// rule: CONC-3
+// expect: fail LANG-9 at line 34
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8443","operation":"listen_tls"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8443,"clients":[{"address":"192.0.2.1","port":40001,"tls":{"certificate":["localhost"]},"steps":[{"expect":[120]}]}]}]}
+// stdout: test failure: net client 0 of 127.0.0.1:8443 expected b"x" but the program closed after writing b""
+fn home() -> SocketAddr {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+}
+
+// A self-signed ECDSA P-256 identity for localhost and 127.0.0.1; it secures nothing.
+fn identity() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let tasks = io.tasks(rt) ? Grant
+  let c = io.monotonic_clock(rt) ? Grant
+  let n = io.net(rt) ? Grant
+  let now = clock.monotonic(c) ? Clock
+  let at = match instant.checked_add(c, now, 1u64) {
+    Some(at) => at,
+    None() => now,
+  }
+  let bounded = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: at),
+    fn(scope: Scope) -> Result[(), NetError] {
+      let mut listener = net.listen(n, home())?
+      let (accepted, _) = net.accept(n, mut listener)?
+      let _ = clock.sleep_until(c, at)
+      let canceled: bool = match tls.accept(n, take accepted, identity()) {
+        Error(Canceled(DeadlineExceeded())) => true,
+        _ => false,
+      }
+      failure.check(canceled, Arithmetic())
+      Ok(())
+    }
+  )
+  match bounded {
+    Expired(Ok(())) => (),
+    _ => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Network(NetError) | Clock(ClockError)

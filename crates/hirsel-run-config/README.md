@@ -1,9 +1,12 @@
 # hirsel-run-config
 
 Closed tooling data for PROG-3/6 and DET-1. Allowed dependencies: std, serde,
-serde_json, sha2, and pinned pure rustls-pki-types/webpki parsers. No compiler or execution implementation dependency.
-`tls` parses verification names and PEM trust anchors without time, cryptography or Io;
-all engines use these argument checks before cancellation.
+serde_json, sha2, pinned pure rustls-pki-types/webpki parsers, and rustls (ring) only to load
+server identity keys. No compiler or execution implementation dependency.
+`tls` parses verification names, PEM trust anchors and PEM server identities (certificate
+chain plus a private key matching the leaf) without time, signing or Io, and answers whether
+an identity's leaf certificate names a server name; all engines use these argument checks
+before cancellation.
 
 Host input read failures include the selected grants, run record or revocation path. A relative directory resolution failure includes its template-relative candidate.
 
@@ -35,7 +38,8 @@ sorted unique address/service/operation triples, with no wildcard rule. Addresse
 are lowercase ASCII host names without a root dot, canonical dotted IPv4 or RFC
 5952 IPv6 without brackets or a zone. Hosts ending in an ASCII numeric or hexadecimal IPv4-number label must be
 canonical dotted-quad IPv4; short forms and leading zeros refuse. Services are decimal ports 0–65535
-without leading zeros, and operations are `connect`, `connect_tls`, `listen`, `udp_bind` or `udp_peer`.
+without leading zeros, and operations are `connect`, `connect_tls`, `listen`, `udp_bind`,
+`udp_peer` or `listen_tls`.
 
 `snapshot_args` and `snapshot_env` convert only explicitly supplied OS strings;
 byte-invalid inputs refuse with the argument index, key index or selected Env key.

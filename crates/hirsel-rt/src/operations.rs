@@ -223,6 +223,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "net.peer_addr"
         | "net.close"
         | "tls.connect"
+        | "tls.accept"
         | "tls.close" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         // `net.read_into`'s compiled body calls this with its buffer's size.
         "$intrinsic.NetReadInto" => Some("hirsel_rt_v2_net_read_into".into()),
@@ -339,6 +340,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "net.write_all"
             | "net.close"
             | "tls.connect"
+            | "tls.accept"
             | "tls.close"
             | "child.write"
             | "child.close_stdin"
@@ -385,6 +387,7 @@ pub const NET_EXPORTS: &[&str] = &[
     "net.peer_addr",
     "net.close",
     "tls.connect",
+    "tls.accept",
     "tls.close",
 ];
 
@@ -733,6 +736,13 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
             Physical::I64,
             Physical::Pointer,
         ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_tls_accept",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
         caller_site: false,
@@ -1586,6 +1596,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "net.peer_addr",
     "net.close",
     "tls.connect",
+    "tls.accept",
     "tls.close",
     "net.udp_bind",
     "udp.send_to",

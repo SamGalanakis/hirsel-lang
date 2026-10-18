@@ -780,6 +780,7 @@ fn script_provider_listeners_serve_granted_addresses_and_never_widen_rules() {
         clients: vec![NetClient {
             address: "192.0.2.1".into(),
             port: 40001,
+            tls: PeerTls::Plain,
             steps: vec![NetStep::Send(b"hi".to_vec())],
         }],
     };

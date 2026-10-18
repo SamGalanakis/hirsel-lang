@@ -189,6 +189,7 @@ pub fn cancel(
         | R::NetWrite { .. }
         | R::NetWriteAll { .. }
         | R::TlsConnect { .. }
+        | R::TlsAccept { .. }
         | R::TlsClose { .. } => net_completion(request, NetError::Canceled(cause)),
         R::Open { .. }
         | R::Create { .. }
@@ -215,7 +216,9 @@ pub fn cancel(
     };
     let completion = adapter.preflight(request)?.unwrap_or(canceled);
     let taken = match request {
-        R::TlsConnect { stream, .. } | R::TlsClose { stream, .. } => Some(*stream),
+        R::TlsConnect { stream, .. } | R::TlsAccept { stream, .. } | R::TlsClose { stream, .. } => {
+            Some(*stream)
+        }
         R::ChildWait { child, .. } => Some(*child),
         R::Commit { file, .. } => Some(*file),
         _ => None,

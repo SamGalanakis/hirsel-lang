@@ -2,7 +2,7 @@
 //! NetPeer (64 bytes), IpAddr (20), NetConnection (16), NetStep (32), PeerTls (16:
 //! u32 tag, payload at 8), TlsFailure (8: u32 tag, AlertReceived's u8 at 4),
 //! SocketAddr (24: IpAddr, port at 20), NetListener (32: SocketAddr, clients at 24)
-//! and NetClient (32: SocketAddr, steps at 24).
+//! and NetClient (48: SocketAddr, PeerTls at 24, steps at 40).
 //! Native campaign programs exercise these layouts.
 use crate::{
     Header, RunCtx,
@@ -116,12 +116,13 @@ unsafe fn listener(at: *const u8) -> NetListener {
         address,
         port,
         clients: unsafe {
-            list(pointer(at.add(24)), 32, |at| {
+            list(pointer(at.add(24)), 48, |at| {
                 let (address, port) = socket_addr(at);
                 NetClient {
                     address,
                     port,
-                    steps: list(pointer(at.add(24)), 32, |at| step(at)),
+                    tls: tls(at.add(24)),
+                    steps: list(pointer(at.add(40)), 32, |at| step(at)),
                 }
             })
         },

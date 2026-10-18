@@ -12,6 +12,8 @@ mod entropy_waits;
 mod ergonomics;
 #[path = "cli/exit_report.rs"]
 mod exit_report;
+#[path = "cli/https.rs"]
+mod https;
 #[path = "cli/replay.rs"]
 mod replay;
 #[path = "cli/select_race.rs"]

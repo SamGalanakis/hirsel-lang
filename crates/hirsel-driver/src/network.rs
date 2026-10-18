@@ -203,6 +203,12 @@ impl HostIo {
             Self::Replay(io) => io.tls_roots(stream, pem),
         }
     }
+    fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
+        match self {
+            Self::Live(io) => io.tls_identity(stream, chain, key),
+            Self::Replay(io) => io.tls_identity(stream, chain, key),
+        }
+    }
     fn stdout(&self) -> &[u8] {
         match self {
             Self::Live(io) => io.stdout(),
@@ -1215,6 +1221,7 @@ impl HostLibrary {
                                 2 => NetOperation::Listen,
                                 3 => NetOperation::UdpBind,
                                 4 => NetOperation::UdpPeer,
+                                5 => NetOperation::ListenTls,
                                 _ => return Err(invalid()),
                             },
                         })
@@ -1333,6 +1340,17 @@ impl HostLibrary {
                     roots,
                 }
             }
+            "tls.accept" => {
+                let identity = fields(&a[2])?;
+                let (chain, key) = (bytes(identity[0])?, bytes(identity[1])?);
+                let stream = self.id(&a[1])?;
+                self.io.tls_identity(stream, &chain, &key);
+                R::TlsAccept {
+                    net: self.id(&a[0])?,
+                    stream,
+                    identity: hirsel_rt::net_tls::chain_digest(&chain),
+                }
+            }
             _ => return Err(Error::Unavailable(format!("host network {name}"))),
         };
         let cancellation = self
@@ -1391,7 +1409,9 @@ impl HostLibrary {
                 sequence(BuiltinType::List, a.into_iter().map(address))
             }),
             C::Count(r) => result(r, u64_value),
-            C::NetUnit(r) if name == "tls.connect" => result(r, |()| a[1].clone()),
+            C::NetUnit(r) if matches!(name, "tls.connect" | "tls.accept") => {
+                result(r, |()| a[1].clone())
+            }
             C::NetUnit(r) => result(r, |()| Value::Unit),
             C::NetBytes(r) => match r {
                 Err(e) => net_error(e),
@@ -1422,8 +1442,10 @@ impl HostLibrary {
             C::Unit(Ok(())) => Value::Unit,
             C::Checked(false) => {
                 cx.stdout.extend_from_slice(&self.io.stdout()[printed..]);
-                if matches!(name, "net.close" | "tls.close" | "tls.connect")
-                    && let Value::Handle { id, .. } = a[1]
+                if matches!(
+                    name,
+                    "net.close" | "tls.close" | "tls.connect" | "tls.accept"
+                ) && let Value::Handle { id, .. } = a[1]
                 {
                     self.handles.remove(&id);
                 }
@@ -1437,16 +1459,16 @@ impl HostLibrary {
         if (name == "net.close"
             || name == "udp.close"
             || name == "tls.close"
-            || name == "tls.connect" && matches!(value, Value::Variant { variant: 1, .. }))
+            || matches!(name, "tls.connect" | "tls.accept")
+                && matches!(value, Value::Variant { variant: 1, .. }))
             && let Value::Handle { id, .. } = a[1]
         {
             self.handles.remove(&id);
         }
-        let consumed = if name == "net.close"
-            || name == "udp.close"
-            || name == "tls.close"
-            || name == "tls.connect"
-        {
+        let consumed = if matches!(
+            name,
+            "net.close" | "udp.close" | "tls.close" | "tls.connect" | "tls.accept"
+        ) {
             vec![1]
         } else {
             vec![]

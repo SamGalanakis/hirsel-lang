@@ -1,7 +1,7 @@
 // rule: CLO-4
 // expect: run
 // grant: clock
-// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8080,"clients":[{"address":"192.0.2.1","port":40001,"steps":[]}]}]}
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8080,"clients":[{"address":"192.0.2.1","port":40001,"tls":"plain","steps":[]}]}]}
 // "An owning once scope-body parameter may take captures without becoming global."
 // The stream an accept destructures into a `let mut` binding is taken by the
 // scope body; under a past deadline its close is canceled before any effect.

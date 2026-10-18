@@ -130,6 +130,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.0.borrow_mut().tls_roots(stream, pem);
     }
+    fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
+        self.0.borrow_mut().tls_identity(stream, chain, key);
+    }
     fn replay_stderr(&self) -> Vec<u8> {
         self.0.borrow().replay_stderr()
     }

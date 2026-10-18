@@ -21,7 +21,12 @@ fn exercise(t: Test, timed: bool) -> Result[(), http.HttpError] {
   let n = test.net(
     t,
     [],
-    [NetListener(address: addr, clients: [NetClient(from: addr, steps: steps)])]
+    [
+      NetListener(
+        address: addr,
+        clients: [NetClient(from: addr, tls: Plain(), steps: steps)]
+      )
+    ]
   )
   let mut listener = net.listen(n, addr) ? network
   let (stream, _) = net.accept(n, mut listener) ? network

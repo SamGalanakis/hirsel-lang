@@ -528,6 +528,7 @@ fn ephemeral_listen_completions_record_assigned_ports_and_refuse_altered_replay(
             clients: vec![NetClient {
                 address: "192.0.2.1".into(),
                 port: 40001,
+                tls: hirsel_run_config::PeerTls::Plain,
                 steps: vec![NetStep::Send(b"hi".to_vec())],
             }],
         },

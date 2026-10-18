@@ -1,0 +1,100 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+}
+
+fn client(port: u16, take tls: PeerTls, take steps: List[NetStep]) -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port),
+    tls: take tls,
+    steps: take steps
+  )
+}
+
+// A self-signed ECDSA P-256 identity for localhost and 127.0.0.1; it secures nothing.
+fn identity() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn upgrade_error(n: Net, take upgraded: Result[Stream of n, NetError]) -> Option[
+  NetError
+] {
+  match upgraded {
+    Ok(_) => None(),
+    Error(e) => Some(e),
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: home(),
+        clients: [
+          client(
+            40001u16,
+            Certificate(["localhost"]),
+            [Send(b"ping"), Expect(b"pong"), Close()]
+          ),
+          client(40002u16, Certificate(["other.example"]), []),
+          client(40003u16, Plain(), [Send(b"GET / HTTP/1.1\r\n")]),
+          client(40004u16, Fails(AlertReceived(48u8)), []),
+          client(40005u16, Certificate(["127.0.0.1"]), [Send(b"hi"), Truncate()])
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, home())?
+  // A Certificate client naming the leaf's DNS name completes the handshake;
+  // every later stream operation moves plaintext.
+  let (first, _) = net.accept(n, mut listener)?
+  let mut secure = tls.accept(n, take first, identity())?
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut secure, mut buf, 16u64)? == 4u64)
+  net.write_all(n, mut secure, b"pong")?
+  tls.close(n, take secure)?
+  // A client whose names the certificate lacks rejects it with bad_certificate;
+  // the failed handshake consumes and closes the stream.
+  let (second, _) = net.accept(n, mut listener)?
+  test.check(
+    t,
+    upgrade_error(n, tls.accept(n, take second, identity())) == Some(
+      Tls(AlertReceived(42u8))
+    )
+  )
+  // A plaintext client cannot complete a server handshake.
+  let (third, _) = net.accept(n, mut listener)?
+  test.check(
+    t,
+    upgrade_error(n, tls.accept(n, take third, identity())) == Some(
+      Tls(HandshakeFailure())
+    )
+  )
+  let (fourth, _) = net.accept(n, mut listener)?
+  test.check(
+    t,
+    upgrade_error(n, tls.accept(n, take fourth, identity())) == Some(
+      Tls(AlertReceived(48u8))
+    )
+  )
+  // An IP subject alternative name serves a client naming the literal. A close
+  // without close_notify truncates every later secured read.
+  let (fifth, _) = net.accept(n, mut listener)?
+  let mut ip = tls.accept(n, take fifth, identity())?
+  test.check(t, net.read(n, mut ip, mut buf, 16u64)? == 2u64)
+  test.check(t, net.read(n, mut ip, mut buf, 16u64) == Error(Tls(Truncated())))
+  test.check(t, bytes.from_list(take buf) == b"pinghi")
+  // A second upgrade of a secured stream is invalid and consumes it.
+  test.check(
+    t,
+    upgrade_error(n, tls.accept(n, take ip, identity())) == Some(InvalidInput())
+  )
+  Ok(())
+}

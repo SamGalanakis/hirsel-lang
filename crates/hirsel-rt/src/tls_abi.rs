@@ -1,4 +1,4 @@
-//! TLS Hirsel ABI v2. Layouts are the ordinary core TlsRoots/Stream layouts;
+//! TLS Hirsel ABI v2. Layouts are the ordinary core TlsRoots/TlsIdentity/Stream layouts;
 //! this adapter adds no TLS representation to the language.
 use crate::io::{Binding, Completion, Request};
 use crate::net::RootsDigest;
@@ -53,6 +53,48 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
         stream,
         server_name,
         roots,
+    };
+    let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
+        Some(Completion::NetUnit(done)) => done.map(|()| stream),
+        Some(_) => crate::fault("TLS completion type mismatch"),
+        None => return STATUS_FAILURE,
+    };
+    unsafe { out.write(NetWordResult::of(done)) };
+    STATUS_OK
+}
+
+/// TlsIdentity = { chain: Bytes, key: Bytes }: two borrowed slices.
+#[repr(C)]
+pub struct TlsIdentityAbi {
+    pub chain: crate::views::Slice,
+    pub key: crate::views::Slice,
+}
+
+/// `tls.accept(n, take s, identity) -> Result[Stream of n, NetError]`. The taken handle
+/// transfers on every outcome; State closes it on data error. The identity material reaches
+/// the adapter outside the recorded request, which names only the chain digest.
+/// # Safety
+/// ctx bound; n/s/identity readable; s writable and transferred; the identity's slices live
+/// for the call; out writable for NetWordResult.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    s: *mut u64,
+    identity: *const TlsIdentityAbi,
+) -> u8 {
+    let stream = unsafe { s.read() };
+    unsafe { s.write(0) };
+    let (chain, key) = unsafe { (&(*identity).chain, &(*identity).key) };
+    let chain = unsafe { crate::io::slice_bytes(chain.owner, chain.start, chain.length) };
+    let key = unsafe { crate::io::slice_bytes(key.owner, key.start, key.length) };
+    unsafe { Binding::get(ctx) }.tls_identity(stream, chain, key);
+    let request = Request::TlsAccept {
+        net: unsafe { n.read() },
+        stream,
+        identity: crate::net_tls::chain_digest(chain),
     };
     let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
         Some(Completion::NetUnit(done)) => done.map(|()| stream),

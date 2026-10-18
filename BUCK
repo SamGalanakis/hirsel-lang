@@ -95,6 +95,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//third-party:rustls",
         "//third-party:serde_json",
     ],
     bin_exes = {
@@ -123,6 +124,8 @@ hirsel_test(
         "conformance/CONC/CONC-2-await.hir",
         "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
         "conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir",
+        "crates/hirsel-rt/tests/it/tls-data/server.cert",
+        "crates/hirsel-rt/tests/it/tls-data/server.key",
         "docs/api.md",
         "examples/adventure/demo.json",
         "examples/adventure/hirsel.json",
@@ -195,6 +198,7 @@ hirsel_test(
         "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
+        "//third-party:rustls",
         "//third-party:serde_json",
     ],
     bin_exes = {
@@ -222,6 +226,8 @@ hirsel_test(
         "conformance/CONC/CONC-2-await.hir",
         "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
         "conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir",
+        "crates/hirsel-rt/tests/it/tls-data/server.cert",
+        "crates/hirsel-rt/tests/it/tls-data/server.key",
         "docs/api.md",
         "examples/adventure/demo.json",
         "examples/adventure/hirsel.json",
@@ -3060,6 +3066,7 @@ hirsel_test(
 hirsel_library(
     name = "hirsel-run-config",
     deps = [
+        "//third-party:rustls",
         "//third-party:rustls-pki-types",
         "//third-party:rustls-webpki",
         "//third-party:serde",
@@ -3080,6 +3087,7 @@ hirsel_library(
 hirsel_test(
     name = "hirsel-run-config-unittest",
     deps = [
+        "//third-party:rustls",
         "//third-party:rustls-pki-types",
         "//third-party:rustls-webpki",
         "//third-party:serde",
@@ -3101,6 +3109,7 @@ hirsel_test(
     name = "hirsel-run-config-test-it",
     deps = [
         "//:hirsel-run-config",
+        "//third-party:rustls",
         "//third-party:rustls-pki-types",
         "//third-party:rustls-webpki",
         "//third-party:serde",

@@ -1,5 +1,5 @@
 // rule: LANG-9
-// expect: fail LANG-9 at line 23
+// expect: fail LANG-9 at line 24
 // stdout: test failure: net client 0 of 127.0.0.1:8080 expected b"pong" but the program closed after writing b"po"
 // entry: trial
 fn home() -> SocketAddr uses {} {
@@ -9,6 +9,7 @@ fn home() -> SocketAddr uses {} {
 fn client() -> NetClient uses {} {
   NetClient(
     from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40001u16),
+    tls: Plain(),
     steps: [Send(b"ping"), Expect(b"pong")]
   )
 }

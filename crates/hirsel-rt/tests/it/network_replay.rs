@@ -136,6 +136,7 @@ fn every_failing_peer_handshake_records_its_failure_and_replays_independently() 
                     ReplayFixture {
                         events: io.tape(),
                         pem_roots: &[],
+                        tls_identities: &[],
                     },
                     &tree,
                     &tree,
@@ -251,6 +252,7 @@ fn pem_roots_require_the_original_bundle_matching_the_recorded_digest() {
             ReplayFixture {
                 events: io.tape(),
                 pem_roots: &[pem],
+                tls_identities: &[],
             },
             &tree,
             &tree,
@@ -392,6 +394,7 @@ fn fault_inputs_come_from_the_original_fixture_not_the_comparison_tape() {
             ReplayFixture {
                 events: &tape,
                 pem_roots: &[],
+                tls_identities: &[],
             },
             &tree,
             native.tree(),

@@ -252,6 +252,7 @@ fn campaign(targets: Vec<TargetSpec>, opts: &'static [OptLevel], scratch_name: &
                         rt_io_support::ReplayFixture {
                             events: &recording.events,
                             pem_roots: &[],
+                            tls_identities: &[],
                         },
                         &recording.tree,
                         sim.tree(),

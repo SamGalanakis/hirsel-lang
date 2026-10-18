@@ -27,8 +27,11 @@ pub enum Grant {
     UdpSocket {
         net: u64,
     },
+    /// Branded by its Net; `operation` is the rule that opened it, which its accepted
+    /// streams keep.
     Listener {
         net: u64,
+        operation: crate::net::NetOperation,
     },
     Test {
         seed: u64,

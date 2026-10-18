@@ -29,7 +29,7 @@ pub fn trial(t: Test) -> Result[(), NetError] {
       NetListener(address: home(49152u16), clients: []),
       NetListener(
         address: home(0u16),
-        clients: [NetClient(from: home(40001u16), steps: [Expect(b"ok")])]
+        clients: [NetClient(from: home(40001u16), tls: Plain(), steps: [Expect(b"ok")])]
       )
     ]
   )

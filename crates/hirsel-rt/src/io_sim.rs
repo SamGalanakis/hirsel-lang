@@ -141,6 +141,9 @@ impl Adapter for SimIo {
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.state.remember_tls_roots(stream, pem);
     }
+    fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
+        self.state.remember_tls_identity(stream, chain, key);
+    }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.state.preflight(request)
     }
@@ -1184,6 +1187,13 @@ impl NetProvider for Recorded<'_> {
         self.address()
     }
     fn tls_connect(&mut self, _: u64, _: &str, _: &RootsDigest) -> crate::net::Provided<()> {
+        self.unit()
+    }
+    fn tls_accept(
+        &mut self,
+        _: u64,
+        _: &std::sync::Arc<rustls::sign::CertifiedKey>,
+    ) -> crate::net::Provided<()> {
         self.unit()
     }
     fn tls_close(&mut self, _: u64) -> crate::net::Provided<()> {

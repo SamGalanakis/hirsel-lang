@@ -157,6 +157,7 @@ fn loopback_recording_replays_without_sockets() {
                 crate::support::io::ReplayFixture {
                     events: &tape,
                     pem_roots: &[],
+                    tls_identities: &[],
                 },
                 &initial,
                 sim.tree(),
@@ -314,6 +315,14 @@ impl NetProvider for Counting {
     fn tls_connect(&mut self, s: u64, name: &str, roots: &RootsDigest) -> Provided<()> {
         self.tick();
         self.inner.tls_connect(s, name, roots)
+    }
+    fn tls_accept(
+        &mut self,
+        s: u64,
+        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
+    ) -> Provided<()> {
+        self.tick();
+        self.inner.tls_accept(s, identity)
     }
     fn tls_close(&mut self, s: u64) -> Provided<()> {
         self.tick();
@@ -769,6 +778,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
                 clients: vec![hirsel_run_config::NetClient {
                     address: "192.0.2.1".into(),
                     port: 40001,
+                    tls: hirsel_run_config::PeerTls::Plain,
                     steps: vec![
                         hirsel_run_config::NetStep::Send(b"GET".to_vec()),
                         hirsel_run_config::NetStep::Expect(vec![0, 0xff]),

@@ -451,6 +451,7 @@ dependencies = [
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
+ "rustls",
  "serde_json",
 ]
 
@@ -831,6 +832,7 @@ dependencies = [
 name = "hirsel-run-config"
 version = "0.1.0"
 dependencies = [
+ "rustls",
  "rustls-pki-types",
  "rustls-webpki",
  "serde",

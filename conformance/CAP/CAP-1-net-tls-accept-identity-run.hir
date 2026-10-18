@@ -1,0 +1,97 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+}
+
+fn clients(count: u16) -> List[NetClient] uses {} {
+  let mut out: List[NetClient] = []
+  let mut i: u16 = 0
+  while i < count {
+    list.push(
+      mut out,
+      NetClient(
+        from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40000u16 + i),
+        tls: Certificate(["localhost"]),
+        steps: [Send(b"hi")]
+      )
+    )
+    i += 1
+  }
+  out
+}
+
+// A self-signed ECDSA P-256 identity for localhost and 127.0.0.1; it secures nothing.
+fn identity() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn invalid(n: Net, mut listener: Listener of n, chain: Bytes, key: Bytes) -> Result[
+  bool,
+  NetError
+] {
+  let (s, _) = net.accept(n, mut listener)?
+  Ok(
+    upgrade_error(n, tls.accept(n, take s, TlsIdentity(chain: chain, key: key))) == Some(
+      InvalidInput()
+    )
+  )
+}
+
+fn upgrade_error(n: Net, take upgraded: Result[Stream of n, NetError]) -> Option[
+  NetError
+] {
+  match upgraded {
+    Ok(_) => None(),
+    Error(e) => Some(e),
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(t, [], [NetListener(address: home(), clients: clients(9u16))])
+  let mut l = net.listen(n, home())?
+  let good = identity()
+  // Empty and malformed PEM, in either half, is invalid input before any handshake.
+  test.check(t, invalid(n, mut l, b"", good.key)?)
+  test.check(
+    t,
+    invalid(
+      n,
+      mut l,
+      b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n",
+      good.key
+    )?
+  )
+  test.check(t, invalid(n, mut l, good.chain, b"")?)
+  test.check(
+    t,
+    invalid(
+      n,
+      mut l,
+      good.chain,
+      b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"
+    )?
+  )
+  // The halves swapped: no certificate in the chain, no key in the key.
+  test.check(t, invalid(n, mut l, good.key, good.chain)?)
+  // A well-formed key that is not the leaf's.
+  test.check(
+    t,
+    invalid(
+      n,
+      mut l,
+      good.chain,
+      b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgFD3CxPNtNZAwpcag\nrHsUkJEIM+0UdizTBq/YVe/m5y2hRANCAATq2wzoRnCgvo/nS120U87CJqPr2Bll\ntrhCgv4Ildnh5D8wJHEUkWcQA8mqtpTkBgtUkk/t5aADqLpQs2eNrjFo\n-----END PRIVATE KEY-----\n"
+    )?
+  )
+  // The matching pair succeeds, and a stream consumed by an invalid identity is closed.
+  let (s, _) = net.accept(n, mut l)?
+  let mut secure = tls.accept(n, take s, good)?
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)
+  Ok(())
+}

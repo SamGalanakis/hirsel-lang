@@ -48,7 +48,12 @@ fn exercise(t: Test, first: String, keep: bool, pipelined: bool, status: u16) ->
   let n = test.net(
     t,
     [],
-    [NetListener(address: addr, clients: [NetClient(from: addr, steps: take steps)])]
+    [
+      NetListener(
+        address: addr,
+        clients: [NetClient(from: addr, tls: Plain(), steps: take steps)]
+      )
+    ]
   )
   let mut listener = net.listen(n, addr) ? http_net
   let (stream, _) = net.accept(n, mut listener) ? http_net

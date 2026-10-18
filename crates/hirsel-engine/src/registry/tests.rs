@@ -121,7 +121,7 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
 fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
     let r = BuiltinRegistry::new();
     assert_eq!(loop_protocols().len(), 6);
-    assert_eq!(r.signatures().count(), 398);
+    assert_eq!(r.signatures().count(), 400);
     let mut symbols = Interner::default();
     for ((protocol, open, next), generics) in loop_protocols().into_iter().zip([2, 2, 1, 1, 1, 2]) {
         assert_eq!(open.0.modules, ["$intrinsic"]);
@@ -664,7 +664,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
         ("SocketAddr", "{ip:IpAddr[],port:U16}"),
         (
             "NetOperation",
-            "Connect()|ConnectTls()|Listen()|UdpBind()|UdpPeer()",
+            "Connect()|ConnectTls()|Listen()|UdpBind()|UdpPeer()|ListenTls()",
         ),
         (
             "NetRule",
@@ -673,6 +673,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
         ("NetTimeout", "Unbounded()|Nanos(U64)"),
         ("Shutdown", "Read()|Write()|Both()"),
         ("TlsRoots", "WebPki()|Pem(Bytes)"),
+        ("TlsIdentity", "{chain:Bytes,key:Bytes}"),
         (
             "TlsFailure",
             "UnknownIssuer()|Expired()|NotYetValid()|NameMismatch()|Revoked()|BadCertificate()|AlertReceived(U8)|HandshakeFailure()|PeerMisbehaved()|Truncated()",
@@ -693,7 +694,10 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
             "UdpReceived",
             "{count:U64,peer:SocketAddr[],truncated:Bool}",
         ),
-        ("NetClient", "{from:SocketAddr[],steps:List[NetStep[]]}"),
+        (
+            "NetClient",
+            "{from:SocketAddr[],tls:PeerTls[],steps:List[NetStep[]]}",
+        ),
         (
             "PeerTls",
             "Plain()|Certificate(List[String])|Fails(TlsFailure[])",
@@ -773,6 +777,7 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
         "net.listen",
         "net.accept",
         "tls.connect",
+        "tls.accept",
     ] {
         let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Function(function) = &signature.kind else {
@@ -801,7 +806,13 @@ fn network_signatures_retain_stream_brands_and_tls_consumption() {
             }]
         );
     }
-    for name in ["net.close", "udp.close", "tls.connect", "tls.close"] {
+    for name in [
+        "net.close",
+        "udp.close",
+        "tls.connect",
+        "tls.accept",
+        "tls.close",
+    ] {
         let signature = registry.get(&hirsel_syntax::DefPath::core(name)).unwrap();
         let SignatureKind::Function(function) = &signature.kind else {
             panic!("{name}")

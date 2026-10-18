@@ -1,6 +1,6 @@
 // rule: CLO-4
 // expect: run
-// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8080,"clients":[{"address":"192.0.2.1","port":40001,"steps":[{"expect":[104,105]}]}]}]}
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8080,"clients":[{"address":"192.0.2.1","port":40001,"tls":"plain","steps":[{"expect":[104,105]}]}]}]}
 // "An owning once scope-body parameter may take captures without becoming global."
 // A stream branded by the enclosing function's `Net` parameter is rebound as a
 // written `let mut ... : Stream of n` inside one scope body and taken by a scope

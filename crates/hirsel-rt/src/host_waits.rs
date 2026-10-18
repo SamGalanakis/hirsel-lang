@@ -37,7 +37,7 @@ struct Parked {
 }
 
 /// The completion a canceled `request` returns without its requested effect, or `None` when it
-/// is not a cancellation point. A canceled `tls.connect` or `tls.close` still closes its
+/// is not a cancellation point. A canceled `tls.connect`, `tls.accept` or `tls.close` still closes its
 /// stream, which the call consumes.
 ///
 /// # Safety

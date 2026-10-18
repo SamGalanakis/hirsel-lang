@@ -1,7 +1,7 @@
 // rule: CONC-3
 // expect: run
 // grant: clock
-// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8080,"clients":[{"address":"192.0.2.1","port":40001,"steps":[{"expect":[120]}]}]}]}
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8080,"clients":[{"address":"192.0.2.1","port":40001,"tls":"plain","steps":[{"expect":[120]}]}]}]}
 fn home() -> SocketAddr {
   SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
 }

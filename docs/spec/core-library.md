@@ -119,6 +119,7 @@ N fn net.set_write_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> R
 N fn net.peer_addr(n: Net, s: Stream of n) -> Result[SocketAddr, NetError]
 N fn net.close(n: Net, take s: Stream of n) -> ()
 fn tls.connect(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots) -> Result[Stream of n, NetError]
+fn tls.accept(n: Net, take s: Stream of n, identity: TlsIdentity) -> Result[Stream of n, NetError]
 N fn tls.close(n: Net, take s: Stream of n) -> Result[(), NetError]
 fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
@@ -361,12 +362,13 @@ network data types are root core types, with variant ordinals in the order writt
 ```text
 IpAddr       = V4(Inline[u8, 4]) | V6(Inline[u8, 16])          // network byte order
 SocketAddr   = { ip: IpAddr, port: u16 }
-NetOperation = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer()
+NetOperation = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer() | ListenTls()
 UdpReceived  = { count: u64, peer: SocketAddr, truncated: bool }
 NetRule      = { address: String, port: u16, operation: NetOperation }
 NetTimeout   = Unbounded() | Nanos(u64)
 Shutdown     = Read() | Write() | Both()
 TlsRoots     = WebPki() | Pem(Bytes)
+TlsIdentity  = { chain: Bytes, key: Bytes }                      // PEM, leaf certificate first
 TlsFailure   = UnknownIssuer() | Expired() | NotYetValid() | NameMismatch() | Revoked()
              | BadCertificate() | AlertReceived(u8) | HandshakeFailure() | PeerMisbehaved()
              | Truncated()
@@ -378,7 +380,7 @@ NetError     = NotGranted() | Canceled(CancelCause) | InvalidInput() | UnknownHo
 ```
 
 `Fault` codes, like `FileFault` codes, are capability inputs, not OS error numbers. One error
-type serves the whole network stack, so `connect`, `tls.connect`, `read` and `write` compose
+type serves the whole network stack, so `connect`, `tls.connect`, `tls.accept`, `read` and `write` compose
 with plain `?`. Interrupted and would-block conditions never surface: the provider retries
 interrupted calls, and every operation blocks.
 
@@ -391,7 +393,7 @@ PeerTls       = Plain() | Certificate(List[String]) | Fails(TlsFailure)
 NetConnection = Refused() | Unanswered() | Open(List[NetStep])
 NetStep       = Send(Bytes) | Expect(Bytes) | Stall() | Close() | Reset() | Truncate()
 NetListener   = { address: SocketAddr, clients: List[NetClient] }
-NetClient     = { from: SocketAddr, steps: List[NetStep] }
+NetClient     = { from: SocketAddr, tls: PeerTls, steps: List[NetStep] }
 ```
 
 `arg.count` counts the ordered launch arguments, excluding the executable and tool options.
@@ -545,7 +547,8 @@ identity for human and JSON reports.
 
 `net.narrow` returns a `Net` with exactly the requested rules when each equals a rule of
 `n`, or is `(a, p, ConnectTls())` under `(a, p, Connect())`; otherwise it returns
-`NotGranted()` and mints no `Net`. An empty rule list is allowed and permits nothing.
+`NotGranted()` and mints no `Net`; `(a, p, ListenTls())` is likewise covered by
+`(a, p, Listen())`. An empty rule list is allowed and permits nothing.
 
 | Operation | Rule required in the `Net` passed |
 |---|---|
@@ -554,7 +557,8 @@ identity for human and JSON reports.
 | `net.connect_addr(n, addr, t)` | a rule whose address is the canonical literal of `addr.ip`, with `addr.port`; a host-name rule never authorizes a raw address |
 | stream operations | the stream's own grant |
 | `tls.connect(n, take s, server_name, roots)` | on a `ConnectTls` stream, `server_name` equal to the rule's address |
-| `net.listen(n, addr)` | `(literal, port, Listen())` for `addr`; port 0 grants an ephemeral port |
+| `tls.accept(n, take s, identity)` | on a stream accepted on a listener of `n` |
+| `net.listen(n, addr)` | `(literal, port, Listen())` or `(literal, port, ListenTls())` for `addr`; port 0 grants an ephemeral port |
 | `net.accept(n, mut l)` | the listener's grant; the peer is not checked |
 | `net.udp_bind(n, addr)` | `(literal, port, UdpBind())` for `addr`; port 0 permits an ephemeral port |
 | `udp.send_to(n, mut s, data, addr)` | the socket's originating `Net`, and `(literal, port, UdpPeer())` for `addr` |
@@ -592,14 +596,29 @@ opened under a `ConnectTls` rule, plaintext reads, writes and shutdown before a 
 return `NotGranted()` with no effect; timeout setters and `peer_addr` are allowed before the
 upgrade, so a read timeout can bound the handshake.
 
+`tls.accept` performs a TLS 1.2 or 1.3 server handshake on an accepted stream, presenting
+`identity`: `chain` holds the PEM certificates sent to the client, leaf first, and `key` the
+PEM private key (PKCS#8, PKCS#1 or SEC1; the first key in the bytes) whose public key is the
+leaf's. An empty or malformed chain or key, a key type the provider cannot sign with, and a
+key that does not match the leaf are `InvalidInput()`. The server requests no client
+certificate, offers ALPN `http/1.1` only (a client offering ALPN without it fails the
+handshake), and issues no session tickets. On success it returns the same stream, after which
+every `net` stream operation moves plaintext; on failure the stream is closed. `tls.accept`
+or `tls.connect` on an upgraded stream is `InvalidInput()` and consumes and closes it. A
+stream accepted on a listener opened under a `ListenTls` rule (and no `Listen` rule, which
+`net.listen` prefers) carries no plaintext before a successful `tls.accept`: reads, writes,
+shutdown and `tls.connect` return `NotGranted()` with no effect, while timeout setters and
+`peer_addr` are allowed. `tls.accept` on a stream from `connect` or `connect_addr` is
+`NotGranted()`. Truncation and `tls.close` behave as for `tls.connect` streams.
+
 `net.listen` binds and listens with a backlog of 128 and no address reuse; `net.accept`
 returns a connected stream and its peer address.
 
 The blocking network operations are `resolve`, `connect`, `connect_addr`, `read`,
-`read_into`, `write`, `write_all`, `accept`, `tls.connect` and `tls.close`. Each is a
+`read_into`, `write`, `write_all`, `accept`, `tls.connect`, `tls.accept` and `tls.close`. Each is a
 cancellation point only before it has an effect: a read before any byte is received, a
 write before any byte is accepted, a connect or handshake before any packet is sent. The
-others never return `Canceled`. A canceled `tls.connect` or `tls.close` still consumes its
+others never return `Canceled`. A canceled `tls.connect`, `tls.accept` or `tls.close` still consumes its
 stream and performs the same cleanup as dropping it in that world, including scripted-client
 `Expect` checks and their failure report.
 
@@ -663,8 +682,8 @@ listens on that IP have no scripted clients.
 - Within `Open(steps)`, a read returns at most `max` bytes of the current `Send` and never
   crosses into the next step. `Close()` ends the peer's data, so reads return 0.
   `Truncate()` ends it without `close_notify`: every later read of a stream after a
-  successful `tls.connect` returns `Tls(Truncated())`, and a read of any other stream
-  returns 0. `Reset()` makes every later operation `ConnectionReset()`. `Stall()` delivers
+  successful `tls.connect` or `tls.accept` returns `Tls(Truncated())`, and a read of any
+  other stream returns 0. `Reset()` makes every later operation `ConnectionReset()`. `Stall()` delivers
   nothing, so a read times out or never completes. The end of the steps is `Close()`.
 - Written bytes accumulate and are compared with the next `Expect(b)` once `b`'s length of
   them exist; a mismatch is `Reset()` at that point. Writes are otherwise accepted.
@@ -695,6 +714,13 @@ listens on that IP have no scripted clients.
   `Tls(HandshakeFailure())`; to a `Fails(f)` peer it is `Tls(f)`, after the same grant checks
   and with the same consumed stream and recorded events as any handshake failure. `roots`
   is not consulted, and script bytes are plaintext.
+- `tls.accept` validates `identity` as the host does, then handshakes with the stream's
+  client by its `tls`: a `Certificate(names)` client succeeds exactly when the identity's
+  leaf certificate is valid for a name in `names` (a DNS or IP subject alternative name;
+  time and chain are not checked), otherwise `Tls(AlertReceived(42))`, the `bad_certificate`
+  alert a verifying client sends; a `Plain()` client is `Tls(HandshakeFailure())`; a
+  `Fails(f)` client is `Tls(f)`. A `Reset()` or `Stall()` step at the handshake behaves as
+  for `tls.connect`. Script bytes are plaintext.
 
 Every operation against a scripted peer or listener is recorded as the same request and completion a
 real network produces, so a simulated run yields a recording that replays like a real one

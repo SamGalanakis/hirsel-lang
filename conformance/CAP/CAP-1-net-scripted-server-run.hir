@@ -10,6 +10,7 @@ fn home() -> SocketAddr uses {} {
 fn client(port: u16, take body: Bytes, take response: Bytes) -> NetClient uses {} {
   NetClient(
     from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port),
+    tls: Plain(),
     steps: [Send(body), Expect(response), Close()]
   )
 }

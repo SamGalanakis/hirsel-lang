@@ -25,7 +25,7 @@ const BACKLOG: libc::c_int = 128;
 #[derive(Debug, Default)]
 pub struct HostNet {
     sockets: BTreeMap<u64, OwnedFd>,
-    tls: BTreeMap<u64, rustls::ClientConnection>,
+    tls: BTreeMap<u64, rustls::Connection>,
     pem: Option<Vec<u8>>,
 }
 impl HostNet {
@@ -579,7 +579,24 @@ impl NetProvider for HostNet {
             let mut conn = crate::net_tls::client(name, roots, pem)?;
             conn.complete_io(&mut crate::net_tls::Transport(fd))
                 .map_err(crate::net_tls::error)?;
-            self.tls.insert(stream, conn);
+            self.tls.insert(stream, conn.into());
+            Ok(())
+        })())
+    }
+    fn tls_accept(
+        &mut self,
+        stream: u64,
+        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
+    ) -> Provided<()> {
+        Ok((|| {
+            let fd = self.socket(stream)?;
+            if self.tls.contains_key(&stream) {
+                return Err(NetError::InvalidInput);
+            }
+            let mut conn = crate::net_tls::server(identity)?;
+            conn.complete_io(&mut crate::net_tls::Transport(fd))
+                .map_err(crate::net_tls::error)?;
+            self.tls.insert(stream, conn.into());
             Ok(())
         })())
     }

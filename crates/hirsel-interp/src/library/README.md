@@ -139,6 +139,9 @@ Blocking operations consume cancellation only before effects, and partial write
 faults preserve the accepted prefix. TLS scripts use certificate names without
 crypto; a `Fails(f)` peer fails every handshake with `Tls(f)`, and a `Truncate()`
 step makes reads of a secured stream `Tls(Truncated())`; request events retain the verification name and SHA-256 PEM root digest.
+`tls.accept` loads its identity with the shared `hirsel_run_config::tls::identity` check
+and answers from the accepted client's `tls`, matching names against the leaf with
+`tls::serves`; its request event records the chain's SHA-256, never the key.
 Read and read_into share a canonical byte-delivery event, and explicit/implicit
 close share the same handle event. Scripted listeners (test.net's third argument or
 `listeners` of `net.script@2`) accept their clients in list order, then return

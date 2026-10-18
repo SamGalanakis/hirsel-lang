@@ -1,9 +1,12 @@
 //! TLS provider boundary, following rustls 0.23.46 src/stream.rs (Stream),
-//! src/conn.rs (complete_io), src/client/client_conn.rs and src/error.rs.
+//! src/conn.rs (complete_io), src/client/client_conn.rs, src/server/server_conn.rs and
+//! src/error.rs.
 //! Socket ownership and grants stay in HostNet/State; this module never records
 //! TLS records, keys, random bytes or time.
 use crate::net::{NetError, RootsDigest, TlsFailure};
-use rustls::{ClientConfig, ClientConnection, RootCertStore};
+use rustls::{
+    ClientConfig, ClientConnection, Connection, RootCertStore, ServerConfig, ServerConnection,
+};
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::sync::Arc;
@@ -12,7 +15,34 @@ use std::sync::Arc;
 pub const WEBPKI_VERSION: &str = "webpki-roots@1.0.9";
 
 pub fn pem_digest(pem: &[u8]) -> RootsDigest {
-    RootsDigest::Pem(Sha256::digest(pem).into())
+    RootsDigest::Pem(chain_digest(pem))
+}
+
+/// The tape identity of a `tls.accept` identity: the SHA-256 of its certificate-chain PEM.
+pub fn chain_digest(pem: &[u8]) -> [u8; 32] {
+    Sha256::digest(pem).into()
+}
+
+/// The ALPN protocols a server handshake offers (docs/spec/core-library.md).
+pub const SERVER_ALPN: &[&[u8]] = &[b"http/1.1"];
+
+/// A server handshake presenting an identity the shared argument checks loaded. No client
+/// authentication, session cache or tickets.
+pub(crate) fn server(
+    identity: &Arc<rustls::sign::CertifiedKey>,
+) -> Result<ServerConnection, NetError> {
+    let mut config =
+        ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| NetError::Tls(failure(&e)))?
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
+                identity.clone(),
+            )));
+    config.alpn_protocols = SERVER_ALPN.iter().map(|p| p.to_vec()).collect();
+    config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    config.send_tls13_tickets = 0;
+    ServerConnection::new(Arc::new(config)).map_err(|e| NetError::Tls(failure(&e)))
 }
 
 /// The host provider verifies with the trust anchors parsed by the shared argument checks.
@@ -133,30 +163,31 @@ impl Write for Transport {
     }
 }
 
-pub(crate) fn read(
-    conn: &mut ClientConnection,
+trait Plaintext: Read + Write {}
+impl<T: Read + Write> Plaintext for T {}
+/// rustls::Stream over either side of a connection.
+fn plaintext<R>(
+    conn: &mut Connection,
     fd: libc::c_int,
-    max: u64,
-) -> Result<Vec<u8>, NetError> {
+    f: impl FnOnce(&mut dyn Plaintext) -> R,
+) -> R {
+    let mut transport = Transport(fd);
+    match conn {
+        Connection::Client(conn) => f(&mut rustls::Stream::new(conn, &mut transport)),
+        Connection::Server(conn) => f(&mut rustls::Stream::new(conn, &mut transport)),
+    }
+}
+pub(crate) fn read(conn: &mut Connection, fd: libc::c_int, max: u64) -> Result<Vec<u8>, NetError> {
     let mut bytes = vec![0; max.min(crate::net_host::READ_CHUNK) as usize];
-    let n = rustls::Stream::new(conn, &mut Transport(fd))
-        .read(&mut bytes)
-        .map_err(error)?;
+    let n = plaintext(conn, fd, |s| s.read(&mut bytes)).map_err(error)?;
     bytes.truncate(n);
     Ok(bytes)
 }
-pub(crate) fn write(
-    conn: &mut ClientConnection,
-    fd: libc::c_int,
-    bytes: &[u8],
-) -> Result<u64, NetError> {
-    rustls::Stream::new(conn, &mut Transport(fd))
-        .write(bytes)
+pub(crate) fn write(conn: &mut Connection, fd: libc::c_int, bytes: &[u8]) -> Result<u64, NetError> {
+    plaintext(conn, fd, |s| s.write(bytes))
         .map(|n| n as u64)
         .map_err(error)
 }
-pub(crate) fn flush(conn: &mut ClientConnection, fd: libc::c_int) -> Result<(), NetError> {
-    rustls::Stream::new(conn, &mut Transport(fd))
-        .flush()
-        .map_err(error)
+pub(crate) fn flush(conn: &mut Connection, fd: libc::c_int) -> Result<(), NetError> {
+    plaintext(conn, fd, |s| s.flush()).map_err(error)
 }

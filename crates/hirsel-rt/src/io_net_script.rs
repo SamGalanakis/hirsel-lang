@@ -473,6 +473,53 @@ impl NetProvider for ScriptNet {
             PeerTls::Fails(failure) => Err(NetError::Tls((*failure).into())),
         })
     }
+    fn tls_accept(
+        &mut self,
+        id: u64,
+        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
+    ) -> Provided<()> {
+        let s = self.connection(id)?;
+        if s.tls {
+            return Ok(Err(NetError::InvalidInput));
+        }
+        if let Err(e) = s.check() {
+            return Ok(Err(e));
+        }
+        if matches!(s.steps.get(s.step), Some(NetStep::Stall)) {
+            return if s.read_timeout {
+                Ok(Err(NetError::TimedOut))
+            } else {
+                Err(AdapterError::Blocked)
+            };
+        }
+        // Policy admits only accepted streams.
+        let Remote::Client {
+            index, listener, ..
+        } = s.remote
+        else {
+            return Err(AdapterError::InvalidCompletion);
+        };
+        let client = self
+            .listeners
+            .iter()
+            .find(|l| l.address == listener.ip.to_string() && l.port == listener.port)
+            .and_then(|l| l.clients.get(index))
+            .ok_or(AdapterError::InvalidCompletion)?;
+        Ok(match &client.tls {
+            PeerTls::Plain => Err(NetError::Tls(TlsFailure::HandshakeFailure)),
+            PeerTls::Certificate(names)
+                if names
+                    .iter()
+                    .any(|name| hirsel_run_config::tls::serves(identity, name)) =>
+            {
+                self.connection(id)?.tls = true;
+                Ok(())
+            }
+            // A verifying client rejecting the certificate sends bad_certificate.
+            PeerTls::Certificate(_) => Err(NetError::Tls(TlsFailure::AlertReceived(42))),
+            PeerTls::Fails(failure) => Err(NetError::Tls((*failure).into())),
+        })
+    }
     fn tls_close(&mut self, id: u64) -> Provided<()> {
         let s = self.connection(id)?;
         Ok(if s.tls { s.check() } else { Ok(()) })
@@ -640,6 +687,9 @@ impl ScriptIo {
 impl crate::io::Adapter for ScriptIo {
     fn tls_roots(&mut self, stream: u64, pem: &[u8]) {
         self.state.remember_tls_roots(stream, pem);
+    }
+    fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
+        self.state.remember_tls_identity(stream, chain, key);
     }
     fn preflight(
         &self,

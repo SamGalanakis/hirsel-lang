@@ -219,6 +219,7 @@ fn replay(tape: &[Event], fixture: &RealIo) {
         ReplayFixture {
             events: fixture.tape(),
             pem_roots: &[PEM],
+            tls_identities: &[],
         },
         &tree,
         &tree,

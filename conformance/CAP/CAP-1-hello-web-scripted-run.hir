@@ -28,6 +28,7 @@ fn serve(n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
 fn client(port: u16, take request: Bytes, take response: Bytes) -> NetClient uses {} {
   NetClient(
     from: SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port),
+    tls: Plain(),
     steps: [Send(request), Expect(response), Close()]
   )
 }

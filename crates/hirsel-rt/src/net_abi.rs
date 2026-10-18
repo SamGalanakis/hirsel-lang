@@ -266,6 +266,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_narrow(
             2 => NetOperation::Listen,
             3 => NetOperation::UdpBind,
             4 => NetOperation::UdpPeer,
+            5 => NetOperation::ListenTls,
             _ => crate::fault("NetOperation tag out of range"),
         };
         list.push(NetRule {

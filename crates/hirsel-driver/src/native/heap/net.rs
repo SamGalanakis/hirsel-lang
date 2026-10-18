@@ -123,31 +123,35 @@ fn listener(v: &OpValue) -> Option<NetListener> {
         clients: sequence(clients)?
             .iter()
             .map(|c| {
-                let [from, s] = fields(c)? else {
+                let [from, tls, s] = fields(c)? else {
                     return None;
                 };
                 let from = addr(from)?;
                 Some(NetClient {
                     address: from.ip.to_string(),
                     port: from.port,
+                    tls: peer_tls(tls)?,
                     steps: steps(s)?,
                 })
             })
             .collect::<Option<_>>()?,
     })
 }
-fn peer(v: &OpValue) -> Option<NetPeer> {
-    let [address, port, resolves, tls, connections] = fields(v)? else {
-        return None;
-    };
-    let tls = match variant(tls)? {
+fn peer_tls(v: &OpValue) -> Option<PeerTls> {
+    Some(match variant(v)? {
         (0, _) => PeerTls::Plain,
         (1, names) => {
             PeerTls::Certificate(sequence(names)?.iter().map(text).collect::<Option<_>>()?)
         }
         (2, failure) => PeerTls::Fails(tls_failure(failure)?.into()),
         _ => return None,
+    })
+}
+fn peer(v: &OpValue) -> Option<NetPeer> {
+    let [address, port, resolves, tls, connections] = fields(v)? else {
+        return None;
     };
+    let tls = peer_tls(tls)?;
     let connections = sequence(connections)?
         .iter()
         .map(|v| {
@@ -183,6 +187,7 @@ fn rule(v: &OpValue) -> Option<NetRule> {
             2 => NetOperation::Listen,
             3 => NetOperation::UdpBind,
             4 => NetOperation::UdpPeer,
+            5 => NetOperation::ListenTls,
             _ => return None,
         },
     })
@@ -422,6 +427,19 @@ impl Io {
                     _ => return None,
                 },
             },
+            (Some("tls"), "accept", [n, s, identity]) => {
+                let [chain, key] = fields(identity)? else {
+                    return None;
+                };
+                let (chain, key) = (bytes(chain)?, bytes(key)?);
+                let stream = self.network_id(s)?;
+                hirsel_rt::io::Adapter::tls_identity(&mut self.network, stream, &chain, &key);
+                R::TlsAccept {
+                    net: self.network_id(n)?,
+                    stream,
+                    identity: hirsel_rt::net_tls::chain_digest(&chain),
+                }
+            }
             _ => return None,
         };
         let completion = match self.script(request, cancellation) {
@@ -482,7 +500,7 @@ impl Io {
                 }
                 Err(e) => error(e),
             },
-            C::NetUnit(r) if module == Some("tls") && name == "connect" => {
+            C::NetUnit(r) if module == Some("tls") && name != "close" => {
                 result(r, |_| OpValue::TakenHandle { argument: 1 })
             }
             C::NetUnit(r) => result(r, |()| OpValue::Unit),
@@ -496,7 +514,7 @@ impl Io {
             }),
             C::Unit(Ok(())) => OpValue::Unit,
             // A scripted client's unmet Expect (docs/spec/core-library.md).
-            C::Checked(false) if name == "close" || module == Some("tls") && name == "connect" => {
+            C::Checked(false) if name == "close" || module == Some("tls") => {
                 if let OpValue::Handle(h) = args[1] {
                     self.network_handles.remove(&h);
                 }

@@ -79,6 +79,7 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
         clients: [
           NetClient(
             from: addr,
+            tls: Plain(),
             steps: [
               Send(
                 b"POST /upload HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4;ext=y\r"

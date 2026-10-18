@@ -25,5 +25,6 @@ mod tasks;
 mod test_reporting;
 mod text;
 mod tls;
+mod tls_server;
 mod views;
 mod waits;

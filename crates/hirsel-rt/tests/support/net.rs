@@ -279,11 +279,21 @@ fn rule_value(r: &NetRule) -> Value {
                     NetOperation::Listen => 2,
                     NetOperation::UdpBind => 3,
                     NetOperation::UdpPeer => 4,
+                    NetOperation::ListenTls => 5,
                 },
                 vec![],
             ),
         ],
     )
+}
+fn peer_tls(tls: &PeerTls) -> Value {
+    match tls {
+        PeerTls::Plain => variant(0, vec![]),
+        PeerTls::Certificate(names) => {
+            variant(1, vec![list(names.iter().cloned().map(Value::String))])
+        }
+        PeerTls::Fails(failure) => variant(2, vec![tls_failure((*failure).into())]),
+    }
 }
 fn peer(p: &NetPeer) -> Value {
     record(
@@ -292,13 +302,7 @@ fn peer(p: &NetPeer) -> Value {
             Value::String(p.address.clone()),
             number(Primitive::U16, p.port.into()),
             list(p.resolves_to.iter().map(|a| ip(a.parse().unwrap()))),
-            match &p.tls {
-                PeerTls::Plain => variant(0, vec![]),
-                PeerTls::Certificate(names) => {
-                    variant(1, vec![list(names.iter().cloned().map(Value::String))])
-                }
-                PeerTls::Fails(failure) => variant(2, vec![tls_failure((*failure).into())]),
-            },
+            peer_tls(&p.tls),
             list(p.connections.iter().map(|c| match c {
                 NetConnection::Refused => variant(0, vec![]),
                 NetConnection::Unanswered => variant(1, vec![]),
@@ -328,17 +332,18 @@ fn listener(l: &NetListener) -> Value {
         "NetListener",
         vec![
             at(&l.address, l.port),
-            list(
-                l.clients
-                    .iter()
-                    .map(|c| record("NetClient", vec![at(&c.address, c.port), steps(&c.steps)])),
-            ),
+            list(l.clients.iter().map(|c| {
+                record(
+                    "NetClient",
+                    vec![at(&c.address, c.port), peer_tls(&c.tls), steps(&c.steps)],
+                )
+            })),
         ],
     )
 }
 /// A partial native write is an accepted prefix. The fixture presents exactly
 /// that prefix to the script (whose writes always accept their entire input).
-pub fn arguments(event: &Event, pem_roots: &[&[u8]]) -> (&'static str, Vec<Value>) {
+pub fn arguments(event: &Event, fixture: super::ReplayFixture<'_>) -> (&'static str, Vec<Value>) {
     let n = |id| handle("Net", id);
     let s = |id| handle("Stream", id);
     match &event.request {
@@ -474,7 +479,8 @@ pub fn arguments(event: &Event, pem_roots: &[&[u8]]) -> (&'static str, Vec<Value
                     variant(0, vec![])
                 }
                 RootsDigest::Pem(digest) => {
-                    let pem = pem_roots
+                    let pem = fixture
+                        .pem_roots
                         .iter()
                         .find(|pem| <[u8; 32]>::from(Sha256::digest(pem)) == *digest)
                         .expect("PEM tape translation requires its original trust bundle");
@@ -488,6 +494,28 @@ pub fn arguments(event: &Event, pem_roots: &[&[u8]]) -> (&'static str, Vec<Value
                     s(*stream),
                     Value::String(server_name.clone()),
                     roots,
+                ],
+            )
+        }
+        R::TlsAccept {
+            net,
+            stream,
+            identity,
+        } => {
+            let (chain, key) = fixture
+                .tls_identities
+                .iter()
+                .find(|(chain, _)| <[u8; 32]>::from(Sha256::digest(chain)) == *identity)
+                .expect("identity tape translation requires its original chain and key");
+            (
+                "tls.accept",
+                vec![
+                    n(*net),
+                    s(*stream),
+                    record(
+                        "TlsIdentity",
+                        vec![Value::Bytes(chain.to_vec()), Value::Bytes(key.to_vec())],
+                    ),
                 ],
             )
         }

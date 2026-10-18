@@ -426,6 +426,9 @@ impl Adapter for RealIo {
         self.state.remember_tls_roots(stream, pem);
         self.net.tls_roots(pem);
     }
+    fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
+        self.state.remember_tls_identity(stream, chain, key);
+    }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         if self.cooperative.is_none() || !crate::host_waits::may_park(&request) {
             return self.perform(request);

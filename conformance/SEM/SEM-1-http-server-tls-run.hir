@@ -1,0 +1,87 @@
+// rule: SEM-1
+// expect: run
+// HTTPS through http.serve_tls: two keep-alive requests over one scripted TLS
+// client, then a plaintext client and an invalid identity failing the handshake.
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+}
+
+fn client(port: u16, take tls: PeerTls, take steps: List[NetStep]) -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: port),
+    tls: take tls,
+    steps: take steps
+  )
+}
+
+// A self-signed ECDSA P-256 identity for localhost and 127.0.0.1; it secures nothing.
+fn identity() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn http_net(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: home(),
+        clients: [
+          client(
+            40001u16,
+            Certificate(["localhost"]),
+            [
+              Send(b"GET /one HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 3\r\nConnection: keep-alive\r\n\r\none"
+              ),
+              Send(
+                b"POST /two HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\nabc"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc"
+              ),
+              Close()
+            ]
+          ),
+          client(40002u16, Plain(), [Send(b"GET / HTTP/1.1\r\n\r\n")]),
+          client(40003u16, Certificate(["localhost"]), [])
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, home()) ? http_net
+  let (stream, _) = net.accept(n, mut listener) ? http_net
+  let mut connection = http.serve_tls(n, take stream, identity(), http.default_config())?
+  let first = http.receive_request(mut connection, None())?
+  test.check(t, first.target == "/one" && first.keep_alive)
+  http.respond(mut connection, 200u16, [], b"one", false)?
+  let second = http.receive_request(mut connection, None())?
+  test.check(t, second.target == "/two" && second.body == b"abc")
+  http.respond(mut connection, 200u16, [], second.body, true)?
+  match http.receive_request(mut connection, None()) {
+    Error(Closed()) => (),
+    _ => test.check(t, false),
+  }
+  // A plaintext client fails the handshake; the stream is closed.
+  let (plain, _) = net.accept(n, mut listener) ? http_net
+  match http.serve_tls(n, take plain, identity(), http.default_config()) {
+    Error(Net(Tls(HandshakeFailure()))) => (),
+    _ => test.check(t, false),
+  }
+  // An invalid identity is invalid input before any handshake.
+  let (unused, _) = net.accept(n, mut listener) ? http_net
+  let broken = TlsIdentity(chain: identity().chain, key: b"")
+  match http.serve_tls(n, take unused, broken, http.default_config()) {
+    Error(Net(InvalidInput())) => (),
+    _ => test.check(t, false),
+  }
+  Ok(())
+}

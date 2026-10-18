@@ -48,6 +48,9 @@ conformance/CAP/CAP-1-net-scripted-listen-granted-run.hir
 conformance/CAP/CAP-1-net-scripted-listen-ungranted-run.hir
 conformance/CAP/CAP-1-net-scripted-server-run.hir
 conformance/CAP/CAP-1-net-timeout-run.hir
+conformance/CAP/CAP-1-net-tls-accept-grant-run.hir
+conformance/CAP/CAP-1-net-tls-accept-identity-run.hir
+conformance/CAP/CAP-1-net-tls-accept-run.hir
 conformance/CAP/CAP-1-net-tls-name-mismatch-run.hir
 conformance/CAP/CAP-1-net-tls-peer-fails-run.hir
 conformance/CAP/CAP-1-net-tls-truncate-run.hir
@@ -501,6 +504,8 @@ conformance/CONC/CONC-3-cancel-order-net-run.hir
 conformance/CONC/CONC-3-cancel-order-stdin-timer-channel-run.hir
 conformance/CONC/CONC-3-cancel-order-tls-inputs-run.hir
 conformance/CONC/CONC-3-cancel-order-tls-run.hir
+conformance/CONC/CONC-3-cancel-tls-accept-cleanup-fail.hir
+conformance/CONC/CONC-3-cancel-tls-accept-cleanup-run.hir
 conformance/CONC/CONC-3-cancel-tls-close-cleanup-fail.hir
 conformance/CONC/CONC-3-cancel-tls-close-cleanup-run.hir
 conformance/CONC/CONC-3-cancel-tls-invalid-upgrade-cleanup-fail.hir
@@ -4141,6 +4146,7 @@ conformance/SEM/SEM-1-http-server-chunk-prefix-3-run.hir
 conformance/SEM/SEM-1-http-server-chunked-run.hir
 conformance/SEM/SEM-1-http-server-clock-authority-run.hir
 conformance/SEM/SEM-1-http-server-persistence-run.hir
+conformance/SEM/SEM-1-http-server-tls-run.hir
 conformance/SEM/SEM-1-http-server-wire-run.hir
 conformance/SEM/SEM-1-http-wire-run.hir
 conformance/SEM/SEM-1-left-bit-loss.hir

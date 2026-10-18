@@ -27,7 +27,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
 it can only be narrowed.
 
 **Network.** `Net` is a network capability over a finite set of rules, each a triple
-`(address, port, operation)`, the operation being `Connect()`, `ConnectTls()`, `Listen()`, `UdpBind()` or `UdpPeer()`.
+`(address, port, operation)`, the operation being `Connect()`, `ConnectTls()`, `Listen()`,
+`UdpBind()`, `UdpPeer()` or `ListenTls()`.
 
 - An address is a canonical host name (lowercase ASCII, no trailing dot, a valid host
   name) or a canonical IP literal (dotted IPv4; RFC 5952 IPv6 without brackets). A host
@@ -43,9 +44,11 @@ Each network operation is checked against the rules of the `Net` it is given bef
 host effect; a failed check returns `NotGranted()` without resolving, connecting or
 sending. A host-name rule authorizes that name, never the addresses it resolves to. A
 `Net` can only be narrowed, to a subset of its rules, where a `ConnectTls` rule is the
-narrowing of the `Connect` rule for the same address and port. A stream opened under a
-`ConnectTls` rule carries no plaintext until TLS is established with the rule's address as
-server name ([network operations](core-library.md#network)).
+narrowing of the `Connect` rule for the same address and port, and a `ListenTls` rule the
+narrowing of the `Listen` rule. A stream opened under a `ConnectTls` rule carries no
+plaintext until TLS is established with the rule's address as server name, and a stream
+accepted on a listener opened under a `ListenTls` rule none until a server handshake
+(`tls.accept`) succeeds ([network operations](core-library.md#network)).
 
 UDP bind and peer authority are separate exact IP-address/port rules. A bound
 `UdpSocket of n` can only be operated through its originating `n`. Sending requires

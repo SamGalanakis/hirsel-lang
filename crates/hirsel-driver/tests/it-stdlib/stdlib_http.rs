@@ -569,7 +569,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
                     "rules": [{"address": "127.0.0.1", "service": "8080", "operation": "listen"}],
                     "peers": [],
                     "listeners": [{"address": "127.0.0.1", "port": 8080, "clients": [{
-                        "address": "127.0.0.1", "port": 40001,
+                        "address": "127.0.0.1", "port": 40001, "tls": "plain",
                         "steps": steps
                     }]}]
                 }))
