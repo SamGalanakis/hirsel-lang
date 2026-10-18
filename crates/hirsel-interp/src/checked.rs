@@ -502,6 +502,8 @@ enum Kind {
     /// A binding/own root, with the actual content's deep placement bounds.
     /// Ordinary reads retain this instance; deep unique extracts these bounds.
     Root(Bound),
+    /// Mutable access to caller-owned content, with its original incoming bounds.
+    MutableRoot(Bound),
     Region,
     Arena,
 }
@@ -544,13 +546,44 @@ impl State {
     }
     fn deep_bound(&self, bound: &[u32]) -> Bound {
         let mut out = vec![];
-        for instance in bound {
-            match &self.kinds[*instance as usize] {
-                Kind::Root(content) => union(&mut out, content),
-                Kind::Region | Kind::Arena => union(&mut out, &[*instance]),
+        let mut pending = bound.to_vec();
+        let mut seen = BTreeSet::new();
+        while let Some(instance) = pending.pop() {
+            if !seen.insert(instance) {
+                continue;
+            }
+            match &self.kinds[instance as usize] {
+                Kind::Root(content) | Kind::MutableRoot(content) => pending.extend(content),
+                Kind::Region | Kind::Arena => union(&mut out, &[instance]),
             }
         }
         out
+    }
+    /// Moving caller-owned content removes only mutable access roots. Ordinary
+    /// binding/capture roots and actual placement bounds remain observable.
+    fn caller_content(&self, shadow: &mut Shadow) {
+        let map = shadow
+            .instances()
+            .filter_map(|instance| {
+                let Kind::MutableRoot(content) = &self.kinds[instance as usize] else {
+                    return None;
+                };
+                let mut pending = content.clone();
+                let mut seen = BTreeSet::new();
+                let mut bound = vec![];
+                while let Some(input) = pending.pop() {
+                    if !seen.insert(input) {
+                        continue;
+                    }
+                    match &self.kinds[input as usize] {
+                        Kind::MutableRoot(original) => pending.extend(original),
+                        _ => union(&mut bound, &[input]),
+                    }
+                }
+                Some((instance, bound))
+            })
+            .collect::<Vec<_>>();
+        shadow.substitute(&map);
     }
     pub fn arena(&mut self) -> u32 {
         self.instance(Kind::Arena)
@@ -577,7 +610,9 @@ impl State {
         for instance in shadow.instances() {
             if !self.open.get(instance as usize).copied().unwrap_or(true) {
                 let rule = match self.kinds[instance as usize] {
-                    Kind::Root(_) | Kind::Region => TrapRule::RegionUseAfterScopeExit,
+                    Kind::Root(_) | Kind::MutableRoot(_) | Kind::Region => {
+                        TrapRule::RegionUseAfterScopeExit
+                    }
                     Kind::Arena => TrapRule::ArenaUseAfterEnd,
                 };
                 return Err(self.trap(rule, format!("{what} reaches ended instance {instance}")));
@@ -776,6 +811,7 @@ pub(crate) struct Argument {
     pub shadow: Shadow,
     /// Empty for a global value; otherwise its bound plus the borrowed slot's home.
     pub lifetime: Bound,
+    pub mutable: bool,
 }
 /// What a caller knows about a closure callee.
 #[derive(Clone, Debug, Default)]
@@ -808,7 +844,11 @@ impl FrameCheck {
         let mut parameters = vec![];
         for (ordinal, local) in body.parameters.iter().enumerate() {
             let mut argument = arguments.get(ordinal).cloned().unwrap_or_default();
-            let instance = s.root(&argument.shadow);
+            let instance = if argument.mutable {
+                s.instance(Kind::MutableRoot(argument.shadow.total()))
+            } else {
+                s.root(&argument.shadow)
+            };
             owned.push(instance);
             parameters.push(instance);
             if let Some(value) = slots.get(local.0 as usize).and_then(Option::as_ref) {
@@ -974,6 +1014,7 @@ impl FrameCheck {
         {
             shadow.substitute(std::slice::from_ref(entry));
         }
+        self.state.borrow().caller_content(&mut shadow);
         shadow
     }
     /// A `mut` write-back keeps its own argument's original bound.
@@ -1132,6 +1173,49 @@ mod tests {
             panic!("deep unique must retain region placement")
         };
         assert_eq!(trap.rule, TrapRule::RegionUseAfterScopeExit);
+    }
+
+    #[test]
+    fn displaced_content_removes_only_transitive_mutable_access_roots() {
+        let shared = state(CheckedRuntime::default());
+        let mut state = shared.borrow_mut();
+        let binding = state.root(&Shadow::default());
+        let region = state.instance(Kind::Region);
+        let arena = state.arena();
+        let outer = state.instance(Kind::MutableRoot(vec![binding, region, arena]));
+        let inner = state.instance(Kind::MutableRoot(vec![outer]));
+        let owned_outer = state.instance(Kind::MutableRoot(vec![]));
+        let owned_inner = state.instance(Kind::MutableRoot(vec![owned_outer]));
+        let mut displaced = Shadow::View {
+            content: Box::new(Shadow::of(vec![inner])),
+            home: vec![binding],
+        };
+        let mut owned = Shadow::of(vec![owned_inner]);
+        state.caller_content(&mut displaced);
+        state.caller_content(&mut owned);
+        assert_eq!(displaced.total(), vec![binding, region, arena]);
+        assert_eq!(owned, Shadow::default());
+        for instance in [outer, inner, owned_outer, owned_inner] {
+            state.close(instance);
+        }
+        assert!(state.access(&displaced, "displaced content").is_ok());
+        assert!(state.access(&owned, "owned content").is_ok());
+        state.close(arena);
+        let Err(Error::Trapped(trap)) = state.access(&displaced, "displaced content") else {
+            panic!("moving content must retain arena placement")
+        };
+        assert_eq!(trap.rule, TrapRule::ArenaUseAfterEnd);
+        state.close(region);
+        let Err(Error::Trapped(trap)) = state.access(&displaced, "displaced content") else {
+            panic!("moving content must retain region placement")
+        };
+        assert_eq!(trap.rule, TrapRule::RegionUseAfterScopeExit);
+        state.close(binding);
+        let Err(Error::Trapped(trap)) = state.access(&displaced, "displaced content") else {
+            panic!("moving content must retain an ordinary borrowed binding")
+        };
+        assert_eq!(trap.rule, TrapRule::RegionUseAfterScopeExit);
+        assert!(state.access(&owned, "owned content").is_ok());
     }
 
     #[test]

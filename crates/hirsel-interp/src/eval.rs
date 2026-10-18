@@ -436,6 +436,7 @@ fn execute_frames(
                                     crate::checked::Argument {
                                         lifetime: shadow.total(),
                                         shadow,
+                                        mutable: false,
                                     }
                                 })
                                 .collect::<Vec<_>>()
@@ -639,14 +640,6 @@ fn execute_frames(
                     let mut callback =
                         Frame::new_body(definition, body, arguments, captures, sizes)?;
                     callback.type_arguments = invocation_types;
-                    if let Some(check) = &frame.check {
-                        callback.check = Some(enter_checked(
-                            &check.state,
-                            &callback,
-                            callback_inputs,
-                            callback_callee,
-                        ));
-                    }
                     let mut_parameters = mut_arguments
                         .into_iter()
                         .map(|i| {
@@ -660,6 +653,14 @@ fn execute_frames(
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     callback.mut_parameters = mut_parameters.iter().map(|(_, l)| *l).collect();
+                    if let Some(check) = &frame.check {
+                        callback.check = Some(enter_checked(
+                            &check.state,
+                            &callback,
+                            callback_inputs,
+                            callback_callee,
+                        ));
+                    }
                     callback.callback = Some(crate::resources::Callback {
                         failure_start: execution.failures.len(),
                         token: continuation,
@@ -1833,19 +1834,6 @@ fn execute_frames(
                 let path = definition.path.clone();
                 let mut callee = Frame::new_body(definition, body, arguments, captures, sizes)?;
                 callee.type_arguments = invocation_types;
-                if let Some(check) = &frame.check {
-                    let mut entered = enter_checked(&check.state, &callee, checks, closure_check);
-                    entered.closes_arena = closes_arena;
-                    callee.check = Some(entered);
-                }
-                // MEM-6: the callback never runs with an unbounded arena.
-                callee.bounded = bounded.map(|(arena, cap)| {
-                    budgets.open(arena, cap);
-                    crate::bounded::Boundary {
-                        arena,
-                        failures: execution.failures.len(),
-                    }
-                });
                 let writebacks = mut_places
                     .into_iter()
                     .map(|(i, p)| {
@@ -1859,6 +1847,19 @@ fn execute_frames(
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 callee.mut_parameters = writebacks.iter().map(|(_, l)| *l).collect();
+                if let Some(check) = &frame.check {
+                    let mut entered = enter_checked(&check.state, &callee, checks, closure_check);
+                    entered.closes_arena = closes_arena;
+                    callee.check = Some(entered);
+                }
+                // MEM-6: the callback never runs with an unbounded arena.
+                callee.bounded = bounded.map(|(arena, cap)| {
+                    budgets.open(arena, cap);
+                    crate::bounded::Boundary {
+                        arena,
+                        failures: execution.failures.len(),
+                    }
+                });
                 callee.depth_failure = depth >= limits.call_depth;
                 frame.continuation = Some(Continuation {
                     returns,
@@ -2678,9 +2679,12 @@ fn checked_release_order(frame: &Frame, place: PlaceId, value: &Value) -> Result
 fn enter_checked(
     state: &crate::checked::Shared,
     frame: &Frame,
-    arguments: Vec<crate::checked::Argument>,
+    mut arguments: Vec<crate::checked::Argument>,
     callee: Option<crate::checked::Callee>,
 ) -> crate::checked::FrameCheck {
+    for (argument, parameter) in arguments.iter_mut().zip(&frame.body().parameters) {
+        argument.mutable = frame.mut_parameters.contains(parameter);
+    }
     let noalloc = frame.body_id == frame.definition.entry
         && state
             .borrow()
@@ -3095,8 +3099,11 @@ fn execute_terminator(
                         lifetime.sort_unstable();
                         lifetime.dedup();
                     }
-                    checks[argument.parameter.0 as usize] =
-                        crate::checked::Argument { shadow, lifetime };
+                    checks[argument.parameter.0 as usize] = crate::checked::Argument {
+                        shadow,
+                        lifetime,
+                        mutable: false,
+                    };
                 }
             }
             Action::Call {
@@ -3197,6 +3204,7 @@ fn checked_callee(
     *checks = vec![crate::checked::Argument {
         shadow: Shadow::of(vec![arena]),
         lifetime: vec![arena],
+        mutable: false,
     }];
     let callee = RuntimeCallee::Closure {
         definition,

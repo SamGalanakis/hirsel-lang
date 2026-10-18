@@ -575,4 +575,7 @@ cooperative evaluator.
 
 Checked Replace transports displaced caller-owned content with its mutable
 parameter's original lifetime bounds, as mutable writeback does. Its callee
-access instance does not follow the moved owner; real region/arena bounds do.
+access instances are expanded transitively through mutable wrappers before the
+owner moves; ordinary binding/capture roots and real region/arena bounds remain.
+Mutable parameter roots retain their original incoming bounds separately from
+ordinary roots, so this transport cannot erase a genuine borrowed lifetime.

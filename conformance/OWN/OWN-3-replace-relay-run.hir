@@ -1,0 +1,16 @@
+// rule: OWN-3
+// expect: run
+fn exchange[T](mut place: T, take new: T) -> T {
+  replace(mut place, take new)
+}
+
+fn relay[T](mut place: T, take new: T) -> T {
+  exchange(mut place, take new)
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut values: List[u64] = [1]
+  let previous = relay(mut values, [2])
+  failure.check(previous[0] == 1 && values[0] == 2, Bounds())
+  Ok(())
+}
