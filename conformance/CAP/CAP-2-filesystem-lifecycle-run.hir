@@ -1,0 +1,80 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+// Rust std::fs mkdir/recursive_mkdir and nonempty rename vectors, confined to Test.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("old"), b"abc")])
+  file.mkdir_all(d, path.of("out/nested"))?
+  file.mkdir_all(d, path.of("out/nested"))?
+  test.check(
+    t,
+    match file.mkdir(d, path.of("out")) {
+      Error(AlreadyExists()) => true,
+      _ => false,
+    }
+  )
+  let entries = file.read_dir(d, path.of("out"))?
+  test.check(t, list.len(entries) == 1)
+  test.check(t, path.text(entries[0].path) == "out/nested")
+  test.check(
+    t,
+    match entries[0].kind {
+      Directory() => true,
+      _ => false,
+    }
+  )
+  let meta = file.metadata(d, path.of("old"))?
+  test.check(
+    t,
+    match meta.kind {
+      Regular() => true,
+      _ => false,
+    }
+  )
+  test.check(t, meta.size == 3)
+  test.check(
+    t,
+    match meta.modified_unix_ns {
+      None() => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.remove_dir(d, path.of("out")) {
+      Error(DirectoryNotEmpty()) => true,
+      _ => false,
+    }
+  )
+  file.rename(d, path.of("old"), path.of("out/nested/value"))?
+  let nested = dir.narrow(d, path.of("out/nested"))?
+  file.rename(d, path.of("out"), path.of("moved"))?
+  test.check(t, list.len(file.read_dir(nested, path.of(""))?) == 1)
+  test.check(t, file.read_bytes(d, path.of("moved/nested/value"))? == b"abc")
+  file.remove(d, path.of("moved/nested/value"))?
+  file.remove_dir(d, path.of("moved/nested"))?
+  file.remove_dir(d, path.of("moved"))?
+  test.check(t, list.len(file.read_dir(d, path.of(""))?) == 0)
+  test.check(
+    t,
+    match file.metadata(d, path.of("moved")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.remove_dir(d, path.of(".")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.mkdir_all(d, path.of("../escape")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

@@ -162,6 +162,8 @@ fn file_error(e: hirsel_rt::io::IoError) -> Value {
         IoError::AlreadyExists => variant(5, vec![]),
         IoError::IsDirectory => variant(6, vec![]),
         IoError::NotDirectory => variant(7, vec![]),
+        IoError::DirectoryNotEmpty => variant(8, vec![]),
+        IoError::CrossDevice => variant(9, vec![]),
     })
 }
 fn clock_error(e: hirsel_rt::io::ClockError) -> Value {
@@ -598,6 +600,27 @@ impl HostLibrary {
             "file.walk" => R::Walk {
                 directory: self.id(&a[0])?,
             },
+            "file.read_dir" => R::ReadDir {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+            },
+            "file.metadata" => R::Metadata {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+            },
+            "file.mkdir" => R::Mkdir {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+            },
+            "file.remove_dir" => R::RemoveDir {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+            },
+            "file.rename" => R::Rename {
+                directory: self.id(&a[0])?,
+                from: path(&a[1])?,
+                to: path(&a[2])?,
+            },
             "file.size" => R::Size {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
@@ -676,6 +699,33 @@ impl HostLibrary {
                     ok(u64_value(n))
                 }
                 Ok(b) => ok(Value::Bytes(b)),
+                Err(e) => file_error(e),
+            },
+            C::Metadata(r) => match r {
+                Ok(meta) => ok(Value::Record {
+                    definition: DefPath::core("Metadata"),
+                    fields: vec![
+                        Some(variant(meta.kind as u32, vec![])),
+                        Some(u64_value(meta.size)),
+                        Some(meta.modified_unix_ns.map_or_else(
+                            || variant(0, vec![]),
+                            |n| variant(1, vec![int(Primitive::I128, n as u128)]),
+                        )),
+                    ],
+                }),
+                Err(e) => file_error(e),
+            },
+            C::Entries(r) => match r {
+                Ok(entries) => ok(sequence(
+                    BuiltinType::List,
+                    entries.into_iter().map(|entry| Value::Record {
+                        definition: DefPath::core("DirEntry"),
+                        fields: vec![
+                            Some(hirsel_interp::library::path(&entry.path)),
+                            Some(variant(entry.kind as u32, vec![])),
+                        ],
+                    }),
+                )),
                 Err(e) => file_error(e),
             },
             C::Paths(r) => match r {

@@ -225,6 +225,7 @@ impl RealIo {
             })
             .collect::<Result<Vec<_>, IoError>>()?;
         let mut snapshots = BTreeMap::new();
+        let mut file_identities = BTreeMap::new();
         for (selector, root) in pins {
             let meta = root.metadata().map_err(error)?;
             let root_identity = (meta.dev(), meta.ino());
@@ -255,6 +256,13 @@ impl RealIo {
                     let pin = open_component(fd.as_raw_fd(), &name, libc::O_PATH, 0)?;
                     let meta = pin.metadata().map_err(error)?;
                     if meta.file_type().is_symlink() {
+                        tree.metadata.insert(
+                            path.clone(),
+                            Metadata {
+                                modified_unix_ns: None,
+                                ..entry_metadata(&meta)
+                            },
+                        );
                         let mut bytes = vec![0; 4096];
                         // SAFETY: pin is a live O_PATH symlink and the buffer is writable.
                         let count = unsafe {
@@ -268,6 +276,7 @@ impl RealIo {
                         if count >= 0 && (count as usize) < bytes.len() {
                             bytes.truncate(count as usize);
                             if let Ok(target) = String::from_utf8(bytes) {
+                                tree.metadata.remove(&path);
                                 tree.links.insert(path, target);
                             }
                         }
@@ -285,9 +294,26 @@ impl RealIo {
                     } else if meta.is_file() {
                         let logical = relative(&selector, &path).expect("snapshot entry");
                         // Invalid entries remain operation faults, rather than admission errors.
+                        file_identities.insert(logical.clone(), (meta.dev(), meta.ino()));
                         if let Ok(bytes) = self.disk.read(&logical) {
                             tree.files.insert(path, bytes);
+                        } else {
+                            tree.metadata.insert(
+                                path,
+                                Metadata {
+                                    modified_unix_ns: None,
+                                    ..entry_metadata(&meta)
+                                },
+                            );
                         }
+                    } else {
+                        tree.metadata.insert(
+                            path,
+                            Metadata {
+                                modified_unix_ns: None,
+                                ..entry_metadata(&meta)
+                            },
+                        );
                     }
                 }
             }
@@ -323,6 +349,12 @@ impl RealIo {
                     .iter()
                     .map(|(p, b)| (relative(selector, p).expect("snapshot file"), b.clone())),
             );
+            tree.metadata.extend(
+                snapshot
+                    .metadata
+                    .iter()
+                    .map(|(p, m)| (relative(selector, p).expect("snapshot metadata"), m.clone())),
+            );
             tree.links.extend(snapshot.links.iter().map(|(p, target)| {
                 (
                     relative(selector, p).expect("snapshot link"),
@@ -348,6 +380,16 @@ impl RealIo {
             let prefix = "../".repeat(parent.split('/').filter(|p| !p.is_empty()).count());
             tree.links
                 .insert(selector.clone(), format!("{prefix}{target}"));
+        }
+        let mut canonical = BTreeMap::<(u64, u64), String>::new();
+        let paths: Vec<_> = tree.regular_paths().into_iter().cloned().collect();
+        for path in paths {
+            let identity = file_identities[&path];
+            if let Some(first) = canonical.get(&identity) {
+                tree.file_aliases.insert(path.clone(), first.clone());
+            } else {
+                canonical.insert(identity, path.clone());
+            }
         }
         Ok(tree)
     }
@@ -553,6 +595,8 @@ impl Adapter for RealIo {
                 | Completion::Size(Err(e))
                 | Completion::Bytes(Err(e))
                 | Completion::Paths(Err(e))
+                | Completion::Entries(Err(e))
+                | Completion::Metadata(Err(e))
                     if *e != IoError::NotGranted =>
                 {
                     Some(e.clone())
@@ -609,6 +653,8 @@ fn error(e: std::io::Error) -> IoError {
         std::io::ErrorKind::AlreadyExists => IoError::AlreadyExists,
         std::io::ErrorKind::IsADirectory => IoError::IsDirectory,
         std::io::ErrorKind::NotADirectory => IoError::NotDirectory,
+        std::io::ErrorKind::DirectoryNotEmpty => IoError::DirectoryNotEmpty,
+        std::io::ErrorKind::CrossesDevices => IoError::CrossDevice,
         _ => IoError::Fault(1),
     }
 }
@@ -616,6 +662,23 @@ fn stream_error(_: std::io::Error) -> IoError {
     IoError::Fault(1)
 }
 
+fn entry_metadata(meta: &std::fs::Metadata) -> Metadata {
+    Metadata {
+        kind: if meta.is_file() {
+            FileKind::Regular
+        } else if meta.is_dir() {
+            FileKind::Directory
+        } else if meta.file_type().is_symlink() {
+            FileKind::Symlink
+        } else {
+            FileKind::Other
+        },
+        size: meta.len(),
+        modified_unix_ns: Some(
+            i128::from(meta.mtime()) * 1_000_000_000 + i128::from(meta.mtime_nsec()),
+        ),
+    }
+}
 impl Disk {
     fn base(&self) -> Result<&File, IoError> {
         if self.active_id == 0 {
@@ -954,6 +1017,86 @@ impl Storage for Disk {
             self.prepared.remove(&key);
             Ok(())
         }
+    }
+    fn move_entry(&mut self, from: &str, to: &str) -> Result<(), IoError> {
+        let (src, a) = self.parent(from)?;
+        let (dst, b) = self.parent(to)?;
+        // SAFETY: pinned confined parents; renameat never follows either leaf.
+        if unsafe { libc::renameat(src.as_raw_fd(), a.as_ptr(), dst.as_raw_fd(), b.as_ptr()) } != 0
+        {
+            let failure = std::io::Error::last_os_error();
+            if failure.kind() == std::io::ErrorKind::AlreadyExists
+                && open_component(
+                    dst.as_raw_fd(),
+                    b.to_str().map_err(|_| IoError::Fault(1))?,
+                    libc::O_PATH,
+                    0,
+                )
+                .and_then(|pin| pin.metadata().map_err(error))
+                .is_ok_and(|m| m.is_dir())
+            {
+                Err(IoError::DirectoryNotEmpty)
+            } else {
+                Err(error(failure))
+            }
+        } else {
+            self.prepared.remove(&(self.active_id, from.into()));
+            self.prepared.remove(&(self.active_id, to.into()));
+            Ok(())
+        }
+    }
+    fn mkdir(&mut self, path: &str) -> Result<(), IoError> {
+        let (parent, name) = self.parent(path)?;
+        // SAFETY: live pinned directory and terminated leaf; mkdirat does not follow the leaf.
+        if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o777) } != 0 {
+            Err(error(std::io::Error::last_os_error()))
+        } else {
+            Ok(())
+        }
+    }
+    fn remove_dir(&mut self, path: &str) -> Result<(), IoError> {
+        let (parent, name) = self.parent(path)?;
+        // SAFETY: pinned confined directory; AT_REMOVEDIR refuses symlinks and nonempty dirs.
+        if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+            Err(error(std::io::Error::last_os_error()))
+        } else {
+            Ok(())
+        }
+    }
+    fn metadata(&mut self, path: &str) -> Result<Metadata, IoError> {
+        let pin = if self.local(path)?.is_empty() {
+            self.base()?.try_clone().map_err(error)?
+        } else {
+            let (parent, name) = self.parent(path)?;
+            open_component(
+                parent.as_raw_fd(),
+                name.to_str().map_err(|_| IoError::Fault(1))?,
+                libc::O_PATH,
+                0,
+            )?
+        };
+        Ok(entry_metadata(&pin.metadata().map_err(error)?))
+    }
+    fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError> {
+        let fd = self.open(path, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        let mut entries = vec![];
+        for entry in
+            std::fs::read_dir(format!("/proc/self/fd/{}", fd.as_raw_fd())).map_err(error)?
+        {
+            let name = entry
+                .map_err(error)?
+                .file_name()
+                .into_string()
+                .map_err(|_| IoError::Fault(1))?;
+            if name.contains(['\\', '\0']) {
+                return Err(IoError::Fault(1));
+            }
+            let pin = open_component(fd.as_raw_fd(), &name, libc::O_PATH, 0)?;
+            let kind = entry_metadata(&pin.metadata().map_err(error)?).kind;
+            entries.push(DirEntry { path: name, kind });
+        }
+        entries.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+        Ok(entries)
     }
     fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError> {
         self.entries(root).map(|(f, _)| f)

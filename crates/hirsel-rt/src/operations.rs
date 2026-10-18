@@ -126,6 +126,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "io.dir" | "dir.narrow" | "path.of" | "arg.path" | "arg.count" | "arg.text"
         | "file.open" | "file.read" | "file.seek" | "file.create" | "file.write"
         | "file.append" | "file.narrow" | "file.create_atomic" | "file.commit" | "file.size"
+        | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir"
         | "file.remove" | "file.write_bytes" | "file.write_all" | "io.monotonic_clock"
         | "io.wall_clock" | "clock.monotonic" | "clock.wall" | "instant.ticks" | "io.random"
         | "io.tasks" | "io.net" | "test.check" | "test.check_case" | "test.fail" | "test.dir"
@@ -200,6 +201,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "file.narrow"
             | "file.create_atomic"
             | "file.commit"
+            | "file.read_dir"
+            | "file.metadata"
+            | "file.mkdir"
+            | "file.rename"
+            | "file.remove_dir"
             | "file.size"
             | "file.remove"
             | "file.read_bytes"
@@ -780,6 +786,36 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
+        symbol: "hirsel_rt_v2_file_read_dir",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_file_metadata",
+        destination: true,
+        result: Some((64, 16)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_file_mkdir",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_file_remove_dir",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_file_rename",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
         symbol: "hirsel_rt_v2_file_size",
         destination: true,
         result: Some((16, 8)),
@@ -1051,6 +1087,11 @@ pub const NATIVE_PATHS: &[&str] = &[
     "file.open",
     "file.read",
     "file.read_bytes",
+    "file.read_dir",
+    "file.metadata",
+    "file.mkdir",
+    "file.rename",
+    "file.remove_dir",
     "file.remove",
     "file.seek",
     "file.size",

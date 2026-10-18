@@ -66,6 +66,11 @@ fn file.append(d: Dir, mut f: File of d, data: Bytes) -> Result[(), FileError]
 fn file.narrow(d: Dir, take f: File) -> Option[File of d]
 fn file.walk(d: Dir) -> Result[Iter[Result[Path, FileError]], FileError]
 fn file.size(d: Dir, p: Path) -> Result[u64, FileError]
+fn file.read_dir(d: Dir, p: Path) -> Result[List[DirEntry], FileError]
+fn file.metadata(d: Dir, p: Path) -> Result[Metadata, FileError]
+fn file.mkdir(d: Dir, p: Path) -> Result[(), FileError]
+fn file.rename(d: Dir, from: Path, to: Path) -> Result[(), FileError]
+fn file.remove_dir(d: Dir, p: Path) -> Result[(), FileError]
 fn file.read_bytes(d: Dir, p: Path) -> Result[Bytes, FileError] in d
 fn file.write_bytes(d: Dir, p: Path, take data: Bytes) -> Result[(), FileError]
 N fn file.remove(d: Dir, p: Path) -> Result[(), FileError]
@@ -207,7 +212,7 @@ CancelCause   = Requested | Parent | ChildFailed
 CancelError   = Canceled(CancelCause)
 ChannelError  = Closed | Canceled(CancelCause)
 GrantError    = NotGranted()
-type FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory()
+type FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice()
 InputError    = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
 EnvError      = NotGranted() | InvalidUtf8()
@@ -226,6 +231,42 @@ provider inputs. Path-confinement refusals retain `FileFault` and never masquera
 permission errors. Other file errors retain `FileFault(u32)`; file and output fault codes
 are capability inputs, not inferred OS error numbers. Every variant is recorded and
 replayed as a run input; injected non-canceled errors can follow partial write effects.
+
+## Filesystem lifecycle
+
+```text
+type FileKind = Regular | Directory | Symlink | Other
+type Metadata { kind: FileKind, size: u64, modified_unix_ns: Option[i128] }
+type DirEntry { path: Path, kind: FileKind }
+```
+
+`file.read_dir` lists direct children, including empty directories and symlinks,
+sorted by UTF-8 path bytes. Entry paths are relative to the supplied `Dir`, including
+the requested directory prefix. Invalid UTF-8 entry names return `FileFault`.
+`file.metadata` describes the final entry without following its symlink; parent
+symlinks resolve beneath the granted root. `size` is the host entry's byte length
+(and the UTF-8 target length for simulated symlinks); non-regular sizes are
+provider inputs. `modified_unix_ns` is an optional signed nanosecond count since
+the Unix epoch, absent when unavailable. Metadata is a filesystem input and needs
+no `WallClock`. A simulated new entry has no timestamp; recorded host metadata
+and its changes remain inputs during replay.
+
+`file.mkdir` creates one directory and returns `AlreadyExists` for any existing
+entry, including a symlink. Missing parents return `NotFound`. `file.rename` moves
+a file, symlink or directory between two paths within the same `Dir`; final
+symlinks are moved or replaced as entries. Replacement follows POSIX semantics:
+files and symlinks replace files or symlinks, directories replace only empty
+directories, and a same-entry rename succeeds. Directory/non-directory mismatches
+return `IsDirectory` or `NotDirectory`; a nonempty destination directory returns
+`DirectoryNotEmpty`. Moving a directory into its descendant returns `FileFault`.
+Cross-device rename returns `CrossDevice`, with no copy fallback.
+`file.remove_dir` removes only an empty directory, never a final symlink; a
+nonempty directory returns `DirectoryNotEmpty`. Rename and directory removal
+refuse either spelling of the grant root with `FileFault`. Read-only grants deny
+all three mutations with `NotGranted` before any storage call. Paths retain the
+existing descriptor confinement and traversal refusal. Portable host errors also
+map ENOTEMPTY to `DirectoryNotEmpty` and EXDEV to `CrossDevice`; other errors use
+the existing `FileError` contract. Successful operations do not promise durability.
 
 ## Network types
 

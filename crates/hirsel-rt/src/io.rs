@@ -42,6 +42,8 @@ pub enum IoError {
     AlreadyExists,
     IsDirectory,
     NotDirectory,
+    DirectoryNotEmpty,
+    CrossDevice,
     NotGranted,
 }
 /// Ordinals follow core InputError; host errno is translated to the existing fault input.
@@ -201,6 +203,27 @@ pub enum Request {
     Walk {
         directory: u64,
     },
+    ReadDir {
+        directory: u64,
+        path: String,
+    },
+    Metadata {
+        directory: u64,
+        path: String,
+    },
+    Mkdir {
+        directory: u64,
+        path: String,
+    },
+    Rename {
+        directory: u64,
+        from: String,
+        to: String,
+    },
+    RemoveDir {
+        directory: u64,
+        path: String,
+    },
     Size {
         directory: u64,
         path: String,
@@ -331,6 +354,8 @@ pub enum Completion {
     Size(Result<u64, IoError>),
     Bytes(Result<Vec<u8>, IoError>),
     Paths(Result<Vec<String>, IoError>),
+    Entries(Result<Vec<DirEntry>, IoError>),
+    Metadata(Result<Metadata, IoError>),
     NetHandle(Result<u64, NetError>),
     Listened(Result<(u64, SocketAddr), NetError>),
     Addresses(Result<Vec<SocketAddr>, NetError>),
@@ -352,19 +377,54 @@ pub struct Event {
     pub completion: Completion,
     pub fault: Option<Fault>,
 }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum FileKind {
+    Regular,
+    Directory,
+    Symlink,
+    Other,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Metadata {
+    pub kind: FileKind,
+    pub size: u64,
+    pub modified_unix_ns: Option<i128>,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirEntry {
+    pub path: String,
+    pub kind: FileKind,
+}
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Tree {
     pub directories: BTreeSet<String>,
     pub files: BTreeMap<String, Vec<u8>>,
+    /// Initial/shared regular-file identity, alias to its lexically first name.
+    pub file_aliases: BTreeMap<String, String>,
     /// Physical relative links; targets remain data until a confined operation resolves them.
     pub links: BTreeMap<String, String>,
+    /// Snapshot provider metadata, including special entries. New simulated entries omit it.
+    pub metadata: BTreeMap<String, Metadata>,
 }
 impl Tree {
+    pub(crate) fn regular_paths(&self) -> BTreeSet<&String> {
+        self.files
+            .keys()
+            .chain(
+                self.metadata
+                    .iter()
+                    .filter_map(|(p, m)| (m.kind == FileKind::Regular).then_some(p)),
+            )
+            .collect()
+    }
     pub fn new(files: BTreeMap<String, Vec<u8>>) -> Result<Self, IoError> {
         let mut tree = Self {
             directories: BTreeSet::from([String::new()]),
             files: BTreeMap::new(),
+            file_aliases: BTreeMap::new(),
             links: BTreeMap::new(),
+            metadata: BTreeMap::new(),
         };
         for (path, bytes) in files {
             let path = relative("", &path)
@@ -461,6 +521,11 @@ pub(crate) trait Storage {
     ) -> Result<(), IoError>;
     fn remove(&mut self, path: &str) -> Result<(), IoError>;
     fn rename(&mut self, from: &str, to: &str) -> Result<(), IoError>;
+    fn move_entry(&mut self, from: &str, to: &str) -> Result<(), IoError>;
+    fn mkdir(&mut self, path: &str) -> Result<(), IoError>;
+    fn remove_dir(&mut self, path: &str) -> Result<(), IoError>;
+    fn metadata(&mut self, path: &str) -> Result<Metadata, IoError>;
+    fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError>;
     fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError>;
 }
 pub(crate) fn relative(root: &str, path: &str) -> Option<String> {
@@ -495,6 +560,8 @@ pub(crate) struct State {
     pub fake_trees: BTreeMap<u64, Tree>,
     pub fake_directories: BTreeMap<u64, u64>,
     fake_files: BTreeMap<u64, crate::io_sim::FileIdentities>,
+    fake_roots: BTreeMap<u64, BTreeMap<u64, String>>,
+    fake_detached: BTreeMap<u64, BTreeSet<u64>>,
     pub projections: BTreeSet<String>,
     pub mounts: BTreeMap<String, Access>,
     /// The admitted RunConfig rule set of the root Net; replay re-derives from it.
@@ -520,6 +587,8 @@ impl Default for State {
             fake_trees: BTreeMap::new(),
             fake_directories: BTreeMap::new(),
             fake_files: BTreeMap::new(),
+            fake_roots: BTreeMap::new(),
+            fake_detached: BTreeMap::new(),
             mounts: BTreeMap::from([(String::new(), Access::ReadWrite)]),
             net_rules: BTreeSet::new(),
             net_world: NetWorld::Host,
@@ -542,6 +611,9 @@ impl State {
             Request::Directory { path, .. } if self.mount(path).is_none() => return true,
             Request::Write { directory, .. }
             | Request::Remove { directory, .. }
+            | Request::Mkdir { directory, .. }
+            | Request::Rename { directory, .. }
+            | Request::RemoveDir { directory, .. }
             | Request::Create { directory, .. }
             | Request::FileWrite { directory, .. }
             | Request::FileAppend { directory, .. }
@@ -617,9 +689,14 @@ impl State {
             | Request::NarrowFile { directory, .. }
             | Request::Walk { directory }
             | Request::Size { directory, .. }
+            | Request::ReadDir { directory, .. }
+            | Request::Metadata { directory, .. }
             | Request::Read { directory, .. }
             | Request::Write { directory, .. }
             | Request::Remove { directory, .. }
+            | Request::Mkdir { directory, .. }
+            | Request::Rename { directory, .. }
+            | Request::RemoveDir { directory, .. }
             | Request::Create { directory, .. }
             | Request::FileWrite { directory, .. }
             | Request::FileAppend { directory, .. }
@@ -669,6 +746,17 @@ impl State {
                 request,
             );
         }
+        if matches!(
+            request,
+            Request::ReadDir { .. }
+                | Request::Metadata { .. }
+                | Request::Mkdir { .. }
+                | Request::RemoveDir { .. }
+                | Request::Rename { .. }
+        ) && fault.is_some_and(|f| f.partial != 0)
+        {
+            return Err(AdapterError::InvalidCompletion);
+        }
         // Policy denial is independently derived, never an injected tape fault.
         if fault.is_some_and(|f| f.error == IoError::NotGranted)
             || (self.denied_projection(request) && fault.is_some())
@@ -684,6 +772,8 @@ impl State {
                         | IoError::AlreadyExists
                         | IoError::IsDirectory
                         | IoError::NotDirectory
+                        | IoError::DirectoryNotEmpty
+                        | IoError::CrossDevice
                 )
             })
         {
@@ -706,16 +796,22 @@ impl State {
                 .fake_files
                 .remove(&tree_id)
                 .expect("fake file identities");
+            let mut roots = self.fake_roots.remove(&tree_id).unwrap_or_default();
+            let mut detached = self.fake_detached.remove(&tree_id).unwrap_or_default();
             let result = self.execute_storage(
-                &mut crate::io_sim::MemoryTree {
-                    tree: &mut tree,
-                    identities: &mut identities,
-                },
+                &mut crate::io_sim::LinkedTree::new(
+                    &mut tree,
+                    &mut roots,
+                    &mut identities,
+                    &mut detached,
+                ),
                 request,
                 fault,
             );
             self.fake_trees.insert(tree_id, tree);
             self.fake_files.insert(tree_id, identities);
+            self.fake_roots.insert(tree_id, roots);
+            self.fake_detached.insert(tree_id, detached);
             if matches!(request, Request::NarrowDir { .. })
                 && let Ok(Completion::Handle(Ok(id))) = &result
             {
@@ -1170,6 +1266,31 @@ impl State {
                 };
                 Ok(C::Unit(result))
             }
+            R::Rename {
+                directory,
+                from,
+                to,
+            } => {
+                let root = self.directory(*directory)?;
+                if self.access(*directory)? == Access::Read {
+                    return Ok(C::Unit(Err(IoError::NotGranted)));
+                }
+                storage.activate(*directory, &root);
+                let result = if let Some(e) = error {
+                    Err(e)
+                } else {
+                    relative(&root, from)
+                        .zip(relative(&root, to))
+                        .ok_or(IoError::Fault(1))
+                        .and_then(|(from, to)| {
+                            if from == root || to == root {
+                                return Err(IoError::Fault(1));
+                            }
+                            storage.move_entry(&from, &to)
+                        })
+                };
+                Ok(C::Unit(result))
+            }
             R::Walk { directory } => {
                 let root = self.directory(*directory)?;
                 storage.activate(*directory, &root);
@@ -1181,6 +1302,10 @@ impl State {
                     R::Open { directory, path }
                     | R::Create { directory, path }
                     | R::Size { directory, path }
+                    | R::ReadDir { directory, path }
+                    | R::Metadata { directory, path }
+                    | R::Mkdir { directory, path }
+                    | R::RemoveDir { directory, path }
                     | R::Read { directory, path }
                     | R::Write {
                         directory, path, ..
@@ -1192,7 +1317,10 @@ impl State {
                 let root = self.directory(directory)?;
                 if self.access(directory)? == Access::Read {
                     match request {
-                        R::Write { .. } | R::Remove { .. } => {
+                        R::Write { .. }
+                        | R::Remove { .. }
+                        | R::Mkdir { .. }
+                        | R::RemoveDir { .. } => {
                             return Ok(C::Unit(Err(IoError::NotGranted)));
                         }
                         R::Create { .. } | R::CreateAtomic { .. } => {
@@ -1220,6 +1348,49 @@ impl State {
                                 position: 0,
                                 writable,
                             }))
+                        })
+                    })),
+                    R::ReadDir { .. } => Ok(C::Entries(if let Some(e) = error {
+                        Err(e)
+                    } else {
+                        path.and_then(|p| {
+                            let prefix = if root.is_empty() {
+                                p.as_str()
+                            } else if p == root {
+                                ""
+                            } else {
+                                p.strip_prefix(&format!("{root}/")).expect("relative path")
+                            };
+                            storage.read_dir(&p).map(|entries| {
+                                entries
+                                    .into_iter()
+                                    .map(|mut entry| {
+                                        if !prefix.is_empty() {
+                                            entry.path = format!("{prefix}/{}", entry.path);
+                                        }
+                                        entry
+                                    })
+                                    .collect()
+                            })
+                        })
+                    })),
+                    R::Metadata { .. } => Ok(C::Metadata(if let Some(e) = error {
+                        Err(e)
+                    } else {
+                        path.and_then(|p| storage.metadata(&p))
+                    })),
+                    R::Mkdir { .. } | R::RemoveDir { .. } => Ok(C::Unit(if let Some(e) = error {
+                        Err(e)
+                    } else {
+                        path.and_then(|p| {
+                            if p == root {
+                                return Err(IoError::Fault(1));
+                            }
+                            if matches!(request, R::Mkdir { .. }) {
+                                storage.mkdir(&p)
+                            } else {
+                                storage.remove_dir(&p)
+                            }
                         })
                     })),
                     R::Size { .. } => Ok(C::Size(if let Some(e) = error {
@@ -1512,6 +1683,8 @@ fn error_word(error: IoError) -> u64 {
         IoError::AlreadyExists => 5,
         IoError::IsDirectory => 6,
         IoError::NotDirectory => 7,
+        IoError::DirectoryNotEmpty => 8,
+        IoError::CrossDevice => 9,
     }
 }
 unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
@@ -2627,6 +2800,209 @@ pub(crate) unsafe fn append_byte_list(
             );
             payload.cast::<u64>().write(total);
             buffer.write(block);
+        }
+    }
+}
+
+path_export!(
+    hirsel_rt_v2_file_mkdir,
+    Mkdir,
+    directory,
+    Unit,
+    UnitResult,
+    UnitResult::of
+);
+path_export!(
+    hirsel_rt_v2_file_remove_dir,
+    RemoveDir,
+    directory,
+    Unit,
+    UnitResult,
+    UnitResult::of
+);
+
+/// # Safety
+/// The bound context and borrowed handles/paths are live; out is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_rename(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    directory: *const u64,
+    from: *const u64,
+    to: *const u64,
+) -> u8 {
+    let request = Request::Rename {
+        directory: unsafe { directory.read() },
+        from: unsafe { Binding::get(ctx) }.path(unsafe { from.read() }),
+        to: unsafe { Binding::get(ctx) }.path(unsafe { to.read() }),
+    };
+    let Ok(Completion::Unit(result)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(UnitResult::of(result)) };
+    crate::STATUS_OK
+}
+
+/// Metadata result: tag at 0, Metadata at 16, Option[i128] at 32.
+#[repr(C, align(16))]
+pub struct MetadataResult {
+    pub words: [u64; 8],
+}
+/// # Safety
+/// Context bound; directory/Path borrowed and out writable for 64 aligned bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_metadata(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut MetadataResult,
+    directory: *const u64,
+    path: *const u64,
+) -> u8 {
+    let request = Request::Metadata {
+        directory: unsafe { directory.read() },
+        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+    };
+    let Ok(Completion::Metadata(result)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let mut words = [0; 8];
+    match result {
+        Ok(meta) => {
+            words[2] = meta.kind as u64;
+            words[3] = meta.size;
+            if let Some(ns) = meta.modified_unix_ns {
+                words[4] = 1;
+                words[6] = ns as u64;
+                words[7] = (ns >> 64) as u64;
+            }
+        }
+        Err(error) => {
+            words[0] = 1;
+            words[2] = error_word(error);
+        }
+    }
+    unsafe { out.write(MetadataResult { words }) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Context bound, directory and path borrowed, out writable for Result[List[DirEntry],FileError].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_read_dir(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut HandleResult,
+    directory: *const u64,
+    path: *const u64,
+) -> u8 {
+    let request = Request::ReadDir {
+        directory: unsafe { directory.read() },
+        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+    };
+    let Ok(Completion::Entries(result)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let result = result.map(|entries| {
+        // DirEntry is pointer-free (Path @0, FileKind @8), like the runtime address list.
+        let block = unsafe { crate::alloc::allocate_sequence(ctx, 0, entries.len() as u64, 16, 8) };
+        let first = crate::alloc::sequence_elements_offset(8) as usize;
+        for (index, entry) in entries.into_iter().enumerate() {
+            let id = unsafe { Binding::get(ctx) }.intern_path(&entry.path);
+            unsafe {
+                let slot = crate::alloc::payload(block).add(first + index * 16);
+                slot.cast::<u64>().write(id);
+                slot.add(8).cast::<u64>().write(entry.kind as u64);
+            }
+        }
+        block as u64
+    });
+    unsafe { out.write(HandleResult::of(result)) };
+    crate::STATUS_OK
+}
+
+#[cfg(test)]
+mod filesystem_authority_tests {
+    use super::*;
+    struct DeniedStorage;
+    impl Storage for DeniedStorage {
+        fn activate(&mut self, _: u64, _: &str) {
+            panic!("denied operation activated storage")
+        }
+        fn file_fits(&mut self, _: u64, _: &str) -> bool {
+            unreachable!()
+        }
+        fn open_file(&mut self, _: &str, _: u64) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn create_file(&mut self, _: &str, _: u64) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn read_file(&mut self, _: u64, _: u64, _: u64) -> Result<Vec<u8>, IoError> {
+            unreachable!()
+        }
+        fn write_file(&mut self, _: u64, _: &[u8], _: bool) -> Result<u64, IoError> {
+            unreachable!()
+        }
+        fn directory(&mut self, _: &str, _: u64) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn read(&mut self, _: &str) -> Result<Vec<u8>, IoError> {
+            unreachable!()
+        }
+        fn write(&mut self, _: &str, _: &[u8], _: bool, _: bool) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn remove(&mut self, _: &str) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn rename(&mut self, _: &str, _: &str) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn move_entry(&mut self, _: &str, _: &str) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn mkdir(&mut self, _: &str) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn remove_dir(&mut self, _: &str) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn metadata(&mut self, _: &str) -> Result<Metadata, IoError> {
+            unreachable!()
+        }
+        fn read_dir(&mut self, _: &str) -> Result<Vec<DirEntry>, IoError> {
+            unreachable!()
+        }
+        fn walk(&mut self, _: &str) -> Result<Vec<String>, IoError> {
+            unreachable!()
+        }
+    }
+    #[test]
+    fn denied_mutations_never_activate_or_call_storage() {
+        let mut state = State::default();
+        let directory = state.handles.insert(Grant::Directory {
+            root: String::new(),
+            access: Access::Read,
+        });
+        for request in [
+            Request::Mkdir {
+                directory,
+                path: "../outside".into(),
+            },
+            Request::RemoveDir {
+                directory,
+                path: "missing/child".into(),
+            },
+            Request::Rename {
+                directory,
+                from: "missing".into(),
+                to: "/outside".into(),
+            },
+        ] {
+            assert_eq!(
+                state.execute_storage(&mut DeniedStorage, &request, None),
+                Ok(Completion::Unit(Err(IoError::NotGranted)))
+            );
         }
     }
 }

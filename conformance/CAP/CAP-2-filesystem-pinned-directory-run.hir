@@ -1,0 +1,63 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [])
+  file.mkdir(d, path.of("source"))?
+  file.mkdir(d, path.of("target"))?
+  file.write_bytes(d, path.of("source/value"), b"content")?
+  let old = dir.narrow(d, path.of("target"))?
+  file.rename(d, path.of("source"), path.of("target"))?
+  test.check(t, list.len(file.read_dir(old, path.of(""))?) == 0)
+  let again = dir.narrow(old, path.of("."))?
+  test.check(t, list.len(file.read_dir(again, path.of(""))?) == 0)
+  test.check(
+    t,
+    match file.metadata(old, path.of("."))?.kind {
+      Directory() => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.mkdir(old, path.of("child")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(t, list.len(file.read_dir(d, path.of("target"))?) == 1)
+  file.mkdir(d, path.of("empty"))?
+  let empty = dir.narrow(d, path.of("empty"))?
+  file.remove_dir(d, path.of("empty"))?
+  test.check(t, list.len(file.read_dir(empty, path.of(""))?) == 0)
+  test.check(
+    t,
+    match file.create(empty, path.of("file")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  file.mkdir(d, path.of("moving"))?
+  let moving = dir.narrow(d, path.of("moving"))?
+  file.write_bytes(moving, path.of("value"), b"held")?
+  let held = file.open(moving, path.of("value"))?
+  let mut atomic = file.create_atomic(moving, path.of("saved"))?
+  file.write_all(moving, mut atomic, b"atomic")?
+  file.rename(d, path.of("moving"), path.of("renamed"))?
+  match file.narrow(moving, take held) {
+    Some(f) => {
+      let _ = take f
+    },
+    None() => test.check(t, false),
+  }
+  file.commit(moving, take atomic)?
+  test.check(t, file.read_bytes(moving, path.of("saved"))? == b"atomic")
+  let created = file.create(moving, path.of("created"))?
+  match file.narrow(moving, take created) {
+    Some(f) => {
+      let _ = take f
+    },
+    None() => test.check(t, false),
+  }
+  Ok(())
+}

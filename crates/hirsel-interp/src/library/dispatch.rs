@@ -250,7 +250,13 @@ impl Library {
                             };
                             match resolved {
                                 Ok(physical)
-                                    if self.simulation.trees[&tree].0.contains(&physical) =>
+                                    if self.simulation.trees[&tree].0.contains(&physical)
+                                        || self
+                                            .simulation
+                                            .detached_directories
+                                            .contains(&directory)
+                                        || (name == "io.dir"
+                                            && self.simulation.detached_mounts.contains(&root)) =>
                                 {
                                     let logical = simulation::relative(&root, &local).unwrap();
                                     let handle = self.simulation.handle(
@@ -265,6 +271,12 @@ impl Library {
                                         unreachable!()
                                     };
                                     self.simulation.resolved_directories.insert(*id, physical);
+                                    if self.simulation.detached_directories.contains(&directory)
+                                        || (name == "io.dir"
+                                            && self.simulation.detached_mounts.contains(&root))
+                                    {
+                                        self.simulation.detached_directories.insert(*id);
+                                    }
                                     ok(handle)
                                 }
                                 Ok(physical) => file_error(
@@ -487,6 +499,9 @@ impl Library {
                 "file.create"
                     | "file.write_bytes"
                     | "file.remove"
+                    | "file.mkdir"
+                    | "file.rename"
+                    | "file.remove_dir"
                     | "file.create_atomic"
                     | "file.write_all"
                     | "file.commit"
@@ -649,6 +664,9 @@ impl Library {
             if t != tree || d != dir {
                 return Err(invalid("wrong atomic directory"));
             }
+            if name == "file.commit" {
+                self.simulation.grants.remove(&id);
+            }
             let local = |p: &str| -> String {
                 if root.is_empty() {
                     p.into()
@@ -672,7 +690,6 @@ impl Library {
             };
             if name == "file.commit" && self.simulation.file_identity(tree, &temp) != Some(identity)
             {
-                self.simulation.grants.remove(&id);
                 self.simulation
                     .trees
                     .get_mut(&tree)
@@ -702,7 +719,6 @@ impl Library {
                     .ok_or_else(|| invalid("dead atomic temporary"))?;
                 files.insert(dst.clone(), data);
                 self.simulation.publish_identity(tree, &temp, &dst);
-                self.simulation.grants.remove(&id);
             }
             return Ok(ok(Value::Unit));
         }
@@ -710,11 +726,28 @@ impl Library {
         let Some(logical) = simulation::relative(&root, p) else {
             return Ok(file_fault(self.simulation.config.invalid_path_code));
         };
-        let follow = !matches!(name, "file.write_bytes" | "file.remove");
+        let follow = !matches!(
+            name,
+            "file.write_bytes"
+                | "file.remove"
+                | "file.metadata"
+                | "file.mkdir"
+                | "file.remove_dir"
+                | "file.rename"
+        );
         let p = match self.simulation.resolve_in(tree, dir, &root, p, follow) {
             Ok(p) => p,
             Err(error) => return Ok(file_error(error)),
         };
+        if matches!(
+            name,
+            "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir"
+        ) {
+            return self.file_lifecycle(name, a, (tree, dir, &root), &logical, &p);
+        }
+        if self.simulation.detached_directories.contains(&dir) {
+            return Ok(file_error(FileError::IsDirectory));
+        }
         match name {
             "file.open" => {
                 if let Err(error) = self.simulation.file_bytes(tree, &p) {
@@ -753,6 +786,7 @@ impl Library {
                     self.simulation.replace_identity(tree, &p);
                     self.simulation.file_identity(tree, &p).unwrap()
                 };
+                self.simulation.sync_file(tree, identity);
                 Ok(ok(self.simulation.handle(
                     "File",
                     Grant::File {
@@ -793,6 +827,7 @@ impl Library {
                 Ok(ok(Value::Unit))
             }
             "file.remove" if tree == 0 && self.simulation.config.links.remove(&p).is_some() => {
+                self.simulation.config.metadata.remove(&p);
                 Ok(ok(Value::Unit))
             }
             "file.remove" => Ok(
@@ -1122,7 +1157,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();
@@ -1488,7 +1523,7 @@ primary_operations! { self, call, context, name, a, value;
     ; finish Ok(Some(OperationResult::returned(value)))
 }
 
-fn parent(path: &str) -> &str {
+pub(super) fn parent(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(p, _)| p)
 }
 pub(super) fn arg(a: &[Value], i: usize) -> Result<&Value, Error> {
@@ -1612,6 +1647,8 @@ pub(super) fn file_error(f: FileError) -> Value {
         FileError::AlreadyExists => 5,
         FileError::IsDirectory => 6,
         FileError::NotDirectory => 7,
+        FileError::DirectoryNotEmpty => 8,
+        FileError::CrossDevice => 9,
     };
     error(variant(ordinal, vec![]))
 }

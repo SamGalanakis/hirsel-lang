@@ -1,0 +1,54 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+// Rust std::fs rename-over-open-file and nonempty-directory vectors.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("source"), b"source"), (path.of("target"), b"target")])
+  let mut old = file.open(d, path.of("target"))?
+  file.rename(d, path.of("source"), path.of("target"))?
+  test.check(t, file.read_bytes(d, path.of("target"))? == b"source")
+  let mut bytes: List[u8] = []
+  let _ = file.read(d, mut old, mut bytes, 6)?
+  test.check(t, bytes.from_list(take bytes) == b"target")
+  file.mkdir(d, path.of("a"))?
+  file.mkdir(d, path.of("b"))?
+  file.mkdir(d, path.of("b/child"))?
+  test.check(
+    t,
+    match file.rename(d, path.of("a"), path.of("b")) {
+      Error(DirectoryNotEmpty()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.rename(d, path.of("target"), path.of("a")) {
+      Error(IsDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.rename(d, path.of("a"), path.of("target")) {
+      Error(NotDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.rename(d, path.of("b"), path.of("b/child/loop")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  file.rename(d, path.of("target"), path.of("target"))?
+  file.rename(d, path.of("a"), path.of("b/child"))?
+  test.check(
+    t,
+    match file.metadata(d, path.of("a")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

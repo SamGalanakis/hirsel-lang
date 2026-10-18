@@ -312,13 +312,29 @@ fn io_result_records_match_derived_layouts_on_both_targets() {
         });
         let walk = ty.variant(&[&[iter], &[error]]);
         let step = ty.variant(&[&[], &[item]]);
+        let kind = ty.variant(&[&[], &[], &[], &[]]);
+        let i128ty = ty.p(Primitive::I128);
+        let timestamp = ty.variant(&[&[], &[i128ty]]);
+        let metadata = ty.record(&[kind, u64ty, timestamp]);
+        let metadata_result = ty.variant(&[&[metadata], &[error]]);
         let mut builder = LayoutBuilder::new(&target, &owners);
+        let metadata_id = builder.layout(&ty.store, metadata_result).unwrap();
         let ids: Vec<_> = [result, size_result, option, unit, bytes_result, walk, step]
             .iter()
             .map(|&t| builder.layout(&ty.store, t).unwrap())
             .collect();
         let table = builder.finish();
         hirsel_lir::layout_validate::validate_table(&table, &target).unwrap();
+        let meta_layout = table.layout(metadata_id).unwrap();
+        assert_eq!(
+            meta_layout.size,
+            SizeSpec::Fixed(size_of::<MetadataResult>() as u64)
+        );
+        assert_eq!(meta_layout.align, align_of::<MetadataResult>() as u32);
+        assert_eq!(
+            meta_layout.tag.as_ref().unwrap().variants[0].fields[0].offset,
+            16
+        );
         for &id in &ids[..3] {
             let record = table.layout(id).unwrap();
             assert_eq!(
@@ -1678,6 +1694,8 @@ fn portable_file_errors_round_trip_provider_faults_tapes_and_result_abi() {
         (5, IoError::AlreadyExists),
         (6, IoError::IsDirectory),
         (7, IoError::NotDirectory),
+        (8, IoError::DirectoryNotEmpty),
+        (9, IoError::CrossDevice),
     ] {
         assert_eq!(
             UnitResult::of(Err(error.clone())),
@@ -1753,4 +1771,459 @@ fn portable_file_errors_round_trip_provider_faults_tapes_and_result_abi() {
         real.handles().observed(),
         real.stdout(),
     );
+}
+
+// Rust fs::tests mkdir_path_already_exists_error, test_rename_directory_to_non_empty_directory,
+// test_rename_file_over_open_file and test_rename_symlink, through confined provider requests.
+#[test]
+fn filesystem_lifecycle_replays_without_host_paths() {
+    let (temp, mut host) = setup();
+    std::os::unix::fs::symlink("missing", temp.path().join("link")).unwrap();
+    std::os::unix::fs::symlink("../outside", temp.path().join("escape")).unwrap();
+    let tree = host.snapshot().unwrap();
+    let Completion::Handle(Ok(dir)) = host
+        .call(Request::Directory {
+            io: 1,
+            path: "".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    let mut expected = vec![host.tape().last().unwrap().clone()];
+    {
+        let mut call = |request: Request| {
+            let result = host.call(request).unwrap();
+            expected.push(host.tape().last().unwrap().clone());
+            result
+        };
+        assert_eq!(
+            call(Request::Mkdir {
+                directory: dir,
+                path: "new".into()
+            }),
+            Completion::Unit(Ok(()))
+        );
+        assert_eq!(
+            call(Request::Mkdir {
+                directory: dir,
+                path: "new".into()
+            }),
+            Completion::Unit(Err(IoError::AlreadyExists))
+        );
+        assert_eq!(
+            call(Request::Mkdir {
+                directory: dir,
+                path: "new/empty".into()
+            }),
+            Completion::Unit(Ok(()))
+        );
+        let Completion::Entries(Ok(entries)) = call(Request::ReadDir {
+            directory: dir,
+            path: "new".into(),
+        }) else {
+            panic!()
+        };
+        assert_eq!(
+            entries,
+            vec![DirEntry {
+                path: "new/empty".into(),
+                kind: FileKind::Directory
+            }]
+        );
+        let Completion::Metadata(Ok(meta)) = call(Request::Metadata {
+            directory: dir,
+            path: "escape".into(),
+        }) else {
+            panic!()
+        };
+        assert_eq!(meta.kind, FileKind::Symlink);
+        assert_eq!(meta.size, 10);
+        assert!(meta.modified_unix_ns.is_some());
+        assert_eq!(
+            call(Request::Read {
+                directory: dir,
+                path: "escape".into()
+            }),
+            Completion::Bytes(Err(IoError::Fault(1)))
+        );
+        assert_eq!(
+            call(Request::Rename {
+                directory: dir,
+                from: "link".into(),
+                to: "renamed-link".into()
+            }),
+            Completion::Unit(Ok(()))
+        );
+        assert_eq!(
+            call(Request::RemoveDir {
+                directory: dir,
+                path: "renamed-link".into()
+            }),
+            Completion::Unit(Err(IoError::NotDirectory))
+        );
+        assert_eq!(
+            call(Request::Rename {
+                directory: dir,
+                from: "new".into(),
+                to: "sub".into()
+            }),
+            Completion::Unit(Err(IoError::DirectoryNotEmpty))
+        );
+        assert_eq!(
+            call(Request::RemoveDir {
+                directory: dir,
+                path: "new".into()
+            }),
+            Completion::Unit(Err(IoError::DirectoryNotEmpty))
+        );
+        assert_eq!(
+            call(Request::Rename {
+                directory: dir,
+                from: "new".into(),
+                to: "moved".into()
+            }),
+            Completion::Unit(Ok(()))
+        );
+        assert_eq!(
+            call(Request::ReadDir {
+                directory: dir,
+                path: "moved".into()
+            }),
+            Completion::Entries(Ok(vec![DirEntry {
+                path: "moved/empty".into(),
+                kind: FileKind::Directory
+            }]))
+        );
+        assert_eq!(
+            call(Request::RemoveDir {
+                directory: dir,
+                path: "moved/empty".into()
+            }),
+            Completion::Unit(Ok(()))
+        );
+        assert_eq!(
+            call(Request::RemoveDir {
+                directory: dir,
+                path: "moved".into()
+            }),
+            Completion::Unit(Ok(()))
+        );
+        assert_eq!(
+            call(Request::RemoveDir {
+                directory: dir,
+                path: ".".into()
+            }),
+            Completion::Unit(Err(IoError::Fault(1)))
+        );
+        assert_eq!(
+            call(Request::Rename {
+                directory: dir,
+                from: "old".into(),
+                to: "".into()
+            }),
+            Completion::Unit(Err(IoError::Fault(1)))
+        );
+    }
+    drop(host);
+    drop(temp);
+    let text = hirsel_rt::launch::render_tape(&expected).unwrap();
+    let tape = hirsel_rt::launch::parse_tape(&text).unwrap();
+    assert_eq!(tape, expected);
+    let mut replay = SimIo::new(tree, tape.clone());
+    for event in tape {
+        assert_eq!(replay.call(event.request).unwrap(), event.completion);
+    }
+    replay.finish().unwrap();
+}
+
+#[test]
+fn filesystem_mutations_deny_read_grants_before_resolving_paths_and_replay_cross_device() {
+    use hirsel_run_config::Access;
+    let temp = Disposable::new();
+    let pin = hirsel_rt::host_paths::PinnedDirectory::open(temp.path()).unwrap();
+    let mut host =
+        RealIo::from_pinned_mounts([("data".into(), Access::Read, pin)], std::io::sink()).unwrap();
+    let Completion::Handle(Ok(dir)) = host
+        .call(Request::Directory {
+            io: 1,
+            path: "data".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    for request in [
+        Request::Mkdir {
+            directory: dir,
+            path: "../outside".into(),
+        },
+        Request::RemoveDir {
+            directory: dir,
+            path: "missing/child".into(),
+        },
+        Request::Rename {
+            directory: dir,
+            from: "missing".into(),
+            to: "/outside".into(),
+        },
+    ] {
+        assert_eq!(
+            host.call(request),
+            Ok(Completion::Unit(Err(IoError::NotGranted)))
+        );
+        assert_eq!(host.tape().last().unwrap().fault, None);
+    }
+    assert!(std::fs::read_dir(temp.path()).unwrap().next().is_none());
+    let tape = host.tape().to_vec();
+    let mut replay = SimIo::new(Tree::new(Default::default()).unwrap(), tape.clone());
+    replay.set_mounts([("data".into(), Access::Read)]).unwrap();
+    for event in tape {
+        assert_eq!(replay.call(event.request), Ok(event.completion));
+    }
+    replay.finish().unwrap();
+
+    let (_temp, mut host) = setup();
+    let Completion::Handle(Ok(dir)) = host
+        .call(Request::Directory {
+            io: 1,
+            path: "".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    host.inject(Fault {
+        error: IoError::CrossDevice,
+        partial: 0,
+    });
+    assert_eq!(
+        host.call(Request::Rename {
+            directory: dir,
+            from: "old".into(),
+            to: "new".into()
+        }),
+        Ok(Completion::Unit(Err(IoError::CrossDevice)))
+    );
+    let tape = hirsel_rt::launch::parse_tape(&hirsel_rt::launch::render_tape(host.tape()).unwrap())
+        .unwrap();
+    let mut replay = SimIo::new(initial(), tape.clone());
+    for event in tape {
+        assert_eq!(replay.call(event.request), Ok(event.completion));
+    }
+    replay.finish().unwrap();
+    assert_eq!(replay.tree(), &initial());
+}
+
+#[test]
+fn filesystem_metadata_abi_preserves_negative_nanoseconds_and_initializes_inactive_bytes() {
+    struct MetadataOnly;
+    impl Adapter for MetadataOnly {
+        fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+            assert!(matches!(request, Request::Metadata { directory: 7, .. }));
+            Ok(Completion::Metadata(Ok(Metadata {
+                kind: FileKind::Symlink,
+                size: 9,
+                modified_unix_ns: Some(-1),
+            })))
+        }
+    }
+    let ctx = support::Ctx::diagnostic();
+    let mut binding = Box::new(Binding::new(MetadataOnly));
+    let path = binding.intern_path("link");
+    let mut out = MetadataResult {
+        words: [u64::MAX; 8],
+    };
+    unsafe {
+        binding.bind(&mut *ctx.0);
+        assert_eq!(
+            hirsel_rt_v2_file_metadata(ctx.0, std::ptr::null_mut(), &mut out, &7, &path),
+            0
+        );
+    }
+    assert_eq!(out.words, [0, 0, 2, 9, 1, 0, u64::MAX, u64::MAX]);
+}
+
+#[test]
+fn filesystem_hard_link_rename_keeps_both_names_and_replays_inode_sharing() {
+    let (temp, mut host) = setup();
+    std::fs::hard_link(temp.path().join("old"), temp.path().join("other")).unwrap();
+    let tree = host.snapshot().unwrap();
+    assert_eq!(tree.file_aliases["other"], "old");
+    let Completion::Handle(Ok(dir)) = host
+        .call(Request::Directory {
+            io: 1,
+            path: "".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        host.call(Request::Rename {
+            directory: dir,
+            from: "old".into(),
+            to: "other".into()
+        }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    assert!(temp.path().join("old").exists());
+    let Completion::Handle(Ok(file)) = host
+        .call(Request::Create {
+            directory: dir,
+            path: "other".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    host.call(Request::FileAppend {
+        directory: dir,
+        file,
+        bytes: b"shared".to_vec(),
+    })
+    .unwrap();
+    host.call(Request::Close { handle: file }).unwrap();
+    assert_eq!(
+        host.call(Request::Read {
+            directory: dir,
+            path: "old".into()
+        }),
+        Ok(Completion::Bytes(Ok(b"shared".to_vec())))
+    );
+    host.call(Request::Rename {
+        directory: dir,
+        from: "old".into(),
+        to: "new".into(),
+    })
+    .unwrap();
+    host.call(Request::Remove {
+        directory: dir,
+        path: "other".into(),
+    })
+    .unwrap();
+    let final_tree = host.snapshot().unwrap();
+    let record = hirsel_rt::launch::Recording {
+        arguments: vec![],
+        run_identity: [0; 32],
+        hash_seed: 0,
+        random_seed: 0,
+        test_seed: 0,
+        binding: None,
+        tree,
+        events: host.tape().to_vec(),
+    };
+    let decoded =
+        hirsel_rt::launch::parse_recording(&hirsel_rt::launch::render_recording(&record).unwrap())
+            .unwrap();
+    assert_eq!(decoded, record);
+    drop(host);
+    drop(temp);
+    let mut replay = SimIo::new(decoded.tree, decoded.events.clone());
+    for event in decoded.events {
+        assert_eq!(replay.call(event.request), Ok(event.completion));
+    }
+    replay.finish().unwrap();
+    assert_eq!(replay.tree(), &final_tree);
+}
+
+#[test]
+fn filesystem_mount_pins_survive_rename_and_removal_before_directory_projection() {
+    use hirsel_run_config::Access;
+    let temp = Disposable::new();
+    std::fs::create_dir(temp.path().join("sub")).unwrap();
+    let pin = |path: &Path| hirsel_rt::host_paths::PinnedDirectory::open(path).unwrap();
+    let mut host = RealIo::from_pinned_mounts(
+        [
+            ("wide".into(), Access::ReadWrite, pin(temp.path())),
+            (
+                "narrow".into(),
+                Access::ReadWrite,
+                pin(&temp.path().join("sub")),
+            ),
+        ],
+        std::io::sink(),
+    )
+    .unwrap();
+    let tree = host.snapshot().unwrap();
+    let Completion::Handle(Ok(wide)) = host
+        .call(Request::Directory {
+            io: 1,
+            path: "wide".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    host.call(Request::Rename {
+        directory: wide,
+        from: "sub".into(),
+        to: "moved".into(),
+    })
+    .unwrap();
+    let Completion::Handle(Ok(narrow)) = host
+        .call(Request::Directory {
+            io: 1,
+            path: "narrow".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        host.call(Request::Mkdir {
+            directory: narrow,
+            path: "child".into()
+        }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    host.call(Request::RemoveDir {
+        directory: narrow,
+        path: "child".into(),
+    })
+    .unwrap();
+    host.call(Request::RemoveDir {
+        directory: wide,
+        path: "moved".into(),
+    })
+    .unwrap();
+    let Completion::Handle(Ok(removed)) = host
+        .call(Request::Directory {
+            io: 1,
+            path: "narrow".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        host.call(Request::ReadDir {
+            directory: removed,
+            path: "".into()
+        }),
+        Ok(Completion::Entries(Ok(vec![])))
+    );
+    assert_eq!(
+        host.call(Request::Mkdir {
+            directory: removed,
+            path: "child".into()
+        }),
+        Ok(Completion::Unit(Err(IoError::NotFound)))
+    );
+    let final_tree = host.snapshot().unwrap();
+    let tape = host.tape().to_vec();
+    drop(host);
+    drop(temp);
+    let mut replay = SimIo::new(tree, tape.clone());
+    replay
+        .set_mounts([
+            ("wide".into(), Access::ReadWrite),
+            ("narrow".into(), Access::ReadWrite),
+        ])
+        .unwrap();
+    for event in tape {
+        assert_eq!(replay.call(event.request), Ok(event.completion));
+    }
+    replay.finish().unwrap();
+    assert_eq!(replay.tree(), &final_tree);
 }

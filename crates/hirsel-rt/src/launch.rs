@@ -113,6 +113,40 @@ impl<A: Adapter> Adapter for Shared<A> {
 
 /// Complete typed completion tape. Hex fields preserve empty paths and arbitrary bytes.
 /// Faults include their committed prefix, so replay reconstructs partial effects exactly.
+fn render_metadata(meta: &crate::io::Metadata) -> String {
+    format!(
+        "{},{},{}",
+        meta.kind as u32,
+        meta.size,
+        meta.modified_unix_ns
+            .map_or_else(|| "none".into(), |n| n.to_string())
+    )
+}
+fn parse_kind(text: &str) -> Result<crate::io::FileKind, String> {
+    use crate::io::FileKind::*;
+    match text {
+        "0" => Ok(Regular),
+        "1" => Ok(Directory),
+        "2" => Ok(Symlink),
+        "3" => Ok(Other),
+        _ => Err("bad file kind".into()),
+    }
+}
+fn parse_metadata(text: &str) -> Result<crate::io::Metadata, String> {
+    let fields: Vec<_> = text.split(',').collect();
+    let [kind, size, modified] = fields.as_slice() else {
+        return Err("bad metadata".into());
+    };
+    Ok(crate::io::Metadata {
+        kind: parse_kind(kind)?,
+        size: size.parse().map_err(|_| "bad metadata size")?,
+        modified_unix_ns: if *modified == "none" {
+            None
+        } else {
+            Some(modified.parse().map_err(|_| "bad metadata timestamp")?)
+        },
+    })
+}
 pub fn render_tape(tape: &[Event]) -> Result<String, String> {
     fn outcome<T>(value: &Result<T, IoError>, ok: impl FnOnce(&T) -> String) -> String {
         match value {
@@ -125,6 +159,8 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             Err(IoError::AlreadyExists) => "AlreadyExists".into(),
             Err(IoError::IsDirectory) => "IsDirectory".into(),
             Err(IoError::NotDirectory) => "NotDirectory".into(),
+            Err(IoError::DirectoryNotEmpty) => "DirectoryNotEmpty".into(),
+            Err(IoError::CrossDevice) => "CrossDevice".into(),
         }
     }
     let mut text = format!("{TAPE_HEADER}\n");
@@ -171,6 +207,27 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             } => format!("file_append {directory} {file} {}", hex(bytes)),
             Request::NarrowFile { directory, file } => format!("narrow_file {directory} {file}"),
             Request::Walk { directory } => format!("walk {directory}"),
+            Request::ReadDir { directory, path } => {
+                format!("read_dir {directory} {}", hex(path.as_bytes()))
+            }
+            Request::Metadata { directory, path } => {
+                format!("metadata {directory} {}", hex(path.as_bytes()))
+            }
+            Request::Mkdir { directory, path } => {
+                format!("mkdir {directory} {}", hex(path.as_bytes()))
+            }
+            Request::RemoveDir { directory, path } => {
+                format!("remove_dir {directory} {}", hex(path.as_bytes()))
+            }
+            Request::Rename {
+                directory,
+                from,
+                to,
+            } => format!(
+                "rename {directory} {} {}",
+                hex(from.as_bytes()),
+                hex(to.as_bytes())
+            ),
             Request::Size { directory, path } => {
                 format!("size {directory} {}", hex(path.as_bytes()))
             }
@@ -240,6 +297,15 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                     .collect::<Vec<_>>()
                     .join(","))
             ),
+            Completion::Metadata(v) => format!("metadata {}", outcome(v, render_metadata)),
+            Completion::Entries(v) => format!(
+                "entries {}",
+                outcome(v, |entries| entries
+                    .iter()
+                    .map(|e| format!("{}:{}", hex(e.path.as_bytes()), e.kind as u32))
+                    .collect::<Vec<_>>()
+                    .join(","))
+            ),
             Completion::Checked(v) => format!("checked {}", u8::from(*v)),
             Completion::Refused(id) => format!("refused {id}"),
             completion => crate::host_io_tape::render_completion(completion)
@@ -257,6 +323,8 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 IoError::AlreadyExists => format!(" ! AlreadyExists 0 {}", f.partial),
                 IoError::IsDirectory => format!(" ! IsDirectory 0 {}", f.partial),
                 IoError::NotDirectory => format!(" ! NotDirectory 0 {}", f.partial),
+                IoError::DirectoryNotEmpty => format!(" ! DirectoryNotEmpty 0 {}", f.partial),
+                IoError::CrossDevice => format!(" ! CrossDevice 0 {}", f.partial),
             })
             .unwrap_or_default();
         let _ = writeln!(text, "{request} -> {completion}{fault}");
@@ -301,6 +369,8 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
             ["AlreadyExists"] => Ok(Err(IoError::AlreadyExists)),
             ["IsDirectory"] => Ok(Err(IoError::IsDirectory)),
             ["NotDirectory"] => Ok(Err(IoError::NotDirectory)),
+            ["DirectoryNotEmpty"] => Ok(Err(IoError::DirectoryNotEmpty)),
+            ["CrossDevice"] => Ok(Err(IoError::CrossDevice)),
             ["fault", code] => Ok(Err(IoError::Fault(number(code)?))),
             ["canceled", code] => Ok(Err(IoError::Canceled(number(code)?))),
             _ => Err("bad tape result".into()),
@@ -329,6 +399,8 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                                 "AlreadyExists" if *code == "0" => IoError::AlreadyExists,
                                 "IsDirectory" if *code == "0" => IoError::IsDirectory,
                                 "NotDirectory" if *code == "0" => IoError::NotDirectory,
+                                "DirectoryNotEmpty" if *code == "0" => IoError::DirectoryNotEmpty,
+                                "CrossDevice" if *code == "0" => IoError::CrossDevice,
                                 _ => return Err("bad tape fault".into()),
                             },
                             partial: number(partial)?,
@@ -399,6 +471,27 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 },
                 ["walk", d] => Request::Walk {
                     directory: number(d)?,
+                },
+                ["read_dir", d, p] => Request::ReadDir {
+                    directory: number(d)?,
+                    path: string(p)?,
+                },
+                ["metadata", d, p] => Request::Metadata {
+                    directory: number(d)?,
+                    path: string(p)?,
+                },
+                ["mkdir", d, p] => Request::Mkdir {
+                    directory: number(d)?,
+                    path: string(p)?,
+                },
+                ["remove_dir", d, p] => Request::RemoveDir {
+                    directory: number(d)?,
+                    path: string(p)?,
+                },
+                ["rename", d, a, b] => Request::Rename {
+                    directory: number(d)?,
+                    from: string(a)?,
+                    to: string(b)?,
                 },
                 ["size", d, p] => Request::Size {
                     directory: number(d)?,
@@ -490,6 +583,22 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                     } else {
                         v.split(',').map(string).collect()
                     }
+                })?),
+                ["metadata", r @ ..] => Completion::Metadata(result(r, parse_metadata)?),
+                ["entries", r @ ..] => Completion::Entries(result(r, |v| {
+                    if v.is_empty() {
+                        return Ok(vec![]);
+                    }
+                    v.split(',')
+                        .map(|entry| {
+                            let (path, kind) =
+                                entry.split_once(':').ok_or("bad directory entry")?;
+                            Ok(crate::io::DirEntry {
+                                path: string(path)?,
+                                kind: parse_kind(kind)?,
+                            })
+                        })
+                        .collect()
                 })?),
                 ["checked", v] => Completion::Checked(boolean(v)?),
                 ["refused", id] => Completion::Refused(number(id)?),
@@ -597,12 +706,28 @@ pub fn render_recording(record: &Recording) -> Result<String, String> {
     for (path, bytes) in &record.tree.files {
         let _ = writeln!(text, "file {} {}", hex(path.as_bytes()), hex(bytes));
     }
+    for (path, target) in &record.tree.file_aliases {
+        let _ = writeln!(
+            text,
+            "hard_link {} {}",
+            hex(path.as_bytes()),
+            hex(target.as_bytes())
+        );
+    }
     for (path, target) in &record.tree.links {
         let _ = writeln!(
             text,
             "link {} {}",
             hex(path.as_bytes()),
             hex(target.as_bytes())
+        );
+    }
+    for (path, meta) in &record.tree.metadata {
+        let _ = writeln!(
+            text,
+            "metadata {} {}",
+            hex(path.as_bytes()),
+            render_metadata(meta)
         );
     }
     text.push_str("events\n");
@@ -650,7 +775,9 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
     let mut arguments = vec![];
     let mut files = std::collections::BTreeMap::new();
     let mut links = std::collections::BTreeMap::new();
+    let mut file_aliases = std::collections::BTreeMap::new();
     let mut directories = std::collections::BTreeSet::new();
+    let mut entry_metadata = std::collections::BTreeMap::new();
     for line in lines {
         let words: Vec<_> = line.split(' ').collect();
         match words.as_slice() {
@@ -701,6 +828,13 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
                     return Err("bad recorded directory".into());
                 }
             }
+            ["hard_link", path, target] => {
+                let path = string(path)?;
+                let target = string(target)?;
+                if path <= target || file_aliases.insert(path, target).is_some() {
+                    return Err("bad recorded hard link".into());
+                }
+            }
             ["link", path, target] => {
                 let path = string(path)?;
                 if path.is_empty()
@@ -708,6 +842,14 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
                     || links.insert(path, string(target)?).is_some()
                 {
                     return Err("bad recorded link".into());
+                }
+            }
+            ["metadata", path, meta] => {
+                let path = string(path)?;
+                if crate::io::relative("", &path).as_ref() != Some(&path)
+                    || entry_metadata.insert(path, parse_metadata(meta)?).is_some()
+                {
+                    return Err("bad recorded metadata".into());
                 }
             }
             ["file", path, data] => {
@@ -734,6 +876,33 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
         }
     }
     tree.links = links;
+    tree.metadata = entry_metadata.clone();
+    for (alias, canonical) in &file_aliases {
+        let regular = tree.regular_paths();
+        if !regular.contains(alias)
+            || !regular.contains(canonical)
+            || matches!((tree.files.get(alias), tree.files.get(canonical)), (Some(a), Some(b)) if a != b)
+            || file_aliases.contains_key(canonical)
+        {
+            return Err("bad recorded shared file identity".into());
+        }
+    }
+    for (path, meta) in &entry_metadata {
+        let kind = if tree.directories.contains(path) {
+            crate::io::FileKind::Directory
+        } else if tree.files.contains_key(path) {
+            crate::io::FileKind::Regular
+        } else if tree.links.contains_key(path) {
+            crate::io::FileKind::Symlink
+        } else {
+            meta.kind
+        };
+        if meta.kind != kind {
+            return Err("recorded metadata kind mismatch".into());
+        }
+    }
+    tree.metadata = entry_metadata;
+    tree.file_aliases = file_aliases;
     if !text.ends_with('\n') {
         return Err("truncated recording record".into());
     }

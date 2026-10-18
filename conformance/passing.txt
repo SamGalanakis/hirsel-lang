@@ -101,6 +101,9 @@ conformance/CAP/CAP-2-file-operation-authority-bad.hir
 conformance/CAP/CAP-2-file-operation-authority-ok.hir
 conformance/CAP/CAP-2-file-stream-dir-bad.hir
 conformance/CAP/CAP-2-file-stream-dir-ok.hir
+conformance/CAP/CAP-2-filesystem-lifecycle-run.hir
+conformance/CAP/CAP-2-filesystem-pinned-directory-run.hir
+conformance/CAP/CAP-2-filesystem-replacement-run.hir
 conformance/CAP/CAP-2-flat-inert-bad.hir
 conformance/CAP/CAP-2-flat-inert-ok.hir
 conformance/CAP/CAP-2-inert-data.hir

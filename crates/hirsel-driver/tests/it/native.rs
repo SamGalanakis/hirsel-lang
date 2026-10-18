@@ -384,7 +384,7 @@ fn every_runtime_primitive_row_matches_its_export() {
             }
         }
         assert_eq!(
-            primitives, 80,
+            primitives, 85,
             "Io, Args, Env, Test, host streams, text, scalar/position cursors, network streams and listeners, processes, and the task runtime entries"
         );
         // Calls of each, with each float family, on both targets.

@@ -96,8 +96,23 @@ pub fn replay_interpreter_with_fixture(
                 },
                 mounts: mounts.clone(),
                 files: initial_tree.files.clone(),
+                file_aliases: initial_tree.file_aliases.clone(),
                 links: initial_tree.links.clone(),
                 directories: initial_tree.directories.clone(),
+                metadata: initial_tree
+                    .metadata
+                    .iter()
+                    .map(|(p, meta)| {
+                        (
+                            p.clone(),
+                            reference::simulation::FileMetadata {
+                                kind: meta.kind as u32,
+                                size: meta.size,
+                                modified_unix_ns: meta.modified_unix_ns,
+                            },
+                        )
+                    })
+                    .collect(),
                 ..Default::default()
             },
         )
@@ -267,6 +282,34 @@ pub fn replay_interpreter_with_fixture(
                     vec![handle("Dir", *directory), handle("File", *file)],
                 ),
                 Request::Walk { directory } => ("file.walk", vec![handle("Dir", *directory)]),
+                Request::ReadDir { directory, path } => (
+                    "file.read_dir",
+                    vec![handle("Dir", *directory), reference::path(path)],
+                ),
+                Request::Metadata { directory, path } => (
+                    "file.metadata",
+                    vec![handle("Dir", *directory), reference::path(path)],
+                ),
+                Request::Mkdir { directory, path } => (
+                    "file.mkdir",
+                    vec![handle("Dir", *directory), reference::path(path)],
+                ),
+                Request::RemoveDir { directory, path } => (
+                    "file.remove_dir",
+                    vec![handle("Dir", *directory), reference::path(path)],
+                ),
+                Request::Rename {
+                    directory,
+                    from,
+                    to,
+                } => (
+                    "file.rename",
+                    vec![
+                        handle("Dir", *directory),
+                        reference::path(from),
+                        reference::path(to),
+                    ],
+                ),
                 Request::Size { directory, path } => (
                     "file.size",
                     vec![handle("Dir", *directory), reference::path(path)],
@@ -376,6 +419,14 @@ pub fn replay_interpreter_with_fixture(
                     },
                     IoError::IsDirectory => reference::simulation::Fault::File {
                         error: reference::simulation::FileError::IsDirectory,
+                        partial: fault.partial,
+                    },
+                    IoError::DirectoryNotEmpty => reference::simulation::Fault::File {
+                        error: reference::simulation::FileError::DirectoryNotEmpty,
+                        partial: fault.partial,
+                    },
+                    IoError::CrossDevice => reference::simulation::Fault::File {
+                        error: reference::simulation::FileError::CrossDevice,
                         partial: fault.partial,
                     },
                     IoError::NotDirectory => reference::simulation::Fault::File {
@@ -576,6 +627,8 @@ fn decode(schema: &Completion, value: hirsel_interp::Value) -> Completion {
                     5 => IoError::AlreadyExists,
                     6 => IoError::IsDirectory,
                     7 => IoError::NotDirectory,
+                    8 => IoError::DirectoryNotEmpty,
+                    9 => IoError::CrossDevice,
                     _ => panic!("invalid nullary file error"),
                 });
             }
@@ -667,6 +720,64 @@ fn decode(schema: &Completion, value: hirsel_interp::Value) -> Completion {
         Completion::Bytes(_) => Completion::Bytes(
             result(value).map(|v| if let Value::Bytes(b) = v { b } else { panic!() }),
         ),
+        Completion::Metadata(_) => Completion::Metadata(result(value).map(|v| {
+            let Value::Record { fields: f, .. } = v else {
+                panic!("expected Metadata")
+            };
+            let mut f = f.into_iter().map(Option::unwrap);
+            let kind = match fields(f.next().unwrap()).0 {
+                0 => FileKind::Regular,
+                1 => FileKind::Directory,
+                2 => FileKind::Symlink,
+                3 => FileKind::Other,
+                _ => panic!("invalid FileKind"),
+            };
+            let Value::Integer(size) = f.next().unwrap() else {
+                panic!()
+            };
+            let (tag, mut payload) = fields(f.next().unwrap());
+            let modified_unix_ns = if tag == 0 {
+                None
+            } else {
+                let Value::Integer(n) = payload.remove(0) else {
+                    panic!()
+                };
+                Some(n.bits() as i128)
+            };
+            Metadata {
+                kind,
+                size: size.bits() as u64,
+                modified_unix_ns,
+            }
+        })),
+        Completion::Entries(_) => Completion::Entries(result(value).map(|v| {
+            let Value::Sequence { elements, .. } = v else {
+                panic!("expected entry list")
+            };
+            elements
+                .into_iter()
+                .map(|v| {
+                    let Value::Record { fields: f, .. } = v.unwrap() else {
+                        panic!("expected DirEntry")
+                    };
+                    let mut f = f.into_iter().map(Option::unwrap);
+                    let Value::Record { fields: p, .. } = f.next().unwrap() else {
+                        panic!("expected Path")
+                    };
+                    let Value::String(path) = p.into_iter().next().unwrap().unwrap() else {
+                        panic!()
+                    };
+                    let kind = match fields(f.next().unwrap()).0 {
+                        0 => FileKind::Regular,
+                        1 => FileKind::Directory,
+                        2 => FileKind::Symlink,
+                        3 => FileKind::Other,
+                        _ => panic!("invalid FileKind"),
+                    };
+                    DirEntry { path, kind }
+                })
+                .collect()
+        })),
         Completion::Paths(_) => Completion::Paths(result(value).map(|v| {
             let Value::Sequence { elements, .. } = v else {
                 panic!()

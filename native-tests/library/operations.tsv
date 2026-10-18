@@ -67,11 +67,16 @@ file.append	15e79db37dee540e144c03aa8c1611082b71caf695cf50d1dd60b8cfc812a36e	0:b
 file.commit	b6d61ca3dcf5493fd78af9916bb19594649719d090e8d5d55cdc4661df33e152	0:b:n;1:t:n->n
 file.create	a9103a476be469e035f4a32b5caebdb64d13bba2f6c5334ec21eb5da73d1945c	0:b:n;1:b:n->n
 file.create_atomic	8f433cfcf3730938b114d49829eb09c11ac87a826c8af599e2a94e9a0ab56f9a	0:b:n;1:b:n->n
+file.metadata	3c7145d3eb7d08d10eacefebdd782314d4eae1360beadce15d29f7a214962067	0:b:n;1:b:n->n
+file.mkdir	bd3d6b8c25e8a92151ec05a40f2aefef78efda9ecf79479ef6a8595547b23eda	0:b:n;1:b:n->n
 file.narrow	93c3a7aa60c443acd27c6c13d781eb5e25572776245d95e528c6736e0051b603	0:b:n;1:t:n->n
 file.open	3aad8b217c8705380a3e611b50ac13666be9a38305fa7113b6db48d541b88ef6	0:b:n;1:b:n->n
 file.read	79d8df283beeb7afed3bfc8b349f2bc8b9b27fc8bee1929a62d4849aca1d5768	0:b:n;1:m:n;2:m:n;3:b:n->n
 file.read_bytes	754b946f06aa283bc78d02df2ce981f911682fdcff917480fffe2a51b13bdd4d	0:b:n;1:b:n->n
+file.read_dir	9b8125fcfb2a6d38f7448f8f9e2a9d6d9cad1e08ec009dc58ed734707012f66d	0:b:n;1:b:n->n
 file.remove	2baf63f44c786eff5ad328cf0383c3b62f14b78c724086053049651f853d132e	0:b:n;1:b:n->n
+file.remove_dir	15e377c20f1c6afc318d323e4143edbc22b3a155efffe545f5abac439bed718d	0:b:n;1:b:n->n
+file.rename	cca32e688d1ad341beedfe49ffa6cb72d63971d507468e5b803b10f006514410	0:b:n;1:b:n;2:b:n->n
 file.seek	06ab407dbfcf0bf02b81d0ba8ec1292fe8e49b2aae1e10e5e737de812816ad2f	0:b:n;1:m:n;2:b:n->n
 file.size	f51e05aebe19a3fa5c7f91d46b5f92855142a40aa5478e6870fa1ecb67fa6f27	0:b:n;1:b:n->n
 file.walk	4c629c98fd082677d0fc22bae12c5ec1811558200a5cb3065d89c21dc4e56f24	0:b:n->a

@@ -686,3 +686,19 @@ entries. Both walk creation and per-entry errors propagate as `Files`.
 `InvalidPattern` distinguishes the expansion error constructor from the opaque
 `Pattern` type's constructor. Compilation and matching acquire no capability;
 only `files` uses the explicit Dir.
+
+## Directory creation
+
+```text
+fn file.mkdir_all(d: Dir, p: Path) -> Result[(), FileError]
+```
+
+Creates missing parents using confined `file.mkdir`; existing real directories
+succeed, including directory symlinks resolved beneath the grant by `dir.narrow`.
+An existing file returns `NotDirectory`; dangling or escaping links return their
+ordinary confined lookup error. Normalization
+is lexical: absolute, invalid and escaping paths return `FileFault` before
+creating anything; an empty or dot path checks the granted directory and succeeds.
+A later failure can leave earlier parents created. Read-only grants deny creation
+through the same core operation. Listing, metadata, same-grant rename and empty
+directory removal are [core operations](core-library.md#filesystem-lifecycle).

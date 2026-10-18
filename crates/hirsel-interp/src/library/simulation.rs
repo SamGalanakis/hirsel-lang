@@ -23,12 +23,20 @@ pub enum FileError {
     AlreadyExists,
     IsDirectory,
     NotDirectory,
+    DirectoryNotEmpty,
+    CrossDevice,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Fault {
     File { error: FileError, partial: usize },
     Canceled(u32),
     Fault { code: u32, partial: usize },
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileMetadata {
+    pub kind: u32,
+    pub size: u64,
+    pub modified_unix_ns: Option<i128>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationConfig {
@@ -47,8 +55,10 @@ pub struct SimulationConfig {
     pub env: BTreeMap<String, Option<String>>,
     pub stdin: Vec<u8>,
     pub files: BTreeMap<String, Vec<u8>>,
+    pub file_aliases: BTreeMap<String, String>,
     pub directories: BTreeSet<String>,
     pub links: BTreeMap<String, String>,
+    pub metadata: BTreeMap<String, FileMetadata>,
     pub monotonic: u64,
     pub wall: i64,
     /// Codes for invalid/confinement paths are capability inputs.
@@ -78,8 +88,10 @@ impl Default for SimulationConfig {
             env: BTreeMap::new(),
             stdin: Vec::new(),
             files: BTreeMap::new(),
+            file_aliases: BTreeMap::new(),
             directories: [String::new()].into_iter().collect(),
             links: BTreeMap::new(),
+            metadata: BTreeMap::new(),
             monotonic: 0,
             wall: 0,
             invalid_path_code: 1,
@@ -139,7 +151,10 @@ pub struct Simulation {
     pub(crate) grants: BTreeMap<u64, Grant>,
     pub(crate) trees: BTreeMap<u64, (BTreeSet<String>, BTreeMap<String, Vec<u8>>)>,
     pub(crate) resolved_directories: BTreeMap<u64, String>,
-    file_identities: BTreeMap<(u64, String), u64>,
+    pub(super) detached_directories: BTreeSet<u64>,
+    pub(super) mount_pins: BTreeMap<String, String>,
+    pub(super) detached_mounts: BTreeSet<String>,
+    pub(super) file_identities: BTreeMap<(u64, String), u64>,
     next_file_identity: u64,
     pub(crate) file_contents: BTreeMap<u64, Vec<u8>>,
     pub(crate) next_id: u64,
@@ -327,6 +342,9 @@ impl Simulation {
             grants: BTreeMap::new(),
             trees: BTreeMap::from([(0, (dirs, files))]),
             resolved_directories: BTreeMap::new(),
+            detached_directories: BTreeSet::new(),
+            mount_pins: BTreeMap::new(),
+            detached_mounts: BTreeSet::new(),
             file_identities: BTreeMap::new(),
             next_file_identity: 1,
             file_contents: BTreeMap::new(),
@@ -337,12 +355,48 @@ impl Simulation {
             last_monotonic: None,
         };
         simulation.identify_tree(0);
+        simulation.mount_pins = simulation
+            .config
+            .mounts
+            .keys()
+            .filter_map(|selector| {
+                simulation
+                    .resolve_path(0, "", selector, true)
+                    .ok()
+                    .map(|root| (selector.clone(), root))
+            })
+            .collect();
         Ok(simulation)
     }
     pub(crate) fn identify_tree(&mut self, tree: u64) {
-        let paths: Vec<_> = self.trees[&tree].1.keys().cloned().collect();
+        let paths: BTreeSet<_> = self.trees[&tree]
+            .1
+            .keys()
+            .cloned()
+            .chain(
+                self.config
+                    .metadata
+                    .iter()
+                    .filter_map(|(p, m)| (tree == 0 && m.kind == 0).then_some(p.clone())),
+            )
+            .collect();
+        let metadata = (tree == 0).then(|| std::mem::take(&mut self.config.metadata));
         for path in paths {
             self.replace_identity(tree, &path);
+        }
+        if let Some(metadata) = metadata {
+            self.config.metadata = metadata;
+        }
+        if tree == 0 {
+            for (alias, canonical) in &self.config.file_aliases {
+                if let Some(identity) = self
+                    .file_identities
+                    .get(&(tree, canonical.clone()))
+                    .copied()
+                {
+                    self.file_identities.insert((tree, alias.clone()), identity);
+                }
+            }
         }
     }
     pub(crate) fn file_identity(&self, tree: u64, path: &str) -> Option<u64> {
@@ -351,15 +405,27 @@ impl Simulation {
     /// Publication replaces the entry even when every byte is unchanged. Never
     /// recycle identities: unlink/recreate must not resurrect an opened file.
     pub(crate) fn replace_identity(&mut self, tree: u64, path: &str) {
+        if tree == 0 {
+            self.config.metadata.remove(path);
+        }
         let identity = self.next_file_identity;
         self.next_file_identity = identity.checked_add(1).expect("file identities exhausted");
         self.file_identities.insert((tree, path.into()), identity);
-        self.file_contents
-            .insert(identity, self.trees[&tree].1[path].clone());
+        self.file_contents.insert(
+            identity,
+            self.trees[&tree].1.get(path).cloned().unwrap_or_default(),
+        );
     }
     pub(crate) fn sync_file(&mut self, tree: u64, identity: u64) {
-        if let Some(((t, path), _)) = self.file_identities.iter().find(|(_, id)| **id == identity) {
+        for ((t, path), _) in self
+            .file_identities
+            .iter()
+            .filter(|(_, id)| **id == identity)
+        {
             assert_eq!(*t, tree);
+            if tree == 0 {
+                self.config.metadata.remove(path);
+            }
             self.trees
                 .get_mut(&tree)
                 .unwrap()
@@ -368,14 +434,24 @@ impl Simulation {
         }
     }
     pub(crate) fn refresh_file(&mut self, tree: u64, path: &str) {
+        if tree == 0 {
+            self.config.metadata.remove(path);
+        }
         let identity = self.file_identity(tree, path).expect("file identity");
         self.file_contents
             .insert(identity, self.trees[&tree].1[path].clone());
     }
     pub(crate) fn unlink_identity(&mut self, tree: u64, path: &str) {
+        if tree == 0 {
+            self.config.metadata.remove(path);
+        }
         self.file_identities.remove(&(tree, path.into()));
     }
     pub(crate) fn publish_identity(&mut self, tree: u64, from: &str, to: &str) {
+        if tree == 0 {
+            self.config.metadata.remove(from);
+            self.config.metadata.remove(to);
+        }
         let identity = self
             .file_identities
             .remove(&(tree, from.into()))
@@ -404,7 +480,18 @@ impl Simulation {
         }
     }
     pub(crate) fn resolve_mount(&self, selector: &str, path: &str) -> Result<String, FileError> {
-        let physical = self.resolve_path(0, "", selector, true)?;
+        let physical = self
+            .mount_pins
+            .get(selector)
+            .cloned()
+            .map_or_else(|| self.resolve_path(0, "", selector, true), Ok)?;
+        if self.detached_mounts.contains(selector) {
+            return if relative("", path).as_deref() == Some("") {
+                Ok(physical)
+            } else {
+                Err(FileError::NotFound)
+            };
+        }
         self.resolve_path(0, &physical, path, true)
     }
     /// Resolve only inside the pinned directory supplied by the operation.
@@ -422,6 +509,13 @@ impl Simulation {
             .get(&directory)
             .map(String::as_str)
             .unwrap_or(logical_root);
+        if self.detached_directories.contains(&directory) {
+            return if relative("", path).as_deref() == Some("") {
+                Ok(root.into())
+            } else {
+                Err(FileError::NotFound)
+            };
+        }
         self.resolve_path(tree, root, path, follow_leaf)
     }
     fn resolve_path(
@@ -503,6 +597,9 @@ impl Simulation {
         logical_root: &str,
     ) -> Result<Vec<String>, FileError> {
         let root = self.resolve_in(tree, directory, logical_root, "", true)?;
+        if self.detached_directories.contains(&directory) {
+            return Ok(vec![]);
+        }
         let mut work = vec![(root.clone(), String::new(), vec![root.clone()])];
         let mut result = Vec::new();
         while let Some((physical, logical, ancestry)) = work.pop() {

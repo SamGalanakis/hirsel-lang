@@ -1,0 +1,39 @@
+// Adapted from Zig Io.Dir.createDirPath and Rust fs::create_dir_all
+// (MIT option; third-party/NOTICES.md). All mutations use the supplied Dir.
+pub fn mkdir_all(d: Dir, p: Path) -> Result[(), FileError] {
+  let normalized = match path.normalize(p) {
+    Ok(value) => value,
+    Error(_) => return core@1/file.mkdir(d, p),
+  }
+  let value = core@1/path.text(normalized)
+  if string.starts_with(value, "/") {
+    return core@1/file.mkdir(d, p)
+  }
+  let parts = path.components(normalized)
+  for part in parts {
+    if part == ".." {
+      return core@1/file.mkdir(d, p)
+    }
+  }
+  if value == "." {
+    let _ = core@1/dir.narrow(d, normalized)?
+    return Ok(())
+  }
+  let mut prefix = ""
+  for part in parts {
+    prefix = if prefix == "" {
+      copy part
+    } else {
+      string.join([prefix, part], "/")
+    }
+    let current = core@1/path.of(prefix)
+    match core@1/file.mkdir(d, current) {
+      Ok(()) => (),
+      Error(AlreadyExists()) => {
+        let _ = core@1/dir.narrow(d, current)?
+      },
+      Error(e) => return Error(take e),
+    }
+  }
+  Ok(())
+}

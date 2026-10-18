@@ -1423,3 +1423,70 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
         assert_eq!(h.library.simulation.events.len(), 1);
     }
 }
+
+#[test]
+fn filesystem_snapshot_metadata_survives_initialization_and_failed_create() {
+    use simulation::FileMetadata;
+    let mut h = Harness::new(SimulationConfig {
+        files: BTreeMap::from([("value".into(), b"x".to_vec())]),
+        directories: [String::new(), "empty".into()].into_iter().collect(),
+        metadata: BTreeMap::from([
+            (
+                "value".into(),
+                FileMetadata {
+                    kind: 0,
+                    size: 1,
+                    modified_unix_ns: Some(-1),
+                },
+            ),
+            (
+                "empty".into(),
+                FileMetadata {
+                    kind: 1,
+                    size: 0,
+                    modified_unix_ns: Some(-2),
+                },
+            ),
+        ]),
+        ..Default::default()
+    });
+    let io = h.root("Io");
+    let d = unok(h.value("io.dir", vec![io, path("")]));
+    let metadata = |value: Value| {
+        let Value::Record { mut fields, .. } = unok(value) else {
+            panic!()
+        };
+        let Value::Variant {
+            variant,
+            mut fields,
+        } = fields.pop().unwrap().unwrap()
+        else {
+            panic!()
+        };
+        if variant == 0 {
+            None
+        } else {
+            let Value::Integer(n) = fields.remove(0).unwrap() else {
+                panic!()
+            };
+            Some(n.bits() as i128)
+        }
+    };
+    assert_eq!(
+        metadata(h.value("file.metadata", vec![d.clone(), path("value")])),
+        Some(-1)
+    );
+    assert!(matches!(
+        h.value("file.create", vec![d.clone(), path("empty")]),
+        Value::Variant { variant: 1, .. }
+    ));
+    assert_eq!(
+        metadata(h.value("file.metadata", vec![d.clone(), path("empty")])),
+        Some(-2)
+    );
+    let _ = h.value("file.create", vec![d.clone(), path("value")]);
+    assert_eq!(
+        metadata(h.value("file.metadata", vec![d, path("value")])),
+        None
+    );
+}

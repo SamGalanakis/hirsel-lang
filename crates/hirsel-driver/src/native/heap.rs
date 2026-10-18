@@ -13,6 +13,7 @@ use hirsel_run_config::Access;
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod filesystem;
 mod net;
 mod process;
 
@@ -32,6 +33,8 @@ struct Io {
     network_handles: BTreeMap<u64, u64>,
     /// The last call was a capability operation (a scheduling point).
     yielded: bool,
+    detached_directories: BTreeSet<u64>,
+    resolved_directories: BTreeMap<u64, String>,
 }
 
 impl Io {
@@ -63,6 +66,8 @@ impl Io {
             network: Default::default(),
             network_handles: BTreeMap::new(),
             yielded: false,
+            detached_directories: BTreeSet::new(),
+            resolved_directories: BTreeMap::new(),
         }
     }
 }
@@ -99,10 +104,15 @@ impl Operations for Io {
         match self.grants.remove(&handle) {
             Some(IoGrant::File { .. }) => Ok(None),
             Some(IoGrant::Atomic {
-                tree, temporary, ..
+                tree,
+                temporary,
+                directory,
+                ..
             }) => {
-                self.trees.get_mut(&tree).unwrap().1.remove(&temporary);
-                self.files.remove(&(tree, temporary));
+                if let Some(temporary) = self.physical_path(directory, &temporary) {
+                    self.trees.get_mut(&tree).unwrap().1.remove(&temporary);
+                    self.files.remove(&(tree, temporary));
+                }
                 Ok(None)
             }
             _ => Err(format!("model close of unknown handle {handle}")),
@@ -132,6 +142,12 @@ impl Operations for Io {
             return outcome;
         }
         if let Some(outcome) = self.process(module, &path.name, args) {
+            return outcome;
+        }
+        if let Some(outcome) = self.detached_filesystem(module, &path.name, args) {
+            return outcome;
+        }
+        if let Some(outcome) = self.filesystem(module, &path.name, args) {
             return outcome;
         }
         if let Some(outcome) = self.io(module, &path.name, args) {
@@ -434,13 +450,23 @@ impl Io {
                     }
                 };
                 if let Some((tree, root, access, path)) = selected {
-                    match io_relative(&root, &path) {
+                    let logical = io_relative(&root, &path);
+                    let physical = logical.as_ref().and_then(|p| {
+                        if kind == "narrow" {
+                            self.physical_path(*parent, p)
+                        } else {
+                            Some(p.clone())
+                        }
+                    });
+                    match physical {
                         Some(root) if self.trees[&tree].0.contains(&root) => {
-                            io_ok(OpValue::Handle(self.grant(IoGrant::Dir {
+                            let id = self.grant(IoGrant::Dir {
                                 tree,
-                                root,
+                                root: logical.unwrap(),
                                 access,
-                            })))
+                            });
+                            self.resolved_directories.insert(id, root);
+                            io_ok(OpValue::Handle(id))
                         }
                         Some(root) => io_portable(if self.trees[&tree].1.contains_key(&root) {
                             7
@@ -613,10 +639,11 @@ impl Io {
                         }),
                     ) => {
                         let fits = tree == old
+                            && !self.detached_directories.contains(directory)
                             && (root.is_empty() || path.starts_with(&format!("{root}/")))
                             && self
-                                .files
-                                .get(&(tree, path.clone()))
+                                .physical_path(*directory, &path)
+                                .and_then(|p| self.files.get(&(tree, p)))
                                 .is_some_and(|current| std::sync::Arc::ptr_eq(current, &identity));
                         if fits {
                             OpValue::Variant {
@@ -675,6 +702,18 @@ impl Io {
                 if tree != owner || *directory != grant {
                     return Some(OpOutcome::Fail("CAP-2".into()));
                 }
+                let Some(temporary) = self.physical_path(*directory, &temporary) else {
+                    if name == "commit" {
+                        self.grants.remove(file);
+                    }
+                    return Some(OpOutcome::Complete {
+                        result: Ok(io_portable(3)),
+                        consumed: if name == "commit" { vec![1] } else { vec![] },
+                    });
+                };
+                let Some(destination) = self.physical_path(*directory, &destination) else {
+                    return Some(OpOutcome::Unsupported);
+                };
                 if name == "commit" {
                     if !self
                         .files
@@ -683,9 +722,15 @@ impl Io {
                     {
                         self.grants.remove(file);
                         self.trees.get_mut(&tree).unwrap().1.remove(&temporary);
+                        let parent = temporary.rsplit_once('/').map_or("", |(p, _)| p);
+                        let error = if self.trees[&tree].0.contains(parent) {
+                            io_error(1)
+                        } else {
+                            io_portable(3)
+                        };
                         self.files.remove(&(tree, temporary));
                         return Some(OpOutcome::Complete {
-                            result: Ok(io_error(1)),
+                            result: Ok(error),
                             consumed: vec![1],
                         });
                     }
@@ -722,6 +767,7 @@ impl Io {
                 let Some(IoGrant::Dir { tree, root, .. }) = self.grants.get(directory) else {
                     return Some(OpOutcome::Fail("CAP-2".into()));
                 };
+                let root = self.resolved_directories.get(directory).unwrap_or(root);
                 let prefix = if root.is_empty() {
                     String::new()
                 } else {
@@ -754,8 +800,11 @@ impl Io {
                     return Some(OpOutcome::Value(io_not_granted()));
                 }
                 let text = self.paths.get(path.checked_sub(1)? as usize)?;
-                let Some(path) = io_relative(&root, text) else {
+                let Some(logical) = io_relative(&root, text) else {
                     return Some(OpOutcome::Value(io_error(1)));
+                };
+                let Some(path) = self.physical_path(*directory, &logical) else {
+                    return Some(OpOutcome::Value(io_portable(3)));
                 };
                 let mut prefix = String::new();
                 let parts: Vec<_> = path.split('/').filter(|p| !p.is_empty()).collect();
@@ -783,7 +832,7 @@ impl Io {
                             writable: false,
                             contents: self.trees[&tree].1[&path].clone(),
                             tree,
-                            path,
+                            path: logical,
                         })))
                     }
                     "create" => {
@@ -810,7 +859,7 @@ impl Io {
                             self.update_files(&identity, &[], false);
                             io_ok(OpValue::OpenHandle(self.grant(IoGrant::File {
                                 tree,
-                                path,
+                                path: logical,
                                 directory: *directory,
                                 position: 0,
                                 writable: true,
@@ -900,8 +949,8 @@ impl Io {
                             io_ok(OpValue::OpenHandle(self.grant(IoGrant::Atomic {
                                 tree,
                                 directory: *directory,
-                                temporary: temporary.clone(),
-                                destination: path,
+                                temporary: format!("{logical}.hirsel-tmp-{serial}"),
+                                destination: logical,
                                 identity: self.files[&(tree, temporary.clone())].clone(),
                             })))
                         }

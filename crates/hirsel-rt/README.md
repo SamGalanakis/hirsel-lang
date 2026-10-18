@@ -436,8 +436,8 @@ Path text reads only the bound lexical intern table and emits no host request.
 
 Ordinary tape snapshots retain physical directories/files and relative link metadata.
 Replay resolves aliases inside each pinned directory grant, so writing through an alias
-updates its target. Invalid link targets and byte-invalid host names remain operation
-faults; they do not reject tape admission. Exclusive temporary creation uses the
+updates its target. Traversal through invalid link targets and access to byte-invalid host names return
+operation faults; they do not reject tape admission. Exclusive temporary creation uses the
 kernel's O_EXCL|O_NOFOLLOW decision before link expansion. Commit checks that its
 source is the prepared regular inode. Ordinary tapes model ordered program effects,
 not arbitrary concurrent mutations of host directory entries.
@@ -686,7 +686,7 @@ FileError's portable conditions map from host ErrorKind and are derived independ
 by the memory tree and checked-heap model. Tape result/fault records preserve each
 condition and committed write prefix. FileFault remains the fallback and confinement
 refusal; output and stdin keep their own fault domains. The Result ABI keeps the
-existing FileFault/Canceled/NotGranted ordinals and appends five nullary variants.
+existing FileFault/Canceled/NotGranted ordinals and appends the portable nullary variants.
 
 `net_host::CooperativeNet` reuses HostNet's socket conventions and immediate operations
 with nonblocking sockets, retained connect/write/TLS progress and readiness tokens.
@@ -713,3 +713,18 @@ that IP. Each world allocates from 49152 upward, skips script-reserved and bound
 ports, and shares the sequence through narrowed Nets; independent worlds restart
 it. Outbound connects do not consume ports. Listen completions retain the assigned
 address for replay.
+
+Filesystem lifecycle operations share the descriptor-confined parent resolver.
+Metadata pins the final entry with O_PATH|O_NOFOLLOW; read_dir classifies direct
+children without opening special files. Ordinary rename uses pinned parents and
+renameat, while atomic commit retains its prepared-inode validation. Empty
+directories, entry kinds and optional metadata have explicit simulated state;
+host timestamps and directory sizes are recorded metadata inputs. Denied writes
+return before storage activation. Tape v6 adds typed entries, metadata, directory
+mutations and the DirectoryNotEmpty/CrossDevice errors.
+
+Snapshots retain hard-link equivalence through run-local canonical names, without
+exposing host inode numbers. Simulated mount pins and issued directory grants
+retain identity across namespace changes, including empty removed directories.
+The checked heap model keeps logical handle paths separate from the current
+resolved directory roots, so held files and atomic temporaries follow their Dir.

@@ -941,3 +941,45 @@ fn full_gate_todo_api_serves_every_route_and_persists() {
     drop(server);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn filesystem_cli_records_host_lifecycle_and_replays_after_the_mount_disappears() {
+    let fixture = Fixture::new(
+        "filesystem",
+        include_str!("../../../examples/filesystem/main.hir"),
+    );
+    let executable = fixture.native_executable();
+    let root = fixture.0.join("native/root");
+    let output_dir = root.join("output");
+    std::fs::create_dir(&output_dir).unwrap();
+    let tape = fixture.0.join("filesystem.tape");
+    let recorded = Command::new(&executable)
+        .env_clear()
+        .env("HIRSEL_RT_ROOT", &root)
+        .env("HIRSEL_RT_TAPE", &tape)
+        .output()
+        .unwrap();
+    assert!(
+        recorded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    let text = String::from_utf8(recorded.stdout.clone()).unwrap();
+    assert!(text.starts_with("build/empty directory "), "{text}");
+    assert!(text.ends_with("build/value regular 5\n"), "{text}");
+    assert_eq!(text.lines().count(), 2);
+    assert!(std::fs::read_dir(&output_dir).unwrap().next().is_none());
+    std::fs::remove_dir_all(&root).unwrap();
+    let replay = Command::new(&executable)
+        .env_clear()
+        .env("HIRSEL_RT_REPLAY", &tape)
+        .output()
+        .unwrap();
+    assert!(
+        replay.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert_eq!(replay.stdout, recorded.stdout);
+    assert!(replay.stderr.is_empty());
+}

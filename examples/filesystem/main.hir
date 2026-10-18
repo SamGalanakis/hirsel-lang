@@ -1,0 +1,27 @@
+pub type Error = Grant(GrantError) | Files(FileError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), Error] {
+  let out = io.stdout(rt) ? Grant
+  let d = io.dir(rt, path.of("output")) ? Files
+  file.mkdir_all(d, path.of("build/empty")) ? Files
+  file.write_bytes(d, path.of("build/value"), b"hello") ? Files
+  for entry in file.read_dir(d, path.of("build")) ? Files {
+    let kind = match entry.kind {
+      Regular() => "regular",
+      Directory() => "directory",
+      Symlink() => "symlink",
+      Other() => "other",
+    }
+    let meta = file.metadata(d, entry.path) ? Files
+    out.print(
+      out,
+      string.join([path.text(entry.path), kind, u64.to_string(meta.size)], " ")
+    ) ? Output
+    out.print(out, "\n") ? Output
+  }
+  file.rename(d, path.of("build"), path.of("finished")) ? Files
+  file.remove(d, path.of("finished/value")) ? Files
+  file.remove_dir(d, path.of("finished/empty")) ? Files
+  file.remove_dir(d, path.of("finished")) ? Files
+  Ok(())
+}

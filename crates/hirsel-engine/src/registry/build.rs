@@ -138,8 +138,9 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "FileError",
             "",
-            "FileFault(u32)|Canceled(CancelCause)|NotGranted()|NotFound()|PermissionDenied()|AlreadyExists()|IsDirectory()|NotDirectory()",
+            "FileFault(u32)|Canceled(CancelCause)|NotGranted()|NotFound()|PermissionDenied()|AlreadyExists()|IsDirectory()|NotDirectory()|DirectoryNotEmpty()|CrossDevice()",
         ),
+        ("FileKind", "", "Regular()|Directory()|Symlink()|Other()"),
         ("IpAddr", "", "V4(Inline[u8, 4])|V6(Inline[u8, 16])"),
         ("NetOperation", "", "Connect()|ConnectTls()|Listen()"),
         ("NetTimeout", "", "Unbounded()|Nanos(u64)"),
@@ -260,6 +261,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "kind: FailureKind,rule: String,site: SourceSite,spawn: List[u64],cause: Option[box Failure]",
         ),
         ("Reservation", "", "sku: Sku,count: u32"),
+        (
+            "Metadata",
+            "",
+            "kind: FileKind,size: u64,modified_unix_ns: Option[i128]",
+        ),
+        ("DirEntry", "", "path: Path,kind: FileKind"),
         ("SocketAddr", "", "ip: IpAddr,port: u16"),
         (
             "NetRule",
