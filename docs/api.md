@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-972 exported definitions; 296 variants.
+973 exported definitions; 299 variants.
 
 ## Types and roots
 
@@ -1128,6 +1128,28 @@ Variant of Shutdown.
 
 Variant of Shutdown.
 
+<a id="def-core_401_2fSignal"></a>
+
+- `type Signal: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Interrupt() | Terminate() | Kill()`
+
+<a id="def-core_401_2fSignal_23Interrupt"></a>
+
+- `Interrupt() -> Signal`
+
+Variant of Signal.
+
+<a id="def-core_401_2fSignal_23Kill"></a>
+
+- `Kill() -> Signal`
+
+Variant of Signal.
+
+<a id="def-core_401_2fSignal_23Terminate"></a>
+
+- `Terminate() -> Signal`
+
+Variant of Signal.
+
 <a id="def-core_401_2fSimd"></a>
 
 - `type Simd[A, n: size] uses {A}`
@@ -1916,7 +1938,7 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/char`](#def-core
 
 <a id="def-core_401_2fchild_2fkill"></a>
 
-- `@noalloc fn child.kill(p: Proc, mut c: Child of p) -> ()`
+- `@noalloc fn child.kill(p: Proc, mut c: Child of p, signal: Signal) -> ()`
 
 <a id="def-core_401_2fchild_2fread_5fstderr"></a>
 
@@ -1928,7 +1950,7 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/char`](#def-core
 
 <a id="def-core_401_2fchild_2fwait"></a>
 
-- `@noalloc fn child.wait(p: Proc, take c: Child of p) -> Result[ExitStatus, ProcessError]`
+- `@noalloc fn child.wait(p: Proc, take c: Child of p, deadline: Option[Deadline]) -> Result[ExitStatus, ProcessError]`
 
 <a id="def-core_401_2fchild_2fwrite"></a>
 
