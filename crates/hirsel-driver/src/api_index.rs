@@ -333,17 +333,24 @@ pub fn entries(root: &Path) -> Result<Vec<Entry>, ToolError> {
 
 fn token_text(syntax: &ast::SyntaxFile, start: u32, end: u32, sources: &SourceMap) -> String {
     let mut text = String::new();
+    let mut space = false;
     for token in &syntax.tokens {
         if token.span.start < start || token.span.end > end {
             continue;
         }
         match token.kind {
-            TokenKind::Trivia(ast::TriviaKind::Space | ast::TriviaKind::Newline) => text.push(' '),
-            TokenKind::Trivia(_) | TokenKind::Eof => {}
-            _ => text.push_str(sources.slice(token.span).unwrap()),
+            TokenKind::Trivia(_) => space = !text.is_empty(),
+            TokenKind::Eof => {}
+            _ => {
+                if space {
+                    text.push(' ');
+                }
+                text.push_str(sources.slice(token.span).unwrap());
+                space = false;
+            }
         }
     }
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text
 }
 fn source_declaration(
     syntax: &ast::SyntaxFile,

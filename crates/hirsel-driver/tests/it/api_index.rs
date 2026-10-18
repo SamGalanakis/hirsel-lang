@@ -126,6 +126,9 @@ pub type Record { name: String, bytes: Bytes }
 pub type Choice[T] = Empty | Value(T)
 pub opaque type Hidden: inert uses {} { secret: u64 }
 pub const LIMIT: u64 = 7
+pub fn literal(text: String) -> bool uses {}
+  requires text == "two  spaces" { true }
+pub fn comment(text: String) -> String/* relation */in text uses {} { text }
 "#,
         )
         .unwrap();
@@ -150,6 +153,14 @@ pub const LIMIT: u64 = 7
             "pub opaque type probe.Hidden: inert uses {}"
         );
         assert_eq!(find("LIMIT").declaration, "pub const probe.LIMIT: u64");
+        assert_eq!(
+            find("literal").declaration,
+            "pub fn probe.literal(text: String) -> bool uses {} requires text == \"two  spaces\""
+        );
+        assert_eq!(
+            find("comment").declaration,
+            "pub fn probe.comment(text: String) -> String in text uses {}"
+        );
         assert_eq!(
             find("Choice#Value").declaration,
             "Value(T) -> probe.Choice[T]"
