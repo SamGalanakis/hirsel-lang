@@ -211,6 +211,8 @@ N fn f32.bits(value: f32) -> u32
 N fn f32.from_bits(value: u32) -> f32
 N fn f64.bits(value: f64) -> u64
 N fn f64.from_bits(value: u64) -> f64
+N fn f32.from_f64(value: f64) -> f32
+N fn f64.from_f32(value: f32) -> f64
 N fn char.to_u32(c: char) -> u32
 N fn char.from_u32(value: u32) -> Option[char]
 N fn string.byte_len(s: String) -> u64
@@ -930,6 +932,11 @@ NaN is the positive quiet canonical NaN. `f32.bits` and `f64.bits` expose the IE
 binary32 and binary64 representation, and `from_bits` reinterprets an unsigned word of the
 same width. These allocate nothing, preserve signed zero, infinities and every finite bit
 pattern, and canonicalize NaNs as [SEM-2](semantics.md#sem-2-floats) requires.
+`f64.from_f32` converts an `f32` to the `f64` of the same value, exactly; `f32.from_f64`
+rounds an `f64` to nearest `f32`, ties to even, so a finite value beyond `f32`'s range
+becomes an infinity and a tiny one a subnormal or signed zero. Both allocate nothing,
+preserve signed zero and infinities, have no error case, and give the result type's one
+NaN for a NaN.
 
 `char.to_u32` returns a `char`'s Unicode scalar value. `char.from_u32` returns `Some` of
 the `char` whose scalar value is its argument, and `None` for a surrogate (0xD800 to

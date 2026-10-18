@@ -292,7 +292,8 @@ reuse, elided dups and kept fields through counters and the units.
   `int.checked_add` branch on the flag into `Some(result)` and `None`, and
   `float.from_int` is an unflagged `IntToFloat` conversion,
   `f32.bits`/`f64.bits` and `f32.from_bits`/`f64.from_bits` are unflagged
-  `Reinterpret` conversions, a `char` is its u32 word, so `char.to_u32`
+  `Reinterpret` conversions, `f64.from_f32` and `f32.from_f64` are unflagged
+  `FloatResize` conversions, a `char` is its u32 word, so `char.to_u32`
   is an identity `Widen` and `char.from_u32` branches on Rust's scalar test
   (`(n ^ 0xD800) + 0xFFFF_F800` wrapping, below `0x10F800`) into
   `Some(n)` and `None`, and

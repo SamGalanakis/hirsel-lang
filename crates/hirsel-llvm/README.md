@@ -44,6 +44,7 @@ Invariants:
 - The scalar library instructions (LIR schema revision 6) are native: `Convert` is
   `trunc`/`sext`/`zext` with a range compare (`llvm.fptosi.sat` and ordered compares for
   `float.to_i32`); `float.from_int` is `sitofp` or `uitofp` into its destination width;
+  `FloatResize` (`f64.from_f32`, `f32.from_f64`) is `fpext` or `fptrunc`;
   `Reinterpret` (`f32.bits` and its siblings) is a `bitcast` whose NaN self-compare selects
   the canonical NaN's bits.
   `IntArith` emits unchecked integer operators for proved SEM-1 sites, or

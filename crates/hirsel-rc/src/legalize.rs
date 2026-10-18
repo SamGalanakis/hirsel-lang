@@ -138,6 +138,8 @@ fn scalar_op(definition: &DefPath) -> Option<ScalarOp> {
         ([m], "bits" | "from_bits") if m == "f32" || m == "f64" => {
             S::Convert(ConvertMode::Reinterpret)
         }
+        ([m], "from_f32") if m == "f64" => S::Convert(ConvertMode::FloatResize),
+        ([m], "from_f64") if m == "f32" => S::Convert(ConvertMode::FloatResize),
         // A char's layout is its scalar value's u32 word.
         ([m], "to_u32") if m == "char" => S::Convert(ConvertMode::Widen),
         ([m], "from_u32") if m == "char" => S::CharFromU32,
@@ -297,7 +299,8 @@ impl Lowering<'_> {
                     mode @ (ConvertMode::Widen
                     | ConvertMode::Truncate
                     | ConvertMode::IntToFloat
-                    | ConvertMode::Reinterpret),
+                    | ConvertMode::Reinterpret
+                    | ConvertMode::FloatResize),
                 ),
                 &[x],
             ) => {

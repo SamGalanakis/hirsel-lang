@@ -449,6 +449,17 @@ impl FnEmitter<'_, '_, '_> {
                 _ => self.invalid(refuse()),
             };
         }
+        if mode == ConvertMode::FloatResize {
+            return match (from, to) {
+                (ScalarKind::F32, ScalarKind::F64) => {
+                    Ok((self.b.ins().fpromote(types::F64, operand), None))
+                }
+                (ScalarKind::F64, ScalarKind::F32) => {
+                    Ok((self.b.ins().fdemote(types::F32, operand), None))
+                }
+                _ => self.invalid(refuse()),
+            };
+        }
         if mode == ConvertMode::FloatToI32 {
             if !matches!(from, ScalarKind::F32 | ScalarKind::F64) || to != ScalarKind::I32 {
                 return self.invalid(refuse());
@@ -499,7 +510,10 @@ impl FnEmitter<'_, '_, '_> {
                 let fits = self.representable(wi, si, wj, sj, operand);
                 Ok((value, Some(fits)))
             }
-            ConvertMode::FloatToI32 | ConvertMode::IntToFloat | ConvertMode::Reinterpret => {
+            ConvertMode::FloatToI32
+            | ConvertMode::IntToFloat
+            | ConvertMode::Reinterpret
+            | ConvertMode::FloatResize => {
                 unreachable!("handled above")
             }
         }

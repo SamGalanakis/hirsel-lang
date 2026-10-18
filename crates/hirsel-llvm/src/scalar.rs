@@ -417,6 +417,17 @@ pub(crate) fn convert<'m>(
             _ => Err(format!("{mode:?} of {from:?} into {to:?}")),
         };
     }
+    if mode == ConvertMode::FloatResize {
+        return match (from, to) {
+            (ScalarKind::F32, ScalarKind::F64) => {
+                Ok((b.cast(Cast::FPExt, operand, module.f64_type()), None))
+            }
+            (ScalarKind::F64, ScalarKind::F32) => {
+                Ok((b.cast(Cast::FPTrunc, operand, module.f32_type()), None))
+            }
+            _ => Err(format!("{mode:?} of {from:?} into {to:?}")),
+        };
+    }
     if mode == ConvertMode::FloatToI32 {
         if !matches!(from, ScalarKind::F32 | ScalarKind::F64) || to != ScalarKind::I32 {
             return Err(format!("{mode:?} of {from:?} into {to:?}"));
@@ -468,7 +479,10 @@ pub(crate) fn convert<'m>(
     match mode {
         ConvertMode::Widen | ConvertMode::Truncate => Ok((value, None)),
         ConvertMode::TryNarrow => Ok((value, Some(representable(b, wi, si, wj, sj, operand)))),
-        ConvertMode::FloatToI32 | ConvertMode::IntToFloat | ConvertMode::Reinterpret => {
+        ConvertMode::FloatToI32
+        | ConvertMode::IntToFloat
+        | ConvertMode::Reinterpret
+        | ConvertMode::FloatResize => {
             unreachable!("handled above")
         }
     }

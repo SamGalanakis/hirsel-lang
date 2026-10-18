@@ -1339,6 +1339,13 @@ impl<S: Stage> Checker<'_, '_, S> {
                                 | (Some(ScalarKind::U64), Some(ScalarKind::F64))
                         ) && flag_kind.is_none()
                     }
+                    ConvertMode::FloatResize => {
+                        matches!(
+                            (from, to),
+                            (Some(ScalarKind::F32), Some(ScalarKind::F64))
+                                | (Some(ScalarKind::F64), Some(ScalarKind::F32))
+                        ) && flag_kind.is_none()
+                    }
                     ConvertMode::FloatToI32 => {
                         matches!(from, Some(ScalarKind::F32 | ScalarKind::F64))
                             && to == Some(ScalarKind::I32)

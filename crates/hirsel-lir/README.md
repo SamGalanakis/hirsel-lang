@@ -433,6 +433,12 @@ u64, or the reverse, with every NaN read as the float kind's one observable NaN
 (SEM-2). It replaces the four runtime entries. C admits exactly those four
 kind pairs and no flag; `tests/it/revision6.rs` retains the hand-built twins.
 
+LIR revision 38 adds `ConvertMode::FloatResize` for `f64.from_f32` and
+`f32.from_f64`: an f32 into an f64 exactly, or an f64 into an f32 rounded to
+nearest, ties to even, with every NaN read as the result kind's one observable
+NaN (SEM-2). C admits exactly those two kind pairs and no flag;
+`tests/it/revision6.rs` retains the hand-built twins.
+
 LIR revision 19 adds diverging calls: `Terminator::Call.normal` is
 None exactly when the callee's `FnAbi.diverges`, the ABI of a Never result, which
 has no result or result destination. C rejects a returning call of a diverging

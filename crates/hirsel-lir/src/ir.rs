@@ -371,6 +371,10 @@ pub enum ConvertMode {
     /// as result, reads as its float kind's one observable NaN, the quiet NaN
     /// with a zero sign and payload (SEM-2). No flag and no error case.
     Reinterpret,
+    /// `f64.from_f32` and `f32.from_f64`: an f32 into an f64 exactly, or an
+    /// f64 into an f32 rounded to nearest, ties to even (SEM-2). A NaN reads
+    /// as the result kind's one observable NaN. No flag and no error case.
+    FloatResize,
 }
 
 /// How `Inst::IntArith` treats a mathematical result outside its kind
@@ -2798,7 +2802,8 @@ snapshot_enum!(ConvertMode {
     TryNarrow,
     FloatToI32,
     IntToFloat,
-    Reinterpret
+    Reinterpret,
+    FloatResize
 });
 snapshot_enum!(ArithMode {
     Wrapping,

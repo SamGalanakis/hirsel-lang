@@ -519,3 +519,31 @@ fn reinterpret_pairs_each_float_with_its_unsigned_word_and_has_no_flag() {
         assert!(violations.is_empty(), "{from:?} to {to:?}: {violations:?}");
     }
 }
+
+#[test]
+fn float_resize_pairs_the_two_float_widths_and_has_no_flag() {
+    let bad = |k: &K| *k == K::Type("conversion");
+    for (from, to, flag) in [
+        (l::F64, l::F64, None),
+        (l::F32, l::F32, None),
+        (l::F64, l::U32, None),
+        (l::U64, l::F32, None),
+        (l::I32, l::F64, None),
+        (l::F32, l::F64, Some(ScalarKind::Bool)),
+    ] {
+        pair(
+            |mutant| {
+                if mutant {
+                    convert(from, to, ConvertMode::FloatResize, flag)
+                } else {
+                    convert(l::F32, l::F64, ConvertMode::FloatResize, None)
+                }
+            },
+            bad,
+        );
+    }
+    for (from, to) in [(l::F32, l::F64), (l::F64, l::F32)] {
+        let violations = convert(from, to, ConvertMode::FloatResize, None);
+        assert!(violations.is_empty(), "{from:?} to {to:?}: {violations:?}");
+    }
+}

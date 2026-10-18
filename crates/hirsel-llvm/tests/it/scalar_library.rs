@@ -203,6 +203,13 @@ fn cases() -> Vec<Case> {
         let word = unsigned_word(kind);
         push(format!("bits_{k}"), reinterpret, kind, word, false);
         push(format!("from_bits_{k}"), reinterpret, word, kind, false);
+        let other = if kind == ScalarKind::F32 {
+            ScalarKind::F64
+        } else {
+            ScalarKind::F32
+        };
+        let resize = Op::Convert(ConvertMode::FloatResize);
+        push(format!("resize_{k}"), resize, kind, other, false);
     }
     cases
 }
@@ -424,6 +431,25 @@ fn ieee_patterns(kind: ScalarKind) -> Vec<u128> {
     }
 }
 
+/// `FloatResize` operands: the IEEE patterns, and for f64 the narrowing ties at 1, at the
+/// f32 maximum (to MAX and to infinity) and at the smallest f32 subnormal (to zero and up).
+fn resize_operands(kind: ScalarKind) -> Vec<u128> {
+    let mut values = ieee_patterns(kind);
+    if kind == ScalarKind::F64 {
+        values.extend([
+            0x3ff0_0000_1000_0000,
+            0x3ff0_0000_3000_0000,
+            0x3fb9_9999_9999_999a,
+            0x47ef_ffff_efff_ffff,
+            0x47ef_ffff_f000_0000,
+            0x3690_0000_0000_0000,
+            0x36a8_0000_0000_0000,
+            0x3810_0000_0000_0000,
+        ]);
+    }
+    values
+}
+
 /// `mul_add` operands: values whose product needs the unrounded intermediate, the extremes
 /// that overflow only when rounded twice, a subnormal, signed zeros, an infinity and NaN.
 fn float_fused(kind: ScalarKind) -> Vec<u128> {
@@ -468,6 +494,9 @@ fn table(case: &Case) -> (&'static str, Vec<u128>) {
         }
         Op::Convert(ConvertMode::Reinterpret) => {
             (leak(format!("{name}_patterns")), ieee_patterns(case.kind))
+        }
+        Op::Convert(ConvertMode::FloatResize) => {
+            (leak(format!("{name}_resize")), resize_operands(case.kind))
         }
         Op::Convert(_) | Op::Narrow => (leak(format!("{name}_bounds")), integer_bounds(case.kind)),
         Op::MulAdd => (leak(format!("{name}_fused")), float_fused(case.kind)),
@@ -639,6 +668,10 @@ fn interpreted(case: &Case, operands: &[u128]) -> Option<(u128, Option<u128>)> {
         }
         Op::Convert(ConvertMode::Reinterpret) => {
             let value = float::from_bits(integer(operands[0])).unwrap();
+            Some((float_bits(value), None))
+        }
+        Op::Convert(ConvertMode::FloatResize) => {
+            let value = float::resize(&float_value(case.kind, operands[0])).unwrap();
             Some((float_bits(value), None))
         }
         Op::Convert(ConvertMode::Widen) => {

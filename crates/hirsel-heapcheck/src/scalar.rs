@@ -363,6 +363,21 @@ pub(crate) fn convert(
         };
         return Ok((value, None));
     }
+    if mode == ConvertMode::FloatResize {
+        // SEM-2: a NaN result is the result kind's one observable NaN.
+        let value = match (from, to) {
+            (ScalarKind::F32, ScalarKind::F64) => {
+                let x = f64::from(f32::from_bits(bits as u32));
+                u128::from(if x.is_nan() { f64::NAN } else { x }.to_bits())
+            }
+            (ScalarKind::F64, ScalarKind::F32) => {
+                let x = f64::from_bits(bits as u64) as f32;
+                u128::from(if x.is_nan() { f32::NAN } else { x }.to_bits())
+            }
+            _ => return invalid(),
+        };
+        return Ok((value, None));
+    }
     if mode == ConvertMode::FloatToI32 {
         let x = match from {
             ScalarKind::F32 => f64::from(f32::from_bits(bits as u32)),

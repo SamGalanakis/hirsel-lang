@@ -106,6 +106,15 @@ pub fn from_bits(value: crate::Integer) -> Option<Value> {
         _ => return None,
     })
 }
+/// `f64.from_f32` and `f32.from_f64` (docs/spec/core-library.md): Rust's float `as` casts widen
+/// exactly and narrow to nearest, ties to even; a NaN stays the one observable NaN (SEM-2).
+pub fn resize(value: &Value) -> Option<Value> {
+    Some(match value {
+        Value::F32(bits) => f64_value(f64::from(f32::from_bits(*bits))),
+        Value::F64(bits) => f32_value(f64::from_bits(*bits) as f32),
+        _ => return None,
+    })
+}
 /// Integer-to-float conversion (docs/spec/core-library.md). Rust's integer `as` casts supply IEEE
 /// round-to-nearest, ties-to-even, directly at the destination width.
 pub fn from_int(value: crate::Integer, target: hirsel_types::Primitive) -> Option<Value> {

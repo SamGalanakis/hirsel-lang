@@ -1445,6 +1445,9 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "f32.from_bits" | "f64.from_bits" => {
         float::from_bits(int(arg(a, 0)?)?).ok_or_else(|| invalid("expected u32 or u64"))?
     },
+    Primitive: "f64.from_f32" | "f32.from_f64" => {
+        float::resize(arg(a, 0)?).ok_or_else(|| invalid("expected float"))?
+    },
     Primitive: "char.to_u32" => match arg(a, 0)? {
         Value::Char(c) => u32_value((*c).into()),
         _ => return Err(invalid("expected char")),

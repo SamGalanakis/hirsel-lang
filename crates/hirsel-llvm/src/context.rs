@@ -973,6 +973,8 @@ pub(crate) enum Cast {
     Trunc,
     /// f32 to f64, exact.
     FPExt,
+    /// f64 to f32, rounded to nearest, ties to even.
+    FPTrunc,
     SIToFP,
     UIToFP,
     /// Reinterpret the bits as another type of the same size.
@@ -989,6 +991,7 @@ impl Cast {
             Cast::SExt => LLVMOpcode::LLVMSExt,
             Cast::Trunc => LLVMOpcode::LLVMTrunc,
             Cast::FPExt => LLVMOpcode::LLVMFPExt,
+            Cast::FPTrunc => LLVMOpcode::LLVMFPTrunc,
             Cast::SIToFP => LLVMOpcode::LLVMSIToFP,
             Cast::UIToFP => LLVMOpcode::LLVMUIToFP,
             Cast::Bits => LLVMOpcode::LLVMBitCast,
