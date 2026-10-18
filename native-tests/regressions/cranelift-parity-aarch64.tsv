@@ -1,0 +1,4 @@
+# Cases the LLVM backend passes and a Cranelift AArch64 executable does not, with the
+# reason (`native --cranelift --aarch64`). Each row is unfinished backend work, not a waiver;
+# a row whose case now passes fails the gate until it is removed.
+# case	reason

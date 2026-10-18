@@ -17,12 +17,23 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const PARITY: &str = "native-tests/regressions/cranelift-parity.tsv";
+/// The same list for AArch64 executables (`native --cranelift --aarch64`).
+pub const PARITY_AARCH64: &str = "native-tests/regressions/cranelift-parity-aarch64.tsv";
+
+/// The parity list of `target`.
+pub fn parity_list(target: &TargetSpec) -> &'static str {
+    if *target == TargetSpec::aarch64_unknown_linux_gnu() {
+        PARITY_AARCH64
+    } else {
+        PARITY
+    }
+}
 /// The cases the per-push native smoke also runs as Cranelift executables.
 pub const SMOKE: &str = "native-tests/regressions/cranelift-smoke.txt";
 
-/// The LLVM configuration a Cranelift run is held to, and the Cranelift one.
-pub fn matrix() -> Vec<Configuration> {
-    let options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
+/// The LLVM configuration a Cranelift run on `target` is held to, and the Cranelift one.
+pub fn matrix(target: TargetSpec) -> Vec<Configuration> {
+    let options = Options::new(target);
     vec![
         Configuration {
             options: options.clone(),
@@ -100,9 +111,12 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, String>, String> {
         }
         let (case, reason) = line
             .split_once('\t')
-            .ok_or_else(|| format!("{PARITY}:{}: not `case<TAB>reason`", index + 1))?;
+            .ok_or_else(|| format!("parity list line {}: not `case<TAB>reason`", index + 1))?;
         if rows.insert(case.to_string(), reason.to_string()).is_some() {
-            return Err(format!("{PARITY}:{}: `{case}` listed twice", index + 1));
+            return Err(format!(
+                "parity list line {}: `{case}` listed twice",
+                index + 1
+            ));
         }
     }
     Ok(rows)

@@ -19,8 +19,11 @@ Interface:
   (`cranelift 0.136.3`) in its reproducibility record, and the driver links the
   objects of that toolchain with a launcher this crate emits too.
 - `emit_clif`: the same emission, returning every function's Cranelift IR as text.
-- `launch_object(target, entry, root_words, launcher, arguments)`: the launcher object,
-  `main` and the `hirsel.entry` adapter, as the driver's LLVM shim builds them.
+- `launch_object(target, entry, root_words, report, launcher, arguments)`: the launcher
+  object, `main` and the `hirsel.entry` adapter with its PROG-3 exit report
+  (`ExitReport`), as the driver's LLVM shim builds them.
+- x86-64 and AArch64 (`isa::lookup_by_name` of the target triple); the parity gate runs
+  both, AArch64 under qemu.
 
 Invariants:
 

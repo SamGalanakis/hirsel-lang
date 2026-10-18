@@ -969,7 +969,13 @@ done:
             value: u64::from(mask),
         });
         let words: Vec<u64> = roots.iter().map(|r| root_index(*r) as u64).collect();
-        hirsel_cranelift::launch_object(target, &symbol, &words, launcher, &arguments)
+        let report = hirsel_cranelift::ExitReport {
+            result_index,
+            offset: report_offset,
+            root: report_root,
+            nodes: report.nodes.clone(),
+        };
+        hirsel_cranelift::launch_object(target, &symbol, &words, &report, launcher, &arguments)
             .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
     } else {
         let shim = format!(

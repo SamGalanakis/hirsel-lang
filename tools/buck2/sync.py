@@ -289,6 +289,10 @@ GATE_TESTS = [
            args=["--cranelift", "--shard", f"{index}/{CRANELIFT_SHARDS}"], release=True,
            runtime_archives=RUNTIME_ARCHIVES, **GATE)
       for index in range(1, CRANELIFT_SHARDS + 1)),
+    *(dict(name=f"gate-native-cranelift-aarch64-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
+           args=["--cranelift", "--aarch64", "--shard", f"{index}/{CRANELIFT_SHARDS}"], release=True,
+           runtime_archives=RUNTIME_ARCHIVES, **GATE)
+      for index in range(1, CRANELIFT_SHARDS + 1)),
     dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",

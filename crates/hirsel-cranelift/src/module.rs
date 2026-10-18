@@ -614,13 +614,38 @@ pub enum LaunchArgument {
     Symbol(String),
 }
 
+/// PROG-3's exit report of an entry's returned `Err`: the entry result's descriptor index,
+/// the error payload's offset in it and the diagnostic view nodes, `root` the payload's.
+#[derive(Clone, Debug)]
+pub struct ExitReport {
+    pub result_index: u32,
+    pub offset: u64,
+    pub root: usize,
+    pub nodes: Vec<ReportNode>,
+}
+
+/// One view node as the runtime reads it: `{kind, a, b, c, text, text length, fields, field
+/// count}`, each field `{offset, node, label, label length}`.
+#[derive(Clone, Debug, Default)]
+pub struct ReportNode {
+    pub kind: u64,
+    pub a: u64,
+    pub b: u64,
+    pub c: u64,
+    pub text: Vec<u8>,
+    pub fields: Vec<(u64, usize, Vec<u8>)>,
+}
+
 /// The launcher object: `main`, which ignores SIGPIPE and returns what `launcher(arguments)`
 /// returns, and the private entry adapter `hirsel.entry(ctx, dest, out, roots)` that calls the
-/// source entry `entry(ctx, dest, out, roots + 8 * w...)` for each root word index `w`.
+/// source entry `entry(ctx, dest, out, roots + 8 * w...)` for each root word index `w`. When the
+/// entry returns normally with the `Err` tag (1) at `out`, the adapter first calls
+/// `hirsel_rt_v2_exit_report(ctx, out, result index, offset, root node)`.
 pub fn launch_object(
     target: &TargetSpec,
     entry: &str,
     root_words: &[u64],
+    report: &ExitReport,
     launcher: &str,
     arguments: &[LaunchArgument],
 ) -> Result<Vec<u8>, CodegenError> {
@@ -660,6 +685,18 @@ pub fn launch_object(
     let adapter_id = module
         .declare_function("hirsel.entry", Linkage::Local, &adapter_sig)
         .map_err(refuse("hirsel.entry"))?;
+    let root_node = report_nodes(&mut module, report)?;
+    let mut report_sig = ir::Signature::new(call_conv);
+    report_sig.params.extend([
+        AbiParam::new(PTR),
+        AbiParam::new(PTR),
+        AbiParam::new(types::I32),
+        AbiParam::new(types::I64),
+        AbiParam::new(PTR),
+    ]);
+    let report_id = module
+        .declare_function("hirsel_rt_v2_exit_report", Linkage::Import, &report_sig)
+        .map_err(refuse("hirsel_rt_v2_exit_report"))?;
     let mut context = Context::new();
     let mut builder_context = FunctionBuilderContext::new();
     context.func = Function::with_name_signature(ir::UserFuncName::default(), adapter_sig);
@@ -676,6 +713,23 @@ pub fn launch_object(
         let callee = module.declare_func_in_func(entry_id, b.func);
         let call = b.ins().call(callee, &args);
         let status = b.inst_results(call)[0];
+        let (returned, reported, done) = (b.create_block(), b.create_block(), b.create_block());
+        b.ins().brif(status, done, &[], returned, &[]);
+        b.switch_to_block(returned);
+        let flags = ir::MemFlagsData::new();
+        let tag = b.ins().load(types::I32, flags, params[2], 0);
+        let error = b.ins().icmp_imm_s(ir::condcodes::IntCC::Equal, tag, 1);
+        b.ins().brif(error, reported, &[], done, &[]);
+        b.switch_to_block(reported);
+        let index = b.ins().iconst(types::I32, i64::from(report.result_index));
+        let offset = b.ins().iconst(types::I64, report.offset as i64);
+        let node = module.declare_data_in_func(root_node, b.func);
+        let node = b.ins().symbol_value(PTR, node);
+        let callee = module.declare_func_in_func(report_id, b.func);
+        b.ins()
+            .call(callee, &[params[0], params[2], index, offset, node]);
+        b.ins().jump(done, &[]);
+        b.switch_to_block(done);
         b.ins().return_(&[status]);
         b.seal_all_blocks();
         b.finalize(module.target_config());
@@ -779,4 +833,93 @@ pub fn launch_object(
     module.finish().emit().map_err(|e| CodegenError::Object {
         message: e.to_string(),
     })
+}
+
+/// The exit report's view nodes as private constants; the root node's id.
+fn report_nodes(module: &mut ObjectModule, report: &ExitReport) -> Emitted<DataId> {
+    let refuse = |name: String| {
+        move |e: cranelift_module::ModuleError| CodegenError::Cranelift {
+            name,
+            message: e.to_string(),
+        }
+    };
+    let declare = |module: &mut ObjectModule, name: String| {
+        module
+            .declare_data(&name, Linkage::Local, false, false)
+            .map_err(refuse(name))
+    };
+    let mut nodes = Vec::with_capacity(report.nodes.len());
+    for i in 0..report.nodes.len() {
+        nodes.push(declare(module, format!("hirsel.report.node.{i}"))?);
+    }
+    let Some(&root) = nodes.get(report.root) else {
+        return Err(CodegenError::Manifest {
+            problem: "an exit report root outside its nodes".into(),
+        });
+    };
+    // Bytes, at least one so every constant has an address of its own.
+    let bytes = |module: &mut ObjectModule, name: String, text: &[u8]| -> Emitted<DataId> {
+        let id = declare(module, name.clone())?;
+        let mut description = DataDescription::new();
+        let mut image = text.to_vec();
+        if image.is_empty() {
+            image.push(0);
+        }
+        description.define(image.into_boxed_slice());
+        module.define_data(id, &description).map_err(refuse(name))?;
+        Ok(id)
+    };
+    for (i, node) in report.nodes.iter().enumerate() {
+        let text = bytes(module, format!("hirsel.report.text.{i}"), &node.text)?;
+        let mut description = DataDescription::new();
+        let mut image = vec![0u8; (node.fields.len() * 32).max(8)];
+        let mut targets = Vec::new();
+        for (j, (offset, child, label)) in node.fields.iter().enumerate() {
+            let Some(&child) = nodes.get(*child) else {
+                return Err(CodegenError::Manifest {
+                    problem: "an exit report field outside its nodes".into(),
+                });
+            };
+            let label_id = bytes(module, format!("hirsel.report.label.{i}.{j}"), label)?;
+            image[j * 32..j * 32 + 8].copy_from_slice(&offset.to_le_bytes());
+            image[j * 32 + 24..j * 32 + 32].copy_from_slice(&(label.len() as u64).to_le_bytes());
+            targets.push((j * 32 + 8, child));
+            targets.push((j * 32 + 16, label_id));
+        }
+        description.define(image.into_boxed_slice());
+        description.set_align(8);
+        for (at, target) in targets {
+            let gv = module.declare_data_in_data(target, &mut description);
+            description.write_data_addr(at as u32, gv, 0);
+        }
+        let name = format!("hirsel.report.fields.{i}");
+        let fields = declare(module, name.clone())?;
+        module
+            .define_data(fields, &description)
+            .map_err(refuse(name))?;
+        let mut image = Vec::with_capacity(64);
+        for word in [
+            node.kind,
+            node.a,
+            node.b,
+            node.c,
+            0,
+            node.text.len() as u64,
+            0,
+        ] {
+            image.extend(word.to_le_bytes());
+        }
+        image.extend((node.fields.len() as u64).to_le_bytes());
+        let mut description = DataDescription::new();
+        description.define(image.into_boxed_slice());
+        description.set_align(8);
+        for (at, target) in [(32, text), (48, fields)] {
+            let gv = module.declare_data_in_data(target, &mut description);
+            description.write_data_addr(at, gv, 0);
+        }
+        module
+            .define_data(nodes[i], &description)
+            .map_err(refuse(format!("hirsel.report.node.{i}")))?;
+    }
+    Ok(root)
 }

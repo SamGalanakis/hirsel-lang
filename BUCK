@@ -7697,6 +7697,206 @@ hirsel_command_test(
 )
 
 hirsel_command_test(
+    name = "gate-native-cranelift-aarch64-shard-1",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native",
+    args = [
+        "--cranelift",
+        "--aarch64",
+        "--shard",
+        "1/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-cranelift-aarch64-shard-2",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native",
+    args = [
+        "--cranelift",
+        "--aarch64",
+        "--shard",
+        "2/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-cranelift-aarch64-shard-3",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native",
+    args = [
+        "--cranelift",
+        "--aarch64",
+        "--shard",
+        "3/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-cranelift-aarch64-shard-4",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native",
+    args = [
+        "--cranelift",
+        "--aarch64",
+        "--shard",
+        "4/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-cranelift-aarch64-shard-5",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native",
+    args = [
+        "--cranelift",
+        "--aarch64",
+        "--shard",
+        "5/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-cranelift-aarch64-shard-6",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native",
+    args = [
+        "--cranelift",
+        "--aarch64",
+        "--shard",
+        "6/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-cranelift-aarch64-shard-7",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native",
+    args = [
+        "--cranelift",
+        "--aarch64",
+        "--shard",
+        "7/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-native-cranelift-aarch64-shard-8",
+    full = True,
+    binary = "//:hirsel-conformance-bin-native",
+    args = [
+        "--cranelift",
+        "--aarch64",
+        "--shard",
+        "8/8",
+    ],
+    release = True,
+    runtime_archives = "//:hirsel-rt-archives",
+    cwd = "crates/hirsel-conformance",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
     name = "gate-native-sanitize",
     full = True,
     binary = "//:hirsel-conformance-bin-native",

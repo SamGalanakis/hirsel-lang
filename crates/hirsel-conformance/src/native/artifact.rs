@@ -135,7 +135,12 @@ pub fn configuration(name: &str) -> Option<Configuration> {
     let mut config = full_matrix()
         .into_iter()
         .chain(topology_matrix(20))
-        .chain(super::cranelift::matrix())
+        .chain(super::cranelift::matrix(
+            hirsel_driver::native::TargetSpec::x86_64_unknown_linux_gnu(),
+        ))
+        .chain(super::cranelift::matrix(
+            hirsel_driver::native::TargetSpec::aarch64_unknown_linux_gnu(),
+        ))
         .find(|c| c.name() == base)?;
     config.options.launch = launch;
     // Stored names must be canonical: no duplicate, reordered or zero suffixes.

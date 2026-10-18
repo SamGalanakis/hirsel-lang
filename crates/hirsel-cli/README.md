@@ -100,7 +100,7 @@ snapshots before supplying that record; selecting the source grants no authority
 production runtime. Default builds use LLVM O2, release O3, debug O0 with source
 line tables. `--backend cranelift` lowers the same LIR with Cranelift: `--debug`
 is its unoptimized level without line tables, the other profiles its `speed`
-level. x86-64 is the target its parity gate covers. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
+level. Its parity gate covers x86-64 and AArch64. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
 records deny external roots. `-- [args...]` explicitly supplies only Args.
 
 `build` and `run --native` accept `--proofs <sidecar>` with any number of

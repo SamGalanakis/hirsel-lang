@@ -14,7 +14,7 @@ use hirsel_driver::native::{
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --cranelift [--clif] [--filter TEXT]... [--shard I/N] | --cranelift-times [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
+const USAGE: &str = "usage: native --smoke | --sanitize [--filter TEXT]... | --cranelift [--clif] [--aarch64] [--filter TEXT]... [--shard I/N] | --cranelift-times [--filter TEXT]... | --full [--bless] [--filter TEXT]... [--shard I/N] [--engine heap|llvm|diagnostic|default|system] [--seed N] [--exhaustive] | --hash-sweep [--filter TEXT]... | --replay DIR | --reduce DIR\n\
                      options: [--root PATH] [--jobs N] [--out DIR] [--hash-seed N]";
 
 fn main() -> ExitCode {
@@ -109,6 +109,7 @@ fn run() -> Result<bool, String> {
     let mut filter = Filter::default();
     let mut bless = false;
     let mut clif = false;
+    let mut aarch64 = false;
     let mut exhaustive = false;
     let mut seed = std::env::var("PROPTEST_RNG_SEED")
         .ok()
@@ -136,6 +137,7 @@ fn run() -> Result<bool, String> {
                 }
                 Long("bless") => bless = true,
                 Long("clif") => clif = true,
+                Long("aarch64") => aarch64 = true,
                 Long("exhaustive") => exhaustive = true,
                 Long("seed") => seed = args.value()?.parse()?,
                 Long("out") => out = Some(PathBuf::from(args.value()?)),
@@ -227,7 +229,14 @@ fn run() -> Result<bool, String> {
             );
             Ok(ok)
         }
-        "--cranelift" => cranelift(&root, jobs, &filter, hash_seed, clif),
+        "--cranelift" => {
+            let target = if aarch64 {
+                TargetSpec::aarch64_unknown_linux_gnu()
+            } else {
+                TargetSpec::x86_64_unknown_linux_gnu()
+            };
+            cranelift(&root, jobs, &filter, hash_seed, clif, target)
+        }
         "--cranelift-times" => cranelift_times(&root, jobs, &filter),
         "--sanitize" => {
             // The smoke and memcheck cases as optimized and unoptimized x86-64
@@ -312,16 +321,19 @@ fn run() -> Result<bool, String> {
 }
 
 /// `--cranelift`: the parity gate over the selected cases (all without a filter).
-/// With `clif`, each selected case's Cranelift IR is printed first.
+/// With `clif`, each selected case's Cranelift IR is printed first. The parity list is
+/// `target`'s: x86-64's file, or AArch64's, run under qemu.
 fn cranelift(
     root: &Path,
     jobs: usize,
     filter: &Filter,
     hash_seed: u64,
     clif: bool,
+    target: TargetSpec,
 ) -> Result<bool, String> {
     use native::cranelift;
-    let matrix = seeded(cranelift::matrix(), hash_seed);
+    let list = cranelift::parity_list(&target);
+    let matrix = seeded(cranelift::matrix(target), hash_seed);
     let mut cases = cranelift::cases(root)?;
     cases.retain(|c| filter.keeps(&c.id));
     if clif {
@@ -332,8 +344,7 @@ fn cranelift(
             println!("{text}");
         }
     }
-    let text = std::fs::read_to_string(root.join(cranelift::PARITY))
-        .map_err(|e| format!("{}: {e}", cranelift::PARITY))?;
+    let text = std::fs::read_to_string(root.join(list)).map_err(|e| format!("{list}: {e}"))?;
     let listed = cranelift::parse(&text)?;
     let results = native::run_cases(
         &cases,
@@ -358,10 +369,7 @@ fn cranelift(
         }
     }
     for id in &report.stale {
-        eprintln!(
-            "cranelift: {id} passes; remove its row from {}",
-            cranelift::PARITY
-        );
+        eprintln!("cranelift: {id} passes; remove its row from {list}");
     }
     // Cases outside the gate, and why LLVM does not pass them.
     for result in results.iter().filter(|r| cranelift::verdict(r).is_none()) {

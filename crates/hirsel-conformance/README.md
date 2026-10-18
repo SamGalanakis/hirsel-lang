@@ -215,7 +215,9 @@ with LLVM's reason). Every case LLVM agrees on and Cranelift does not is a row o
 `native-tests/regressions/cranelift-parity.tsv` (`case`, then Cranelift's reason); a
 failure without its row, a changed reason and a row whose case agrees fail. The run
 prints the rows its results imply, keeping rows of cases it did not select.
-`--clif` first prints each selected case's Cranelift IR. `native --cranelift-times`
+`--clif` first prints each selected case's Cranelift IR. `--aarch64` runs both builds as
+AArch64 executables under qemu against `cranelift-parity-aarch64.tsv`
+(`//:gate-native-cranelift-aarch64-shard-1` to `-8`). `native --cranelift-times`
 prints the emission wall time of each case's one-object build under Cranelift, LLVM
 O0 and LLVM O2, and their totals.
 

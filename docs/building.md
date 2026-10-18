@@ -308,7 +308,9 @@ cases of `native-tests/regressions/cranelift-smoke.txt` as Cranelift executables
 ```
 
 The whole parity set runs as `//:gate-native-cranelift-shard-1` to `-8`, each under
-the pool's action time limit.
+the pool's action time limit, and as AArch64 executables under qemu as
+`//:gate-native-cranelift-aarch64-shard-1` to `-8` (`--test-arg=--aarch64` on a filtered
+run; its list is `cranelift-parity-aarch64.tsv`).
 
 `native --cranelift-times [--filter TEXT]...` prints each case's emission wall time
 under Cranelift, LLVM O0 and LLVM O2, and the totals.

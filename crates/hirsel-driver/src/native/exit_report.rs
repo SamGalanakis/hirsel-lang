@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 
 pub(crate) struct Report {
     pub declarations: String,
+    /// The nodes `declarations` defines, for a launcher Cranelift emits.
+    pub nodes: Vec<hirsel_cranelift::ReportNode>,
     pub offset: u64,
     pub root: usize,
     pub result: LayoutId,
@@ -341,8 +343,24 @@ pub(crate) fn derive(
         ));
         declarations.push_str(&format!("@hirsel.report.node.{i} = private constant %hirsel.report.node {{ i64 {}, i64 {}, i64 {}, i64 {}, ptr @hirsel.report.text.{i}, i64 {}, ptr @hirsel.report.fields.{i}, i64 {} }}\n", n.kind, n.a, n.b, n.c, n.text.len(), fields.len()));
     }
+    let nodes = nodes
+        .into_iter()
+        .map(|n| hirsel_cranelift::ReportNode {
+            kind: n.kind,
+            a: n.a,
+            b: n.b,
+            c: n.c,
+            text: n.text.into_bytes(),
+            fields: n
+                .fields
+                .into_iter()
+                .map(|(offset, node, label)| (offset, node, label.into_bytes()))
+                .collect(),
+        })
+        .collect();
     Ok(Report {
         declarations,
+        nodes,
         offset: field.offset,
         root,
         result,
