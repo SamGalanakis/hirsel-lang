@@ -1120,6 +1120,9 @@ struct Checker<'a> {
     return_sendability: BTreeMap<ParamId, bool>,
     /// `mut x: unique T` parameters already reported for a lost hand-back.
     lost_handbacks: BTreeSet<usize>,
+    /// Statements whose end releases a call's temporary with a user-visible
+    /// destruction, which may fail (FAIL-3).
+    destroying: BTreeSet<hirsel_syntax::StmtId>,
     /// Proving `@preserves_unique` on this parameter: it and every non-plain
     /// taken or `mut` parameter enter unique, and it must leave unique.
     unique_proof: Option<ParamId>,
@@ -1472,9 +1475,22 @@ pub(super) fn check(
         return_uniqueness: BTreeMap::new(),
         return_sendability: BTreeMap::new(),
         lost_handbacks: BTreeSet::new(),
+        destroying: BTreeSet::new(),
         unique_proof: proof,
         live: &live,
     };
+    checker.destroying = graph
+        .statements
+        .temporaries
+        .iter()
+        .filter(|(expression, _)| {
+            matches!(
+                tree.expressions[expression.0 as usize].kind,
+                ExprKind::Call { .. }
+            ) && checker.destroyed(**expression)
+        })
+        .map(|(_, statement)| *statement)
+        .collect();
     let initial = checker.proof_entry(initial_storage.initial(&checker));
     let finalizer = matches!(graph.owner, NameSite::Item(item)
         if matches!(tree.items[item.0 as usize].kind, hirsel_syntax::ItemKind::Type { drop: Some(_), .. }));
@@ -2514,6 +2530,20 @@ impl Checker<'_> {
             });
         promised && self.callee_definition(callee).is_some()
     }
+    /// User-visible destruction (DROP-1/2): a noncopyable value, which may
+    /// hold a resource, or a once callable.
+    fn destroyed(&self, expression: ExprId) -> bool {
+        self.property(expression).is_some_and(|p| !p.copyable)
+            || self
+                .ty(expression)
+                .and_then(|ty| self.body.types.get(ty))
+                .is_some_and(|row| row.modes.multiplicity == Multiplicity::Once)
+    }
+    fn binding_destroyed(&self, binding: usize) -> bool {
+        let ty = self.body.bindings[binding].ty;
+        !self.properties[ty.index()].copyable
+            || self.body.types.get(ty).unwrap().modes.multiplicity == Multiplicity::Once
+    }
     /// MODE-2: a direct generic call whose result holds only values of type
     /// parameters it cannot copy returns a unique result when every argument
     /// that may supply them is unique.
@@ -3426,6 +3456,27 @@ impl Checker<'_> {
             })
         {
             self.mutable_crossing_exit(state, *operation, &BTreeSet::new());
+        }
+        // MODE-2: releasing a value with user-visible destruction runs code
+        // that may fail (DROP-1/2, FAIL-3), so it is a failure site too.
+        let releases = match op {
+            Op::Kill(bindings) => bindings.iter().any(|binding| {
+                state.slots[*binding].available & LIVE != 0 && self.binding_destroyed(*binding)
+            }),
+            Op::StatementEnd(statement) => self.destroying.contains(statement),
+            Op::Write {
+                place: expression, ..
+            } => place(self.body, *expression, self.source_rows).is_some_and(|place| {
+                state.slots[place.binding].available & LIVE != 0 && self.destroyed(*expression)
+            }),
+            _ => false,
+        };
+        if releases {
+            let site = match op {
+                Op::Write { operation, .. } => *operation,
+                _ => self.graph.nodes[self.node].span,
+            };
+            self.mutable_crossing_exit(state, site, &BTreeSet::new());
         }
         match op {
             Op::Nop => {}

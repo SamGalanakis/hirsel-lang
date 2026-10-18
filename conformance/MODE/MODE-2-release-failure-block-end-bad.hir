@@ -1,0 +1,26 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 15
+// Releasing b at the block's end runs its finalizer, which may fail while
+// kept shares xs, so the caller would get xs back aliased. Twin is
+// MODE-2-release-failure-block-end-run.
+resource type Bomb {
+  n: u64,
+}
+drop(b) {
+  let _ = 10u64 / b.n
+}
+
+fn grow(mut xs: unique List[u64]) uses {} {
+  let fresh: unique List[u64] = [1u64]
+  {
+    let b = Bomb(n: 1u64)
+    let kept = copy xs
+  }
+  xs = take fresh
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut xs: unique List[u64] = [0u64]
+  grow(mut xs)
+  Ok(())
+}

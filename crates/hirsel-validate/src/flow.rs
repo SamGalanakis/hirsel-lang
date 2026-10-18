@@ -240,8 +240,8 @@ struct Model {
     origin_paths: BTreeSet<Vec<hirsel_types::FieldId>>,
     /// The parameter root a `@preserves_unique` re-proof hands back (MODE-2).
     unique_proof: Option<usize>,
-    /// The failure edge being checked is a release's, which ends no uniqueness
-    /// hand-back proof: source checking sees failures at evaluation sites.
+    /// The failure edge being checked is a release's that runs no user code
+    /// (DROP-1), which ends no uniqueness hand-back proof.
     releasing: std::cell::Cell<bool>,
     /// While a return's cleanup runs, the roots whose shares it returns.
     returning_shares: std::cell::RefCell<BTreeSet<usize>>,
@@ -5243,10 +5243,14 @@ impl Checker<'_> {
                     if self.readonly_map_entry(*place) || self.readonly_byte_index(*place) {
                         self.flow_error(report, ViolationKind::InvalidUse(*place));
                     }
-                    let may_fail = state.places[model.mapping[place.0 as usize]] & LIVE != 0
+                    let live = state.places[model.mapping[place.0 as usize]] & LIVE != 0;
+                    let may_fail = live
                         && needs_release(self, self.place_type(*place), &self.definition.types);
+                    // MODE-2: a release that runs user code may fail while a
+                    // hand-back is weakened; a copyable one runs none (DROP-1).
+                    let silent = !(live && self.destroyed(self.place_type(*place)));
                     self.drop_place(model, state, *place, *if_live, report, true);
-                    model.releasing.set(true);
+                    model.releasing.set(silent);
                     self.failure_cleanup(model, state, instruction.on_failure, report, may_fail);
                     model.releasing.set(false);
                 }
@@ -5257,8 +5261,14 @@ impl Checker<'_> {
                         CleanupAction::Drop { place, .. }
                             if state.places[model.mapping[place.0 as usize]] & LIVE != 0
                                 && needs_release(self, self.place_type(*place), &self.definition.types)));
+                    let silent = !self.body.cleanup_actions(*id).any(|action| {
+                        matches!(action,
+                        CleanupAction::Drop { place, .. }
+                            if state.places[model.mapping[place.0 as usize]] & LIVE != 0
+                                && self.destroyed(self.place_type(*place)))
+                    });
                     self.cleanup(model, state, *id, false, report, true);
-                    model.releasing.set(true);
+                    model.releasing.set(silent);
                     self.failure_cleanup(model, state, instruction.on_failure, report, may_fail);
                     model.releasing.set(false);
                 }

@@ -1,0 +1,24 @@
+// rule: MODE-2
+// expect: run
+// xs is unique again before b's old value is released. Twin is
+// MODE-2-release-failure-displaced-bad.
+resource type Bomb {
+  n: u64,
+}
+drop(b) {
+  let _ = 10u64 / b.n
+}
+
+fn grow(mut xs: unique List[u64], take spare: Bomb) uses {} {
+  let fresh: unique List[u64] = [1u64]
+  let mut b = Bomb(n: 1u64)
+  let kept = copy xs
+  xs = take fresh
+  b = take spare
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut xs: unique List[u64] = [0u64]
+  grow(mut xs, Bomb(n: 2u64))
+  Ok(())
+}

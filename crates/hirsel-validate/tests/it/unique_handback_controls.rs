@@ -904,3 +904,122 @@ fn a_parametric_result_is_unique_only_from_unique_inputs() {
     // An aliased list may share its elements: the unique result is forged.
     assert!(!parametric_call(false).kinds().is_empty());
 }
+
+/// A resource whose finalizer may fail (DROP-2).
+fn token_signature() -> Signature {
+    let mut signature = function_signature("Token", vec![], TypeKind::Tuple(vec![].into()));
+    let scalar = signature
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::U64)));
+    let representation = signature.types.push(ty(TypeKind::Record(
+        vec![Field {
+            name: "value".into(),
+            ty: scalar,
+            growable: false,
+        }]
+        .into(),
+    )));
+    signature.kind = SignatureKind::Type(TypeDefinition {
+        loop_source: None,
+        format: None,
+        destructor_allocation: Allocation::NoAlloc,
+        generics: vec![],
+        representation: Some(representation),
+        bounds: vec![],
+        authority: AuthoritySummary::inert(),
+        capability: None,
+        implementation_authority: None,
+        serializable: false,
+        layout: Layout::default(),
+        distinct: false,
+        resource: true,
+        drop: Some(path("Token_drop")),
+        fact: None,
+    });
+    signature
+}
+
+/// `fn main(mut x: unique String, take fresh: unique String, take b: Token)`
+/// copies `x`, then replaces it with `fresh`. With `weakened`, `b` is released
+/// between the copy and the replacement; otherwise before the copy.
+fn released_resource(weakened: bool) -> Fixture {
+    let (mut f, x) = handback(true);
+    let string = TypeKind::Primitive(Primitive::String);
+    let fresh = param(&mut f, string.clone());
+    let old = f.body().places[fresh as usize].ty;
+    let mut row = f.definition.types.get(old).unwrap().clone();
+    row.modes.uniqueness = Uniqueness::Unique;
+    let row = f.definition.types.push(row);
+    f.body().locals[fresh as usize].ty = row;
+    f.body().places[fresh as usize].ty = row;
+    let b = param(
+        &mut f,
+        TypeKind::Named {
+            definition: path("Token"),
+            arguments: vec![].into(),
+        },
+    );
+    f.signatures.insert(path("Token"), token_signature());
+    let kept = f.slot(string.clone(), Storage::Local);
+    let displaced = f.slot(string, Storage::Temporary);
+    let release = |on_failure| {
+        inst(
+            InstructionKind::Drop {
+                place: PlaceId(b),
+                if_live: false,
+            },
+            on_failure,
+        )
+    };
+    let copy_id = RvalueId(f.body().rvalues.len() as u32);
+    f.body().rvalues.push(Rvalue::Use(copy(x)));
+    let copied = |on_failure| {
+        inst(
+            InstructionKind::Assign {
+                destination: PlaceId(kept),
+                value: copy_id,
+            },
+            on_failure,
+        )
+    };
+    let fresh_only = f.cleanup(vec![drop(fresh)]);
+    let with_b = f.cleanup(vec![drop(fresh), drop(b)]);
+    let kept_fresh = f.cleanup(vec![drop(kept), drop(fresh)]);
+    let kept_only = f.cleanup(vec![drop(kept)]);
+    let kept_displaced = f.cleanup(vec![drop(kept), drop(displaced)]);
+    let mut instructions = if weakened {
+        vec![copied(with_b), release(kept_fresh)]
+    } else {
+        vec![release(fresh_only), copied(fresh_only)]
+    };
+    instructions.push(inst(
+        InstructionKind::Replace {
+            destination: PlaceId(x),
+            value: take(fresh),
+            displaced: PlaceId(displaced),
+            if_live: false,
+        },
+        kept_only,
+    ));
+    instructions.push(inst(
+        InstructionKind::Drop {
+            place: PlaceId(displaced),
+            if_live: false,
+        },
+        kept_displaced,
+    ));
+    f.body().blocks[0].instructions.extend(instructions);
+    f.body().blocks[0].terminator = ret(0, kept_only);
+    owner_sig(
+        &mut f,
+        &[PassingMode::Mut, PassingMode::Take, PassingMode::Take],
+    );
+    f
+}
+
+#[test]
+fn a_failing_finalizer_is_a_hand_back_failure_site() {
+    released_resource(false).valid();
+    // The finalizer may fail while `kept` shares `x`.
+    handback_error(&released_resource(true), "mutable unique hand-back");
+}

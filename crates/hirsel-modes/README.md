@@ -496,7 +496,10 @@ its last use stays `parked` on the storage until its statement's `StatementEnd`;
 `restore_borrowed` makes the storage unique again, at each statement end and kill, once
 no live binding, evaluated temporary or parked temporary reaches it. A call whose
 type is Never has no successor node, so a match arm it ends adds nothing to the join, and a
-bare nullary variant is fresh, as a literal is. A parametric call (`parametric_unique`, from
+bare nullary variant is fresh, as a literal is. Releasing a value with user-visible
+destruction (`destroyed`: noncopyable or once) at a kill, at the end of a statement that
+holds such a call temporary (`destroying`), or by a displacing write is a failure site
+for the hand-back. A parametric call (`parametric_unique`, from
 `hirsel_types::parametric_inputs`) returns a unique value when every argument that may
 supply its result's type-parameter values is unique. A taken argument of
 a call reaching it makes the share real (`share`). A `@preserves_unique`

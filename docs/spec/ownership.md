@@ -171,7 +171,11 @@ part of any type ([OWN-8](#own-8-parts)). A plain `mut` argument that is a part 
 owner's uniqueness, since the callee may install a share there. A `mut x: unique T` parameter
 accepts only unique arguments and only unique whole-value assignments, so its root is
 updated in place, and it hands back a unique value: on every return and at every
-evaluation that may fail, `x` must be unique, or MODE-2 is reported there. A counted
+evaluation that may fail, `x` must be unique, or MODE-2 is reported there. Releasing a value
+with user-visible destruction is such an evaluation, since a finalizer may fail
+([FAIL-3](failure.md#fail-3-what-runs)): a block's end, a statement's end or an assignment
+that drops a resource or a once callable. A copyable value's release runs no code
+([DROP-1](failure.md#drop-1-values)). A counted
 result related to `x`, such as `map.get(x, k)`'s, holds a share of it and ends its
 uniqueness while the result may live; its shares stay local to the borrow, so `x` counts
 as unique again once no live binding and no temporary of an unfinished statement holds a
