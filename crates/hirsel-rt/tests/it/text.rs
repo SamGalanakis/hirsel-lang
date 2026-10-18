@@ -107,6 +107,117 @@ fn byte_descriptor_and_text_records_match_derivation_on_both_targets() {
 }
 
 #[test]
+fn bytes_list_descriptor_matches_derivation_on_both_targets() {
+    use hirsel_layout::layout::{LayoutBuilder, Owners};
+    use hirsel_lir::layout_types::{LayoutKind, TargetSpec};
+    use hirsel_types::Primitive;
+    for target in [
+        TargetSpec::x86_64_unknown_linux_gnu(),
+        TargetSpec::aarch64_unknown_linux_gnu(),
+    ] {
+        let mut ty = support::schema::Ty::default();
+        let bytes = ty.p(Primitive::Bytes);
+        let list = ty.list(bytes);
+        let owners = Owners::default();
+        let mut builder = LayoutBuilder::new(&target, &owners);
+        let slice = builder.layout(&ty.store, bytes).unwrap();
+        builder.layout(&ty.store, list).unwrap();
+        let table = builder.finish();
+        hirsel_lir::layout_validate::validate_table(&table, &target).unwrap();
+        let payload = table
+            .layouts
+            .iter()
+            .position(|r| matches!(r.kind, LayoutKind::Sequence { element } if element == slice))
+            .unwrap();
+        let derived = hirsel_lir::rt_program::descriptor(
+            &table,
+            hirsel_lir::layout_types::LayoutId(payload as u32),
+        )
+        .unwrap();
+        let runtime = &BYTES_LIST_DESCRIPTOR.0;
+        assert_eq!(
+            (
+                runtime.magic,
+                runtime.version,
+                runtime.size,
+                runtime.align,
+                runtime.field_count,
+                runtime.flags,
+                runtime.logical
+            ),
+            (
+                hirsel_rt::LAYOUT_MAGIC,
+                hirsel_rt::LAYOUT_VERSION,
+                derived.size,
+                derived.align,
+                derived.field_count,
+                derived.flags,
+                derived.logical
+            )
+        );
+        assert!(runtime.finalizer.is_none() && derived.finalizer.is_none());
+        let steps =
+            unsafe { std::slice::from_raw_parts(runtime.steps, runtime.step_count as usize) };
+        let steps: Vec<_> = steps
+            .iter()
+            .map(|s| {
+                assert!(s.layout.is_null());
+                (
+                    s.kind,
+                    s.field,
+                    s.variant,
+                    s.span,
+                    s.offset,
+                    s.stride,
+                    s.count,
+                    s.count_offset,
+                )
+            })
+            .collect();
+        let expected: Vec<_> = derived
+            .steps
+            .iter()
+            .map(|s| {
+                assert!(s.layout.is_none());
+                (
+                    s.kind.code(),
+                    s.field,
+                    s.variant,
+                    s.span,
+                    s.offset,
+                    s.stride,
+                    s.count,
+                    s.count_offset,
+                )
+            })
+            .collect();
+        assert_eq!(steps, expected);
+    }
+}
+
+#[test]
+fn a_runtime_bytes_list_holds_its_items_and_releases_every_owner() {
+    for ctx in [Ctx::production(), Ctx::diagnostic()] {
+        unsafe {
+            let items = [b"one".to_vec(), vec![], b"three\xff".to_vec()];
+            let list = allocate_bytes_list(ctx.0, &items);
+            assert_eq!((*list).index(), bytes_list_index(ctx.0));
+            let payload = list.cast::<u8>().add(HEADER_SIZE);
+            assert_eq!(payload.cast::<u64>().read(), 3);
+            assert!(payload.add(8).cast::<u64>().read() >= 3);
+            for (index, item) in items.iter().enumerate() {
+                let slice = payload.add(16 + index * 24).cast::<Slice>().read();
+                assert_eq!(shown(slice), item.as_slice());
+                assert_eq!((*slice.owner).count, 1);
+            }
+            assert_eq!(ctx.stats().live_blocks, 4);
+            release(&ctx, list);
+        }
+        assert_eq!(ctx.stats().live_blocks, 0);
+    }
+}
+
+#[test]
 fn from_bytes_transfers_the_same_nonzero_slice_on_both_utf8_outcomes() {
     for ctx in [Ctx::production(), Ctx::diagnostic()] {
         for (bytes, start, length, tag) in [

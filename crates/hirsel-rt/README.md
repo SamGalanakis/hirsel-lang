@@ -38,7 +38,11 @@ Invariants and boundary:
 - One immutable descriptor registry belongs to a run context. The driver assigns it before
   partitioning the linked program and every emitted object receives the same assignment.
   Runtime-owned bytes/file-walk descriptors reserve indices 0/1, empty environments use 2,
-  and canonical layout-descriptor digests order the remaining indices. ABI v2 entries accept
+  and canonical layout-descriptor digests order the remaining indices. The run context
+  appends one more runtime descriptor after the program's, the `List[Bytes]` payload
+  (`text::BYTES_LIST_DESCRIPTOR`, at `text::bytes_list_index`), so runtime results can hold
+  byte strings; a test checks its steps, flags and charge against the derivation on both
+  targets. ABI v2 entries accept
   indices; inline FINALIZE steps retain descriptor pointers as immutable program data.
 - `alloc` and `arena_alloc` return the new block and cannot fail (runtime ABI 3): backing
   exhaustion terminates environmentally, which no program observes, so callers test no

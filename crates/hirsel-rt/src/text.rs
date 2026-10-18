@@ -33,6 +33,83 @@ pub static hirsel_rt_v2_bytes_descriptor: BytesDescriptor = BytesDescriptor(Layo
     logical: 1,
 });
 
+/// The `List[Bytes]` payload descriptor the runtime allocates its byte-string lists under:
+/// a sequence of 24-byte slices whose drop program releases each element's owner, highest
+/// index first. Its steps are the derivation's (`hirsel_lir::rt_program`).
+#[repr(transparent)]
+pub struct BytesListDescriptor(pub Layout);
+// SAFETY: this immutable descriptor points only at the immutable steps below.
+unsafe impl Sync for BytesListDescriptor {}
+#[repr(transparent)]
+struct BytesListSteps([crate::Step; 2]);
+// SAFETY: immutable steps with no layout pointers.
+unsafe impl Sync for BytesListSteps {}
+static BYTES_LIST_STEPS: BytesListSteps = BytesListSteps([
+    crate::Step {
+        kind: crate::STEP_LOOP,
+        field: crate::WHOLE_VALUE,
+        variant: 0,
+        span: 1,
+        offset: 16,
+        stride: 24,
+        count: 0,
+        count_offset: 0,
+        layout: std::ptr::null(),
+    },
+    crate::Step {
+        kind: crate::STEP_RELEASE,
+        field: crate::WHOLE_VALUE,
+        variant: 0,
+        span: 0,
+        offset: 0,
+        stride: 0,
+        count: 0,
+        count_offset: crate::NO_OFFSET,
+        layout: std::ptr::null(),
+    },
+]);
+pub static BYTES_LIST_DESCRIPTOR: BytesListDescriptor = BytesListDescriptor(Layout {
+    magic: LAYOUT_MAGIC,
+    version: LAYOUT_VERSION,
+    size: 16,
+    align: 8,
+    finalizer: None,
+    steps: BYTES_LIST_STEPS.0.as_ptr(),
+    step_count: 2,
+    field_count: 0,
+    flags: LAYOUT_DYNAMIC
+        | crate::LAYOUT_LOGICAL_PER_ELEMENT
+        | crate::LAYOUT_SEQUENCE
+        | crate::release::LAYOUT_WIDE_CURSOR,
+    logical: 8,
+});
+
+/// The registry index of [`BYTES_LIST_DESCRIPTOR`]: the run context places it after the
+/// linked program's descriptors.
+/// # Safety
+/// `ctx` is a live run context.
+pub unsafe fn bytes_list_index(ctx: *mut RunCtx) -> u32 {
+    unsafe { (*ctx).heap.layout_count() - 1 }
+}
+
+/// A fresh `List[Bytes]` holding a fresh Bytes of each of `items`, in order.
+/// # Safety
+/// `ctx` is a live run context.
+pub unsafe fn allocate_bytes_list(ctx: *mut RunCtx, items: &[Vec<u8>]) -> *mut Header {
+    let count = u64::try_from(items.len()).unwrap_or_else(|_| fault("list length overflow"));
+    unsafe {
+        let block = allocate_sequence(ctx, bytes_list_index(ctx), count, 24, 8);
+        let first = payload(block).add(sequence_elements_offset(8) as usize);
+        for (index, item) in items.iter().enumerate() {
+            first
+                .add(index * 24)
+                .cast::<Slice>()
+                .write(allocate_bytes(ctx, item));
+        }
+        block
+    }
+}
+
 /// Allocate the shared runtime byte storage layout, including its u64 count and capacity,
 /// as a whole slice of it.
 /// # Safety

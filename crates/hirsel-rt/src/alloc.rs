@@ -672,6 +672,11 @@ impl Heap {
         }
     }
 
+    /// The number of descriptors in this heap's registry.
+    pub(crate) fn layout_count(&self) -> u32 {
+        self.layouts.len() as u32
+    }
+
     #[inline]
     pub(crate) unsafe fn descriptor(&self, index: u32) -> *const crate::Layout {
         if index as usize >= self.layouts.len() {

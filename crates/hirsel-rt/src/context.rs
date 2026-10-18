@@ -42,7 +42,8 @@ pub struct Config {
     /// moves hash-table placement and nothing a program can observe.
     pub hash_seed: u64,
     /// The linked program's immutable descriptor table; runtime descriptors occupy indices 0/1
-    /// (0: the plain pointer-free sequence for Bytes and `List[SocketAddr]`; 1: file walk).
+    /// (0: the plain pointer-free sequence for Bytes and `List[SocketAddr]`; 1: file walk) and
+    /// the index after the table (the runtime's `List[Bytes]`, `text::bytes_list_index`).
     pub layouts: *const *const crate::Layout,
     pub layout_count: u32,
     pub reserved: u32,
@@ -283,7 +284,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         || config.count_max == 1
         || config.count_max > u32::MAX as u64
         || config.reserved != 0
-        || config.layout_count > crate::alloc::INDEX_MASK - 1
+        || config.layout_count > crate::alloc::INDEX_MASK - 2
         || (config.layout_count != 0 && config.layouts.is_null())
     {
         return LAUNCH_INVALID_CONFIG;
@@ -302,6 +303,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
             std::slice::from_raw_parts(config.layouts, config.layout_count as usize)
         });
     }
+    layouts.push(&crate::text::BYTES_LIST_DESCRIPTOR.0 as *const crate::Layout);
     for &layout in &layouts {
         unsafe {
             crate::release::check_layout(layout);
