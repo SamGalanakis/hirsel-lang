@@ -1,0 +1,657 @@
+// Time zones from TZif data (RFC 8536 versions 1 through 4) and the POSIX TZ
+// rule in a version 2+ footer. Ported from jiff-core tz/tzif/{parser,query}.rs
+// and tz/posix.rs (third-party/NOTICES.md); abbreviations are validated, not kept.
+// One zone's rules: transitions from TZif data and an optional POSIX rule for
+// instants at or after the last one. time_zone holds its operations.
+pub opaque type TimeZone: copyable + inert + noalloc_drop uses {} {
+  // Unix seconds of each transition, ascending; index 0 is a sentinel before all time.
+  starts: List[i64],
+  // The offset in effect from each transition.
+  offsets: List[i32],
+  // Local wall-clock seconds where each transition's gap or fold begins (its
+  // start in the earlier of the two offsets).
+  civil_starts: List[i64],
+  rule: Option[PosixZone],
+}
+
+// How time_zone.to_timestamp picks an instant for a civil datetime that a
+// transition skipped (a gap) or repeated (a fold), as jiff's Disambiguation does.
+pub type Disambiguation = Earlier | Later | Reject
+
+// time_zone.to_timestamp under Reject: the civil datetime fell in a gap or a fold.
+pub type ZoneError = Gap | Fold
+
+// A POSIX day: Jn (1-365, February 29 never counted), n (0-365, counted) or
+// Mm.w.d (month, week 1-5 where 5 is the last, weekday 0 Sunday-6).
+type PosixDay = Julian(u16) | Zero(u16) | WeekdayOf(month: u8, week: u8, weekday: u8)
+
+type PosixPoint {
+  day: PosixDay,
+  seconds: i32,
+}
+
+type PosixDst {
+  offset: i32,
+  start: PosixPoint,
+  end: PosixPoint,
+}
+
+type PosixZone {
+  standard: i32,
+  dst: Option[PosixDst],
+}
+
+// The offsets a civil datetime may have: one, or the offsets before and after a
+// gap or fold.
+type Resolution = Single(i32) | Skipped(i32, i32) | Repeated(i32, i32)
+
+type TzifHeader {
+  version: u8,
+  utc_count: u64,
+  standard_count: u64,
+  leap_count: u64,
+  time_count: u64,
+  type_count: u64,
+  char_count: u64,
+}
+
+const MIN_SECOND: i64 = -377705116800
+
+const MAX_SECOND: i64 = 253402300799
+
+// Below every transition and every civil second of the date range.
+const FAR_PAST: i64 = -377705316800
+
+const ABBREVIATION_MAX: u64 = 255
+
+// --- Shared calendar helpers -------------------------------------------------
+@noalloc
+fn year_of_second(second: i64) -> i32 uses {} {
+  civil_from_days(core@1/int.div_floor(second, 86400)).year
+}
+
+@noalloc
+fn last_at_or_before(xs: List[i64], value: i64) -> u64 uses {} {
+  let mut low: u64 = 0
+  let mut high = core@1/list.len(xs)
+  while low + 1 < high {
+    let middle = low + (high - low) / 2
+    if xs[middle] <= value {
+      low = middle
+    } else {
+      high = middle
+    }
+  }
+  low
+}
+
+// --- POSIX rules (jiff-core tz/posix.rs) -------------------------------------
+@noalloc
+fn posix_day_number(day: PosixDay, year: i32) -> Option[i64] uses {} {
+  let first = days_from_civil(year, 1, 1)
+  match day {
+    Julian(n) => {
+      let wide: i64 = core@1/int.widen(n)
+      if is_leap(year) && n >= 60 {
+        Some(first + wide)
+      } else {
+        Some(first + wide - 1)
+      }
+    },
+    Zero(n) => {
+      if n + 1 > days_in_year(year) {
+        None()
+      } else {
+        let wide: i64 = core@1/int.widen(n)
+        Some(first + wide)
+      }
+    },
+    WeekdayOf(month: month, week: week, weekday: weekday) => {
+      let wanted: i64 = core@1/int.widen(weekday)
+      let start = days_from_civil(year, month, 1)
+      if week == 5 {
+        let length: i64 = core@1/int.widen(days_in_month(year, month))
+        let last = start + length - 1
+        Some(last - core@1/int.mod(core@1/int.mod(last + 4, 7) - wanted, 7))
+      } else {
+        let weeks: i64 = core@1/int.widen(week)
+        Some(
+          start + core@1/int.mod(wanted - core@1/int.mod(start + 4, 7), 7) + (weeks - 1) * 7
+        )
+      }
+    },
+  }
+}
+
+// The transition `point` of `year` in the frame `offset` seconds behind its wall
+// clock, clamped to the year (jiff DayTime::to_datetime). The year's end is the
+// next year's first second, an exclusive bound.
+@noalloc
+fn posix_point_second(point: PosixPoint, year: i32, offset: i32) -> i64 uses {} {
+  let first = days_from_civil(year, 1, 1)
+  let next = days_from_civil(year, 12, 31) + 1
+  let Some(day) = posix_day_number(point.day, year) else {
+    return next * 86400
+  }
+  let seconds: i64 = core@1/int.widen(point.seconds - offset)
+  let shifted = day + core@1/int.div_floor(seconds, 86400)
+  if shifted < first {
+    first * 86400
+  } else if shifted >= next {
+    next * 86400
+  } else {
+    shifted * 86400 + core@1/int.mod(seconds, 86400)
+  }
+}
+
+@noalloc
+fn in_window(start: i64, end: i64, second: i64) -> bool uses {} {
+  if start <= end {
+    start <= second && second < end
+  } else {
+    !(end <= second && second < start)
+  }
+}
+
+// DST's UTC window in `year` (jiff dst_info_utc), with its permanent-DST case.
+@noalloc
+fn posix_utc_window(rule: PosixZone, dst: PosixDst, year: i32) -> (i64, i64) uses {} {
+  let start = posix_point_second(dst.start, year, rule.standard)
+  let mut end = posix_point_second(dst.end, year, dst.offset)
+  let standard: i64 = core@1/int.widen(rule.standard)
+  if start == days_from_civil(year, 1, 1) * 86400 && year != year_of_second(
+    end + standard
+  ) {
+    end = (days_from_civil(year, 12, 31) + 1) * 86400
+  }
+  (start, end)
+}
+
+@noalloc
+fn posix_offset(rule: PosixZone, second: i64) -> (i32, bool) uses {} {
+  let Some(dst) = rule.dst else {
+    return (rule.standard, false)
+  }
+  let (start, end) = posix_utc_window(rule, dst, year_of_second(second))
+  if in_window(start, end, second) {
+    (dst.offset, true)
+  } else {
+    (rule.standard, false)
+  }
+}
+
+// jiff posix TimeZone::to_ambiguous_timestamp over wall-clock seconds.
+@noalloc
+fn posix_resolve(rule: PosixZone, wall: i64) -> Resolution uses {} {
+  let Some(dst) = rule.dst else {
+    return Single(rule.standard)
+  }
+  let year = year_of_second(wall)
+  let start = posix_point_second(dst.start, year, 0)
+  let end = posix_point_second(dst.end, year, 0)
+  let diff: i64 = core@1/int.widen(dst.offset - rule.standard)
+  if diff == 0 {
+    Single(rule.standard)
+  } else if diff < 0 {
+    if in_window(start, end, wall) {
+      Single(dst.offset)
+    } else if start + diff <= wall && wall < start {
+      Repeated(rule.standard, dst.offset)
+    } else if end <= wall && wall < end - diff {
+      Skipped(dst.offset, rule.standard)
+    } else {
+      Single(rule.standard)
+    }
+  } else if !in_window(start, end, wall) {
+    Single(rule.standard)
+  } else if start <= wall && wall < start + diff {
+    Skipped(rule.standard, dst.offset)
+  } else if end - diff <= wall && wall < end {
+    Repeated(dst.offset, rule.standard)
+  } else {
+    Single(dst.offset)
+  }
+}
+
+// --- POSIX TZ parsing (jiff-core tz/posix.rs Parser, IANA v3+ extensions) -----
+@noalloc
+fn is_digit_at(bytes: Bytes, i: u64, end: u64) -> bool uses {} {
+  i < end && bytes[i] >= b'0' && bytes[i] <= b'9'
+}
+
+// One to `most` digits.
+@noalloc
+fn posix_number(bytes: Bytes, start: u64, end: u64, most: u64) -> Result[
+  (i64, u64),
+  scalar.ParseError
+] uses {} {
+  let mut value: i64 = 0
+  let mut i = start
+  while i - start < most && is_digit_at(bytes, i, end) {
+    let digit: i64 = core@1/int.widen(bytes[i] - b'0')
+    value = value * 10 + digit
+    i += 1
+  }
+  if i == start {
+    return Error(Invalid())
+  }
+  Ok((value, i))
+}
+
+// Exactly `count` digits.
+@noalloc
+fn posix_digits(bytes: Bytes, start: u64, end: u64, count: u64) -> Result[
+  (i64, u64),
+  scalar.ParseError
+] uses {} {
+  let (value, next) = posix_number(bytes, start, end, count)?
+  if next - start != count {
+    return Error(Invalid())
+  }
+  Ok((value, next))
+}
+
+@noalloc
+fn posix_abbreviation(bytes: Bytes, start: u64, end: u64) -> Result[
+  u64,
+  scalar.ParseError
+] uses {} {
+  if start >= end {
+    return Error(Invalid())
+  }
+  if bytes[start] == b'<' {
+    let mut i = start + 1
+    while i < end && (ascii.is_alnum(bytes[i]) || bytes[i] == b'+' || bytes[i] == b'-') {
+      i += 1
+    }
+    if i >= end || bytes[i] != b'>' || i - start - 1 < 3 || i - start - 1 > ABBREVIATION_MAX {
+      return Error(Invalid())
+    }
+    return Ok(i + 1)
+  }
+  let mut i = start
+  while i < end && ascii.is_alpha(bytes[i]) {
+    i += 1
+  }
+  if i - start < 3 || i - start > ABBREVIATION_MAX {
+    return Error(Invalid())
+  }
+  Ok(i)
+}
+
+// [+-]hh[:mm[:ss]] with hours 0-24 (or 0-167 for a rule time), as seconds.
+@noalloc
+fn posix_clock(bytes: Bytes, start: u64, end: u64, hours_max: i64) -> Result[
+  (i64, u64),
+  scalar.ParseError
+] uses {} {
+  let mut i = start
+  let mut sign: i64 = 1
+  if i < end && (bytes[i] == b'+' || bytes[i] == b'-') {
+    if bytes[i] == b'-' {
+      sign = -1
+    }
+    i += 1
+  }
+  let digits: u64 = if hours_max > 99 {
+    3
+  } else {
+    2
+  }
+  let (hours, after_hours) = posix_number(bytes, i, end, digits)?
+  if hours > hours_max {
+    return Error(Invalid())
+  }
+  i = after_hours
+  let mut minutes: i64 = 0
+  let mut seconds: i64 = 0
+  if i < end && bytes[i] == b':' {
+    let (m, after_minutes) = posix_digits(bytes, i + 1, end, 2)?
+    minutes = m
+    i = after_minutes
+    if i < end && bytes[i] == b':' {
+      let (s, after_seconds) = posix_digits(bytes, i + 1, end, 2)?
+      seconds = s
+      i = after_seconds
+    }
+  }
+  if minutes > 59 || seconds > 59 {
+    return Error(Invalid())
+  }
+  Ok((sign * (hours * 3600 + minutes * 60 + seconds), i))
+}
+
+// A POSIX offset is west of UTC, so EST5 is -05:00.
+@noalloc
+fn posix_utc_offset(bytes: Bytes, start: u64, end: u64) -> Result[
+  (i32, u64),
+  scalar.ParseError
+] uses {} {
+  let (west, next) = posix_clock(bytes, start, end, 24)?
+  let east: i32 = core@1/int.narrow(-west)
+  Ok((east, next))
+}
+
+@noalloc
+fn posix_point(bytes: Bytes, start: u64, end: u64) -> Result[
+  (PosixPoint, u64),
+  scalar.ParseError
+] uses {} {
+  if start >= end {
+    return Error(Invalid())
+  }
+  let mut i = start
+  let day: PosixDay = if bytes[i] == b'J' {
+    let (n, next) = posix_number(bytes, i + 1, end, 3)?
+    if n < 1 || n > 365 {
+      return Error(Invalid())
+    }
+    i = next
+    Julian(core@1/int.narrow(n))
+  } else if is_digit_at(bytes, i, end) {
+    let (n, next) = posix_number(bytes, i, end, 3)?
+    if n > 365 {
+      return Error(Invalid())
+    }
+    i = next
+    Zero(core@1/int.narrow(n))
+  } else if bytes[i] == b'M' {
+    let (month, after_month) = posix_number(bytes, i + 1, end, 2)?
+    if month < 1 || month > 12 || after_month >= end || bytes[after_month] != b'.' {
+      return Error(Invalid())
+    }
+    let (week, after_week) = posix_digits(bytes, after_month + 1, end, 1)?
+    if week < 1 || week > 5 || after_week >= end || bytes[after_week] != b'.' {
+      return Error(Invalid())
+    }
+    let (weekday, after_weekday) = posix_digits(bytes, after_week + 1, end, 1)?
+    if weekday > 6 {
+      return Error(Invalid())
+    }
+    i = after_weekday
+    WeekdayOf(
+      month: core@1/int.narrow(month),
+      week: core@1/int.narrow(week),
+      weekday: core@1/int.narrow(weekday)
+    )
+  } else {
+    return Error(Invalid())
+  }
+  let mut seconds: i64 = 7200
+  if i < end && bytes[i] == b'/' {
+    let (time, next) = posix_clock(bytes, i + 1, end, 167)?
+    seconds = time
+    i = next
+  }
+  Ok((PosixPoint(day: day, seconds: core@1/int.narrow(seconds)), i))
+}
+
+@noalloc
+fn parse_posix(bytes: Bytes, start: u64, end: u64) -> Result[
+  PosixZone,
+  scalar.ParseError
+] uses {} {
+  let after_name = posix_abbreviation(bytes, start, end)?
+  let (standard, after_offset) = posix_utc_offset(bytes, after_name, end)?
+  let mut i = after_offset
+  let mut dst: Option[PosixDst] = None()
+  if i < end && (ascii.is_alpha(bytes[i]) || bytes[i] == b'<') {
+    i = posix_abbreviation(bytes, i, end)?
+    if i >= end {
+      return Error(Invalid())
+    }
+    let mut offset = standard + 3600
+    if bytes[i] != b',' {
+      let (explicit, next) = posix_utc_offset(bytes, i, end)?
+      offset = explicit
+      i = next
+    }
+    if i >= end || bytes[i] != b',' {
+      return Error(Invalid())
+    }
+    let (first, after_first) = posix_point(bytes, i + 1, end)?
+    if after_first >= end || bytes[after_first] != b',' {
+      return Error(Invalid())
+    }
+    let (last, after_last) = posix_point(bytes, after_first + 1, end)?
+    i = after_last
+    dst = Some(PosixDst(offset: offset, start: first, end: last))
+  }
+  if i != end {
+    return Error(Invalid())
+  }
+  Ok(PosixZone(standard: standard, dst: dst))
+}
+
+// --- TZif parsing (jiff-core tz/tzif/parser.rs) --------------------------------
+@noalloc
+fn read_u32(bytes: Bytes, at: u64) -> u64 uses {} {
+  let b0: u64 = core@1/int.widen(bytes[at])
+  let b1: u64 = core@1/int.widen(bytes[at + 1])
+  let b2: u64 = core@1/int.widen(bytes[at + 2])
+  let b3: u64 = core@1/int.widen(bytes[at + 3])
+  b0 << 24 | b1 << 16 | b2 << 8 | b3
+}
+
+// A big-endian two's-complement time of 4 or 8 bytes.
+@noalloc
+fn read_time(bytes: Bytes, at: u64, size: u64) -> i64 uses {} {
+  let high = read_u32(bytes, at)
+  if size == 4 {
+    let narrow: u32 = core@1/int.narrow(high)
+    let signed: i32 = core@1/int.truncate(narrow)
+    return core@1/int.widen(signed)
+  }
+  core@1/int.truncate(high << 32 | read_u32(bytes, at + 4))
+}
+
+@noalloc
+fn tzif_header(bytes: Bytes, at: u64) -> Result[TzifHeader, scalar.ParseError] uses {} {
+  if core@1/bytes.len(bytes) - at < 44 || bytes[at] != b'T' || bytes[at + 1] != b'Z' || bytes[at + 2] != b'i' || bytes[at + 3] != b'f' {
+    return Error(Invalid())
+  }
+  let header = TzifHeader(
+    version: bytes[at + 4],
+    utc_count: read_u32(bytes, at + 20),
+    standard_count: read_u32(bytes, at + 24),
+    leap_count: read_u32(bytes, at + 28),
+    time_count: read_u32(bytes, at + 32),
+    type_count: read_u32(bytes, at + 36),
+    char_count: read_u32(bytes, at + 40)
+  )
+  if header.utc_count != 0 && header.utc_count != header.type_count || header.standard_count != 0 && header.standard_count != header.type_count || header.type_count < 1 || header.char_count < 1 {
+    return Error(Invalid())
+  }
+  Ok(header)
+}
+
+@noalloc
+fn tzif_block_length(header: TzifHeader, size: u64) -> u64 uses {} {
+  header.time_count * size + header.time_count + header.type_count * 6 + header.char_count + header.leap_count * (size + 4) + header.standard_count + header.utc_count
+}
+
+fn parse_tzif(bytes: Bytes) -> Result[TimeZone, scalar.ParseError] uses {} {
+  let len = core@1/bytes.len(bytes)
+  let first = tzif_header(bytes, 0)?
+  let mut header = first
+  let mut size: u64 = 4
+  let mut at: u64 = 44
+  if first.version != 0 {
+    let skip = tzif_block_length(first, 4)
+    if len - at < skip {
+      return Error(Invalid())
+    }
+    header = tzif_header(bytes, at + skip)?
+    at += skip + 44
+    size = 8
+  }
+  if len - at < tzif_block_length(header, size) {
+    return Error(Invalid())
+  }
+  let times_at = at
+  let indices_at = times_at + header.time_count * size
+  let types_at = indices_at + header.time_count
+  let names_at = types_at + header.type_count * 6
+  let indicators_at = names_at + header.char_count + header.leap_count * (size + 4)
+  // Local time types; each designation starts inside the table and ends at a NUL within it.
+  let mut type_offsets: List[i32] = []
+  let mut i: u64 = 0
+  while i < header.type_count {
+    let offset: i32 = core@1/int.narrow(read_time(bytes, types_at + i * 6, 4))
+    if !valid_offset(offset) {
+      return Error(OutOfRange())
+    }
+    core@1/list.push(mut type_offsets, offset)
+    let mut k: u64 = core@1/int.widen(bytes[types_at + i * 6 + 5])
+    while k < header.char_count && bytes[names_at + k] != 0 {
+      k += 1
+    }
+    if k >= header.char_count {
+      return Error(Invalid())
+    }
+    i += 1
+  }
+  // Standard/wall and UT/local indicators (RFC 8536 3.2).
+  i = 0
+  while i < header.standard_count || i < header.utc_count {
+    let standard: u8 = if i < header.standard_count {
+      bytes[indicators_at + i]
+    } else {
+      0
+    }
+    let universal: u8 = if i < header.utc_count {
+      bytes[indicators_at + header.standard_count + i]
+    } else {
+      0
+    }
+    if standard > 1 || universal > 1 || universal == 1 && standard != 1 {
+      return Error(Invalid())
+    }
+    i += 1
+  }
+  // Transitions after a sentinel with type 0, their times clamped to the
+  // supported range like jiff's, and each one's civil range (jiff
+  // add_civil_datetimes_to_transitions): a gap or fold begins at the earlier
+  // of the two wall clocks.
+  let mut starts: List[i64] = [FAR_PAST]
+  let mut offsets: List[i32] = [type_offsets[0]]
+  let mut civil_starts: List[i64] = [FAR_PAST]
+  let mut last_type: u64 = 0
+  let mut previous = FAR_PAST
+  i = 0
+  while i < header.time_count {
+    let mut second = read_time(bytes, times_at + i * size, size)
+    if second < MIN_SECOND {
+      second = MIN_SECOND
+    } else if second > MAX_SECOND {
+      second = MAX_SECOND
+    }
+    let index: u64 = core@1/int.widen(bytes[indices_at + i])
+    if second < previous || index >= header.type_count {
+      return Error(Invalid())
+    }
+    let offset = type_offsets[index]
+    let wall: i32 = if offset < type_offsets[last_type] {
+      offset
+    } else {
+      type_offsets[last_type]
+    }
+    let shift: i64 = core@1/int.widen(wall)
+    core@1/list.push(mut starts, second)
+    core@1/list.push(mut offsets, offset)
+    core@1/list.push(mut civil_starts, second + shift)
+    previous = second
+    last_type = index
+    i += 1
+  }
+  let mut rule: Option[PosixZone] = None()
+  if first.version != 0 {
+    let footer = indicators_at + header.standard_count + header.utc_count
+    if footer >= len || bytes[footer] != b'\n' {
+      return Error(Invalid())
+    }
+    let mut newline = footer + 1
+    while newline < len && newline - footer <= 1024 && bytes[newline] != b'\n' {
+      newline += 1
+    }
+    if newline >= len || bytes[newline] != b'\n' {
+      return Error(Invalid())
+    }
+    if newline > footer + 1 {
+      rule = Some(parse_posix(bytes, footer + 1, newline)?)
+    }
+  }
+  // The footer rule must agree with the last transition (jiff
+  // verify_posix_time_zone_consistency, offsets and DST flags).
+  if header.time_count > 0 {
+    if let Some(footer) = rule {
+      let (offset, dst) = posix_offset(footer, previous)
+      if offset != type_offsets[last_type] || dst != (bytes[types_at + last_type * 6 + 4] == 1) {
+        return Error(Invalid())
+      }
+    }
+  }
+  Ok(
+    TimeZone(
+      starts: take starts,
+      offsets: take offsets,
+      civil_starts: take civil_starts,
+      rule: rule
+    )
+  )
+}
+
+// A zone with one offset forever.
+fn fixed_zone(offset: i32) -> TimeZone uses {} {
+  TimeZone(
+    starts: [FAR_PAST],
+    offsets: [offset],
+    civil_starts: [FAR_PAST],
+    rule: None()
+  )
+}
+
+// --- Queries (jiff-core tz/tzif/query.rs) --------------------------------------
+@noalloc
+fn zone_offset(zone: TimeZone, second: i64) -> i32 uses {} {
+  let index = last_at_or_before(zone.starts, second)
+  if index + 1 < core@1/list.len(zone.starts) {
+    return zone.offsets[index]
+  }
+  match zone.rule {
+    Some(rule) => {
+      let (offset, _) = posix_offset(rule, second)
+      offset
+    },
+    None() => zone.offsets[index],
+  }
+}
+
+@noalloc
+fn zone_resolve(zone: TimeZone, wall: i64) -> Resolution uses {} {
+  let index = last_at_or_before(zone.civil_starts, wall)
+  let here = zone.offsets[index]
+  if index > 0 {
+    let prior = zone.offsets[index - 1]
+    // The range ends at the transition in the later of the two offsets.
+    let widest: i64 = if prior < here {
+      core@1/int.widen(here)
+    } else {
+      core@1/int.widen(prior)
+    }
+    if wall < zone.starts[index] + widest {
+      if prior < here {
+        return Skipped(prior, here)
+      }
+      if prior > here {
+        return Repeated(prior, here)
+      }
+    }
+  }
+  if index + 1 == core@1/list.len(zone.civil_starts) {
+    if let Some(rule) = zone.rule {
+      return posix_resolve(rule, wall)
+    }
+  }
+  Single(here)
+}

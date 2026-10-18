@@ -1,0 +1,118 @@
+// rule: SEM-1
+// expect: run
+// POSIX TZ rules alone, in TZif data with no transitions: a two-hour and a
+// half-hour DST from jiff's time_zone_posix_to_ambiguous_timestamp, its
+// time_zone_posix_to_datetime vectors, POSIX day and clamping cases, and Go's
+// TestTzset instants.
+fn zone(t: Test, rule: String) -> time.TimeZone {
+  test.expect_ok(t, time_zone.from_tzif(check.footer_only(rule)))
+}
+
+fn offsets(t: Test, rule: String, rows: List[(i128, i32)]) -> () {
+  let posix = zone(t, rule)
+  for (second, offset) in rows {
+    test.equal(
+      t,
+      time_zone.offset(posix, time.Timestamp(unix_nanoseconds: second * 1000000000)),
+      offset
+    )
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // Antarctica/Troll: a two-hour gap and fold.
+  check.ambiguity(
+    t,
+    zone(t, "<+00>0<+02>-2,M3.5.0/1,M10.5.0/3"),
+    [
+      ("1970-01-01T00:00:00", 0, 0, 0),
+      ("2024-03-31T00:59:59.999999999", 0, 0, 0),
+      ("2024-03-31T01:00:00", 1, 0, 7200),
+      ("2024-03-31T02:59:59.999999999", 1, 0, 7200),
+      ("2024-03-31T03:00:00", 0, 7200, 7200),
+      ("2024-10-27T00:59:59.999999999", 0, 7200, 7200),
+      ("2024-10-27T01:00:00", 2, 7200, 0),
+      ("2024-10-27T02:00:00", 2, 7200, 0),
+      ("2024-10-27T02:59:59.999999999", 2, 7200, 0),
+      ("2024-10-27T03:00:00", 0, 0, 0)
+    ]
+  )
+  // America/St_Johns: half-hour offsets.
+  check.ambiguity(
+    t,
+    zone(t, "NST3:30NDT,M3.2.0,M11.1.0"),
+    [
+      ("1969-12-31T20:30:00", 0, -12600, -12600),
+      ("2024-03-10T02:00:00", 1, -12600, -9000),
+      ("2024-03-10T02:59:59.999999999", 1, -12600, -9000),
+      ("2024-03-10T03:00:00", 0, -9000, -9000),
+      ("2024-11-03T01:00:00", 2, -9000, -12600),
+      ("2024-11-03T01:59:59.999999999", 2, -9000, -12600),
+      ("2024-11-03T02:00:00", 0, -12600, -12600)
+    ]
+  )
+  check.instants(
+    t,
+    zone(t, "AEST-10AEDT,M10.1.0,M4.1.0/3"),
+    [
+      (0, 39600, "1970-01-01T11:00:00"),
+      (1728143999999999999, 36000, "2024-10-06T01:59:59.999999999"),
+      (1728144000000000000, 39600, "2024-10-06T03:00:00"),
+      (1712419199999999999, 39600, "2024-04-07T02:59:59.999999999"),
+      (1712419200000000000, 36000, "2024-04-07T02:00:00")
+    ]
+  )
+  // The largest offsets: standard 24:59:59 and the default DST hour past it.
+  check.instants(
+    t,
+    zone(t, "XXX-24:59:59YYY,M3.2.0,M11.1.0"),
+    [
+      (1704412800000000000, 89999, "2024-01-06T00:59:59"),
+      (1717545600000000000, 93599, "2024-06-06T01:59:59")
+    ]
+  )
+  // Go TestTzset.
+  offsets(
+    t,
+    "PST8PDT,M3.2.0,M11.1.0",
+    [
+      (2159200800, -25200),
+      (2152173599, -28800),
+      (2152173600, -25200),
+      (2152173601, -25200),
+      (2172733199, -25200),
+      (2172733200, -28800),
+      (2172733201, -28800),
+      (2235632400, -28800),
+      (2240568000, -28800)
+    ]
+  )
+  offsets(t, "KST-9", [(1677246697, 32400)])
+  // Zero-based day 365 does not exist in 2023, so DST runs to the year's end.
+  offsets(
+    t,
+    "EST+5EDT,59,365",
+    [
+      (1677653999, -18000),
+      (1677654000, -14400),
+      (1704067199, -14400),
+      (1709189999, -18000),
+      (1709190000, -14400),
+      (1735624799, -14400),
+      (1735624800, -18000)
+    ]
+  )
+  // Rule times from -167 to 167 hours clamp to the year.
+  offsets(
+    t,
+    "XXX3EDT4,J1/-167:59:59,J365/167:59:59",
+    [(1704067200, -14400), (1735689599, -14400)]
+  )
+  // Africa/Casablanca's rearguard rule is DST all year (jiff regression_permanent_dst).
+  offsets(
+    t,
+    "XXX-2<+01>-1,0/0,J365/23",
+    [(3692217600, 3600), (3723746399, 3600), (3723746400, 3600), (3723753599, 3600)]
+  )
+  Ok(())
+}

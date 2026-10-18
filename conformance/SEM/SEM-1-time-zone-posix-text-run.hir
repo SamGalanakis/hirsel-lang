@@ -1,0 +1,65 @@
+// rule: SEM-1
+// expect: run
+// POSIX TZ strings in a TZif footer: jiff posix.rs parse tests and IANA v3+
+// extensions that parse, and malformed strings that are errors.
+fn rule(text: String) -> Option[scalar.ParseError] {
+  match time_zone.from_tzif(check.footer_only(text)) {
+    Ok(_) => None(),
+    Error(error) => Some(error),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // POSIX strings that parse.
+  let accepted: List[String] = [
+    "EST5",
+    "EST+5",
+    "<+0330>-3:30",
+    "<-03>3<-02>,M3.5.0/-2,M10.5.0/-1",
+    "EET-2EEST,M3.4.4/48,M10.4.4/49",
+    "NZST-12NZDT,J60,J300",
+    "NZST-12NZDT,M9.5.0,M4.1.0/3",
+    "EST5EDT,J1/23:59:59,J365/24:00:00",
+    "EST5EDT,J1/-1,J365/167:00:00",
+    "EST5EDT,0/0,365",
+    "ABCDEF5abcdef,M3.2.0,M11.1.0",
+    "XXX-24:59:59YYY,M3.2.0,M11.1.0"
+  ]
+  for text in accepted {
+    test.equal(t, rule(text), None())
+  }
+  // POSIX strings that do not: a missing or short name, DST with no rule, bad
+  // fields, trailing text and jiff's fuzzed inputs.
+  let rejected: List[String] = [
+    "5",
+    "ES5",
+    "EST",
+    "<AB>5",
+    "<EST5",
+    "EST25",
+    "EST5:60",
+    "EST5EDT",
+    "EST5EDT4",
+    "EST5EDT,M3.2.0",
+    "EST5EDT,M13.1.0,M11.1.0",
+    "EST5EDT,M3.6.0,M11.1.0",
+    "EST5EDT,M3.2.7,M11.1.0",
+    "EST5EDT,M3.2,M11.1.0",
+    "EST5EDT,J0,J365",
+    "EST5EDT,J1,J366",
+    "EST5EDT,0,366",
+    "EST5EDT,M3.2.0/168,M11.1.0",
+    "EST5EDT,M3.2.0/2:60,M11.1.0",
+    "NZST-12NZDT,J60,J300WAT",
+    "NZST-12NZDT,M9.5.0,M4.1.0/3WAT",
+    "NZDT,M9.5.0,M4.1.0/3",
+    "AAAAAAAAAAAAAAACAAAAAAAAAAAAQA8AACAAAAAAAAAAAAAAAAACAAAAAAAAAAA",
+    "<AAAAAAAAAAAAAAACAAAAAAAAAAAAQA>8<AACAAAAAAAAAAAAAAAAACAAAAAAAAAAA>",
+    "PPPPPPPPPPPPPPPPPPPPnoofPPPAAA6DaPPPPPPPPPPPPPPPPPPPPPnoofPPPPP,n",
+    "oooooooooovooooooooooooooooool9<ooooo2o-o-oooooookoorooooooooroo8"
+  ]
+  for text in rejected {
+    test.equal(t, rule(text), Some(Invalid()))
+  }
+  Ok(())
+}

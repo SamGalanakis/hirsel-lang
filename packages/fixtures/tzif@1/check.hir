@@ -1,0 +1,142 @@
+// Table checks shared by the time zone corpus programs.
+// Each row is a wall time, 0/1/2 for unambiguous/gap/fold, and the offsets in
+// effect before and after the transition (equal when unambiguous), as in jiff's
+// time_zone_tzif_to_ambiguous_timestamp. Earlier, Later and Reject must pick
+// the instants jiff's earlier, later and unambiguous do.
+pub fn ambiguity(t: Test, zone: time.TimeZone, rows: List[(String, u8, i32, i32)]) -> () {
+  for (text, kind, prior, next) in rows {
+    let wall = test.expect_ok(t, date_time.parse(text))
+    let at_prior = test.expect_ok(t, date_time.to_timestamp(wall, prior))
+    let at_next = test.expect_ok(t, date_time.to_timestamp(wall, next))
+    if kind == 0 {
+      test.equal(t, prior, next)
+      test.equal(t, time_zone.to_timestamp(zone, wall, Earlier()), Ok(at_prior))
+      test.equal(t, time_zone.to_timestamp(zone, wall, Later()), Ok(at_prior))
+      test.equal(t, time_zone.to_timestamp(zone, wall, Reject()), Ok(at_prior))
+    } else if kind == 1 {
+      test.equal(t, time_zone.to_timestamp(zone, wall, Earlier()), Ok(at_next))
+      test.equal(t, time_zone.to_timestamp(zone, wall, Later()), Ok(at_prior))
+      test.equal(t, time_zone.to_timestamp(zone, wall, Reject()), Error(Gap()))
+    } else {
+      test.equal(t, time_zone.to_timestamp(zone, wall, Earlier()), Ok(at_prior))
+      test.equal(t, time_zone.to_timestamp(zone, wall, Later()), Ok(at_next))
+      test.equal(t, time_zone.to_timestamp(zone, wall, Reject()), Error(Fold()))
+    }
+  }
+}
+
+// Each row is an instant in Unix nanoseconds, the zone's offset then and the
+// wall time it shows, as in jiff's time_zone_tzif_to_datetime.
+pub fn instants(t: Test, zone: time.TimeZone, rows: List[(i128, i32, String)]) -> () {
+  for (nanos, offset, text) in rows {
+    let stamp = time.Timestamp(unix_nanoseconds: nanos)
+    test.equal(t, time_zone.offset(zone, stamp), offset)
+    test.equal(
+      t,
+      time_zone.to_datetime(zone, stamp),
+      Ok(test.expect_ok(t, date_time.parse(text)))
+    )
+  }
+}
+
+// TZif data with no transitions whose footer is `rule`, so the POSIX rule
+// alone decides every offset.
+pub fn footer_only(rule: String) -> Bytes {
+  build(b'2', [], [], [(0, 0, 0)], [b'U', b'T', b'C', 0], [], rule)
+}
+
+// TZif data of `version` (0 is version 1, with 32-bit times and no footer):
+// transition times and their type indices (one per time), local time types as (offset, isdst,
+// designation index), the designation bytes, standard/wall indicators and the
+// footer. A version 2+ file carries a minimal version 1 block first.
+pub fn build(
+  version: u8,
+  times: List[i64],
+  indices: List[u8],
+  types: List[(i32, u8, u8)],
+  names: List[u8],
+  indicators: List[u8],
+  footer: String
+) -> Bytes {
+  let mut out: List[u8] = []
+  if version != 0 {
+    header(mut out, version, 0, 1, 1, 0)
+    let empty: List[u8] = [0, 0, 0, 0, 0, 0, 0]
+    for byte in empty {
+      core@1/list.push(mut out, byte)
+    }
+  }
+  let size: u64 = if version == 0 {
+    4
+  } else {
+    8
+  }
+  header(
+    mut out,
+    version,
+    core@1/list.len(times),
+    core@1/list.len(types),
+    core@1/list.len(names),
+    core@1/list.len(indicators)
+  )
+  for time in times {
+    let raw: u64 = core@1/int.truncate(time)
+    number(mut out, raw, size)
+  }
+  for index in indices {
+    core@1/list.push(mut out, index)
+  }
+  for (offset, dst, name) in types {
+    let raw: u32 = core@1/int.truncate(offset)
+    number(mut out, core@1/int.widen(raw), 4)
+    core@1/list.push(mut out, dst)
+    core@1/list.push(mut out, name)
+  }
+  for byte in names {
+    core@1/list.push(mut out, byte)
+  }
+  for byte in indicators {
+    core@1/list.push(mut out, byte)
+  }
+  if version != 0 {
+    core@1/list.push(mut out, b'\n')
+    text.append(mut out, footer)
+    core@1/list.push(mut out, b'\n')
+  }
+  core@1/bytes.from_list(take out)
+}
+
+fn header(
+  mut out: List[u8],
+  version: u8,
+  times: u64,
+  types: u64,
+  names: u64,
+  indicators: u64
+) -> () {
+  text.append(mut out, "TZif")
+  core@1/list.push(mut out, version)
+  let mut i: u64 = 0
+  while i < 15 {
+    core@1/list.push(mut out, 0)
+    i += 1
+  }
+  // UT/local indicators, standard/wall indicators, leap seconds, transition
+  // times, local time types and designation bytes.
+  number(mut out, 0, 4)
+  number(mut out, indicators, 4)
+  number(mut out, 0, 4)
+  number(mut out, times, 4)
+  number(mut out, types, 4)
+  number(mut out, names, 4)
+}
+
+// The low `size` bytes of `value`, big-endian.
+fn number(mut out: List[u8], value: u64, size: u64) -> () {
+  let mut shift = size * 8
+  while shift > 0 {
+    shift -= 8
+    let byte: u8 = core@1/int.truncate(value >> shift)
+    core@1/list.push(mut out, byte)
+  }
+}

@@ -1,0 +1,74 @@
+// Time zone operations over TZif data the program supplies, adapted from jiff
+// tz::TimeZone (third-party/NOTICES.md). There is no ambient database and no
+// implicit local zone: read the bytes from a granted Dir or embed them.
+// A zone from TZif bytes, such as a file under /usr/share/zoneinfo.
+pub fn from_tzif(data: Bytes) -> Result[time.TimeZone, scalar.ParseError] uses {} {
+  time.parse_tzif(data)
+}
+
+// The zone whose offset is always zero.
+pub fn utc() -> time.TimeZone uses {} {
+  time.fixed_zone(0)
+}
+
+// The zone whose offset is always `seconds` east of UTC.
+pub fn fixed(seconds: i32) -> Result[time.TimeZone, time.TimeError] uses {} {
+  if !time.valid_offset(seconds) {
+    return Error(OutOfRange())
+  }
+  Ok(time.fixed_zone(seconds))
+}
+
+// The zone's offset, in seconds east of UTC, at `value`.
+@noalloc
+pub fn offset(zone: time.TimeZone, value: time.Timestamp) -> i32 uses {} {
+  let seconds = core@1/int.div_floor(value.unix_nanoseconds, time.NANOS_PER_SECOND)
+  let low: i128 = core@1/int.widen(time.MIN_SECOND)
+  let high: i128 = core@1/int.widen(time.MAX_SECOND)
+  let clamped: i64 = if seconds < low {
+    time.MIN_SECOND
+  } else if seconds > high {
+    time.MAX_SECOND
+  } else {
+    core@1/int.narrow(seconds)
+  }
+  time.zone_offset(zone, clamped)
+}
+
+// The civil datetime the zone shows at `value`.
+@noalloc
+pub fn to_datetime(zone: time.TimeZone, value: time.Timestamp) -> Result[
+  time.DateTime,
+  time.TimeError
+] uses {} {
+  date_time.from_timestamp(value, offset(zone, value))
+}
+
+// The instant the zone shows as `value`. In a gap (skipped wall-clock time)
+// Earlier uses the offset after it and Later the offset before it; in a fold
+// (repeated time) Earlier is the first occurrence and Later the second; Reject
+// returns Gap or Fold (jiff AmbiguousTimestamp earlier, later, unambiguous).
+@noalloc
+pub fn to_timestamp(
+  zone: time.TimeZone,
+  value: time.DateTime,
+  disambiguation: time.Disambiguation
+) -> Result[time.Timestamp, time.ZoneError] uses {} {
+  let wall = time.local_nanos(value)
+  // Every civil datetime's second fits i64.
+  let second: i64 = core@1/int.narrow(core@1/int.div_floor(wall, time.NANOS_PER_SECOND))
+  let chosen = match time.zone_resolve(zone, second) {
+    Single(only) => only,
+    Skipped(prior, later_offset) => match disambiguation {
+      Earlier => later_offset,
+      Later => prior,
+      Reject => return Error(Gap()),
+    },
+    Repeated(prior, later_offset) => match disambiguation {
+      Earlier => prior,
+      Later => later_offset,
+      Reject => return Error(Fold()),
+    },
+  }
+  Ok(time.Timestamp(unix_nanoseconds: wall - time.offset_nanos(chosen)))
+}

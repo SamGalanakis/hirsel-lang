@@ -4271,6 +4271,17 @@ conformance/SEM/SEM-1-time-date-calendar-run.hir
 conformance/SEM/SEM-1-time-date-roundtrip-run.hir
 conformance/SEM/SEM-1-time-offset-run.hir
 conformance/SEM/SEM-1-time-strftime-run.hir
+conformance/SEM/SEM-1-time-zone-dublin-run.hir
+conformance/SEM/SEM-1-time-zone-invalid-run.hir
+conformance/SEM/SEM-1-time-zone-new-york-run.hir
+conformance/SEM/SEM-1-time-zone-posix-rules-run.hir
+conformance/SEM/SEM-1-time-zone-posix-run.hir
+conformance/SEM/SEM-1-time-zone-posix-text-run.hir
+conformance/SEM/SEM-1-time-zone-sitka-honolulu-run.hir
+conformance/SEM/SEM-1-time-zone-slim-rules-run.hir
+conformance/SEM/SEM-1-time-zone-slim-run.hir
+conformance/SEM/SEM-1-time-zone-st-johns-run.hir
+conformance/SEM/SEM-1-time-zone-tasmania-run.hir
 conformance/SEM/SEM-1-truncate-boundary.hir
 conformance/SEM/SEM-1-truncate-out-of-range.hir
 conformance/SEM/SEM-1-truncate-zero.hir

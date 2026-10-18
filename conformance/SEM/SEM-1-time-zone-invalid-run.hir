@@ -1,0 +1,136 @@
+// rule: SEM-1
+// expect: run
+// Malformed TZif data is an error, after jiff's tzif parser checks; each case
+// has a well-formed twin that loads. Version 1 data, an empty footer and fixed
+// zones load too.
+fn failure(data: Bytes) -> Option[scalar.ParseError] {
+  match time_zone.from_tzif(data) {
+    Ok(_) => None(),
+    Error(error) => Some(error),
+  }
+}
+
+fn at(seconds: i128) -> time.Timestamp {
+  time.Timestamp(unix_nanoseconds: seconds * 1000000000)
+}
+
+const NAMES: List[u8] = [b'E', b'S', b'T', 0, b'E', b'D', b'T', 0]
+
+const NEW_YORK_RULE: String = "EST5EDT,M3.2.0,M11.1.0"
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let types: List[(i32, u8, u8)] = [(-18000, 0, 0), (-14400, 1, 4)]
+  // One transition, to DST at 2024-03-10T07:00:00Z, as the footer agrees.
+  let good = check.build(b'2', [1710054000], [1], types, NAMES, [], NEW_YORK_RULE)
+  test.equal(t, failure(good), None())
+  let zone = test.expect_ok(t, time_zone.from_tzif(good))
+  test.equal(t, time_zone.offset(zone, at(1710053999)), -18000)
+  test.equal(t, time_zone.offset(zone, at(1710054000)), -14400)
+  test.equal(t, time_zone.offset(zone, at(1730613600)), -18000)
+  // Truncated data, a wrong magic and nothing at all.
+  test.equal(
+    t,
+    failure(core@1/bytes.slice(good, 0, core@1/bytes.len(good) - 1)),
+    Some(Invalid())
+  )
+  test.equal(t, failure(core@1/bytes.slice(good, 0, 60)), Some(Invalid()))
+  test.equal(
+    t,
+    failure(core@1/bytes.slice(good, 1, core@1/bytes.len(good))),
+    Some(Invalid())
+  )
+  test.equal(t, failure(core@1/bytes.slice(good, 0, 0)), Some(Invalid()))
+  // A transition naming a type past the table.
+  test.equal(
+    t,
+    failure(check.build(b'2', [1710054000], [2], types, NAMES, [], NEW_YORK_RULE)),
+    Some(Invalid())
+  )
+  // Decreasing transitions; equal ones are allowed.
+  test.equal(
+    t,
+    failure(check.build(b'2', [100, 99], [1, 0], types, NAMES, [], "")),
+    Some(Invalid())
+  )
+  test.equal(
+    t,
+    failure(check.build(b'2', [100, 100], [1, 0], types, NAMES, [], "")),
+    None()
+  )
+  // An offset of 26 hours is out of range; 25:59:59 is the largest.
+  test.equal(
+    t,
+    failure(check.build(b'2', [], [], [(93600, 0, 0)], NAMES, [], "")),
+    Some(OutOfRange())
+  )
+  test.equal(
+    t,
+    failure(check.build(b'2', [], [], [(-93599, 0, 0)], NAMES, [], "")),
+    None()
+  )
+  // A designation index past the table, or one with no NUL after it.
+  test.equal(
+    t,
+    failure(check.build(b'2', [], [], [(0, 0, 8)], NAMES, [], "")),
+    Some(Invalid())
+  )
+  test.equal(
+    t,
+    failure(check.build(b'2', [], [], [(0, 0, 0)], [b'U', b'T', b'C'], [], "")),
+    Some(Invalid())
+  )
+  // Indicators: a UT time must also be standard time, and each is 0 or 1.
+  test.equal(
+    t,
+    failure(check.build(b'2', [], [], [(0, 0, 0)], NAMES, [2], "")),
+    Some(Invalid())
+  )
+  test.equal(t, failure(check.build(b'2', [], [], [(0, 0, 0)], NAMES, [1], "")), None())
+  // A footer that disagrees with the last transition's offset or DST flag.
+  test.equal(
+    t,
+    failure(check.build(b'2', [1710054000], [0], types, NAMES, [], NEW_YORK_RULE)),
+    Some(Invalid())
+  )
+  test.equal(
+    t,
+    failure(
+      check.build(
+        b'2',
+        [1710054000],
+        [1],
+        [(-18000, 0, 0), (-14400, 0, 4)],
+        NAMES,
+        [],
+        NEW_YORK_RULE
+      )
+    ),
+    Some(Invalid())
+  )
+  // An empty footer means no rule: the last transition's offset holds forever.
+  let ruleless = test.expect_ok(
+    t,
+    time_zone.from_tzif(check.build(b'2', [1710054000], [1], types, NAMES, [], ""))
+  )
+  test.equal(t, time_zone.offset(ruleless, at(1730613600)), -14400)
+  // Version 1 data has 32-bit times and no footer.
+  let old = test.expect_ok(
+    t,
+    time_zone.from_tzif(check.build(0, [-100, 100], [1, 0], types, NAMES, [], ""))
+  )
+  test.equal(t, time_zone.offset(old, at(-101)), -18000)
+  test.equal(t, time_zone.offset(old, at(-100)), -14400)
+  test.equal(t, time_zone.offset(old, at(100)), -18000)
+  // The tz database's own UTC file.
+  let utc = test.expect_ok(t, time_zone.from_tzif(zones.UTC))
+  test.equal(t, time_zone.offset(utc, at(1710054000)), 0)
+  test.equal(t, time_zone.offset(time_zone.utc(), at(1710054000)), 0)
+  // Fixed zones take any offset in range.
+  test.equal(
+    t,
+    time_zone.offset(test.expect_ok(t, time_zone.fixed(-93599)), at(0)),
+    -93599
+  )
+  test.expect_error(t, time_zone.fixed(93600))
+  Ok(())
+}

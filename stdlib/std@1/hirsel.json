@@ -133,6 +133,18 @@
       ]
     },
     {
+      "path": "tzif.hir",
+      "module": [
+        "time"
+      ]
+    },
+    {
+      "path": "time_zone.hir",
+      "module": [
+        "time_zone"
+      ]
+    },
+    {
       "path": "sample.hir",
       "module": [
         "internal",

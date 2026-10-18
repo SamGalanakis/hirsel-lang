@@ -192,7 +192,8 @@ Wait(WaitError)`. Retrying with a delay is a loop around `time.sleep`; nothing p
 Civil values carry no time zone. They are ordinary algorithms adapted from jiff's
 `civil` module: no clock authority, locale or time-zone database, and no implicit local
 zone. Each type keeps one module of functions named after it, as `time.Duration` keeps
-`duration`: `date`, `time_of_day` and `date_time`.
+`duration`: `date`, `time_of_day` and `date_time`, and `time_zone` for `time.TimeZone`
+(see Time zones).
 
 `time.Date` is a proleptic Gregorian date of years -9999 through 9999 (jiff's range);
 `time.TimeOfDay` is an hour 0–23, minute 0–59, second 0–59 and nanosecond 0–999999999,
@@ -270,6 +271,54 @@ and `%d`, or `%Y` with `%j`; when several are present they must agree, as must `
 time fields are zero, but a minute needs an hour, a second a minute and a fraction a second.
 The offset is `Some` exactly when the pattern has `%z`. Flags, widths and other directives
 are not supported.
+
+## Time zones
+
+`time.TimeZone` is a zone's rules, read from TZif data (RFC 8536, versions 1 through 4)
+that the program supplies, for example bytes read from `/usr/share/zoneinfo` through a
+granted `Dir` or embedded in the program. There is no ambient database. Lookup follows
+jiff's `tz` module: before the first transition the first local time type applies; at
+or after the last one the version 2+ footer's POSIX TZ rule decides, or, with an empty
+footer, the last transition's offset holds. `time_zone.utc()` and `time_zone.fixed(offset)`
+are zones with one offset forever; `fixed` returns `TimeError.OutOfRange` for an offset
+outside ±26 hours.
+
+`time_zone.from_tzif(data)` returns `scalar.ParseError.OutOfRange` for a local time type
+whose offset is outside ±26 hours and `Invalid` for any other malformed data: a wrong
+magic or truncated block, unequal indicator and type counts, no local time type, a
+transition naming a missing type, decreasing transition times, a designation index past
+the table or without a NUL, an indicator other than 0 or 1 or a UT indicator on a wall
+time, a footer not enclosed in newlines or longer than 1024 bytes, a malformed POSIX rule,
+or a rule whose offset or DST flag at the last transition differs from that transition's.
+Transition times are clamped to the date range, and leap-second records are skipped.
+Abbreviations are validated but not kept.
+
+The footer rule is POSIX TZ with the IANA version 3 extensions: names of three or more
+letters, or `<...>` quoted names of letters, digits, `+` and `-`; offsets `[+-]hh[:mm[:ss]]`
+with hours 0–24, west of UTC as POSIX writes them; DST one hour ahead of standard time
+unless given; rule days `Jn` (1–365, February 29 never counted), `n` (0–365) and `Mm.w.d`
+(week 5 is the month's last); rule times from -167 to 167 hours, 02:00 when absent. A rule
+day that does not exist in a year (`365` in a common year) and a rule time that leaves its
+year clamp to that year's start or end, and DST that would end where the next year's
+begins is permanent (jiff `regression_permanent_dst`).
+
+`time_zone.offset(zone, ts)` is the offset in seconds east of UTC at `ts`, and
+`time_zone.to_datetime(zone, ts)` the civil datetime the zone shows then, `OutOfRange`
+outside the date range. `time_zone.to_timestamp(zone, dt, disambiguation)` is the instant
+the zone shows as `dt`. A transition to a larger offset skips civil times (a gap) and one
+to a smaller offset repeats them (a fold); `time.Disambiguation` picks among them as jiff's
+`AmbiguousTimestamp` does:
+
+| `Disambiguation` | Gap | Fold |
+|---|---|---|
+| `Earlier` | the offset after the gap, so the earlier instant | the first occurrence, in the offset before |
+| `Later` | the offset before the gap, so the later instant | the second occurrence, in the offset after |
+| `Reject` | `ZoneError.Gap` | `ZoneError.Fold` |
+
+No instant shows a civil time in a gap: `Earlier` returns the instant the zone shows as
+that time less the gap's length and `Later` the one it shows as that time plus it (01:30
+and 03:30 for 02:30 in a one-hour gap at 02:00). Every other civil time names one instant,
+which all three policies return.
 
 ## JSON
 
