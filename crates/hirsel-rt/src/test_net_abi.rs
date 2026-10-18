@@ -1,8 +1,9 @@
 //! Fixed core@1 `test.net` ABI. The layouts are the ordinary repr-C core layouts:
-//! NetPeer (64 bytes), IpAddr (20), NetConnection (16), NetStep (32), PeerTls (16:
-//! u32 tag, payload at 8), TlsFailure (8: u32 tag, AlertReceived's u8 at 4),
-//! SocketAddr (24: IpAddr, port at 20), NetListener (40: address String, port at 24,
-//! clients at 32) and NetClient (48: SocketAddr, PeerTls at 24, steps at 40).
+//! NetPeer (88 bytes), IpAddr (20), NetConnection (16), NetStep (32), PeerTls (40:
+//! u32 tag, payload at 8; Presents' Bytes at 16), TlsFailure (8: u32 tag,
+//! AlertReceived's u8 at 4), SocketAddr (24: IpAddr, port at 20), NetListener (40:
+//! address String, port at 24, clients at 32) and NetClient (72: SocketAddr, PeerTls at
+//! 24, steps at 64).
 //! Native campaign programs exercise these layouts.
 use crate::{
     Header, RunCtx,
@@ -93,6 +94,10 @@ unsafe fn tls(at: *const u8) -> PeerTls {
         0 => PeerTls::Plain,
         1 => PeerTls::Certificate(unsafe { list(pointer(at.add(8)), 24, |at| text(at)) }),
         2 => PeerTls::Fails(unsafe { failure(at.add(8)) }),
+        3 => PeerTls::Presents(
+            unsafe { list(pointer(at.add(8)), 24, |at| text(at)) },
+            unsafe { bytes(at.add(16)) },
+        ),
         _ => crate::fault("Test peer PeerTls tag"),
     }
 }
@@ -102,7 +107,7 @@ unsafe fn peer(at: *const u8) -> NetPeer {
         port: unsafe { at.add(24).cast::<u16>().read() },
         resolves_to: unsafe { list(pointer(at.add(32)), 20, |at| ip(at)) },
         tls: unsafe { tls(at.add(40)) },
-        connections: unsafe { list(pointer(at.add(56)), 16, |at| connection(at)) },
+        connections: unsafe { list(pointer(at.add(80)), 16, |at| connection(at)) },
     }
 }
 unsafe fn socket_addr(at: *const u8) -> (String, u16) {
@@ -115,13 +120,13 @@ unsafe fn listener(at: *const u8) -> NetListener {
         address: unsafe { text(at) },
         port: unsafe { at.add(24).cast::<u16>().read() },
         clients: unsafe {
-            list(pointer(at.add(32)), 48, |at| {
+            list(pointer(at.add(32)), 72, |at| {
                 let (address, port) = socket_addr(at);
                 NetClient {
                     address,
                     port,
                     tls: tls(at.add(24)),
-                    steps: list(pointer(at.add(40)), 32, |at| step(at)),
+                    steps: list(pointer(at.add(64)), 32, |at| step(at)),
                 }
             })
         },
@@ -142,7 +147,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_net(
 ) -> u8 {
     let request = Request::TestNet {
         test: unsafe { test.read() },
-        peers: unsafe { list(peers, 64, |at| peer(at)) },
+        peers: unsafe { list(peers, 88, |at| peer(at)) },
         listeners: unsafe { list(listeners, 40, |at| listener(at)) },
     };
     let completion = match unsafe { crate::io::capability_call(ctx, request) } {

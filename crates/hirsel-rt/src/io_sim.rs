@@ -144,6 +144,14 @@ impl Adapter for SimIo {
     fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
         self.state.remember_tls_identity(stream, chain, key);
     }
+    fn tls_server(
+        &mut self,
+        stream: u64,
+        identities: &[(&[u8], &[u8])],
+        clients: crate::net::ClientAuth<&[u8]>,
+    ) {
+        self.state.remember_tls_server(stream, identities, clients);
+    }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.state.preflight(request)
     }
@@ -1192,15 +1200,27 @@ impl NetProvider for Recorded<'_> {
     fn peer_addr(&mut self, _: u64) -> crate::net::Provided<SocketAddr> {
         self.address()
     }
-    fn tls_connect(&mut self, _: u64, _: &str, _: &RootsDigest) -> crate::net::Provided<()> {
+    fn tls_connect(
+        &mut self,
+        _: u64,
+        _: &str,
+        _: &RootsDigest,
+        _: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+    ) -> crate::net::Provided<()> {
         self.unit()
     }
     fn tls_accept(
         &mut self,
         _: u64,
-        _: &std::sync::Arc<rustls::sign::CertifiedKey>,
+        _: &hirsel_run_config::tls::Server,
     ) -> crate::net::Provided<()> {
         self.unit()
+    }
+    fn tls_peer(&mut self, _: u64) -> crate::net::Provided<Option<Vec<u8>>> {
+        match self.0 {
+            Completion::Certificates(value) => Ok(value.clone()),
+            _ => Err(AdapterError::InvalidCompletion),
+        }
     }
     fn tls_close(&mut self, _: u64) -> crate::net::Provided<()> {
         self.unit()

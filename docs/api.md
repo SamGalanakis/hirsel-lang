@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1189 exported definitions; 335 variants.
+1193 exported definitions; 339 variants.
 
 ## Types and roots
 
@@ -922,7 +922,7 @@ Variant of OutputError.
 
 <a id="def-core_401_2fPeerTls"></a>
 
-- `type PeerTls uses {} = Plain() | Certificate(List[String]) | Fails(TlsFailure)`
+- `type PeerTls uses {} = Plain() | Certificate(List[String]) | Fails(TlsFailure) | Presents(List[String], Bytes)`
 
 <a id="def-core_401_2fPeerTls_23Certificate"></a>
 
@@ -939,6 +939,12 @@ Variant of PeerTls.
 <a id="def-core_401_2fPeerTls_23Plain"></a>
 
 - `Plain() -> PeerTls`
+
+Variant of PeerTls.
+
+<a id="def-core_401_2fPeerTls_23Presents"></a>
+
+- `Presents(List[String], Bytes) -> PeerTls`
 
 Variant of PeerTls.
 
@@ -1250,6 +1256,28 @@ Variant of StockError.
 
 - `@capability(local) opaque type Test: noalloc_drop uses {Test}`
 
+<a id="def-core_401_2fTlsClientAuth"></a>
+
+- `type TlsClientAuth uses {} = Anonymous() | Request(Bytes) | Require(Bytes)`
+
+<a id="def-core_401_2fTlsClientAuth_23Anonymous"></a>
+
+- `Anonymous() -> TlsClientAuth`
+
+Variant of TlsClientAuth.
+
+<a id="def-core_401_2fTlsClientAuth_23Request"></a>
+
+- `Request(Bytes) -> TlsClientAuth`
+
+Variant of TlsClientAuth.
+
+<a id="def-core_401_2fTlsClientAuth_23Require"></a>
+
+- `Require(Bytes) -> TlsClientAuth`
+
+Variant of TlsClientAuth.
+
 <a id="def-core_401_2fTlsFailure"></a>
 
 - `type TlsFailure: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = UnknownIssuer() | Expired() | NotYetValid() | NameMismatch() | Revoked() | BadCertificate() | AlertReceived(u8) | HandshakeFailure() | PeerMisbehaved() | Truncated()`
@@ -1333,6 +1361,10 @@ Variant of TlsRoots.
 - `WebPki() -> TlsRoots`
 
 Variant of TlsRoots.
+
+<a id="def-core_401_2fTlsServer"></a>
+
+- `type TlsServer uses {} = { identities: List[TlsIdentity], clients: TlsClientAuth }`
 
 <a id="def-core_401_2fTx"></a>
 
@@ -4906,9 +4938,9 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 
 <a id="def-std_401_2fhttp_2fserve_5ftls"></a>
 
-- `pub fn http.serve_tls(n: Net, take stream: Stream of n, identity: TlsIdentity, config: Config) -> Result[ ServerConnection, HttpError ]`
+- `pub fn http.serve_tls(n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[ ServerConnection, HttpError ]`
 
-References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/TlsIdentity`](#def-core_401_2fTlsIdentity), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/TlsServer`](#def-core_401_2fTlsServer), [`std@1/http/Config`](#def-std_401_2fhttp_2fConfig), [`std@1/http/HttpError`](#def-std_401_2fhttp_2fHttpError), [`std@1/http/ServerConnection`](#def-std_401_2fhttp_2fServerConnection)
 
 <a id="def-std_401_2fhttp_2fserver_5fconnection"></a>
 
@@ -8003,7 +8035,7 @@ References: [`std@1/time/TimeZone`](#def-std_401_2ftime_2fTimeZone)
 
 <a id="def-core_401_2ftls_2faccept"></a>
 
-- `fn tls.accept(n: Net, take s: Stream of n, identity: TlsIdentity) -> Result[Stream of n, NetError]`
+- `fn tls.accept(n: Net, take s: Stream of n, server: TlsServer) -> Result[Stream of n, NetError]`
 
 on a stream accepted on a listener of `n`
 
@@ -8016,6 +8048,16 @@ on a stream accepted on a listener of `n`
 - `fn tls.connect(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots) -> Result[Stream of n, NetError]`
 
 on a `ConnectTls` stream, `server_name` equal to the rule's address
+
+<a id="def-core_401_2ftls_2fconnect_5fas"></a>
+
+- `fn tls.connect_as(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots, identity: TlsIdentity) -> Result[Stream of n, NetError]`
+
+<a id="def-core_401_2ftls_2fpeer"></a>
+
+- `fn tls.peer(n: Net, s: Stream of n) -> Result[Option[Bytes], NetError]`
+
+the stream's own grant
 
 
 ## type_shape

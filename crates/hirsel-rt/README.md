@@ -399,11 +399,16 @@ plaintext. `tls.close` sends close_notify before closing on every outcome; impli
 drop only closes. PEM bytes pass through `Adapter::tls_roots` to the host provider
 for its next handshake, outside the tape request, whose SHA-256 must match. Replay
 and scripted providers ignore the bundle and use only the digest. `tls.accept` is the
-server handshake (`net_tls::server`: ALPN `http/1.1` only, no client auth, session cache
-or tickets; the host holds either side as a `rustls::Connection`). Its identity passes
-through `Adapter::tls_identity`; every world loads it into State with the shared
-`hirsel_run_config::tls::identity`, the tape request records only the chain PEM's
-SHA-256, and the provider receives the loaded key (`tests/it/tls_server.rs`). Scripted worlds
+server handshake (`net_tls::server`: ALPN `http/1.1` only, no session cache or tickets,
+the identity `tls::select` picks for the client's SNI, and the rustls client verifier of
+a `Request` or `Require` trust set; the host holds either side as a
+`rustls::Connection`). Its `TlsServer` passes through `Adapter::tls_server`; every world
+loads it into State with the shared `hirsel_run_config::tls::server`, the tape request
+records only the chain and trust-set PEM SHA-256s, and the provider receives the loaded
+server (`tests/it/tls_server.rs`). `tls.connect_as` passes its client identity through
+`Adapter::tls_identity` the same way and the tape names its chain digest. `tls.peer` is a
+recorded request whose completion is the DER chain a server verified (`net_tls::peer`).
+Scripted worlds
 attach independently at the same provider seam. UDP uses `UdpBind` and `UdpPeer`
 rules and an originating-Net socket grant. `State::net_error` validates arguments
 and authority before host cancellation; `execute_net` discards outside senders,
@@ -821,8 +826,11 @@ Unbounded unanswered connects and stalled reads produce a distinct Blocked signa
 A `Fails(f)` peer fails every handshake with `Tls(f)` (State closes the taken stream as
 for any handshake failure), and a `Truncate()` step reads as `Tls(Truncated())` on a
 secured stream and as end of stream otherwise. A scripted client's `tls` answers
-`tls.accept`: a `Certificate(names)` client accepts an identity whose leaf names one of
-them (`hirsel_run_config::tls::serves`) and otherwise sends bad_certificate.
+`tls.accept` through the shared `hirsel_run_config::tls::scripted_accept`: a
+`Certificate(names)` or `Presents(names, chain)` client sends its first DNS name as SNI,
+accepts the selected identity when its leaf names one of `names` and otherwise sends
+bad_certificate; a `Presents` chain is verified against a `Request` or `Require` trust set
+at its latest notBefore and becomes the stream's `tls.peer` chain.
 
 `test.net` decodes the nested core peer values through `test_net_abi.rs` and creates
 an isolated ScriptNet in State, with peer-derived rules. Every request and result

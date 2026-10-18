@@ -296,6 +296,13 @@ fn peer_tls(tls: &PeerTls) -> Value {
             variant(1, vec![list(names.iter().cloned().map(Value::String))])
         }
         PeerTls::Fails(failure) => variant(2, vec![tls_failure((*failure).into())]),
+        PeerTls::Presents(names, chain) => variant(
+            3,
+            vec![
+                list(names.iter().cloned().map(Value::String)),
+                Value::Bytes(chain.clone()),
+            ],
+        ),
     }
 }
 fn peer(p: &NetPeer) -> Value {
@@ -350,6 +357,26 @@ fn listener(l: &NetListener) -> Value {
 pub fn arguments(event: &Event, fixture: super::ReplayFixture<'_>) -> (&'static str, Vec<Value>) {
     let n = |id| handle("Net", id);
     let s = |id| handle("Stream", id);
+    // Tapes name TLS material by digest; the fixture holds the originals.
+    let trust = |digest: &[u8; 32]| {
+        fixture
+            .pem_roots
+            .iter()
+            .find(|pem| <[u8; 32]>::from(Sha256::digest(pem)) == *digest)
+            .expect("PEM tape translation requires its original trust bundle")
+            .to_vec()
+    };
+    let tls_identity = |digest: &[u8; 32]| {
+        let (chain, key) = fixture
+            .tls_identities
+            .iter()
+            .find(|(chain, _)| <[u8; 32]>::from(Sha256::digest(chain)) == *digest)
+            .expect("identity tape translation requires its original chain and key");
+        record(
+            "TlsIdentity",
+            vec![Value::Bytes(chain.to_vec()), Value::Bytes(key.to_vec())],
+        )
+    };
     match &event.request {
         R::UdpBind { net, addr } => ("net.udp_bind", vec![n(*net), address(*addr)]),
         R::UdpSend {
@@ -476,53 +503,56 @@ pub fn arguments(event: &Event, fixture: super::ReplayFixture<'_>) -> (&'static 
             stream,
             server_name,
             roots,
+            identity,
         } => {
             let roots = match roots {
                 RootsDigest::WebPki(version) => {
                     assert_eq!(version, "webpki-roots@1.0.9");
                     variant(0, vec![])
                 }
-                RootsDigest::Pem(digest) => {
-                    let pem = fixture
-                        .pem_roots
-                        .iter()
-                        .find(|pem| <[u8; 32]>::from(Sha256::digest(pem)) == *digest)
-                        .expect("PEM tape translation requires its original trust bundle");
-                    variant(1, vec![Value::Bytes(pem.to_vec())])
-                }
+                RootsDigest::Pem(digest) => variant(1, vec![Value::Bytes(trust(digest))]),
             };
+            let mut arguments = vec![
+                n(*net),
+                s(*stream),
+                Value::String(server_name.clone()),
+                roots,
+            ];
+            if let Some(digest) = identity {
+                arguments.push(tls_identity(digest));
+            }
             (
-                "tls.connect",
-                vec![
-                    n(*net),
-                    s(*stream),
-                    Value::String(server_name.clone()),
-                    roots,
-                ],
+                if identity.is_some() {
+                    "tls.connect_as"
+                } else {
+                    "tls.connect"
+                },
+                arguments,
             )
         }
         R::TlsAccept {
             net,
             stream,
-            identity,
+            server,
         } => {
-            let (chain, key) = fixture
-                .tls_identities
-                .iter()
-                .find(|(chain, _)| <[u8; 32]>::from(Sha256::digest(chain)) == *identity)
-                .expect("identity tape translation requires its original chain and key");
+            let clients = match server.clients {
+                ClientAuth::Anonymous => variant(0, vec![]),
+                ClientAuth::Request(digest) => variant(1, vec![Value::Bytes(trust(&digest))]),
+                ClientAuth::Require(digest) => variant(2, vec![Value::Bytes(trust(&digest))]),
+            };
             (
                 "tls.accept",
                 vec![
                     n(*net),
                     s(*stream),
                     record(
-                        "TlsIdentity",
-                        vec![Value::Bytes(chain.to_vec()), Value::Bytes(key.to_vec())],
+                        "TlsServer",
+                        vec![list(server.identities.iter().map(tls_identity)), clients],
                     ),
                 ],
             )
         }
+        R::TlsPeer { net, stream } => ("tls.peer", vec![n(*net), s(*stream)]),
         R::TlsClose { net, stream } => ("tls.close", vec![n(*net), s(*stream)]),
         R::Listen { net, addr } => ("net.listen", vec![n(*net), address(*addr)]),
         R::UnixConnect { net, path } => (

@@ -251,9 +251,11 @@ test.log	6a6eb479eda17b07d1981b9a1f4ae39c1bb8e38bc366d4ee9e2016793471195a	0:b:n;
 test.net	b4ee0388ef748f15ae38468a3a69128a16c0e3f078d5f47d44ea06628af71dfb	0:b:n;1:b:n;2:b:n->n
 test.process	64c9273a4b8dcdfd9403d53cd48319c035c9540871bc3ae1428152a68f96d39f	0:b:n;1:b:n;2:b:n->n
 test.seed	496829bdb8ea444ef9d1dec2819feb398a895d950c5121c963dcdd6ae6a15c84	0:b:n->n
-tls.accept	7fb3e2e3e81c55b7248a41e7745f3bf75e5ab673662cb03323118e11f0881eb7	0:b:n;1:t:n;2:b:n->n
+tls.accept	ff66601a3c34d98561640fa2aee60aa060977c0aa0e2bd6fa3deaf593ab1b10c	0:b:n;1:t:n;2:b:n->n
 tls.close	b91bec9b151f21cb6179ac696e180d61bd0f6bf56384ba2d2de2c26e9d87c549	0:b:n;1:t:n->n
 tls.connect	8925f1c7b909525196fed1ec27d35c086688cbb9d3fba43b9c4d1d66f521d5d1	0:b:n;1:t:n;2:b:n;3:b:n->n
+tls.connect_as	0cd0948fc75f5b105bcc0f40d9c02e0e668984c542b638eaaba2be6faa23b177	0:b:n;1:t:n;2:b:n;3:b:n;4:b:n->n
+tls.peer	60b3061924c18a3222074de67b34309c32b92e56b4f679e913ed0ddaf014c663	0:b:n;1:b:n->n
 type_shape.info	e869ea58fde5757f63e855903e17fcf2c352e5957f5a8c0d0e0e3e90d3521154	0:b:n->n
 udp.close	6370332995222f709297cf3432444fa01bf806b0dacdbf2f4117d64d1a77654b	0:b:n;1:t:n->n
 udp.recv_from	ae5d975f40d324f194e8457f8edb91421fb012c9f5eccc2fef36302cc001d052	0:b:n;1:m:n;2:m:n;3:b:n->n

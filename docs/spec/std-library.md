@@ -1233,7 +1233,7 @@ N fn http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut hea
 ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool }
 fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
 fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection
-fn http.serve_tls(n: Net, take stream: Stream of n, identity: TlsIdentity, config: Config) -> Result[ServerConnection, HttpError]
+fn http.serve_tls(n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[ServerConnection, HttpError]
 fn http.receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[ServerRequest, HttpError]
 fn http.respond(mut c: ServerConnection, status: u16, headers: List[Header], body: Bytes, close: bool) -> Result[(), HttpError]
 ```
@@ -1294,7 +1294,7 @@ caller owns the listen/accept loop, routing and concurrency across connections.
 
 `serve_tls` serves HTTPS on an accepted stream: it sets the stream's read and write
 timeouts from `read_timeout` and `write_timeout` (unbounded when `None`), so they bound
-each socket wait of the server handshake, performs `tls.accept` with `identity`, and returns
+each socket wait of the server handshake, performs `tls.accept` with `server`, and returns
 `server_connection` over the secured stream; every later receive sets its own read
 timeout as above. A handshake or timeout failure is `Net(error)` and closes the stream.
 The connection then behaves exactly as a plaintext one; the handshake offers ALPN

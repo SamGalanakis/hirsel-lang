@@ -5,7 +5,7 @@ use hirsel_rt::io::*;
 use hirsel_rt::io_real::RealIo;
 use hirsel_rt::io_sim::SimIo;
 use hirsel_rt::launch::{parse_tape, render_tape};
-use hirsel_rt::net::Provided;
+use hirsel_rt::net::{ClientAuth, Provided, TlsServerDigest};
 use hirsel_rt::net_host::HostNet;
 use std::cell::Cell;
 use std::collections::BTreeSet;
@@ -312,17 +312,23 @@ impl NetProvider for Counting {
         self.tick();
         self.inner.peer_addr(s)
     }
-    fn tls_connect(&mut self, s: u64, name: &str, roots: &RootsDigest) -> Provided<()> {
-        self.tick();
-        self.inner.tls_connect(s, name, roots)
-    }
-    fn tls_accept(
+    fn tls_connect(
         &mut self,
         s: u64,
-        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
+        name: &str,
+        roots: &RootsDigest,
+        identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
     ) -> Provided<()> {
         self.tick();
-        self.inner.tls_accept(s, identity)
+        self.inner.tls_connect(s, name, roots, identity)
+    }
+    fn tls_accept(&mut self, s: u64, server: &hirsel_run_config::tls::Server) -> Provided<()> {
+        self.tick();
+        self.inner.tls_accept(s, server)
+    }
+    fn tls_peer(&mut self, s: u64) -> Provided<Option<Vec<u8>>> {
+        self.tick();
+        self.inner.tls_peer(s)
     }
     fn unix_connect(&mut self, id: u64, path: &str) -> Provided<()> {
         self.tick();
@@ -532,6 +538,7 @@ fn denied_and_invalid_operations_issue_no_provider_call() {
         stream: s,
         server_name: "localhost".into(),
         roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
+        identity: None,
     });
     assert_eq!(denied(c), NetError::NotGranted);
     assert_eq!(calls.get(), 4, "a refused handshake sends no TLS byte");
@@ -853,13 +860,32 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             stream: 3,
             server_name: "example.com".into(),
             roots: RootsDigest::WebPki("webpki-roots 1.0.9".into()),
+            identity: None,
         },
         Request::TlsConnect {
             net: 2,
             stream: 3,
             server_name: "example.com".into(),
             roots: RootsDigest::Pem([0xab; 32]),
+            identity: Some([0xcd; 32]),
         },
+        Request::TlsAccept {
+            net: 2,
+            stream: 3,
+            server: TlsServerDigest {
+                identities: vec![[1; 32], [2; 32]],
+                clients: ClientAuth::Require([3; 32]),
+            },
+        },
+        Request::TlsAccept {
+            net: 2,
+            stream: 3,
+            server: TlsServerDigest {
+                identities: vec![],
+                clients: ClientAuth::Anonymous,
+            },
+        },
+        Request::TlsPeer { net: 2, stream: 3 },
         Request::TlsClose { net: 2, stream: 3 },
         Request::Listen { net: 2, addr: a4 },
         Request::Accept {
@@ -880,6 +906,9 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
         Completion::NetBytes(Ok(b"\r\n".to_vec())),
         Completion::Count(Ok(3)),
         Completion::NetUnit(Ok(())),
+        Completion::Certificates(Ok(None)),
+        Completion::Certificates(Ok(Some(vec![0x30, 0x03, 1, 2, 3]))),
+        Completion::Certificates(Err(NetError::NotConnected)),
         Completion::Address(Ok(a6)),
         Completion::Accepted(Ok((5, a4))),
     ];

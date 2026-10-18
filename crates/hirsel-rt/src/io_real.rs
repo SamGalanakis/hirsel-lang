@@ -429,6 +429,14 @@ impl Adapter for RealIo {
     fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
         self.state.remember_tls_identity(stream, chain, key);
     }
+    fn tls_server(
+        &mut self,
+        stream: u64,
+        identities: &[(&[u8], &[u8])],
+        clients: crate::net::ClientAuth<&[u8]>,
+    ) {
+        self.state.remember_tls_server(stream, identities, clients);
+    }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         if self.cooperative.is_none() || !crate::host_waits::may_park(&request) {
             return self.perform(request);

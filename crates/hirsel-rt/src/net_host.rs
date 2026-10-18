@@ -647,36 +647,43 @@ impl NetProvider for HostNet {
             .socket(stream)
             .and_then(|fd| name_of(fd, libc::getpeername)))
     }
-    fn tls_connect(&mut self, stream: u64, name: &str, roots: &RootsDigest) -> Provided<()> {
+    fn tls_connect(
+        &mut self,
+        stream: u64,
+        name: &str,
+        roots: &RootsDigest,
+        identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+    ) -> Provided<()> {
         let pem = self.pem.take();
         Ok((|| {
             let fd = self.socket(stream)?;
             if self.tls.contains_key(&stream) {
                 return Err(NetError::InvalidInput);
             }
-            let mut conn = crate::net_tls::client(name, roots, pem)?;
+            let mut conn = crate::net_tls::client(name, roots, pem, identity)?;
             conn.complete_io(&mut crate::net_tls::Transport(fd))
                 .map_err(crate::net_tls::error)?;
             self.tls.insert(stream, conn.into());
             Ok(())
         })())
     }
-    fn tls_accept(
-        &mut self,
-        stream: u64,
-        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
-    ) -> Provided<()> {
+    fn tls_accept(&mut self, stream: u64, server: &hirsel_run_config::tls::Server) -> Provided<()> {
         Ok((|| {
             let fd = self.socket(stream)?;
             if self.tls.contains_key(&stream) {
                 return Err(NetError::InvalidInput);
             }
-            let mut conn = crate::net_tls::server(identity)?;
+            let mut conn = crate::net_tls::server(server)?;
             conn.complete_io(&mut crate::net_tls::Transport(fd))
                 .map_err(crate::net_tls::error)?;
             self.tls.insert(stream, conn.into());
             Ok(())
         })())
+    }
+    fn tls_peer(&mut self, stream: u64) -> Provided<Option<Vec<u8>>> {
+        Ok(self
+            .socket(stream)
+            .map(|_| self.tls.get(&stream).and_then(crate::net_tls::peer)))
     }
     fn tls_close(&mut self, stream: u64) -> Provided<()> {
         Ok((|| {

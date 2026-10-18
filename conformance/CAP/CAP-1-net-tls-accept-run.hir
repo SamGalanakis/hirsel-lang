@@ -56,7 +56,11 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
   // A Certificate client naming the leaf's DNS name completes the handshake;
   // every later stream operation moves plaintext.
   let (first, _) = net.accept(n, mut listener)?
-  let mut secure = tls.accept(n, take first, identity())?
+  let mut secure = tls.accept(
+    n,
+    take first,
+    TlsServer(identities: [identity()], clients: Anonymous())
+  )?
   let mut buf: List[u8] = []
   test.check(t, net.read(n, mut secure, mut buf, 16u64)? == 4u64)
   net.write_all(n, mut secure, b"pong")?
@@ -66,36 +70,58 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
   let (second, _) = net.accept(n, mut listener)?
   test.check(
     t,
-    upgrade_error(n, tls.accept(n, take second, identity())) == Some(
-      Tls(AlertReceived(42u8))
-    )
+    upgrade_error(
+      n,
+      tls.accept(
+        n,
+        take second,
+        TlsServer(identities: [identity()], clients: Anonymous())
+      )
+    ) == Some(Tls(AlertReceived(42u8)))
   )
   // A plaintext client cannot complete a server handshake.
   let (third, _) = net.accept(n, mut listener)?
   test.check(
     t,
-    upgrade_error(n, tls.accept(n, take third, identity())) == Some(
-      Tls(HandshakeFailure())
-    )
+    upgrade_error(
+      n,
+      tls.accept(
+        n,
+        take third,
+        TlsServer(identities: [identity()], clients: Anonymous())
+      )
+    ) == Some(Tls(HandshakeFailure()))
   )
   let (fourth, _) = net.accept(n, mut listener)?
   test.check(
     t,
-    upgrade_error(n, tls.accept(n, take fourth, identity())) == Some(
-      Tls(AlertReceived(48u8))
-    )
+    upgrade_error(
+      n,
+      tls.accept(
+        n,
+        take fourth,
+        TlsServer(identities: [identity()], clients: Anonymous())
+      )
+    ) == Some(Tls(AlertReceived(48u8)))
   )
   // An IP subject alternative name serves a client naming the literal. A close
   // without close_notify truncates every later secured read.
   let (fifth, _) = net.accept(n, mut listener)?
-  let mut ip = tls.accept(n, take fifth, identity())?
+  let mut ip = tls.accept(
+    n,
+    take fifth,
+    TlsServer(identities: [identity()], clients: Anonymous())
+  )?
   test.check(t, net.read(n, mut ip, mut buf, 16u64)? == 2u64)
   test.check(t, net.read(n, mut ip, mut buf, 16u64) == Error(Tls(Truncated())))
   test.check(t, bytes.from_list(take buf) == b"pinghi")
   // A second upgrade of a secured stream is invalid and consumes it.
   test.check(
     t,
-    upgrade_error(n, tls.accept(n, take ip, identity())) == Some(InvalidInput())
+    upgrade_error(
+      n,
+      tls.accept(n, take ip, TlsServer(identities: [identity()], clients: Anonymous()))
+    ) == Some(InvalidInput())
   )
   Ok(())
 }

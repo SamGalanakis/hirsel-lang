@@ -51,8 +51,10 @@ conformance/CAP/CAP-1-net-timeout-run.hir
 conformance/CAP/CAP-1-net-tls-accept-grant-run.hir
 conformance/CAP/CAP-1-net-tls-accept-identity-run.hir
 conformance/CAP/CAP-1-net-tls-accept-run.hir
+conformance/CAP/CAP-1-net-tls-mtls-run.hir
 conformance/CAP/CAP-1-net-tls-name-mismatch-run.hir
 conformance/CAP/CAP-1-net-tls-peer-fails-run.hir
+conformance/CAP/CAP-1-net-tls-sni-run.hir
 conformance/CAP/CAP-1-net-tls-truncate-run.hir
 conformance/CAP/CAP-1-net-ungranted-host-run.hir
 conformance/CAP/CAP-1-normalize-tree-example.hir
@@ -746,6 +748,7 @@ conformance/DET/DET-1-file-stream-write-run.hir
 conformance/DET/DET-1-http-fetch-repeat-run.hir
 conformance/DET/DET-1-net-ephemeral-listeners-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
+conformance/DET/DET-1-tls-mtls-replay-run.hir
 conformance/DET/DET-1-udp-replay-run.hir
 conformance/DET/DET-1-unix-replay-run.hir
 conformance/DET/DET-2-first-failure-site.hir

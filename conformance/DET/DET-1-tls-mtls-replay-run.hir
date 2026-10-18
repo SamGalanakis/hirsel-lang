@@ -1,0 +1,46 @@
+// rule: DET-1
+// expect: run
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"8443","operation":"listen_tls"}],"peers":[],"listeners":[{"address":"127.0.0.1","port":8443,"clients":[{"address":"192.0.2.1","port":40000,"tls":{"presents":[["localhost"],[45,45,45,45,45,66,69,71,73,78,32,67,69,82,84,73,70,73,67,65,84,69,45,45,45,45,45,10,77,73,73,66,121,122,67,67,65,88,71,103,65,119,73,66,65,103,73,66,65,106,65,75,66,103,103,113,104,107,106,79,80,81,81,68,65,106,65,103,77,82,52,119,72,65,89,68,86,81,81,68,68,66,86,73,97,88,74,122,90,87,119,103,10,100,71,86,122,100,67,66,106,98,71,108,108,98,110,81,103,81,48,69,119,73,66,99,78,77,106,89,120,77,68,69,52,77,106,69,119,79,84,69,48,87,104,103,80,77,106,69,121,78,106,65,53,77,106,81,121,77,84,65,53,77,84,82,97,10,77,67,77,120,68,122,65,78,66,103,78,86,66,65,111,77,66,107,104,112,99,110,78,108,98,68,69,81,77,65,52,71,65,49,85,69,65,119,119,72,89,87,100,108,98,110,81,116,78,122,66,90,77,66,77,71,66,121,113,71,83,77,52,57,10,65,103,69,71,67,67,113,71,83,77,52,57,65,119,69,72,65,48,73,65,66,66,113,43,102,73,105,88,106,99,108,109,49,100,105,65,66,55,85,122,108,56,85,110,118,101,81,52,54,85,72,117,120,47,53,81,117,78,68,110,65,79,106,76,10,114,87,78,121,109,118,68,109,50,106,53,97,117,86,86,76,48,86,77,112,49,113,90,100,100,55,110,74,100,106,55,102,98,103,109,114,104,57,108,98,98,119,109,106,103,90,89,119,103,90,77,119,72,103,89,68,86,82,48,82,66,66,99,119,10,70,89,73,84,89,87,100,108,98,110,81,116,78,121,53,111,97,88,74,122,90,87,119,117,100,71,86,122,100,68,65,77,66,103,78,86,72,82,77,66,65,102,56,69,65,106,65,65,77,65,52,71,65,49,85,100,68,119,69,66,47,119,81,69,10,65,119,73,72,103,68,65,84,66,103,78,86,72,83,85,69,68,68,65,75,66,103,103,114,66,103,69,70,66,81,99,68,65,106,65,100,66,103,78,86,72,81,52,69,70,103,81,85,121,82,101,102,103,101,82,68,71,85,57,117,74,50,65,89,10,49,56,71,77,111,74,81,111,112,103,115,119,72,119,89,68,86,82,48,106,66,66,103,119,70,111,65,85,100,118,69,117,114,49,76,48,117,111,79,83,53,68,86,83,72,68,113,105,118,100,103,87,106,51,77,119,67,103,89,73,75,111,90,73,10,122,106,48,69,65,119,73,68,83,65,65,119,82,81,73,103,74,73,70,103,104,48,121,114,70,55,72,72,76,76,78,102,75,72,69,81,118,104,66,107,66,102,90,88,69,48,103,101,84,75,102,76,69,77,110,120,71,50,73,67,73,81,68,97,10,50,50,82,103,80,68,56,72,66,114,68,122,65,102,89,88,107,68,71,97,118,70,118,87,100,122,52,115,84,119,99,85,103,103,119,67,104,76,88,69,56,103,61,61,10,45,45,45,45,45,69,78,68,32,67,69,82,84,73,70,73,67,65,84,69,45,45,45,45,45,10]]},"steps":[{"send":[104,105]},{"expect":[111,107]}]},{"address":"192.0.2.1","port":40001,"tls":{"certificate":["localhost"]},"steps":[]}]}]}
+// A client-certificate handshake records the server's chain and trust-set digests and the
+// handshake outcome, and tls.peer records the DER chain it returned, so the run replays
+// without a client, a certificate check or a clock; the refused client replays too.
+fn identity() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn client_ca() -> Bytes uses {} {
+  b"-----BEGIN CERTIFICATE-----\nMIIBpzCCAU2gAwIBAgIUJcRfXF74bJVJ8NZ8YidArcz1vjQwCgYIKoZIzj0EAwIw\nIDEeMBwGA1UEAwwVSGlyc2VsIHRlc3QgY2xpZW50IENBMCAXDTI2MTAxODIxMDkx\nNFoYDzIxMjYwOTI0MjEwOTE0WjAgMR4wHAYDVQQDDBVIaXJzZWwgdGVzdCBjbGll\nbnQgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQGTXKDWWVzSF/6j11hL/0j\nl7LqpUE91czErh4dg39NsxNQ+kBIm/fbGVyVX45XusV+wE3x7VFmwThPz/JlQlDX\no2MwYTAdBgNVHQ4EFgQUdvEur1L0uoOS5DVSHDqivdgWj3MwHwYDVR0jBBgwFoAU\ndvEur1L0uoOS5DVSHDqivdgWj3MwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8E\nBAMCAgQwCgYIKoZIzj0EAwIDSAAwRQIhANh+iw/jA2yH4a18l0t5Qd6RU6GbGfkf\n5m2ElhFJM5H7AiBgnEFSo18hh+z9elj9+XbDONt+iN4AD+qoDXfJJuoyJg==\n-----END CERTIFICATE-----\n"
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), NetError] {
+  let n = match io.net(rt) {
+    Ok(n) => n,
+    Error(_) => return Ok(()),
+  }
+  let server = TlsServer(identities: [identity()], clients: Require(client_ca()))
+  let mut l = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16))?
+  let (s, _) = net.accept(n, mut l)?
+  let mut secure = tls.accept(n, take s, server)?
+  let der = match tls.peer(n, secure)? {
+    Some(der) => der,
+    None() => b"",
+  }
+  let mut buffer: List[u8] = []
+  let read = net.read(n, mut secure, mut buffer, 8u64)?
+  net.write_all(n, mut secure, b"ok")?
+  tls.close(n, take secure)?
+  let (anonymous, _) = net.accept(n, mut l)?
+  let refused = match tls.accept(n, take anonymous, server) {
+    Error(Tls(BadCertificate())) => true,
+    _ => false,
+  }
+  // The DER certificate: 463 bytes, a SEQUENCE with a two-byte length.
+  failure.check(
+    refused && read == 2u64 && bytes.len(der) == 463u64 && der[0] == 48u8 && der[1] == 130u8,
+    Arithmetic()
+  )
+  Ok(())
+}

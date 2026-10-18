@@ -1,0 +1,75 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// A server with two identities presents the one whose leaf names the client's SNI, and
+// the first when the SNI names neither or the client sends none (an IP literal).
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+}
+
+// Self-signed P-256 identities for alpha.hirsel.test and beta.hirsel.test; they secure
+// nothing.
+fn alpha() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIB0DCCAXegAwIBAgIUYBHLp+oGYuodLqxoxhA50xBB2UEwCgYIKoZIzj0EAwIw\nHDEaMBgGA1UEAwwRYWxwaGEuaGlyc2VsLnRlc3QwIBcNMjYxMDE4MjEwOTE0WhgP\nMjEyNjA5MjQyMTA5MTRaMBwxGjAYBgNVBAMMEWFscGhhLmhpcnNlbC50ZXN0MFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7au0ixdB+sLjBrPCgisAh95HCgcGbMVj\nh0olRs0iWTPFS8RmicxQkHyT7nrRhm9/1VEf1+EwLZyPW/n7ZR1J06OBlDCBkTAd\nBgNVHQ4EFgQUR0YCm3QwnshTR7v952a9s9QJoQMwHwYDVR0jBBgwFoAUR0YCm3Qw\nnshTR7v952a9s9QJoQMwHAYDVR0RBBUwE4IRYWxwaGEuaGlyc2VsLnRlc3QwDAYD\nVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEw\nCgYIKoZIzj0EAwIDRwAwRAIgeLYTnt0CzqoZE3X9v3UgvgjC70DANY7O5SuVUuhE\nNtQCICNDEuq2R8XaAj3vjZN/foqt5Xlhl/DrvfYO4JyBeysw\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAQptwdbbMJ93QPZv\nROSpcV0e1bNiG70B5zkRVoKSwaehRANCAATtq7SLF0H6wuMGs8KCKwCH3kcKBwZs\nxWOHSiVGzSJZM8VLxGaJzFCQfJPuetGGb3/VUR/X4TAtnI9b+ftlHUnT\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn beta() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBzzCCAXSgAwIBAgIUUzLbOnuGy3GzVbVrBXKphBCMvAcwCgYIKoZIzj0EAwIw\nGzEZMBcGA1UEAwwQYmV0YS5oaXJzZWwudGVzdDAgFw0yNjEwMTgyMTA5MTRaGA8y\nMTI2MDkyNDIxMDkxNFowGzEZMBcGA1UEAwwQYmV0YS5oaXJzZWwudGVzdDBZMBMG\nByqGSM49AgEGCCqGSM49AwEHA0IABEhCKccTFEvvxoOuV9TJpt5OQHMQ53puOdEP\nwKMwrEIh1+Bt2pZOjfdZiKlQlMxwevT9Sm0qxunzlLzDGCupgVWjgZMwgZAwHQYD\nVR0OBBYEFO4RIvlzykxE3LAPFAIBKq3imQDVMB8GA1UdIwQYMBaAFO4RIvlzykxE\n3LAPFAIBKq3imQDVMBsGA1UdEQQUMBKCEGJldGEuaGlyc2VsLnRlc3QwDAYDVR0T\nAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYI\nKoZIzj0EAwIDSQAwRgIhALL/ehmqzxvFtOUiVpFTPAMWtWGpcgVjgU+gsm61hG55\nAiEAgswQRcrVDJvEDer1TwIaRMbBzwMX5DqB975G16ARPe0=\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNnaZ9Th9wW843Yod\nEA3EUaJa5HpyUHTuqK9/6Zs3syWhRANCAARIQinHExRL78aDrlfUyabeTkBzEOd6\nbjnRD8CjMKxCIdfgbdqWTo33WYipUJTMcHr0/UptKsbp85S8wxgrqYFV\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn client(i: u16, take names: List[String]) -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40000u16 + i),
+    tls: Certificate(names),
+    steps: [Send(b"hi")]
+  )
+}
+
+fn handshake(n: Net, mut l: Listener of n) -> Result[Option[NetError], NetError] {
+  let (s, _) = net.accept(n, mut l)?
+  match tls.accept(
+    n,
+    take s,
+    TlsServer(identities: [alpha(), beta()], clients: Anonymous())
+  ) {
+    Ok(_) => Ok(None()),
+    Error(e) => Ok(Some(e)),
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: home().port,
+        clients: [
+          client(0u16, ["beta.hirsel.test"]),
+          client(1u16, ["alpha.hirsel.test"]),
+          client(2u16, ["gamma.hirsel.test", "alpha.hirsel.test"]),
+          client(3u16, ["gamma.hirsel.test", "beta.hirsel.test"]),
+          client(4u16, ["127.0.0.1", "alpha.hirsel.test"])
+        ]
+      )
+    ]
+  )
+  let mut l = net.listen(n, home())?
+  // Each SNI selects its own identity, whichever position it holds.
+  test.check(t, handshake(n, mut l)? == None())
+  test.check(t, handshake(n, mut l)? == None())
+  // An SNI naming neither falls back to the first identity, which this client accepts and
+  // the next rejects with bad_certificate.
+  test.check(t, handshake(n, mut l)? == None())
+  test.check(t, handshake(n, mut l)? == Some(Tls(AlertReceived(42u8))))
+  // An IP literal sends no SNI: the first identity again.
+  test.check(t, handshake(n, mut l)? == None())
+  Ok(())
+}

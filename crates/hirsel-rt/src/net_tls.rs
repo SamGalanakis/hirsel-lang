@@ -1,9 +1,11 @@
 //! TLS provider boundary, following rustls 0.23.46 src/stream.rs (Stream),
 //! src/conn.rs (complete_io), src/client/client_conn.rs, src/server/server_conn.rs and
-//! src/error.rs.
+//! src/error.rs; SNI selection and client verification follow src/server/handy.rs and
+//! src/webpki/client_verifier.rs.
 //! Socket ownership and grants stay in HostNet/State; this module never records
 //! TLS records, keys, random bytes or time.
 use crate::net::{NetError, RootsDigest, TlsFailure};
+use hirsel_run_config::tls::Server;
 use rustls::{
     ClientConfig, ClientConnection, Connection, RootCertStore, ServerConfig, ServerConnection,
 };
@@ -26,32 +28,55 @@ pub fn chain_digest(pem: &[u8]) -> [u8; 32] {
 /// The ALPN protocols a server handshake offers (docs/spec/core-library.md).
 pub const SERVER_ALPN: &[&[u8]] = &[b"http/1.1"];
 
-/// A server handshake presenting an identity the shared argument checks loaded. No client
-/// authentication, session cache or tickets.
-pub(crate) fn server(
-    identity: &Arc<rustls::sign::CertifiedKey>,
-) -> Result<ServerConnection, NetError> {
-    let mut config =
+/// Presents the identity `tls::select` picks for the client's SNI.
+#[derive(Debug)]
+struct BySni(Vec<Arc<rustls::sign::CertifiedKey>>);
+impl rustls::server::ResolvesServerCert for BySni {
+    fn resolve(
+        &self,
+        hello: rustls::server::ClientHello<'_>,
+    ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        Some(hirsel_run_config::tls::select(&self.0, hello.server_name()).clone())
+    }
+}
+
+/// A server handshake with a server the shared argument checks loaded: the identity the
+/// client's SNI selects, and the client verifier of its trust set. No session cache or
+/// tickets.
+pub(crate) fn server(server: &Server) -> Result<ServerConnection, NetError> {
+    let builder =
         ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
-            .map_err(|e| NetError::Tls(failure(&e)))?
-            .with_no_client_auth()
-            .with_cert_resolver(Arc::new(rustls::sign::SingleCertAndKey::from(
-                identity.clone(),
-            )));
+            .map_err(|e| NetError::Tls(failure(&e)))?;
+    let builder = match &server.clients {
+        Some(verifier) => builder.with_client_cert_verifier(verifier.clone()),
+        None => builder.with_no_client_auth(),
+    };
+    let mut config = builder.with_cert_resolver(Arc::new(BySni(server.identities.clone())));
     config.alpn_protocols = SERVER_ALPN.iter().map(|p| p.to_vec()).collect();
     config.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
     config.send_tls13_tickets = 0;
     ServerConnection::new(Arc::new(config)).map_err(|e| NetError::Tls(failure(&e)))
 }
 
-/// The host provider verifies with the trust anchors parsed by the shared argument checks.
-/// No cached config enables
-/// resumption, client auth or ALPN.
+/// What `tls.peer` returns for a connection: the chain a server verified, never a client's.
+pub(crate) fn peer(conn: &Connection) -> Option<Vec<u8>> {
+    match conn {
+        Connection::Server(conn) => conn
+            .peer_certificates()
+            .map(hirsel_run_config::tls::chain_der),
+        Connection::Client(_) => None,
+    }
+}
+
+/// The host provider verifies with the trust anchors parsed by the shared argument checks,
+/// and presents `identity` when the server asks for a client certificate. No cached config
+/// enables resumption or ALPN.
 pub(crate) fn client(
     name: &str,
     roots: &RootsDigest,
     pem: Option<Vec<u8>>,
+    identity: Option<&Arc<rustls::sign::CertifiedKey>>,
 ) -> Result<ClientConnection, NetError> {
     let roots = match roots {
         RootsDigest::WebPki(version) if version == WEBPKI_VERSION => RootCertStore {
@@ -69,38 +94,24 @@ pub(crate) fn client(
         _ => return Err(NetError::InvalidInput),
     };
     let name = hirsel_run_config::tls::server_name(name).ok_or(NetError::InvalidInput)?;
-    let mut config =
+    let builder =
         ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
             .map_err(|e| NetError::Tls(failure(&e)))?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+            .with_root_certificates(roots);
+    let mut config = match identity {
+        Some(identity) => builder.with_client_cert_resolver(Arc::new(
+            rustls::sign::SingleCertAndKey::from(identity.clone()),
+        )),
+        None => builder.with_no_client_auth(),
+    };
     config.resumption = rustls::client::Resumption::disabled();
     ClientConnection::new(Arc::new(config), name).map_err(|e| NetError::Tls(failure(&e)))
 }
 
 /// Condense rustls Error/CertificateError into the runtime's TLS errors.
 pub fn failure(error: &rustls::Error) -> TlsFailure {
-    use rustls::{CertificateError as C, Error as E};
-    match error {
-        E::InvalidCertificate(cert) => match cert {
-            C::UnknownIssuer => TlsFailure::UnknownIssuer,
-            C::Expired | C::ExpiredContext { .. } => TlsFailure::Expired,
-            C::NotValidYet | C::NotValidYetContext { .. } => TlsFailure::NotYetValid,
-            C::NotValidForName | C::NotValidForNameContext { .. } => TlsFailure::NameMismatch,
-            C::Revoked => TlsFailure::Revoked,
-            _ => TlsFailure::BadCertificate,
-        },
-        E::NoCertificatesPresented => TlsFailure::BadCertificate,
-        E::AlertReceived(alert) => TlsFailure::AlertReceived(u8::from(*alert)),
-        E::PeerMisbehaved(_)
-        | E::InappropriateMessage { .. }
-        | E::InappropriateHandshakeMessage { .. }
-        | E::InvalidMessage(_)
-        | E::PeerSentOversizedRecord
-        | E::DecryptError => TlsFailure::PeerMisbehaved,
-        _ => TlsFailure::HandshakeFailure,
-    }
+    hirsel_run_config::tls::failure(error).into()
 }
 
 pub(crate) fn error(error: io::Error) -> NetError {

@@ -1,7 +1,7 @@
-//! TLS Hirsel ABI v2. Layouts are the ordinary core TlsRoots/TlsIdentity/Stream layouts;
-//! this adapter adds no TLS representation to the language.
+//! TLS Hirsel ABI v2. Layouts are the ordinary core TlsRoots/TlsIdentity/TlsServer/Stream
+//! layouts; this adapter adds no TLS representation to the language.
 use crate::io::{Binding, Completion, Request};
-use crate::net::RootsDigest;
+use crate::net::{ClientAuth, RootsDigest};
 use crate::net_abi::{NetUnitResult, NetWordResult};
 use crate::{Header, RunCtx, STATUS_FAILURE, STATUS_OK};
 
@@ -13,12 +13,65 @@ pub struct TlsRootsAbi {
     pub pem: crate::views::Slice,
 }
 
+/// The roots digest of a `TlsRoots` argument, supplying Pem material outside the request.
+/// WebPki's inactive payload need not be initialized.
+unsafe fn roots(ctx: *mut RunCtx, stream: u64, roots: *const TlsRootsAbi) -> RootsDigest {
+    match unsafe { (*roots).tag } {
+        0 => RootsDigest::WebPki(crate::net_tls::WEBPKI_VERSION.into()),
+        1 => {
+            // Read only the active Pem payload.
+            let pem = unsafe { &(*roots).pem };
+            let bytes = unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) };
+            unsafe { Binding::get(ctx) }.tls_roots(stream, bytes);
+            crate::net_tls::pem_digest(bytes)
+        }
+        _ => crate::fault("TlsRoots tag out of range"),
+    }
+}
+
+/// A client handshake request. The taken handle transfers on every outcome; State closes
+/// it on data error.
+unsafe fn connect(
+    ctx: *mut RunCtx,
+    out: *mut NetWordResult,
+    n: *const u64,
+    s: *mut u64,
+    name: (*mut Header, u64, u64),
+    roots: *const TlsRootsAbi,
+    identity: Option<*const TlsIdentityAbi>,
+) -> u8 {
+    let stream = unsafe { s.read() };
+    unsafe { s.write(0) };
+    let name = unsafe { crate::io::slice_bytes(name.0, name.1, name.2) };
+    let server_name = std::str::from_utf8(name)
+        .unwrap_or_else(|_| crate::fault("invalid String in TLS ABI"))
+        .to_owned();
+    let roots = unsafe { self::roots(ctx, stream, roots) };
+    let identity = identity.map(|identity| {
+        let (chain, key) = unsafe { (*identity).bytes() };
+        unsafe { Binding::get(ctx) }.tls_identity(stream, chain, key);
+        crate::net_tls::chain_digest(chain)
+    });
+    let request = Request::TlsConnect {
+        net: unsafe { n.read() },
+        stream,
+        server_name,
+        roots,
+        identity,
+    };
+    let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
+        Some(Completion::NetUnit(done)) => done.map(|()| stream),
+        Some(_) => crate::fault("TLS completion type mismatch"),
+        None => return STATUS_FAILURE,
+    };
+    unsafe { out.write(NetWordResult::of(done)) };
+    STATUS_OK
+}
+
 /// `tls.connect(n, take s, server_name, roots) -> Result[Stream of n, NetError]`.
-/// The taken handle transfers on every outcome; State closes it on data error.
 /// # Safety
 /// ctx bound; n/s/roots readable; s writable and transferred; name and PEM slices
-/// live for the call; out writable for NetWordResult. WebPki's inactive payload
-/// need not be initialized.
+/// live for the call; out writable for NetWordResult.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
     ctx: *mut RunCtx,
@@ -31,28 +84,133 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
     name_len: u64,
     roots: *const TlsRootsAbi,
 ) -> u8 {
+    unsafe {
+        connect(
+            ctx,
+            out,
+            n,
+            s,
+            (name_owner, name_start, name_len),
+            roots,
+            None,
+        )
+    }
+}
+
+/// `tls.connect_as(n, take s, server_name, roots, identity) -> Result[Stream of n,
+/// NetError]`: `tls.connect` presenting a client identity, whose material reaches the
+/// adapter outside the recorded request.
+/// # Safety
+/// As `hirsel_rt_v2_tls_connect`; identity readable and its slices live for the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_tls_connect_as(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    s: *mut u64,
+    name_owner: *mut Header,
+    name_start: u64,
+    name_len: u64,
+    roots: *const TlsRootsAbi,
+    identity: *const TlsIdentityAbi,
+) -> u8 {
+    unsafe {
+        connect(
+            ctx,
+            out,
+            n,
+            s,
+            (name_owner, name_start, name_len),
+            roots,
+            Some(identity),
+        )
+    }
+}
+
+/// TlsIdentity = { chain: Bytes, key: Bytes }: two borrowed slices.
+#[repr(C)]
+pub struct TlsIdentityAbi {
+    pub chain: crate::views::Slice,
+    pub key: crate::views::Slice,
+}
+impl TlsIdentityAbi {
+    /// # Safety
+    /// Both slices are live.
+    unsafe fn bytes(&self) -> (&[u8], &[u8]) {
+        let (chain, key) = (&self.chain, &self.key);
+        unsafe {
+            (
+                crate::io::slice_bytes(chain.owner, chain.start, chain.length),
+                crate::io::slice_bytes(key.owner, key.start, key.length),
+            )
+        }
+    }
+}
+
+/// TlsClientAuth = Anonymous() | Request(Bytes) | Require(Bytes): u32 tag, padding, then the
+/// trust set's slice.
+#[repr(C)]
+pub struct TlsClientAuthAbi {
+    pub tag: u32,
+    pub padding: u32,
+    pub pem: crate::views::Slice,
+}
+
+/// TlsServer = { identities: List[TlsIdentity], clients: TlsClientAuth }: the list block,
+/// then the client policy at 8.
+#[repr(C)]
+pub struct TlsServerAbi {
+    pub identities: *mut Header,
+    pub clients: TlsClientAuthAbi,
+}
+
+/// `tls.accept(n, take s, server) -> Result[Stream of n, NetError]`. The taken handle
+/// transfers on every outcome; State closes it on data error. The server's material reaches
+/// the adapter outside the recorded request, which names only digests.
+/// # Safety
+/// ctx bound; n/s/server readable; s writable and transferred; the server's list and slices
+/// live for the call; out writable for NetWordResult.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    s: *mut u64,
+    server: *const TlsServerAbi,
+) -> u8 {
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
-    let name = unsafe { crate::io::slice_bytes(name_owner, name_start, name_len) };
-    let server_name = std::str::from_utf8(name)
-        .unwrap_or_else(|_| crate::fault("invalid String in TLS ABI"))
-        .to_owned();
-    let roots = match unsafe { (*roots).tag } {
-        0 => RootsDigest::WebPki(crate::net_tls::WEBPKI_VERSION.into()),
-        1 => {
-            // Read only the active Pem payload.
-            let pem = unsafe { &(*roots).pem };
-            let bytes = unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) };
-            unsafe { Binding::get(ctx) }.tls_roots(stream, bytes);
-            crate::net_tls::pem_digest(bytes)
-        }
-        _ => crate::fault("TlsRoots tag out of range"),
+    let list = unsafe { (*server).identities };
+    let payload = crate::alloc::payload(list);
+    let count = usize::try_from(unsafe { payload.cast::<u64>().read() })
+        .unwrap_or_else(|_| crate::fault("identity count overflow"));
+    let first = crate::alloc::sequence_elements_offset(8) as usize;
+    let size = std::mem::size_of::<TlsIdentityAbi>();
+    let identities: Vec<(&[u8], &[u8])> = (0..count)
+        .map(|index| unsafe {
+            (*payload.add(first + index * size).cast::<TlsIdentityAbi>()).bytes()
+        })
+        .collect();
+    let clients = unsafe { &(*server).clients };
+    let trust = || {
+        let pem = &clients.pem;
+        unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) }
     };
-    let request = Request::TlsConnect {
+    let clients = match clients.tag {
+        0 => ClientAuth::Anonymous,
+        1 => ClientAuth::Request(trust()),
+        2 => ClientAuth::Require(trust()),
+        _ => crate::fault("TlsClientAuth tag out of range"),
+    };
+    let binding = unsafe { Binding::get(ctx) };
+    binding.tls_server(stream, &identities, clients);
+    let server = crate::net::TlsServerDigest::of(&identities, clients);
+    let request = Request::TlsAccept {
         net: unsafe { n.read() },
         stream,
-        server_name,
-        roots,
+        server,
     };
     let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
         Some(Completion::NetUnit(done)) => done.map(|()| stream),
@@ -63,45 +221,58 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_connect(
     STATUS_OK
 }
 
-/// TlsIdentity = { chain: Bytes, key: Bytes }: two borrowed slices.
+/// `Result[Option[Bytes], NetError]`: the tag, then at 8 either the Option (its tag, then the
+/// Bytes slice at 16) or the NetError words; 40 bytes, align 8.
 #[repr(C)]
-pub struct TlsIdentityAbi {
-    pub chain: crate::views::Slice,
-    pub key: crate::views::Slice,
+pub struct NetChainResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub option: u32,
+    pub option_padding: u32,
+    pub value: crate::views::Slice,
 }
 
-/// `tls.accept(n, take s, identity) -> Result[Stream of n, NetError]`. The taken handle
-/// transfers on every outcome; State closes it on data error. The identity material reaches
-/// the adapter outside the recorded request, which names only the chain digest.
+/// `tls.peer(n, s) -> Result[Option[Bytes], NetError]`: the verified client chain.
 /// # Safety
-/// ctx bound; n/s/identity readable; s writable and transferred; the identity's slices live
-/// for the call; out writable for NetWordResult.
+/// ctx bound; n/s readable; out writable for NetChainResult.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
+pub unsafe extern "C" fn hirsel_rt_v2_tls_peer(
     ctx: *mut RunCtx,
     _destination: *mut u8,
-    out: *mut NetWordResult,
+    out: *mut NetChainResult,
     n: *const u64,
-    s: *mut u64,
-    identity: *const TlsIdentityAbi,
+    s: *const u64,
 ) -> u8 {
-    let stream = unsafe { s.read() };
-    unsafe { s.write(0) };
-    let (chain, key) = unsafe { (&(*identity).chain, &(*identity).key) };
-    let chain = unsafe { crate::io::slice_bytes(chain.owner, chain.start, chain.length) };
-    let key = unsafe { crate::io::slice_bytes(key.owner, key.start, key.length) };
-    unsafe { Binding::get(ctx) }.tls_identity(stream, chain, key);
-    let request = Request::TlsAccept {
+    let request = Request::TlsPeer {
         net: unsafe { n.read() },
-        stream,
-        identity: crate::net_tls::chain_digest(chain),
+        stream: unsafe { s.read() },
     };
-    let done = match unsafe { crate::net_abi::call_recording(ctx, request) } {
-        Some(Completion::NetUnit(done)) => done.map(|()| stream),
+    let value = match unsafe { crate::net_abi::call(ctx, request) } {
+        Some(Completion::Certificates(value)) => value,
         Some(_) => crate::fault("TLS completion type mismatch"),
         None => return STATUS_FAILURE,
     };
-    unsafe { out.write(NetWordResult::of(done)) };
+    // Initialize padding and inactive bytes without manufacturing a pointer from error bits.
+    unsafe {
+        out.cast::<u8>()
+            .write_bytes(0, std::mem::size_of::<NetChainResult>())
+    };
+    match value {
+        Ok(None) => {}
+        Ok(Some(chain)) => unsafe {
+            (*out).option = 1;
+            (*out).value = crate::text::allocate_bytes(ctx, &chain);
+        },
+        Err(error) => unsafe {
+            let e = crate::net_abi::NetErrorAbi::of(error);
+            (*out).tag = 1;
+            (*out).option = e.tag;
+            (*out).option_padding = e.word;
+            std::ptr::addr_of_mut!((*out).value)
+                .cast::<u32>()
+                .write(e.extra);
+        },
+    }
     STATUS_OK
 }
 

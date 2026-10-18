@@ -2,11 +2,13 @@
 
 Closed tooling data for PROG-3/6 and DET-1. Allowed dependencies: std, serde,
 serde_json, sha2, pinned pure rustls-pki-types/webpki parsers, and rustls (ring) only to load
-server identity keys. No compiler or execution implementation dependency.
+server identity keys and verify client certificates. No compiler or execution implementation dependency.
 `tls` parses verification names, PEM trust anchors and PEM server identities (certificate
-chain plus a private key matching the leaf) without time, signing or Io, and answers whether
-an identity's leaf certificate names a server name; all engines use these argument checks
-before cancellation.
+chain plus a private key matching the leaf) without time, signing or Io, loads a
+`TlsServer` (identities plus the rustls client verifier of its trust set), answers whether
+an identity's leaf certificate names a server name and which identity an SNI selects, and
+decides a scripted client's server handshake (`scripted_accept`, verifying a presented chain
+at its latest notBefore); all engines use these argument checks before cancellation.
 
 Host input read failures include the selected grants, run record or revocation path. A relative directory resolution failure includes its template-relative candidate.
 
@@ -74,8 +76,9 @@ Revocation references remain external host evidence selectors, not provider name
 (possibly empty). `peers` is forbidden under every other provider, including an
 explicit null. A peer has fields `address`, `port` (u16), `resolves_to` (canonical
 IP strings in resolver order), `tls` and `connections`. Variants use external
-snake_case tags: `"plain"`, `{"certificate":["example.com"]}` or
-`{"fails":f}` for TLS, where `f` is a TlsFailure tag such as `"unknown_issuer"`
+snake_case tags: `"plain"`, `{"certificate":["example.com"]}`,
+`{"fails":f}` or, for a listener's client only, `{"presents":[["example.com"],[45,45]]}`
+(names, then the PEM chain it presents) for TLS, where `f` is a TlsFailure tag such as `"unknown_issuer"`
 or `{"alert_received":40}`; `"refused"`, `"unanswered"` or `{"open":[steps]}`
 for connections; and `{"send":[0,255]}`, `{"expect":[71,69,84]}`, `"stall"`,
 `"close"`, `"reset"` or `"truncate"` for steps. `net.script@2` replaced

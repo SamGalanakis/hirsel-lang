@@ -1,0 +1,128 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+// A server requires or requests client certificates against a trust set: a client
+// certificate the trust set issued succeeds and tls.peer returns its DER chain; a missing
+// certificate under Require and an untrusted one are refused and close the stream; Request
+// admits a client without one; Anonymous never sees one.
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8443u16)
+}
+
+// The self-signed P-256 identity for localhost of the server TLS tests; it secures nothing.
+fn identity() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+// The Hirsel test client CA, and agent-7's certificate it issued (CN=agent-7, O=Hirsel,
+// DNS:agent-7.hirsel.test, clientAuth); they secure nothing.
+fn client_ca() -> Bytes uses {} {
+  b"-----BEGIN CERTIFICATE-----\nMIIBpzCCAU2gAwIBAgIUJcRfXF74bJVJ8NZ8YidArcz1vjQwCgYIKoZIzj0EAwIw\nIDEeMBwGA1UEAwwVSGlyc2VsIHRlc3QgY2xpZW50IENBMCAXDTI2MTAxODIxMDkx\nNFoYDzIxMjYwOTI0MjEwOTE0WjAgMR4wHAYDVQQDDBVIaXJzZWwgdGVzdCBjbGll\nbnQgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQGTXKDWWVzSF/6j11hL/0j\nl7LqpUE91czErh4dg39NsxNQ+kBIm/fbGVyVX45XusV+wE3x7VFmwThPz/JlQlDX\no2MwYTAdBgNVHQ4EFgQUdvEur1L0uoOS5DVSHDqivdgWj3MwHwYDVR0jBBgwFoAU\ndvEur1L0uoOS5DVSHDqivdgWj3MwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8E\nBAMCAgQwCgYIKoZIzj0EAwIDSAAwRQIhANh+iw/jA2yH4a18l0t5Qd6RU6GbGfkf\n5m2ElhFJM5H7AiBgnEFSo18hh+z9elj9+XbDONt+iN4AD+qoDXfJJuoyJg==\n-----END CERTIFICATE-----\n"
+}
+
+fn client_cert() -> Bytes uses {} {
+  b"-----BEGIN CERTIFICATE-----\nMIIByzCCAXGgAwIBAgIBAjAKBggqhkjOPQQDAjAgMR4wHAYDVQQDDBVIaXJzZWwg\ndGVzdCBjbGllbnQgQ0EwIBcNMjYxMDE4MjEwOTE0WhgPMjEyNjA5MjQyMTA5MTRa\nMCMxDzANBgNVBAoMBkhpcnNlbDEQMA4GA1UEAwwHYWdlbnQtNzBZMBMGByqGSM49\nAgEGCCqGSM49AwEHA0IABBq+fIiXjclm1diAB7Uzl8UnveQ46UHux/5QuNDnAOjL\nrWNymvDm2j5auVVL0VMp1qZdd7nJdj7fbgmrh9lbbwmjgZYwgZMwHgYDVR0RBBcw\nFYITYWdlbnQtNy5oaXJzZWwudGVzdDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQE\nAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAdBgNVHQ4EFgQUyRefgeRDGU9uJ2AY\n18GMoJQopgswHwYDVR0jBBgwFoAUdvEur1L0uoOS5DVSHDqivdgWj3MwCgYIKoZI\nzj0EAwIDSAAwRQIgJIFgh0yrF7HHLLNfKHEQvhBkBfZXE0geTKfLEMnxG2ICIQDa\n22RgPD8HBrDzAfYXkDGavFvWdz4sTwcUggwChLXE8g==\n-----END CERTIFICATE-----\n"
+}
+
+// The same subject issued by a CA the server does not trust.
+fn rogue_cert() -> Bytes uses {} {
+  b"-----BEGIN CERTIFICATE-----\nMIIBxTCCAWugAwIBAgIBAzAKBggqhkjOPQQDAjAaMRgwFgYDVQQDDA9IaXJzZWwg\ncm9ndWUgQ0EwIBcNMjYxMDE4MjEwOTE0WhgPMjEyNjA5MjQyMTA5MTRaMCMxDzAN\nBgNVBAoMBkhpcnNlbDEQMA4GA1UEAwwHYWdlbnQtNzBZMBMGByqGSM49AgEGCCqG\nSM49AwEHA0IABIFzU9aZKHDAKxocdjw/Se1ZBopZaynPhIyvZu+YpGvoQokk8EEw\nHONXEz6ASkNOh5zp6hFmbZEZ4c6bzdloy1mjgZYwgZMwHgYDVR0RBBcwFYITYWdl\nbnQtNy5oaXJzZWwudGVzdDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAT\nBgNVHSUEDDAKBggrBgEFBQcDAjAdBgNVHQ4EFgQUp8CUJlnB661ZZv5aEylBUAA5\nxJUwHwYDVR0jBBgwFoAUcrudHmY73RtIx7e3u5LmiHJreDowCgYIKoZIzj0EAwID\nSAAwRQIgf1AJikcyAHBKE/URnelURPwYiG1gOoNYZJw+HXFs4XQCIQDURYP535K4\nOc2NgqJPRW3kJGV3ncrgxkfQoWnZCN9ghw==\n-----END CERTIFICATE-----\n"
+}
+
+fn client(i: u16, take tls: PeerTls) -> NetClient uses {} {
+  NetClient(
+    from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40000u16 + i),
+    tls: tls,
+    steps: [Send(b"hi")]
+  )
+}
+
+fn server(take clients: TlsClientAuth) -> TlsServer uses {} {
+  TlsServer(identities: [identity()], clients: clients)
+}
+
+fn refusal(n: Net, take upgraded: Result[Stream of n, NetError]) -> Option[NetError] {
+  match upgraded {
+    Ok(_) => None(),
+    Error(e) => Some(e),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: home().port,
+        clients: [
+          client(0u16, Presents(["localhost"], client_cert())),
+          client(1u16, Certificate(["localhost"])),
+          client(2u16, Presents(["localhost"], rogue_cert())),
+          client(3u16, Certificate(["localhost"])),
+          client(4u16, Presents(["localhost"], client_cert())),
+          client(5u16, Presents(["localhost"], client_cert())),
+          client(6u16, Presents(["localhost"], client_cert()))
+        ]
+      )
+    ]
+  )
+  let mut l = net.listen(n, home())?
+  // A trusted client certificate: the handshake succeeds, and tls.peer returns the DER
+  // certificate the client sent, which a plain stream does not have.
+  let (s, _) = net.accept(n, mut l)?
+  test.check(t, tls.peer(n, s)? == None())
+  let mut secure = tls.accept(n, take s, server(Require(client_ca())))?
+  let chain = match tls.peer(n, secure)? {
+    Some(der) => der,
+    None() => b"",
+  }
+  test.check(
+    t,
+    std@1/sha256.digest_hex(chain) == "f5ea24727ed23aba89ac20b4ce6033544ceac6b61ebab88fbb07491e370dc571"
+  )
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)
+  // Require refuses a client that sends no certificate, and any trust set refuses one
+  // it did not issue.
+  let (missing, _) = net.accept(n, mut l)?
+  test.check(
+    t,
+    refusal(n, tls.accept(n, take missing, server(Require(client_ca())))) == Some(
+      Tls(BadCertificate())
+    )
+  )
+  let (rogue, _) = net.accept(n, mut l)?
+  test.check(
+    t,
+    refusal(n, tls.accept(n, take rogue, server(Request(client_ca())))) == Some(
+      Tls(UnknownIssuer())
+    )
+  )
+  // Request admits a client without a certificate, and Anonymous asks for none.
+  let (optional, _) = net.accept(n, mut l)?
+  let unauthenticated = tls.accept(n, take optional, server(Request(client_ca())))?
+  test.check(t, tls.peer(n, unauthenticated)? == None())
+  let (anonymous, _) = net.accept(n, mut l)?
+  let unasked = tls.accept(n, take anonymous, server(Anonymous()))?
+  test.check(t, tls.peer(n, unasked)? == None())
+  // An empty or malformed trust set and an empty identity list are invalid input.
+  let (empty, _) = net.accept(n, mut l)?
+  test.check(
+    t,
+    refusal(n, tls.accept(n, take empty, server(Require(b"")))) == Some(InvalidInput())
+  )
+  let (none, _) = net.accept(n, mut l)?
+  test.check(
+    t,
+    refusal(
+      n,
+      tls.accept(n, take none, TlsServer(identities: [], clients: Anonymous()))
+    ) == Some(InvalidInput())
+  )
+  Ok(())
+}

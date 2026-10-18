@@ -1379,7 +1379,7 @@ pub fn server_connection(n: Net, take stream: Stream of n, config: Config) -> Se
 
 // The TLS twin of server_connection: a server handshake on an accepted stream,
 // bounded by the config's read and write timeouts, then the keep-alive server.
-pub fn serve_tls(n: Net, take stream: Stream of n, identity: TlsIdentity, config: Config) -> Result[
+pub fn serve_tls(n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[
   ServerConnection,
   HttpError
 ] {
@@ -1389,7 +1389,7 @@ pub fn serve_tls(n: Net, take stream: Stream of n, identity: TlsIdentity, config
   // A ListenTls stream allows options before its handshake.
   core@1/net.set_read_timeout(n, mut plain, rt) ? http_net_error
   core@1/net.set_write_timeout(n, mut plain, wt) ? http_net_error
-  let secure = core@1/tls.accept(n, take plain, identity) ? http_net_error
+  let secure = core@1/tls.accept(n, take plain, server) ? http_net_error
   Ok(server_connection(n, take secure, config))
 }
 

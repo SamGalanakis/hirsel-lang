@@ -216,6 +216,9 @@ impl CooperativeNet {
                 Ok(0) => return Ok(Err(NetError::Tls(crate::net::TlsFailure::Truncated))),
                 Ok(_) => {
                     if let Err(e) = conn.process_new_packets() {
+                        // Best effort, as rustls complete_io does: tell the peer why, so a
+                        // refused client certificate reaches the client as its alert.
+                        let _ = conn.write_tls(&mut crate::net_tls::Transport(fd));
                         return Ok(Err(NetError::Tls(crate::net_tls::failure(&e))));
                     }
                 }
@@ -432,20 +435,25 @@ impl NetProvider for CooperativeNet {
     fn peer_addr(&mut self, stream: u64) -> Provided<SocketAddr> {
         self.host.peer_addr(stream)
     }
-    fn tls_connect(&mut self, stream: u64, name: &str, roots: &RootsDigest) -> Provided<()> {
-        let pem = self.host.pem.take();
-        self.handshake(stream, || {
-            crate::net_tls::client(name, roots, pem).map(rustls::Connection::from)
-        })
-    }
-    fn tls_accept(
+    fn tls_connect(
         &mut self,
         stream: u64,
-        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
+        name: &str,
+        roots: &RootsDigest,
+        identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
     ) -> Provided<()> {
+        let pem = self.host.pem.take();
         self.handshake(stream, || {
-            crate::net_tls::server(identity).map(rustls::Connection::from)
+            crate::net_tls::client(name, roots, pem, identity).map(rustls::Connection::from)
         })
+    }
+    fn tls_accept(&mut self, stream: u64, server: &hirsel_run_config::tls::Server) -> Provided<()> {
+        self.handshake(stream, || {
+            crate::net_tls::server(server).map(rustls::Connection::from)
+        })
+    }
+    fn tls_peer(&mut self, stream: u64) -> Provided<Option<Vec<u8>>> {
+        self.host.tls_peer(stream)
     }
     fn tls_close(&mut self, stream: u64) -> Provided<()> {
         if let Some(conn) = self.host.tls.get_mut(&stream) {

@@ -32,6 +32,8 @@ enum Remote {
 struct Connection {
     remote: Remote,
     tls: bool,
+    /// What `tls.peer` returns: the verified chain a `tls.accept` client presented.
+    peer: Option<Vec<u8>>,
     steps: Vec<NetStep>,
     step: usize,
     offset: usize,
@@ -49,6 +51,7 @@ impl Connection {
         Self {
             remote,
             tls: false,
+            peer: None,
             steps,
             step: 0,
             offset: 0,
@@ -458,7 +461,14 @@ impl NetProvider for ScriptNet {
             })
             .ok_or(NetError::UnknownHost))
     }
-    fn tls_connect(&mut self, id: u64, server_name: &str, _roots: &RootsDigest) -> Provided<()> {
+    /// Scripted peers never request a client certificate: a valid `identity` goes unused.
+    fn tls_connect(
+        &mut self,
+        id: u64,
+        server_name: &str,
+        _roots: &RootsDigest,
+        _identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+    ) -> Provided<()> {
         let s = self.connection(id)?;
         // Owner 385145: upgrading an already secured Stream consumes it with
         // InvalidInput, just as the host rustls provider does. State closes it.
@@ -488,13 +498,10 @@ impl NetProvider for ScriptNet {
             }
             PeerTls::Certificate(_) => Err(NetError::Tls(TlsFailure::NameMismatch)),
             PeerTls::Fails(failure) => Err(NetError::Tls((*failure).into())),
+            PeerTls::Presents(..) => return Err(AdapterError::InvalidCompletion),
         })
     }
-    fn tls_accept(
-        &mut self,
-        id: u64,
-        identity: &std::sync::Arc<rustls::sign::CertifiedKey>,
-    ) -> Provided<()> {
+    fn tls_accept(&mut self, id: u64, server: &hirsel_run_config::tls::Server) -> Provided<()> {
         let s = self.connection(id)?;
         if s.tls {
             return Ok(Err(NetError::InvalidInput));
@@ -522,20 +529,19 @@ impl NetProvider for ScriptNet {
             .find(|l| l.address == listener.0 && l.port == listener.1)
             .and_then(|l| l.clients.get(index))
             .ok_or(AdapterError::InvalidCompletion)?;
-        Ok(match &client.tls {
-            PeerTls::Plain => Err(NetError::Tls(TlsFailure::HandshakeFailure)),
-            PeerTls::Certificate(names)
-                if names
-                    .iter()
-                    .any(|name| hirsel_run_config::tls::serves(identity, name)) =>
-            {
-                self.connection(id)?.tls = true;
+        let verdict = hirsel_run_config::tls::scripted_accept(&client.tls, server);
+        Ok(match verdict {
+            Ok(peer) => {
+                let s = self.connection(id)?;
+                s.tls = true;
+                s.peer = peer;
                 Ok(())
             }
-            // A verifying client rejecting the certificate sends bad_certificate.
-            PeerTls::Certificate(_) => Err(NetError::Tls(TlsFailure::AlertReceived(42))),
-            PeerTls::Fails(failure) => Err(NetError::Tls((*failure).into())),
+            Err(failure) => Err(NetError::Tls(failure.into())),
         })
+    }
+    fn tls_peer(&mut self, id: u64) -> Provided<Option<Vec<u8>>> {
+        Ok(Ok(self.connection(id)?.peer.clone()))
     }
     fn tls_close(&mut self, id: u64) -> Provided<()> {
         let s = self.connection(id)?;
@@ -717,6 +723,14 @@ impl crate::io::Adapter for ScriptIo {
     }
     fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
         self.state.remember_tls_identity(stream, chain, key);
+    }
+    fn tls_server(
+        &mut self,
+        stream: u64,
+        identities: &[(&[u8], &[u8])],
+        clients: crate::net::ClientAuth<&[u8]>,
+    ) {
+        self.state.remember_tls_server(stream, identities, clients);
     }
     fn preflight(
         &self,

@@ -36,9 +36,17 @@ fn invalid(n: Net, mut listener: Listener of n, chain: Bytes, key: Bytes) -> Res
 ] {
   let (s, _) = net.accept(n, mut listener)?
   Ok(
-    upgrade_error(n, tls.accept(n, take s, TlsIdentity(chain: chain, key: key))) == Some(
-      InvalidInput()
-    )
+    upgrade_error(
+      n,
+      tls.accept(
+        n,
+        take s,
+        TlsServer(
+          identities: [TlsIdentity(chain: chain, key: key)],
+          clients: Anonymous()
+        )
+      )
+    ) == Some(InvalidInput())
   )
 }
 
@@ -94,7 +102,11 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
   )
   // The matching pair succeeds, and a stream consumed by an invalid identity is closed.
   let (s, _) = net.accept(n, mut l)?
-  let mut secure = tls.accept(n, take s, good)?
+  let mut secure = tls.accept(
+    n,
+    take s,
+    TlsServer(identities: [good], clients: Anonymous())
+  )?
   let mut buf: List[u8] = []
   test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)
   Ok(())

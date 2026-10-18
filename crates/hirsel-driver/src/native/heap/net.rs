@@ -143,6 +143,15 @@ fn peer_tls(v: &OpValue) -> Option<PeerTls> {
             PeerTls::Certificate(sequence(names)?.iter().map(text).collect::<Option<_>>()?)
         }
         (2, failure) => PeerTls::Fails(tls_failure(failure)?.into()),
+        (3, presents) => {
+            let [names, chain] = fields(presents)? else {
+                return None;
+            };
+            PeerTls::Presents(
+                sequence(names)?.iter().map(text).collect::<Option<_>>()?,
+                bytes(chain)?,
+            )
+        }
         _ => return None,
     })
 }
@@ -421,35 +430,78 @@ impl Io {
                 net: self.network_id(n)?,
                 stream: self.network_id(s)?,
             },
-            (Some("tls"), "connect", [n, s, host, roots]) => R::TlsConnect {
-                net: self.network_id(n)?,
-                stream: self.network_id(s)?,
-                server_name: text(host)?,
-                roots: match variant(roots)? {
+            (Some("tls"), "connect" | "connect_as", [n, s, host, roots, identity @ ..]) => {
+                let stream = self.network_id(s)?;
+                let roots = match variant(roots)? {
                     (0, _) => RootsDigest::WebPki("webpki-roots@1.0.9".into()),
                     (1, b) => {
                         use sha2::Digest;
                         let pem = bytes(b)?;
-                        let stream = self.network_id(s)?;
                         hirsel_rt::io::Adapter::tls_roots(&mut self.network, stream, &pem);
                         RootsDigest::Pem(sha2::Sha256::digest(&pem).into())
                     }
                     _ => return None,
-                },
-            },
-            (Some("tls"), "accept", [n, s, identity]) => {
-                let [chain, key] = fields(identity)? else {
+                };
+                let identity = match (name, identity) {
+                    ("connect", []) => None,
+                    ("connect_as", [identity]) => {
+                        let [chain, key] = fields(identity)? else {
+                            return None;
+                        };
+                        let (chain, key) = (bytes(chain)?, bytes(key)?);
+                        hirsel_rt::io::Adapter::tls_identity(
+                            &mut self.network,
+                            stream,
+                            &chain,
+                            &key,
+                        );
+                        Some(hirsel_rt::net_tls::chain_digest(&chain))
+                    }
+                    _ => return None,
+                };
+                R::TlsConnect {
+                    net: self.network_id(n)?,
+                    stream,
+                    server_name: text(host)?,
+                    roots,
+                    identity,
+                }
+            }
+            (Some("tls"), "accept", [n, s, server]) => {
+                let [identities, clients] = fields(server)? else {
                     return None;
                 };
-                let (chain, key) = (bytes(chain)?, bytes(key)?);
+                let identities = sequence(identities)?
+                    .iter()
+                    .map(|identity| {
+                        let [chain, key] = fields(identity)? else {
+                            return None;
+                        };
+                        Some((bytes(chain)?, bytes(key)?))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                let identities: Vec<(&[u8], &[u8])> =
+                    identities.iter().map(|(c, k)| (&c[..], &k[..])).collect();
+                let (tag, trust) = variant(clients)?;
+                let trust = if tag == 0 { vec![] } else { bytes(trust)? };
+                let clients = match tag {
+                    0 => ClientAuth::Anonymous,
+                    1 => ClientAuth::Request(&trust[..]),
+                    2 => ClientAuth::Require(&trust[..]),
+                    _ => return None,
+                };
                 let stream = self.network_id(s)?;
-                hirsel_rt::io::Adapter::tls_identity(&mut self.network, stream, &chain, &key);
+                hirsel_rt::io::Adapter::tls_server(&mut self.network, stream, &identities, clients);
                 R::TlsAccept {
                     net: self.network_id(n)?,
                     stream,
-                    identity: hirsel_rt::net_tls::chain_digest(&chain),
+                    server: hirsel_rt::net::TlsServerDigest::of(&identities, clients),
                 }
             }
+            (Some("tls"), "peer", [n, s]) => R::TlsPeer {
+                net: self.network_id(n)?,
+                stream: self.network_id(s)?,
+            },
             _ => return None,
         };
         let completion = match self.script(request, cancellation) {
@@ -514,6 +566,10 @@ impl Io {
                 result(r, |_| OpValue::TakenHandle { argument: 1 })
             }
             C::NetUnit(r) => result(r, |()| OpValue::Unit),
+            C::Certificates(r) => result(r, |chain| match chain {
+                Some(chain) => v(1, OpValue::ByteSequence(chain)),
+                None => v(0, OpValue::Unit),
+            }),
             C::Count(r) => result(r, |n| bits(ScalarKind::U64, n)),
             C::Address(r) => result(r, address),
             C::Addresses(r) => result(r, |a| {
@@ -537,6 +593,7 @@ impl Io {
             _ => return Some(OpOutcome::Unsupported),
         };
         let consumed = module == Some("tls")
+            && name != "peer"
             && (name == "close" || matches!(value, OpValue::Variant { tag: 1, .. }))
             || matches!(module, Some("net" | "udp")) && name == "close";
         Some(if consumed {

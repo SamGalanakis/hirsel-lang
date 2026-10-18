@@ -402,12 +402,18 @@ pub enum Request {
         stream: u64,
         server_name: String,
         roots: RootsDigest,
+        /// `tls.connect_as`: the SHA-256 of the client identity's certificate-chain PEM; the
+        /// key never appears.
+        identity: Option<[u8; 32]>,
     },
-    /// The identity is the SHA-256 of its certificate-chain PEM; the key never appears.
     TlsAccept {
         net: u64,
         stream: u64,
-        identity: [u8; 32],
+        server: crate::net::TlsServerDigest,
+    },
+    TlsPeer {
+        net: u64,
+        stream: u64,
     },
     TlsClose {
         net: u64,
@@ -536,6 +542,8 @@ pub enum Completion {
     Datagram(Result<(Vec<u8>, SocketAddr, bool), NetError>),
     Count(Result<u64, NetError>),
     NetUnit(Result<(), NetError>),
+    /// `tls.peer`: the verified client chain's DER certificates, concatenated.
+    Certificates(Result<Option<Vec<u8>>, NetError>),
     Address(Result<SocketAddr, NetError>),
     Accepted(Result<(u64, SocketAddr), NetError>),
     Process(hirsel_run_config::ProcessOutcome),
@@ -765,6 +773,7 @@ pub(crate) struct State {
     pub(crate) pem_validity: BTreeMap<u64, ([u8; 32], bool)>,
     /// The identity material supplied for each stream's pending `tls.accept`.
     pub(crate) tls_identities: BTreeMap<u64, crate::net::TlsIdentity>,
+    pub(crate) tls_servers: BTreeMap<u64, crate::net::TlsServer>,
     /// The admitted rules of the root Proc and the world serving it.
     pub process_rules: Vec<hirsel_run_config::ProcessRule>,
     pub process_world: crate::process::ProcessWorld,
@@ -797,6 +806,7 @@ impl Default for State {
             net_scripts: BTreeMap::new(),
             pem_validity: BTreeMap::new(),
             tls_identities: BTreeMap::new(),
+            tls_servers: BTreeMap::new(),
             process_rules: vec![],
             process_world: crate::process::ProcessWorld::Host,
             process_scripts: BTreeMap::new(),
@@ -1690,9 +1700,18 @@ pub trait Adapter {
     /// Supply the next handshake's PEM material without adding it to the tape.
     /// Replay and scripted worlds use only the digest in TlsConnect.
     fn tls_roots(&mut self, _stream: u64, _pem: &[u8]) {}
-    /// Supply the next server handshake's identity material without adding it to the tape.
+    /// Supply the next `tls.connect_as` identity material without adding it to the tape.
     /// Every world loads it to check validity; the request records only the chain digest.
     fn tls_identity(&mut self, _stream: u64, _chain: &[u8], _key: &[u8]) {}
+    /// Supply the next server handshake's `TlsServer` material without adding it to the
+    /// tape. Every world loads it to check validity; the request records only digests.
+    fn tls_server(
+        &mut self,
+        _stream: u64,
+        _identities: &[(&[u8], &[u8])],
+        _clients: crate::net::ClientAuth<&[u8]>,
+    ) {
+    }
     /// Confirmed replay output, used only when reporting a tool refusal.
     fn replay_stdout(&self) -> Vec<u8> {
         vec![]
@@ -1736,6 +1755,14 @@ impl Binding {
     }
     pub(crate) fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
         self.adapter.tls_identity(stream, chain, key);
+    }
+    pub(crate) fn tls_server(
+        &mut self,
+        stream: u64,
+        identities: &[(&[u8], &[u8])],
+        clients: crate::net::ClientAuth<&[u8]>,
+    ) {
+        self.adapter.tls_server(stream, identities, clients);
     }
     pub fn new(adapter: impl Adapter + 'static) -> Self {
         Self {

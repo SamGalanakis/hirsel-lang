@@ -52,7 +52,11 @@ fn secure_only_streams(t: Test, tls_only: Net) -> Result[(), NetError] {
   // Options are allowed, so a timeout can bound the handshake.
   net.set_read_timeout(tls_only, mut first, Nanos(1000000u64))?
   test.check(t, net.peer_addr(tls_only, first)?.port == 40000u16)
-  let mut secure = tls.accept(tls_only, take first, identity())?
+  let mut secure = tls.accept(
+    tls_only,
+    take first,
+    TlsServer(identities: [identity()], clients: Anonymous())
+  )?
   test.check(t, net.read(tls_only, mut secure, mut buf, 8u64)? == 2u64)
   let (second, _) = net.accept(tls_only, mut l)?
   test.check(
@@ -98,7 +102,11 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
   let mut buf: List[u8] = []
   let mut plain_listener = net.listen(n, home())?
   let (third, _) = net.accept(n, mut plain_listener)?
-  let mut upgraded = tls.accept(n, take third, identity())?
+  let mut upgraded = tls.accept(
+    n,
+    take third,
+    TlsServer(identities: [identity()], clients: Anonymous())
+  )?
   test.check(t, net.read(n, mut upgraded, mut buf, 8u64)? == 2u64)
   let mut (fourth, _) = net.accept(n, mut plain_listener)?
   test.check(t, net.read(n, mut fourth, mut buf, 8u64)? == 2u64)
@@ -106,14 +114,26 @@ pub fn exercise(t: Test) -> Result[(), NetError] {
   let connected = net.connect(n, "plain.example", 80u16, Unbounded())?
   test.check(
     t,
-    upgrade_error(n, tls.accept(n, take connected, identity())) == Some(NotGranted())
+    upgrade_error(
+      n,
+      tls.accept(
+        n,
+        take connected,
+        TlsServer(identities: [identity()], clients: Anonymous())
+      )
+    ) == Some(NotGranted())
   )
   let invalid = net.connect(n, "plain.example", 80u16, Unbounded())?
   test.check(
     t,
-    upgrade_error(n, tls.accept(n, take invalid, TlsIdentity(chain: b"", key: b""))) == Some(
-      InvalidInput()
-    )
+    upgrade_error(
+      n,
+      tls.accept(
+        n,
+        take invalid,
+        TlsServer(identities: [TlsIdentity(chain: b"", key: b"")], clients: Anonymous())
+      )
+    ) == Some(InvalidInput())
   )
   Ok(())
 }

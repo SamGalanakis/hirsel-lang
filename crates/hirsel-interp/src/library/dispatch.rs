@@ -1370,7 +1370,7 @@ primary_operations! { self, call, context, name, a, value;
         if result.is_err() && let Some(saved) = saved { self.synchronizers = saved; }
         return result.map(Some); },
     Unavailable: "arena.seal" | "region.with" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
-    Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.accept" | "tls.close" | "test.net" | "net.listen" | "net.unix_connect" | "net.unix_listen" | "net.accept" | "net.local_addr" | "net.udp_bind" | "udp.send_to" | "udp.recv_from" | "udp.close" => {
+    Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.connect_as" | "tls.accept" | "tls.peer" | "tls.close" | "test.net" | "net.listen" | "net.unix_connect" | "net.unix_listen" | "net.accept" | "net.local_addr" | "net.udp_bind" | "udp.send_to" | "udp.recv_from" | "udp.close" => {
         return self.network_call(name, &call, context).map(Some);
     },
     // A rejected replay never publishes effects or consumes script entries; a scripted

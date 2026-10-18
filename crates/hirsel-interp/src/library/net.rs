@@ -90,6 +90,8 @@ pub(super) struct ScriptStream {
     /// An accepted stream's client index and listen address: its `Expect`
     /// mismatches fail the test instead of resetting. Its `peer` is the client's TLS.
     client: Option<(usize, String)>,
+    /// What `tls.peer` returns: the verified chain a `tls.accept` client presented.
+    chain: Option<Vec<u8>>,
     mismatch: Option<String>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,6 +140,7 @@ impl ScriptStream {
             read_closed: false,
             write_closed: false,
             client: None,
+            chain: None,
             mismatch: None,
         }
     }
@@ -377,6 +380,13 @@ fn peer_tls(v: &Value) -> Result<PeerTls, Error> {
                 .collect::<Result<_, _>>()?,
         ),
         (2, [Some(failure)]) => PeerTls::Fails(tls_failure(failure)?),
+        (3, [Some(names), Some(chain)]) => PeerTls::Presents(
+            collection::elements(names, BuiltinType::List)?
+                .iter()
+                .map(|n| text(n).map(str::to_owned))
+                .collect::<Result<_, _>>()?,
+            bytes(chain)?.to_vec(),
+        ),
         _ => return Err(invalid("PeerTls representation")),
     })
 }
@@ -1159,7 +1169,7 @@ impl Simulation {
                     let access = {
                         let s = &self.net_streams[&id];
                         let invalid_tls = match name {
-                            "tls.connect" => {
+                            "tls.connect" | "tls.connect_as" => {
                                 let invalid_roots = match variant_fields(arg(a, 3)?)? {
                                     (0, []) => false,
                                     (1, [Some(pem)]) => {
@@ -1170,14 +1180,16 @@ impl Simulation {
                                 invalid_roots
                                     || hirsel_run_config::tls::server_name(text(arg(a, 2)?)?)
                                         .is_none()
+                                    || name == "tls.connect_as" && identity(arg(a, 4)?)?.is_none()
                             }
-                            "tls.accept" => identity(arg(a, 2)?)?.is_none(),
+                            "tls.accept" => server(arg(a, 2)?)?.is_none(),
                             _ => false,
                         };
-                        let upgrade = matches!(name, "tls.connect" | "tls.accept");
+                        let upgrade =
+                            matches!(name, "tls.connect" | "tls.connect_as" | "tls.accept");
                         if upgrade && (s.tls || invalid_tls) {
                             Err(NetFault::InvalidInput)
-                        } else if name == "tls.connect"
+                        } else if matches!(name, "tls.connect" | "tls.connect_as")
                             && s.requires_tls
                             && (s.client.is_some() || text(arg(a, 2)?)? != s.host)
                             || name == "tls.accept" && s.client.is_none()
@@ -1204,24 +1216,36 @@ impl Simulation {
                             | "net.write"
                             | "net.write_all"
                             | "tls.connect"
+                            | "tls.connect_as"
                             | "tls.accept"
                             | "tls.close"
                     );
                     if let Err(e) = access {
-                        if matches!(name, "tls.connect" | "tls.accept" | "tls.close")
-                            && let Some(report) = self.close_net(id)
+                        if matches!(
+                            name,
+                            "tls.connect" | "tls.connect_as" | "tls.accept" | "tls.close"
+                        ) && let Some(report) = self.close_net(id)
                         {
                             break 'operation Err(NetFault::Unmet(report));
                         }
                         break 'operation Err(e);
                     }
                     if let Some(cause) = cancellation.filter(|_| blocking) {
-                        if matches!(name, "tls.connect" | "tls.accept" | "tls.close")
-                            && let Some(report) = self.close_net(id)
+                        if matches!(
+                            name,
+                            "tls.connect" | "tls.connect_as" | "tls.accept" | "tls.close"
+                        ) && let Some(report) = self.close_net(id)
                         {
                             break 'operation Err(NetFault::Unmet(report));
                         }
                         break 'operation Err(NetFault::Canceled(cause));
+                    }
+                    // Handshake state, not stream input: no step is consulted.
+                    if name == "tls.peer" {
+                        break 'operation Ok(match &self.net_streams[&id].chain {
+                            Some(chain) => super::dispatch::some(Value::Bytes(chain.clone())),
+                            None => super::dispatch::none(),
+                        });
                     }
                     if name == "tls.close" && !self.net_streams[&id].tls {
                         if let Some(report) = self.close_net(id) {
@@ -1232,8 +1256,10 @@ impl Simulation {
                     let s = self.net_streams.get_mut(&id).unwrap();
                     s.advance();
                     if matches!(s.steps.front(), Some(NetStep::Reset)) {
-                        if matches!(name, "tls.connect" | "tls.accept" | "tls.close")
-                            && let Some(report) = self.close_net(id)
+                        if matches!(
+                            name,
+                            "tls.connect" | "tls.connect_as" | "tls.accept" | "tls.close"
+                        ) && let Some(report) = self.close_net(id)
                         {
                             break 'operation Err(NetFault::Unmet(report));
                         }
@@ -1258,8 +1284,10 @@ impl Simulation {
                                 }
                             }
                         }
-                        if matches!(name, "tls.connect" | "tls.accept" | "tls.close")
-                            && let Some(report) = self.close_net(id)
+                        if matches!(
+                            name,
+                            "tls.connect" | "tls.connect_as" | "tls.accept" | "tls.close"
+                        ) && let Some(report) = self.close_net(id)
                         {
                             break 'operation Err(NetFault::Unmet(report));
                         }
@@ -1267,7 +1295,8 @@ impl Simulation {
                     }
                     let s = self.net_streams.get_mut(&id).unwrap();
                     match name {
-                        "tls.connect" => {
+                        // Scripted peers never request a client certificate.
+                        "tls.connect" | "tls.connect_as" => {
                             let server_name = text(arg(a, 2)?)?;
                             let outcome = if matches!(s.steps.front(), Some(NetStep::Stall)) {
                                 Err(if s.read_timeout.is_some() {
@@ -1293,6 +1322,9 @@ impl Simulation {
                                         Err(NetFault::Tls(TlsFailure::HandshakeFailure))
                                     }
                                     PeerTls::Fails(failure) => Err(NetFault::Tls(*failure)),
+                                    PeerTls::Presents(..) => {
+                                        return Err(invalid("a peer's TLS is never Presents"));
+                                    }
                                 }
                             };
                             if outcome.as_ref().is_err_and(|e| *e != NetFault::Blocked)
@@ -1303,8 +1335,8 @@ impl Simulation {
                             outcome
                         }
                         "tls.accept" => {
-                            let identity = identity(arg(a, 2)?)?
-                                .ok_or_else(|| invalid("identity checked before accept"))?;
+                            let server = server(arg(a, 2)?)?
+                                .ok_or_else(|| invalid("server checked before accept"))?;
                             let s = self.net_streams.get_mut(&id).unwrap();
                             let outcome = if matches!(s.steps.front(), Some(NetStep::Stall)) {
                                 Err(if s.read_timeout.is_some() {
@@ -1313,23 +1345,13 @@ impl Simulation {
                                     NetFault::Blocked
                                 })
                             } else {
-                                match &s.peer {
-                                    PeerTls::Certificate(names)
-                                        if names.iter().any(|n| {
-                                            hirsel_run_config::tls::serves(&identity, n)
-                                        }) =>
-                                    {
+                                match hirsel_run_config::tls::scripted_accept(&s.peer, &server) {
+                                    Ok(chain) => {
                                         s.tls = true;
+                                        s.chain = chain;
                                         Ok(arg(a, 1)?.clone())
                                     }
-                                    // A verifying client sends bad_certificate.
-                                    PeerTls::Certificate(_) => {
-                                        Err(NetFault::Tls(TlsFailure::AlertReceived(42)))
-                                    }
-                                    PeerTls::Plain => {
-                                        Err(NetFault::Tls(TlsFailure::HandshakeFailure))
-                                    }
-                                    PeerTls::Fails(failure) => Err(NetFault::Tls(*failure)),
+                                    Err(failure) => Err(NetFault::Tls(failure)),
                                 }
                             };
                             if outcome.as_ref().is_err_and(|e| *e != NetFault::Blocked)
@@ -1478,7 +1500,13 @@ impl Simulation {
             }
             Err(_) => unreachable!(),
         };
-        let input = if name == "tls.connect" {
+        // Records name certificate chains and trust sets by digest; key material is never
+        // recorded.
+        let chain_digest = |identity: &Value| -> Result<Value, Error> {
+            let chain = bytes(fields(identity, "TlsIdentity", 2)?[0])?;
+            Ok(Value::Bytes(Sha256::digest(chain).to_vec()))
+        };
+        let input = if matches!(name, "tls.connect" | "tls.connect_as") {
             let (tag, payload) = variant_fields(arg(a, 3)?)?;
             let digest = match (tag, payload) {
                 (0, []) => variant(0, vec![Value::String("webpki-roots@1.0.9".into())]),
@@ -1487,14 +1515,31 @@ impl Simulation {
                 }
                 _ => return Err(invalid("TlsRoots representation")),
             };
-            encode_arguments(&[a[0].clone(), a[1].clone(), a[2].clone(), digest])
+            let mut input = vec![a[0].clone(), a[1].clone(), a[2].clone(), digest];
+            if name == "tls.connect_as" {
+                input.push(chain_digest(arg(a, 4)?)?);
+            }
+            encode_arguments(&input)
         } else if name == "tls.accept" {
-            // The record names the chain by digest; key material is never recorded.
-            let chain = bytes(fields(arg(a, 2)?, "TlsIdentity", 2)?[0])?;
+            let f = fields(arg(a, 2)?, "TlsServer", 2)?;
+            let identities = collection::elements(f[0], BuiltinType::List)?
+                .iter()
+                .map(chain_digest)
+                .collect::<Result<Vec<_>, _>>()?;
+            let (tag, payload) = variant_fields(f[1])?;
+            let clients = match (tag, payload) {
+                (0, []) => variant(0, vec![]),
+                (1 | 2, [Some(pem)]) => variant(
+                    tag,
+                    vec![Value::Bytes(Sha256::digest(bytes(pem)?).to_vec())],
+                ),
+                _ => return Err(invalid("TlsClientAuth representation")),
+            };
             encode_arguments(&[
                 a[0].clone(),
                 a[1].clone(),
-                Value::Bytes(Sha256::digest(chain).to_vec()),
+                Value::Tuple(identities.into_iter().map(Some).collect()),
+                clients,
             ])
         } else if name == "net.read" || name == "net.read_into" || name == "udp.recv_from" {
             let max = if name == "net.read" || name == "udp.recv_from" {
@@ -1537,7 +1582,12 @@ impl Simulation {
             *arguments = updates;
             if matches!(
                 name,
-                "net.close" | "udp.close" | "tls.connect" | "tls.accept" | "tls.close"
+                "net.close"
+                    | "udp.close"
+                    | "tls.connect"
+                    | "tls.connect_as"
+                    | "tls.accept"
+                    | "tls.close"
             ) {
                 consumed.push(1);
             }
@@ -1549,6 +1599,27 @@ impl Simulation {
 fn identity(v: &Value) -> Result<Option<hirsel_run_config::tls::Identity>, Error> {
     let f = fields(v, "TlsIdentity", 2)?;
     Ok(hirsel_run_config::tls::identity(bytes(f[0])?, bytes(f[1])?))
+}
+/// A `TlsServer` record loaded by the shared argument check; `None` when invalid.
+fn server(v: &Value) -> Result<Option<hirsel_run_config::tls::Server>, Error> {
+    use hirsel_run_config::tls::ClientAuth;
+    let f = fields(v, "TlsServer", 2)?;
+    let identities = collection::elements(f[0], BuiltinType::List)?;
+    let pairs = identities
+        .iter()
+        .map(|identity| {
+            let f = fields(identity, "TlsIdentity", 2)?;
+            Ok((bytes(f[0])?, bytes(f[1])?))
+        })
+        .collect::<Result<Vec<(&[u8], &[u8])>, Error>>()?;
+    let (tag, payload) = variant_fields(f[1])?;
+    let clients = match (tag, payload) {
+        (0, []) => ClientAuth::Anonymous,
+        (1, [Some(pem)]) => ClientAuth::Request(bytes(pem)?),
+        (2, [Some(pem)]) => ClientAuth::Require(bytes(pem)?),
+        _ => return Err(invalid("TlsClientAuth representation")),
+    };
+    Ok(hirsel_run_config::tls::server(&pairs, clients))
 }
 fn validate_peers(peers: &[NetPeer]) -> Result<(), Error> {
     let mut seen = BTreeMap::new();

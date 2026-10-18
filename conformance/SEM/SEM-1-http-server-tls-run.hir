@@ -60,7 +60,12 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   )
   let mut listener = net.listen(n, home()) ? http_net
   let (stream, _) = net.accept(n, mut listener) ? http_net
-  let mut connection = http.serve_tls(n, take stream, identity(), http.default_config())?
+  let mut connection = http.serve_tls(
+    n,
+    take stream,
+    TlsServer(identities: [identity()], clients: Anonymous()),
+    http.default_config()
+  )?
   let first = http.receive_request(mut connection, None())?
   test.check(t, first.target == "/one" && first.keep_alive)
   http.respond(mut connection, 200u16, [], b"one", false)?
@@ -73,14 +78,24 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   }
   // A plaintext client fails the handshake; the stream is closed.
   let (plain, _) = net.accept(n, mut listener) ? http_net
-  match http.serve_tls(n, take plain, identity(), http.default_config()) {
+  match http.serve_tls(
+    n,
+    take plain,
+    TlsServer(identities: [identity()], clients: Anonymous()),
+    http.default_config()
+  ) {
     Error(Net(Tls(HandshakeFailure()))) => (),
     _ => test.check(t, false),
   }
   // An invalid identity is invalid input before any handshake.
   let (unused, _) = net.accept(n, mut listener) ? http_net
   let broken = TlsIdentity(chain: identity().chain, key: b"")
-  match http.serve_tls(n, take unused, broken, http.default_config()) {
+  match http.serve_tls(
+    n,
+    take unused,
+    TlsServer(identities: [broken], clients: Anonymous()),
+    http.default_config()
+  ) {
     Error(Net(InvalidInput())) => (),
     _ => test.check(t, false),
   }

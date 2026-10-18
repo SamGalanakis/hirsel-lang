@@ -31,7 +31,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
       let mut listener = net.listen(n, home())?
       let (accepted, _) = net.accept(n, mut listener)?
       let _ = clock.sleep_until(c, at)
-      let canceled: bool = match tls.accept(n, take accepted, identity()) {
+      let canceled: bool = match tls.accept(
+        n,
+        take accepted,
+        TlsServer(identities: [identity()], clients: Anonymous())
+      ) {
         Error(Canceled(DeadlineExceeded())) => true,
         _ => false,
       }

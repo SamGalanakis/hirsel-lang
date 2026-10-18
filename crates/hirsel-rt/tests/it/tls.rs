@@ -105,6 +105,7 @@ fn connect(
             stream,
             server_name: name.into(),
             roots,
+            identity: None,
         })
         .unwrap();
     (net, stream, done)
@@ -257,6 +258,7 @@ fn a_host_unknown_issuer_tape_replays_independently_in_the_interpreter() {
             stream,
             server_name: "localhost".into(),
             roots: RootsDigest::WebPki(WEBPKI_VERSION.into()),
+            identity: None,
         }),
         Ok(Completion::NetUnit(Err(NetError::Tls(
             TlsFailure::UnknownIssuer
@@ -371,7 +373,7 @@ fn pem_is_bound_to_its_digest_and_invalid_bundles_never_start_tls() {
         let (mut socket, _) = listener.accept().unwrap();
         host.tls_roots(material);
         assert_eq!(
-            host.tls_connect(1, "localhost", &digest),
+            host.tls_connect(1, "localhost", &digest, None),
             Ok(Err(NetError::InvalidInput))
         );
         host.close(1);

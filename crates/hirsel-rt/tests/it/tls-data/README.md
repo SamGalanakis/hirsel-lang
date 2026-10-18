@@ -12,3 +12,17 @@ openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out other.key
 ```
 
 The same identity is embedded in the server TLS conformance programs. It secures nothing.
+
+The client-certificate and SNI fixtures are P-256 as well, generated the same way (the CA
+and rogue keys were discarded after signing):
+
+- `client-ca.cert`: the self-signed "Hirsel test client CA" (`CA:TRUE`, `keyCertSign`).
+- `client.cert` and `client.key`: `/O=Hirsel/CN=agent-7` with
+  `subjectAltName=DNS:agent-7.hirsel.test` and `extendedKeyUsage=clientAuth`, issued by
+  `client-ca.cert` with serial 2 (`openssl x509 -req -CA client-ca.cert -CAkey ...`).
+- `rogue-ca.cert` and `rogue.cert`: a second CA, and the same subject issued by it with
+  serial 3, which `client-ca.cert` does not trust.
+- `alpha.cert`/`alpha.key` and `beta.cert`/`beta.key`: self-signed server identities for
+  `alpha.hirsel.test` and `beta.hirsel.test`, made like `server.cert`.
+
+The client and SNI conformance programs embed the same certificates. They secure nothing.

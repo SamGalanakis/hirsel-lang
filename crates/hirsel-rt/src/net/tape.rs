@@ -95,6 +95,11 @@ fn roots(r: &RootsDigest) -> String {
         RootsDigest::Pem(digest) => format!("pem:{}", hex(digest)),
     }
 }
+fn parse_digest(word: &str) -> Result<[u8; 32], String> {
+    unhex(word)?
+        .try_into()
+        .map_err(|_| "bad tape SHA-256 digest".into())
+}
 fn parse_roots(word: &str) -> Result<RootsDigest, String> {
     match word.split_once(':') {
         Some(("webpki", v)) => Ok(RootsDigest::WebPki(text(v)?)),
@@ -271,16 +276,39 @@ pub(crate) fn render_request(request: &Request) -> String {
             stream,
             server_name,
             roots: r,
+            identity,
         } => format!(
-            "tls_connect {net} {stream} {} {}",
+            "tls_connect {net} {stream} {} {}{}",
             hex(server_name.as_bytes()),
-            roots(r)
+            roots(r),
+            identity.map_or(String::new(), |d| format!(" pem:{}", hex(&d)))
         ),
         R::TlsAccept {
             net,
             stream,
-            identity,
-        } => format!("tls_accept {net} {stream} pem:{}", hex(identity)),
+            server,
+        } => {
+            let identities = server
+                .identities
+                .iter()
+                .map(|d| format!("pem:{}", hex(d)))
+                .collect::<Vec<_>>()
+                .join(",");
+            let clients = match server.clients {
+                ClientAuth::Anonymous => "anonymous".into(),
+                ClientAuth::Request(d) => format!("request:{}", hex(&d)),
+                ClientAuth::Require(d) => format!("require:{}", hex(&d)),
+            };
+            format!(
+                "tls_accept {net} {stream} {} {clients}",
+                if identities.is_empty() {
+                    "none"
+                } else {
+                    &identities
+                }
+            )
+        }
+        R::TlsPeer { net, stream } => format!("tls_peer {net} {stream}"),
         R::TlsClose { net, stream } => format!("tls_close {net} {stream}"),
         R::Listen { net, addr } => format!("listen {net} {}", address(addr)),
         R::Accept { net, listener } => format!("accept {net} {listener}"),
@@ -312,6 +340,12 @@ pub(crate) fn render_completion(completion: &Completion) -> String {
         C::NetBytes(v) => format!("net_bytes {}", outcome(v, |b| hex(b))),
         C::Count(v) => format!("count {}", outcome(v, u64::to_string)),
         C::NetUnit(v) => format!("net_unit {}", outcome(v, |()| String::new())),
+        C::Certificates(v) => format!(
+            "certificates {}",
+            outcome(v, |chain| chain
+                .as_ref()
+                .map_or("none".into(), |der| format!("der:{}", hex(der))))
+        ),
         C::Address(v) => format!("address {}", outcome(v, address)),
         C::Accepted(v) => format!(
             "accepted {}",
@@ -406,21 +440,41 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             net: number(n)?,
             stream: number(s)?,
         },
-        ["tls_connect", n, s, name, r] => R::TlsConnect {
+        ["tls_connect", n, s, name, r, identity @ ..] => R::TlsConnect {
             net: number(n)?,
             stream: number(s)?,
             server_name: text(name)?,
             roots: parse_roots(r)?,
+            identity: match identity {
+                [] => None,
+                [d] => Some(parse_digest(
+                    d.strip_prefix("pem:").ok_or("bad tape identity")?,
+                )?),
+                _ => return Err("bad tape tls_connect".into()),
+            },
         },
-        ["tls_accept", n, s, i] => R::TlsAccept {
+        ["tls_accept", n, s, identities, clients] => R::TlsAccept {
             net: number(n)?,
             stream: number(s)?,
-            identity: i
-                .strip_prefix("pem:")
-                .ok_or("bad tape identity")
-                .map(unhex)??
-                .try_into()
-                .map_err(|_| "bad tape identity digest")?,
+            server: TlsServerDigest {
+                identities: match *identities {
+                    "none" => vec![],
+                    list => list
+                        .split(',')
+                        .map(|d| parse_digest(d.strip_prefix("pem:").ok_or("bad tape identity")?))
+                        .collect::<Result<_, String>>()?,
+                },
+                clients: match clients.split_once(':') {
+                    None if *clients == "anonymous" => ClientAuth::Anonymous,
+                    Some(("request", d)) => ClientAuth::Request(parse_digest(d)?),
+                    Some(("require", d)) => ClientAuth::Require(parse_digest(d)?),
+                    _ => return Err("bad tape client auth".into()),
+                },
+            },
+        },
+        ["tls_peer", n, s] => R::TlsPeer {
+            net: number(n)?,
+            stream: number(s)?,
         },
         ["tls_close", n, s] => R::TlsClose {
             net: number(n)?,
@@ -477,6 +531,12 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["net_unit", r @ ..] => C::NetUnit(parse_outcome(r, |w| match w {
             [""] => Ok(()),
             _ => Err("bad unit result".into()),
+        })?),
+        ["certificates", r @ ..] => C::Certificates(parse_outcome(r, |w| match one(w)? {
+            "none" => Ok(None),
+            der => Ok(Some(unhex(
+                der.strip_prefix("der:").ok_or("bad tape chain")?,
+            )?)),
         })?),
         ["address", r @ ..] => C::Address(parse_outcome(r, |w| parse_address(one(w)?))?),
         ["accepted", r @ ..] => C::Accepted(parse_outcome(r, |w| match w {

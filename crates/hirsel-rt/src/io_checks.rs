@@ -19,6 +19,7 @@ pub(crate) fn net_completion(request: &R, error: NetError) -> C {
         R::UdpRecv { .. } => C::Datagram(Err(error)),
         R::UdpSend { .. } | R::NetWrite { .. } => C::Count(Err(error)),
         R::PeerAddr { .. } => C::Address(Err(error)),
+        R::TlsPeer { .. } => C::Certificates(Err(error)),
         _ => C::NetUnit(Err(error)),
     }
 }

@@ -35,12 +35,16 @@ pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
       let checked: bool = match tls.accept(
         n,
         take invalid,
-        TlsIdentity(chain: b"", key: b"")
+        TlsServer(identities: [TlsIdentity(chain: b"", key: b"")], clients: Anonymous())
       ) {
         Error(InvalidInput()) => true,
         _ => false,
       }
-      let canceled: bool = match tls.accept(n, take valid, identity()) {
+      let canceled: bool = match tls.accept(
+        n,
+        take valid,
+        TlsServer(identities: [identity()], clients: Anonymous())
+      ) {
         Error(Canceled(DeadlineExceeded())) => true,
         _ => false,
       }

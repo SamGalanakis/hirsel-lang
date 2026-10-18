@@ -58,6 +58,7 @@ fn tls_record_with_roots(peer_tls: PeerTls, roots: RootsDigest, pem: Option<&[u8
             stream,
             server_name: "localhost".into(),
             roots,
+            identity: None,
         })
         .unwrap();
     if completion == Completion::NetUnit(Ok(())) {
@@ -199,6 +200,7 @@ fn a_truncate_step_fails_secured_reads_and_ends_plaintext_reads() {
                     stream,
                     server_name: "localhost".into(),
                     roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
+                    identity: None,
                 })
                 .unwrap(),
                 Completion::NetUnit(Ok(()))
@@ -314,6 +316,7 @@ fn certificate_names_are_merged_independently_of_tls_event_order() {
                     stream,
                     server_name: name.into(),
                     roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
+                    identity: None,
                 })
                 .unwrap();
             let expected = if name == "localhost" {

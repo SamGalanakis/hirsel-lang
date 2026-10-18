@@ -423,6 +423,7 @@ pub fn replay_interpreter_with_fixture(
                 | Request::PeerAddr { .. }
                 | Request::TlsConnect { .. }
                 | Request::TlsAccept { .. }
+                | Request::TlsPeer { .. }
                 | Request::TlsClose { .. }
                 | Request::Listen { .. }
                 | Request::UnixConnect { .. }

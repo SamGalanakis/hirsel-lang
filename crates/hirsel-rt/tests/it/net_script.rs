@@ -161,13 +161,13 @@ fn net_script_tls_checks_names_and_ignores_roots() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        net.tls_connect(1, "other.com", &roots),
+        net.tls_connect(1, "other.com", &roots, None),
         Ok(Err(NetError::Tls(TlsFailure::NameMismatch)))
     );
-    assert_eq!(net.tls_connect(1, "example.com", &roots), Ok(Ok(())));
+    assert_eq!(net.tls_connect(1, "example.com", &roots, None), Ok(Ok(())));
     let mut net = stream(vec![]);
     assert_eq!(
-        net.tls_connect(1, "example.com", &roots),
+        net.tls_connect(1, "example.com", &roots, None),
         Ok(Err(NetError::Tls(TlsFailure::HandshakeFailure)))
     );
 }
@@ -234,6 +234,7 @@ fn repeated_tls_upgrade_is_invalid_and_consumes_the_script_stream() {
         stream: 3,
         server_name: "example.com".into(),
         roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
+        identity: None,
     };
     assert_eq!(io.call(upgrade.clone()), Ok(C::NetUnit(Ok(()))));
     let mut repeated = upgrade;
@@ -298,7 +299,8 @@ fn tls_only_script_can_set_timeouts_before_a_stalled_handshake() {
             net: 2,
             stream: 3,
             server_name: "example.com".into(),
-            roots: RootsDigest::WebPki("webpki-roots@1.0.9".into())
+            roots: RootsDigest::WebPki("webpki-roots@1.0.9".into()),
+            identity: None,
         }),
         Ok(C::NetUnit(Err(NetError::TimedOut)))
     );

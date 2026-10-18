@@ -84,7 +84,9 @@ N fn net.set_write_timeout(n: Net, mut s: Stream of n, timeout: NetTimeout) -> R
 N fn net.peer_addr(n: Net, s: Stream of n) -> Result[SocketAddr, NetError]
 N fn net.close(n: Net, take s: Stream of n) -> ()
 fn tls.connect(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots) -> Result[Stream of n, NetError]
-fn tls.accept(n: Net, take s: Stream of n, identity: TlsIdentity) -> Result[Stream of n, NetError]
+fn tls.connect_as(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots, identity: TlsIdentity) -> Result[Stream of n, NetError]
+fn tls.accept(n: Net, take s: Stream of n, server: TlsServer) -> Result[Stream of n, NetError]
+fn tls.peer(n: Net, s: Stream of n) -> Result[Option[Bytes], NetError]
 N fn tls.close(n: Net, take s: Stream of n) -> Result[(), NetError]
 fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]

@@ -58,7 +58,9 @@ pub struct NetClient {
     pub address: String,
     pub port: u16,
     /// `Plain` never starts TLS; `Certificate(names)` accepts a server certificate valid
-    /// for one of `names`; `Fails(f)` fails every server handshake with `Tls(f)`.
+    /// for one of `names`, sending the first as SNI when it is a DNS name;
+    /// `Presents(names, chain)` does the same and presents the PEM `chain` as its client
+    /// certificate; `Fails(f)` fails every server handshake with `Tls(f)`.
     pub tls: PeerTls,
     pub steps: Vec<NetStep>,
 }
@@ -97,6 +99,13 @@ pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
             || !listener.clients.iter().all(|c| canonical_ip(&c.address))
         {
             return Err(format!("listener {index} has a noncanonical IP literal"));
+        }
+        if listener.clients.iter().any(
+            |c| matches!(&c.tls, PeerTls::Presents(_, chain) if crate::tls::chain(chain).is_none()),
+        ) {
+            return Err(format!(
+                "listener {index} has a client presenting no well-formed PEM certificate"
+            ));
         }
     }
     Ok(())
@@ -161,6 +170,9 @@ pub enum PeerTls {
     Certificate(Vec<String>),
     /// Every handshake with this peer fails with `Tls(failure)`.
     Fails(TlsFailure),
+    /// A client only: `Certificate(names)` that also presents the PEM certificate chain
+    /// (leaf first) as its client certificate.
+    Presents(Vec<String>, Vec<u8>),
 }
 
 /// `TlsFailure`, in its docs/spec/core-library.md variant order.
@@ -341,8 +353,11 @@ pub fn canonical_unix_path(path: &str) -> bool {
 }
 
 /// A scripted peer names a host or IP literal, or a socket path: a Unix peer, which is
-/// plain, has port 0 and resolves to nothing.
+/// plain, has port 0 and resolves to nothing. A peer's TLS is never a client's `Presents`.
 pub fn check_peer_address(peer: &NetPeer) -> Result<(), String> {
+    if matches!(peer.tls, PeerTls::Presents(..)) {
+        return Err("presents is a scripted client's TLS, not a peer's".into());
+    }
     if canonical_unix_path(&peer.address) {
         if peer.port != 0 || !peer.resolves_to.is_empty() || peer.tls != PeerTls::Plain {
             return Err("a Unix peer is plain, with port 0 and no resolves_to".into());

@@ -148,6 +148,14 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn tls_identity(&mut self, stream: u64, chain: &[u8], key: &[u8]) {
         self.0.borrow_mut().tls_identity(stream, chain, key);
     }
+    fn tls_server(
+        &mut self,
+        stream: u64,
+        identities: &[(&[u8], &[u8])],
+        clients: crate::net::ClientAuth<&[u8]>,
+    ) {
+        self.0.borrow_mut().tls_server(stream, identities, clients);
+    }
     fn replay_stderr(&self) -> Vec<u8> {
         self.0.borrow().replay_stderr()
     }

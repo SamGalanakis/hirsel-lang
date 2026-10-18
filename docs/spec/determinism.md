@@ -129,7 +129,8 @@ that sequence, outbound connects do not consume it, exhaustion is `AddrInUse()`,
 and the chosen local address is recorded in the listen completion for replay.
 A scripted listener with port 0 supplies clients for the first port-0 listen on
 its IP, using the assigned port. Peer variants are external snake_case tags: `"plain"`,
-`{"certificate": [names]}` or `{"fails": failure}` for TLS (a `TlsFailure` tag such as
+`{"certificate": [names]}`, `{"fails": failure}` or, for a listener's client only,
+`{"presents": [[names], [bytes]]}` for TLS (a `TlsFailure` tag such as
 `"unknown_issuer"` or `{"alert_received": 40}`); `"refused"`, `"unanswered"` or
 `{"open": [steps]}` for connections; `{"send": [bytes]}`, `{"expect": [bytes]}`, `"stall"`,
 `"close"`, `"reset"` and `"truncate"` for steps; bytes are arrays of `u8`. Peer data grants
@@ -288,12 +289,15 @@ TLS is recorded as plaintext and as the `tls.connect` outcome, never as TLS reco
 request records the server name and the identity of the root set: `webpki:` and the
 hex-encoded version of the compiled root store for `WebPki()`, or `pem:` and the SHA-256 of
 the original PEM bytes for `Pem(b)`, so replay under a different trust configuration
-refuses instead of succeeding. TLS records, keys, randomness and verification time are
-internal to the provider and never recorded. A `tls.accept` request records the SHA-256 of
-the identity's certificate-chain PEM bytes and its completion the handshake outcome; the
-private key, and any digest of it, is never recorded. Replay re-derives the identity's
-validity from the material the program supplies again, and a different chain refuses. A
-replayable ciphertext recording would have to
+refuses instead of succeeding; a `tls.connect_as` request also records the SHA-256 of its
+identity's certificate-chain PEM bytes. TLS records, keys, randomness and verification time
+are internal to the provider and never recorded. A `tls.accept` request records the SHA-256
+of each identity's certificate-chain PEM bytes, in order, and its client policy with the
+SHA-256 of the trust set's PEM bytes, and its completion the handshake outcome; a private
+key, and any digest of one, is never recorded. Replay re-derives the server's validity from
+the material the program supplies again, and a different chain or trust set refuses. A
+`tls.peer` request records the stream, and its completion the DER chain it returned, which
+replay returns without cryptography. A replayable ciphertext recording would have to
 contain the key material, so recording plaintext loses no confidentiality; recordings are
 secret-bearing in any case, since their run record holds granted `Env` values.
 

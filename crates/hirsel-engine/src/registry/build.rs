@@ -162,6 +162,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("Shutdown", "", "Read()|Write()|Both()"),
         ("TlsRoots", "", "WebPki()|Pem(Bytes)"),
         (
+            "TlsClientAuth",
+            "",
+            "Anonymous()|Request(Bytes)|Require(Bytes)",
+        ),
+        (
             "TlsFailure",
             "",
             "UnknownIssuer()|Expired()|NotYetValid()|NameMismatch()|Revoked()|BadCertificate()|AlertReceived(u8)|HandshakeFailure()|PeerMisbehaved()|Truncated()",
@@ -174,7 +179,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "PeerTls",
             "",
-            "Plain()|Certificate(List[String])|Fails(TlsFailure)",
+            "Plain()|Certificate(List[String])|Fails(TlsFailure)|Presents(List[String],Bytes)",
         ),
         (
             "NetConnection",
@@ -267,7 +272,13 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         if b.generics.is_empty()
             && !matches!(
                 name,
-                "TlsRoots" | "PeerTls" | "NetConnection" | "NetStep" | "ChildStep" | "ShapeBody"
+                "TlsRoots"
+                    | "TlsClientAuth"
+                    | "PeerTls"
+                    | "NetConnection"
+                    | "NetStep"
+                    | "ChildStep"
+                    | "ShapeBody"
             )
         {
             t.bounds = vec![
@@ -304,6 +315,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("DirEntry", "", "path: Path,kind: FileKind"),
         ("SocketAddr", "", "ip: IpAddr,port: u16"),
         ("TlsIdentity", "", "chain: Bytes,key: Bytes"),
+        (
+            "TlsServer",
+            "",
+            "identities: List[TlsIdentity],clients: TlsClientAuth",
+        ),
         (
             "NetRule",
             "",
