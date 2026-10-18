@@ -812,7 +812,7 @@ left to right, carry an odd tail, and repeat until one value is left; an empty s
 NaN, a single infinity sign is preserved, and an exact zero is +0 except for an input of
 only negative zeros.
 
-`ScalarView` yields each `u32` Unicode scalar value; `PositionView` yields each scalar's
+`ScalarView` yields each Unicode scalar value as a `char`; `PositionView` yields each scalar's
 start and the terminal position, even for an empty string; `GraphemeView` is a standard
 library type ([Unicode](std-library.md#unicode)). These are nonallocating borrowed loop
 sources with declared loop-source associations, not erased `Iter` constructors.

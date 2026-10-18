@@ -54,7 +54,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
             for v in &values {
                 let valid = match protocol {
                     "UnicodeScalars" => {
-                        matches!(v,Value::Integer(n) if n.kind()==Primitive::U32 && char::from_u32(n.bits() as u32).is_some())
+                        matches!(v, Value::Char(_))
                     }
                     "ScalarPositions" => {
                         matches!(v,Value::Record {definition,..} if *definition==hirsel_syntax::DefPath::core("StrPos"))

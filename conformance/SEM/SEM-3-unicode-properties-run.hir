@@ -1,94 +1,81 @@
 // rule: SEM-3
 // expect: run
 // Unicode16 property and simple-case edges; invalid scalar controls.
-fn mapping(cp: u32, lower: u32, upper: u32) -> () {
-  failure.check(std@1/unicode.simple_lower(cp) == lower, TextInvariant())
-  failure.check(std@1/unicode.simple_upper(cp) == upper, TextInvariant())
+fn mapping(c: char, lower: char, upper: char) -> () {
+  failure.check(std@1/unicode.simple_lower(c) == lower, TextInvariant())
+  failure.check(std@1/unicode.simple_upper(c) == upper, TextInvariant())
 }
 
 pub fn main() -> Result[(), ()] {
-  let scalars_1: List[u32] = [
+  let scalars_1: List[char] = [
     '\t',
     '\n',
     '\u{b}',
     '\u{c}',
     '\r',
     ' ',
-    0x85u32,
-    0xa0u32,
-    0x1680u32,
-    0x2000u32,
-    0x200au32,
-    0x2028u32,
-    0x2029u32,
-    0x202fu32,
-    0x205fu32,
-    0x3000u32
+    '\u{85}',
+    '\u{a0}',
+    '\u{1680}',
+    '\u{2000}',
+    '\u{200a}',
+    '\u{2028}',
+    '\u{2029}',
+    '\u{202f}',
+    '\u{205f}',
+    '\u{3000}'
   ]
-  for cp in scalars_1 {
-    failure.check(std@1/unicode.is_whitespace(cp), TextInvariant())
+  for c in scalars_1 {
+    failure.check(std@1/unicode.is_whitespace(c), TextInvariant())
   }
-  let scalars_2: List[u32] = [
-    0u32,
-    8u32,
-    14u32,
-    0x180eu32,
-    0x200bu32,
-    0x2060u32,
-    0xfeffu32,
-    0xd800u32,
-    0x110000u32,
-    0xffffffffu32
+  let scalars_2: List[char] = [
+    '\0',
+    '\u{8}',
+    '\u{e}',
+    '\u{180e}',
+    '\u{200b}',
+    '\u{2060}',
+    '\u{feff}'
   ]
-  for cp in scalars_2 {
-    failure.check(!std@1/unicode.is_whitespace(cp), TextInvariant())
+  for c in scalars_2 {
+    failure.check(!std@1/unicode.is_whitespace(c), TextInvariant())
   }
-  for cp in string.scalars("Aaλ中é") {
-    failure.check(std@1/unicode.is_letter(cp), TextInvariant())
-    failure.check(!std@1/unicode.is_digit(cp), TextInvariant())
+  for c in string.scalars("Aaλ中é") {
+    failure.check(std@1/unicode.is_letter(c), TextInvariant())
+    failure.check(!std@1/unicode.is_digit(c), TextInvariant())
   }
   // New in the pinned Unicode16 data, rather than a host's Unicode version.
-  failure.check(std@1/unicode.is_letter(0x11380u32), TextInvariant())
-  failure.check(std@1/unicode.is_digit(0x10d40u32), TextInvariant())
-  for cp in string.scalars("09९０") {
-    failure.check(std@1/unicode.is_digit(cp), TextInvariant())
-    failure.check(!std@1/unicode.is_letter(cp), TextInvariant())
+  failure.check(std@1/unicode.is_letter('\u{11380}'), TextInvariant())
+  failure.check(std@1/unicode.is_digit('\u{10d40}'), TextInvariant())
+  for c in string.scalars("09९０") {
+    failure.check(std@1/unicode.is_digit(c), TextInvariant())
+    failure.check(!std@1/unicode.is_letter(c), TextInvariant())
   }
-  let scalars_3: List[u32] = [
-    0x301u32,
-    0x378u32,
-    0x2160u32,
-    0xd800u32,
-    0xdfffu32,
-    0x110000u32,
-    0xffffffffu32
-  ]
-  for cp in scalars_3 {
-    failure.check(!std@1/unicode.is_letter(cp), TextInvariant())
-    failure.check(!std@1/unicode.is_digit(cp), TextInvariant())
+  let scalars_3: List[char] = ['\u{301}', '\u{378}', '\u{2160}']
+  for c in scalars_3 {
+    failure.check(!std@1/unicode.is_letter(c), TextInvariant())
+    failure.check(!std@1/unicode.is_digit(c), TextInvariant())
   }
-  failure.check(!std@1/unicode.is_digit(0xb2u32), TextInvariant())
+  failure.check(!std@1/unicode.is_digit('\u{b2}'), TextInvariant())
   mapping('A', 'a', 'A')
   mapping('a', 'a', 'A')
-  mapping(0x3a3u32, 0x3c3u32, 0x3a3u32)
-  mapping(0x3c2u32, 0x3c2u32, 0x3a3u32)
-  mapping(0x1f2u32, 0x1f3u32, 0x1f1u32)
-  mapping(0x130u32, 'i', 0x130u32)
-  mapping(0xdfu32, 0xdfu32, 0xdfu32)
-  mapping(0x1e9eu32, 0xdfu32, 0x1e9eu32)
-  mapping(0x212au32, 'k', 0x212au32)
-  mapping(0x10400u32, 0x10428u32, 0x10400u32)
-  mapping(0x10428u32, 0x10428u32, 0x10400u32)
-  let scalars_4: List[u32] = [
-    0x378u32,
-    0x1f600u32,
-    0xd800u32,
-    0xdfffu32,
-    0x110000u32,
-    0xffffffffu32
-  ]
-  for cp in scalars_4 {
-    mapping(cp, cp, cp)
+  mapping('\u{3a3}', '\u{3c3}', '\u{3a3}')
+  mapping('\u{3c2}', '\u{3c2}', '\u{3a3}')
+  mapping('\u{1f2}', '\u{1f3}', '\u{1f1}')
+  mapping('\u{130}', 'i', '\u{130}')
+  mapping('\u{df}', '\u{df}', '\u{df}')
+  mapping('\u{1e9e}', '\u{df}', '\u{1e9e}')
+  mapping('\u{212a}', 'k', '\u{212a}')
+  mapping('\u{10400}', '\u{10428}', '\u{10400}')
+  mapping('\u{10428}', '\u{10428}', '\u{10400}')
+  let scalars_4: List[char] = ['\u{378}', '\u{1f600}']
+  for c in scalars_4 {
+    mapping(c, c, c)
+  }
+  // Values that are not scalar values never reach the predicates or case maps.
+  let invalid: List[u32] = [0xd800, 0xdfff, 0x110000, 0xffffffff]
+  for n in invalid {
+    failure.check(char.from_u32(n) == None(), TextInvariant())
   }
   Ok(())
 }

@@ -4053,6 +4053,7 @@ conformance/SEM/SEM-3-sha256-run.hir
 conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-split-once-run.hir
 conformance/SEM/SEM-3-string-compare-run.hir
+conformance/SEM/SEM-3-tour-05-chars-run.hir
 conformance/SEM/SEM-3-tour-05-text-run.hir
 conformance/SEM/SEM-3-tour-14-fstrings-run.hir
 conformance/SEM/SEM-3-tour-15-format-run.hir

@@ -9,10 +9,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   let mut words: u64 = 0
   let mut in_word: bool = false
   for c in string.scalars(text) {
-    if c == 10u32 {
+    if c == '\n' {
       lines += 1
     }
-    let space = c == 32u32 || c >= 9u32 && c <= 13u32
+    let space = c == ' ' || c >= '\t' && c <= '\r'
     if !space && !in_word {
       words += 1
     }

@@ -1,0 +1,38 @@
+// rule: SEM-3
+// expect: run
+// stdout: S-heep: 1 upper, 5 letters
+// stdout: 🐑 is U+1f411
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn initials(text: String) -> String {
+  let mut out: List[u8] = []
+  for c in string.scalars(text) {
+    if c == ' ' {
+      char.format_into('-', mut out)
+    } else {
+      char.format_into(c, mut out)
+    }
+  }
+  text.finish_valid(take out)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let mut upper: u64 = 0
+  let mut letters: u64 = 0
+  for c in string.scalars("S heep") {
+    if unicode.simple_upper(c) == c && unicode.is_letter(c) {
+      upper += 1
+    }
+    if unicode.is_letter(c) {
+      letters += 1
+    }
+  }
+  let sheep = '🐑'
+  let data = b"x,y"
+  failure.check(data[1] == b',' && char.from_u32(0xd800) == None(), TextInvariant())
+  let name = initials("S heep")
+  let output = io.stdout(rt) ? Grant
+  out.print(output, f"{name}: {upper} upper, {letters} letters\n") ? Output
+  out.print(output, f"{sheep} is U+{char.to_u32(sheep):x}\n") ? Output
+  Ok(())
+}

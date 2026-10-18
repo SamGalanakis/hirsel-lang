@@ -1,13 +1,16 @@
 // Padding and sign/prefix placement follow Rust core::fmt::Formatter.
 @preserves_unique(out)
 pub fn repeat(mut out: List[u8], fill: u64, count: u64) -> () uses {} {
-  let scalar: u32 = core@1/int.narrow(fill)
+  let scalar = match core@1/char.from_u32(core@1/int.narrow(fill)) {
+    Some(c) => c,
+    None() => {
+      core@1/failure.check(false, TextInvariant())
+      ' '
+    },
+  }
   let mut at: u64 = 0
   while at < count {
-    match utf8.append_scalar(mut out, scalar) {
-      Ok(()) => (),
-      Error(_) => core@1/failure.check(false, TextInvariant()),
-    }
+    char.format_into(scalar, mut out)
     at += 1
   }
 }

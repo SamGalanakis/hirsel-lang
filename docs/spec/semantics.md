@@ -40,11 +40,11 @@ literal spelling outside its type's finite range rounds to infinity.
 ### SEM-3: Strings
 
 A character literal (`'a'`, `'é'`, `'\u{1f411}'`) denotes its Unicode scalar
-value as `u32`, the same type yielded by `string.scalars`. It is an integer
-constant in both interpreted and native execution; it does not allocate a string.
+value as a `char`, the type `string.scalars` yields. It is a constant in both
+interpreted and native execution; it does not allocate a string.
 The escapes `\n`, `\t`, `\r`, `\0`, `\\`, `\'` and `\u{...}` denote one scalar.
 Character literal patterns match that scalar value. Lexical validity is defined
-in [syntax](syntax.md); there is no implicit conversion to a narrower integer.
+in [syntax](syntax.md); there is no implicit conversion to or from an integer.
 
 `String` is always valid UTF-8; `Bytes` is arbitrary. There is no `length`: there is
 `byte_len`, plus built-in views over a borrowed string (`string.scalars(s)`,
@@ -82,7 +82,7 @@ suffix. The f-string's `uses` are its holes' `uses`, because the std protocol op
 use nothing, and it allocates only its builder, plus whatever its holes' `@format`
 functions use and allocate. A hole of type `String` is appended as is,
 and `bool`, `char`, the integers and the floats as `to_string` spells them: a `char` is its
-UTF-8 encoding. A character literal is a `u32` and formats as its number. A hole of a declared type with a `@format`
+UTF-8 encoding, so `f"{'a'}"` is `"a"`. A hole of a declared type with a `@format`
 association calls that association's function, below. Any other hole type, including
 `Bytes`, tuples, type parameters and declared types without `@format`, is SEM-3 naming
 the type; the message for a declared type names `@format`.

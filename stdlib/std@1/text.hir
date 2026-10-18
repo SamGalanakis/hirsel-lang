@@ -74,10 +74,7 @@ pub fn format_into_spec(
     if at == count {
       break
     }
-    match utf8.append_scalar(mut out, scalar) {
-      Ok(()) => (),
-      Error(_) => core@1/failure.check(false, TextInvariant()),
-    }
+    char.format_into(scalar, mut out)
     at += 1
   }
   internal.format.repeat(mut out, fill, right)

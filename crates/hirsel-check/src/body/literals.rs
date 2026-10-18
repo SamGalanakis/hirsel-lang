@@ -30,7 +30,7 @@ pub(super) fn suffix(text: &str) -> Option<Primitive> {
 pub(super) fn fixed_primitive(l: &ast::Literal) -> Option<Primitive> {
     match l {
         ast::Literal::Integer(s) | ast::Literal::Float(s) => suffix(s),
-        ast::Literal::Character(_) => Some(Primitive::U32),
+        ast::Literal::Character(_) => Some(Primitive::Char),
         ast::Literal::Byte(_) => Some(Primitive::U8),
         ast::Literal::String(_) => Some(Primitive::String),
         ast::Literal::Bytes(_) => Some(Primitive::Bytes),
@@ -150,12 +150,12 @@ impl Checker<'_, '_> {
             }
             ast::Literal::Character(s) => {
                 if let Some(expected) = expected {
-                    let scalar = self.primitive(Primitive::U32);
+                    let scalar = self.primitive(Primitive::Char);
                     if !self.compatible(scalar, expected) {
                         self.report(
                             const { RuleId::of("LANG-2") },
                             span,
-                            "character literal has type u32",
+                            "character literal has type char",
                         );
                         return self.error();
                     }

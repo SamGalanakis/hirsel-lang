@@ -130,8 +130,8 @@ fn decompose(mut points: List[u32], cp: u32) -> () uses {} {
 // Explicit NFC: compatibility mappings never enter canonical_pair.
 pub fn normalize_nfc(s: String) -> unique String uses {} {
   let mut points: List[u32] = []
-  for cp in core@1/string.scalars(s) {
-    decompose(mut points, cp)
+  for c in core@1/string.scalars(s) {
+    decompose(mut points, core@1/char.to_u32(c))
   }
   let mut composed: List[u32] = []
   let mut starter: u64 = 0
@@ -154,9 +154,10 @@ pub fn normalize_nfc(s: String) -> unique String uses {} {
   }
   let mut bytes: List[u8] = []
   for cp in composed {
-    match std@1/utf8.append_scalar(mut bytes, cp) {
-      Ok(()) => (),
-      Error(_) => core@1/failure.check(false, TextInvariant()),
+    // Composition and decomposition map scalar values to scalar values.
+    match core@1/char.from_u32(cp) {
+      Some(c) => char.format_into(c, mut bytes),
+      None() => core@1/failure.check(false, TextInvariant()),
     }
   }
   text.finish_valid(take bytes)

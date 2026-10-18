@@ -6,16 +6,17 @@ pub type ExpandError = InvalidPattern(PatternError) | Files(FileError)
 
 type Token {
   kind: u8,
-  scalar: u32,
+  scalar: char,
   negated: bool,
-  ranges: List[(u32, u32)],
+  ranges: List[(char, char)],
 }
 
 pub opaque type Pattern: copyable + inert + noalloc_drop uses {} {
   tokens: List[Token],
 }
 
-fn width(cp: u32) -> u64 uses {} {
+fn width(c: char) -> u64 uses {} {
+  let cp = core@1/char.to_u32(c)
   if cp < 128 {
     1
   } else if cp < 2048 {
@@ -27,7 +28,7 @@ fn width(cp: u32) -> u64 uses {} {
   }
 }
 
-fn offset(scalars: List[u32], end: u64) -> u64 uses {} {
+fn offset(scalars: List[char], end: u64) -> u64 uses {} {
   let mut out: u64 = 0
   let mut i: u64 = 0
   while i < end {
@@ -37,12 +38,12 @@ fn offset(scalars: List[u32], end: u64) -> u64 uses {} {
   out
 }
 
-fn escaped(scalars: List[u32], mut at: u64) -> Result[u32, PatternError] uses {} {
+fn escaped(scalars: List[char], mut at: u64) -> Result[char, PatternError] uses {} {
   let len = core@1/list.len(scalars)
-  if at >= len || scalars[at] == 45 || scalars[at] == 93 {
+  if at >= len || scalars[at] == '-' || scalars[at] == ']' {
     return Error(Syntax(offset(scalars, at)))
   }
-  if scalars[at] == 92 {
+  if scalars[at] == '\\' {
     at += 1
   }
   if at >= len {
@@ -54,7 +55,7 @@ fn escaped(scalars: List[u32], mut at: u64) -> Result[u32, PatternError] uses {}
 }
 
 pub fn compile(pattern: String) -> Result[Pattern, PatternError] uses {} {
-  let mut scalars: List[u32] = []
+  let mut scalars: List[char] = []
   for cp in core@1/string.scalars(pattern) {
     core@1/list.push(mut scalars, cp)
   }
@@ -65,26 +66,26 @@ pub fn compile(pattern: String) -> Result[Pattern, PatternError] uses {} {
     let cp = scalars[at]
     at += 1
     let mut token = Token(kind: 0, scalar: cp, negated: false, ranges: [])
-    if cp == 42 {
+    if cp == '*' {
       token.kind = 1
-    } else if cp == 63 {
+    } else if cp == '?' {
       token.kind = 2
-    } else if cp == 92 {
+    } else if cp == '\\' {
       if at == len {
         return Error(Syntax(offset(scalars, at)))
       }
       token.scalar = scalars[at]
       at += 1
-    } else if cp == 91 {
+    } else if cp == '[' {
       token.kind = 3
-      if at < len && scalars[at] == 94 {
+      if at < len && scalars[at] == '^' {
         token.negated = true
         at += 1
       }
-      while at < len && scalars[at] != 93 {
+      while at < len && scalars[at] != ']' {
         let lo = escaped(scalars, mut at)?
         let mut hi = lo
-        if at < len && scalars[at] == 45 {
+        if at < len && scalars[at] == '-' {
           at += 1
           hi = escaped(scalars, mut at)?
         }
@@ -100,12 +101,12 @@ pub fn compile(pattern: String) -> Result[Pattern, PatternError] uses {} {
   Ok(Pattern(tokens: take tokens))
 }
 
-fn accepts(token: Token, cp: u32) -> bool uses {} {
+fn accepts(token: Token, cp: char) -> bool uses {} {
   if token.kind == 0 {
     return token.scalar == cp
   }
   if token.kind == 1 || token.kind == 2 {
-    return cp != 47
+    return cp != '/'
   }
   let mut found = false
   for (lo, hi) in token.ranges {

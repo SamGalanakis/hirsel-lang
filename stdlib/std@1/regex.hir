@@ -41,7 +41,7 @@ pub opaque type Regex: copyable + inert + noalloc_drop uses {} {
 }
 
 type Input {
-  scalars: List[u32],
+  scalars: List[char],
   offsets: List[u64],
   at: u64,
 }
@@ -58,7 +58,8 @@ type Tree {
   limit: u64,
 }
 
-fn scalar_width(cp: u32) -> u64 uses {} {
+fn scalar_width(c: char) -> u64 uses {} {
+  let cp = core@1/char.to_u32(c)
   if cp < 128 {
     1
   } else if cp < 2048 {
@@ -90,12 +91,46 @@ fn context() -> Context uses {} {
   Context(alternatives: None(), sequence: None(), atom: None(), repeated: false)
 }
 
-fn peek(cursor: Input) -> u32 uses {} {
+// The next pattern scalar; None past the end.
+fn peek(cursor: Input) -> Option[char] uses {} {
   if cursor.at < core@1/list.len(cursor.scalars) {
-    cursor.scalars[cursor.at]
+    Some(cursor.scalars[cursor.at])
   } else {
-    1114112
+    None()
   }
+}
+
+// The scalar after the next one; None past the end.
+fn peek_second(cursor: Input) -> Option[char] uses {} {
+  if cursor.at + 1 < core@1/list.len(cursor.scalars) {
+    Some(cursor.scalars[cursor.at + 1])
+  } else {
+    None()
+  }
+}
+
+// The byte of an ASCII scalar; None for any other.
+fn ascii_byte(c: char) -> Option[u8] uses {} {
+  let cp = core@1/char.to_u32(c)
+  if cp < 0x80u32 {
+    Some(core@1/int.narrow(cp))
+  } else {
+    None()
+  }
+}
+
+// Whether `c` is an ASCII letter or digit.
+fn ascii_alnum(c: char) -> bool uses {} {
+  match ascii_byte(c) {
+    Some(b) => ascii.is_alnum(b),
+    None() => false,
+  }
+}
+
+// A one-scalar range of a class.
+fn single(c: char) -> (u32, u32) uses {} {
+  let cp = core@1/char.to_u32(c)
+  (cp, cp)
 }
 
 fn syntax(cursor: Input) -> CompileError uses {} {
@@ -177,10 +212,10 @@ fn finish_context(mut tree: Tree, mut ctx: Context) -> Result[u64, CompileError]
   }
 }
 
-fn class_ranges(cp: u32) -> unique List[(u32, u32)] uses {} {
-  if cp == 100 || cp == 68 {
+fn class_ranges(c: char) -> unique List[(u32, u32)] uses {} {
+  if c == 'd' || c == 'D' {
     [(48, 57)]
-  } else if cp == 115 || cp == 83 {
+  } else if c == 's' || c == 'S' {
     [(9, 10), (12, 13), (32, 32)]
   } else {
     [(48, 57), (65, 90), (95, 95), (97, 122)]
@@ -188,24 +223,24 @@ fn class_ranges(cp: u32) -> unique List[(u32, u32)] uses {} {
 }
 
 fn escaped(mut cursor: Input, in_class: bool) -> Result[Node, CompileError] uses {} {
-  let cp = peek(cursor)
-  if cp == 1114112 {
-    return Error(syntax(cursor))
+  let c = match peek(cursor) {
+    Some(c) => c,
+    None() => return Error(syntax(cursor)),
   }
   cursor.at += 1
   let mut node = empty_node(1)
-  if cp == 100 || cp == 68 || cp == 115 || cp == 83 || cp == 119 || cp == 87 {
-    node.ranges = class_ranges(cp)
+  if c == 'd' || c == 'D' || c == 's' || c == 'S' || c == 'w' || c == 'W' {
+    node.ranges = class_ranges(c)
     node.size = core@1/list.len(node.ranges)
-    node.negated = cp == 68 || cp == 83 || cp == 87
+    node.negated = c == 'D' || c == 'S' || c == 'W'
     return Ok(take node)
   }
-  if !in_class && (cp == 65 || cp == 122 || cp == 98 || cp == 66) {
-    node.kind = if cp == 65 {
+  if !in_class && (c == 'A' || c == 'z' || c == 'b' || c == 'B') {
+    node.kind = if c == 'A' {
       3
-    } else if cp == 122 {
+    } else if c == 'z' {
       4
-    } else if cp == 98 {
+    } else if c == 'b' {
       5
     } else {
       6
@@ -213,45 +248,46 @@ fn escaped(mut cursor: Input, in_class: bool) -> Result[Node, CompileError] uses
     node.nullable = true
     return Ok(take node)
   }
-  let scalar: u32 = if cp == 110 {
-    10
-  } else if cp == 114 {
-    13
-  } else if cp == 116 {
-    9
-  } else if cp == 102 {
-    12
-  } else if cp == 97 {
-    7
-  } else if cp == 118 {
-    11
-  } else if cp < 128 && (cp >= 48 && cp <= 57 || cp >= 65 && cp <= 90 || cp >= 97 && cp <= 122) {
+  let scalar = if c == 'n' {
+    '\n'
+  } else if c == 'r' {
+    '\r'
+  } else if c == 't' {
+    '\t'
+  } else if c == 'f' {
+    '\u{c}'
+  } else if c == 'a' {
+    '\u{7}'
+  } else if c == 'v' {
+    '\u{b}'
+  } else if ascii_alnum(c) {
     return Error(Syntax(cursor.offsets[cursor.at - 1]))
   } else {
-    cp
+    c
   }
-  core@1/list.push(mut node.ranges, (scalar, scalar))
+  core@1/list.push(mut node.ranges, single(scalar))
   Ok(take node)
 }
 
 fn class_item(mut cursor: Input) -> Result[Node, CompileError] uses {} {
-  if peek(cursor) == 91 && cursor.at + 1 < core@1/list.len(cursor.scalars) && cursor.scalars[cursor.at + 1] == 58 {
+  if peek(cursor) == Some('[') && peek_second(cursor) == Some(':') {
     return Error(syntax(cursor))
   }
-  if peek(cursor) == 1114112 {
-    return Error(syntax(cursor))
+  let c = match peek(cursor) {
+    Some(c) => c,
+    None() => return Error(syntax(cursor)),
   }
-  let cp = peek(cursor)
   cursor.at += 1
-  if cp == 92 {
+  if c == '\\' {
     return escaped(mut cursor, true)
   }
   let mut node = empty_node(1)
-  core@1/list.push(mut node.ranges, (cp, cp))
+  core@1/list.push(mut node.ranges, single(c))
   Ok(take node)
 }
 
 // Complement predefined ASCII classes before unioning them into a bracket class.
+// Ranges are scalar-value intervals: a complement spans the surrogate gap.
 fn append_ranges(mut out: List[(u32, u32)], node: Node) -> () uses {} {
   let mut begin: u32 = 0
   for (lo, hi) in node.ranges {
@@ -271,15 +307,17 @@ fn append_ranges(mut out: List[(u32, u32)], node: Node) -> () uses {} {
 
 fn bracket(mut cursor: Input) -> Result[Node, CompileError] uses {} {
   let mut node = empty_node(1)
-  if peek(cursor) == 94 {
+  if peek(cursor) == Some('^') {
     node.negated = true
     cursor.at += 1
   }
   let mut first = true
-  while peek(cursor) != 93 || first {
+  while peek(cursor) != Some(']') || first {
     let item = class_item(mut cursor)?
     first = false
-    if peek(cursor) == 45 && cursor.at + 1 < core@1/list.len(cursor.scalars) && cursor.scalars[cursor.at + 1] != 93 {
+    if peek(cursor) == Some('-') && peek_second(cursor) != None() && peek_second(cursor) != Some(
+      ']'
+    ) {
       cursor.at += 1
       let end_offset = cursor.offsets[cursor.at]
       let end = class_item(mut cursor)?
@@ -305,13 +343,27 @@ fn bracket(mut cursor: Input) -> Result[Node, CompileError] uses {} {
   Ok(take node)
 }
 
+// The decimal digit value of the next pattern scalar, if it is one.
+fn peek_digit(cursor: Input) -> Option[u8] uses {} {
+  match peek(cursor) {
+    Some(c) => match ascii_byte(c) {
+      Some(b) => ascii.digit_value(b),
+      None() => None(),
+    },
+    None() => None(),
+  }
+}
+
 fn decimal(mut cursor: Input) -> Result[u64, CompileError] uses {} {
-  if peek(cursor) < 48 || peek(cursor) > 57 {
+  if peek_digit(cursor) == None() {
     return Error(syntax(cursor))
   }
   let mut value: u64 = 0
-  while peek(cursor) >= 48 && peek(cursor) <= 57 {
-    let digit: u64 = core@1/int.widen(peek(cursor) - 48)
+  while true {
+    let digit: u64 = match peek_digit(cursor) {
+      Some(d) => core@1/int.widen(d),
+      None() => break,
+    }
     if value > (18446744073709551615u64 - digit) / 10 {
       return Error(ProgramTooLarge())
     }
@@ -321,31 +373,31 @@ fn decimal(mut cursor: Input) -> Result[u64, CompileError] uses {} {
   Ok(value)
 }
 
-fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, cp: u32) -> Result[
+fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, c: char) -> Result[
   u64,
   CompileError
 ] uses {} {
   let mut node = empty_node(9)
   node.left = atom
-  if cp == 42 {
+  if c == '*' {
     node.unbounded = true
-  } else if cp == 43 {
+  } else if c == '+' {
     node.min = 1
     node.unbounded = true
-  } else if cp == 63 {
+  } else if c == '?' {
     node.max = 1
   } else {
     node.min = decimal(mut cursor)?
     node.max = node.min
-    if peek(cursor) == 44 {
+    if peek(cursor) == Some(',') {
       cursor.at += 1
-      if peek(cursor) == 125 {
+      if peek(cursor) == Some('}') {
         node.unbounded = true
       } else {
         node.max = decimal(mut cursor)?
       }
     }
-    if peek(cursor) != 125 {
+    if peek(cursor) != Some('}') {
       return Error(syntax(cursor))
     }
     cursor.at += 1
@@ -353,7 +405,7 @@ fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, cp: u32) -> Result[
       return Error(syntax(cursor))
     }
   }
-  if peek(cursor) == 63 {
+  if peek(cursor) == Some('?') {
     node.lazy = true
     cursor.at += 1
   }
@@ -385,24 +437,24 @@ fn repetition(mut tree: Tree, mut cursor: Input, atom: u64, cp: u32) -> Result[
 fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses {} {
   let mut cursor = Input(scalars: [], offsets: [], at: 0)
   let mut byte: u64 = 0
-  for cp in core@1/string.scalars(pattern) {
-    core@1/list.push(mut cursor.scalars, cp)
+  for c in core@1/string.scalars(pattern) {
+    core@1/list.push(mut cursor.scalars, c)
     core@1/list.push(mut cursor.offsets, byte)
-    byte += scalar_width(cp)
+    byte += scalar_width(c)
   }
   core@1/list.push(mut cursor.offsets, byte)
   let mut tree = Tree(nodes: [], limit: limit)
   let mut contexts: List[Context] = [context()]
   let mut depth: u64 = 0
   while cursor.at < core@1/list.len(cursor.scalars) {
-    let cp = peek(cursor)
+    let c = cursor.scalars[cursor.at]
     let at = cursor.offsets[cursor.at]
     cursor.at += 1
-    if cp == 40 {
+    if c == '(' {
       flush(mut tree, mut contexts[depth])?
-      if peek(cursor) == 63 {
+      if peek(cursor) == Some('?') {
         cursor.at += 1
-        if peek(cursor) != 58 {
+        if peek(cursor) != Some(':') {
           return Error(syntax(cursor))
         }
         cursor.at += 1
@@ -413,7 +465,7 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
       } else {
         core@1/list.push(mut contexts, context())
       }
-    } else if cp == 41 {
+    } else if c == ')' {
       if depth == 0 {
         return Error(Syntax(at))
       }
@@ -421,7 +473,7 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
       depth -= 1
       contexts[depth].atom = Some(group)
       contexts[depth].repeated = false
-    } else if cp == 124 {
+    } else if c == '|' {
       let right = finish_sequence(mut tree, mut contexts[depth])?
       contexts[depth].alternatives = Some(
         match contexts[depth].alternatives {
@@ -429,7 +481,7 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
           None() => right,
         }
       )
-    } else if cp == 42 || cp == 43 || cp == 63 || cp == 123 {
+    } else if c == '*' || c == '+' || c == '?' || c == '{' {
       if contexts[depth].repeated {
         return Error(Syntax(at))
       }
@@ -437,29 +489,29 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
         Some(n) => n,
         None() => return Error(Syntax(at)),
       }
-      let repeated = repetition(mut tree, mut cursor, atom, cp)?
+      let repeated = repetition(mut tree, mut cursor, atom, c)?
       contexts[depth].atom = Some(repeated)
       contexts[depth].repeated = true
     } else {
       flush(mut tree, mut contexts[depth])?
-      let node = if cp == 91 {
+      let node = if c == '[' {
         bracket(mut cursor)?
-      } else if cp == 92 {
+      } else if c == '\\' {
         escaped(mut cursor, false)?
       } else {
         let mut node = empty_node(
-          if cp == 46 {
+          if c == '.' {
             2
-          } else if cp == 94 {
+          } else if c == '^' {
             3
-          } else if cp == 36 {
+          } else if c == '$' {
             4
           } else {
             1
           }
         )
         if node.kind == 1 {
-          core@1/list.push(mut node.ranges, (cp, cp))
+          core@1/list.push(mut node.ranges, single(c))
         }
         take node
       }
@@ -659,8 +711,12 @@ fn spend(mut left: u64) -> Result[(), MatchError] uses {} {
   Ok(())
 }
 
-fn word(cp: u32) -> bool uses {} {
-  cp >= 48 && cp <= 57 || cp >= 65 && cp <= 90 || cp == 95 || cp >= 97 && cp <= 122
+// Whether a text boundary's scalar is an ASCII word scalar; None is a text edge.
+fn word(scalar: Option[char]) -> bool uses {} {
+  match scalar {
+    Some(c) => ascii_alnum(c) || c == '_',
+    None() => false,
+  }
 }
 
 type Thread {
@@ -674,8 +730,8 @@ fn add(
   re: Regex,
   seed: Thread,
   at: u64,
-  previous: u32,
-  next: u32,
+  previous: Option[char],
+  next: Option[char],
   mut seen: List[u64],
   mut ready: List[Thread],
   mut work: u64
@@ -695,7 +751,7 @@ fn add(
           return Ok(true)
         }
       } else {
-        let allowed = inst.kind == 0 || inst.kind == 10 || inst.kind == 3 && at == 0 || inst.kind == 4 && next == 1114112 || inst.kind == 5 && word(
+        let allowed = inst.kind == 0 || inst.kind == 10 || inst.kind == 3 && at == 0 || inst.kind == 4 && next == None() || inst.kind == 5 && word(
           previous
         ) != word(next) || inst.kind == 6 && word(previous) == word(next)
         if allowed {
@@ -722,10 +778,11 @@ fn add(
   Ok(false)
 }
 
-fn accepts(inst: Inst, cp: u32, mut work: u64) -> Result[bool, MatchError] uses {} {
+fn accepts(inst: Inst, c: char, mut work: u64) -> Result[bool, MatchError] uses {} {
   if inst.kind == 2 {
-    return Ok(cp != 10)
+    return Ok(c != '\n')
   }
+  let cp = core@1/char.to_u32(c)
   let mut found = false
   for (lo, hi) in inst.ranges {
     spend(mut work)?
@@ -741,12 +798,15 @@ type Machine {
   seeds: List[Thread],
   matched: Option[Span],
   at: u64,
-  previous: u32,
+  previous: Option[char],
   work: u64,
 }
 
-// One scalar boundary, including the final EOF sentinel. The scalar view is lazy.
-fn step(re: Regex, cp: u32, mut machine: Machine) -> Result[bool, MatchError] uses {} {
+// One scalar boundary, including the final end of text (None). The scalar view is lazy.
+fn step(re: Regex, next_scalar: Option[char], mut machine: Machine) -> Result[
+  bool,
+  MatchError
+] uses {} {
   spend(mut machine.work)?
   let at = machine.at
   let mut ready: List[Thread] = []
@@ -757,7 +817,7 @@ fn step(re: Regex, cp: u32, mut machine: Machine) -> Result[bool, MatchError] us
       seed,
       at,
       machine.previous,
-      cp,
+      next_scalar,
       mut machine.seen,
       mut ready,
       mut machine.work
@@ -772,7 +832,7 @@ fn step(re: Regex, cp: u32, mut machine: Machine) -> Result[bool, MatchError] us
       Thread(pc: re.entry, start: at),
       at,
       machine.previous,
-      cp,
+      next_scalar,
       mut machine.seen,
       mut ready,
       mut machine.work
@@ -786,16 +846,24 @@ fn step(re: Regex, cp: u32, mut machine: Machine) -> Result[bool, MatchError] us
       machine.matched = Some(Span(start: thread.start, end: at))
       break
     }
-    if cp != 1114112 && accepts(inst, cp, mut machine.work)? {
+    let accepted = match next_scalar {
+      Some(c) => accepts(inst, c, mut machine.work)?,
+      None() => false,
+    }
+    if accepted {
       core@1/list.push(mut next, Thread(pc: inst.x, start: thread.start))
     }
   }
-  if cp == 1114112 || core@1/list.len(next) == 0 && machine.matched != None() {
+  let c = match next_scalar {
+    Some(c) => c,
+    None() => return Ok(true),
+  }
+  if core@1/list.len(next) == 0 && machine.matched != None() {
     return Ok(true)
   }
   machine.seeds = take next
-  machine.previous = cp
-  machine.at += scalar_width(cp)
+  machine.previous = next_scalar
+  machine.at += scalar_width(c)
   Ok(false)
 }
 
@@ -808,7 +876,7 @@ pub fn find(re: Regex, text: String, work_limit: u64) -> Result[
     seeds: [],
     matched: None(),
     at: 0,
-    previous: 1114112,
+    previous: None(),
     work: work_limit
   )
   let mut i: u64 = 0
@@ -817,12 +885,12 @@ pub fn find(re: Regex, text: String, work_limit: u64) -> Result[
     core@1/list.push(mut machine.seen, 0)
     i += 1
   }
-  for cp in core@1/string.scalars(text) {
-    if step(re, cp, mut machine)? {
+  for c in core@1/string.scalars(text) {
+    if step(re, Some(c), mut machine)? {
       return Ok(copy machine.matched)
     }
   }
-  step(re, 1114112, mut machine)?
+  step(re, None(), mut machine)?
   Ok(copy machine.matched)
 }
 

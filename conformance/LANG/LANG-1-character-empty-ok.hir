@@ -1,5 +1,5 @@
 // rule: LANG-1
 // expect: accept
-fn scalar() -> u32 {
+fn scalar() -> char {
   'a'
 }

@@ -38,7 +38,7 @@ pub(super) fn signatures() -> Vec<Signature> {
     ));
     for (protocol, generics, source, item) in [
         ("SetElements", "T: key", "Set[T]", "T"),
-        ("UnicodeScalars", "", "ScalarView", "u32"),
+        ("UnicodeScalars", "", "ScalarView", "char"),
         ("ScalarPositions", "", "PositionView", "StrPos of source"),
     ] {
         let cursor_name = if protocol == "SetElements" {

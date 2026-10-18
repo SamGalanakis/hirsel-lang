@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-813 exported definitions; 255 variants.
+812 exported definitions; 254 variants.
 
 
 ## Types and roots
@@ -376,6 +376,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@preserves_unique(out) pub fn char.format_into(value: char, mut out: List[u8]) -> () uses {}` — Appends the UTF-8 encoding of 'value', one to four bytes; to_string is that text. <!-- std@1/char/format_into -->
 - `@noalloc pub fn char.from_ascii(byte: u8) -> Option[char] uses {}` — The char of an ASCII byte; None for a byte above 0x7F. <!-- std@1/char/from_ascii -->
 - `@noalloc fn char.from_u32(value: u32) -> Option[char]` <!-- core@1/char/from_u32 -->
+- `@noalloc pub fn char.from_u8(byte: u8) -> char uses {}` — The char whose scalar value is 'byte', U+0000 to U+00FF, as Rust's char::from(u8). <!-- std@1/char/from_u8 -->
 - `pub fn char.to_string(value: char) -> unique String uses {}` <!-- std@1/char/to_string -->
 - `@noalloc fn char.to_u32(c: char) -> u32` <!-- core@1/char/to_u32 -->
 
@@ -1287,12 +1288,12 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub opaque type unicode.GraphemeCursor: copyable + inert + noalloc_drop uses {}` — Public signature type; representation and associated operations stay private. <!-- std@1/unicode/GraphemeCursor -->
 - `@loop_source(graphemes_open, graphemes_next) pub opaque type unicode.GraphemeView: copyable + inert + noalloc_drop uses {}` — Default extended grapheme clusters, Unicode16 UAX #29 revision 45. <!-- std@1/unicode/GraphemeView -->
 - `@noalloc pub fn unicode.graphemes(s: String) -> GraphemeView in s` — Adapted from src/grapheme.rs::new_graphemes at unicode-segmentation ff47b3187adddb14813e6fb2cfc1a079f58cfddc. <!-- std@1/unicode/graphemes -->
-- `@noalloc pub fn unicode.is_digit(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_digit -->
-- `@noalloc pub fn unicode.is_letter(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_letter -->
-- `@noalloc pub fn unicode.is_whitespace(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_whitespace -->
+- `@noalloc pub fn unicode.is_digit(c: char) -> bool uses {}` <!-- std@1/unicode/is_digit -->
+- `@noalloc pub fn unicode.is_letter(c: char) -> bool uses {}` <!-- std@1/unicode/is_letter -->
+- `@noalloc pub fn unicode.is_whitespace(c: char) -> bool uses {}` <!-- std@1/unicode/is_whitespace -->
 - `pub fn unicode.normalize_nfc(s: String) -> unique String uses {}` — Explicit NFC: compatibility mappings never enter canonical_pair. <!-- std@1/unicode/normalize_nfc -->
-- `@noalloc pub fn unicode.simple_lower(cp: u32) -> u32 uses {}` <!-- std@1/unicode/simple_lower -->
-- `@noalloc pub fn unicode.simple_upper(cp: u32) -> u32 uses {}` <!-- std@1/unicode/simple_upper -->
+- `@noalloc pub fn unicode.simple_lower(c: char) -> char uses {}` <!-- std@1/unicode/simple_lower -->
+- `@noalloc pub fn unicode.simple_upper(c: char) -> char uses {}` <!-- std@1/unicode/simple_upper -->
 
 ## uri
 
@@ -1331,7 +1332,4 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## utf8
 
-- `pub type utf8.EncodeError = InvalidScalar(u32)` — Zig unicode.utf8Encode and Rust str validation/lossy error-span semantics. <!-- std@1/utf8/EncodeError -->
-- `InvalidScalar(u32) -> utf8.EncodeError` — Variant of utf8.EncodeError. <!-- std@1/utf8/EncodeError#InvalidScalar -->
-- `@preserves_unique(out) pub fn utf8.append_scalar(mut out: List[u8], scalar: u32) -> Result[(), EncodeError] uses {}` <!-- std@1/utf8/append_scalar -->
-- `pub fn utf8.decode_lossy(data: Bytes) -> unique String uses {}` <!-- std@1/utf8/decode_lossy -->
+- `pub fn utf8.decode_lossy(data: Bytes) -> unique String uses {}` — Rust str validation/lossy error-span semantics. <!-- std@1/utf8/decode_lossy -->

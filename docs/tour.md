@@ -459,6 +459,65 @@ Expected:
 ```
 <!-- /tour -->
 
+## Characters
+
+`char` is one Unicode scalar value: 0 through 0x10FFFF without the surrogates.
+A character literal such as `'a'` or `'\u{1f411}'` has type `char`;
+`string.scalars` yields `char` and the `unicode.*` predicates take it.
+A `char` is not an integer: `char.to_u32` gives its scalar value and
+`char.from_u32` returns `None()` for a surrogate or a value above 0x10FFFF.
+`char.format_into` appends the UTF-8 encoding, and an f-string hole of type
+`char` prints the character. Bytes stay `u8`: a byte literal such as `b','`
+is one ASCII byte and compares with an element of `Bytes`.
+
+<!-- tour: conformance/SEM/SEM-3-tour-05-chars-run.hir -->
+[Runnable source](../conformance/SEM/SEM-3-tour-05-chars-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn initials(text: String) -> String {
+  let mut out: List[u8] = []
+  for c in string.scalars(text) {
+    if c == ' ' {
+      char.format_into('-', mut out)
+    } else {
+      char.format_into(c, mut out)
+    }
+  }
+  text.finish_valid(take out)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let mut upper: u64 = 0
+  let mut letters: u64 = 0
+  for c in string.scalars("S heep") {
+    if unicode.simple_upper(c) == c && unicode.is_letter(c) {
+      upper += 1
+    }
+    if unicode.is_letter(c) {
+      letters += 1
+    }
+  }
+  let sheep = '🐑'
+  let data = b"x,y"
+  failure.check(data[1] == b',' && char.from_u32(0xd800) == None(), TextInvariant())
+  let name = initials("S heep")
+  let output = io.stdout(rt) ? Grant
+  out.print(output, f"{name}: {upper} upper, {letters} letters\n") ? Output
+  out.print(output, f"{sheep} is U+{char.to_u32(sheep):x}\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+S-heep: 1 upper, 5 letters
+🐑 is U+1f411
+```
+<!-- /tour -->
+
 ## Building text with f-strings
 
 An `f`-prefixed string builds a fresh `unique String` from its text and the values

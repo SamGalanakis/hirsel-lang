@@ -51,6 +51,7 @@ N fn ascii.to_upper(c: u8) -> u8 uses {}
 N fn ascii.to_lower(c: u8) -> u8 uses {}
 N fn ascii.digit_value(c: u8) -> Option[u8] uses {}
 N fn char.from_ascii(byte: u8) -> Option[char] uses {}
+N fn char.from_u8(byte: u8) -> char uses {}
 @preserves_unique(out) fn char.format_into(value: char, mut out: List[u8]) -> () uses {}
 fn char.to_string(value: char) -> unique String uses {}
 fn path.normalize(p: Path) -> Result[Path, path.PathError] uses {}
@@ -287,7 +288,8 @@ including invalid syntax following overflowing digits; otherwise overflow yields
 
 `char` has a module of its own ([the catalogue](#the-catalogue)): `format_into` appends
 the char's UTF-8 encoding, one to four bytes, `to_string` is that text, and `from_ascii`
-returns the char of a byte below 0x80 and `None` otherwise. A char has no `format`,
+returns the char of a byte below 0x80 and `None` otherwise; `from_u8` is total, the
+char U+0000 to U+00FF whose scalar value is the byte. A char has no `format`,
 `format_into_spec` or `parse`; f-string holes of type `char` take only fill, alignment
 and width ([SEM-3](semantics.md#sem-3-strings)). Its integer conversions are the core
 `char.to_u32` and `char.from_u32`.
@@ -753,17 +755,16 @@ The pure allocation-free `std@1/unicode` helpers use the same pinned Unicode
 16.0.0 data as NFC and grapheme segmentation:
 
 ```text
-fn unicode.is_whitespace(cp: u32) -> bool uses {}
-fn unicode.is_letter(cp: u32) -> bool uses {}
-fn unicode.is_digit(cp: u32) -> bool uses {}
-fn unicode.simple_lower(cp: u32) -> u32 uses {}
-fn unicode.simple_upper(cp: u32) -> u32 uses {}
+fn unicode.is_whitespace(c: char) -> bool uses {}
+fn unicode.is_letter(c: char) -> bool uses {}
+fn unicode.is_digit(c: char) -> bool uses {}
+fn unicode.simple_lower(c: char) -> char uses {}
+fn unicode.simple_upper(c: char) -> char uses {}
 ```
 
 Whitespace is the Unicode White_Space property, letters are general categories
-L*, and digits are Nd. Invalid scalar values return false from predicates and
-pass through unchanged from case functions. Unmapped scalars also pass through.
-These helpers classify scalar numbers; they do not validate text. Simple case
+L*, and digits are Nd. Unmapped scalars pass through the case functions
+unchanged. Simple case
 maps one scalar to one scalar, without full string casing, casefold or locale
 rules. Generated immutable ranges and mapping rows come from the vendored
 UnicodeData.txt and PropList.txt; `stdlib/unicode16/generate.py --check` verifies
@@ -931,16 +932,14 @@ ends (once for an empty input). All three helpers are ordinary source.
 
 ## UTF-8 construction and lossy conversion
 
-`std@1/utf8.append_scalar(mut out: List[u8], scalar: u32) -> Result[(),
-utf8.EncodeError] uses {}` appends the scalar's UTF-8 encoding. `EncodeError =
-InvalidScalar(u32)` rejects surrogates and values above U+10FFFF before touching
-`out`. Existing bytes in the builder are preserved on this validation error.
-`utf8.decode_lossy(data: Bytes) -> unique String uses {}` borrows arbitrary bytes and
+A char's UTF-8 encoding is appended by `char.format_into` ([scalars](#scalars));
+a `char` is always a scalar value, so encoding cannot fail, and `char.from_u32`
+rejects surrogates and values above U+10FFFF beforehand. `utf8.decode_lossy(data: Bytes) -> unique String uses {}` borrows arbitrary bytes and
 returns owned UTF-8. It replaces each invalid sequence with U+FFFD using Rust's
 maximal valid-prefix/error-span policy: a valid but incomplete prefix is replaced
 once; an invalid next byte is reconsidered as the start of the next sequence.
 Overlong encodings, surrogate encodings and values above U+10FFFF are invalid.
-Both operations are ordinary pure source. Strict conversion remains the existing
+It is ordinary pure source. Strict conversion remains the existing
 `string.from_bytes(take bytes) -> Result[String, Bytes]` operation.
 
 ## Base64 codec

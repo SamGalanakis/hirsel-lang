@@ -26,11 +26,21 @@ pub fn to_string(value: char) -> unique String uses {} {
   text.finish_valid(take out)
 }
 
+// The char whose scalar value is `byte`, U+0000 to U+00FF, as Rust's char::from(u8).
+@noalloc
+pub fn from_u8(byte: u8) -> char uses {} {
+  // Every value below 0x100 is a scalar value, so None never occurs.
+  match core@1/char.from_u32(core@1/int.widen(byte)) {
+    Some(c) => c,
+    None() => '\0',
+  }
+}
+
 // The char of an ASCII byte; None for a byte above 0x7F.
 @noalloc
 pub fn from_ascii(byte: u8) -> Option[char] uses {} {
   if byte < 0x80 {
-    core@1/char.from_u32(core@1/int.widen(byte))
+    Some(from_u8(byte))
   } else {
     None()
   }

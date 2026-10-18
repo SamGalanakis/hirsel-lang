@@ -19,7 +19,8 @@ fn property_contains(table: Bytes, cp: u32) -> bool uses {} {
 }
 
 @noalloc
-fn simple_case(table: Bytes, cp: u32) -> u32 uses {} {
+fn simple_case(table: Bytes, c: char) -> char uses {} {
+  let cp = core@1/char.to_u32(c)
   let mut low: u64 = 0
   let mut high = core@1/bytes.len(table) / 6
   while low < high {
@@ -30,33 +31,37 @@ fn simple_case(table: Bytes, cp: u32) -> u32 uses {} {
     } else if cp > value {
       low = middle + 1
     } else {
-      return scalar_at(table, middle * 6 + 3)
+      // The pinned tables map scalar values to scalar values.
+      return match core@1/char.from_u32(scalar_at(table, middle * 6 + 3)) {
+        Some(mapped) => mapped,
+        None() => c,
+      }
     }
   }
-  cp
+  c
 }
 
 @noalloc
-pub fn is_whitespace(cp: u32) -> bool uses {} {
-  property_contains(WHITE_SPACE, cp)
+pub fn is_whitespace(c: char) -> bool uses {} {
+  property_contains(WHITE_SPACE, core@1/char.to_u32(c))
 }
 
 @noalloc
-pub fn is_letter(cp: u32) -> bool uses {} {
-  property_contains(LETTERS, cp)
+pub fn is_letter(c: char) -> bool uses {} {
+  property_contains(LETTERS, core@1/char.to_u32(c))
 }
 
 @noalloc
-pub fn is_digit(cp: u32) -> bool uses {} {
-  property_contains(DIGITS, cp)
+pub fn is_digit(c: char) -> bool uses {} {
+  property_contains(DIGITS, core@1/char.to_u32(c))
 }
 
 @noalloc
-pub fn simple_lower(cp: u32) -> u32 uses {} {
-  simple_case(SIMPLE_LOWER, cp)
+pub fn simple_lower(c: char) -> char uses {} {
+  simple_case(SIMPLE_LOWER, c)
 }
 
 @noalloc
-pub fn simple_upper(cp: u32) -> u32 uses {} {
-  simple_case(SIMPLE_UPPER, cp)
+pub fn simple_upper(c: char) -> char uses {} {
+  simple_case(SIMPLE_UPPER, c)
 }

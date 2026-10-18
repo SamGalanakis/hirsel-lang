@@ -44,7 +44,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   test.check(t, f"{string.trim("  padded  ")}|" == "padded|")
   test.check(t, f"{{literal}} {{{n}}}" == "{literal} {3}")
   test.check(t, f"tab\there \"quoted\" \u{1f411}" == "tab\there \"quoted\" 🐑")
-  test.check(t, f"é{name}ü{'é'}" == "éhirselü233")
+  test.check(t, f"é{name}ü{'é'}" == "éhirselüé")
   test.check(t, f"outer {f"inner {n}"} done" == "outer inner 3 done")
   test.check(t, label(Point(x: -1, y: 2)) == "(-1, 2)")
   test.check(t, f"{n * 2u64 + 1u64}" == "7")

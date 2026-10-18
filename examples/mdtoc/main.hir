@@ -7,37 +7,16 @@ pub type Heading {
   title: String,
 }
 
-// Append scalar `cp` to `out` as UTF-8.
-fn encode(mut out: List[u8], cp: u32) {
-  if cp < 0x80 {
-    list.push(mut out, int.truncate(cp))
-  } else if cp < 0x800 {
-    list.push(mut out, int.truncate(0xc0u32 | cp >> 6))
-    list.push(mut out, int.truncate(0x80u32 | cp & 0x3f))
-  } else if cp < 0x10000 {
-    list.push(mut out, int.truncate(0xe0u32 | cp >> 12))
-    list.push(mut out, int.truncate(0x80u32 | cp >> 6 & 0x3f))
-    list.push(mut out, int.truncate(0x80u32 | cp & 0x3f))
-  } else {
-    list.push(mut out, int.truncate(0xf0u32 | cp >> 18))
-    list.push(mut out, int.truncate(0x80u32 | cp >> 12 & 0x3f))
-    list.push(mut out, int.truncate(0x80u32 | cp >> 6 & 0x3f))
-    list.push(mut out, int.truncate(0x80u32 | cp & 0x3f))
-  }
-}
-
 // Lowercase NFC text with Unicode simple case mapping. Spaces become `-`,
 // `-` and `_` stay, other ASCII punctuation is dropped. Non-ASCII scalars stay.
 fn slug(title: String) -> String {
   let mut out: List[u8] = []
   for scalar in string.scalars(unicode.normalize_nfc(title)) {
-    let cp = unicode.simple_lower(scalar)
-    if cp >= 0x61 && cp <= 0x7a || cp >= 0x30 && cp <= 0x39 || cp == 0x2d || cp == 0x5f {
-      encode(mut out, cp)
-    } else if cp == 0x20 {
-      encode(mut out, 0x2d)
-    } else if cp >= 0x80 {
-      encode(mut out, cp)
+    let c = unicode.simple_lower(scalar)
+    if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c >= '\u{80}' {
+      char.format_into(c, mut out)
+    } else if c == ' ' {
+      char.format_into('-', mut out)
     }
   }
   match text.finish(take out) {

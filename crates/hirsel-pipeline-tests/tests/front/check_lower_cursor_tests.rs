@@ -4,7 +4,7 @@
 fn cursor_preparation_lifetimes_close_on_exhaustion_break_continue_and_return() {
     for ending in ["", "break", "continue", "return"] {
         let source = format!(
-            "fn example(s:String) {{ for x in string.scalars(s) {{ let _:u32 = x\n {ending} }} }}"
+            "fn example(s:String) {{ for x in string.scalars(s) {{ let _:char = x\n {ending} }} }}"
         );
         let mut engine = hirsel_engine::QueryEngine::new(
             hirsel_engine::default_environment(),

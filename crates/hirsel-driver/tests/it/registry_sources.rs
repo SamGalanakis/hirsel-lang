@@ -130,6 +130,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 "ascii.to_lower",
                 "ascii.digit_value",
                 "char.from_ascii",
+                "char.from_u8",
                 "char.format_into",
                 "char.to_string",
                 "path.normalize",

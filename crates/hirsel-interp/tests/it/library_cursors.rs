@@ -108,10 +108,7 @@ fn unicode_view_protocols_keep_scalars_and_positions() {
     let scalars = h.value("string.scalars", &input);
     assert_eq!(
         h.values("UnicodeScalars", scalars),
-        source
-            .chars()
-            .map(|c| u32_value(c as u32))
-            .collect::<Vec<_>>()
+        source.chars().map(Value::Char).collect::<Vec<_>>()
     );
     let positions = h.value("string.positions", &input);
     let values = h.values("ScalarPositions", positions);

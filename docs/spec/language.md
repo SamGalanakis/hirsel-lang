@@ -13,9 +13,9 @@ arguments are never written in expressions, so a postfix `[` is always indexing.
 ([CT-3](compile-time.md#ct-3-shapes)), not an executable API.
 
 Boolean, byte-string, string, character and byte literals intrinsically have types `bool`,
-`Bytes`, `String`, `u32` and `u8`. A character literal such as `'a'` has type `u32`,
+`Bytes`, `String`, `char` and `u8`. A character literal such as `'a'` has type `char`,
 and a byte literal such as `b'a'` type `u8`, even without an expected type; an
-incompatible expected type is LANG-2. A numeric literal without a suffix or a bare variant takes its type from the
+incompatible expected type, such as `u32` for `'a'`, is LANG-2. A numeric literal without a suffix or a bare variant takes its type from the
 expected type or, in `a..b`, a binary operator or `==`, from the other operand; with neither,
 it is an error. A size parameter
 used as a value is a `u64`. Parameters are in scope only after their declaration, and
@@ -204,7 +204,8 @@ latter returning `None` for a value that is not a scalar value.
 
 ```hirsel
 fn later(a: char, b: char) -> bool { a > b }              // a + b is LANG-7
-fn code(c: char) -> u32 { char.to_u32(c) }
+fn digit(c: char) -> bool { c >= '0' && c <= '9' }
+fn code(c: char) -> u32 { char.to_u32(c) }                 // char.to_u32('a') is 97
 fn scalar(n: u32) -> Option[char] { char.from_u32(n) }     // `n` alone is LANG-7
 ```
 

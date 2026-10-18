@@ -1,11 +1,11 @@
 // rule: SEM-3
 // expect: run
-fn digit(c: u32) -> bool
+fn digit(c: char) -> bool
   ensures result == (c >= '0' && c <= '9') {
   c >= '0' && c <= '9'
 }
 
-fn classify(c: u32) -> u32 {
+fn classify(c: char) -> u32 {
   match c {
     'a' => 1,
     '\n' => 2,
@@ -15,11 +15,30 @@ fn classify(c: u32) -> u32 {
 
 pub fn main() -> Result[(), ()] {
   let c = 'a'
-  failure.check(c == 97u32 && classify(c) == 1 && classify('\n') == 2, TextInvariant())
-  failure.check('\n' == 10u32 && '\t' == 9u32 && '\r' == 13u32, TextInvariant())
-  failure.check('\\' == 92u32 && '\'' == 39u32 && '\0' == 0u32, TextInvariant())
-  failure.check('é' == 233u32 && '🐑' == 0x1f411u32, TextInvariant())
-  failure.check('\u{1f411}' == '🐑' && '\u{10ffff}' == 0x10ffffu32, TextInvariant())
+  failure.check(
+    char.to_u32(c) == 97u32 && classify(c) == 1 && classify('\n') == 2,
+    TextInvariant()
+  )
+  failure.check(
+    char.to_u32('\n') == 10u32 && char.to_u32('\t') == 9u32,
+    TextInvariant()
+  )
+  failure.check(
+    char.to_u32('\r') == 13u32 && char.to_u32('\\') == 92u32,
+    TextInvariant()
+  )
+  failure.check(
+    char.to_u32('\'') == 39u32 && char.to_u32('\0') == 0u32,
+    TextInvariant()
+  )
+  failure.check(
+    char.to_u32('é') == 233u32 && char.to_u32('🐑') == 0x1f411u32,
+    TextInvariant()
+  )
+  failure.check(
+    '\u{1f411}' == '🐑' && char.to_u32('\u{10ffff}') == 0x10ffffu32,
+    TextInvariant()
+  )
   let mut count = 0u64
   let text = "aé🐑"
   for scalar in string.scalars(text) {

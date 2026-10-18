@@ -1,30 +1,4 @@
-// Zig unicode.utf8Encode and Rust str validation/lossy error-span semantics.
-pub type EncodeError = InvalidScalar(u32)
-
-@preserves_unique(out)
-pub fn append_scalar(mut out: List[u8], scalar: u32) -> Result[(), EncodeError] uses {} {
-  if scalar > 1114111u32 || scalar >= 55296u32 && scalar <= 57343u32 {
-    return Error(InvalidScalar(scalar))
-  }
-  if scalar < 128u32 {
-    core@1/list.push(mut out, core@1/int.narrow(scalar))
-  } else {
-    if scalar < 2048u32 {
-      core@1/list.push(mut out, core@1/int.narrow(192u32 + scalar / 64u32))
-    } else {
-      if scalar < 65536u32 {
-        core@1/list.push(mut out, core@1/int.narrow(224u32 + scalar / 4096u32))
-      } else {
-        core@1/list.push(mut out, core@1/int.narrow(240u32 + scalar / 262144u32))
-        core@1/list.push(mut out, core@1/int.narrow(128u32 + scalar / 4096u32 % 64u32))
-      }
-      core@1/list.push(mut out, core@1/int.narrow(128u32 + scalar / 64u32 % 64u32))
-    }
-    core@1/list.push(mut out, core@1/int.narrow(128u32 + scalar % 64u32))
-  }
-  Ok(())
-}
-
+// Rust str validation/lossy error-span semantics.
 pub fn decode_lossy(data: Bytes) -> unique String uses {} {
   let mut out: List[u8] = []
   let len = core@1/bytes.len(data)

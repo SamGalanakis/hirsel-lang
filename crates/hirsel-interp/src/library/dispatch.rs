@@ -1427,7 +1427,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "string.byte_len" => u64_value(text(arg(a, 0)?)?.len() as u64),
     Primitive: "string.scalars" => collection::sequence(
                 BuiltinType::Array,
-                string::scalars(text(arg(a, 0)?)?).map(u32_value),
+                text(arg(a, 0)?)?.chars().map(Value::Char),
             ),
     Primitive: "string.positions" => {
                 let s = text(arg(a, 0)?)?;
