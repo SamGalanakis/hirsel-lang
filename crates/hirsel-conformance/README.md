@@ -245,9 +245,10 @@ failures run under their pairwise covers. `--jobs N` sets how many cases run at 
 (default 4). Each run of `native` or `agree --native` keeps its scratch
 directories, and its report unless `--out` names one, under its own run root
 `native-gate/runs/<pid>-<time>` beside the executable, so concurrent runs in
-one checkout never share a path; the root is held by a file lock, and the next
-run removes every root whose owner has exited. Runtime archives built with
-Cargo stay in the shared, locked `native-gate/runtime/cache`.
+one checkout never share a path; the root is held by a file lock, explicitly
+unlocked when its owner drops even if a spawning child retains a descriptor.
+The next run removes every root whose owner has finished. Runtime archives built
+with Cargo stay in the shared, locked `native-gate/runtime/cache`.
 `native --sanitize` (in `tools/gate --full`) runs the smoke
 cases, the allocating cases of `native-tests/regressions/memcheck.txt` and eight
 generated programs as x86-64 executables under Valgrind memcheck, at O0 and O3:

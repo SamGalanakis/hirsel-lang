@@ -20,7 +20,7 @@ fn base() -> Result<PathBuf, String> {
 /// One process's scratch root: `<parent>/<id>`, locked by `<parent>/<id>.lock`.
 pub struct RunRoot {
     dir: PathBuf,
-    _lock: File,
+    lock: File,
 }
 
 impl RunRoot {
@@ -49,7 +49,7 @@ impl RunRoot {
                 .map_err(|e| error(&lock_path, e))?;
             lock.lock().map_err(|e| error(&lock_path, e))?;
             match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(Self { dir, _lock: lock }),
+                Ok(()) => return Ok(Self { dir, lock }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 16 => {
                     attempt += 1;
                 }
@@ -67,6 +67,15 @@ impl RunRoot {
         let dir = self.dir.join(name);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(dir)
+    }
+}
+
+impl Drop for RunRoot {
+    fn drop(&mut self) {
+        // A concurrent spawn can retain this open file description between
+        // fork and exec. Closing our descriptor alone would leave its flock
+        // held by that child, so release it when the owner finishes.
+        let _ = self.lock.unlock();
     }
 }
 
@@ -117,4 +126,37 @@ pub fn runtime_cache() -> Result<PathBuf, String> {
     let dir = base()?.join("runtime").join("cache");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finished_roots_are_pruned_while_inherited_handles_remain_open() {
+        let parent = std::env::temp_dir().join(format!(
+            "hirsel-native-scratch-inherited-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let first = RunRoot::create_in(&parent).unwrap();
+        let finished = first.dir().to_path_buf();
+        // A forked child holds the same open file description until exec or
+        // exit. Keep a duplicate alive to pin that window without scheduling.
+        let inherited = first.lock.try_clone().unwrap();
+        let live = RunRoot::create_in(&parent).unwrap();
+        assert!(finished.is_dir());
+        drop(first);
+        // Finished reports stay available until another run prunes them.
+        assert!(finished.is_dir());
+        let next = RunRoot::create_in(&parent).unwrap();
+        assert!(!finished.exists() && !finished.with_extension("lock").exists());
+        assert!(live.dir().is_dir() && next.dir().is_dir());
+        assert!(inherited.metadata().is_ok());
+        drop((inherited, live, next));
+        std::fs::remove_dir_all(parent).unwrap();
+    }
 }
