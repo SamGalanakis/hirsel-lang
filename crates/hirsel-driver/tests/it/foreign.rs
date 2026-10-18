@@ -424,8 +424,10 @@ fn native_calls_c_with_scalars_a_byte_view_and_a_released_handle() {
             &path,
             Some(launch),
             None,
-            &mut Vec::new(),
-            &mut Vec::new(),
+            native::Output::Streams {
+                stdout: &mut Vec::new(),
+                stderr: &mut Vec::new(),
+            },
         );
         let Err(ToolError::Runtime(message)) = refused else {
             panic!(
