@@ -568,7 +568,7 @@ code, and each program rule code's rule ID.
 `hirsel_rt_v2_launch(entry, result_size, layouts, layout_count, config)` (`src/launch.rs`) binds
 the linked program's immutable descriptor registry and runs one compiled
 `fn(rt: Io, args: Args) -> Result[(), E]` in a fresh context with real Io
-granted on `HIRSEL_RT_ROOT`, and exits 0 for `Ok`, 1 for `Error`, 2 for a
+granted on `HIRSEL_RT_ROOT` (without it, the root Io grants no mount and no projection), and exits 0 for `Ok`, 1 for `Error`, 2 for a
 language failure, 3 for a refused launch and 4 for a Blocked run (CONC-8: every task waits
 and none can proceed; the run stops there without cleanup, and its record says `blocked` and
 `audit unavailable`). With `HIRSEL_RT_OBSERVATION` it

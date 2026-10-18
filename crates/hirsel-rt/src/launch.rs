@@ -13,7 +13,8 @@
 //!
 //! Harness launches without a record take explicit inputs from the environment, read once
 //! here and never by a semantic kernel:
-//! `HIRSEL_RT_ROOT` (the granted directory, default the working directory),
+//! `HIRSEL_RT_ROOT` (the fixture profile's read-write directory beside every Io projection;
+//! absent, the root Io grants no mount and no projection),
 //! `HIRSEL_RT_DIAGNOSTIC` (poisoning and header checks) and `HIRSEL_RT_OBSERVATION` (a file
 //! that receives the observation record below), `HIRSEL_RT_TAPE` (a file that receives the
 //! real Io completion tape) and `HIRSEL_RT_REPLAY` (a recorded tape: Io is then the
@@ -1503,11 +1504,16 @@ unsafe fn execute(
                 }
                 Box::new(SimIo::new(initial_tree.clone(), vec![]))
             }
-            None => match RealIo::grant_with_output(
-                std::path::Path::new(
-                    &std::env::var_os("HIRSEL_RT_ROOT").unwrap_or_else(|| ".".into()),
-                ),
-                RawStdout,
+            // Without `HIRSEL_RT_ROOT` the root Io grants nothing (determinism.md, Run
+            // configuration): no mount and no projection.
+            None => match std::env::var_os("HIRSEL_RT_ROOT").map_or_else(
+                || {
+                    let mut io =
+                        RealIo::from_pinned_mounts([], RawStdout).expect("an empty mount set");
+                    io.set_projections(Default::default());
+                    Ok(io)
+                },
+                |root| RealIo::grant_with_output(std::path::Path::new(&root), RawStdout),
             ) {
                 Ok(mut io) => {
                     if let Some(ticks) = std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK") {

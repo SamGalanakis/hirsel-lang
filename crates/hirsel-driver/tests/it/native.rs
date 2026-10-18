@@ -968,6 +968,41 @@ fn zero_parameter_native_launch_refuses_non_result_and_non_unit_success() {
     });
 }
 
+/// A harness launch without `HIRSEL_RT_ROOT` grants the root Io nothing: not the working
+/// directory, not stdout.
+#[test]
+fn io_native_entry_without_a_harness_root_is_granted_no_projection() {
+    with_compiler_stack(|| {
+        let checked = checked(
+            r#"pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  match io.dir(rt, path.of("")) { Error(NotGranted()) => (), _ => return Error("dir") }
+  match io.stdout(rt) { Error(_) => (), Ok(_) => return Error("stdout") }
+  Ok(())
+}"#,
+        );
+        let ready = build(&checked.validated, &Options::new(x86())).unwrap();
+        let toolchain = toolchain(&smoke_matrix());
+        let dir = scratch("io-no-root");
+        let executable = link(
+            &ready,
+            &checked.entry,
+            OptLevel::Speed,
+            Partition::Whole,
+            &toolchain,
+            &dir,
+        )
+        .unwrap();
+        let output = std::process::Command::new(std::fs::canonicalize(executable).unwrap())
+            .current_dir(&dir)
+            .env_clear()
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+    });
+}
+
 #[test]
 fn root_free_native_entry_ignores_ambient_directory_and_argument_inputs() {
     use std::os::unix::ffi::OsStringExt;
