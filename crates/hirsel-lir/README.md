@@ -202,8 +202,9 @@ Invariants:
   inside a block as a byte slice under a covering loan, and `FlatLength`
   counts a flat sequence (LIR schema revision 4). The scalar library
   instructions (LIR schema revision 6) are typed here: `Convert` by its mode's
-  kind pairs and flag (`Type("conversion")`), `IntArith` as `Add` of one
-  integer kind with a Bool flag exactly in `Checked` mode
+  kind pairs and flag (`Type("conversion")`), `IntArith` over one integer
+  kind with wrapping operations listed under revision 28 below, named Add
+  modes, and a Bool flag exactly in `Checked` mode
   (`Type("integer arithmetic")`), `MulAdd` over one float kind
   (`Type("fused multiply-add")`), and the named `Binary` operations by domain
   (`Type("binary operands")`: divisions over integers, minimum, maximum and
