@@ -77,7 +77,7 @@ fn tir_depth_failure_uses_mem3_site_and_runs_emitted_cleanup() {
 #[test]
 fn internal_set_order_sorts_structurally_then_compares_lexicographically() {
     // Spec #93: internal structural ordering only; source < stays scalar/bytes.
-    let set = |xs: &[u128]| Value::Set(xs.iter().map(|&x| Some(int(x))).collect());
+    let set = |xs: &[u128]| Value::set(xs.iter().map(|&x| Some(int(x))).collect());
     assert_eq!(
         compare(&set(&[256]), &set(&[2])),
         Ok(Some(Ordering::Greater))

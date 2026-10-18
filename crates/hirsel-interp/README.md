@@ -141,9 +141,9 @@ silently becoming an ordinary record. `RuntimeTypes.forget` names the registered
 intrinsic; its one argument must be Take, a resource from the caller's defining
 module. Forget suppresses both the finalizer and all owned-field destruction.
 
-`Value::Sequence { kind, elements }` represents Array/List/Inline/Simd. `Value::Map`
+`Value::Sequence { kind, elements, arena }` represents Array/List/Inline/Simd. `Value::Map`
 contains optional `(key,value)` tuple entries in insertion order; `Value::Set`
-contains optional elements in insertion order. M owns their named operations;
+contains optional elements in insertion order; each has an `arena` tag as a Sequence does. M owns their named operations;
 structural map equality is order-sensitive, set equality and hashing ignore order.
 Opaque `Handle { kind, id }` is for capability/runtime identity, never host addresses.
 The registry chooses tags and deterministic IDs; no behavior is inferred from tags.
@@ -336,6 +336,10 @@ failure whose first record is that arena's `OutOfSpace` with no later record (no
 during its cleanup) is removed and becomes `Error(OutOfSpace)`; every other failure
 propagates unchanged. A charge of a generic type, which parametric execution cannot size,
 is `Error::Unavailable`, as is a copy of a callable into a bounded arena.
+A List, Array, Map or Set block in an arena carries `ArenaStorage` (its arena, one
+element's or entry's charge and a shared flag): `list.push` and an insert of a new key
+charge one element or entry, and the first write to a shared one charges its length or
+entry count (`eval.rs` `list_write`, `keyed_write`).
 
 The private heap producer returns an opaque stable `$Heap` handle with identity zero. It performs no allocation. This executes the heap keyword independently of the M2 `copy_to` operation.
 

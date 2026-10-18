@@ -59,11 +59,16 @@ impl Importer<'_, '_> {
         Ok(t)
     }
 
-    /// Whether the TIR type `ty` is a List or Array: the blocks MEM-6 tracks
-    /// in an arena.
-    pub(super) fn list_or_array(&mut self, ty: TypeId) -> R<bool> {
+    /// Whether a block of the TIR type `ty` whose payload is `payload` is one
+    /// MEM-6 tracks in an arena: a List or Array of rows, a Map or a Set.
+    pub(super) fn tracked_block(&mut self, ty: TypeId, payload: LayoutId) -> R<bool> {
         let ty = self.ty(ty)?;
-        Ok(crate::library::list_or_array(&self.store, ty))
+        Ok(crate::library::tracked_block(
+            &self.store,
+            ty,
+            self.layouts.table(),
+            payload,
+        ))
     }
 
     pub(super) fn layout(&mut self, store_ty: TypeId) -> R<LayoutId> {

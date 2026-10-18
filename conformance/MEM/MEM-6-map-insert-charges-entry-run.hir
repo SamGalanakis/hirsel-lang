@@ -1,0 +1,76 @@
+// rule: MEM-6
+// expect: run
+// stdout: 64 out of space
+// stdout: 2400 fits
+// stdout: 2399 out of space
+// stdout: 32 fits
+// stdout: 31 out of space
+// "Each map.insert or set.insert of a key a Map or Set in it does not hold charges that
+// entry's logical size (key plus value, or the member) before it consumes its arguments."
+// An arena Map[u64, u64] grows in its arena: 150 inserts charge 16 each, the hash index
+// nothing. Replacing the value of a key the Map holds charges nothing, and a String key
+// charges its reference, the String being on the heap.
+fn grow(cap: u64) -> Result[u64, OutOfSpace] {
+  let empty: Map[u64, u64] = map.empty()
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m = copy_to(a, empty)
+      for i in 0u64..150u64 {
+        map.insert(mut m, i, i)
+      }
+      match map.get(m, 149u64) {
+        Some(v) => v,
+        None => 0u64,
+      }
+    }
+  )
+}
+
+fn replace(cap: u64) -> Result[u64, OutOfSpace] {
+  let empty: Map[String, u64] = map.empty()
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m = copy_to(a, empty)
+      map.insert(mut m, "a", 1u64)
+      map.insert(mut m, "bc", 2u64)
+      map.insert(mut m, "a", 3u64)
+      match map.get(m, "a") {
+        Some(v) => v,
+        None => 0u64,
+      }
+    }
+  )
+}
+
+fn report(
+  stdout: Stdout,
+  fits: String,
+  over: String,
+  r: Result[u64, OutOfSpace],
+  value: u64
+) -> () {
+  if r == Ok(value) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  report(stdout, "64 fits\n", "64 out of space\n", grow(64u64), 149u64)
+  report(stdout, "2400 fits\n", "2400 out of space\n", grow(2400u64), 149u64)
+  report(stdout, "2399 fits\n", "2399 out of space\n", grow(2399u64), 149u64)
+  report(stdout, "32 fits\n", "32 out of space\n", replace(32u64), 3u64)
+  report(stdout, "31 fits\n", "31 out of space\n", replace(31u64), 3u64)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -1,0 +1,48 @@
+// rule: MEM-6
+// expect: run
+// stdout: 56 fits
+// stdout: 55 out of space
+// "A push or insert through a nested place copies the inner List, Map or Set each time,
+// charged." A Map lent through a List element is shared, so each insert copies it: the
+// List charges 8, the first insert 16, the second 16 for its entry and 16 for the copy.
+fn through(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: List[Map[u64, u64]] = []
+  list.push(mut h, map.empty())
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut ms = copy_to(a, h)
+      map.insert(mut ms[0], 1u64, 1u64)
+      map.insert(mut ms[0], 2u64, 2u64)
+      list.len(ms)
+    }
+  )
+}
+
+fn report(
+  stdout: Stdout,
+  fits: String,
+  over: String,
+  r: Result[u64, OutOfSpace],
+  value: u64
+) -> () {
+  if r == Ok(value) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  report(stdout, "56 fits\n", "56 out of space\n", through(56u64), 1u64)
+  report(stdout, "55 fits\n", "55 out of space\n", through(55u64), 1u64)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

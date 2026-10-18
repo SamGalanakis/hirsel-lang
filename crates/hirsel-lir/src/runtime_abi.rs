@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 11;
+pub const ABI_VERSION: u32 = 12;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -39,8 +39,8 @@ pub const COUNT_OFFSET: u64 = 0;
 pub const COUNT_UNIQUE: u64 = 1;
 /// The count value of an immortal block: sticky, never wraps.
 pub const COUNT_IMMORTAL: u64 = u32::MAX as u64;
-/// The count of a tracked arena block (a List or Array in an arena, MEM-6, runtime
-/// ABI 11) that is unshared: a write may change it in place, though it is never unique.
+/// The count of a tracked arena block (a List, Array, Map or Set in an arena, MEM-6,
+/// runtime ABI 11, 12 for a Map's or Set's) that is unshared: a write may change it in place, though it is never unique.
 /// A dup makes it [`COUNT_ARENA_SHARED`]. Like the immortal count, neither is ever
 /// released: every count at or above [`COUNT_ARENA_SHARED`] is uncounted.
 pub const COUNT_ARENA_UNIQUE: u64 = u32::MAX as u64 - 1;
@@ -74,7 +74,8 @@ pub const SLAB_POOL_OFFSET: u64 = 32;
 pub const LARGE_PREFIX_POINTER_BACK: u64 = 8;
 pub const LARGE_CAPACITY_OFFSET: u64 = 32;
 pub const IMMORTAL_CAPACITY_BACK: u64 = 16;
-/// A tracked arena block (runtime ABI 11) has one more prefix word before its extent:
+/// A tracked arena block (runtime ABI 11) has one more prefix word before its extent (a
+/// fixed layout's too, runtime ABI 12, whose extent words are unused):
 /// the address of its arena's record, [`TRACKED_REGION_BACK`] bytes before the header,
 /// so [`TRACKED_PREFIX_BYTES`] precede its payload in all, the header's eight included.
 pub const TRACKED_REGION_BACK: u64 = 24;
@@ -143,7 +144,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 7;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 8;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -164,10 +165,15 @@ pub const LAYOUT_FROZEN: u32 = 32;
 /// The payload is a sequence's (descriptor version 7): a deep copy into an arena tracks
 /// a block of it (MEM-6) unless it lies below a [`LAYOUT_UNTRACKED_BELOW`] block.
 pub const LAYOUT_SEQUENCE: u32 = 64;
-/// A block of this payload (a Map's, a Set's, a closure environment's) keeps the
+/// A block of this payload (a SortedMap's, a Slots', a closure environment's) keeps the
 /// sequences it reaches untracked when a deep copy puts them in an arena (descriptor
 /// version 7).
 pub const LAYOUT_UNTRACKED_BELOW: u32 = 128;
+/// A Map's or Set's block payload (descriptor version 8, MEM-6): its entries List at
+/// payload offset 0, then its index. Its own block charges nothing. A deep copy into a
+/// bounded arena tracks the block and its entries List, charged as any List, and neither
+/// tracks nor charges its index.
+pub const LAYOUT_KEYED: u32 = 256;
 pub const STEP_RELEASE: u32 = 1;
 pub const STEP_FINALIZE: u32 = 2;
 pub const STEP_CLOSE_HANDLE: u32 = 3;

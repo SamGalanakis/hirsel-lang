@@ -141,7 +141,8 @@ pub(crate) fn construction<'a>(
     charge().map_err(logical_error)
 }
 
-/// The logical bytes of one element of the List or Array type `ty`: what a push
+/// The logical bytes of one element of the List or Array type `ty`, or one
+/// entry of the Map or Set type `ty`: what a push or an insert of a new key
 /// charges, and per element what a copy-on-write copy charges (MEM-6).
 pub(crate) fn element<'a>(
     runtime: &'a RuntimeTypes,
@@ -156,9 +157,9 @@ pub(crate) fn element<'a>(
     Ok(element.unwrap_or(0))
 }
 
-/// The arena storage of a sequence of `kind` built in `arena` (MEM-6): a List or
-/// Array, `None` for any other. Its per-element charge is read from `ty` only when the
-/// arena is bounded: an unbounded arena is never charged.
+/// The arena storage of a block of `kind` built in `arena` (MEM-6): a List,
+/// Array, Map or Set, `None` for any other. Its per-element charge is read from
+/// `ty` only when the arena is bounded: an unbounded arena is never charged.
 pub(crate) fn storage<'a>(
     runtime: &'a RuntimeTypes,
     store: &'a TypeStore,
@@ -167,7 +168,10 @@ pub(crate) fn storage<'a>(
     arena: u64,
     bounded: bool,
 ) -> Result<Option<ArenaStorage>, Error> {
-    if !matches!(kind, BuiltinType::List | BuiltinType::Array) {
+    if !matches!(
+        kind,
+        BuiltinType::List | BuiltinType::Array | BuiltinType::Map | BuiltinType::Set
+    ) {
         return Ok(None);
     }
     let resolve = resolver(runtime);
@@ -205,10 +209,10 @@ fn sequential<'a>(
     ))
 }
 
-/// Retag every List and Array block of `value`'s tree outside Maps and Sets as
-/// fresh storage of `arena`, or every one as heap storage when it is None: a
-/// deep copy (`copy_to`) builds every block anew, unshared. Element charges
-/// are read from `ty` only for a bounded arena.
+/// Retag every List, Array, Map and Set block of `value`'s tree as fresh
+/// storage of `arena`, or every one as heap storage when it is None: a deep
+/// copy (`copy_to`) builds every block anew, unshared. Element charges are
+/// read from `ty` only for a bounded arena.
 pub(crate) fn retag<'a>(
     runtime: &'a RuntimeTypes,
     store: &'a TypeStore,
@@ -219,7 +223,7 @@ pub(crate) fn retag<'a>(
     let Some((arena, bounded)) = arena else {
         let mut work = vec![value];
         while let Some(value) = work.pop() {
-            if let Value::Sequence { arena, .. } = value {
+            if let Some(arena) = value.arena_storage_mut() {
                 *arena = None;
             }
             if let Some(fields) = value.fields_mut() {
@@ -235,12 +239,11 @@ pub(crate) fn retag<'a>(
                 kind: BuiltinType::List | BuiltinType::Array,
                 arena: tag,
                 ..
-            } = value
+            }
+            | Value::Map { arena: tag, .. }
+            | Value::Set { arena: tag, .. } = value
             {
                 *tag = Some(ArenaStorage::fresh(arena, 0));
-            }
-            if matches!(value, Value::Map(_) | Value::Set(_)) {
-                continue;
             }
             if let Some(fields) = value.fields_mut() {
                 work.extend(fields.iter_mut().flatten());
@@ -286,7 +289,43 @@ pub(crate) fn retag<'a>(
                             work.push((element_value, *element, scope.clone()));
                         }
                     }
-                    // A Map or Set's storage is its own: the Lists it holds are untracked.
+                    (
+                        BuiltinType::Set,
+                        [element, ..],
+                        Value::Set {
+                            entries,
+                            arena: tag,
+                        },
+                    ) => {
+                        let each = logical.size(*element, &scope).map_err(logical_error)?;
+                        *tag = Some(ArenaStorage::fresh(arena, each));
+                        for entry in entries.iter_mut().flatten() {
+                            work.push((entry, *element, scope.clone()));
+                        }
+                    }
+                    (
+                        BuiltinType::Map,
+                        [key, item, ..],
+                        Value::Map {
+                            entries,
+                            arena: tag,
+                        },
+                    ) => {
+                        let each = logical
+                            .size(*key, &scope)
+                            .and_then(|k| Ok(k.saturating_add(logical.size(*item, &scope)?)))
+                            .map_err(logical_error)?;
+                        *tag = Some(ArenaStorage::fresh(arena, each));
+                        for entry in entries.iter_mut().flatten() {
+                            let Value::Tuple(parts) = entry else {
+                                return Err(mismatch());
+                            };
+                            if let [Some(k), Some(v)] = parts.as_mut_slice() {
+                                work.push((k, *key, scope.clone()));
+                                work.push((v, *item, scope.clone()));
+                            }
+                        }
+                    }
                     (
                         BuiltinType::Inline | BuiltinType::Simd,
                         [element, ..],
@@ -402,14 +441,20 @@ pub(crate) fn copy<'a>(
                             work.push((element_value, *element, scope.clone()));
                         }
                     }
-                    (BuiltinType::Set, [element, ..], Value::Set(elements)) => {
+                    (
+                        BuiltinType::Set,
+                        [element, ..],
+                        Value::Set {
+                            entries: elements, ..
+                        },
+                    ) => {
                         let each = size(*element)?;
                         total = total.saturating_add(each.saturating_mul(elements.len() as u64));
                         for element_value in elements.iter().flatten() {
                             work.push((element_value, *element, scope.clone()));
                         }
                     }
-                    (BuiltinType::Map, [key, item, ..], Value::Map(entries)) => {
+                    (BuiltinType::Map, [key, item, ..], Value::Map { entries, .. }) => {
                         let each = size(*key)?.saturating_add(size(*item)?);
                         total = total.saturating_add(each.saturating_mul(entries.len() as u64));
                         for entry in entries.iter().flatten() {

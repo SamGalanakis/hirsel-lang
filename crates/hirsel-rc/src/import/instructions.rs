@@ -959,12 +959,9 @@ impl Importer<'_, '_> {
             _ => self.layout_of(ty),
         };
         let anchor = self.anchor_here();
-        // A copy of a List or Array of rows in an arena is tracked there (MEM-6).
-        let tracked = self.list_or_array(self.body.places[value.place.0 as usize].ty)?
-            && matches!(
-                self.layouts.record(layout).kind,
-                LayoutKind::Sequence { .. }
-            );
+        // A copy of a List or Array of rows, a Map or a Set in an arena is
+        // tracked there (MEM-6).
+        let tracked = self.tracked_block(self.body.places[value.place.0 as usize].ty, layout)?;
         let construct = hirsel_lir::ir::ConstructId(self.out.tables.constructs.len() as u32);
         self.out.tables.constructs.push(ConstructSite {
             arena_no_drop: false,
@@ -1137,6 +1134,7 @@ impl Importer<'_, '_> {
                 _ => return malformed("container sequence"),
             };
             let sequence_ty = self.intern(layout);
+            let site = self.out.tables.constructs.len();
             let value = self.construct(
                 ConstructorKind::Sequence,
                 sequence,
@@ -1144,6 +1142,11 @@ impl Importer<'_, '_> {
                 destination.clone(),
                 sequence_ty,
             )?;
+            // A Map's or Set's entries are tracked in an arena with it, its
+            // index never (MEM-6).
+            if field == 0 && self.out.tables.constructs.len() > site {
+                self.out.tables.constructs[site].tracked = true;
+            }
             if self.holds(value) {
                 self.failure.pending.push(value);
             }
@@ -1154,6 +1157,7 @@ impl Importer<'_, '_> {
             &hirsel_syntax::DefPath::core(if is_map { "Map" } else { "Set" }),
             None,
         );
+        let site = self.out.tables.constructs.len();
         let empty = self.construct(
             ConstructorKind::Record(symbol),
             payload,
@@ -1161,6 +1165,7 @@ impl Importer<'_, '_> {
             destination,
             ty,
         )?;
+        self.out.tables.constructs[site].tracked = true;
         if fields.is_empty() {
             return Ok(empty);
         }

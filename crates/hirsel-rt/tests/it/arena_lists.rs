@@ -3,7 +3,8 @@
 //! element, and a shared List's count when it copies it within the arena; growth relocates
 //! within the arena, uncharged, so after `n` pushes the List's storage is at most `4n + 4`
 //! elements. A detach copies a tracked block within its arena, a deep copy into an arena
-//! tracks the sequences it copies except below a Map, and a reserve leaves a tracked block.
+//! tracks the sequences, Maps and Sets it copies except a Map's index and anything below an
+//! untracked-below block, and a reserve leaves a tracked block.
 
 use crate::support;
 
@@ -21,8 +22,8 @@ use hirsel_rt::region::{
 use hirsel_rt::release::hirsel_rt_v2_release;
 use hirsel_rt::{
     COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_IMMORTAL, Config, Header, LAYOUT_DYNAMIC,
-    LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_SEQUENCE, LAYOUT_UNTRACKED_BELOW, Layout, Region,
-    STATUS_EXHAUSTED, WHOLE_VALUE,
+    LAYOUT_KEYED, LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_NO_EXTENT, LAYOUT_SEQUENCE,
+    LAYOUT_UNTRACKED_BELOW, Layout, Region, STATUS_EXHAUSTED, WHOLE_VALUE,
 };
 use support::*;
 
@@ -338,10 +339,10 @@ fn a_reserve_leaves_a_tracked_block() {
 }
 
 /// A deep copy into a bounded arena tracks the root when asked and every sequence below it,
-/// except those an untracked-below block (a Map's storage) holds, which stay immortal. An
-/// unbounded arena, whose charges nothing observes, tracks nothing.
+/// except those an untracked-below block (a SortedMap's storage) holds, which stay immortal.
+/// An unbounded arena, whose charges nothing observes, tracks nothing.
 #[test]
-fn a_deep_copy_tracks_sequences_except_below_a_map() {
+fn a_deep_copy_tracks_sequences_except_below_an_untracked_block() {
     for ctx in contexts() {
         let holder = layout(8, 1, None, vec![release_step(0, 0)]);
         let map = with_flags(holder, LAYOUT_UNTRACKED_BELOW);
@@ -384,6 +385,72 @@ fn a_deep_copy_tracks_sequences_except_below_a_map() {
                 unsafe { hirsel_rt_v2_release(ctx.0, block, (*block).index(), ptr::null(), 0) };
             assert_eq!(status, 0);
         }
+        assert_eq!(ctx.stats().live_blocks, 0);
+    }
+}
+
+/// A Map's block (`LAYOUT_KEYED`, runtime ABI 12) charges nothing itself and its index nothing:
+/// a deep copy into a bounded arena charges only the entries, tracks the block (a fixed
+/// layout, so its prefix leaves the extent words unused) and its entries, and keeps the index
+/// immortal. A detach of the shared block copies it within its arena uncharged, and the
+/// entries it then shares are charged when written.
+#[test]
+fn a_map_block_tracks_its_entries_and_never_its_index() {
+    for ctx in contexts() {
+        let map = with_flags(
+            layout(16, 2, None, vec![release_step(0, 0), release_step(1, 8)]),
+            LAYOUT_KEYED | LAYOUT_NO_EXTENT,
+        );
+        bind(&ctx, &[words(), map]);
+        let list = |len: u64| {
+            let block = alloc_block(ctx.0, words(), 16 + 8 * len);
+            write_u64(block, 0, len);
+            write_u64(block, SEQUENCE_CAPACITY_OFFSET as usize, len);
+            block
+        };
+        let (entries, index) = (list(2), list(3));
+        let source = alloc_block(ctx.0, map, 16);
+        write_ref(source, 0, entries);
+        write_ref(source, 8, index);
+        for (cap, status) in [(15, STATUS_EXHAUSTED), (16, 0)] {
+            let mut arena = open(&ctx, Some(cap));
+            let mut out = ptr::null_mut();
+            let copied = unsafe {
+                hirsel_rt_v2_unique_copy(
+                    ctx.0,
+                    source,
+                    arena.as_mut_ptr(),
+                    ALLOC_TRACKED,
+                    0,
+                    &mut out,
+                )
+            };
+            assert_eq!(copied, status);
+            if status == 0 {
+                assert_eq!(
+                    (count(out), count(read_ref(out, 0)), count(read_ref(out, 8))),
+                    (COUNT_ARENA_UNIQUE, COUNT_ARENA_UNIQUE, COUNT_IMMORTAL)
+                );
+                unsafe { hirsel_rt_v2_dup(ctx.0, out) };
+                let mut copy = ptr::null_mut();
+                assert_eq!(unsafe { hirsel_rt_v2_detach(ctx.0, out, 0, &mut copy) }, 0);
+                assert_ne!(copy, out);
+                assert_eq!(
+                    (count(copy), count(read_ref(copy, 0))),
+                    (COUNT_ARENA_UNIQUE, COUNT_ARENA_SHARED)
+                );
+                // The budget is spent: the shared entries' copy does not fit.
+                let mut entries = read_ref(copy, 0);
+                assert_eq!(
+                    unsafe { hirsel_rt_v2_detach(ctx.0, entries, 0, &mut entries) },
+                    STATUS_EXHAUSTED
+                );
+            }
+            close(&ctx, &mut arena);
+        }
+        let status =
+            unsafe { hirsel_rt_v2_release(ctx.0, source, (*source).index(), ptr::null(), 0) };
+        assert_eq!(status, 0);
         assert_eq!(ctx.stats().live_blocks, 0);
     }
 }

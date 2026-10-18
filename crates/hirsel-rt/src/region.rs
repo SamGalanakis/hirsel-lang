@@ -177,7 +177,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_owner(
 /// It has no count, so its drop program never runs from a release; the caller schedules the
 /// payload with `hirsel_rt_v2_region_schedule` when it moves a heap credit in. With
 /// [`ALLOC_TRACKED`] in `flags` (runtime ABI 11) the block is a tracked arena block instead: an
-/// unshared [`COUNT_ARENA_UNIQUE`] count, and its arena's record before the extent. Returns the
+/// unshared [`COUNT_ARENA_UNIQUE`] count, and its arena's record before the extent (a fixed
+/// layout's too, runtime ABI 12, whose extent words stay unused). Returns the
 /// block. It cannot fail: backing exhaustion terminates environmentally (runtime ABI 3).
 ///
 /// # Safety
@@ -198,8 +199,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
         let layout = &*ctx.descriptor(index);
         let bare = layout.flags & LAYOUT_NO_EXTENT != 0;
         let tracked = flags & ALLOC_TRACKED != 0;
-        if flags & !ALLOC_TRACKED != 0 || (tracked && bare) {
-            fault("an arena allocation has unknown flags or tracks a fixed layout");
+        if flags & !ALLOC_TRACKED != 0 {
+            fault("an arena allocation has unknown flags");
         }
         if bare && (extent != layout.size || align != layout.align) {
             fault("a fixed-layout arena block is not its layout's size and alignment");
@@ -209,11 +210,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
         }
         let physical = align.max(8);
         // The payload follows the header (after the 16-byte extent unless bare, and the
-        // region word when tracked), at `physical` alignment.
-        let prefix = if bare {
-            8
-        } else if tracked {
+        // region word when tracked: a tracked fixed layout leaves its extent words unused),
+        // at `physical` alignment.
+        let prefix = if tracked {
             TRACKED_PREFIX_BYTES
+        } else if bare {
+            8
         } else {
             24
         };
@@ -263,8 +265,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
     }
 }
 
-/// Whether `block` is a tracked arena block (MEM-6, runtime ABI 11): a List or Array whose
-/// count says whether it is shared.
+/// Whether `block` is a tracked arena block (MEM-6, runtime ABI 11): a List or Array, or a
+/// Map's or Set's block (runtime ABI 12), whose count says whether it is shared.
 ///
 /// # Safety
 /// `block` is a live block.

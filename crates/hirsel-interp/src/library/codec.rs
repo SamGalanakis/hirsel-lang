@@ -179,7 +179,7 @@ fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
                     kind: BuiltinType::Map,
                     arguments,
                 },
-                Value::Map(_),
+                Value::Map { .. },
             ) => {
                 let key = element(arguments, 0)?;
                 let val = element(arguments, 1)?;
@@ -197,7 +197,7 @@ fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
                     kind: BuiltinType::Set,
                     arguments,
                 },
-                Value::Set(_),
+                Value::Set { .. },
             ) => {
                 children.extend(
                     fields(value)?
@@ -327,7 +327,7 @@ fn from_wire(
                     SchemaNode::Builtin {
                         kind: BuiltinType::Map,
                         ..
-                    } => Value::Map(
+                    } => Value::map(
                         fs.chunks_mut(2)
                             .map(|p| Some(Value::Tuple(p.iter_mut().map(Option::take).collect())))
                             .collect(),
@@ -335,7 +335,7 @@ fn from_wire(
                     SchemaNode::Builtin {
                         kind: BuiltinType::Set,
                         ..
-                    } => Value::Set(fs),
+                    } => Value::set(fs),
                     SchemaNode::Builtin { kind, .. } => Value::Sequence {
                         kind: *kind,
                         elements: fs,

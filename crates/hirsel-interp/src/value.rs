@@ -163,8 +163,17 @@ pub enum Value {
     F64(u64),
     String(String),
     Bytes(Vec<u8>),
-    Map(Vec<Option<Value>>),
-    Set(Vec<Option<Value>>),
+    /// A Map's entries in insertion order; `arena` as for a Sequence (MEM-6):
+    /// a Map built in an arena, None elsewhere. Its element charge is one
+    /// entry's.
+    Map {
+        entries: Vec<Option<Value>>,
+        arena: Option<ArenaStorage>,
+    },
+    Set {
+        entries: Vec<Option<Value>>,
+        arena: Option<ArenaStorage>,
+    },
     Tuple(Vec<Option<Value>>),
     Record {
         definition: DefPath,
@@ -224,8 +233,8 @@ impl Value {
     }
     pub(crate) fn fields_mut(&mut self) -> Option<&mut Vec<Option<Value>>> {
         match self {
-            Self::Map(f)
-            | Self::Set(f)
+            Self::Map { entries: f, .. }
+            | Self::Set { entries: f, .. }
             | Self::Tuple(f)
             | Self::Box(f)
             | Self::Record { fields: f, .. }
@@ -246,8 +255,12 @@ impl Value {
             match value {
                 Value::F32(bits) if f32::from_bits(*bits).is_nan() => *bits = 0x7fc0_0000,
                 Value::F64(bits) if f64::from_bits(*bits).is_nan() => *bits = 0x7ff8_0000_0000_0000,
-                Value::Map(fields)
-                | Value::Set(fields)
+                Value::Map {
+                    entries: fields, ..
+                }
+                | Value::Set {
+                    entries: fields, ..
+                }
                 | Value::Tuple(fields)
                 | Value::Variant { fields, .. }
                 | Value::Record { fields, .. }
@@ -359,8 +372,14 @@ impl Clone for Value {
                     id: *id,
                 },
                 Value::Shared(root) => Value::Shared(root.clone()),
-                Value::Map(f) => Value::Map(vec![None; f.len()]),
-                Value::Set(f) => Value::Set(vec![None; f.len()]),
+                Value::Map { entries, arena } => Value::Map {
+                    entries: vec![None; entries.len()],
+                    arena: arena.clone(),
+                },
+                Value::Set { entries, arena } => Value::Set {
+                    entries: vec![None; entries.len()],
+                    arena: arena.clone(),
+                },
                 Value::Tuple(f) => Value::Tuple(vec![None; f.len()]),
                 Value::Box(f) => Value::Box(vec![None; f.len()]),
                 Value::Record { definition, fields } => Value::Record {
@@ -471,8 +490,8 @@ impl Value {
                 invoked: Some(invoked),
                 ..
             } if invoked.get().is_some() => Some(&[]),
-            Self::Map(f)
-            | Self::Set(f)
+            Self::Map { entries: f, .. }
+            | Self::Set { entries: f, .. }
             | Self::Tuple(f)
             | Self::Box(f)
             | Self::Record { fields: f, .. }
@@ -506,17 +525,47 @@ impl Value {
             arena: None,
         }
     }
-    /// MEM-6: a semantic copy of this value shares every arena List or Array of
-    /// its tree. Native code marks only the blocks it holds at inline depth, but
-    /// a block behind another one cannot be written or moved out until that one
-    /// is, and copying that one on its write gives each child a second holder.
+    /// A Map outside any arena.
+    pub fn map(entries: Vec<Option<Value>>) -> Self {
+        Self::Map {
+            entries,
+            arena: None,
+        }
+    }
+    /// A Set outside any arena.
+    pub fn set(entries: Vec<Option<Value>>) -> Self {
+        Self::Set {
+            entries,
+            arena: None,
+        }
+    }
+    /// The arena storage of a List, Array, Map or Set block placed in an arena
+    /// (MEM-6).
+    pub(crate) fn arena_storage(&self) -> Option<&ArenaStorage> {
+        match self {
+            Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
+                arena.as_ref()
+            }
+            _ => None,
+        }
+    }
+    pub(crate) fn arena_storage_mut(&mut self) -> Option<&mut Option<ArenaStorage>> {
+        match self {
+            Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
+                Some(arena)
+            }
+            _ => None,
+        }
+    }
+    /// MEM-6: a semantic copy of this value shares every arena List, Array, Map
+    /// or Set of its tree. Native code marks only the blocks it holds at inline
+    /// depth, but a block behind another one cannot be written or moved out
+    /// until that one is, and copying that one on its write gives each child a
+    /// second holder.
     pub(crate) fn share_arena_storage(&self) {
         let mut work = vec![self];
         while let Some(v) = work.pop() {
-            if let Self::Sequence {
-                arena: Some(arena), ..
-            } = v
-            {
+            if let Some(arena) = v.arena_storage() {
                 arena.share();
             }
             if let Some(fields) = v.fields() {
@@ -525,15 +574,12 @@ impl Value {
         }
     }
     /// MEM-6: a deep copy (`unique x`) builds every block anew where its source
-    /// lives, so each arena List or Array of it is fresh, unshared storage there.
+    /// lives, so each arena List, Array, Map or Set of it is fresh, unshared
+    /// storage there.
     pub(crate) fn fresh_arena_storage(&mut self) {
         let mut work = vec![self];
         while let Some(v) = work.pop() {
-            if let Self::Sequence {
-                arena: Some(storage),
-                ..
-            } = v
-            {
+            if let Some(Some(storage)) = v.arena_storage_mut() {
                 *storage = ArenaStorage::fresh(storage.arena, storage.element);
             }
             if let Some(fields) = v.fields_mut() {
@@ -546,8 +592,8 @@ impl Value {
         match self {
             Self::Sequence { kind, .. } => !matches!(kind, BuiltinType::Inline | BuiltinType::Simd),
             Self::Box(_)
-            | Self::Map(_)
-            | Self::Set(_)
+            | Self::Map { .. }
+            | Self::Set { .. }
             | Self::Closure { .. }
             | Self::String(_)
             | Self::Bytes(_) => true,

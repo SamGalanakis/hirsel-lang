@@ -1,0 +1,83 @@
+// rule: MEM-6
+// expect: run
+// stdout: 56 fits
+// stdout: 55 out of space
+// stdout: 64 fits
+// stdout: 63 out of space
+// The Lists and Maps a Map holds are tracked in its arena: map.get's counted local result
+// shares the stored value, so its first write copies it, charged. The Map[u64, List[u64]]
+// charges 16 for its entry and 16 for the List; a push to the List read back charges 8
+// and 16 for the copy. The Map of Maps charges 32; an insert into the inner Map read back
+// charges 16 and 16 for the copy.
+fn list_value(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: Map[u64, List[u64]] = map.empty()
+  map.insert(mut h, 1u64, [1u64, 2u64])
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let m = copy_to(a, h)
+      match map.get(m, 1u64) {
+        Some(xs) => {
+          let mut ys = xs
+          list.push(mut ys, 3u64)
+          list.len(ys)
+        },
+        None => 0u64,
+      }
+    }
+  )
+}
+
+fn map_value(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: Map[u64, Map[u64, u64]] = map.empty()
+  let mut inner: Map[u64, u64] = map.empty()
+  map.insert(mut inner, 7u64, 7u64)
+  map.insert(mut h, 1u64, take inner)
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let m = copy_to(a, h)
+      match map.get(m, 1u64) {
+        Some(x) => {
+          let mut y = x
+          map.insert(mut y, 8u64, 8u64)
+          match map.get(y, 8u64) {
+            Some(v) => v,
+            None => 0u64,
+          }
+        },
+        None => 0u64,
+      }
+    }
+  )
+}
+
+fn report(
+  stdout: Stdout,
+  fits: String,
+  over: String,
+  r: Result[u64, OutOfSpace],
+  value: u64
+) -> () {
+  if r == Ok(value) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  report(stdout, "56 fits\n", "56 out of space\n", list_value(56u64), 3u64)
+  report(stdout, "55 fits\n", "55 out of space\n", list_value(55u64), 3u64)
+  report(stdout, "64 fits\n", "64 out of space\n", map_value(64u64), 8u64)
+  report(stdout, "63 fits\n", "63 out of space\n", map_value(63u64), 8u64)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

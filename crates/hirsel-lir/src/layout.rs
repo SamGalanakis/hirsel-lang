@@ -575,7 +575,9 @@ impl LogicalCharge {
 }
 
 /// The charge of a block whose payload layout is `payload`; None for a payload
-/// with no logical size (a flat encoding or an environment).
+/// with no logical size (a flat encoding or an environment). A Map's or Set's
+/// own block charges nothing: its entries List charges its entries, and its
+/// index nothing ([`keyed_index`]).
 pub fn block_charge(table: &LayoutTable, payload: LayoutId) -> Option<LogicalCharge> {
     match &table.layout(payload)?.kind {
         LayoutKind::Sequence { element }
@@ -583,6 +585,34 @@ pub fn block_charge(table: &LayoutTable, payload: LayoutId) -> Option<LogicalCha
         | LayoutKind::SoaColumns { element } => {
             Some(LogicalCharge::PerElement(logical_size(table, *element)?))
         }
+        _ if keyed(table, payload) => Some(LogicalCharge::Fixed(0)),
         _ => Some(LogicalCharge::Fixed(logical_size(table, payload)?)),
     }
+}
+
+/// Whether `payload` is a Map's or Set's block payload (MEM-6): its field 0 is
+/// the dense entries List, a bounded arena's charge and tracking of its
+/// contents, and its field 1 the index, which a bounded arena neither charges
+/// nor tracks.
+pub fn keyed(table: &LayoutTable, payload: LayoutId) -> bool {
+    matches!(
+        table.layout(payload).map(|r| &r.kind),
+        Some(LayoutKind::Opaque { owner })
+            if [hirsel_syntax::DefPath::core("Map"), hirsel_syntax::DefPath::core("Set")]
+                .contains(owner)
+    )
+}
+
+/// The byte offset of a Map's or Set's index field in its block payload
+/// `payload`; None for any other payload ([`keyed`]).
+pub fn keyed_index(table: &LayoutTable, payload: LayoutId) -> Option<u64> {
+    if !keyed(table, payload) {
+        return None;
+    }
+    table
+        .layout(payload)?
+        .fields
+        .iter()
+        .find(|f| f.ordinal == 1)
+        .map(|f| f.offset)
 }

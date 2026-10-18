@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 7;
+pub const LAYOUT_VERSION: u32 = 8;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -57,9 +57,14 @@ pub const LAYOUT_FROZEN: u32 = 32;
 /// `Layout::flags` (version 7): a sequence's payload. A deep copy into an arena tracks a block
 /// of it (MEM-6) unless the copy reached it below a [`LAYOUT_UNTRACKED_BELOW`] block.
 pub const LAYOUT_SEQUENCE: u32 = 64;
-/// `Layout::flags` (version 7): a Map's, a Set's or an environment's payload, whose sequences a
-/// deep copy into an arena keeps untracked.
+/// `Layout::flags` (version 7): a SortedMap's, a Slots' or an environment's payload, whose
+/// sequences a deep copy into an arena keeps untracked.
 pub const LAYOUT_UNTRACKED_BELOW: u32 = 128;
+/// `Layout::flags` (version 8): a Map's or Set's payload, its entries List at offset 0, then
+/// its index. A deep copy into a bounded arena tracks the block and its entries (MEM-6),
+/// charged as any List, and neither tracks nor charges the index; the block's own logical
+/// size is 0.
+pub const LAYOUT_KEYED: u32 = 256;
 
 /// Release the counted block reference stored at `offset`.
 pub const STEP_RELEASE: u32 = 1;
@@ -180,7 +185,8 @@ pub(crate) unsafe fn check_layout(layout: *const Layout) {
             | LAYOUT_LOGICAL_PER_ELEMENT
             | LAYOUT_FROZEN
             | LAYOUT_SEQUENCE
-            | LAYOUT_UNTRACKED_BELOW)
+            | LAYOUT_UNTRACKED_BELOW
+            | LAYOUT_KEYED)
         != 0
     {
         fault("a layout descriptor has unknown flags");

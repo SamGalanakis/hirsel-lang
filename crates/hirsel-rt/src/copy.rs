@@ -24,10 +24,11 @@
 //! `logical` size (per element: times its u64 count). A copy the budget does not cover
 //! returns [`STATUS_EXHAUSTED`] and copies nothing; the caller records the failure.
 //!
-//! Into a bounded arena, every copied sequence block ([`LAYOUT_SEQUENCE`]) is a tracked arena
-//! block, unshared, except below a Map, Set or environment ([`LAYOUT_UNTRACKED_BELOW`]); the
-//! root is tracked when the caller says so. A detach of a tracked arena block copies it within
-//! its arena, charged its count.
+//! Into a bounded arena, every copied sequence block ([`LAYOUT_SEQUENCE`]) and Map or Set block
+//! ([`LAYOUT_KEYED`]) is a tracked arena block, unshared, except a Map's or Set's index and
+//! anything below a SortedMap, Slots or environment ([`LAYOUT_UNTRACKED_BELOW`]); the root is
+//! tracked when the caller says so. A Map's or Set's index is never charged. A detach of a
+//! tracked arena block copies it within its arena, charged its count.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,7 +39,8 @@ use crate::context::RunCtx;
 use crate::count::check_live_block;
 use crate::region::{ALLOC_TRACKED, Region, is_tracked, tracked_region};
 use crate::release::{
-    LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_SEQUENCE, LAYOUT_UNTRACKED_BELOW, LOGICAL_UNSUPPORTED,
+    LAYOUT_KEYED, LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_SEQUENCE, LAYOUT_UNTRACKED_BELOW,
+    LOGICAL_UNSUPPORTED,
 };
 use crate::release::{
     Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP,
@@ -192,13 +194,24 @@ pub(crate) unsafe fn holders(
     }
 }
 
+/// Whether `slot`, a holder slot of a block whose descriptor is `layout` and whose payload is
+/// at `payload`, is a Map's or Set's index (`LAYOUT_KEYED`): every holder but the entries at
+/// offset 0.
+///
+/// # Safety
+/// `layout` is a live descriptor.
+unsafe fn keyed_index(layout: *const Layout, payload: *mut u8, slot: *mut u8) -> bool {
+    // SAFETY: caller contract.
+    unsafe { (*layout).flags & LAYOUT_KEYED != 0 && slot != payload }
+}
+
 /// The deep copy walk: each slot of `root` naming a counted block is rewritten to that
 /// block's copy (made once), and then every copy's slots in turn. A block reached again gains
 /// one holder instead of a second copy, so sharing inside the graph is kept. Into a bounded
-/// arena, the first block copied is tracked when `first` says so; every other sequence block
-/// is unless an untracked-below block holds it, directly or not, or `track` is false for the
-/// root's. A tracked copy whose layout has a drop program is scheduled for the arena's exit,
-/// since pushes may move heap credits into it.
+/// arena, the first block copied is tracked when `first` says so; every other sequence, Map
+/// or Set block is unless it is a Map's or Set's index or an untracked-below block holds it,
+/// directly or not, or `track` is false for the root's. A tracked copy whose layout has a drop
+/// program is scheduled for the arena's exit, since pushes may move heap credits into it.
 unsafe fn copy_graph(
     raw: *mut RunCtx,
     destination: *mut Region,
@@ -218,6 +231,9 @@ unsafe fn copy_graph(
         let mut copies: HashMap<*mut Header, *mut Header> = HashMap::new();
         // Each copy still to walk, and whether the sequences below it are tracked.
         let pending: RefCell<Vec<(*mut Header, bool)>> = RefCell::new(Vec::new());
+        // The copy whose holder slots are being walked, if any: a Map's or Set's index is not
+        // tracked.
+        let walked: std::cell::Cell<*mut Header> = std::cell::Cell::new(ptr::null_mut());
         // Only a bounded arena's charges observe tracking (MEM-6).
         let arena = !destination.is_null() && (*destination).bound != 0;
         let below = std::cell::Cell::new(track && arena);
@@ -240,9 +256,13 @@ unsafe fn copy_graph(
                 }
                 None => {
                     let flags = (*(*raw).descriptor((*child).index())).flags;
+                    let parent = walked.get();
+                    let index = !parent.is_null()
+                        && keyed_index((*raw).descriptor((*parent).index()), payload(parent), slot);
+                    let below = below.get() && !index;
                     let tracked = match first.take() {
                         Some(root) => root && arena,
-                        None => below.get() && flags & LAYOUT_SEQUENCE != 0,
+                        None => below && flags & (LAYOUT_SEQUENCE | LAYOUT_KEYED) != 0,
                     };
                     let target = clone_block(&mut *raw, child, destination, tracked);
                     if tracked && (*(*raw).descriptor((*target).index())).step_count != 0 {
@@ -254,7 +274,7 @@ unsafe fn copy_graph(
                         );
                     }
                     copies.insert(child, target);
-                    let tracks = below.get() && flags & LAYOUT_UNTRACKED_BELOW == 0;
+                    let tracks = below && flags & LAYOUT_UNTRACKED_BELOW == 0;
                     pending.borrow_mut().push((target, tracks));
                     target
                 }
@@ -267,6 +287,7 @@ unsafe fn copy_graph(
                 break;
             };
             below.set(tracks);
+            walked.set(copy);
             holders(
                 (*ctx).descriptor((*copy).index()),
                 payload(copy),
@@ -299,13 +320,15 @@ unsafe fn tree_charge(ctx: &RunCtx, root: impl FnOnce(&mut dyn FnMut(*mut u8))) 
     // SAFETY: caller contract of the entries below.
     unsafe {
         let child = |slot: *mut u8| slot.cast::<*mut Header>().read_unaligned();
+        // A Map's or Set's index is not charged (`LAYOUT_KEYED`).
         let children = |block: *mut Header| {
             let mut out = Vec::new();
-            holders(
-                ctx.descriptor((*block).index()),
-                payload(block),
-                &mut |slot| out.push(child(slot)),
-            );
+            let layout = ctx.descriptor((*block).index());
+            holders(layout, payload(block), &mut |slot| {
+                if !keyed_index(layout, payload(block), slot) {
+                    out.push(child(slot));
+                }
+            });
             out
         };
         let mut roots = Vec::new();

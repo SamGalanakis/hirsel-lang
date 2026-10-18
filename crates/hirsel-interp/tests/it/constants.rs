@@ -100,7 +100,7 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
                     constructor: Constructor::Set,
                     fields: vec![scalar.clone()],
                 },
-                Value::Set(vec![Some(Value::Integer(
+                Value::set(vec![Some(Value::Integer(
                     hirsel_interp::Integer::new(Primitive::U32, 7).unwrap(),
                 ))]),
             ),
@@ -128,7 +128,7 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
                         constructor: Constructor::Map,
                         fields: vec![entry],
                     },
-                    Value::Map(vec![Some(Value::Tuple(vec![
+                    Value::map(vec![Some(Value::Tuple(vec![
                         Some(Value::Integer(
                             hirsel_interp::Integer::new(Primitive::U32, 7).unwrap(),
                         )),

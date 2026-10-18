@@ -1741,6 +1741,7 @@ fn execute_frames(
                             )?
                         } else {
                             list_write(&path, &mut arguments, &mut budgets)
+                                .or_else(|| keyed_write(&path, &mut arguments, &mut budgets))
                         };
                         let result = if let Some(arena) = exhausted {
                             budgets.exhausted(arena, execution.failures.len());
@@ -2292,22 +2293,31 @@ fn rvalue(
                 vec![]
             };
             let mut value = crate::aggregate::construct(constructor, values, kind, runtime, sizes)?;
-            // MEM-6: a List or Array built in an arena is unshared storage there.
+            // MEM-6: a List, Array, Map or Set built in an arena is unshared
+            // storage there.
             if let Destination::Arena(origin) = &placement
                 && let Some(arena) = frame.arena_of(origin)
-                && let Value::Sequence {
-                    kind, arena: tag, ..
-                } = &mut value
             {
-                let arena = u64::from(arena);
-                *tag = crate::bounded::storage(
-                    runtime,
-                    &frame.definition.types,
-                    frame.place(destination)?.ty,
-                    *kind,
-                    arena,
-                    budgets.bounded(arena),
-                )?;
+                let kind = match &value {
+                    Value::Sequence { kind, .. } => Some(*kind),
+                    Value::Map { .. } => Some(hirsel_types::BuiltinType::Map),
+                    Value::Set { .. } => Some(hirsel_types::BuiltinType::Set),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    let arena = u64::from(arena);
+                    let storage = crate::bounded::storage(
+                        runtime,
+                        &frame.definition.types,
+                        frame.place(destination)?.ty,
+                        kind,
+                        arena,
+                        budgets.bounded(arena),
+                    )?;
+                    if let Some(tag) = value.arena_storage_mut() {
+                        *tag = storage;
+                    }
+                }
             }
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, true);
@@ -2480,6 +2490,62 @@ fn list_write(
         *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
         // The original and the copy both hold every element.
         elements
+            .iter()
+            .flatten()
+            .for_each(crate::value::Value::share_arena_storage);
+    }
+    None
+}
+
+/// MEM-6: an insert of a new key into an arena Map or Set charges its entry
+/// before it consumes its arguments; a write to a shared one (an insert of a
+/// new key, a Map insert that replaces a value, a remove of a key it holds)
+/// first copies it within its arena, charged its entry count, and the
+/// operation writes the unshared copy. A Set insert of a member it holds and a
+/// remove of an absent key write nothing, and a key that cannot be hashed
+/// (`Depth`) charges nothing: the operation fails. Returns the arena whose
+/// budget is exceeded.
+fn keyed_write(
+    path: &hirsel_syntax::DefPath,
+    arguments: &mut [Value],
+    budgets: &mut crate::bounded::Budgets,
+) -> Option<u64> {
+    let name = ["map.insert", "set.insert", "map.remove", "set.remove"]
+        .into_iter()
+        .find(|name| *path == hirsel_syntax::DefPath::core(name))?;
+    let (container, rest) = arguments.split_first_mut()?;
+    let hit = crate::library::collection::contains(container, rest.first()?).ok()?;
+    // Whether the operation writes, and whether it adds an entry.
+    let (writes, adds) = match name {
+        "map.insert" => (true, !hit),
+        "set.insert" => (!hit, !hit),
+        _ => (hit, false),
+    };
+    let (Value::Map {
+        entries,
+        arena: Some(storage),
+    }
+    | Value::Set {
+        entries,
+        arena: Some(storage),
+    }) = container
+    else {
+        return None;
+    };
+    if !writes {
+        return None;
+    }
+    if adds && let Err(arena) = budgets.charge(storage.arena, storage.element) {
+        return Some(arena);
+    }
+    if storage.shared() {
+        let bytes = storage.element.saturating_mul(entries.len() as u64);
+        if let Err(arena) = budgets.charge(storage.arena, bytes) {
+            return Some(arena);
+        }
+        *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+        // The original and the copy both hold every entry.
+        entries
             .iter()
             .flatten()
             .for_each(crate::value::Value::share_arena_storage);

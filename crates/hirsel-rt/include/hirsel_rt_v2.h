@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 11
+#define HIRSEL_RT_V2_ABI_VERSION 12
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -42,7 +42,8 @@ extern "C" {
 #define HIRSEL_RT_V2_COUNT_OFFSET 0
 #define HIRSEL_RT_V2_COUNT_UNIQUE 1
 #define HIRSEL_RT_V2_COUNT_IMMORTAL UINT32_MAX
-/* A tracked arena block (a List or Array in an arena, MEM-6, ABI 11) counts ARENA_UNIQUE while
+/* A tracked arena block (a List or Array in an arena, MEM-6, ABI 11, or a Map's or Set's block,
+ * ABI 12) counts ARENA_UNIQUE while
  * unshared, which a write may change in place though it is never unique, and ARENA_SHARED once a
  * dup shares it, which its next write copies within its arena. No count at or above ARENA_SHARED
  * is ever released. */
@@ -67,7 +68,8 @@ extern "C" {
 #define HIRSEL_RT_V2_LARGE_CAPACITY_OFFSET 32
 #define HIRSEL_RT_V2_IMMORTAL_CAPACITY_BACK 16
 /* A tracked arena block's arena record address, TRACKED_REGION_BACK bytes before its header:
- * TRACKED_PREFIX_BYTES precede its payload in all, the header included (ABI 11). */
+ * TRACKED_PREFIX_BYTES precede its payload in all, the header included (ABI 11); a fixed
+ * layout's extent words stay unused (ABI 12). */
 #define HIRSEL_RT_V2_TRACKED_REGION_BACK 24
 #define HIRSEL_RT_V2_TRACKED_PREFIX_BYTES 32
 /* `flags` of arena_alloc and unique_copy: the block, or a deep copy's root, is tracked. */
@@ -121,7 +123,7 @@ extern "C" {
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 7
+#define HIRSEL_RT_V2_LAYOUT_VERSION 8
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -135,9 +137,14 @@ extern "C" {
  * root lives, and a deep copy reaching such a block adds a root instead. */
 #define HIRSEL_RT_V2_LAYOUT_FROZEN 32
 /* A sequence's payload: a deep copy into an arena tracks a block of it unless it lies below an
- * UNTRACKED_BELOW block (a Map's, a Set's, an environment's), whose sequences stay untracked. */
+ * UNTRACKED_BELOW block (a SortedMap's, a Slots', an environment's), whose sequences stay
+ * untracked. */
 #define HIRSEL_RT_V2_LAYOUT_SEQUENCE 64
 #define HIRSEL_RT_V2_LAYOUT_UNTRACKED_BELOW 128
+/* A Map's or Set's payload (version 8): its entries List at offset 0, then its index. Its own
+ * logical size is 0; a deep copy into a bounded arena tracks it and its entries and neither
+ * tracks nor charges its index (MEM-6, ABI 12). */
+#define HIRSEL_RT_V2_LAYOUT_KEYED 256
 #define HIRSEL_RT_V2_INDEX_MASK 0x1fffffffu
 #define HIRSEL_RT_V2_KIND_SHIFT 29
 #define HIRSEL_RT_V2_KIND_SMALL 0

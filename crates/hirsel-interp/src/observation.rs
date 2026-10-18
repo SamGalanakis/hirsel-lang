@@ -219,8 +219,8 @@ impl ObservedValue {
                     nodes.push(O::NonComparableFunction);
                     continue;
                 }
-                Value::Map(f) => (A::Map, f),
-                Value::Set(f) => (A::Set, f),
+                Value::Map { entries: f, .. } => (A::Map, f),
+                Value::Set { entries: f, .. } => (A::Set, f),
                 Value::Tuple(f) => (A::Tuple, f),
                 Value::Box(f) => (A::Box, f),
                 Value::Record { definition, fields } => (A::Record(definition.clone()), fields),

@@ -243,11 +243,13 @@ fn copy_to(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let (value, loan) = b.borrow(source.address, false)?;
     let result = b.fresh(source.layout);
     let layout = b.cx.payload(source.layout).unwrap_or(source.layout);
-    // A List or Array of rows copied into an arena is tracked there (MEM-6).
+    // A List or Array of rows, a Map or a Set copied into an arena is tracked
+    // there (MEM-6).
     let tracked = matches!(
         b.cx.arguments.first(),
-        Some(hirsel_types::GenericArgument::Type(t)) if super::list_or_array(&b.cx.store, *t)
-    ) && matches!(b.cx.record(layout).kind, LayoutKind::Sequence { .. });
+        Some(hirsel_types::GenericArgument::Type(t))
+            if super::tracked_block(&b.cx.store, *t, b.cx.layouts.table(), layout)
+    );
     let construct = ConstructId(b.ed.unit.tables.constructs.len() as u32);
     b.ed.unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,

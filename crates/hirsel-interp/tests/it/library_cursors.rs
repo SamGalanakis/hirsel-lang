@@ -145,7 +145,7 @@ fn unicode_view_protocols_keep_scalars_and_positions() {
 #[test]
 fn mismatched_cursor_protocols_and_malformed_sources_are_tool_errors() {
     let mut h = Harness::new();
-    let cursor = h.value("$intrinsic.MapInsertionOrder_open", &[Value::Map(vec![])]);
+    let cursor = h.value("$intrinsic.MapInsertionOrder_open", &[Value::map(vec![])]);
     assert!(matches!(
         h.call("$intrinsic.SortedMapOrder_next", &[cursor]),
         Err(Error::InvalidTir(_))
@@ -163,7 +163,7 @@ fn mismatched_cursor_protocols_and_malformed_sources_are_tool_errors() {
     assert!(matches!(
         h.call(
             "$intrinsic.MapInsertionOrder_open",
-            &[Value::Map(vec![None])]
+            &[Value::map(vec![None])]
         ),
         Err(Error::InvalidTir(_))
     ));

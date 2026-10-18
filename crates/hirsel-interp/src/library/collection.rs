@@ -4,8 +4,8 @@ use hirsel_types::BuiltinType;
 pub fn sequence(kind: BuiltinType, values: impl IntoIterator<Item = Value>) -> Value {
     let elements = values.into_iter().map(Some).collect();
     match kind {
-        BuiltinType::Map => Value::Map(elements),
-        BuiltinType::Set => Value::Set(elements),
+        BuiltinType::Map => Value::map(elements),
+        BuiltinType::Set => Value::set(elements),
         _ => Value::Sequence {
             kind,
             elements,
@@ -15,9 +15,18 @@ pub fn sequence(kind: BuiltinType, values: impl IntoIterator<Item = Value>) -> V
 }
 pub fn elements(value: &Value, kind: BuiltinType) -> Result<Vec<Value>, Error> {
     let elements = match (value, kind) {
-        (Value::Map(elements), BuiltinType::Map) | (Value::Set(elements), BuiltinType::Set) => {
-            elements
-        }
+        (
+            Value::Map {
+                entries: elements, ..
+            },
+            BuiltinType::Map,
+        )
+        | (
+            Value::Set {
+                entries: elements, ..
+            },
+            BuiltinType::Set,
+        ) => elements,
         (
             Value::Sequence {
                 kind: k, elements, ..
@@ -34,9 +43,13 @@ pub fn elements(value: &Value, kind: BuiltinType) -> Result<Vec<Value>, Error> {
 
 pub fn len(value: &Value) -> Result<u64, Error> {
     match value {
-        Value::Sequence { elements, .. } | Value::Map(elements) | Value::Set(elements) => {
-            Ok(elements.len() as u64)
+        Value::Sequence { elements, .. }
+        | Value::Map {
+            entries: elements, ..
         }
+        | Value::Set {
+            entries: elements, ..
+        } => Ok(elements.len() as u64),
         _ => Err(invalid("expected collection")),
     }
 }
@@ -130,7 +143,10 @@ fn find(
     Ok(None)
 }
 pub fn insert(mut value: Value, key: Value, item: Value) -> Result<Mutation, KeyedError> {
-    let Value::Map(elements) = &mut value else {
+    let Value::Map {
+        entries: elements, ..
+    } = &mut value
+    else {
         return Err(invalid("map.insert requires Map").into());
     };
     if let Some(index) = find(elements, &key, entry_key)? {
@@ -150,7 +166,10 @@ pub fn insert(mut value: Value, key: Value, item: Value) -> Result<Mutation, Key
     })
 }
 pub fn set_insert(mut value: Value, item: Value) -> Result<Mutation, KeyedError> {
-    let Value::Set(elements) = &mut value else {
+    let Value::Set {
+        entries: elements, ..
+    } = &mut value
+    else {
         return Err(invalid("set.insert requires Set").into());
     };
     let released = if find(elements, &item, |member| Ok(member))?.is_some() {
@@ -163,7 +182,10 @@ pub fn set_insert(mut value: Value, item: Value) -> Result<Mutation, KeyedError>
 }
 /// The value stored under an equal key, as a semantic copy.
 pub fn get(map: &Value, key: &Value) -> Result<Option<Value>, KeyedError> {
-    let Value::Map(elements) = map else {
+    let Value::Map {
+        entries: elements, ..
+    } = map
+    else {
         return Err(invalid("map.get requires Map").into());
     };
     let Some(index) = find(elements, key, entry_key)? else {
@@ -179,8 +201,12 @@ pub fn get(map: &Value, key: &Value) -> Result<Option<Value>, KeyedError> {
 }
 pub fn contains(collection: &Value, key: &Value) -> Result<bool, KeyedError> {
     let found = match collection {
-        Value::Map(elements) => find(elements, key, entry_key)?,
-        Value::Set(elements) => find(elements, key, |member| Ok(member))?,
+        Value::Map {
+            entries: elements, ..
+        } => find(elements, key, entry_key)?,
+        Value::Set {
+            entries: elements, ..
+        } => find(elements, key, |member| Ok(member))?,
         _ => return Err(invalid("contains requires Map or Set").into()),
     };
     Ok(found.is_some())
@@ -249,8 +275,8 @@ pub fn data_equal(a: &Value, b: &Value) -> bool {
                 fields(x, y)
             }
         }
-        (Value::Map(x), Value::Map(y)) => fields(x, y),
-        (Value::Set(x), Value::Set(y)) => {
+        (Value::Map { entries: x, .. }, Value::Map { entries: y, .. }) => fields(x, y),
+        (Value::Set { entries: x, .. }, Value::Set { entries: y, .. }) => {
             x.len() == y.len()
                 && x.iter()
                     .flatten()
@@ -283,7 +309,10 @@ pub fn order(a: Integer, b: Integer) -> Option<i32> {
 
 /// Ordered eviction transfers V and separately releases the stored key.
 pub fn map_remove(mut value: Value, key: &Value) -> Result<OperationResult, KeyedError> {
-    let Value::Map(elements) = &mut value else {
+    let Value::Map {
+        entries: elements, ..
+    } = &mut value
+    else {
         return Err(invalid("map.remove requires Map").into());
     };
     let (result, released) = if let Some(index) = find(elements, key, entry_key)? {
@@ -304,7 +333,10 @@ pub fn map_remove(mut value: Value, key: &Value) -> Result<OperationResult, Keye
     })
 }
 pub fn set_remove(mut value: Value, key: &Value) -> Result<OperationResult, KeyedError> {
-    let Value::Set(elements) = &mut value else {
+    let Value::Set {
+        entries: elements, ..
+    } = &mut value
+    else {
         return Err(invalid("set.remove requires Set").into());
     };
     let index = find(elements, key, |member| Ok(member))?;

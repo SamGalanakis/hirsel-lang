@@ -529,8 +529,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// token is null (`heap`), else an immortal block bump-allocated in that arena. An `Arena`
     /// value can be the inert heap token as well as an open arena record.
     /// `nullable` controls whether this destination admits the heap token. A tracked site's
-    /// arena block (a List or Array, MEM-6) is unshared and has its arena's record before
-    /// its extent.
+    /// arena block (a List, Array, Map or Set, MEM-6) is unshared and has its arena's record
+    /// before its extent.
     pub(super) fn arena_block(
         &mut self,
         token: Value<'m>,
@@ -592,8 +592,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         // The cursor is always word aligned (every reservation ends on a word), so a block
         // of a fixed layout (LAYOUT_NO_EXTENT) is its header at the cursor, or at the first
         // padded position for a wider payload alignment, then its payload: one bump and one
-        // limit test. A null limit (none yet, or diagnostics) fails the test.
-        let (block, next) = match (hirsel_lir::rt_program::no_extent(record), &record.size) {
+        // limit test. A null limit (none yet, or diagnostics) fails the test. A tracked one
+        // (a Map's or Set's, MEM-6) has the tracked prefix, its extent words unused.
+        let bare = hirsel_lir::rt_program::no_extent(record) && !self.tracks(site);
+        let (block, next) = match (bare, &record.size) {
             (true, &SizeSpec::Fixed(size)) => {
                 let block = if physical == 8 {
                     cursor

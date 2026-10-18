@@ -4495,9 +4495,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                     && let Some(region) = self.tracked_region(p)?
                 {
                     // A tracked arena block is copied within its arena,
-                    // charged its count (MEM-6).
-                    let len = self.read_scalar(Ptr { offset: 0, ..p }, 8)? as u64;
+                    // charged its count (MEM-6); a Map's or Set's block
+                    // charges nothing itself.
                     let layout = self.ledger.get(p.alloc).layout.expect("live");
+                    let len = if hirsel_lir::layout::keyed(&self.program.layouts, layout) {
+                        0
+                    } else {
+                        self.read_scalar(Ptr { offset: 0, ..p }, 8)? as u64
+                    };
                     let bytes = self.block_charge(layout, len)?;
                     if !self.charge(region, bytes) {
                         return self.exhaust(f, failure, region);
@@ -5613,11 +5618,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                 continue;
             }
             let a = self.ledger.check(p)?;
+            // A Map's or Set's index is not charged.
+            let index = self.keyed_index(a.layout.expect("live"));
             let children: Vec<Ptr> = a
                 .extent
                 .cells
-                .values()
-                .filter_map(|c| self.holder_target(c))
+                .iter()
+                .filter(|(o, _)| Some(**o) != index)
+                .filter_map(|(_, c)| self.holder_target(c))
                 .collect();
             if !expanded {
                 work.push((p, true));
@@ -5647,13 +5655,21 @@ impl<'p, S: Stage> Machine<'p, S> {
             .fold(0u64, |total, r| total.saturating_add(charges[&r.alloc])))
     }
 
-    /// Whether no block below one of `layout` is tracked: a Map's, Set's or
-    /// environment's (`LAYOUT_UNTRACKED_BELOW`, MEM-6).
+    /// Whether no block below one of `layout` is tracked: a SortedMap's,
+    /// Slots' or environment's (`LAYOUT_UNTRACKED_BELOW`, MEM-6).
     fn untracked_below(&self, layout: LayoutId) -> Checked<bool> {
-        Ok(matches!(
-            self.record(layout)?.kind,
-            LayoutKind::Opaque { .. } | LayoutKind::Environment { .. }
-        ))
+        Ok(!hirsel_lir::layout::keyed(&self.program.layouts, layout)
+            && matches!(
+                self.record(layout)?.kind,
+                LayoutKind::Opaque { .. } | LayoutKind::Environment { .. }
+            ))
+    }
+
+    /// The payload offset of a Map's or Set's index, which a bounded arena
+    /// neither charges nor tracks (`LAYOUT_KEYED`, MEM-6); None for any
+    /// other block.
+    fn keyed_index(&self, layout: LayoutId) -> Option<u64> {
+        hirsel_lir::layout::keyed_index(&self.program.layouts, layout)
     }
 
     /// The arena of the tracked arena block `p` names, if it is one (MEM-6).
@@ -6613,9 +6629,10 @@ impl<'p, S: Stage> Machine<'p, S> {
     /// name deep copies with a credit each, sharing kept across the value.
     ///
     /// Into an arena, the root copy is a tracked arena block when `tracked`
-    /// says so, and every other List or Array block copy is unless a Map, Set
-    /// or environment holds it, directly or not, on the path that first
-    /// reached it (MEM-6, `copy.rs::copy_graph`); `layout` is `val`'s.
+    /// says so, and every other List, Array, Map or Set block copy is unless
+    /// it is a Map's or Set's index or a SortedMap, Slots or environment holds
+    /// it, directly or not, on the path that first reached it (MEM-6,
+    /// `copy.rs::copy_graph`); `layout` is `val`'s.
     fn deep_copy(
         &mut self,
         f: &Frame,
@@ -6684,14 +6701,20 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             let (layout, size) = (a.layout.expect("live"), a.extent.len());
             let image = a.extent.copy(0, size, None);
-            let sequence = matches!(self.record(layout)?.kind, LayoutKind::Sequence { .. });
+            let sequence = matches!(self.record(layout)?.kind, LayoutKind::Sequence { .. })
+                || hirsel_lir::layout::keyed(&self.program.layouts, layout);
             let tracks = below && !self.untracked_below(layout)?;
+            // A Map's or Set's index is never tracked.
+            let index = self.keyed_index(layout);
             pending.extend(
                 image
                     .cells
-                    .values()
-                    .filter_map(|c| self.holder_target(c))
-                    .map(|c| (c, tracks, None)),
+                    .iter()
+                    .filter_map(|(o, c)| {
+                        self.holder_target(c)
+                            .map(|c| (c, tracks && Some(*o) != index, None))
+                    })
+                    .collect::<Vec<_>>(),
             );
             let copy = self.place_sized(f, placement, layout, size)?;
             self.ledger.get_mut(copy.alloc).extent.place(0, image);

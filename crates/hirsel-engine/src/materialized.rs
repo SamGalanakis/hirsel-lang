@@ -165,13 +165,13 @@ impl QueryEngine {
                                 kind: hirsel_types::BuiltinType::Map,
                                 ..
                             },
-                            Value::Map(_)
+                            Value::Map { .. }
                         ) | (
                             TypeKind::Builtin {
                                 kind: hirsel_types::BuiltinType::Set,
                                 ..
                             },
-                            Value::Set(_)
+                            Value::Set { .. }
                         ) | (
                             TypeKind::Builtin {
                                 kind: hirsel_types::BuiltinType::SortedMap,
@@ -261,7 +261,7 @@ impl QueryEngine {
                             (Constructor::Sequence, elements, fields.into())
                         }
                         (
-                            Value::Map(entries),
+                            Value::Map { entries, .. },
                             layout @ TypeKind::Builtin {
                                 kind: hirsel_types::BuiltinType::Map,
                                 ..
@@ -297,7 +297,9 @@ impl QueryEngine {
                             (Constructor::Map, entries, fields.into())
                         }
                         (
-                            Value::Set(elements),
+                            Value::Set {
+                                entries: elements, ..
+                            },
                             TypeKind::Builtin {
                                 kind: hirsel_types::BuiltinType::Set,
                                 arguments,

@@ -1,0 +1,79 @@
+// rule: MEM-6
+// expect: run
+// stdout: 96 fits
+// stdout: 95 out of space
+// stdout: 640 fits
+// stdout: 639 out of space
+// "The first write to a shared arena ... Map or Set (an insert of a new key, or a map.insert
+// that replaces a value) copies it into the same arena as a new unshared one, charged its
+// copied ... entry count." Copying the Map shares it: the first insert charges 16 for
+// its own entry and 16 for each copied one, the second only its own; the copy keeps its
+// entries. Replacing a value of a shared Map of 20 entries charges their copy and no hash
+// index.
+fn shared(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: Map[u64, u64] = map.empty()
+  map.insert(mut h, 1u64, 1u64)
+  map.insert(mut h, 2u64, 2u64)
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m = copy_to(a, h)
+      let n = copy m
+      map.insert(mut m, 3u64, 3u64)
+      map.insert(mut m, 4u64, 4u64)
+      match map.get(n, 2u64) {
+        Some(v) => v,
+        None => 0u64,
+      }
+    }
+  )
+}
+
+fn indexed(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: Map[u64, u64] = map.empty()
+  for i in 0u64..20u64 {
+    map.insert(mut h, i, i)
+  }
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut m = copy_to(a, h)
+      let n = copy m
+      map.insert(mut m, 5u64, 50u64)
+      match map.get(n, 5u64) {
+        Some(v) => v,
+        None => 0u64,
+      }
+    }
+  )
+}
+
+fn report(
+  stdout: Stdout,
+  fits: String,
+  over: String,
+  r: Result[u64, OutOfSpace],
+  value: u64
+) -> () {
+  if r == Ok(value) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  report(stdout, "96 fits\n", "96 out of space\n", shared(96u64), 2u64)
+  report(stdout, "95 fits\n", "95 out of space\n", shared(95u64), 2u64)
+  report(stdout, "640 fits\n", "640 out of space\n", indexed(640u64), 5u64)
+  report(stdout, "639 fits\n", "639 out of space\n", indexed(639u64), 5u64)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

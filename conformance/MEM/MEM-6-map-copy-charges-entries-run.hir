@@ -1,0 +1,71 @@
+// rule: MEM-6
+// expect: run
+// stdout: 32 fits
+// stdout: 31 out of space
+// stdout: 160 fits
+// stdout: 159 out of space
+// "A Map[K, V] or Set[K] of n entries" charges "n times K plus V": copy_to charges the
+// entries alone, neither the Map's own block nor its hash index, on every engine.
+fn copied(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: Map[u64, u64] = map.empty()
+  map.insert(mut h, 1u64, 2u64)
+  map.insert(mut h, 3u64, 4u64)
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let m = copy_to(a, h)
+      match map.get(m, 3u64) {
+        Some(v) => v,
+        None => 0u64,
+      }
+    }
+  )
+}
+
+fn indexed(cap: u64) -> Result[u64, OutOfSpace] {
+  let mut h: Set[u64] = set.empty()
+  for i in 0u64..20u64 {
+    set.insert(mut h, i)
+  }
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let s = copy_to(a, h)
+      if set.contains(s, 19u64) {
+        1u64
+      } else {
+        0u64
+      }
+    }
+  )
+}
+
+fn report(
+  stdout: Stdout,
+  fits: String,
+  over: String,
+  r: Result[u64, OutOfSpace],
+  value: u64
+) -> () {
+  if r == Ok(value) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  report(stdout, "32 fits\n", "32 out of space\n", copied(32u64), 4u64)
+  report(stdout, "31 fits\n", "31 out of space\n", copied(31u64), 4u64)
+  report(stdout, "160 fits\n", "160 out of space\n", indexed(160u64), 1u64)
+  report(stdout, "159 fits\n", "159 out of space\n", indexed(159u64), 1u64)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

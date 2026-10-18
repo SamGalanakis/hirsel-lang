@@ -1168,8 +1168,10 @@ pub struct ConstructSite {
     /// No child-credit walk or payload drop is scheduled for this construction.
     pub arena_no_drop: bool,
     /// The construction builds a List or Array (MEM-6, LIR schema revision
-    /// 28): placed in an arena, its block is tracked and starts unshared; a
-    /// deep copy tracks the List and Array blocks it copies there.
+    /// 32), or a Map's or Set's block or entries List (revision 33): placed in
+    /// an arena, its block is tracked and starts unshared; a deep copy tracks
+    /// the List, Array, Map and Set blocks it copies there, a Map's or Set's
+    /// entries included and its index excluded.
     pub tracked: bool,
     pub constructor: ConstructorKind,
     pub layout: LayoutId,

@@ -414,7 +414,11 @@ pub(crate) fn holds_storage(value: &Value) -> bool {
     let mut work = vec![value];
     while let Some(v) = work.pop() {
         match v {
-            Value::String(_) | Value::Bytes(_) | Value::Map(_) | Value::Set(_) | Value::Box(_) => {
+            Value::String(_)
+            | Value::Bytes(_)
+            | Value::Map { .. }
+            | Value::Set { .. }
+            | Value::Box(_) => {
                 return true;
             }
             Value::Handle { kind, .. } => {

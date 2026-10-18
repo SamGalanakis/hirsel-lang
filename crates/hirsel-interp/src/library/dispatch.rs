@@ -1893,8 +1893,8 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
                 out.extend_from_slice(&[8, kind_tag(*kind)]);
                 fields(&mut out, &mut work, elements);
             }
-            Value::Map(items) | Value::Set(items) => {
-                out.push(if matches!(value, Value::Map(_)) {
+            Value::Map { entries: items, .. } | Value::Set { entries: items, .. } => {
+                out.push(if matches!(value, Value::Map { .. }) {
                     16
                 } else {
                     17

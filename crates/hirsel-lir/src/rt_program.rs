@@ -246,6 +246,16 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
             lower.steps.len()
         )));
     }
+    // A Map's or Set's payload holds its entries at offset 0 (`LAYOUT_KEYED`).
+    let keyed = crate::layout::keyed(table, id);
+    if keyed
+        && !record
+            .fields
+            .iter()
+            .any(|f| f.ordinal == 0 && f.offset == 0)
+    {
+        return malformed("a Map or Set payload whose entries are not at offset 0");
+    }
     let (logical, per_element) = match crate::layout::block_charge(table, id) {
         Some(crate::layout::LogicalCharge::Fixed(n)) => (n, 0),
         Some(crate::layout::LogicalCharge::PerElement(n)) => {
@@ -278,7 +288,9 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
             } else {
                 0
             }
-            | if matches!(
+            | if keyed {
+                crate::runtime_abi::LAYOUT_KEYED
+            } else if matches!(
                 record.kind,
                 LayoutKind::Opaque { .. } | LayoutKind::Environment { .. }
             ) {

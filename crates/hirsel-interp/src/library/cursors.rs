@@ -261,7 +261,7 @@ fn consuming(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Erro
 
 fn source_elements(source: &Value, kind: BuiltinType) -> Result<&[Option<Value>], Error> {
     match (kind, source) {
-        (BuiltinType::Map, Value::Map(entries)) => Ok(entries),
+        (BuiltinType::Map, Value::Map { entries, .. }) => Ok(entries),
         (BuiltinType::SortedMap, Value::Record { definition, fields })
             if *definition == hirsel_syntax::DefPath::core("SortedMap")
                 && fields.len() == 2
@@ -301,7 +301,7 @@ fn owned_elements(source: &mut Value, kind: BuiltinType) -> Result<&mut Vec<Opti
         };
     }
     match source {
-        Value::Map(entries) if kind == BuiltinType::Map => Ok(entries),
+        Value::Map { entries, .. } if kind == BuiltinType::Map => Ok(entries),
         Value::Sequence {
             kind: actual,
             elements,

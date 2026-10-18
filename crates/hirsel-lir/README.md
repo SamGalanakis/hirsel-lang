@@ -584,3 +584,13 @@ each rule with its valid twin. Runtime ABI 11 adds `hirsel_rt_v2_arena_push`, a
 `flags` argument to `arena_alloc` and `unique_copy` (`ALLOC_TRACKED`), and the
 tracked block's 32-byte prefix, which names its arena; layout descriptor version 7
 adds `LAYOUT_SEQUENCE` and `LAYOUT_UNTRACKED_BELOW`.
+
+LIR revision 33 (MEM-6) keeps a Map's or Set's budget in a bounded arena.
+`ConstructSite::tracked` also marks a Map's or Set's block and its entries List, which a
+deep copy into an arena tracks too (`layout::keyed`, descriptor version 8 `LAYOUT_KEYED`):
+the block charges nothing itself (`block_charge`) and its index is neither charged nor
+tracked (`layout::keyed_index`). `map.insert` and `set.insert` append through `list.push`,
+whose `ArenaPush` charges the entry. RC's copy-on-write treats a Map's own entries and index
+as its storage: crossing its block does not make them nested, while a Map or Set lent or
+written through another block is shared like a List. Runtime ABI 12 lets a tracked arena
+block have a fixed layout.

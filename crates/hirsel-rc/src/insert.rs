@@ -3850,8 +3850,8 @@ struct Write {
     lend: bool,
 }
 
-/// Whether the place `steps` of `slot` holds a List or Array block: the
-/// blocks MEM-6 tracks in an arena.
+/// Whether the place `steps` of `slot` holds a List, Array, Map or Set block:
+/// the blocks MEM-6 tracks in an arena.
 fn holds_sequence<S>(
     unit: &LirUnit<S>,
     lay: Lay<'_>,
@@ -3865,9 +3865,37 @@ fn holds_sequence<S>(
             None => return false,
         }
     }
-    lay.payload(layout)
-        .and_then(|p| lay.get(p))
-        .is_some_and(|r| matches!(r.kind, LayoutKind::Sequence { .. }))
+    lay.payload(layout).is_some_and(|p| {
+        hirsel_lir::layout::keyed(lay.0, p)
+            || lay
+                .get(p)
+                .is_some_and(|r| matches!(r.kind, LayoutKind::Sequence { .. }))
+    })
+}
+
+/// Whether the place `steps` of `slot` is reached through another block
+/// (MEM-6): one whose holders are not tracked. A Map's or Set's own entries
+/// and index are its storage, so crossing its block is not.
+fn through_block<S>(
+    unit: &LirUnit<S>,
+    lay: Lay<'_>,
+    slot: SlotId,
+    steps: &[ProjectionStep],
+) -> bool {
+    let mut layout = unit.types[unit.slots[slot.index()].ty.index()].layout;
+    for step in steps {
+        if lay
+            .payload(layout)
+            .is_some_and(|p| !hirsel_lir::layout::keyed(lay.0, p))
+        {
+            return true;
+        }
+        match child_layout(lay, layout, step) {
+            Some(child) => layout = child,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// Before an address that a write, a mutable loan or a `mut` argument uses
@@ -4236,9 +4264,7 @@ fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]
                 None => prefixes.push((prefix, None)),
             }
         }
-        let crosses = facts.places[w.address.index()]
-            .as_ref()
-            .is_some_and(|p| !p.crossings.is_empty());
+        let crosses = through_block(&ed.unit, lay, slot, &steps);
         let lend = (w.lend && !w.holding && crosses && holds_sequence(&ed.unit, lay, slot, &steps))
             .then(|| steps.clone());
         if prefixes.is_empty() && lend.is_none() {
@@ -4394,13 +4420,12 @@ fn detach(
 ) -> Result<(ValueId, BlockId), PassError> {
     let slot_ty = ed.unit.slots[slot.index()].ty;
     let mut layout = ed.unit.types[slot_ty.index()].layout;
-    // Whether the path reaches this block through another one.
-    let mut nested = false;
     for step in prefix {
-        nested |= lay.payload(layout).is_some();
         layout = child_layout(lay, layout, step)
             .ok_or_else(|| PassError::Malformed("a projection outside its layout".into()))?;
     }
+    // Whether the path reaches this block through another one.
+    let nested = through_block(&ed.unit, lay, slot, prefix);
     let payload = lay
         .payload(layout)
         .ok_or_else(|| PassError::Malformed("a crossing without a block".into()))?;

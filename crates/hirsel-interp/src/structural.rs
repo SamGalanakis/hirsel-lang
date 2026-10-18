@@ -15,8 +15,8 @@ pub enum StructuralError {
 }
 fn children(v: &Value) -> Option<&[Option<Value>]> {
     match v {
-        Value::Map(f)
-        | Value::Set(f)
+        Value::Map { entries: f, .. }
+        | Value::Set { entries: f, .. }
         | Value::Tuple(f)
         | Value::Box(f)
         | Value::Record { fields: f, .. }
@@ -28,8 +28,8 @@ fn children(v: &Value) -> Option<&[Option<Value>]> {
 }
 fn identity(a: &Value, b: &Value) -> Result<Ordering, StructuralError> {
     match (a, b) {
-        (Value::Map(_), Value::Map(_))
-        | (Value::Set(_), Value::Set(_))
+        (Value::Map { .. }, Value::Map { .. })
+        | (Value::Set { .. }, Value::Set { .. })
         | (Value::Tuple(_), Value::Tuple(_))
         | (Value::Box(_), Value::Box(_)) => Ok(Ordering::Equal),
         (Value::Record { definition: a, .. }, Value::Record { definition: b, .. })
@@ -88,7 +88,7 @@ fn compare_at(
                 ) {
                     return Err(StructuralError::InvalidValue);
                 }
-                if matches!((a, b), (Value::Set(_), Value::Set(_))) {
+                if matches!((a, b), (Value::Set { .. }, Value::Set { .. })) {
                     // Canonical encoding proves equality even for hand-built
                     // heterogeneous sets; its byte order is not structural order.
                     if equality_only {
@@ -100,7 +100,8 @@ fn compare_at(
                     }
                     // SEM-5, spec #93: canonical structural element order,
                     // independent of insertion order and encoding byte artifacts.
-                    let (Value::Set(ac), Value::Set(bc)) = (a, b) else {
+                    let (Value::Set { entries: ac, .. }, Value::Set { entries: bc, .. }) = (a, b)
+                    else {
                         unreachable!()
                     };
                     fn canonical(
@@ -238,8 +239,8 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                     Value::Distinct { .. } => 8,
                     Value::Box(_) => 9,
                     Value::Sequence { .. } => 10,
-                    Value::Map(_) => 11,
-                    Value::Set(_) => 12,
+                    Value::Map { .. } => 11,
+                    Value::Set { .. } => 12,
                     _ => return Err(StructuralError::InvalidValue),
                 };
                 let mut bytes = vec![tag];
@@ -271,7 +272,7 @@ fn encoding(value: &Value, depth: usize) -> Result<Vec<u8>, StructuralError> {
                     work.push(Work::Finish(
                         bytes,
                         fields.len(),
-                        matches!(v, Value::Set(_)),
+                        matches!(v, Value::Set { .. }),
                     ));
                     for f in fields.iter().rev() {
                         work.push(Work::Enter(

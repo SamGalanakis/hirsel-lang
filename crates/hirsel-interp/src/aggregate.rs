@@ -128,7 +128,7 @@ pub(crate) fn construct(
             if values.iter().any(|value| !matches!(value, Some(Value::Tuple(fields)) if fields.len() == 2 && fields.iter().all(Option::is_some))) {
                 return Err(invalid("map constructor requires complete key/value entries"));
             }
-            Value::Map(values)
+            Value::map(values)
         }
         Constructor::Set => {
             if !matches!(
@@ -141,7 +141,7 @@ pub(crate) fn construct(
             {
                 return Err(invalid("set constructor requires complete Set elements"));
             }
-            Value::Set(values)
+            Value::set(values)
         }
         Constructor::Box => {
             if values.len() != 1 {
@@ -190,7 +190,7 @@ mod tests {
         ];
         assert_eq!(
             construct(Constructor::Map, entries.clone(), &map, &runtime, vec![]).unwrap(),
-            Value::Map(entries)
+            Value::map(entries)
         );
         assert!(
             construct(
@@ -209,7 +209,7 @@ mod tests {
         let elements = vec![Some(Value::Bool(true)), Some(Value::Bool(false))];
         assert_eq!(
             construct(Constructor::Set, elements.clone(), &set, &runtime, vec![]).unwrap(),
-            Value::Set(elements)
+            Value::set(elements)
         );
         assert!(construct(Constructor::Set, vec![None], &set, &runtime, vec![]).is_err());
         assert!(construct(Constructor::Map, vec![], &set, &runtime, vec![]).is_err());
