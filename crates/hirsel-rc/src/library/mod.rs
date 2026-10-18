@@ -217,8 +217,8 @@ pub(crate) fn list_or_array(store: &hirsel_types::TypeStore, ty: TypeId) -> bool
 }
 
 /// Whether a block of the TIR type `ty` of `store`, whose block payload is
-/// `payload`, is tracked in an arena (MEM-6): a List or Array of rows, or a
-/// Map or Set.
+/// `payload`, is tracked in an arena (MEM-6): a List or Array of rows or of
+/// `@soa` columns, or a Map or Set.
 pub(crate) fn tracked_block(
     store: &hirsel_types::TypeStore,
     ty: TypeId,
@@ -229,7 +229,10 @@ pub(crate) fn tracked_block(
         || (list_or_array(store, ty)
             && matches!(
                 table.layout(payload).map(|r| &r.kind),
-                Some(hirsel_lir::layout_types::LayoutKind::Sequence { .. })
+                Some(
+                    hirsel_lir::layout_types::LayoutKind::Sequence { .. }
+                        | hirsel_lir::layout_types::LayoutKind::SoaColumns { .. }
+                )
             ))
 }
 

@@ -815,13 +815,14 @@ impl Importer<'_, '_> {
                 let site = self.out.tables.constructs.len();
                 let sequence = constructor == ConstructorKind::Sequence;
                 let value = self.construct(constructor, layout, values, destination, ty)?;
-                // A List or Array literal's block is tracked in an arena (MEM-6);
-                // a static empty sequence is no construction.
+                // A List or Array literal's block, of rows or of `@soa` columns,
+                // is tracked in an arena (MEM-6); a static empty sequence is no
+                // construction.
                 if sequence
                     && self.out.tables.constructs.len() > site
                     && matches!(
                         self.layouts.record(layout).kind,
-                        LayoutKind::Sequence { .. }
+                        LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. }
                     )
                 {
                     self.out.tables.constructs[site].tracked = true;

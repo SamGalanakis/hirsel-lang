@@ -288,6 +288,11 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
             } else {
                 0
             }
+            | if matches!(record.kind, LayoutKind::SoaColumns { .. }) {
+                crate::runtime_abi::LAYOUT_COLUMNS
+            } else {
+                0
+            }
             | if keyed {
                 crate::runtime_abi::LAYOUT_KEYED
             } else if matches!(

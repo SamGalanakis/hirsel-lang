@@ -5,13 +5,13 @@
     (ScalarAlignments 1 2 4 8 16 4 8 8 16)
     (SysV64)
     (Elf) "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-    (ArtifactVersions 34 3 1 13 0))
-  (LayoutTable #2109e078969fd2eb0d3b0ca4bfa0b725e9352abd0e0d3ccd8dd3c6ec1bfdd0c2 3 1
+    (ArtifactVersions 35 3 1 14 0))
+  (LayoutTable #5fafecbb9825d538bb109d0eb9625ca6cba28b3bf4879d5d2cfa70217b8baf43 3 1
     (list
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2109e078969fd2eb0d3b0ca4bfa0b725e9352abd0e0d3ccd8dd3c6ec1bfdd0c2 3)
+          (none) #5fafecbb9825d538bb109d0eb9625ca6cba28b3bf4879d5d2cfa70217b8baf43 3)
         (Scalar
           (U64))
         (Fixed 8) 8
@@ -32,7 +32,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2109e078969fd2eb0d3b0ca4bfa0b725e9352abd0e0d3ccd8dd3c6ec1bfdd0c2 3)
+          (none) #5fafecbb9825d538bb109d0eb9625ca6cba28b3bf4879d5d2cfa70217b8baf43 3)
         (Scalar
           (Bool))
         (Fixed 1) 1
@@ -53,7 +53,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2109e078969fd2eb0d3b0ca4bfa0b725e9352abd0e0d3ccd8dd3c6ec1bfdd0c2 3)
+          (none) #5fafecbb9825d538bb109d0eb9625ca6cba28b3bf4879d5d2cfa70217b8baf43 3)
         (Aggregate)
         (Fixed 8) 8
         (list
@@ -72,7 +72,7 @@
       (LayoutRecord
         (LayoutKey
           (none)
-          (none) #2109e078969fd2eb0d3b0ca4bfa0b725e9352abd0e0d3ccd8dd3c6ec1bfdd0c2 3)
+          (none) #5fafecbb9825d538bb109d0eb9625ca6cba28b3bf4879d5d2cfa70217b8baf43 3)
         (Block 2)
         (Fixed 8) 8
         (list)
@@ -100,11 +100,11 @@
   (list
     (LirUnit
       (UnitHeader
-        (Reuse) 34
+        (Reuse) 35
         (Source)
         (InputIdentity 11 #129a1e7efb7f261960cd22cf61a43afb3602da1616b6a941a635e4327915a243)
         (DefPath "fixture" "0"
-          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #2109e078969fd2eb0d3b0ca4bfa0b725e9352abd0e0d3ccd8dd3c6ec1bfdd0c2 #47e4f389d2c103ce5b9ea54d9b27d7bdf3ba1fd5198b693861dc7d2362bae5fd 0)
+          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #5fafecbb9825d538bb109d0eb9625ca6cba28b3bf4879d5d2cfa70217b8baf43 #399045dae12e1ba7f83f38e8ac094802fab9e59228f2707ae430756031285da4 0)
       (list
         (LirType
           (Scalar

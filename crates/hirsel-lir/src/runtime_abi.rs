@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 13;
+pub const ABI_VERSION: u32 = 14;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -144,7 +144,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 8;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 9;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -174,6 +174,11 @@ pub const LAYOUT_UNTRACKED_BELOW: u32 = 128;
 /// bounded arena tracks the block and its entries List, charged as any List, and neither
 /// tracks nor charges its index.
 pub const LAYOUT_KEYED: u32 = 256;
+/// The payload is an `@soa` List's columns (descriptor version 9, MEM-6): a deep copy into
+/// an arena tracks a block of it as a [`LAYOUT_SEQUENCE`] one. A push to a tracked one is
+/// charged and copies a shared one at its capacity; growth regrows it in its arena
+/// (`hirsel_rt_v2_arena_regrow`), the compiled column copy moving its columns.
+pub const LAYOUT_COLUMNS: u32 = 512;
 pub const STEP_RELEASE: u32 = 1;
 pub const STEP_FINALIZE: u32 = 2;
 pub const STEP_CLOSE_HANDLE: u32 = 3;
@@ -399,6 +404,7 @@ pub enum RuntimeEntry {
     ArenaAlloc,
     ArenaPush,
     ArenaReserve,
+    ArenaRegrow,
     ArenaEnter,
     ArenaBound,
     ArenaExhausted,
@@ -494,7 +500,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 62] = [
+    pub const ALL: [RuntimeEntry; 63] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -535,6 +541,7 @@ impl RuntimeEntry {
         Self::ArenaAlloc,
         Self::ArenaPush,
         Self::ArenaReserve,
+        Self::ArenaRegrow,
         Self::ArenaEnter,
         Self::ArenaBound,
         Self::ArenaExhausted,
@@ -843,6 +850,11 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::ArenaRegrow => (
+                "hirsel_rt_v2_arena_regrow",
+                ptr(N::Header, 1),
+                const { &[CTX, BLOCK, p("extent", U64), p("align", U64)] },
+            ),
             Self::ArenaEnter => ("hirsel_rt_v2_arena_enter", VOID, const { &[CTX, REGION] }),
             Self::ArenaBound => (
                 "hirsel_rt_v2_arena_bound",
@@ -1030,6 +1042,7 @@ snapshot_enum!(RuntimeEntry {
     ArenaAlloc,
     ArenaPush,
     ArenaReserve,
+    ArenaRegrow,
     ArenaEnter,
     ArenaBound,
     ArenaExhausted,

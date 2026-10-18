@@ -149,7 +149,8 @@ arena as a new unshared one, charged its copied length or entry count, whose ele
 entries are then held twice and so shared, then the write proceeds; a write that fails its
 bounds check, and a `set.insert` of a member the Set holds, copies nothing, and
 `list.reserve` is only a hint there. A remove charges nothing and returns nothing to the
-budget. A List of `Packed` values ([MEM-13](#mem-13-packed-variants)), whose storage is
+budget. An `@soa` List is tracked like any other, its columns copied and relocated
+together. A List of `Packed` values ([MEM-13](#mem-13-packed-variants)), whose storage is
 sequential, is not tracked: a write to one is not charged. An unshared List grows in place,
 relocating within its arena by doubling from four elements when full, so its storage is at
 most four times its charged bytes plus four elements; an unshared Map or Set keeps its

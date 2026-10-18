@@ -82,6 +82,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::ArenaAlloc
         | R::ArenaPush
         | R::ArenaReserve
+        | R::ArenaRegrow
         | R::ArenaEnter
         | R::RegionOwner
         | R::RegionHold

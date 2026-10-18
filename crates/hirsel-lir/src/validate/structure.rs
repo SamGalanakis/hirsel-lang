@@ -1813,9 +1813,10 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
             }
             // One push's preparation of a List block (MEM-6, LIR schema
-            // revision 32): `list.push`'s, never a sequential one's. One of
-            // `count` elements prepares an Io read's appends, which import
-            // places in user code (revision 34).
+            // revision 32): `list.push`'s, never a sequential one's, of rows or
+            // of `@soa` columns (revision 35). One of `count` elements prepares
+            // an Io read's appends, which import places in user code (revision
+            // 34).
             Inst::ArenaPush {
                 address,
                 count,
@@ -1833,7 +1834,12 @@ impl<S: Stage> Checker<'_, '_, S> {
                     .address_layout(facts, address)
                     .and_then(|l| layouts.payload(l))
                     .and_then(|p| layouts.get(p))
-                    .is_some_and(|r| matches!(r.kind, LayoutKind::Sequence { .. }));
+                    .is_some_and(|r| {
+                        matches!(
+                            r.kind,
+                            LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. }
+                        )
+                    });
                 if !sequence {
                     self.add(
                         site,

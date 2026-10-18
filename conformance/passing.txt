@@ -1971,6 +1971,7 @@ conformance/MEM/MEM-6-map-shared-copy-charge-run.hir
 conformance/MEM/MEM-6-map-value-copy-charge-run.hir
 conformance/MEM/MEM-6-outer-arena-exhaustion-run.hir
 conformance/MEM/MEM-6-set-insert-charges-member-run.hir
+conformance/MEM/MEM-6-soa-list-push-charges-run.hir
 conformance/MEM/MEM-6-soa-list-push-run.hir
 conformance/MEM/MEM-6-std-sorted-map-arena-get-run.hir
 conformance/MEM/MEM-6-stdin-read-charges-maximum-run.hir

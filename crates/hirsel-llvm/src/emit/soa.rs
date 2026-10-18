@@ -116,7 +116,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let source = self.payload_of(old, payload)?;
         let count = self.load_u64(source.ptr);
         let capacity = self.load_u64(self.builder.offset(source.ptr, self.const_u64(8)));
-        let unique = crate::runtime::is_unique(&self.builder, old);
+        // MEM-6: an unshared tracked arena block is written in place too.
+        let unique = if self.tracking() {
+            crate::runtime::is_writable(&self.builder, old)
+        } else {
+            crate::runtime::is_unique(&self.builder, old)
+        };
         let enough = self.builder.icmp(IntPredicate::Uge, capacity, wanted);
         let keep = self.builder.binary(BinOp::And, unique, enough);
         let grow = self.module.append_block(self.function);
@@ -148,12 +153,50 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         let bytes = self.builder.binary(BinOp::Mul, cap, self.const_u64(width));
         let extent = self.builder.binary(BinOp::Add, bytes, self.const_u64(data));
-        let fresh = self.alloc_block(
-            payload,
-            extent,
-            self.layout(payload)?.align,
-            SourceAnchorId(0),
-        )?;
+        // A tracked arena block regrows in its arena, uncharged (MEM-6).
+        let tracked = if self.tracking() {
+            Some(crate::runtime::is_tracked(&self.builder, old))
+        } else {
+            None
+        };
+        let fresh = match tracked {
+            None => self.alloc_block(
+                payload,
+                extent,
+                self.layout(payload)?.align,
+                SourceAnchorId(0),
+            )?,
+            Some(tracked) => {
+                let (arena, heap, grown) = (
+                    self.module.append_block(self.function),
+                    self.module.append_block(self.function),
+                    self.module.append_block(self.function),
+                );
+                self.builder.cond_br(tracked, arena, heap);
+                self.builder.position(arena);
+                let regrow = self.runtime(RuntimeEntry::ArenaRegrow)?;
+                let align = self.const_u64(u64::from(self.layout(payload)?.align));
+                let regrown = self
+                    .builder
+                    .call(regrow, &[self.context, old, extent, align]);
+                let from_arena = self.builder.current();
+                self.builder.br(grown);
+                self.builder.position(heap);
+                let allocated = self.alloc_block(
+                    payload,
+                    extent,
+                    self.layout(payload)?.align,
+                    SourceAnchorId(0),
+                )?;
+                let from_heap = self.builder.current();
+                self.builder.br(grown);
+                self.builder.position(grown);
+                let fresh = self.builder.phi(self.module.ptr_type());
+                self.builder.add_incoming(fresh, regrown, from_arena);
+                self.builder.add_incoming(fresh, allocated, from_heap);
+                fresh
+            }
+        };
         let target = self.payload_of(fresh, payload)?;
         self.builder.store(count, target.ptr, 8);
         self.builder
@@ -187,6 +230,19 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let joined = self.module.append_block(self.function);
         self.builder.cond_br(unique, moved, copied);
         self.builder.position(moved);
+        if let Some(tracked) = tracked {
+            // An unshared tracked block's storage is abandoned in its arena, emptied so its
+            // scheduled drop finds no row.
+            let (abandon, free) = (
+                self.module.append_block(self.function),
+                self.module.append_block(self.function),
+            );
+            self.builder.cond_br(tracked, abandon, free);
+            self.builder.position(abandon);
+            self.builder.store(self.const_u64(0), source.ptr, 8);
+            self.builder.br(joined);
+            self.builder.position(free);
+        }
         let free = self.runtime(RuntimeEntry::Free)?;
         self.builder.call(free, &[self.context, old]);
         self.builder.br(joined);

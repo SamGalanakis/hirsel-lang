@@ -305,7 +305,10 @@ entry count, and its index is neither tracked nor charged. `map.empty()` and `se
 that block where their relation places them (PROV-4), as a literal does. An Io read into an
 arena List (`stdin.read`, `file.read`, `net.read`) is charged its maximum bytes before its
 effect (runtime ABI 13): compiled code first calls `hirsel_rt_v2_arena_reserve`, which charges
-them and copies or relocates the List as a push does, so the read appends in place. A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
+them and copies or relocates the List as a push does, so the read appends in place. An
+`@soa` List (`LAYOUT_COLUMNS`, descriptor version 9) is tracked too: a push charges its row and
+copies a shared block at its capacity, and the compiled column copy regrows a full one in its
+arena through `hirsel_rt_v2_arena_regrow` (runtime ABI 14). A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
 cleanup failed too: then the failure propagates with the `OutOfSpace` primary (FAIL-3). The
 reference interpreter (`hirsel-interp`, `src/bounded.rs`) charges from
 `hirsel_types::logical`; H and native execution charge from layouts

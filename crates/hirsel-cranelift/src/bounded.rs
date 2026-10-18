@@ -54,6 +54,14 @@ impl FnEmitter<'_, '_, '_> {
         self.b.ins().bor(unique, unshared)
     }
 
+    /// Whether `block` is a tracked arena block: its count is `COUNT_ARENA_UNIQUE` or
+    /// `COUNT_ARENA_SHARED`.
+    pub(crate) fn is_tracked(&mut self, block: Value) -> Value {
+        let count = self.load_ty(types::I32, block, COUNT_OFFSET);
+        let offset = self.b.ins().iadd_imm_s(count, -(COUNT_ARENA_SHARED as i64));
+        self.b.ins().icmp_imm_s(IntCC::UnsignedLessThan, offset, 2)
+    }
+
     /// `Share`: a semantic copy marks every unshared tracked arena block `value` holds at
     /// inline depth shared. A program that opens no bounded arena emits nothing.
     pub(crate) fn share(&mut self, value: ValueId) -> Emitted {

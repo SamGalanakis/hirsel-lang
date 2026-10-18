@@ -444,6 +444,33 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_reserve(
     unsafe { prepare(ctx, block, count, element_size, element_align, out_block) }
 }
 
+/// Regrow the tracked arena `@soa` List block `block` (MEM-6, runtime ABI 14): a fresh,
+/// unshared tracked block of its layout in its arena, of `extent` bytes at `align`, uncharged,
+/// its drop program scheduled there. The caller moves or copies the columns into it and
+/// empties an unshared `block`, whose storage is abandoned.
+///
+/// # Safety
+/// `ctx` is live and `block` a live tracked arena block of a columns layout.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_arena_regrow(
+    ctx: *mut RunCtx,
+    block: *mut Header,
+    extent: u64,
+    align: u64,
+) -> *mut Header {
+    // SAFETY: caller contract.
+    unsafe {
+        let region = tracked_region(block);
+        check_active(region);
+        let index = (*block).index();
+        let fresh = hirsel_rt_v2_arena_alloc(ctx, region, index, extent, align, ALLOC_TRACKED);
+        if (*(*ctx).descriptor(index)).step_count != 0 {
+            hirsel_rt_v2_region_schedule(ctx, region, index, crate::alloc::payload(fresh));
+        }
+        fresh
+    }
+}
+
 /// Room for `count` more elements in the List block `block`, charged (MEM-6).
 ///
 /// # Safety
@@ -470,6 +497,18 @@ unsafe fn prepare(
         let copied = if shared { each.saturating_mul(len) } else { 0 };
         if !charge_arena(region, each.saturating_mul(count).saturating_add(copied)) {
             return crate::STATUS_EXHAUSTED;
+        }
+        // An `@soa` List's columns move with its capacity, which only the compiled column
+        // copy lays out: a shared one is copied at its capacity, and growth regrows it in its
+        // arena (`hirsel_rt_v2_arena_regrow`).
+        if (*(*ctx).descriptor((*block).index())).flags & crate::release::LAYOUT_COLUMNS != 0 {
+            let fresh = if shared {
+                crate::copy::copy_held(ctx, block, region, true)
+            } else {
+                block
+            };
+            out_block.write(fresh);
+            return STATUS_OK;
         }
         let capacity = crate::alloc::payload(block)
             .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)

@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 8;
+pub const LAYOUT_VERSION: u32 = 9;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -65,6 +65,9 @@ pub const LAYOUT_UNTRACKED_BELOW: u32 = 128;
 /// charged as any List, and neither tracks nor charges the index; the block's own logical
 /// size is 0.
 pub const LAYOUT_KEYED: u32 = 256;
+/// `Layout::flags` (version 9): an `@soa` List's columns payload, tracked in a bounded arena
+/// as a sequence's (MEM-6).
+pub const LAYOUT_COLUMNS: u32 = 512;
 
 /// Release the counted block reference stored at `offset`.
 pub const STEP_RELEASE: u32 = 1;
@@ -186,7 +189,8 @@ pub(crate) unsafe fn check_layout(layout: *const Layout) {
             | LAYOUT_FROZEN
             | LAYOUT_SEQUENCE
             | LAYOUT_UNTRACKED_BELOW
-            | LAYOUT_KEYED)
+            | LAYOUT_KEYED
+            | LAYOUT_COLUMNS)
         != 0
     {
         fault("a layout descriptor has unknown flags");

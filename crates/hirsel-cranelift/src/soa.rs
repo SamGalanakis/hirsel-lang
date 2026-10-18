@@ -117,7 +117,8 @@ impl FnEmitter<'_, '_, '_> {
         let source = self.payload_of(old, payload)?;
         let count = self.load_u64(source.ptr);
         let capacity = self.load_ty(types::I64, source.ptr, 8);
-        let unique = self.is_unique(old);
+        // MEM-6: an unshared tracked arena block is written in place too.
+        let unique = self.is_writable(old);
         let enough = self
             .b
             .ins()
@@ -140,12 +141,46 @@ impl FnEmitter<'_, '_, '_> {
         }
         let bytes = self.b.ins().imul_imm_s(cap, width as i64);
         let extent = self.b.ins().iadd_imm_s(bytes, data as i64);
-        let fresh = self.alloc_block(
-            payload,
-            extent,
-            self.layout(payload)?.align,
-            SourceAnchorId(0),
-        )?;
+        // A tracked arena block regrows in its arena, uncharged (MEM-6).
+        let tracked = if self.tracking() {
+            Some(self.is_tracked(old))
+        } else {
+            None
+        };
+        let fresh = match tracked {
+            None => self.alloc_block(
+                payload,
+                extent,
+                self.layout(payload)?.align,
+                SourceAnchorId(0),
+            )?,
+            Some(tracked) => {
+                let (arena, heap, grown) = (
+                    self.b.create_block(),
+                    self.b.create_block(),
+                    self.b.create_block(),
+                );
+                let fresh = self.b.append_block_param(grown, types::I64);
+                self.b.ins().brif(tracked, arena, &[], heap, &[]);
+                self.b.switch_to_block(arena);
+                let align = self.u64c(u64::from(self.layout(payload)?.align));
+                let regrown = self.rt1(
+                    RuntimeEntry::ArenaRegrow,
+                    &[self.context, old, extent, align],
+                )?;
+                self.b.ins().jump(grown, &[regrown.into()]);
+                self.b.switch_to_block(heap);
+                let allocated = self.alloc_block(
+                    payload,
+                    extent,
+                    self.layout(payload)?.align,
+                    SourceAnchorId(0),
+                )?;
+                self.b.ins().jump(grown, &[allocated.into()]);
+                self.b.switch_to_block(grown);
+                fresh
+            }
+        };
         let target = self.payload_of(fresh, payload)?;
         self.store_at(count, target.ptr, 0);
         self.store_at(cap, target.ptr, 8);
@@ -167,6 +202,17 @@ impl FnEmitter<'_, '_, '_> {
         let joined = self.b.create_block();
         self.b.ins().brif(unique, moved, &[], copied, &[]);
         self.b.switch_to_block(moved);
+        if let Some(tracked) = tracked {
+            // An unshared tracked block's storage is abandoned in its arena, emptied so its
+            // scheduled drop finds no row.
+            let (abandon, free) = (self.b.create_block(), self.b.create_block());
+            self.b.ins().brif(tracked, abandon, &[], free, &[]);
+            self.b.switch_to_block(abandon);
+            let zero = self.u64c(0);
+            self.store_at(zero, source.ptr, 0);
+            self.b.ins().jump(joined, &[]);
+            self.b.switch_to_block(free);
+        }
         self.rt(RuntimeEntry::Free, &[self.context, old])?;
         self.b.ins().jump(joined, &[]);
         self.b.switch_to_block(copied);

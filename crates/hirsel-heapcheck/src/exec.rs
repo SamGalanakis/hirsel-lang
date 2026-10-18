@@ -5650,7 +5650,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             let layout = a.layout.expect("live");
             let count = match self.record(layout)?.kind {
-                LayoutKind::Sequence { .. } | LayoutKind::Sequential { .. } => {
+                LayoutKind::Sequence { .. }
+                | LayoutKind::Sequential { .. }
+                | LayoutKind::SoaColumns { .. } => {
                     self.read_scalar(Ptr { offset: 0, ..p }, 8)? as u64
                 }
                 _ => 1,
@@ -5724,6 +5726,27 @@ impl<'p, S: Stage> Machine<'p, S> {
         let copied = if shared { each.saturating_mul(len) } else { 0 };
         if !self.charge(region, each.saturating_mul(count).saturating_add(copied)) {
             return Ok(Some(region));
+        }
+        // An `@soa` List's columns move with its capacity: a shared one is
+        // copied at its capacity, and its growth regrows it in its arena.
+        if matches!(self.record(layout)?.kind, LayoutKind::SoaColumns { .. }) {
+            if shared {
+                let copy = self.detach_block(block, 0)?;
+                let Cell::Data { counted, .. } = self.read_cell(r.ptr)? else {
+                    return fail(V::TypeConfusion, "a sequence place holding a code word");
+                };
+                let word = self.word;
+                self.ledger.get_mut(r.ptr.alloc).extent.put_cell(
+                    r.ptr.offset,
+                    word,
+                    Cell::Data {
+                        ptr: copy,
+                        counted,
+                        borrow: None,
+                    },
+                );
+            }
+            return Ok(None);
         }
         let wanted = len
             .checked_add(count)
@@ -6719,8 +6742,10 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             let (layout, size) = (a.layout.expect("live"), a.extent.len());
             let image = a.extent.copy(0, size, None);
-            let sequence = matches!(self.record(layout)?.kind, LayoutKind::Sequence { .. })
-                || hirsel_lir::layout::keyed(&self.program.layouts, layout);
+            let sequence = matches!(
+                self.record(layout)?.kind,
+                LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. }
+            ) || hirsel_lir::layout::keyed(&self.program.layouts, layout);
             let tracks = below && !self.untracked_below(layout)?;
             // A Map's or Set's index is never tracked.
             let index = self.keyed_index(layout);

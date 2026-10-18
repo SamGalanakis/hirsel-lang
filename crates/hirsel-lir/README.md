@@ -601,3 +601,11 @@ with the read's maximum, before each `stdin.read`, `file.read` and `net.read` ca
 unit, through an address of its own. The read then appends without charging or relocating.
 `tests/it/revision34.rs` pairs its rule with a valid twin. Runtime ABI 13 adds
 `hirsel_rt_v2_arena_reserve`.
+
+LIR revision 35 (MEM-6) tracks an `@soa` List in a bounded arena. `ConstructSite::tracked`
+also marks a List of `SoaColumns`, a deep copy tracks one too (descriptor version 9
+`LAYOUT_COLUMNS`), and `ArenaPush` accepts its place: it is charged and copied at its
+capacity when shared, never relocated, since only the compiled column copy lays its
+columns out. That copy, `SeqReserve`'s, writes an unshared tracked block in place and
+regrows a tracked one in its arena (runtime ABI 14 `hirsel_rt_v2_arena_regrow`), emptying
+the abandoned block.

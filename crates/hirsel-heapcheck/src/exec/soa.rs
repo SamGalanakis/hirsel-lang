@@ -222,9 +222,13 @@ impl<S: Stage> Machine<'_, S> {
             return fail(V::TypeConfusion, "column capacity is not an integer");
         };
         let count = self.read_scalar(block, 8)? as u64;
+        // MEM-6: an unshared tracked arena block is written in place too, and a
+        // tracked one regrows in its arena, uncharged.
+        let region = self.tracked_region(block)?;
         let old = self.ledger.check(block)?;
         let private =
-            old.count == Some(Count::Finite(1)) && old.owner == Owner::Heap && !old.published;
+            (old.count == Some(Count::Finite(1)) && old.owner == Owner::Heap && !old.published)
+                || (region.is_some() && old.count == Some(Count::Arena { shared: false }));
         if !private || bits > u128::from(old_capacity) {
             let (data, quantum, columns) = self.column_shape(element)?;
             let width: u64 = columns.iter().map(|&(_, stride)| stride).sum();
@@ -242,7 +246,14 @@ impl<S: Stage> Machine<'_, S> {
                     .ok_or_else(|| err(V::Malformed, "column block without layout"))?,
                 old.align,
             );
-            let grown = self.heap_alloc(payload, bytes, align)?;
+            let grown = match region {
+                Some(region) => {
+                    let grown = self.arena_alloc(region, payload, bytes)?;
+                    self.ledger.get_mut(grown.alloc).count = Some(Count::Arena { shared: false });
+                    grown
+                }
+                None => self.heap_alloc(payload, bytes, align)?,
+            };
             let extent = &mut self.ledger.get_mut(grown.alloc).extent;
             extent.write_bytes(0, &count.to_le_bytes());
             extent.write_bytes(8, &cap.to_le_bytes());
@@ -277,7 +288,14 @@ impl<S: Stage> Machine<'_, S> {
                     borrow: None,
                 },
             );
-            if private {
+            if private && region.is_some() {
+                // The abandoned storage stays in its arena, emptied: its exit
+                // drops no row there.
+                self.ledger
+                    .get_mut(block.alloc)
+                    .extent
+                    .write_bytes(block.offset, &0u64.to_le_bytes());
+            } else if private {
                 self.ledger.get_mut(block.alloc).count = None;
                 self.ledger.free(block.alloc)?;
             } else if counted {

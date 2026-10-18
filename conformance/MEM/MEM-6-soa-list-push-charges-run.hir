@@ -1,0 +1,115 @@
+// rule: MEM-6
+// expect: run
+// stdout: 100 fits
+// stdout: 99 out of space
+// stdout: 30 fits
+// stdout: 29 out of space
+// stdout: 50 fits
+// stdout: 49 out of space
+// "Each list.push to a List in it charges its element's logical size before it consumes its
+// argument." An @soa Row is 10 logical bytes: ten pushes from [] charge 100 while the columns
+// relocate within the arena, a copy_to of two rows then a push charge 30, and a push to a
+// shared List first copies its two rows, so a literal of two, the copy and the push charge 50.
+// Every row reads back after each relocation.
+@soa
+type Row {
+  small: u8,
+  x: u64,
+  flag: bool,
+}
+
+fn row(n: u64) -> Row {
+  Row(small: 7, x: n, flag: n % 2u64 == 0u64)
+}
+
+fn good(xs: List[Row]) -> bool {
+  let mut i = 0u64
+  let mut ok = true
+  while i < list.len(xs) {
+    let r = xs[i]
+    ok = ok && r.small == 7 && r.x == i + 1u64 && r.flag == (r.x % 2u64 == 0u64)
+    i = i + 1u64
+  }
+  ok
+}
+
+fn grow(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[Row] in a = []
+      for i in 1u64..11u64 {
+        list.push(mut xs, row(i))
+      }
+      if good(xs) {
+        list.len(xs)
+      } else {
+        0u64
+      }
+    }
+  )
+}
+
+fn copied(cap: u64) -> Result[u64, OutOfSpace] {
+  let rows: List[Row] = [row(1u64), row(2u64)]
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[Row] in a = copy_to(a, rows)
+      list.push(mut xs, row(3u64))
+      if good(xs) {
+        list.len(xs)
+      } else {
+        0u64
+      }
+    }
+  )
+}
+
+fn shared(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[Row] in a = [row(1u64), row(2u64)]
+      let held = copy xs
+      list.push(mut xs, row(3u64))
+      if good(xs) && good(held) {
+        list.len(xs) + list.len(held)
+      } else {
+        0u64
+      }
+    }
+  )
+}
+
+fn report(
+  stdout: Stdout,
+  fits: String,
+  over: String,
+  r: Result[u64, OutOfSpace],
+  value: u64
+) -> () {
+  if r == Ok(value) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  report(stdout, "100 fits\n", "100 out of space\n", grow(100u64), 10u64)
+  report(stdout, "99 fits\n", "99 out of space\n", grow(99u64), 10u64)
+  report(stdout, "30 fits\n", "30 out of space\n", copied(30u64), 3u64)
+  report(stdout, "29 fits\n", "29 out of space\n", copied(29u64), 3u64)
+  report(stdout, "50 fits\n", "50 out of space\n", shared(50u64), 5u64)
+  report(stdout, "49 fits\n", "49 out of space\n", shared(49u64), 5u64)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
