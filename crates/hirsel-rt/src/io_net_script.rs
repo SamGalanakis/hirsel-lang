@@ -482,6 +482,20 @@ impl ScriptIo {
         }
         model
     }
+    /// A Main launch's admitted `io.net` grant: its rules, and with peers its scripted world,
+    /// as a host launch configures them.
+    pub fn set_net_grant(
+        &mut self,
+        grant: &hirsel_run_config::NetGrant,
+    ) -> Result<(), AdapterError> {
+        self.state.net_rules = crate::net::NetRule::from_config(grant);
+        match &grant.peers {
+            Some(peers) => self
+                .state
+                .set_net_script(peers.clone(), grant.listeners.clone()),
+            None => Ok(()),
+        }
+    }
     /// A Main launch's admitted `io.process` grant; absent, the root Proc runs nothing.
     pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
         self.state.set_process_grant(grant);
