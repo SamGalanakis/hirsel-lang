@@ -190,7 +190,9 @@ impl LifetimeScopes {
 #[derive(Clone)]
 struct Environment {
     owner: NameSite,
-    breaks: Option<(usize, usize, usize)>,
+    /// The innermost loop's break and continue targets, its scope depth and
+    /// its statement.
+    breaks: Option<(usize, usize, usize, StmtId)>,
     scopes: Vec<Vec<usize>>,
     lifetime: usize,
     result: Modes,
@@ -225,6 +227,27 @@ fn node(nodes: &mut Vec<Node>, op: Op, next: Vec<usize>, span: Span) -> usize {
 }
 fn reserve(nodes: &mut Vec<Node>, span: Span) -> usize {
     node(nodes, Op::Nop, vec![], span)
+}
+/// An early exit (`break`, `continue`, `return`, `?`) ends every statement it
+/// leaves, innermost first, up to `until` (a loop the exit stays in), so their
+/// temporaries are released on that edge too (MODE-2).
+fn exit_statements(
+    nodes: &mut Vec<Node>,
+    statements: &Statements,
+    from: Option<StmtId>,
+    until: Option<StmtId>,
+    next: usize,
+    span: Span,
+) -> usize {
+    let mut left = vec![];
+    let mut current = from;
+    while let Some(statement) = current.filter(|s| Some(*s) != until) {
+        left.push(statement);
+        current = statements.parents.get(&statement).copied();
+    }
+    left.into_iter().rev().fold(next, |next, statement| {
+        node(nodes, Op::StatementEnd(statement), vec![next], span)
+    })
 }
 pub(super) fn binders(
     rows: &super::source_rows::SourceRows,
@@ -992,6 +1015,14 @@ pub(super) fn build(
                                 vec![exit],
                                 expr.origin.span,
                             );
+                            let kill = exit_statements(
+                                &mut nodes,
+                                &statements,
+                                env.statement,
+                                None,
+                                kill,
+                                expr.origin.span,
+                            );
                             let branch =
                                 node(&mut nodes, Op::Nop, vec![finish, kill], expr.origin.span);
                             jobs.push(Job::Expr {
@@ -1011,6 +1042,14 @@ pub(super) fn build(
                                 &mut nodes,
                                 Op::Kill(env.scopes.iter().flatten().copied().collect()),
                                 vec![exit],
+                                expr.origin.span,
+                            );
+                            let kill = exit_statements(
+                                &mut nodes,
+                                &statements,
+                                env.statement,
+                                None,
+                                kill,
                                 expr.origin.span,
                             );
                             if let Some(value) = value {
@@ -1044,15 +1083,24 @@ pub(super) fn build(
                             continue;
                         }
                         ExprKind::Break | ExprKind::Continue => {
-                            if let Some((break_to, continue_to, depth)) = env.breaks {
-                                nodes[entry].op = Op::Kill(
-                                    env.scopes.iter().skip(depth).flatten().copied().collect(),
-                                );
-                                nodes[entry].next = vec![if matches!(expr.kind, ExprKind::Break) {
+                            if let Some((break_to, continue_to, depth, loop_statement)) = env.breaks
+                            {
+                                let target = if matches!(expr.kind, ExprKind::Break) {
                                     break_to
                                 } else {
                                     continue_to
-                                }];
+                                };
+                                nodes[entry].op = Op::Kill(
+                                    env.scopes.iter().skip(depth).flatten().copied().collect(),
+                                );
+                                nodes[entry].next = vec![exit_statements(
+                                    &mut nodes,
+                                    &statements,
+                                    env.statement,
+                                    Some(loop_statement),
+                                    target,
+                                    expr.origin.span,
+                                )];
                             }
                             continue;
                         }
@@ -1414,7 +1462,7 @@ pub(super) fn build(
                             nodes[entry].next = vec![condition_entry];
                             let branch = node(&mut nodes, Op::Nop, vec![], stmt.origin.span);
                             let loop_entry = reserve(&mut nodes, stmt.origin.span);
-                            env.breaks = Some((next, entry, env.scopes.len()));
+                            env.breaks = Some((next, entry, env.scopes.len(), statement));
                             jobs.push(Job::Expr {
                                 entry: loop_entry,
                                 expression: *loop_body,
@@ -1500,7 +1548,7 @@ pub(super) fn build(
                                 stmt.origin.span,
                             );
                             let loop_entry = reserve(&mut nodes, stmt.origin.span);
-                            env.breaks = Some((loop_exit, kill, env.scopes.len()));
+                            env.breaks = Some((loop_exit, kill, env.scopes.len(), statement));
                             jobs.push(Job::Expr {
                                 entry: loop_entry,
                                 expression: *loop_body,

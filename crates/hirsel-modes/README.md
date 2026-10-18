@@ -492,7 +492,9 @@ declared one, as V derives it. A `mut x: unique T` parameter must be unique at e
 return and evaluation failure site (`mutable_crossing_exit`); a related call result's
 counted shares only mark it `borrow_only`. A failure site accepts that, and so does a
 return whose value reaches none of it (`reached_bindings`). A temporary released after
-its last use stays `parked` on the storage until its statement's `StatementEnd`;
+its last use stays `parked` on the storage until its statement's `StatementEnd`. An early
+exit (`break`, `continue`, `return`, `?`) passes the `StatementEnd` of every statement it
+leaves, innermost first, up to the loop it stays in (`exit_statements`);
 `restore_borrowed` makes the storage unique again, at each statement end and kill, once
 no live binding, evaluated temporary or parked temporary reaches it. A call whose
 type is Never has no successor node, so a match arm it ends adds nothing to the join, and a

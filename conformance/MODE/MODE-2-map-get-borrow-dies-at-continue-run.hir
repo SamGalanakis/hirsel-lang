@@ -1,0 +1,43 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// `continue` ends the `let` statement that held the map.get temporary, so the
+// map is unique again when the next iteration passes it to `need`. Twin is
+// MODE-2-map-get-borrow-before-continue-bad.
+fn need(mut m: unique Map[String, String]) -> () {
+  map.insert(mut m, unique "seen", unique "yes")
+}
+
+fn count(mut m: unique Map[String, String], k: String) -> u64 {
+  let mut n = 0u64
+  let mut skipped = 0u64
+  while n < 3u64 {
+    need(mut m)
+    n = n + 1u64
+    let size = match map.get(m, k) {
+      Some(v) => string.byte_len(v),
+      None() => 0u64,
+    } + if n == 1u64 {
+      skipped = skipped + 1u64
+      continue
+    } else {
+      0u64
+    }
+  }
+  skipped
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut m: unique Map[String, String] = unique map.empty()
+  map.insert(mut m, unique "k", unique "value")
+  let skipped = count(mut m, "k")
+  let _ = out.print(
+    io.stdout(rt)?,
+    if skipped == 1u64 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}
