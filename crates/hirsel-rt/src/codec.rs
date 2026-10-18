@@ -160,6 +160,8 @@ enum Scalar {
     Integer(usize),
     F32,
     F64,
+    /// Four bytes holding a Unicode scalar value.
+    Char,
 }
 
 struct Program {
@@ -232,6 +234,7 @@ impl Program {
                     5 | 10 => Scalar::Integer(16),
                     11 => Scalar::F32,
                     12 => Scalar::F64,
+                    13 => Scalar::Char,
                     _ => fault("an unknown codec scalar"),
                 }),
                 NODE_TEXT => Node::Text(Text {
@@ -492,7 +495,7 @@ unsafe fn flat_extent(program: &Program, node: usize, at: *const u8) -> u64 {
             match &program.nodes[node] {
                 Node::Scalar(Scalar::Bool) => 1,
                 Node::Scalar(Scalar::Integer(n)) => *n as u64,
-                Node::Scalar(Scalar::F32) => 4,
+                Node::Scalar(Scalar::F32 | Scalar::Char) => 4,
                 Node::Scalar(Scalar::F64) => 8,
                 Node::FlatText { .. } | Node::Framed(_) | Node::FlatSequence { .. } => word(cursor)
                     .checked_add(8)
@@ -555,7 +558,7 @@ fn inline_decode(program: &Program, root: usize, input: &mut Input<'_>) -> Vec<u
                 let n = match scalar {
                     Scalar::Bool => 1,
                     Scalar::Integer(n) => *n,
-                    Scalar::F32 => 4,
+                    Scalar::F32 | Scalar::Char => 4,
                     Scalar::F64 => 8,
                 };
                 out.resize(out.len().max(at + n), 0);
@@ -645,7 +648,7 @@ fn flat_decode(program: &Program, root: usize, input: &mut Input<'_>) -> Vec<u8>
                 let n = match scalar {
                     Scalar::Bool => 1,
                     Scalar::Integer(n) => *n,
-                    Scalar::F32 => 4,
+                    Scalar::F32 | Scalar::Char => 4,
                     Scalar::F64 => 8,
                 };
                 out.extend_from_slice(&checked(input.number(n)).to_le_bytes()[..n]);
@@ -863,6 +866,7 @@ unsafe fn encode_node(
         match &program.nodes[node] {
             Node::Scalar(Scalar::Bool) => out.push(u8::from(*at != 0)),
             Node::Scalar(Scalar::Integer(width)) => out.extend_from_slice(read(at, *width)),
+            Node::Scalar(Scalar::Char) => out.extend_from_slice(read(at, 4)),
             Node::Scalar(Scalar::F32) => {
                 let bits = at.cast::<u32>().read_unaligned();
                 let bits = if nan32(bits) { 0x7fc0_0000 } else { bits };
@@ -1230,6 +1234,11 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), DecodeError> {
                             return Err(DecodeError::Scalar);
                         }
                     }
+                    Node::Scalar(Scalar::Char) => {
+                        if char::from_u32(input.number(4)? as u32).is_none() {
+                            return Err(DecodeError::Scalar);
+                        }
+                    }
                     Node::Scalar(Scalar::F64) => {
                         let bits = input.number(8)? as u64;
                         if nan64(bits) && bits != 0x7ff8_0000_0000_0000 {
@@ -1405,7 +1414,7 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
                 Node::Scalar(Scalar::Integer(width)) => {
                     write(at, &checked(input.number(*width)).to_le_bytes()[..*width])
                 }
-                Node::Scalar(Scalar::F32) => {
+                Node::Scalar(Scalar::F32 | Scalar::Char) => {
                     write(at, &checked(input.number(4)).to_le_bytes()[..4])
                 }
                 Node::Scalar(Scalar::F64) => {

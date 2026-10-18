@@ -341,6 +341,7 @@ impl<'a> Plan<'a> {
                 }
             }
             SchemaNode::Scalar(Primitive::Bytes) => self.text(layout, false)?,
+            SchemaNode::Scalar(Primitive::Char) => CodecNode::Char(layout),
             SchemaNode::Scalar(_) => CodecNode::Scalar(layout),
             SchemaNode::Tuple(items) => self.fields(layout, &items.clone())?,
             SchemaNode::Record(fields) => {

@@ -112,10 +112,7 @@ fn schema_inner(
         }
         let mut part = |id| child(id, &mut schema, &mut memo, &mut pending);
         let node = match row.kind {
-            // SER-1: char has no SER-2 encoding yet.
-            TypeKind::Error
-            | TypeKind::Function(_)
-            | TypeKind::Primitive(Primitive::Never | Primitive::Char) => {
+            TypeKind::Error | TypeKind::Function(_) | TypeKind::Primitive(Primitive::Never) => {
                 return Ok(None);
             }
             TypeKind::Primitive(p) => SchemaNode::Scalar(p),

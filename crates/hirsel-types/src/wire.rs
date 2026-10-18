@@ -605,6 +605,12 @@ fn encode_scalar(
     }
     match (p, v) {
         (Primitive::Bool, ValueNode::Bool(b)) => put(out, &[u8::from(*b)], budget),
+        (Primitive::Char, ValueNode::Unsigned(n)) => {
+            match u32::try_from(*n).ok().and_then(char::from_u32) {
+                Some(c) => put(out, &u32::from(c).to_le_bytes(), budget),
+                None => Err(Error::Scalar),
+            }
+        }
         (Primitive::F32, ValueNode::F32(b)) => put(
             out,
             &(if nan32(*b) { 0x7fc0_0000 } else { *b }).to_le_bytes(),
@@ -649,6 +655,13 @@ fn decode_scalar(
             1 => ValueNode::Bool(true),
             _ => return Err(Error::Scalar),
         },
+        Primitive::Char => {
+            let n = input.number(4)?;
+            if char::from_u32(n as u32).is_none() {
+                return Err(Error::Scalar);
+            }
+            ValueNode::Unsigned(n)
+        }
         Primitive::F32 => {
             let b = input.number(4)? as u32;
             if nan32(b) && b != 0x7fc0_0000 {

@@ -10,9 +10,9 @@ independent of the native ABI.
 Capabilities, resources, handles, functions, raw pointers, owner brands, scoped identity,
 opaque types and refinement-constrained types cannot occur in a serializable schema. The
 supported schemas are those the canonical codec enumerates: `bool`, the fixed-width
-integers and floats, `String`, `Bytes`, unit, tuples, records, variants, `box`, `Array`,
-`List`, `Inline`, `Simd`, `Packed`, `Map`, `Set`, and exactly the core `Option` and
-`Result`. Every owned payload qualifies independently; no unsupported constructor
+integers and floats, `char`, `String`, `Bytes`, unit, tuples, records, variants, `box`,
+`Array`, `List`, `Inline`, `Simd`, `Packed`, `Map`, `Set`, and exactly the core `Option`
+and `Result`. Every owned payload qualifies independently; no unsupported constructor
 inherits a codec.
 
 User records, variants, unconstrained distinct types and flat types may opt in with
@@ -52,11 +52,12 @@ whole SER-1 schema, including explicit opt-in for user nominal types.
 `DecodeError` has nullary cases: `Version` (magic or codec version),
 `SchemaMismatch` (descriptor differs from the expected schema), `Truncated`
 (incomplete input), `Trailing` (extra payload or envelope bytes), `Scalar`
-(noncanonical bool or NaN), `Utf8` (invalid String encoding), `Tag` (invalid
-variant ordinal), `Length` (invalid or overflowing extent), `Duplicate`
-(repeated Map key or Set element), and `Order` (descending Set encodings). Schema or valid
-source-value inconsistencies are compiler errors; operational budget exhaustion
-is separate from `DecodeError`.
+(noncanonical bool or NaN, or a `char` that is not a Unicode scalar value),
+`Utf8` (invalid String encoding), `Tag` (invalid variant ordinal), `Length`
+(invalid or overflowing extent), `Duplicate` (repeated Map key or Set element),
+and `Order` (descending Set encodings). Schema or valid source-value
+inconsistencies are compiler errors; operational budget exhaustion is separate
+from `DecodeError`.
 
 ## Canonical data codec version 1
 
@@ -72,6 +73,7 @@ without imposing a language depth limit.
 |---|---|
 | `bool` | One byte, exactly `00` for false or `01` for true. |
 | `u8`/`u16`/`u32`/`u64`/`u128`; `i8`/`i16`/`i32`/`i64`/`i128` | Exactly 1/2/4/8/16 bytes; signed integers use two's complement. Encoding rejects an out-of-range supplied scalar rather than truncate it. |
+| `char` | Exactly 4 bytes: the scalar value as a `u32`. Decoding rejects a surrogate (0xD800 through 0xDFFF) or a value above 0x10FFFF. |
 | `f32`; `f64` | Exactly 4/8 bytes of IEEE binary32/binary64 bits. Every non-NaN bit pattern is preserved, signed zero, subnormals and infinities included. Every NaN encodes as `0x7fc00000` / `0x7ff8000000000000`; decoding rejects every other NaN bit pattern. |
 | `String`; `Bytes` | `u64` byte length, then exactly those bytes. A `String` is valid shortest-form UTF-8, with no surrogate encodings and nothing above U+10FFFF; no normalization, source-literal restriction or NUL termination applies. `Bytes` permits any octet. |
 | unit; tuple; record | Unit is empty. Tuple elements and record fields are concatenated in declaration order; names and field counts are in the schema only. Variable-size children carry only their own prefixes, never an extra byte extent for the containing field. |
@@ -102,7 +104,7 @@ bytes. A child index is a `u32`. Node tags are one byte:
 
 | Tag | Node | Appended |
 |---|---|---|
-| 0 | Scalar | one byte: `Bool`, `U8`, `U16`, `U32`, `U64`, `U128`, `I8`, `I16`, `I32`, `I64`, `I128`, `F32`, `F64`, `String`, `Bytes` as 0 through 14 |
+| 0 | Scalar | one byte: `Bool`, `U8`, `U16`, `U32`, `U64`, `U128`, `I8`, `I16`, `I32`, `I64`, `I128`, `F32`, `F64`, `String`, `Bytes`, `Char` as 0 through 15 |
 | 1 | Tuple | `u32` child count and child indexes |
 | 2 | Record | `u32` field count; per field, text name then child index |
 | 3 | Variant | `u32` arm count; per arm, text name, `u32` field count and fields; each field is byte 0 (positional) or byte 1 and a text label, then its child index |
@@ -127,12 +129,12 @@ their payload only, without nested envelopes.
 ### Validation
 
 Each read and each length addition or multiplication is checked before indexing or
-allocating; overflow, truncation, an invalid `bool`, tag, NaN or UTF-8, duplicate map keys,
-noncanonical sets and trailing payload or envelope bytes are rejected. No partially
-decoded value is exposed, and no user constructor, callback or finalizer runs. Operational
-byte, value or work budgets may refuse service separately from malformed data; they are
-not language size or depth bounds. Decoder traversal counts zero-byte elements and cannot
-loop forever on an uninhabited recursive schema. For canonical input,
+allocating; overflow, truncation, an invalid `bool`, `char`, tag, NaN or UTF-8, duplicate
+map keys, noncanonical sets and trailing payload or envelope bytes are rejected. No
+partially decoded value is exposed, and no user constructor, callback or finalizer runs.
+Operational byte, value or work budgets may refuse service separately from malformed data;
+they are not language size or depth bounds. Decoder traversal counts zero-byte elements
+and cannot loop forever on an uninhabited recursive schema. For canonical input,
 `encode(decode(bytes))` is byte-identical; `decode(encode(value))` preserves the specified
 data, with canonical NaNs, canonical `Set` order, fresh ownership and no sharing.
 

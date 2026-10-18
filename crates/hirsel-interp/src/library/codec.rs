@@ -98,6 +98,9 @@ fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
         let mut children: Vec<(SchemaId, &Value)> = vec![];
         let mut node = match (&schema.nodes[ty.0 as usize], value) {
             (SchemaNode::Scalar(Primitive::Bool), Value::Bool(v)) => ValueNode::Bool(*v),
+            (SchemaNode::Scalar(Primitive::Char), Value::Char(v)) => {
+                ValueNode::Unsigned(u128::from(u32::from(*v)))
+            }
             (SchemaNode::Scalar(_), Value::Integer(v)) if v.is_signed() => {
                 ValueNode::Signed(v.signed())
             }
@@ -354,6 +357,13 @@ fn from_wire(
                     (SchemaNode::Scalar(p), node) => {
                         let scalar = match node {
                             ValueNode::Bool(v) => Value::Bool(*v),
+                            // The reference decoder admitted only scalar values.
+                            ValueNode::Unsigned(v) if *p == Primitive::Char => Value::Char(
+                                u32::try_from(*v)
+                                    .ok()
+                                    .and_then(char::from_u32)
+                                    .ok_or_else(|| invalid("codec char node"))?,
+                            ),
                             ValueNode::Unsigned(v) => Value::Integer(Integer::new(*p, *v).unwrap()),
                             ValueNode::Signed(v) => {
                                 let width = crate::value::integer_layout(*p).unwrap().0;

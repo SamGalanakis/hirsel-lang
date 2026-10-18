@@ -220,7 +220,7 @@ impl<S: Stage> Machine<'_, S> {
             let node = self.plan_node(plan, id)?;
             let layout = node.layout();
             match node {
-                CodecNode::Scalar(_) => {
+                CodecNode::Scalar(_) | CodecNode::Char(_) => {
                     let LayoutKind::Scalar(kind) = self.record(layout)?.kind else {
                         return fail(V::TypeConfusion, "a codec scalar off its layout");
                     };
@@ -638,7 +638,7 @@ impl<S: Stage> Machine<'_, S> {
             let node = self.plan_node(plan, id)?;
             let layout = node.layout();
             match node {
-                CodecNode::Scalar(_) => {
+                CodecNode::Scalar(_) | CodecNode::Char(_) => {
                     let LayoutKind::Scalar(kind) = self.record(layout)?.kind else {
                         return fail(V::TypeConfusion, "a codec scalar off its layout");
                     };
@@ -649,7 +649,8 @@ impl<S: Stage> Machine<'_, S> {
                         ScalarKind::F32 => nan32(bits as u32) && bits != 0x7fc0_0000,
                         ScalarKind::F64 => nan64(bits as u64) && bits != 0x7ff8_0000_0000_0000,
                         _ => false,
-                    };
+                    } || matches!(node, CodecNode::Char(_))
+                        && char::from_u32(bits as u32).is_none();
                     if bad {
                         return Ok(Err(Malformed::Scalar));
                     }
@@ -786,7 +787,7 @@ impl<S: Stage> Machine<'_, S> {
                 continue;
             }
             match node {
-                CodecNode::Scalar(_) => {
+                CodecNode::Scalar(_) | CodecNode::Char(_) => {
                     let n = self.size(layout)? as usize;
                     bytes[at..at + n].copy_from_slice(input.take(n as u64).map_err(reread)?);
                 }
@@ -858,7 +859,7 @@ impl<S: Stage> Machine<'_, S> {
             };
             let node = self.plan_node(plan, id)?;
             match node {
-                CodecNode::Scalar(layout) => {
+                CodecNode::Scalar(layout) | CodecNode::Char(layout) => {
                     bytes.extend_from_slice(input.take(self.size(*layout)?).map_err(reread)?)
                 }
                 CodecNode::FlatText { .. } => {
@@ -938,7 +939,7 @@ impl<S: Stage> Machine<'_, S> {
                 CodecNode::FlatText { .. } | CodecNode::Framed { .. } => {
                     return fail(V::Malformed, "flat codec node off a flat layout");
                 }
-                CodecNode::Scalar(_) => {
+                CodecNode::Scalar(_) | CodecNode::Char(_) => {
                     let size = self.size(layout)?;
                     let bits = input.take(size).map_err(reread)?.to_vec();
                     self.codec_bytes(image, dest, &bits);

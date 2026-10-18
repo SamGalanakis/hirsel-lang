@@ -59,10 +59,7 @@ pub(super) fn eligible(
             return Ok(false);
         }
         match row.kind {
-            // SER-1: char has no SER-2 encoding yet.
-            TypeKind::Error
-            | TypeKind::Function(_)
-            | TypeKind::Primitive(Primitive::Never | Primitive::Char) => {
+            TypeKind::Error | TypeKind::Function(_) | TypeKind::Primitive(Primitive::Never) => {
                 return Ok(false);
             }
             TypeKind::Primitive(_) => (),

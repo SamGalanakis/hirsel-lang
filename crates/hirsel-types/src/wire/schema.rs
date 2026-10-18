@@ -177,7 +177,8 @@ fn scalar_tag(p: Primitive) -> Result<u8, Error> {
         F64 => 12,
         String => 13,
         Bytes => 14,
-        Char | Never => return Err(Error::Schema),
+        Char => 15,
+        Never => return Err(Error::Schema),
     })
 }
 fn builtin_tag(p: BuiltinType) -> Result<u8, Error> {

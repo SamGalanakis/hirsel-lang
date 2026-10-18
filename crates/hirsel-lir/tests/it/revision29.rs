@@ -26,6 +26,8 @@ enum Mutant {
     FlatText,
     Framed,
     FlatZero,
+    /// A char node at a u64 layout rather than u32.
+    Char,
 }
 
 /// Push `record` onto the fixture table.
@@ -146,6 +148,11 @@ fn plan(t: &mut Lir<Value>, decode: bool, m: Mutant) -> (CodecPlan, LayoutId) {
         },
         utf8: true,
     });
+    nodes.push(CodecNode::Char(if m == Mutant::Char {
+        l::U64
+    } else {
+        l::U32
+    }));
     let plan = CodecPlan {
         descriptor: vec![4],
         nodes,
@@ -248,6 +255,16 @@ fn flat_text_requires_byte_length_framing() {
 #[test]
 fn framed_values_match_their_content_layout() {
     pair(either(encode, Mutant::Framed), |k| {
+        *k == K::Type("codec plan")
+    });
+}
+
+#[test]
+fn a_char_node_is_a_u32_scalar() {
+    pair(either(encode, Mutant::Char), |k| {
+        *k == K::Type("codec plan")
+    });
+    pair(either(decode, Mutant::Char), |k| {
         *k == K::Type("codec plan")
     });
 }

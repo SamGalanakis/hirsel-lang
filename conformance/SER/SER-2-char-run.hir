@@ -1,0 +1,55 @@
+// rule: SER-2
+// expect: run
+// A char is its scalar value in 4 bytes; decoding rejects surrogates and values above 0x10FFFF.
+@serializable
+type Glyph {
+  c: char,
+  name: String,
+}
+
+@serializable
+flat type FlatGlyph {
+  c: char,
+  width: u8,
+}
+
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let decoded: T = codec.decode(encoded)?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  test.check(
+    t,
+    codec.encode('\u{e9}') == b"\x48\x53\x43\x31\x01\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x0f\x04\x00\x00\x00\x00\x00\x00\x00\xe9\x00\x00\x00"
+  )
+  let last: Result[char, DecodeError] = codec.decode(
+    b"\x48\x53\x43\x31\x01\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x0f\x04\x00\x00\x00\x00\x00\x00\x00\xff\xff\x10\x00"
+  )
+  test.check(t, last == Ok('\u{10ffff}'))
+  let below: Result[char, DecodeError] = codec.decode(
+    b"\x48\x53\x43\x31\x01\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x0f\x04\x00\x00\x00\x00\x00\x00\x00\xff\xd7\x00\x00"
+  )
+  test.check(t, below == Ok('\u{d7ff}'))
+  let surrogate: Result[char, DecodeError] = codec.decode(
+    b"\x48\x53\x43\x31\x01\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x0f\x04\x00\x00\x00\x00\x00\x00\x00\x00\xd8\x00\x00"
+  )
+  test.check(t, surrogate == Error(Scalar()))
+  let above: Result[char, DecodeError] = codec.decode(
+    b"\x48\x53\x43\x31\x01\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x0f\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x00"
+  )
+  test.check(t, above == Error(Scalar()))
+  round(t, Glyph(c: '🐑', name: "sheep"))?
+  round(t, FlatGlyph(c: 'a', width: 1))?
+  let scalars: List[char] = ['a', '\u{0}', '\u{10ffff}']
+  round(t, scalars)?
+  let mut seen: Set[char] = set.empty()
+  set.insert(mut seen, 'z')
+  set.insert(mut seen, 'a')
+  round(t, seen)?
+  let some: Option[char] = Some('x')
+  round(t, some)?
+  Ok(())
+}

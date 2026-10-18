@@ -4276,6 +4276,7 @@ conformance/SER/SER-1-resource-field-ok.hir
 conformance/SER/SER-2-bad-magic-run.hir
 conformance/SER/SER-2-bad-tag-run.hir
 conformance/SER/SER-2-bad-version-run.hir
+conformance/SER/SER-2-char-run.hir
 conformance/SER/SER-2-duplicate-map-run.hir
 conformance/SER/SER-2-duplicate-set-run.hir
 conformance/SER/SER-2-flat-zero-stride-list-run.hir

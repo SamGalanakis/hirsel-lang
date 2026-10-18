@@ -393,7 +393,8 @@ uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t len
  * (hirsel_lir::codec::CodecPlan::program). Program words: CODEC_VERSION, the node count, the byte
  * size of `out`, the root node, the out node and the Bytes node, then one word per node giving
  * the word offset of its body. A body is a CODEC_NODE_* kind, then:
- *   SCALAR    scalar code (bool, u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64)
+ *   SCALAR    scalar code (bool, u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64,
+ *             char: 4 bytes that decode only as a Unicode scalar value)
  *   TEXT      utf8, the slice's owner, start and length offsets, the byte sequence's index
  *   FIELDS    count, then (offset, node) per field in declaration order
  *   VARIANT   form (0 ordinal u32, 1 null-pointer niche), tag offset, the niche's nullary arm,

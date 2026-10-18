@@ -93,12 +93,16 @@ pub enum CodecNode {
         layout: LayoutId,
         element: CodecNodeId,
     },
+    /// `char`: a `u32` scalar layout; decoding admits only a Unicode scalar
+    /// value.
+    Char(LayoutId),
 }
 
 impl CodecNode {
     pub fn layout(&self) -> LayoutId {
         match self {
             Self::Scalar(layout)
+            | Self::Char(layout)
             | Self::Text { layout, .. }
             | Self::FlatText { layout, .. }
             | Self::Framed { layout, .. }
@@ -115,7 +119,7 @@ impl CodecNode {
     /// Every child node, in encoding order.
     pub fn children(&self) -> Vec<CodecNodeId> {
         match self {
-            Self::Scalar(_) | Self::Text { .. } | Self::FlatText { .. } => vec![],
+            Self::Scalar(_) | Self::Char(_) | Self::Text { .. } | Self::FlatText { .. } => vec![],
             Self::Framed { value, .. } => vec![*value],
             Self::Fields { fields, .. } => fields.clone(),
             Self::Variant { arms, .. } => arms.iter().flatten().copied().collect(),
@@ -308,6 +312,11 @@ impl CodecPlan {
                         return Err("a scalar node at a layout that is not a value scalar".into());
                     }
                 }
+                CodecNode::Char(_) => {
+                    if r.kind != LayoutKind::Scalar(ScalarKind::U32) {
+                        return Err("a char node at a layout that is not u32".into());
+                    }
+                }
                 CodecNode::Text { storage, .. } => {
                     let LayoutKind::Slice { element } = r.kind else {
                         return Err("a text node at a layout that is not a slice".into());
@@ -468,6 +477,7 @@ impl CodecPlan {
                     }
                 }
                 CodecNode::Scalar(_)
+                | CodecNode::Char(_)
                 | CodecNode::FlatText { .. }
                 | CodecNode::Framed { .. }
                 | CodecNode::Fields { .. }
@@ -523,6 +533,7 @@ impl CodecPlan {
                     };
                     body.extend([NODE_SCALAR, scalar_code(kind)?]);
                 }
+                CodecNode::Char(_) => body.extend([NODE_SCALAR, SCALAR_CHAR]),
                 CodecNode::Text { storage, utf8, .. } => {
                     body.extend([
                         NODE_TEXT,
@@ -783,6 +794,9 @@ pub const NODE_FLAT_VARIANT: u64 = 12;
 pub const NODE_FLAT_SEQUENCE: u64 = 13;
 pub const NODE_SEQUENTIAL: u64 = 14;
 pub const NODE_COLUMNS: u64 = 15;
+/// A `NODE_SCALAR` code past the layout scalars: 4 bytes holding a Unicode
+/// scalar value.
+pub const SCALAR_CHAR: u64 = 13;
 /// A Set's absent value node.
 pub const NO_NODE: u64 = u64::MAX;
 
@@ -802,6 +816,7 @@ snapshot_enum!(CodecNode {
     Set { layout, element },
     FlatText { layout, utf8 },
     Framed { layout, value },
+    Char(layout),
 });
 snapshot_struct!(CodecPlan {
     descriptor,
