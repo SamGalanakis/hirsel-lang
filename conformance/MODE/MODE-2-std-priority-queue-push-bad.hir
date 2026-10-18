@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+@noalloc
+fn compare(a: String, b: String) -> i32 uses {} {
+  0
+}
+
+pub fn demo(take value: String) -> () uses {} {
+  let alias = copy value
+  let mut q: unique priority_queue.Heap[String] = priority_queue.empty()
+  priority_queue.push(mut q, take value, compare)
+  let _ = string.byte_len(alias)
+}

@@ -310,6 +310,26 @@ a fresh unique owner before pushing. Pop transfers deep uniqueness; leftover ite
 cleanup,
 including resource payloads and failure paths. A fresh empty deque is unique.
 
+## Priority queue
+
+```text
+fn priority_queue.empty[T]() -> unique priority_queue.Heap[T] uses {}
+N fn priority_queue.len[T](h: priority_queue.Heap[T]) -> u64 uses {}
+fn priority_queue.push[T](mut h: unique priority_queue.Heap[T], take value: unique T, by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {h, value}
+fn priority_queue.pop[T](mut h: unique priority_queue.Heap[T], by: @noalloc fn(T, T) -> i32 uses {}) -> unique Option[T] uses {h}
+```
+
+`Heap[T]` is an opaque source min-heap over a unique List of unique elements.
+The module is named `priority_queue` because `heap` is reserved. Callers must use the same ordering
+on every operation. Pop transfers the least element under that ordering, or returns
+`None` when empty; equal priorities have no stable order. Length is O(1), push and
+pop O(log n), with ordinary allocation growth on push. Push requires a unique
+input; `unique value` copies an aliased value into a fresh unique owner before
+pushing. Push owns its input and
+remaining elements are released on cleanup, including comparator failure. Pop and
+List sort share one sift kernel; reversing its comparator never negates an i32.
+A fresh empty heap is unique. This surface provides no peek or indexed update.
+
 ## Testing helpers
 
 `test.equal` checks structural equality of `data` values. `test.approx` requires

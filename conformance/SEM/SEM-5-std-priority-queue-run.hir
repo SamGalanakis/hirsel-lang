@@ -1,0 +1,63 @@
+// rule: SEM-5
+// expect: run
+// Zig PriorityQueue and Rust BinaryHeap empty, duplicate and extrema vectors.
+@noalloc
+fn compare(a: i64, b: i64) -> i32 uses {} {
+  if a < b {
+    -2147483648i32
+  } else if a > b {
+    2147483647i32
+  } else {
+    0
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut h: unique priority_queue.Heap[i64] = priority_queue.empty()
+  failure.check(
+    priority_queue.len(h) == 0 && priority_queue.pop(mut h, compare) == None,
+    Bounds()
+  )
+  let input: Array[i64] = [
+    10i64,
+    -9223372036854775808i64,
+    4i64,
+    7i64,
+    3i64,
+    0i64,
+    -2i64,
+    3i64,
+    10i64,
+    9223372036854775807i64
+  ]
+  for value in input {
+    priority_queue.push(mut h, value, compare)
+  }
+  failure.check(priority_queue.len(h) == 10, Bounds())
+  let expected: Array[i64] = [
+    -9223372036854775808i64,
+    -2i64,
+    0i64,
+    3i64,
+    3i64,
+    4i64,
+    7i64,
+    10i64,
+    10i64,
+    9223372036854775807i64
+  ]
+  for value in expected {
+    failure.check(priority_queue.pop(mut h, compare) == Some(value), Bounds())
+  }
+  failure.check(
+    priority_queue.len(h) == 0 && priority_queue.pop(mut h, compare) == None,
+    Bounds()
+  )
+  for i in 0u64..100u64 {
+    priority_queue.push(mut h, int.narrow(100u64 - i), compare)
+  }
+  for i in 1i64..101i64 {
+    failure.check(priority_queue.pop(mut h, compare) == Some(i), Bounds())
+  }
+  Ok(())
+}

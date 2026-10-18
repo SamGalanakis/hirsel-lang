@@ -1,0 +1,39 @@
+// Shared sift kernels adapted from Rust/Zig heap algorithms.
+@noalloc
+pub fn sift[T](
+  mut xs: unique List[T],
+  begin: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut root = begin
+  // root < end/2 proves 2*root+1 cannot overflow and has a left child.
+  while root < end / 2 {
+    let mut child = root * 2 + 1
+    if child + 1 < end && by(xs[child], xs[child + 1]) < 0 {
+      child += 1
+    }
+    if by(xs[root], xs[child]) >= 0 {
+      return
+    }
+    core@1/list.swap(mut xs, root, child)
+    root = child
+  }
+}
+
+@noalloc
+pub fn sift_up[T](
+  mut xs: unique List[T],
+  begin: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut child = begin
+  while child > 0 {
+    let parent = (child - 1) / 2
+    if by(xs[parent], xs[child]) <= 0 {
+      return
+    }
+    core@1/list.swap(mut xs, parent, child)
+    child = parent
+  }
+}

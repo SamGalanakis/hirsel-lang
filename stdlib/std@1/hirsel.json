@@ -18,6 +18,19 @@
       ]
     },
     {
+      "path": "priority_queue.hir",
+      "module": [
+        "priority_queue"
+      ]
+    },
+    {
+      "path": "heap_ops.hir",
+      "module": [
+        "internal",
+        "heap_ops"
+      ]
+    },
+    {
       "path": "deque.hir",
       "module": [
         "deque"

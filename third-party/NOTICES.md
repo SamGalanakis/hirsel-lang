@@ -29,6 +29,8 @@ the license named in its row; the license texts follow once each.
 | Rust standard library | `library/alloc/src/collections/btree/map.rs` ordered lookup/removal and ownership vectors | SortedMap access kernels and conformance, retaining Hirsel's sequence representation | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Rust standard library | `library/alloc/src/collections/vec_deque/mod.rs` endpoint and move-ownership vectors | `stdlib/std@1/deque.hir`, deque conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Zig standard library | `lib/std/deque.zig` endpoint and empty/reuse vectors | `stdlib/std@1/deque.hir`, deque conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
+| Rust standard library | `library/alloc/src/collections/binary_heap/mod.rs` priority and move-ownership vectors | `stdlib/std@1/priority_queue.hir`, priority-queue conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
+| Zig standard library | `lib/std/priority_queue.zig` sift and ordering vectors | `stdlib/std@1/{priority_queue,heap_ops}.hir`, priority-queue conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | lexopt | command-line parser dependency | `crates/hirsel-cli-args` | blyxxyz/lexopt 0.3.2 | MIT |
 | Cranelift | code generator dependency (`cranelift-codegen`, `-frontend`, `-module`, `-object`) | `crates/hirsel-cranelift` | bytecodealliance/wasmtime cranelift 0.136.3 crate releases | Apache-2.0 WITH LLVM-exception |
 | Zig standard library | `lib/std/Uri.zig`, `fmt.zig` parseIntWithSign | `stdlib/std@1/uri.hir`, `crates/hirsel-driver/tests/it-stdlib/stdlib_uri.rs` | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |

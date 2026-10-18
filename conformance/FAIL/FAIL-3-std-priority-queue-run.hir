@@ -1,0 +1,32 @@
+// rule: FAIL-3
+// expect: run
+// stdout: new
+// stdout: old
+resource type Item {
+  priority: i32,
+  output: Stdout,
+  label: String,
+}
+drop(x) {
+  let _ = out.print(x.output, x.label)
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  failure.check(a.priority != 99, Bounds())
+  if a.priority < b.priority {
+    -1
+  } else if a.priority > b.priority {
+    1
+  } else {
+    0
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut h: unique priority_queue.Heap[Item] = priority_queue.empty()
+  priority_queue.push(mut h, Item(priority: 98, output: o, label: "old\n"), compare)
+  priority_queue.push(mut h, Item(priority: 100, output: o, label: "new\n"), compare)
+  Ok(())
+}

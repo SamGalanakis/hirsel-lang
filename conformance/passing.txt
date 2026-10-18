@@ -623,6 +623,7 @@ conformance/DROP/DROP-2-std-iter-resource-run.hir
 conformance/DROP/DROP-2-std-iter-zip-run.hir
 conformance/DROP/DROP-2-std-map-remove-run.hir
 conformance/DROP/DROP-2-std-map-string-remove-run.hir
+conformance/DROP/DROP-2-std-priority-queue-run.hir
 conformance/DROP/DROP-2-std-sorted-map-key-remove-run.hir
 conformance/DROP/DROP-2-std-sorted-map-remove-run.hir
 conformance/DROP/DROP-2-testhelpers-expect-error-ok-drop-fail.hir
@@ -739,6 +740,10 @@ conformance/FAIL/FAIL-3-map-displaced-finalizer.hir
 conformance/FAIL/FAIL-3-mapped-iterator-callback-mut-state-bad.hir
 conformance/FAIL/FAIL-3-mapped-iterator-callback-mut-state-ok.hir
 conformance/FAIL/FAIL-3-sorted-insert-taken-callback.hir
+conformance/FAIL/FAIL-3-std-priority-queue-fail.hir
+conformance/FAIL/FAIL-3-std-priority-queue-pop-fail.hir
+conformance/FAIL/FAIL-3-std-priority-queue-pop-run.hir
+conformance/FAIL/FAIL-3-std-priority-queue-run.hir
 conformance/FAIL/FAIL-3-std-sorted-map-get-fail.hir
 conformance/FAIL/FAIL-3-std-sorted-map-get-run.hir
 conformance/FAIL/FAIL-3-std-sorted-map-remove-fail.hir
@@ -2475,6 +2480,8 @@ conformance/MODE/MODE-2-std-map-cycle-bad.hir
 conformance/MODE/MODE-2-std-map-cycle-ok.hir
 conformance/MODE/MODE-2-std-map-remove-bad.hir
 conformance/MODE/MODE-2-std-map-remove-ok.hir
+conformance/MODE/MODE-2-std-priority-queue-push-bad.hir
+conformance/MODE/MODE-2-std-priority-queue-push-ok.hir
 conformance/MODE/MODE-2-std-set-remove-bad.hir
 conformance/MODE/MODE-2-std-set-remove-ok.hir
 conformance/MODE/MODE-2-std-sorted-map-constructor-ok.hir
@@ -4105,6 +4112,8 @@ conformance/SEM/SEM-5-std-deque-owned-cycle-run.hir
 conformance/SEM/SEM-5-std-deque-run.hir
 conformance/SEM/SEM-5-std-map-lifecycle-run.hir
 conformance/SEM/SEM-5-std-map-owned-cycle-run.hir
+conformance/SEM/SEM-5-std-priority-queue-owned-cycle-run.hir
+conformance/SEM/SEM-5-std-priority-queue-run.hir
 conformance/SEM/SEM-5-std-set-string-remove-run.hir
 conformance/SEM/SEM-5-std-sorted-map-access-run.hir
 conformance/SEM/SEM-5-std-sorted-map-owned-cycle-run.hir
