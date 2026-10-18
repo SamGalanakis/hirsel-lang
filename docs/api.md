@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1172 exported definitions; 318 variants.
+1174 exported definitions; 318 variants.
 
 ## Types and roots
 
@@ -941,6 +941,10 @@ Variant of PeerTls.
 - `Plain() -> PeerTls`
 
 Variant of PeerTls.
+
+<a id="def-core_401_2fPipelineOutput"></a>
+
+- `type PipelineOutput uses {} = { statuses: List[ExitStatus], stdout: Bytes, stderr: Bytes }`
 
 <a id="def-core_401_2fPositionView"></a>
 
@@ -6493,6 +6497,10 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 ## proc
 
+<a id="def-core_401_2fproc_2fpipeline"></a>
+
+- `fn proc.pipeline(p: Proc, stages: List[Command], stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[PipelineOutput, ProcessError]`
+
 <a id="def-core_401_2fproc_2frun"></a>
 
 - `fn proc.run(p: Proc, cmd: Command, stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]`
@@ -6508,7 +6516,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 - `@noalloc pub fn process.pipefail(pipeline: PipelineOutput) -> ExitStatus uses {}`
 
-References: [`core@1/ExitStatus`](#def-core_401_2fExitStatus)
+References: [`core@1/ExitStatus`](#def-core_401_2fExitStatus), [`core@1/PipelineOutput`](#def-core_401_2fPipelineOutput)
 
 
 ## random
