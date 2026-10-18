@@ -184,13 +184,15 @@ observable.
 
 Layer 1. `shared.freeze(take x: unique T) -> Shared[T]`, for `T` inert and holding no
 resources, freezes a value deeply: its inner blocks become immortal and uncounted, and only
-the root carries an atomic count. `Shared[T]` is copyable (an atomic increment), sendable
+the root carries a count updated without data races under the run's scheduler. The current
+single-threaded scheduler uses plain counts; a threaded scheduler makes them atomic.
+`Shared[T]` is copyable (a root-count increment), sendable
 and read by borrowing; dropping the last root frees the whole value.
 `shared.thaw(take s) -> Result[unique T, Shared[T]]` returns the value with ordinary counts
 restored when `s` is the last root, and gives `s` back otherwise. Freeze and thaw each walk
 the value and are allocation sites.
 
-A copied `Shared` root acquires an independent atomic share and is global everywhere,
+A copied `Shared` root acquires an independent share and is global everywhere,
 including when read from a borrowed parameter, capture or field. An uncopied borrowed root
 keeps its local view. `unique` on the root is inert; `thaw` checks the sole-holder count at
 run time. Copying and deep ownership never traverse `Shared` contents.
