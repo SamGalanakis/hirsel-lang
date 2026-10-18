@@ -576,7 +576,7 @@ mod tests {
             BuiltinType::SortedMap,
             BuiltinType::Ptr,
             BuiltinType::FnPtr,
-            BuiltinType::Shape,
+            BuiltinType::TypeShape,
             BuiltinType::Task,
             BuiltinType::Sender,
             BuiltinType::Receiver,

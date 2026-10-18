@@ -449,7 +449,7 @@ pub enum UnavailableFeature {
     ReleaseRegion,
     CloseArena,
     JoinTasks,
-    /// A `Shape` whose static data is not materialized.
+    /// A `TypeShape` whose static data is not materialized.
     Shape,
 }
 

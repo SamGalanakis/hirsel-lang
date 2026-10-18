@@ -1,7 +1,7 @@
 // rule: LANG-7
 // expect: reject LANG-7 at line 3
-type Shape = Dot(u64) | Empty
+type TypeShape = Dot(u64) | Empty
 
-fn make() -> Shape {
+fn make() -> TypeShape {
   Dot(1)
 }

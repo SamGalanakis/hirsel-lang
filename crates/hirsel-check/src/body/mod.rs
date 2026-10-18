@@ -1504,7 +1504,7 @@ impl Checker<'_, '_> {
                 let t = self.syntax_type(t, frame)?;
                 self.plans.shapes.push((id, syntax, t));
                 self.ty(TypeKind::Builtin {
-                    kind: BuiltinType::Shape,
+                    kind: BuiltinType::TypeShape,
                     arguments: vec![GenericArgument::Type(t)].into(),
                 })
             }

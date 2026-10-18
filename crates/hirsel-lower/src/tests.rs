@@ -285,7 +285,7 @@ fn generic_call_printing_does_not_expose_type_provenance() {
 fn snapshot_shape_comptime_todo_and_local_function() {
     let mut f = Fixture::new(P::U8);
     let shape = f.type_(TypeKind::Builtin {
-        kind: hirsel_types::BuiltinType::Shape,
+        kind: hirsel_types::BuiltinType::TypeShape,
         arguments: vec![hirsel_types::GenericArgument::Type(f.scalar)].into(),
     });
     let e = f.expr(ExprKind::Shape(TypeExprId(0)), shape, U::Take, 1);

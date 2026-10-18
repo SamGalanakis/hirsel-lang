@@ -48,7 +48,9 @@ Enclosing contracts are not inherited, but called helpers' contracts apply.
 ### CT-3: Shapes
 
 Reserved for future compile-time features, including opacity-aware type-shape reflection
-and typed generation. No executable shape, build, quotation or generated-body API exists.
+and typed generation. The reflection type constructor is reserved as `TypeShape[T]`;
+`Shape` is an ordinary user type name. No executable shape, build, quotation or
+generated-body API exists.
 External tools may generate source definitions, which are checked like other source; that
 does not replace or exclude future in-language generation.
 

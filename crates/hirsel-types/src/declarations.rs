@@ -92,7 +92,7 @@ pub fn structural_equality(
                 pending.push((representation, false));
             }
             TypeKind::Builtin { kind, arguments } => {
-                // GEN-1, spec #41: Shared/Slots/Shape lack structural operations;
+                // GEN-1, spec #41: Shared/Slots/TypeShape lack structural operations;
                 // SortedMap owns its function-bearing Order dictionary.
                 if !matches!(
                     kind,
@@ -227,7 +227,7 @@ pub fn structural_authority<E>(
                         BuiltinType::Ptr
                             | BuiltinType::FnPtr
                             | BuiltinType::SlotId
-                            | BuiltinType::Shape
+                            | BuiltinType::TypeShape
                     ) {
                         pending.extend(arguments.iter().filter_map(|a| match a {
                             GenericArgument::Type(t) => Some(*t),

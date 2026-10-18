@@ -62,7 +62,7 @@ unit_enum!(BuiltinType {
     Atomic,
     Ptr,
     FnPtr,
-    Shape
+    TypeShape
 });
 
 #[cfg(test)]
@@ -115,7 +115,7 @@ mod tests {
             (BuiltinType::Atomic, "Atomic"),
             (BuiltinType::Ptr, "Ptr"),
             (BuiltinType::FnPtr, "FnPtr"),
-            (BuiltinType::Shape, "Shape"),
+            (BuiltinType::TypeShape, "TypeShape"),
         ] {
             let expected = format!("({tag})");
             assert_eq!(to_text(&value), expected);

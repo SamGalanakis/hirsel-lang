@@ -2220,7 +2220,7 @@ impl Normalizer<'_, '_> {
                     kind: BuiltinType::Ptr
                         | BuiltinType::FnPtr
                         | BuiltinType::SlotId
-                        | BuiltinType::Shape,
+                        | BuiltinType::TypeShape,
                     ..
                 }
             ) {
@@ -2476,7 +2476,7 @@ fn builtin(s: &str) -> Option<BuiltinType> {
         "Atomic" => BuiltinType::Atomic,
         "Ptr" => BuiltinType::Ptr,
         "FnPtr" => BuiltinType::FnPtr,
-        "Shape" => BuiltinType::Shape,
+        "TypeShape" => BuiltinType::TypeShape,
         _ => return None,
     })
 }

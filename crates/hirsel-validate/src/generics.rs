@@ -169,7 +169,7 @@ impl Checker<'_> {
                         BuiltinType::Ptr
                             | BuiltinType::FnPtr
                             | BuiltinType::SlotId
-                            | BuiltinType::Shape
+                            | BuiltinType::TypeShape
                     ) {
                         continue;
                     }

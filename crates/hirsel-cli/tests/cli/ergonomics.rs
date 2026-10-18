@@ -14,9 +14,9 @@ fn authoring_diagnostics_name_the_relevant_type_field_and_namespace() {
             "before `.`, `list` names a module",
         ),
         (
-            "type Shape = Dot(u64) | Empty\nfn make() -> Shape { Dot(1) }",
+            "type TypeShape = Dot(u64) | Empty\nfn make() -> TypeShape { Dot(1) }",
             "LANG-7",
-            "type `Shape` conflicts with a builtin type name",
+            "type `TypeShape` conflicts with a builtin type name",
         ),
     ] {
         let path = file(source);

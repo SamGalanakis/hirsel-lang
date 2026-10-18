@@ -814,7 +814,7 @@ fn serializable_ir_rejects_hidden_authority_and_unsupported_runtime_containers()
         BuiltinType::Mutex,
         BuiltinType::Iter,
         BuiltinType::SortedMap,
-        BuiltinType::Shape,
+        BuiltinType::TypeShape,
         BuiltinType::Region,
         BuiltinType::Atomic,
         BuiltinType::Task,

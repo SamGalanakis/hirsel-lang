@@ -506,7 +506,7 @@ impl Encoder {
                     BuiltinType::Atomic => "Atomic",
                     BuiltinType::Ptr => "Ptr",
                     BuiltinType::FnPtr => "FnPtr",
-                    BuiltinType::Shape => "Shape",
+                    BuiltinType::TypeShape => "TypeShape",
                 });
                 self.arguments(arguments, s)?;
             }

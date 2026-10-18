@@ -485,7 +485,7 @@ impl KeyEncoder<'_> {
                     B::Atomic => "Atomic",
                     B::Ptr => "Ptr",
                     B::FnPtr => "FnPtr",
-                    B::Shape => "Shape",
+                    B::TypeShape => "TypeShape",
                 });
                 self.arguments(arguments)?;
             }

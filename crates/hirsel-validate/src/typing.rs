@@ -3297,7 +3297,7 @@ impl<'a> Checker<'a> {
                 }
             }
             Rvalue::Shape(t) => {
-                if !matches!(kind, TypeKind::Builtin { kind: BuiltinType::Shape, arguments } if arguments.len() == 1 && matches!(arguments[0], GenericArgument::Type(id) if semantic_equal(&self.definition.types, id, &self.definition.types, *t).unwrap_or(false)))
+                if !matches!(kind, TypeKind::Builtin { kind: BuiltinType::TypeShape, arguments } if arguments.len() == 1 && matches!(arguments[0], GenericArgument::Type(id) if semantic_equal(&self.definition.types, id, &self.definition.types, *t).unwrap_or(false)))
                 {
                     self.error(ViolationKind::TypeMismatch { entity: "shape" });
                 }

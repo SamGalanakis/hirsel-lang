@@ -92,7 +92,7 @@ pub enum BuiltinType {
     Atomic,
     Ptr,
     FnPtr,
-    Shape,
+    TypeShape,
 }
 snapshot_enum!(BuiltinType {
     Array,
@@ -115,7 +115,7 @@ snapshot_enum!(BuiltinType {
     Atomic,
     Ptr,
     FnPtr,
-    Shape
+    TypeShape
 });
 /// Independently supplied operation declarations. Implementations derive from
 /// the declaration and actuals, never from the candidate unit or its call ABI.

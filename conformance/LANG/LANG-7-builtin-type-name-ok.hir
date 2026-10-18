@@ -1,7 +1,7 @@
 // rule: LANG-7
 // expect: accept
-type Figure = Dot(u64) | Empty
+type Shape = Dot(u64) | Empty
 
-fn make() -> Figure {
+fn make() -> Shape {
   Dot(1)
 }

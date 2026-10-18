@@ -44,7 +44,7 @@ pub fn cleanup_summary(
             | BuiltinType::FnPtr
             | BuiltinType::SlotId
             | BuiltinType::Atomic
-            | BuiltinType::Shape => DropAllocation::NoAlloc,
+            | BuiltinType::TypeShape => DropAllocation::NoAlloc,
             BuiltinType::Iter | BuiltinType::SortedMap => DropAllocation::MayAllocate,
             _ => join(
                 arguments
@@ -509,7 +509,7 @@ fn prove(
                 if matches!(
                     kind,
                     BuiltinType::SlotId
-                        | BuiltinType::Shape
+                        | BuiltinType::TypeShape
                         | BuiltinType::Ptr
                         | BuiltinType::FnPtr
                 ) {

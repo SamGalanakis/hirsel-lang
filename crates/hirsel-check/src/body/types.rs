@@ -1745,7 +1745,7 @@ fn builtin(name: &str) -> Option<BuiltinType> {
         "Atomic" => Atomic,
         "Ptr" => Ptr,
         "FnPtr" => FnPtr,
-        "Shape" => Shape,
+        "TypeShape" => TypeShape,
         _ => return None,
     })
 }

@@ -135,7 +135,7 @@ fn unary_types_snapshot_and_shape() {
     let unit_ty = f.body().result;
     let shape = f.slot(
         TypeKind::Builtin {
-            kind: BuiltinType::Shape,
+            kind: BuiltinType::TypeShape,
             arguments: vec![GenericArgument::Type(unit_ty)].into(),
         },
         Storage::Temporary,

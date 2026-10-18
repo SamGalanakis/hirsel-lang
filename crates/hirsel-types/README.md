@@ -107,7 +107,7 @@ Structural properties have one declaration-based implementation:
 `structural_property` proves Plain, Copyable, Sendable and NeedsRelease;
 `structural_sendability` derives conditional generic summaries. Transparent
 nominals substitute their actual arguments into their representation; opaque
-nominals require exported bounds. Phantom arguments of Ptr/FnPtr/SlotId/Shape
+nominals require exported bounds. Phantom arguments of Ptr/FnPtr/SlotId/TypeShape
 are not owned payloads. Concrete locality excludes Sendable, even for flat
 values. Function and erased Iter capture summaries remain explicit producer facts.
 `projected_type` applies owner locality and the derived root sendability to

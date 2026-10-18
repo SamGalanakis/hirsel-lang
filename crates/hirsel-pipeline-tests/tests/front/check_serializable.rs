@@ -41,7 +41,7 @@ fn every_ineligible_leaf_has_a_data_twin() {
         "Mutex[u64]",
         "Iter[u64]",
         "SortedMap[u64,u64]",
-        "Shape[u64]",
+        "TypeShape[u64]",
     ] {
         check(
             &format!("@serializable type Row {{ value: List[({leaf},u64)] }}"),

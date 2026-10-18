@@ -1819,7 +1819,7 @@ pub(super) fn encode_value(value: &Value) -> Vec<u8> {
             Atomic => 17,
             Ptr => 18,
             FnPtr => 19,
-            Shape => 20,
+            TypeShape => 20,
         }
     }
     fn size_bindings(out: &mut Vec<u8>, sizes: &[Option<u64>]) {

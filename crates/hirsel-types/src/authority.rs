@@ -7,7 +7,7 @@ use crate::*;
 /// and erased iterator captures remain unknown, never implicitly inert.
 ///
 /// This summary does not supply an explicit governing capability operand.
-/// Phantom type arguments of Ptr/FnPtr/SlotId/Shape do not contribute payloads.
+/// Phantom type arguments of Ptr/FnPtr/SlotId/TypeShape do not contribute payloads.
 pub fn builtin_held_authority(kind: BuiltinType, roles: &NominalRoles) -> AuthoritySummary {
     let role = match kind {
         BuiltinType::Iter => return AuthoritySummary::Unknown,

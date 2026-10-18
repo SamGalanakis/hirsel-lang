@@ -331,7 +331,7 @@ fn builtin_to_native(value: BuiltinType) -> hirsel_lir::operation::BuiltinType {
         BuiltinType::Atomic => hirsel_lir::operation::BuiltinType::Atomic,
         BuiltinType::Ptr => hirsel_lir::operation::BuiltinType::Ptr,
         BuiltinType::FnPtr => hirsel_lir::operation::BuiltinType::FnPtr,
-        BuiltinType::Shape => hirsel_lir::operation::BuiltinType::Shape,
+        BuiltinType::TypeShape => hirsel_lir::operation::BuiltinType::TypeShape,
     }
 }
 
@@ -357,7 +357,7 @@ fn builtin_from_native(value: hirsel_lir::operation::BuiltinType) -> BuiltinType
         hirsel_lir::operation::BuiltinType::Atomic => BuiltinType::Atomic,
         hirsel_lir::operation::BuiltinType::Ptr => BuiltinType::Ptr,
         hirsel_lir::operation::BuiltinType::FnPtr => BuiltinType::FnPtr,
-        hirsel_lir::operation::BuiltinType::Shape => BuiltinType::Shape,
+        hirsel_lir::operation::BuiltinType::TypeShape => BuiltinType::TypeShape,
     }
 }
 
@@ -398,7 +398,7 @@ mod tests {
             "Atomic",
             "Ptr",
             "FnPtr",
-            "Shape",
+            "TypeShape",
         ] {
             let text = format!("({tag})");
             let semantic = from_text::<BuiltinType>(&text).unwrap();

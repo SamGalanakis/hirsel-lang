@@ -188,7 +188,7 @@ pub fn has_owned_crossing_requirement(
                     BuiltinType::Shared
                     | BuiltinType::Ptr
                     | BuiltinType::FnPtr
-                    | BuiltinType::Shape
+                    | BuiltinType::TypeShape
                     | BuiltinType::SlotId
                     | BuiltinType::Iter,
                 ..
@@ -391,7 +391,7 @@ pub fn owned_crossing_receipts(
                     | BuiltinType::Iter
                     | BuiltinType::Ptr
                     | BuiltinType::FnPtr
-                    | BuiltinType::Shape
+                    | BuiltinType::TypeShape
                     | BuiltinType::SlotId,
                 ..
             } => (),

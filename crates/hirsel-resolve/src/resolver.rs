@@ -2309,7 +2309,7 @@ fn native_type(path: &Path, symbols: &Interner) -> bool {
                     | "Atomic"
                     | "Ptr"
                     | "FnPtr"
-                    | "Shape"
+                    | "TypeShape"
             )
         )
 }

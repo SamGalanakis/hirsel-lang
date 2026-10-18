@@ -331,7 +331,7 @@ pub enum BuiltinType {
     Atomic,
     Ptr,
     FnPtr,
-    Shape,
+    TypeShape,
 }
 /// Semantic field; dependent sibling brands refer to its index (PROV-5).
 #[derive(Clone, Debug, Eq, PartialEq)]

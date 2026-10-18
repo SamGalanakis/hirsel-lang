@@ -37,7 +37,7 @@ An opaque type's bounds and authority summary are part of its signature, and opa
 declarations are checked against their representation in the owner's view, sealed
 capabilities included; [CAP-5](capabilities.md#cap-5-capability-sealing) changes
 authority abstraction only, not structural-bound proof. There is no universal `==`.
-`Shared`, `Slots`, `Shape` and `SortedMap` satisfy neither `data` nor `key`, including
+`Shared`, `Slots`, `TypeShape` and `SortedMap` satisfy neither `data` nor `key`, including
 inside aggregates; `Map` and `Set` have their specified structural equality
 ([SEM-5](semantics.md#sem-5-maps)). Finite or regular nominal type graphs have no semantic
 depth or width cutoff for proving bounds; only strictly growing polymorphic expansion may
