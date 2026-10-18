@@ -7,6 +7,7 @@ mod intrinsics;
 mod iteration;
 mod literals;
 mod patterns;
+mod shapes;
 mod source_rows;
 mod tails;
 #[cfg(test)]
@@ -1527,11 +1528,16 @@ impl Checker<'_, '_> {
             E::Shape(t) => {
                 let syntax = t;
                 let t = self.syntax_type(t, frame)?;
-                self.plans.shapes.push((id, syntax, t));
-                self.ty(TypeKind::Builtin {
-                    kind: BuiltinType::TypeShape,
-                    arguments: vec![GenericArgument::Type(t)].into(),
-                })
+                match self.shape_subject(id, t)? {
+                    Some(t) => {
+                        self.plans.shapes.push((id, syntax, t));
+                        self.ty(TypeKind::Builtin {
+                            kind: BuiltinType::TypeShape,
+                            arguments: vec![GenericArgument::Type(t)].into(),
+                        })
+                    }
+                    None => self.error(),
+                }
             }
             E::Heap => {
                 let role = self

@@ -1751,6 +1751,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "test.dir",
     "test.fail",
     "test.net",
+    // CT-3: compile-time only; no run-time code holds a TypeShape.
+    "type_shape.info",
 ];
 
 /// Stable declaration ownership transport, used by the independently retained inventory.

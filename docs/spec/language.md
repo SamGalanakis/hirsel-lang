@@ -9,8 +9,8 @@ ownership are in [Ownership and modes](ownership.md).
 
 Every type judgment is decided by the text to its left plus the expected type. Type
 arguments are never written in expressions, so a postfix `[` is always indexing.
-`shape(T)` is reserved syntax for future type-shape reflection
-([CT-3](compile-time.md#ct-3-shapes)), not an executable API.
+`shape(T)` names a type in an expression only to read its shape at compile time
+([CT-3](compile-time.md#ct-3-shapes)); it is not a type argument.
 
 Boolean, byte-string, string, character and byte literals intrinsically have types `bool`,
 `Bytes`, `String`, `char` and `u8`. A character literal such as `'a'` has type `char`,
@@ -196,7 +196,7 @@ only), and `distinct` types, which inherit their base's bounds, are built as `Pe
 and read back with `let Percent(v) = p`. There is no overloading, no type class, no
 implicit conversion (including between error types), no textual macro expansion, no
 exception, no `any` and no cast. Typed compile-time generation is reserved
-([CT-3](compile-time.md#ct-3-shapes)).
+([typed generation](compile-time.md#typed-generation)).
 
 The forms are `bool`, `char`, sized integers and floats, `String`, `Bytes`, aliases `type A = B`,
 single variants `type A = Only()`, records, variants, tuples (`(x,)` for one element),

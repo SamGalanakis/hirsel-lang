@@ -1,0 +1,8 @@
+// rule: CT-2
+// expect: accept
+// A shape token describes a type to compile-time code; it is not data.
+type Rec {
+  n: u32,
+}
+
+const SHAPE: ShapeInfo = type_shape.info(shape(Rec))

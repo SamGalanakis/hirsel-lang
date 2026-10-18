@@ -1,0 +1,11 @@
+// rule: CT-3
+// expect: reject CT-3 at line 9
+// "shape(T) is evaluated only at compile time".
+type Rec {
+  n: u32,
+}
+
+fn probe() -> () {
+  let _ = shape(Rec)
+  ()
+}

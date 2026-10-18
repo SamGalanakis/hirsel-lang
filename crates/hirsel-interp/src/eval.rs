@@ -2198,6 +2198,8 @@ fn rvalue(
             }
             value
         }
+        // CT-3: a shape is a payload-free token; `type_shape.info` reads its type actual.
+        Rvalue::Shape(_) => Value::Unit,
         Rvalue::Size(parameter) => {
             let ty = frame.place(destination)?.ty;
             if !matches!(

@@ -1,0 +1,9 @@
+// rule: GEN-3
+// expect: reject GEN-3 at line 7
+// A transparent alias has its target's shape, and a builtin collection has none.
+type Same = List[String]
+
+fn probe() -> () {
+  let _ = comptime type_shape.info(shape(Same))
+  ()
+}

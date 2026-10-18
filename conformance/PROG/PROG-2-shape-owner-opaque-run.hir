@@ -1,0 +1,36 @@
+// rule: PROG-2
+// expect: run
+// stdout: opaque
+// stdout: value: u64
+// The owning package sees its opaque representation, and its shape says so.
+pub opaque type Secret: data uses {} {
+  value: u64,
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let info = comptime type_shape.info(shape(Secret))
+  let out = io.stdout(rt)?
+  match info.visibility {
+    Private => {
+      let _ = out.print(out, "private\n")
+    },
+    Public => {
+      let _ = out.print(out, "public\n")
+    },
+    Opaque => {
+      let _ = out.print(out, "opaque\n")
+    },
+  }
+  match info.body {
+    Record(fields) => {
+      for f in fields {
+        let _ = out.print(out, f.name)
+        let _ = out.print(out, ": ")
+        let _ = out.print(out, f.ty)
+        let _ = out.print(out, "\n")
+      }
+    },
+    Choice(_) => (),
+  }
+  Ok(())
+}

@@ -1,0 +1,10 @@
+// rule: CT-2
+// expect: reject CT-2 at line 9
+// A shape token describes a type to compile-time code; it is not data.
+type Rec {
+  n: u32,
+}
+
+fn probe() -> () {
+  let s = comptime shape(Rec)
+}

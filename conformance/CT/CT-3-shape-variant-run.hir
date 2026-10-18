@@ -1,0 +1,37 @@
+// rule: CT-3
+// expect: run
+// stdout: Empty
+// stdout: Dot x: i64 y: i64
+// stdout: Tagged _: String _: Bytes
+// Variant names and payloads, labelled or positional, come from the declaration.
+type Mark = Empty | Dot(x: i64, y: i64) | Tagged(String, Bytes)
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let info = comptime type_shape.info(shape(Mark))
+  let out = io.stdout(rt)?
+  match info.body {
+    Record(_) => {
+      let _ = out.print(out, "record\n")
+    },
+    Choice(variants) => {
+      for v in variants {
+        let _ = out.print(out, v.name)
+        for p in v.payload {
+          let _ = out.print(out, " ")
+          match p.label {
+            Some(label) => {
+              let _ = out.print(out, label)
+            },
+            None => {
+              let _ = out.print(out, "_")
+            },
+          }
+          let _ = out.print(out, ": ")
+          let _ = out.print(out, p.ty)
+        }
+        let _ = out.print(out, "\n")
+      }
+    },
+  }
+  Ok(())
+}

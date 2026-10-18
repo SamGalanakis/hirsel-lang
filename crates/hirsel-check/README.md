@@ -82,7 +82,9 @@ Lowering consumes these producer decisions after I/J:
   Nested closure results belong to their frame; local function signatures never
   infer from the body.
 - `Plans.shapes` maps each shape expression and syntax type to a caller-owned
-  semantic TypeId for subsequent materialization.
+  semantic TypeId, aliases followed, for lowering's shape rvalue. `shapes.rs`
+  admits a shape only in compile-time code (CT-3), of a record or variant
+  declaration (GEN-3) whose representation the signature view shows (PROG-2).
 
 Missing nominal capability arguments retain typed ordinary inputs/results and
 are diagnosed by authority checking under docs/spec/diagnostics.md, rather than a derivative arity

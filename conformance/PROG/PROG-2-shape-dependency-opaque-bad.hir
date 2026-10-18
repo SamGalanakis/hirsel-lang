@@ -1,0 +1,7 @@
+// rule: PROG-2
+// expect: reject PROG-2 at line 5
+// Only a type's owning package can take the shape of its opaque representation.
+fn probe() -> () {
+  let _ = comptime type_shape.info(shape(vendor.Secret))
+  ()
+}

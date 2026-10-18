@@ -1,0 +1,9 @@
+// rule: GEN-3
+// expect: accept
+// A distinct type wraps a base type; it has no record or variant shape.
+type Percent = Percent(v: u8)
+
+fn probe() -> () {
+  let _ = comptime type_shape.info(shape(Percent))
+  ()
+}

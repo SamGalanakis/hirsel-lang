@@ -213,6 +213,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ),
         ("StockError", "", "OutOfStock(Sku)"),
         ("TxFailure", "E", "Aborted(E)|Canceled(CancelCause)"),
+        ("ShapeVisibility", "", "Private()|Public()|Opaque()"),
+        (
+            "ShapeBody",
+            "",
+            "Record(List[FieldShape])|Choice(List[VariantShape])",
+        ),
     ] {
         let mut b = Builder::new(generic)
             .with_declarations(&out)
@@ -250,7 +256,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         if b.generics.is_empty()
             && !matches!(
                 name,
-                "TlsRoots" | "PeerTls" | "NetConnection" | "NetStep" | "ChildStep"
+                "TlsRoots" | "PeerTls" | "NetConnection" | "NetStep" | "ChildStep" | "ShapeBody"
             )
         {
             t.bounds = vec![
@@ -262,6 +268,9 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 Bound::Inert,
                 Bound::NoallocDrop,
             ];
+        }
+        if name == "ShapeBody" {
+            t.bounds = shape_data_bounds();
         }
         publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
     }
@@ -314,6 +323,18 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "clock: MonotonicClock,at: Instant of .clock",
         ),
         ("NetClient", "", "from: SocketAddr,steps: List[NetStep]"),
+        ("FieldShape", "", "name: String,ty: String"),
+        ("PayloadShape", "", "label: Option[String],ty: String"),
+        (
+            "VariantShape",
+            "",
+            "name: String,payload: List[PayloadShape]",
+        ),
+        (
+            "ShapeInfo",
+            "",
+            "name: String,visibility: ShapeVisibility,body: ShapeBody",
+        ),
         (
             "NetListener",
             "",
@@ -325,6 +346,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             .with_schema(super::schema(name));
         let repr = b.record(fields);
         let mut t = type_definition(b.generics.clone(), Some(repr));
+        if matches!(
+            name,
+            "FieldShape" | "PayloadShape" | "VariantShape" | "ShapeInfo"
+        ) {
+            t.bounds = shape_data_bounds();
+        }
         if name == "Deadline" {
             // A deadline holds its clock, so it carries that clock's authority.
             t.bounds = vec![
@@ -838,6 +865,17 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         *signature = Arc::new(normalized);
     }
     out
+}
+/// CT-3 shape data holds only strings and lists of them: structurally
+/// copyable, data, key, inert and noalloc_drop, but neither plain nor sendable.
+fn shape_data_bounds() -> Vec<Bound> {
+    vec![
+        Bound::Copyable,
+        Bound::Data,
+        Bound::Key,
+        Bound::Inert,
+        Bound::NoallocDrop,
+    ]
 }
 fn type_definition(
     generics: Vec<GenericParameter>,
@@ -1368,6 +1406,7 @@ fn builtin(n: &str) -> Option<BuiltinType> {
         "Mutex" => Mutex,
         "Atomic" => Atomic,
         "Ptr" => Ptr,
+        "TypeShape" => TypeShape,
         _ => return None,
     })
 }

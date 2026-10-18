@@ -1,0 +1,17 @@
+// rule: GEN-3
+// expect: run
+// stdout: standalone@0/Rec
+// A transparent alias has its target's shape.
+type Rec {
+  n: u32,
+}
+
+type Same = Rec
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let info = comptime type_shape.info(shape(Same))
+  let out = io.stdout(rt)?
+  let _ = out.print(out, info.name)
+  let _ = out.print(out, "\n")
+  Ok(())
+}

@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-813 exported definitions; 259 variants.
+820 exported definitions; 264 variants.
 
 ## Types and roots
 
@@ -371,6 +371,10 @@ Variant of FailureKind.
 - `OutOfSpace() -> FailureKind`
 
 Variant of FailureKind.
+
+<a id="def-core_401_2fFieldShape"></a>
+
+- `type FieldShape: copyable + data + key + inert + noalloc_drop uses {} = { name: String, ty: String }`
 
 <a id="def-core_401_2fFile"></a>
 
@@ -868,6 +872,10 @@ Variant of OutputError.
 
 - `opaque type Path: copyable + inert + noalloc_drop + plain + data + key + sendable uses {}`
 
+<a id="def-core_401_2fPayloadShape"></a>
+
+- `type PayloadShape: copyable + data + key + inert + noalloc_drop uses {} = { label: Option[String], ty: String }`
+
 <a id="def-core_401_2fPeerTls"></a>
 
 - `type PeerTls uses {} = Plain() | Certificate(List[String]) | Fails(TlsFailure)`
@@ -1025,6 +1033,48 @@ Variant of Result.
 <a id="def-core_401_2fSet"></a>
 
 - `type Set[T: key] uses {T}`
+
+<a id="def-core_401_2fShapeBody"></a>
+
+- `type ShapeBody: copyable + data + key + inert + noalloc_drop uses {} = Record(List[FieldShape]) | Choice(List[VariantShape])`
+
+<a id="def-core_401_2fShapeBody_23Choice"></a>
+
+- `Choice(List[VariantShape]) -> ShapeBody`
+
+Variant of ShapeBody.
+
+<a id="def-core_401_2fShapeBody_23Record"></a>
+
+- `Record(List[FieldShape]) -> ShapeBody`
+
+Variant of ShapeBody.
+
+<a id="def-core_401_2fShapeInfo"></a>
+
+- `type ShapeInfo: copyable + data + key + inert + noalloc_drop uses {} = { name: String, visibility: ShapeVisibility, body: ShapeBody }`
+
+<a id="def-core_401_2fShapeVisibility"></a>
+
+- `type ShapeVisibility: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Private() | Public() | Opaque()`
+
+<a id="def-core_401_2fShapeVisibility_23Opaque"></a>
+
+- `Opaque() -> ShapeVisibility`
+
+Variant of ShapeVisibility.
+
+<a id="def-core_401_2fShapeVisibility_23Private"></a>
+
+- `Private() -> ShapeVisibility`
+
+Variant of ShapeVisibility.
+
+<a id="def-core_401_2fShapeVisibility_23Public"></a>
+
+- `Public() -> ShapeVisibility`
+
+Variant of ShapeVisibility.
 
 <a id="def-core_401_2fShared"></a>
 
@@ -1233,6 +1283,10 @@ Variant of TxFailure.
 <a id="def-core_401_2fUnsafe"></a>
 
 - `@capability(global) opaque type Unsafe: plain + copyable + sendable + noalloc_drop uses {Unsafe}`
+
+<a id="def-core_401_2fVariantShape"></a>
+
+- `type VariantShape: copyable + data + key + inert + noalloc_drop uses {} = { name: String, payload: List[PayloadShape] }`
 
 <a id="def-core_401_2fWaitError"></a>
 
@@ -5333,6 +5387,13 @@ References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/
 - `fn tls.connect(n: Net, take s: Stream of n, server_name: String, roots: TlsRoots) -> Result[Stream of n, NetError]`
 
 on a `ConnectTls` stream, `server_name` equal to the rule's address
+
+
+## type_shape
+
+<a id="def-core_401_2ftype_5fshape_2finfo"></a>
+
+- `fn type_shape.info[T](s: TypeShape[T]) -> ShapeInfo`
 
 
 ## u128

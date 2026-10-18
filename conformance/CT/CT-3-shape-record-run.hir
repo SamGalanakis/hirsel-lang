@@ -1,0 +1,33 @@
+// rule: CT-3
+// expect: run
+// stdout: id: u64
+// stdout: name: String
+// stdout: tags: List[String]
+// stdout: manager: core@1/Option[box standalone@0/User]
+// A constant computes a record's field inventory from shape(T) once, at compile time.
+type User {
+  id: u64,
+  name: String,
+  tags: List[String],
+  manager: Option[box User],
+}
+
+fn record_fields[T](s: TypeShape[T]) -> List[FieldShape] {
+  match type_shape.info(s).body {
+    Record(found) => found,
+    Choice(_) => [],
+  }
+}
+
+const USER_FIELDS: List[FieldShape] = comptime record_fields(shape(User))
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  for f in USER_FIELDS {
+    let _ = out.print(out, f.name)
+    let _ = out.print(out, ": ")
+    let _ = out.print(out, f.ty)
+    let _ = out.print(out, "\n")
+  }
+  Ok(())
+}

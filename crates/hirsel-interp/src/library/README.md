@@ -157,6 +157,10 @@ scripts remain available. Confinement failures retain the explicit invalid-path
 code, while missing entries use NotFound. File-specific faults are rejected by
 the stdin, stdout and network script domains.
 
+`type_shape.info` (CT-3) reads its type actual's checked declaration from the same
+driver-supplied snapshots and builds core `ShapeInfo` data with canonical type
+spellings; the `shape(T)` rvalue it reads is a payload-free token (`Value::Unit`).
+
 `codec.encode` and `codec.decode` prove concrete schemas from driver-supplied checked declarations and convert values iteratively through hirsel-types::wire. All format validation stays in that shared codec; only complete decoded values become evaluator data. Malformed input returns DecodeError, while codec budgets remain operational refusal.
 
 Scripted port-0 listeners bind their client queue to the first ephemeral listen on

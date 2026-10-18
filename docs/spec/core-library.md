@@ -43,6 +43,9 @@ declarations but are exempt from runtime dispatch and operation manifests.
 fn codec.encode[T: serializable](value: T) -> Bytes
 fn codec.decode[T: serializable](data: Bytes) -> Result[T, DecodeError]
 
+// CT-3
+fn type_shape.info[T](s: TypeShape[T]) -> ShapeInfo
+
 // CAP-1/2/4, LANG-9, CONC-3
 N fn io.stdin(rt: Io) -> Result[Stdin, GrantError]
 N fn io.stderr(rt: Io) -> Result[Stderr, GrantError]
@@ -901,6 +904,12 @@ reservations.insert(tx: Tx, value: Reservation) -> Result[Reservation, StockErro
 
 They grant no ambient database authority. The overview's `CliError` is
 `Usage(ArgError) | Files(FileError) | Output(OutputError)`.
+
+`type_shape.info` reads a compile-time `TypeShape[T]` as the `ShapeInfo` data of
+[CT-3](compile-time.md#ct-3-shapes); its data types `ShapeInfo`, `ShapeVisibility`,
+`ShapeBody`, `FieldShape`, `VariantShape` and `PayloadShape` are root core types with the
+`copyable`, `data`, `key`, `inert` and `noalloc_drop` bounds. It runs only during
+compile-time evaluation and has no run-time implementation.
 
 `codec.encode` and `codec.decode` use the [canonical codec](serialization.md#ser-2-canonical-codec).
 `DecodeError` is the nullary variant `Version | SchemaMismatch | Truncated |

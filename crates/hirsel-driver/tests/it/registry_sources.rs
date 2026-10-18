@@ -332,7 +332,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         assert_eq!(normalized.metadata.visibility, Visibility::Public);
         checked += 1;
     }
-    assert_eq!(checked, 156);
+    assert_eq!(checked, 157);
 }
 
 #[test]

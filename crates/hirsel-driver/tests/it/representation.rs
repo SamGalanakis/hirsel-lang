@@ -181,6 +181,31 @@ fn owner_constant_materialization_tracks_private_shape_edits() {
 }
 
 #[test]
+fn owner_constant_shapes_track_private_field_edits() {
+    with_compiler_stack(|| {
+        let source = "pub opaque type Hidden: data uses {} { value: u64 }\n\
+                      fn first(take info: ShapeInfo) -> String {\n\
+                      match info.body { Record(fields) => copy fields[0].ty, Choice(_) => \"\" }\n\
+                      }\n\
+                      const field: String = first(type_shape.info(shape(Hidden)))\n";
+        let mut engine = engine(source);
+        let mut field = entry_path(&default_context());
+        field.0.name = "field".into();
+        for (source, spelling) in [
+            (source.to_owned(), "u64"),
+            (source.replace("value: u64", "value: u32"), "u32"),
+        ] {
+            let file = engine.sources.add("private.hir", source).unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            assert_eq!(
+                engine.materialize_constant(&field).unwrap(),
+                hirsel_tir::Constant::String(spelling.into())
+            );
+        }
+    });
+}
+
+#[test]
 fn opaque_package_controls_preserve_private_operations_and_diagnostic_sites() {
     with_compiler_stack(|| {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");

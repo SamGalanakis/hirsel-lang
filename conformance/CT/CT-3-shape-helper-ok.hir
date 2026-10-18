@@ -1,0 +1,16 @@
+// rule: CT-3
+// expect: accept
+// A helper body is run-time code even when only comptime calls it.
+type Rec {
+  n: u32,
+}
+
+fn name_of[T](s: TypeShape[T]) -> String {
+  type_shape.info(s).name
+}
+
+fn rec_name() -> String {
+  comptime name_of(shape(Rec))
+}
+
+const NAME: String = comptime rec_name()

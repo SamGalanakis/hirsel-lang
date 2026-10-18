@@ -224,9 +224,9 @@ not ambient database authority.
 
 ## Not in Hirsel
 
-These are excluded by design. Future typed compile-time generation, type-shape
-reflection and callable evaluation are reserved ([compile time](compile-time.md#reserved-for-future-compile-time-features)),
-not excluded.
+These are excluded by design. Future typed compile-time generation and callable evaluation
+are reserved ([compile time](compile-time.md#reserved-for-future-compile-time-features)),
+not excluded; compile-time type-shape inspection is [CT-3](compile-time.md#ct-3-shapes).
 
 - Files as the unit of code; import statements; ambient I/O, globals and implicit
   contexts.

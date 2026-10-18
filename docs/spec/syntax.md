@@ -507,8 +507,8 @@ iteration preparation. No blocks other than loops may be labelled. Constructors 
 syntax; field and variant names are resolved against the expected type. `[a, b]` is a
 sequence literal whose kind (`Array`, `List`, `Inline`) comes from the expected type; an
 empty sequence literal also needs one. `box e` builds the block a `box T` needs. The
-`= comptime expression` function body and `shape(T)` are reserved syntax
-([CT-3](compile-time.md#ct-3-shapes)). `comptime e` has prefix precedence; parenthesize a
+`= comptime expression` function body is reserved syntax; `shape(T)` reads a type's shape at
+compile time ([CT-3](compile-time.md#ct-3-shapes)). `comptime e` has prefix precedence; parenthesize a
 larger operand.
 
 A closure literal may omit its result type, which is then inferred inside the enclosing

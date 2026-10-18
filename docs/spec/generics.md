@@ -128,10 +128,14 @@ fn largest(xs: List[u32], by: Order[u32]) -> Option[u32] {
 
 ### GEN-3: Reflection
 
-Reserved for future type-shape reflection. There is no executable shape-inspection,
-derive or body-generation API. The `shape` keyword and its type-taking form are reserved;
-an opacity-aware reflection contract can be specified later without committing to
-source-body inspection or a shape representation
+A type has a shape ([CT-3](compile-time.md#ct-3-shapes)) when it is a nominal record or
+variant declaration, or a transparent alias of one, and its representation is visible to
+the package that writes `shape(T)` ([PROG-2](programs.md#prog-2-visibility)). Scalars,
+tuples, function types, builtin collections, `distinct` types and aliases of any of these
+have none: `shape(T)` of one is GEN-3. A generic declaration has a shape at each concrete
+instance. `TypeShape[T]` carries no structural operation, and taking a shape adds no bound or
+operation to the shaped type. Generating declarations or
+bodies from shapes is reserved
 ([reserved compile-time features](compile-time.md#reserved-for-future-compile-time-features)).
 
 ### GEN-4: Representation

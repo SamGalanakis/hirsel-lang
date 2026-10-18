@@ -1,0 +1,29 @@
+// rule: CT-3
+// expect: run
+// stdout: standalone@0/Pair[u64, List[String]]
+// stdout: left: u64
+// stdout: right: List[String]
+// A generic declaration's shape spells its fields through the actual arguments.
+type Pair[A, B] {
+  left: A,
+  right: B,
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let info = comptime type_shape.info(shape(Pair[u64, List[String]]))
+  let out = io.stdout(rt)?
+  let _ = out.print(out, info.name)
+  let _ = out.print(out, "\n")
+  match info.body {
+    Record(fields) => {
+      for f in fields {
+        let _ = out.print(out, f.name)
+        let _ = out.print(out, ": ")
+        let _ = out.print(out, f.ty)
+        let _ = out.print(out, "\n")
+      }
+    },
+    Choice(_) => (),
+  }
+  Ok(())
+}

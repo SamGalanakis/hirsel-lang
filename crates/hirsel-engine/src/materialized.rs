@@ -17,7 +17,7 @@ fn non_data(site: Span) -> QueryError {
     let mut diagnostic = Diagnostic::error(
         const { hirsel_diag::RuleId::of("CT-2") },
         site,
-        "compile-time values cannot materialize resources, capabilities or closures",
+        "compile-time values cannot materialize resources, capabilities, closures or type shapes",
     );
     diagnostic
         .notes
@@ -78,6 +78,16 @@ impl QueryEngine {
                     continue;
                 }
             };
+            // CT-3: a shape token describes a type to compile-time code only.
+            if matches!(
+                types.get(ty).map(|t| &t.kind),
+                Some(TypeKind::Builtin {
+                    kind: hirsel_types::BuiltinType::TypeShape,
+                    ..
+                })
+            ) {
+                return Err(non_data(site));
+            }
             let kind = match value {
                 Value::Unit => ValueKind::Constant(Constant::Unit),
                 Value::Bool(v) => ValueKind::Constant(Constant::Bool(v)),
