@@ -23,7 +23,7 @@ property, so it is not part of an action key.
 """
 
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS", "POOL_BUDGETS")
-load(":test_sizes.bzl", MEASURED_TEST_REQUESTS = "TEST_REQUESTS")
+load(":test_sizes.bzl", "TEST_REQUESTS")
 
 PRIORITY = 50
 
@@ -33,13 +33,6 @@ PRIORITY = 50
 # The test launcher runs as many test threads as the request's whole CPUs.
 # A binary with no measurement yet runs as a single-threaded one with room.
 DEFAULT_TEST_REQUEST = [1, 2097152, ""]
-# Each examples shard runs one case. Until it has its own measurements, use
-# one CPU and twice the measured CLI integration-test memory reservation,
-# rather than the unmeasured whole-binary 2 GiB fallback.
-TEST_REQUESTS = MEASURED_TEST_REQUESTS | {
-    "hirsel-cli-test-examples": [1, MEASURED_TEST_REQUESTS["hirsel-cli-test-cli"][1] * 2, ""],
-}
-
 # `-c hirsel.tests=focus` is for running one test or a few by name: every pool
 # test run books one CPU (with its binary's measured memory). The pool's scheduler reserves nothing for a multi-CPU action, so
 # behind a stream of one-CPU actions a four-CPU run of a single case waited up

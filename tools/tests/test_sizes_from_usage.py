@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'buck2'))
@@ -13,6 +14,30 @@ import test_sizes_from_usage as sizes  # noqa: E402
 
 
 class NativeSizes(unittest.TestCase):
+    def test_partial_refresh_preserves_unobserved_native_requests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            retained = {'cpu_count': 1, 'memory_kb': 4194304, 'cpu_class': '', 'fallback_from': 'gate-native-full'}
+            (root / 'test-sizes.json').write_text(json.dumps({'gate-agree-native-full': retained}))
+            usage = root / 'usage.log'
+            usage.write_text('10\ttest=run:-:root//:hirsel-cli-test-cli\top=abc\twall_ms=1000\t'
+                             'cpu_usec=1200000\trequested_cpu=1\trequested_kb=524288\n')
+            trace = root / 'trace.jsonl'
+            trace.write_text(json.dumps(dict(event='usage', operation='abc', sampled=True, peak_memory_kb=2000000)))
+            with patch.object(sizes, 'HERE', root), patch.object(sys, 'argv', [
+                    'sizes', '--usage', str(usage), '--pss', str(trace), '--only', 'hirsel-cli-test-cli']):
+                sizes.main()
+            rows = json.loads((root / 'test-sizes.json').read_text())
+            self.assertEqual(rows['gate-agree-native-full'], retained)
+            self.assertEqual(rows['hirsel-cli-test-cli']['memory_kb'], 1310720)
+            self.assertIn('"gate-agree-native-full": [1, 4194304, ""]', (root / 'test_sizes.bzl').read_text())
+            before = (root / 'test-sizes.json').read_bytes()
+            with patch.object(sizes, 'HERE', root), patch.object(sys, 'argv', [
+                    'sizes', '--usage', str(usage), '--pss', str(trace), '--only', 'missing']):
+                with self.assertRaises(SystemExit):
+                    sizes.main()
+            self.assertEqual((root / 'test-sizes.json').read_bytes(), before)
+
     def test_pss_and_actual_retry_floor_are_shared_by_shards(self):
         with tempfile.TemporaryDirectory() as directory:
             usage = Path(directory) / 'actions.log'

@@ -278,8 +278,9 @@ in `sync.py`), including its ignored native cases. The existing launcher deals
 these equal-cost cases by name, preserving compiled test identities and exact
 filters; an exact example runs through `hirsel-cli-test-examples-shard-1`.
 Rerun `sync.py` after adding or removing an example test.
-Each shard requests one CPU and twice the CLI integration tests' measured memory
-reservation (currently 1 GiB), instead of the unmeasured binary's 2 GiB fallback.
+Each shard uses the examples binary's own measured request in `test_sizes.bzl`.
+Its reservation is independent of CLI integration tests, whose concurrency and
+memory needs differ.
 The gate selects every shard, so independent examples can run in parallel without
 one long action holding the whole examples suite's reservation.
 
@@ -365,9 +366,15 @@ python3 tools/buck2/test_sizes_from_usage.py --usage /tmp/usage-*.log \
 # Refresh only full native stages, preserving the other measured requests:
 python3 tools/buck2/test_sizes_from_usage.py --native-stages \
   --usage /tmp/usage-*.log --pss /tmp/trace-*.jsonl --kills /tmp/kills.txt
+# Refresh selected binaries without discarding other measurements:
+python3 tools/buck2/test_sizes_from_usage.py --only hirsel-cli-test-cli \
+  --usage /tmp/usage-*.log --pss /tmp/trace-*.jsonl
 ```
 
 A request is part of the test's action key: resizing reruns those tests once.
+The gate selects the resized binaries directly, and the bounded campaigns whose
+requests changed. Evidence-only changes run tool checks. Full-only stages remain
+on demand; a reservation update never starts a full native campaign.
 
 `pool_usage.py` reports, read-only from the same trace and usage rows, the
 pool's reserved CPU-hours by repository and hirsel's reserved against used
