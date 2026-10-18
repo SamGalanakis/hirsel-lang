@@ -4,6 +4,16 @@
 // MIT, third-party/NOTICES.md. Explicit Net and branded Stream replace Io and
 // connection handles; owned buffers replace borrowed reader/writer slices.
 // Limits/defaults follow ureq src/config.rs.
+// Whole-request deadline pattern (the caller owns tasks, deadline and client):
+// let owned_client = take client
+// let bounded = task.scope_until(tasks, deadline,
+//   fn(s: Scope) -> (http.Client, Result[http.Response, http.HttpError]) {
+//     let mut current = take owned_client
+//     let outcome = http.client_fetch(mut current, Get(), url, [], None())
+//     (take current, take outcome)
+//   })
+// Finished and Expired both retain the client and outcome; match to recover them.
+// A cancelled exchange drops its stream before returning the client.
 pub type Method = Get | Head | Post | Put | Delete | Patch | Options
 
 pub type Version = Http10 | Http11
@@ -1112,6 +1122,12 @@ fn http_client_request(
   Ok(take r)
 }
 
+/// Bound the complete exchange, including connect, TLS, redirects and body reads,
+/// with task.scope_until: take the Client into the body, then return it with the
+/// outcome. Finished and Expired both retain that pair for the next call.
+/// Expired contains the body's result; cancellation is Net(Canceled(cause)).
+/// A cancelled exchange never returns its checked-out stream to the idle pool.
+///
 /// Fetch with connection reuse. The exclusive borrow permits one exchange at a
 /// time per Client; use one Client per concurrent worker. The per-host limit
 /// bounds idle connections only. max_idle_connections bounds the entire idle pool.

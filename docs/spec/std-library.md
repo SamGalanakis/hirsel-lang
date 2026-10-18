@@ -724,6 +724,41 @@ normally needs only one connection per origin.
 dropped at checkout, before reuse. Invalid timeout values or a missing required clock
 return `Net(InvalidInput())`. These are ordinary std resources and core calls.
 
+For a whole-request deadline, enclose the call in the landed core scope API:
+
+```hirsel
+fn bounded_fetch(
+  tasks: Tasks,
+  deadline: Deadline,
+  take client: http.Client,
+  url: String
+) -> Bounded[(http.Client, Result[http.Response, http.HttpError])] {
+  task.scope_until(
+    tasks,
+    deadline,
+    fn(s: Scope) -> (http.Client, Result[http.Response, http.HttpError]) {
+      let mut current = take client
+      let outcome = http.client_fetch(mut current, Get(), url, [], None())
+      (take current, take outcome)
+    }
+  )
+}
+```
+
+The once scope body takes the client and returns it with the outcome. Match
+`Finished((client, outcome))` or `Expired((client, outcome))` to recover both and
+rebind the client as mutable for the next call. This uses owned captures; the default
+borrowed capture does not permit mutation of an outer client.
+
+The enclosing scope bounds connection setup, TLS, redirects, writes and the entire
+response read with one absolute deadline. `Finished(value)` means the scope completed;
+`Expired(value)` retains its body's result after deadline cancellation. A blocked
+exchange returns `Net(Canceled(DeadlineExceeded()))` and drops its checked-out stream,
+so later calls can use only other healthy idle connections or fresh ones. No per-call timeout argument
+or extra polling loop is involved. The same pattern applies to one-shot `request`/`fetch`
+and incremental response reads. Config's existing connect/read/write timeouts remain
+relative network-provider bounds and return `TimedOut`, independently of a scope deadline.
+
 ## Input
 
 `input.read_all(s: Stdin) -> Result[unique Bytes, InputError]` reads to end of input.

@@ -493,6 +493,7 @@ conformance/CONC/CONC-3-clock-sleep-duration-run.hir
 conformance/CONC/CONC-3-clock-sleep-order-run.hir
 conformance/CONC/CONC-3-clock-tied-timers-run.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
+conformance/CONC/CONC-3-http-client-deadline-run.hir
 conformance/CONC/CONC-3-process-run-canceled-run.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir

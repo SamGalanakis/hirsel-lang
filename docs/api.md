@@ -2738,6 +2738,12 @@ References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/
 
 - `pub fn http.client_fetch( mut c: Client, method: Method, url: String, headers: List[Header], body: Option[Bytes] ) -> Result[Response, HttpError]`
 
+Bound the complete exchange, including connect, TLS, redirects and body reads,
+with task.scope_until: take the Client into the body, then return it with the
+outcome. Finished and Expired both retain that pair for the next call.
+Expired contains the body's result; cancellation is Net(Canceled(cause)).
+A cancelled exchange never returns its checked-out stream to the idle pool.
+
 Fetch with connection reuse. The exclusive borrow permits one exchange at a
 time per Client; use one Client per concurrent worker. The per-host limit
 bounds idle connections only. max_idle_connections bounds the entire idle pool.

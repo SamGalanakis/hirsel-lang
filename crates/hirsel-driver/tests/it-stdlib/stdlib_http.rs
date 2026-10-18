@@ -625,6 +625,7 @@ fn pooled_client_scripts_replay_without_network_authority() {
             "conformance/SEM/SEM-1-http-client-server-close-run.hir",
             "conformance/SEM/SEM-1-http-client-post-reset-run.hir",
             "conformance/SEM/SEM-1-http-client-idle-expiry-run.hir",
+            "conformance/CONC/CONC-3-http-client-deadline-run.hir",
         ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../..")
