@@ -16,6 +16,7 @@ def render(match):
     lines = source.splitlines(keepends=True)
     split = next(i for i, line in enumerate(lines) if not line.startswith('//'))
     body = ''.join(lines[split:]).lstrip('\n')
+    first = len(lines) - len(body.splitlines())
     output = ''.join(line.removeprefix('// stdout: ').rstrip('\n') + '\n'
                      for line in lines[:split] if line.startswith('// stdout: '))
     exit_code = next((line.removeprefix('// exit: ').strip()
@@ -27,6 +28,10 @@ def render(match):
         expected = 'All selected @test functions pass.'
     if any(line.strip() == '// expect: accept' for line in lines[:split]):
         expected = ACCEPT
+    failure = next((line.split() for line in lines[:split]
+                    if line.startswith('// expect: fail ')), None)
+    if failure:
+        expected = f'A {failure[3]} failure at line {int(failure[-1]) - first} of this program.'
     return (f'<!-- tour: {path} -->\n'
             f'[Runnable source](../{path})\n\n'
             f'```hirsel\n{body}```\n\nExpected:\n\n{expected}\n<!-- /tour -->')

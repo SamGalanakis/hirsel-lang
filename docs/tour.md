@@ -294,6 +294,43 @@ input error
 ```
 <!-- /tour -->
 
+## Reporting a failure at the caller
+
+A language failure such as a false `failure.check` reports the operation that
+failed. Mark a checking helper `@track_caller` to report its application call
+instead: the report's primary site is the call, and an `in` line keeps the check
+inside the helper. A marked helper calling another marked helper forwards its own
+caller. Attribution stops at an unmarked caller: a failure through `progress`
+reports the `percent` call inside `progress`. A call through a function value starts
+at that call. Only ordinary named functions take
+the attribute. Below, `percent(5, 4)` fails at the call in `main`.
+
+<!-- tour: conformance/FAIL/FAIL-1-tour-03-track-caller-fail.hir -->
+[Runnable source](../conformance/FAIL/FAIL-1-tour-03-track-caller-fail.hir)
+
+```hirsel
+@track_caller
+fn percent(part: u64, whole: u64) -> u64 {
+  failure.check(whole > 0 && part <= whole, Arithmetic())
+  part * 100 / whole
+}
+
+fn progress(done: u64, total: u64) -> u64 {
+  percent(done, total)
+}
+
+pub fn main() -> Result[(), ()] {
+  let shown = progress(3, 4) + percent(5, 4)
+  failure.check(shown > 0, Arithmetic())
+  Ok(())
+}
+```
+
+Expected:
+
+A SEM-1 failure at line 12 of this program.
+<!-- /tour -->
+
 ## Generic functions as callbacks
 
 An annotated callable type can specialize a top-level generic function name. The same

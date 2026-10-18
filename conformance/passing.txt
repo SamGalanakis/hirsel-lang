@@ -851,6 +851,7 @@ conformance/FAIL/FAIL-1-contract-evaluation-source.hir
 conformance/FAIL/FAIL-1-contract-source.hir
 conformance/FAIL/FAIL-1-expected-result.hir
 conformance/FAIL/FAIL-1-program-order.hir
+conformance/FAIL/FAIL-1-tour-03-track-caller-fail.hir
 conformance/FAIL/FAIL-1-track-caller-argument-fail.hir
 conformance/FAIL/FAIL-1-track-caller-argument-run.hir
 conformance/FAIL/FAIL-1-track-caller-chain-fail.hir

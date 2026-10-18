@@ -1,0 +1,17 @@
+// rule: FAIL-1
+// expect: fail SEM-1 at line 14
+@track_caller
+fn percent(part: u64, whole: u64) -> u64 {
+  failure.check(whole > 0 && part <= whole, Arithmetic())
+  part * 100 / whole
+}
+
+fn progress(done: u64, total: u64) -> u64 {
+  percent(done, total)
+}
+
+pub fn main() -> Result[(), ()] {
+  let shown = progress(3, 4) + percent(5, 4)
+  failure.check(shown > 0, Arithmetic())
+  Ok(())
+}

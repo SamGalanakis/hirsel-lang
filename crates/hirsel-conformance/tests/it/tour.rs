@@ -51,21 +51,28 @@ fn published_programs_and_outputs_match_the_corpus() {
             .position(|line| !line.starts_with("//"))
             .map(|i| source.split_inclusive('\n').skip(i).collect::<String>())
             .unwrap();
+        let body = body.trim_start_matches('\n');
+        // A failure line is counted within the published snippet.
+        let first = source.lines().count() - body.lines().count();
         let expected = match header.expect {
             Expect::Test => "All selected @test functions pass.".into(),
             Expect::Accept if source.contains("extern \"c\" fn ") => ACCEPT.into(),
+            Expect::Fail {
+                rule,
+                line,
+                stdout: None,
+            } => format!("A {rule} failure at line {} of this program.", line - first),
             Expect::Run { stdout, exit } if stdout.is_empty() && exit == 0 => {
                 "No stdout; exit 0 (all checks pass).".into()
             }
             Expect::Run { stdout, exit } if stdout.is_empty() => format!("No stdout; exit {exit}."),
             Expect::Run { stdout, .. } => format!("```text\n{stdout}```"),
-            _ => panic!("tour program must have a checked run or test expectation: {path}"),
+            _ => panic!("tour program must have a checked expectation: {path}"),
         };
         assert_eq!(
             rendered,
             format!(
-                "[Runnable source](../{path})\n\n```hirsel\n{}```\n\nExpected:\n\n{expected}\n",
-                body.trim_start_matches('\n')
+                "[Runnable source](../{path})\n\n```hirsel\n{body}```\n\nExpected:\n\n{expected}\n"
             ),
             "{path}: run python3 docs/tour/render.py"
         );
