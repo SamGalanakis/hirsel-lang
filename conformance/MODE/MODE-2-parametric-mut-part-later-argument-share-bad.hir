@@ -1,0 +1,21 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+// `mut st.items` is unique only while its owner is, and the later block
+// argument shares the part into `keep` before callee entry, so the old list
+// `replace` returns is aliased. Twin is
+// MODE-2-parametric-mut-part-later-argument-share-ok.
+type St {
+  items: List[u64],
+}
+
+fn probe(mut st: unique St) -> u64 {
+  let mut keep: List[List[u64]] = []
+  let mut old: unique List[u64] = replace(
+    mut st.items,
+    take {
+      list.push(mut keep, copy st.items)
+      []
+    }
+  )
+  list.len(keep)
+}

@@ -1,0 +1,20 @@
+// rule: MODE-2
+// expect: accept
+// The later block argument only borrows `st.items`, so the owner, and with it
+// the part, is still unique at callee entry. Twin is
+// MODE-2-parametric-mut-part-later-argument-share-bad.
+type St {
+  items: List[u64],
+}
+
+fn probe(mut st: unique St) -> u64 {
+  let mut keep: List[List[u64]] = []
+  let mut old: unique List[u64] = replace(
+    mut st.items,
+    take {
+      list.push(mut keep, [list.len(st.items)])
+      []
+    }
+  )
+  list.len(keep)
+}

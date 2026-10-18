@@ -45,7 +45,10 @@ A `mut` call argument reserves its place while the later arguments are evaluated
 they may read it but not write, move or reserve it again. Its exclusive loan, and
 the check that no live value still borrows the place, start at callee entry, so
 a view whose last use is a later argument of the same call has already ended
-(LANG-3, the two-phase borrow of Rust's `v.push(v.len())`).
+(LANG-3, the two-phase borrow of Rust's `v.push(v.len())`). For the same reason a
+lent argument's uniqueness and crossing proof, which parameter requirements, the
+parametric rule and `@preserves_unique` read, are its place's state at callee
+entry, after every argument (`entry_value`), not its snapshot from evaluation.
 A borrowed loop over a place (`for x in xs`, any collection) lends that place
 from loop entry while it may advance again (SEM-4): a write, move or `mut`
 loan of an overlapping place in the body conflicts whether or not the body uses

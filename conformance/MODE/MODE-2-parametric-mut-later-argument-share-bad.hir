@@ -1,0 +1,20 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 12
+// A `mut` argument is only reserved while the later arguments are evaluated
+// (LANG-3), and the block argument shares `a` into `keep` before callee entry.
+// So `a` is not unique at entry and the parametric result of `replace`, the
+// old list `keep` still holds, is aliased. Twin is
+// MODE-2-parametric-mut-later-argument-share-run.
+fn probe() -> u64 {
+  let mut a: unique List[u64] = [1u64, 2u64]
+  let mut keep: List[List[u64]] = []
+  let n = list.len(keep)
+  let old: unique List[u64] = replace(
+    mut a,
+    take {
+      list.push(mut keep, copy a)
+      []
+    }
+  )
+  n
+}

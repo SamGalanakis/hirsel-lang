@@ -2814,6 +2814,12 @@ conformance/MODE/MODE-2-nested-view-return-ok.hir
 conformance/MODE/MODE-2-nested-view-strengthen-bad.hir
 conformance/MODE/MODE-2-nested-view-take-ok.hir
 conformance/MODE/MODE-2-nested-view-written-binding-ok.hir
+conformance/MODE/MODE-2-parametric-generic-mut-later-argument-share-bad.hir
+conformance/MODE/MODE-2-parametric-generic-mut-later-argument-share-ok.hir
+conformance/MODE/MODE-2-parametric-mut-later-argument-share-bad.hir
+conformance/MODE/MODE-2-parametric-mut-later-argument-share-run.hir
+conformance/MODE/MODE-2-parametric-mut-part-later-argument-share-bad.hir
+conformance/MODE/MODE-2-parametric-mut-part-later-argument-share-ok.hir
 conformance/MODE/MODE-2-part-mut-unique-call-bad.hir
 conformance/MODE/MODE-2-part-mut-unique-call-ok.hir
 conformance/MODE/MODE-2-pattern-physical-aliased-bad.hir
@@ -3003,6 +3009,8 @@ conformance/MODE/MODE-4-mutable-function-binding-written-mode-run.hir
 conformance/MODE/MODE-4-mutex-handle.hir
 conformance/MODE/MODE-4-nested-generic-bound-bad.hir
 conformance/MODE/MODE-4-nested-generic-bound-ok.hir
+conformance/MODE/MODE-4-parametric-mut-later-argument-share-send-bad.hir
+conformance/MODE/MODE-4-parametric-mut-later-argument-share-send-ok.hir
 conformance/MODE/MODE-4-plain-function-pointer-send-ok.hir
 conformance/MODE/MODE-4-plain-pointer-send-ok.hir
 conformance/MODE/MODE-4-plain.hir

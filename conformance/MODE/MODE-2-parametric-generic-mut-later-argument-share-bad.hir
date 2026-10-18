@@ -1,0 +1,22 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+// A user generic is parametric as `replace` is: its `mut` supplier must be
+// unique at callee entry, after the later block argument has shared `a` into
+// `keep`. Twin is MODE-2-parametric-generic-mut-later-argument-share-ok.
+fn swap_out[T](mut slot: T, take fresh: T, tag: u64) -> T uses {} {
+  replace(mut slot, take fresh)
+}
+
+fn probe() -> u64 {
+  let mut a: unique List[u64] = [1u64, 2u64]
+  let mut keep: List[List[u64]] = []
+  let old: unique List[u64] = swap_out(
+    mut a,
+    take [],
+    {
+      list.push(mut keep, copy a)
+      0u64
+    }
+  )
+  list.len(keep)
+}

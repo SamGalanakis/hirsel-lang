@@ -189,6 +189,13 @@ payload would leave that share in the mutex, and the next holder would update it
 place. Without `unique`, in-place update still happens whenever the run-time count allows
 ([OWN-7](#own-7-uniqueness-test)).
 
+A call argument is **currently unique** when it is unique at callee entry, after every
+argument has been evaluated. A lent place is passed as itself, and a `mut` one is only
+reserved while the later arguments are evaluated ([LANG-3](language.md#lang-3-evaluation)),
+so a later argument may still copy or share it:
+`replace(mut a, take { list.push(mut keep, copy a); [] })` receives an aliased `a` and
+returns an aliased list.
+
 A part reached by field and element steps from a currently unique owner, up to a `Shared`
 boundary, is itself unique, so `mut st.items` may be passed to a `mut` parameter declared
 `unique`; the owner stays unique when the part comes back unique. A callable may declare

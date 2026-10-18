@@ -1,0 +1,22 @@
+// rule: MODE-4
+// expect: reject MODE-4 at line 20
+// The block argument shares `a` into `keep` before callee entry, so the old
+// list `replace` returns is aliased and cannot be sent. Twin is
+// MODE-4-parametric-mut-later-argument-share-send-ok.
+fn send[T: sendable](take value: T) -> T {
+  value
+}
+
+fn probe() -> u64 {
+  let mut a: unique List[u64] = [1u64, 2u64]
+  let mut keep: List[List[u64]] = []
+  let old = replace(
+    mut a,
+    take {
+      list.push(mut keep, copy a)
+      []
+    }
+  )
+  let sent = send(take old)
+  list.len(keep)
+}

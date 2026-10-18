@@ -2188,6 +2188,39 @@ impl Checker<'_> {
             )
         })
     }
+    /// An argument's value as the callee receives it. A borrowed or `mut`
+    /// place is passed as itself, and the later arguments may still read and
+    /// share it (LANG-3), so its uniqueness and crossing proof are the place's
+    /// state at callee entry, after every argument, not its snapshot from
+    /// evaluation (MODE-2).
+    fn entry_value(&self, state: &State, argument: ExprId) -> Value {
+        let mut actual = self.value(state, argument);
+        if !matches!(actual.usage, UseKind::Borrow | UseKind::Mut) {
+            return actual;
+        }
+        let Some(place) = place(self.body, argument, self.source_rows) else {
+            return actual;
+        };
+        let current = &state.slots[place.binding].value;
+        if !self.property(argument).is_some_and(|p| p.sendable_aliased) {
+            let proof = if place.projections.is_empty() {
+                Some(if current.modes.uniqueness == Uniqueness::Unique {
+                    self.captured_sendability(argument, current)
+                } else {
+                    current.modes.sendability.clone()
+                })
+            } else {
+                current.crossing_parts.get(&place.projections)
+            };
+            if let Some(proof) = proof {
+                actual.modes.sendability = proof;
+            }
+        }
+        if current.modes.uniqueness == Uniqueness::Aliased {
+            actual.modes.uniqueness = Uniqueness::Aliased;
+        }
+        actual
+    }
     fn projection_locality(
         &self,
         state: &State,
@@ -2741,13 +2774,13 @@ impl Checker<'_> {
     }
     /// MODE-2: a direct generic call whose result holds only values of type
     /// parameters it cannot copy returns a unique result when every argument
-    /// that may supply them is unique.
+    /// that may supply them is unique at callee entry (`unique_arguments`).
     fn parametric_unique(
         &self,
-        state: &State,
         callee: ExprId,
         arguments: &[hirsel_syntax::Argument],
         requirements: &[Option<super::cfg::Requirement>],
+        unique_arguments: &BTreeSet<ExprId>,
     ) -> bool {
         let Some(path) = self.callee_definition(callee) else {
             return false;
@@ -2775,12 +2808,7 @@ impl Checker<'_> {
                 };
                 match inputs.get(requirement.parameter) {
                     Some(ParametricInput::Free) => true,
-                    Some(ParametricInput::Unique) => {
-                        self.property(argument.value)
-                            .is_some_and(|p| p.plain || p.shared)
-                            || self.value(state, argument.value).modes.uniqueness
-                                == Uniqueness::Unique
-                    }
+                    Some(ParametricInput::Unique) => unique_arguments.contains(&argument.value),
                     Some(ParametricInput::UniqueResult) => self
                         .ty(argument.value)
                         .and_then(|ty| match &self.body.types.get(ty)?.kind {
@@ -6004,31 +6032,7 @@ impl Checker<'_> {
                             continue;
                         };
                         if self.property(arg.value).is_some() {
-                            let mut actual = self.value(state, arg.value);
-                            if matches!(actual.usage, UseKind::Borrow | UseKind::Mut)
-                                && !self
-                                    .property(arg.value)
-                                    .is_some_and(|property| property.sendable_aliased)
-                            {
-                                if let Some(place) = place(self.body, arg.value, self.source_rows) {
-                                    let current = &state.slots[place.binding].value;
-                                    let proof = if place.projections.is_empty() {
-                                        Some(if current.modes.uniqueness == Uniqueness::Unique {
-                                            self.captured_sendability(arg.value, current)
-                                        } else {
-                                            current.modes.sendability.clone()
-                                        })
-                                    } else {
-                                        current.crossing_parts.get(&place.projections)
-                                    };
-                                    if let Some(proof) = proof {
-                                        actual.modes.sendability = proof;
-                                    }
-                                    if current.modes.uniqueness == Uniqueness::Aliased {
-                                        actual.modes.uniqueness = Uniqueness::Aliased;
-                                    }
-                                }
-                            }
+                            let actual = self.entry_value(state, arg.value);
                             let before = self.diagnostics.len();
                             let satisfied = self.required(
                                 state,
@@ -6106,6 +6110,18 @@ impl Checker<'_> {
                         }
                     }
                 }
+                // MODE-2: the arguments unique at callee entry, before the
+                // result's own reads share anything.
+                let unique_arguments: BTreeSet<ExprId> = arguments
+                    .iter()
+                    .filter(|arg| {
+                        self.property(arg.value)
+                            .is_some_and(|p| p.plain || p.shared)
+                            || self.entry_value(state, arg.value).modes.uniqueness
+                                == Uniqueness::Unique
+                    })
+                    .map(|arg| arg.value)
+                    .collect();
                 if self.emit && !failed && !*constructor && self.arenas.global(&result.relation) {
                     let values: Vec<ExprId> = arguments.iter().map(|a| a.value).collect();
                     for (arg, requirement) in arguments.iter().zip(requirements) {
@@ -6169,7 +6185,7 @@ impl Checker<'_> {
                             captures
                                 .iter()
                                 .fold(Sendability::Sendable, |sendability, index| {
-                                    let argument = self.value(state, arguments[*index].value);
+                                    let argument = self.entry_value(state, arguments[*index].value);
                                     let captured = self
                                         .captured_sendability(arguments[*index].value, &argument);
                                     let captured = join_sendability(
@@ -6603,21 +6619,10 @@ impl Checker<'_> {
                             || self
                                 .property(arg.value)
                                 .is_some_and(|p| p.plain || p.shared)
-                            || !borrowed
-                                && self.value(state, arg.value).modes.uniqueness
-                                    == Uniqueness::Unique
+                            || !borrowed && unique_arguments.contains(&arg.value)
                     });
-                let parametric = self.parametric_unique(state, *callee, arguments, requirements);
-                // The selected `mut` argument itself must be unique.
-                let unique_arguments: BTreeSet<ExprId> = arguments
-                    .iter()
-                    .filter(|arg| {
-                        self.property(arg.value)
-                            .is_some_and(|p| p.plain || p.shared)
-                            || self.value(state, arg.value).modes.uniqueness == Uniqueness::Unique
-                    })
-                    .map(|arg| arg.value)
-                    .collect();
+                let parametric =
+                    self.parametric_unique(*callee, arguments, requirements, &unique_arguments);
                 for (storage, mutable, argument) in &loans {
                     let declared = self
                         .body

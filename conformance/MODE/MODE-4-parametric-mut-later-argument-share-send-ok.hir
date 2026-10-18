@@ -1,0 +1,22 @@
+// rule: MODE-4
+// expect: accept
+// The block argument only borrows `a`, so `a` is unique at callee entry and the
+// old list `replace` returns is unique and can be sent. Twin is
+// MODE-4-parametric-mut-later-argument-share-send-bad.
+fn send[T: sendable](take value: T) -> T {
+  value
+}
+
+fn probe() -> u64 {
+  let mut a: unique List[u64] = [1u64, 2u64]
+  let mut keep: List[List[u64]] = []
+  let old = replace(
+    mut a,
+    take {
+      list.push(mut keep, [list.len(a)])
+      []
+    }
+  )
+  let sent = send(take old)
+  list.len(keep)
+}

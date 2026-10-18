@@ -1,0 +1,29 @@
+// rule: MODE-2
+// expect: run
+// stdout: 2
+// The block argument shares `a` into `keep` before callee entry, so the old
+// list `replace` returns is aliased and `unique old` deep-copies it: pushing
+// to the copy leaves the list `keep` holds at length 2. Twin is
+// MODE-2-parametric-mut-later-argument-share-bad.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let mut a: unique List[u64] = [1u64, 2u64]
+  let mut keep: List[List[u64]] = []
+  let old = replace(
+    mut a,
+    take {
+      list.push(mut keep, copy a)
+      []
+    }
+  )
+  let mut u: unique List[u64] = unique old
+  list.push(mut u, 9u64)
+  let _ = out.print(
+    io.stdout(rt)?,
+    if list.len(keep[0u64]) == 2u64 {
+      "2\n"
+    } else {
+      "3\n"
+    }
+  )
+  Ok(())
+}
