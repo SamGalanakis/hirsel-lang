@@ -18,6 +18,10 @@ fn returned_errors_report_payloads_without_stderr_grants_and_replay_them() {
             "pub type Trouble = Missing(path: String, code: i64, detail: box Option[List[u8]]) | Other\npub fn main() -> Result[(), Trouble] { Error(Other()) }",
             "error: Other\n",
         ),
+        (
+            "pub fn main() -> Result[(), List[u8]] { Error([1u8, 2u8]) }",
+            "error: [1, 2]\n",
+        ),
         ("pub fn main() -> Result[(), String] { Ok(()) }", ""),
     ] {
         let source = file(text);

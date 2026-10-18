@@ -8721,7 +8721,12 @@ impl<'p, S: Stage> Machine<'p, S> {
             return fail(V::Unsupported, "observation depth limit");
         }
         let record = self.record(layout)?;
-        let size = self.size(layout)?;
+        // Variable payloads have no fixed storage size. Their existing checked
+        // allocation bounds the opaque observation; cleanup still audits it.
+        let size = record
+            .size
+            .storage()
+            .unwrap_or_else(|| e.len().saturating_sub(offset));
         e.check_range(offset, size)?;
         let fields =
             |list: &[hirsel_lir::layout_types::FieldLayout]| -> Checked<Vec<Option<Observed>>> {

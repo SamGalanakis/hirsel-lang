@@ -123,8 +123,10 @@ Invariants:
   count it until it moves into the terminal cleanup drain. This generic-call
   return path is H-only: the driver's native source launcher admits typed
   Io/Args or Test entries returning an inline Result, and the runtime observes
-  those result bytes before task exit. It does not launch arbitrary
-  block-returning functions or release an arbitrary returned layout.
+  the typed Result, reports an Error, and consumes that Result before task exit.
+  It does not launch arbitrary block-returning functions. Opaque observations
+  of variable payloads use their checked allocation extent; terminal cleanup
+  still traverses their ordinary drop programs and audits every owner.
   Static data, saturated counts, `forget` subgraphs and harness context
   handles are named exemption records, never a blanket exemption.
 - Fault injection: `fault_campaign` fails each deterministic failure-capable
