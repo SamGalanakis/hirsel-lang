@@ -1,0 +1,33 @@
+// rule: LANG-13
+// expect: run
+// stdout: six bytes
+// A match in a loop copies one part of a tuple payload, and cleanup releases
+// its sibling in place on every path, the copy's failure path included.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn pair(s: String) -> Option[(String, String)] {
+  Some((unique s, unique s))
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let mut n = 0u64
+  let mut i = 0u64
+  while i < 3 {
+    i += 1
+    let line = match pair("ab") {
+      Some((content, _)) => copy content,
+      None() => "",
+    }
+    n += string.byte_len(line)
+  }
+  out.print(
+    output,
+    if n == 6 {
+      "six bytes\n"
+    } else {
+      "wrong\n"
+    }
+  ) ? Output
+  Ok(())
+}

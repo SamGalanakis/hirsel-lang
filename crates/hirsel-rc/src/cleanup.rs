@@ -126,6 +126,7 @@ pub fn lower<S: Stage>(
         inserted: Vec::new(),
         prepared: Vec::new(),
         flags: BTreeMap::new(),
+        drop_at: BlockId(0),
     };
     // Later drops of a block first, so splitting a block leaves the
     // indices of its earlier drops in place; a preparation inserted before
@@ -1149,6 +1150,8 @@ struct Lowering<'e, 'a> {
     inserted: Vec<(BlockId, usize)>,
     prepared: Vec<(SlotId, Vec<Step>, AddressId)>,
     flags: BTreeMap<Vec<Step>, ValueId>,
+    /// The block of the drop being lowered.
+    drop_at: BlockId,
 }
 
 /// What every action of one drop shares.
@@ -1173,6 +1176,7 @@ impl Lowering<'_, '_> {
         else {
             return Err(PassError::Malformed("not a drop".into()));
         };
+        self.drop_at = b;
         let Some((slot, path)) = self.facts.slot_of(address).map(|(s, p)| (s, p.to_vec())) else {
             return Err(PassError::Unsupported("a drop through a block".into()));
         };
@@ -2300,16 +2304,46 @@ impl Lowering<'_, '_> {
                 "a variant part with no prepared sibling address".into(),
             ));
         }
-        // One preparation per path: drop a site another site reaches.
-        let reach = self.reachable();
-        let reaches = |t: &(usize, usize, FailureId), u: &(usize, usize, FailureId)| {
-            (t.0 == u.0 && t.1 < u.1) || (t.0 != u.0 && reach[t.0].contains(&u.0))
+        // One preparation. The sibling preparations dominating the drop
+        // being lowered form a chain: take its first, as a loop makes every
+        // site reach every other. Otherwise drop a site another site reaches.
+        let succ = self.successors();
+        let dom = hirsel_graph::Dominators::new(&succ, self.ed.unit.entry.index());
+        let reach: Vec<std::collections::BTreeSet<usize>> = (0..succ.len())
+            .map(|b| {
+                hirsel_graph::postorder(&succ, succ[b].iter().copied())
+                    .into_iter()
+                    .collect()
+            })
+            .collect();
+        let before = |t: &(usize, usize, FailureId), u: &(usize, usize, FailureId)| {
+            if t.0 == u.0 {
+                t.1 < u.1
+            } else {
+                dom.dominates(t.0, u.0)
+            }
         };
-        let sites: Vec<_> = sites
+        let covering: Vec<_> = sites
             .iter()
-            .filter(|u| !sites.iter().any(|t| t != *u && reaches(t, u)))
+            .filter(|t| dom.dominates(t.0, self.drop_at.index()))
             .copied()
             .collect();
+        let sites: Vec<_> = match covering
+            .iter()
+            .find(|t| covering.iter().all(|u| u == *t || before(t, u)))
+        {
+            Some(first) => vec![*first],
+            None => {
+                let reaches = |t: &(usize, usize, FailureId), u: &(usize, usize, FailureId)| {
+                    (t.0 == u.0 && t.1 < u.1) || (t.0 != u.0 && reach[t.0].contains(&u.0))
+                };
+                sites
+                    .iter()
+                    .filter(|u| !sites.iter().any(|t| t != *u && reaches(t, u)))
+                    .copied()
+                    .collect()
+            }
+        };
         // Later sites first, so earlier indices stay put.
         for &(b, i, failure) in sites.iter().rev() {
             let f = self.ed.unit.tables.failures[failure.index()].clone();
@@ -2345,10 +2379,9 @@ impl Lowering<'_, '_> {
         Ok(())
     }
 
-    /// For each block, the blocks reachable from it in one or more steps,
-    /// through normal and failure edges alike.
-    fn reachable(&self) -> Vec<std::collections::BTreeSet<usize>> {
-        let succ: Vec<Vec<usize>> = Flow {
+    /// Each block's successors, through normal and failure edges alike.
+    fn successors(&self) -> Vec<Vec<usize>> {
+        Flow {
             unit: &self.ed.unit,
             code: &self.ed.code,
             lay: self.lay,
@@ -2357,14 +2390,7 @@ impl Lowering<'_, '_> {
         .successors()
         .into_iter()
         .map(|targets| targets.into_iter().map(|b| b.index()).collect())
-        .collect();
-        (0..succ.len())
-            .map(|b| {
-                hirsel_graph::postorder(&succ, succ[b].iter().copied())
-                    .into_iter()
-                    .collect()
-            })
-            .collect()
+        .collect()
     }
 
     /// A new unprepared address of `slot` at `path`.
@@ -2465,6 +2491,7 @@ mod pending_tests {
             inserted: vec![],
             prepared: vec![],
             flags: BTreeMap::new(),
+            drop_at: BlockId(0),
         };
         let mut actions = Vec::new();
         lowering
@@ -2517,6 +2544,7 @@ mod pending_tests {
             inserted: vec![],
             prepared: vec![],
             flags: BTreeMap::new(),
+            drop_at: BlockId(0),
         };
         let mut state = crate::insert::SlotState {
             live: Tri::Yes,

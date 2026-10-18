@@ -1020,6 +1020,7 @@ conformance/LANG/LANG-13-if-let-ok.hir
 conformance/LANG/LANG-13-irrefutable-patterns.hir
 conformance/LANG/LANG-13-let-else-bad.hir
 conformance/LANG/LANG-13-let-else-ok.hir
+conformance/LANG/LANG-13-loop-tuple-payload-part-run.hir
 conformance/LANG/LANG-13-nested-match-on-binding-run.hir
 conformance/LANG/LANG-13-nested-variant-payload-drop-run.hir
 conformance/LANG/LANG-13-package-module-destructure-bad.hir
