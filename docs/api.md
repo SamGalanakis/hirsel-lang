@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-783 exported definitions; 257 variants.
+792 exported definitions; 257 variants.
 
 ## Types and roots
 
@@ -1117,6 +1117,10 @@ Variant of StockError.
 <a id="def-core_401_2fTask"></a>
 
 - `type Task[T] uses {Scope, T}`
+
+<a id="def-core_401_2fTaskSet"></a>
+
+- `opaque resource type TaskSet[R]: noalloc_drop uses {Scope, R}`
 
 <a id="def-core_401_2fTasks"></a>
 
@@ -4891,6 +4895,16 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 ## task
 
+<a id="def-core_401_2ftask_2fadd"></a>
+
+- `@noalloc fn task.add[R](s: Scope, mut set: TaskSet[R] of s, take h: Task[R] of s) -> ()`
+
+<a id="def-std_401_2ftask_2fall"></a>
+
+- `pub fn task.all[T, E](s: Scope, take set: TaskSet[Result[T, E]] of s) -> Result[List[T], E]`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/Scope`](#def-core_401_2fScope), [`core@1/TaskSet`](#def-core_401_2fTaskSet)
+
 <a id="def-core_401_2ftask_2fasync"></a>
 
 - `fn task.async[R: sendable](s: Scope, take f: once fn() -> R) -> Task[R] of s`
@@ -4899,9 +4913,21 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 - `fn task.await[R](s: Scope, take h: Task[R] of s) -> R`
 
+<a id="def-core_401_2ftask_2fawait_5fany"></a>
+
+- `fn task.await_any[R](s: Scope, set: TaskSet[R] of s) -> Option[u64]`
+
+<a id="def-core_401_2ftask_2fawait_5fat"></a>
+
+- `fn task.await_at[R](s: Scope, mut set: TaskSet[R] of s, index: u64) -> R`
+
 <a id="def-core_401_2ftask_2fcancel"></a>
 
 - `@noalloc fn task.cancel[R](s: Scope, h: Task[R] of s) -> ()`
+
+<a id="def-core_401_2ftask_2fcancel_5fall"></a>
+
+- `fn task.cancel_all[R](s: Scope, take set: TaskSet[R] of s) -> ()`
 
 <a id="def-core_401_2ftask_2fcheck_5fcanceled"></a>
 
@@ -4910,6 +4936,10 @@ References: [`core@1/String`](#def-core_401_2fString)
 <a id="def-core_401_2ftask_2fdetach"></a>
 
 - `fn task.detach[R](s: Scope, take h: Task[R] of s) -> ()`
+
+<a id="def-core_401_2ftask_2fdetach_5fall"></a>
+
+- `fn task.detach_all[R](s: Scope, take set: TaskSet[R] of s) -> ()`
 
 <a id="def-core_401_2ftask_2fisolate"></a>
 
@@ -4922,6 +4952,16 @@ References: [`core@1/String`](#def-core_401_2fString)
 <a id="def-core_401_2ftask_2fscope_5funtil"></a>
 
 - `fn task.scope_until[R](tasks: Tasks, deadline: Deadline, body: once fn(s: Scope) -> R) -> Bounded[R]`
+
+<a id="def-std_401_2ftask_2fselect"></a>
+
+- `pub fn task.select[R](s: Scope, take set: TaskSet[R] of s) -> (u64, R)`
+
+References: [`core@1/Scope`](#def-core_401_2fScope), [`core@1/TaskSet`](#def-core_401_2fTaskSet), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-core_401_2ftask_2fset"></a>
+
+- `fn task.set[R](s: Scope) -> TaskSet[R] of s`
 
 
 ## test

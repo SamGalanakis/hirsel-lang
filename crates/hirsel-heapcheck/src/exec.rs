@@ -9067,7 +9067,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                                     return fail(V::ForgedPointer, format!("unknown handle {h}"));
                                 }
                             }
-                            if h & channels::ENDPOINT != 0 {
+                            if h & tasks::TASK_SET != 0 {
+                                // A task set closes in the task scheduler (CONC-2).
+                                self.close_task_set(h)?;
+                            } else if h & channels::ENDPOINT != 0 {
                                 // A channel endpoint closes in the task scheduler (CONC-6).
                                 self.close_endpoint(h, &mut d.work)?;
                             } else if let Some(rule) = self

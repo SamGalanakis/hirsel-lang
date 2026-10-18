@@ -357,6 +357,9 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
   waited for children. Every poll expires the due scope deadlines first, by deadline with
   ties in entry order, then polls the parked tasks: other waits in park order, then timer
   waits by deadline with ties in park order.
+- Task sets are the runtime's rows and handle words, opened in the ledger and closed by their
+  drop or by `task.cancel_all`/`task.detach_all`; completion order and `task.await_any`'s choice
+  are the runtime's, and a release that hands off to a holding member resumes at the next one.
 - When every task waits, none is parked on a source that can complete and no deadline is
   pending, the run is Blocked (CONC-8): it stops with no cleanup and no terminal audit, and
   its observation says `blocked`.

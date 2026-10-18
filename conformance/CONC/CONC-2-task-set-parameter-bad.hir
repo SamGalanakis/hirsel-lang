@@ -1,0 +1,25 @@
+// rule: CONC-2
+// expect: reject CONC-2 at line 5
+// A parameter taking a task set holds its caller's obligation; dropping it leaks the
+// members' joins.
+fn forget(s: Scope, take set: TaskSet[u64] of s) -> () {}
+
+fn launch(tasks: Tasks) -> () {
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let mut set: TaskSet[u64] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> u64 {
+            1
+          }
+        )
+      )
+      forget(s, take set)
+    }
+  )
+}

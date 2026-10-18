@@ -52,6 +52,13 @@ pub(super) enum Wait {
     /// A suspended operation (a timer wait, or a wait on a stalled scripted source), parked
     /// until a poll ended it; its completion is the task's [`Suspended`].
     Suspended,
+    /// `task.await_any` on task set `set`, parked until a member completed.
+    Any(u32),
+    /// `task.cancel_all` or `task.detach_all` releasing task set `set`'s members from `next`,
+    /// after handing off to a holding one.
+    Release { set: u32, next: usize },
+    /// `task.cancel_all`, parked until every member of task set `set` completed.
+    Drain(u32),
 }
 
 /// What a parked task waits for; its poll performs the wait's effect.
@@ -71,7 +78,23 @@ pub(super) enum Park {
     Timer { until: u64 },
     /// A wait on a stalled scripted peer or child, which only its source or a cancellation ends.
     Pending,
+    /// `task.await_any`, until a member of task set `set` holds its result or failed.
+    Any(u32),
+    /// `task.cancel_all`, until every member of task set `set` completed.
+    Drain(u32),
 }
+
+/// A task set (CONC-2): its scope and its members' Task words in add order, `None` once
+/// awaited.
+#[derive(Clone)]
+struct TaskSet {
+    generation: u32,
+    scope: u32,
+    members: Vec<Option<u64>>,
+}
+
+/// Task set words are channel endpoint words with this bit too, as the runtime makes them.
+pub(super) const TASK_SET: u64 = 1 << 62;
 
 /// A holding child's result: its slot, the slot's layout and its `None` image.
 #[derive(Clone)]
@@ -112,6 +135,8 @@ pub(super) struct Task {
     chain: Option<Vec<(ObservedFailure, Vec<u32>)>>,
     /// The layout of the closure the scheduler holds for this child.
     main: Option<LayoutId>,
+    /// Its place in completion order, set when it holds its result or failed.
+    completed: u64,
 }
 
 impl Task {
@@ -139,6 +164,7 @@ impl Task {
             exited: false,
             chain: None,
             main: None,
+            completed: 0,
         }
     }
 }
@@ -177,6 +203,9 @@ pub(super) struct Tasks {
     /// The live scopes' deadlines that have not fired, as (deadline, scope): by deadline, ties
     /// in entry order.
     armed: std::collections::BTreeSet<(u64, u32)>,
+    sets: Vec<Option<TaskSet>>,
+    /// Children that held their result or failed so far: the next one's completion order.
+    completions: u64,
 }
 
 fn handle(index: u32, generation: u32) -> u64 {
@@ -207,6 +236,13 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         "$intrinsic.TaskCanceled",
         "task.cancel",
         "task.detach",
+        "task.set",
+        "task.add",
+        "task.await_any",
+        "$intrinsic.TaskSetHas",
+        "$intrinsic.TaskSetTake",
+        "task.cancel_all",
+        "task.detach_all",
         "channel.open",
         "sender.dup",
         "$intrinsic.ChannelSend",
@@ -248,7 +284,71 @@ impl Tasks {
             armed: Default::default(),
             switch: None,
             spawns: Vec::new(),
+            sets: Vec::new(),
+            completions: 0,
         }
+    }
+    /// `task` holds its result or failed: its place in completion order.
+    fn order(&mut self, task: u32) -> Checked<()> {
+        let order = self.completions;
+        self.completions += 1;
+        self.task(task)?.completed = order;
+        Ok(())
+    }
+    /// The task set a TaskSet word names, which must belong to `scope`.
+    fn set_handle(&self, word: u64, scope: u32) -> Checked<u32> {
+        let index = word as u32;
+        match self.sets.get(index as usize).and_then(Option::as_ref) {
+            Some(set)
+                if word & TASK_SET != 0
+                    && set.generation
+                        == ((word & !(super::channels::ENDPOINT | TASK_SET)) >> 32) as u32
+                    && set.scope == scope =>
+            {
+                Ok(index)
+            }
+            _ => fail(
+                V::Malformed,
+                "a TaskSet handle of another scope or a closed set",
+            ),
+        }
+    }
+    fn set(&mut self, index: u32) -> Checked<&mut TaskSet> {
+        self.sets
+            .get_mut(index as usize)
+            .and_then(Option::as_mut)
+            .ok_or_else(|| err(V::Malformed, "a vacant task set row"))
+    }
+    /// The row a member's Task word names while the child has one.
+    fn member(&self, word: u64) -> Option<&Task> {
+        self.tasks
+            .get(word as u32 as usize)
+            .and_then(Option::as_ref)
+            .filter(|t| t.generation == (word >> 32) as u32)
+    }
+    /// The add-order index of the unawaited member of `set` that completed first, if one has.
+    fn first_completed(&self, set: u32) -> Option<u64> {
+        self.sets[set as usize]
+            .as_ref()?
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(i, word)| {
+                let row = self.member((*word)?)?;
+                matches!(row.state, State::Holding | State::Done)
+                    .then_some((row.completed, i as u64))
+            })
+            .min()
+            .map(|(_, i)| i)
+    }
+    /// Whether every unawaited member of `set` has completed.
+    fn drained(&self, set: u32) -> bool {
+        self.sets[set as usize].as_ref().is_some_and(|row| {
+            row.members
+                .iter()
+                .flatten()
+                .all(|&word| self.member(word).is_none_or(|t| t.state == State::Done))
+        })
     }
     pub(super) fn task(&mut self, index: u32) -> Checked<&mut Task> {
         self.tasks
@@ -764,6 +864,7 @@ impl<S: Stage> Machine<'_, S> {
                 row.slot = Some(slot);
                 row.state = State::Holding;
                 row.wait = Some(Wait::Finish);
+                s.order(current)?;
                 self.run_next(false)?;
                 Ok(Control::Continue)
             }
@@ -962,7 +1063,204 @@ impl<S: Stage> Machine<'_, S> {
                 // The handle word is taken: nothing of it remains to release.
                 self.task_return(f, &arguments, None, normal)
             }
+            "task.set" => {
+                let word = self.task_word(f, &Self::task_argument(&arguments, 0)?)?;
+                let s = self.scheduler();
+                let scope = s.scope_handle(word)?;
+                let generation = s.fresh_generation() & 0x3fff_ffff;
+                s.sets.push(Some(TaskSet {
+                    generation,
+                    scope,
+                    members: Vec::new(),
+                }));
+                let set = super::channels::ENDPOINT
+                    | TASK_SET
+                    | u64::from(generation) << 32
+                    | (s.sets.len() - 1) as u64;
+                self.ledger
+                    .handles
+                    .insert(set, (crate::ledger::HandleState::Open, false));
+                self.task_yield()?;
+                let result = site
+                    .result
+                    .ok_or_else(|| err(V::Malformed, "a task set without a result"))?;
+                self.task_return(f, &arguments, Some((result, Val::Handle(set))), normal)
+            }
+            "task.add" => {
+                let word = self.task_word(f, &Self::task_argument(&arguments, 0)?)?;
+                let set = self.task_word(f, &Self::task_argument(&arguments, 1)?)?;
+                let task = self.task_word(f, &Self::task_argument(&arguments, 2)?)?;
+                let s = self.scheduler();
+                let scope = s.scope_handle(word)?;
+                s.task_handle(task, scope)?;
+                let set = s.set_handle(set, scope)?;
+                s.set(set)?.members.push(Some(task));
+                self.task_yield()?;
+                // The handle word is taken: the set holds it now.
+                self.task_return(f, &arguments, None, normal)
+            }
+            "task.await_any" => {
+                let word = self.task_word(f, &Self::task_argument(&arguments, 0)?)?;
+                let set = self.task_word(f, &Self::task_argument(&arguments, 1)?)?;
+                let s = self.scheduler();
+                let scope = s.scope_handle(word)?;
+                let set = s.set_handle(set, scope)?;
+                let current = s.current;
+                let index = match s.task(current)?.wait {
+                    None => {
+                        let waiting = s.set(set)?.members.iter().any(Option::is_some);
+                        let first = s.first_completed(set);
+                        if waiting && first.is_none() {
+                            s.task(current)?.wait = Some(Wait::Any(set));
+                            self.park_until(Park::Any(set), true)?;
+                            return Ok(Control::Continue);
+                        }
+                        self.task_yield()?;
+                        first
+                    }
+                    Some(Wait::Any(waited)) if waited == set => {
+                        s.task(current)?.wait = None;
+                        Some(s.first_completed(set).ok_or_else(|| {
+                            err(V::Malformed, "await_any resumed with no member completed")
+                        })?)
+                    }
+                    _ => return fail(V::Malformed, "a task resumed in another operation"),
+                };
+                let result = site
+                    .result
+                    .ok_or_else(|| err(V::Malformed, "await_any without a result"))?;
+                let layout = self.value_type(f.unit, result)?.layout;
+                let value = match index {
+                    Some(index) => OpValue::Variant {
+                        tag: 1,
+                        value: Box::new(OpValue::Bits {
+                            scalar: ScalarKind::U64,
+                            bits: u128::from(index),
+                        }),
+                    },
+                    None => OpValue::Variant {
+                        tag: 0,
+                        value: Box::new(OpValue::Unit),
+                    },
+                };
+                let image =
+                    self.operation_image(f, layout, value, &arguments, &mut Default::default())?;
+                let repr = self.value_type(f.unit, result)?.repr;
+                let val = self.val_from(image, repr, layout)?.0;
+                self.task_return(f, &arguments, Some((result, val)), normal)
+            }
+            "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" => {
+                let word = self.task_word(f, &Self::task_argument(&arguments, 0)?)?;
+                let set = self.task_word(f, &Self::task_argument(&arguments, 1)?)?;
+                let ArgumentValue::Value(index) = Self::task_argument(&arguments, 2)?.value else {
+                    return fail(V::Malformed, "a member index passed by address");
+                };
+                let index = match self.read_use(f, index)? {
+                    Val::Bits { bits, .. } => usize::try_from(bits).ok(),
+                    _ => return fail(V::TypeConfusion, "a member index that is not a u64"),
+                };
+                let s = self.scheduler();
+                let scope = s.scope_handle(word)?;
+                let set = s.set_handle(set, scope)?;
+                let member = index.and_then(|i| s.set(set).ok()?.members.get_mut(i));
+                let result = site
+                    .result
+                    .ok_or_else(|| err(V::Malformed, "a task set entry without a result"))?;
+                // Neither is a yield: they are parts of `task.await_at`, whose join yields.
+                let val = if name == "$intrinsic.TaskSetHas" {
+                    Val::Bits {
+                        scalar: ScalarKind::Bool,
+                        bits: u128::from(member.is_some_and(|m| m.is_some())),
+                    }
+                } else {
+                    Val::Handle(
+                        member
+                            .and_then(Option::take)
+                            .ok_or_else(|| err(V::Malformed, "a task set member taken twice"))?,
+                    )
+                };
+                self.task_return(f, &arguments, Some((result, val)), normal)
+            }
+            "task.cancel_all" | "task.detach_all" => {
+                let word = self.task_word(f, &Self::task_argument(&arguments, 0)?)?;
+                let set_word = self.task_word(f, &Self::task_argument(&arguments, 1)?)?;
+                let cancel = name == "task.cancel_all";
+                let s = self.scheduler();
+                let scope = s.scope_handle(word)?;
+                let set = s.set_handle(set_word, scope)?;
+                let current = s.current;
+                let next = match s.task(current)?.wait {
+                    None => {
+                        if cancel {
+                            for word in s.set(set)?.members.clone().into_iter().flatten() {
+                                let child = s.task_handle(word, scope)?;
+                                s.cancel(child, CANCEL_REQUESTED)?;
+                            }
+                        }
+                        Some(0)
+                    }
+                    Some(Wait::Release { set: waited, next }) if waited == set => Some(next),
+                    Some(Wait::Drain(waited)) if waited == set => None,
+                    _ => return fail(V::Malformed, "a task resumed in another operation"),
+                };
+                if let Some(next) = next {
+                    let members = s.set(set)?.members.clone();
+                    for (i, word) in members.iter().enumerate().skip(next) {
+                        let Some(word) = *word else { continue };
+                        let s = self.scheduler();
+                        if let Some(child) = s.member(word).map(|_| word as u32) {
+                            let row = s.task(child)?;
+                            row.detached = true;
+                            if row.state == State::Holding {
+                                row.slot = None;
+                                s.task(current)?.wait = Some(Wait::Release { set, next: i + 1 });
+                                s.hand_off(child)?;
+                                return Ok(Control::Continue);
+                            }
+                            if row.state == State::Done && row.chain.is_none() {
+                                s.scope(scope)?.children.retain(|&c| c != child);
+                                s.vacate(child);
+                            }
+                        }
+                    }
+                    let s = self.scheduler();
+                    s.task(current)?.wait = None;
+                    if cancel && !s.drained(set) {
+                        s.task(current)?.wait = Some(Wait::Drain(set));
+                        self.park_until(Park::Drain(set), true)?;
+                        return Ok(Control::Continue);
+                    }
+                    self.task_yield()?;
+                } else {
+                    s.task(current)?.wait = None;
+                }
+                // The set word is taken: its handle closes with its row.
+                self.scheduler().sets[set as usize] = None;
+                match self.ledger.handles.get_mut(&set_word) {
+                    Some((state @ crate::ledger::HandleState::Open, _)) => {
+                        *state = crate::ledger::HandleState::Closed
+                    }
+                    _ => return fail(V::DoubleClose, "a task set closed twice"),
+                }
+                self.task_return(f, &arguments, None, normal)
+            }
             _ => unreachable!("a task operation"),
+        }
+    }
+
+    /// A dropped task set's row closes; its members stay children of their scope.
+    pub(super) fn close_task_set(&mut self, word: u64) -> Checked<()> {
+        let s = self.scheduler();
+        let index = word as u32 as usize;
+        match s.sets.get(index).and_then(Option::as_ref) {
+            Some(set)
+                if set.generation
+                    == ((word & !(super::channels::ENDPOINT | TASK_SET)) >> 32) as u32 =>
+            {
+                s.sets[index] = None;
+                Ok(())
+            }
+            _ => fail(V::DoubleClose, "a task set closed twice"),
         }
     }
 
@@ -1014,6 +1312,8 @@ impl<S: Stage> Machine<'_, S> {
             },
             Some(Park::Exit(scope)) => Ok(s.settled(scope)),
             Some(Park::Timer { .. } | Park::Pending) => self.poll_suspended(task),
+            Some(Park::Any(set)) => Ok(s.first_completed(set).is_some()),
+            Some(Park::Drain(set)) => Ok(s.drained(set)),
             Some(Park::Receive {
                 channel,
                 slot,
@@ -1200,6 +1500,7 @@ impl<S: Stage> Machine<'_, S> {
         let detached = row.detached;
         if failed {
             row.chain = Some(chain);
+            s.order(index)?;
             let scope_row = s.scope(scope)?;
             scope_row.canceled.get_or_insert(CANCEL_CHILD_FAILED);
             for sibling in scope_row.children.clone() {

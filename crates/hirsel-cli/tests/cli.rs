@@ -12,6 +12,8 @@ mod ergonomics;
 mod exit_report;
 #[path = "cli/replay.rs"]
 mod replay;
+#[path = "cli/select_race.rs"]
+mod select_race;
 #[path = "cli/testing.rs"]
 mod testing;
 static NEXT: AtomicUsize = AtomicUsize::new(0);

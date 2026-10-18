@@ -1,0 +1,70 @@
+// rule: CONC-2
+// expect: run
+// stdout: 10 20 30
+// "task.all" returns every result in add order, whatever order the members completed in.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn slow(tasks: Tasks, value: u64) -> Result[u64, ()] {
+  let mut i: u64 = 0
+  while i < 5 {
+    let _ = task.scope(
+      tasks,
+      fn(inner: Scope) -> Result[(), CancelError] {
+        task.check_canceled(inner)
+      }
+    )
+    i += 1
+  }
+  Ok(value)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let outcome = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[u64], ()] {
+      let mut set: TaskSet[Result[u64, ()]] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, ()] {
+            slow(tasks, 10)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, ()] {
+            Ok(20)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, ()] {
+            slow(tasks, 30)
+          }
+        )
+      )
+      task.all(s, take set)
+    }
+  )
+  out.print(
+    stdout,
+    if outcome == Ok([10, 20, 30]) {
+      "10 20 30\n"
+    } else {
+      "wrong\n"
+    }
+  ) ? Output
+  Ok(())
+}

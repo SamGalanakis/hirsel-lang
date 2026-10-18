@@ -50,6 +50,10 @@ pub static AWAIT: LibraryBody = LibraryBody {
     path: || DefPath::core("task.await"),
     build: join,
 };
+pub static AWAIT_AT: LibraryBody = LibraryBody {
+    path: || DefPath::core("task.await_at"),
+    build: join_at,
+};
 pub static CHECK_CANCELED: LibraryBody = LibraryBody {
     path: || DefPath::core("task.check_canceled"),
     build: check_canceled,
@@ -513,11 +517,80 @@ fn join(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     };
     let s = b.read_bits(s.address)?;
     let h = b.take(h.address)?;
+    join_handle(b, &entry, option_layout, size, s, h)
+}
+
+/// `task.await_at(s, mut set, index)`: a member that is absent or already awaited fails
+/// CONC-2; otherwise the set gives up its handle, which is joined as `task.await` joins.
+fn join_at(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    let result = cx.type_actual(0)?;
+    let (option_layout, size) = option_of(cx, result)?;
+    let generics = vec![GenericArgument::Type(result)];
+    let has = intrinsic(cx, "TaskSetHas", generics.clone())?;
+    let take = intrinsic(cx, "TaskSetTake", generics.clone())?;
+    let entry = intrinsic(cx, "TaskJoin", generics)?;
+    let mut b = Body::new(cx)?;
+    let &[s, set, index] = b.parameters.as_slice() else {
+        return Err(PassError::Malformed("task.await_at parameters".into()));
+    };
+    let s = b.read_bits(s.address)?;
+    let index = b.read_bits(index.address)?;
+    let (word, loan) = b.borrow(set.address, false)?;
+    let failure = b.failure(None);
+    let callee = operation(&mut b, &has);
+    let member = invoke(
+        &mut b,
+        callee,
+        has.abi,
+        vec![
+            argument(0, Passing::Borrow, s),
+            argument(1, Passing::Borrow, word),
+            argument(2, Passing::Borrow, index),
+        ],
+        &[loan],
+        failure,
+        BlockKind::Body,
+    )
+    .ok_or_else(|| PassError::Malformed("TaskSetHas returns a bool".into()))?;
+    let failure = b.failure(Some("CONC-2"));
+    b.push(Inst::Check {
+        condition: member,
+        failure,
+    });
+    let failure = b.failure(None);
+    let callee = operation(&mut b, &take);
+    let arguments = vec![
+        argument(0, Passing::Borrow, s),
+        exclusive(&mut b, 1, set.slot, set.address),
+        argument(2, Passing::Borrow, index),
+    ];
+    let h = invoke(
+        &mut b,
+        callee,
+        take.abi,
+        arguments,
+        &[],
+        failure,
+        BlockKind::Body,
+    )
+    .ok_or_else(|| PassError::Malformed("TaskSetTake returns a handle".into()))?;
+    join_handle(b, &entry, option_layout, size, s, h)
+}
+
+/// Join `h` of scope `s` into a fresh `None` slot and return the result it moved in.
+fn join_handle(
+    mut b: Body<'_, '_>,
+    entry: &Intrinsic,
+    option_layout: LayoutId,
+    size: u64,
+    s: ValueId,
+    h: ValueId,
+) -> R<LirUnit<Value>> {
     let none = option(&mut b, option_layout, 0, &[]);
     let (slot, address) = local(&mut b, none)?;
     let size = b.u64(size)?;
     let failure = b.failure(None);
-    let callee = operation(&mut b, &entry);
+    let callee = operation(&mut b, entry);
     let arguments = vec![
         argument(0, Passing::Borrow, s),
         argument(1, Passing::Take, h),

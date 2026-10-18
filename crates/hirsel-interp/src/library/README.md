@@ -67,7 +67,9 @@ Task scopes, cooperative children, joins, cancellation and isolation execute thr
 independent duplicated sender endpoints and suspended mutable receiver loans.
 Dropping the last receiver schedules buffered finalizers through the evaluator.
 Runnable task selection is an explicit task.resume replay input; child completion
-and await completion have separate events. Cancellation applies before blocking
+and await completion have separate events. A task set's members are task ids in add order;
+children record their completion order, from which `task.await_any` picks, and its choice is an
+event of its own. Cancellation applies before blocking
 Io and channel effects, while destruction shields cancellation. Blocked network
 operations park their typed arguments and mutable loans until ready.
 `synchronization.rs` runs mutex bodies synchronously, publishes mutable payload

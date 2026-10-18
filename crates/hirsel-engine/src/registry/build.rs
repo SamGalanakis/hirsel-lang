@@ -378,6 +378,28 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         t.drop = Some(hirsel_syntax::DefPath::core(name));
         publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
     }
+    // A scope's set of task handles (CONC-2): a noncopyable run-local resource holding its
+    // members' await-or-detach obligations. Its drop releases the set; its members stay
+    // children of their scope, joined at its exit.
+    {
+        let b = Builder::new("R").with_declarations(&out);
+        let mut t = type_definition(b.generics.clone(), None);
+        t.resource = true;
+        t.bounds = vec![Bound::NoallocDrop];
+        t.destructor_allocation = Allocation::NoAlloc;
+        t.authority = AuthoritySummary::Known(
+            vec![
+                AuthorityTerm::Capability(hirsel_syntax::DefPath::core("Scope")),
+                AuthorityTerm::TypeParameter(TypeParameterRef::bound(TypeParamId(0))),
+            ]
+            .into(),
+        );
+        t.drop = Some(hirsel_syntax::DefPath::core("TaskSet"));
+        publish(
+            b.signature("TaskSet", SignatureKind::Type(t), true),
+            &mut out,
+        );
+    }
     for (name, generic) in [
         ("Array", "T"),
         ("List", "T"),
@@ -622,6 +644,20 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "$intrinsic.TaskJoin",
             "s: Scope, take h: Task[R] of s, mut slot: Option[R], size: u64",
             "()",
+        ),
+        // `task.await_at`'s compiled body checks that the member is unawaited, then takes its
+        // handle from the set and joins it.
+        (
+            "R",
+            "$intrinsic.TaskSetHas",
+            "s: Scope, set: TaskSet[R] of s, index: u64",
+            "bool",
+        ),
+        (
+            "R",
+            "$intrinsic.TaskSetTake",
+            "s: Scope, mut set: TaskSet[R] of s, index: u64",
+            "Task[R] of s",
         ),
         // A message crosses as a one-element list block the runtime queues and, unreceived,
         // releases (CONC-6). The status is 0 sent or received, 1 closed, 2 + cause canceled.

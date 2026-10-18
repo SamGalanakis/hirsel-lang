@@ -25,6 +25,14 @@ pub(super) struct Tasks {
     pub host_deadlines: bool,
     /// Deadline scopes entered since the host adapter last took them: scope, clock, ticks.
     entered: Vec<(u64, Value, u64)>,
+    /// Live task sets (CONC-2): their scope and members in add order, `None` once awaited.
+    sets: BTreeMap<u64, TaskSet>,
+    /// Children completed so far: the next completion's place in completion order.
+    completions: u64,
+}
+struct TaskSet {
+    scope: u64,
+    members: Vec<Option<u64>>,
 }
 /// A scope's deadline (CONC-3): when it is due, whether it fired, and the entry's anchor,
 /// where its expiry is recorded.
@@ -49,6 +57,8 @@ struct Child {
     canceled: Option<u32>,
     finished: bool,
     detached: bool,
+    /// Its place in completion order, which `task.await_any` reports first.
+    completed: u64,
     result: Option<OperationResult>,
 }
 pub(super) enum Pending {
@@ -63,6 +73,12 @@ pub(super) enum Pending {
         released: Vec<Value>,
     },
     Await(u64),
+    AwaitAny(u64),
+    /// `task.cancel_all`'s wait for its canceled members, and what their detach released.
+    Drain {
+        members: Vec<u64>,
+        released: Vec<Value>,
+    },
 }
 fn handle(kind: &str, id: u64) -> Value {
     Value::Handle {
@@ -158,6 +174,31 @@ impl Tasks {
             _ => Err(invalid("retired task has no completed result")),
         }
     }
+    /// The task set `set` of `scope`.
+    fn set(&mut self, set: u64, scope: u64) -> Result<&mut TaskSet, Error> {
+        self.sets
+            .get_mut(&set)
+            .filter(|row| row.scope == scope)
+            .ok_or_else(|| invalid("task set of another scope"))
+    }
+    /// The add-order index of the member that completed first among those not awaited, if
+    /// any has: completion order is the scheduler's, so a replayed schedule chooses the same.
+    fn first_completed(&self, set: u64) -> Option<u64> {
+        self.sets[&set]
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(index, member)| {
+                let child = &self.tasks[member.as_ref()?];
+                child.finished.then_some((child.completed, index as u64))
+            })
+            .min()
+            .map(|(_, index)| index)
+    }
+    /// A dropped task set's members stay children of its scope, joined at its exit.
+    pub fn drop_set(&mut self, set: u64) {
+        self.sets.remove(&set);
+    }
     pub fn finished(&mut self, task: u64, mut result: OperationResult) -> Result<(), Error> {
         let child = self
             .tasks
@@ -180,6 +221,8 @@ impl Tasks {
         }
         let child = self.tasks.get_mut(&task).unwrap();
         child.finished = true;
+        child.completed = self.completions;
+        self.completions += 1;
         child.result = Some(result);
         let detached = child.detached;
         self.spawn_counts.remove(&task);
@@ -374,6 +417,7 @@ impl Library {
                         canceled,
                         finished: false,
                         detached: false,
+                        completed: 0,
                         result: None,
                     },
                 );
@@ -406,6 +450,108 @@ impl Library {
                     result
                 } else {
                     self.task_wait(Pending::Await(task), context, "task.await", vec![task])
+                }
+            }
+            "task.set" => {
+                let scope = id(arg(a, 0)?, "Scope")?;
+                if !self.tasks.scopes.contains_key(&scope) {
+                    return Err(invalid("expired task scope"));
+                }
+                let set = self.tasks.fresh();
+                self.tasks.sets.insert(
+                    set,
+                    TaskSet {
+                        scope,
+                        members: vec![],
+                    },
+                );
+                OperationResult::returned(handle("TaskSet", set))
+            }
+            "task.add" => {
+                let scope = id(arg(a, 0)?, "Scope")?;
+                let task = id(arg(a, 2)?, "Task")?;
+                if self.tasks.tasks.get(&task).is_none_or(|t| t.scope != scope) {
+                    return Err(invalid("task belongs to another scope"));
+                }
+                self.tasks
+                    .set(id(arg(a, 1)?, "TaskSet")?, scope)?
+                    .members
+                    .push(Some(task));
+                OperationResult::Complete {
+                    value: Value::Unit,
+                    arguments: vec![],
+                    consumed: vec![2],
+                    released: vec![],
+                }
+            }
+            "task.await_any" => {
+                let scope = id(arg(a, 0)?, "Scope")?;
+                let set = id(arg(a, 1)?, "TaskSet")?;
+                let waiting: Vec<u64> = self
+                    .tasks
+                    .set(set, scope)?
+                    .members
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect();
+                if waiting.is_empty() {
+                    OperationResult::returned(none())
+                } else if let Some(index) = self.tasks.first_completed(set) {
+                    self.record_any(index, context)?;
+                    OperationResult::returned(some(u64_value(index)))
+                } else {
+                    self.task_wait(Pending::AwaitAny(set), context, "task.await_any", waiting)
+                }
+            }
+            "task.await_at" => {
+                let scope = id(arg(a, 0)?, "Scope")?;
+                let index = super::dispatch::index(arg(a, 2)?)?;
+                let member = self
+                    .tasks
+                    .set(id(arg(a, 1)?, "TaskSet")?, scope)?
+                    .members
+                    .get_mut(index)
+                    .and_then(Option::take);
+                let Some(task) = member else {
+                    return Ok(OperationResult::Failed(super::dispatch::fail(
+                        call,
+                        context,
+                        "CONC-2",
+                        "the task set has no unawaited member at this index",
+                    )));
+                };
+                if let Some(result) = self.tasks.tasks.get_mut(&task).unwrap().result.take() {
+                    self.record_join(task, &result, context)?;
+                    result
+                } else {
+                    self.task_wait(Pending::Await(task), context, "task.await", vec![task])
+                }
+            }
+            "task.cancel_all" | "task.detach_all" => {
+                let scope = id(arg(a, 0)?, "Scope")?;
+                let set = id(arg(a, 1)?, "TaskSet")?;
+                self.tasks.set(set, scope)?;
+                let members: Vec<u64> = self
+                    .tasks
+                    .sets
+                    .remove(&set)
+                    .unwrap()
+                    .members
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                let mut released = vec![];
+                for &task in &members {
+                    if name == "task.cancel_all" {
+                        self.tasks.cancel(task, 0);
+                    }
+                    released.extend(self.tasks.detach(task)?);
+                }
+                if name == "task.cancel_all" {
+                    self.drain(members, released, context)
+                } else {
+                    drained(released)
                 }
             }
             "task.check_canceled" => {
@@ -594,6 +740,40 @@ impl Library {
             context,
         )
     }
+    /// `task.await_any`'s choice, an event of the run as a join's completion is.
+    fn record_any(&mut self, index: u64, context: &mut OperationContext<'_>) -> Result<(), Error> {
+        self.simulation.record(
+            "Tasks",
+            "task.await_any.complete",
+            self.tasks.current.to_le_bytes().to_vec(),
+            index.to_le_bytes().to_vec(),
+            context,
+        )
+    }
+    /// `task.cancel_all` returns once every canceled member has finished; detached, each
+    /// one's result was released as it completed.
+    fn drain(
+        &mut self,
+        members: Vec<u64>,
+        released: Vec<Value>,
+        context: &OperationContext<'_>,
+    ) -> OperationResult {
+        let members: Vec<u64> = members
+            .into_iter()
+            .filter(|task| self.tasks.tasks.contains_key(task))
+            .collect();
+        if members.is_empty() {
+            drained(released)
+        } else {
+            let targets = members.clone();
+            self.task_wait(
+                Pending::Drain { members, released },
+                context,
+                "task.cancel_all",
+                targets,
+            )
+        }
+    }
     pub(super) fn poll_task(
         &mut self,
         token: u64,
@@ -631,6 +811,25 @@ impl Library {
                 Ok(None)
             }
             pending @ Pending::Join { .. } => self.join_scope(pending, context).map(Some),
+            Pending::AwaitAny(set) => match self.tasks.first_completed(set) {
+                Some(index) => {
+                    self.record_any(index, context)?;
+                    Ok(Some(OperationResult::returned(some(u64_value(index)))))
+                }
+                None => {
+                    self.tasks.pending.insert(token, pending);
+                    Ok(None)
+                }
+            },
+            Pending::Drain { ref members, .. }
+                if members
+                    .iter()
+                    .any(|task| self.tasks.tasks.contains_key(task)) =>
+            {
+                self.tasks.pending.insert(token, pending);
+                Ok(None)
+            }
+            Pending::Drain { released, .. } => Ok(Some(drained(released))),
             _ => Err(invalid("callback is not a wait")),
         }
     }
@@ -760,6 +959,15 @@ impl Library {
         context: &mut OperationContext<'_>,
     ) -> Result<(), Error> {
         self.expire_scope(scope, context)
+    }
+}
+/// `task.cancel_all` or `task.detach_all` done: the set was taken, the released results remain.
+fn drained(released: Vec<Value>) -> OperationResult {
+    OperationResult::Complete {
+        value: Value::Unit,
+        arguments: vec![],
+        consumed: vec![1],
+        released,
     }
 }
 pub(super) fn append_chain(primary: &mut Vec<FailureRecord>, mut chain: Vec<FailureRecord>) {

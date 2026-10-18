@@ -1076,8 +1076,7 @@ other lock acquisitions. Compute under the lock, then perform effects outside.
 A failed mutex body kills the mutex. A channel send consumes its payload and
 returns it with the error if delivery fails. This example returns one value
 through a channel and explicitly joins the child; its output is independent of
-which task gets scheduled first. Run this section in the interpreter; native
-structured tasks are not available yet.
+which task gets scheduled first.
 
 <!-- tour: conformance/CONC/CONC-2-tour-11-concurrency-run.hir -->
 [Runnable source](../conformance/CONC/CONC-2-tour-11-concurrency-run.hir)
@@ -1124,6 +1123,78 @@ Expected:
 
 ```text
 7
+```
+<!-- /tour -->
+
+To wait for several children, add their handles to a `TaskSet` and hand it to
+`task.all`, which returns every result in the order they were added, or the
+first `Error` once it has cancelled and joined the children still running.
+`task.select` instead returns the index and result of the first child to
+finish and cancels the rest. A task set must be consumed like a handle.
+
+<!-- tour: conformance/CONC/CONC-2-tour-11-task-all-run.hir -->
+[Runnable source](../conformance/CONC/CONC-2-tour-11-task-all-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError) | Range(RangeError)
+
+pub type RangeError = Empty(u64, u64)
+
+fn total(from: u64, to: u64) -> Result[u64, RangeError] {
+  if from > to {
+    return Error(Empty(from, to))
+  }
+  let mut sum: u64 = 0
+  let mut i = from
+  while i <= to {
+    sum += i
+    i += 1
+  }
+  Ok(sum)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let sums = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[u64], RangeError] {
+      let mut set: TaskSet[Result[u64, RangeError]] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, RangeError] {
+            total(1, 10)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, RangeError] {
+            total(11, 20)
+          }
+        )
+      )
+      task.all(s, take set)
+    }
+  ) ? Range
+  for sum in sums {
+    out.print(output, f"{sum}\n") ? Output
+  }
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+55
+155
 ```
 <!-- /tour -->
 

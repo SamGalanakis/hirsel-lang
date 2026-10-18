@@ -90,8 +90,8 @@ fn random.u64(r: Random) -> Result[u64, RandomError]
 fn random.below(r: Random, upper_exclusive: u64) -> Result[u64, random.SampleError]
 ```
 
-Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`
-and the `format_into` and NFC functions below) define their contracts by their declared
+Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`,
+`task` and the `format_into` and NFC functions below) define their contracts by their declared
 signatures and the rules in this part.
 
 ## Option and Result helpers
@@ -105,6 +105,13 @@ except `filter`, which lends its payload to the predicate. Rust `is_err` / `err`
 `unwrap` / `expect` are omitted. `option.remove(mut value)` adapts Rust
 `Option::take`: it returns the current option and leaves `None` in its place,
 using core `replace`. A unique payload remains unique.
+
+## Task combinators
+
+`task.all` and `task.select` (module `task`) are ordinary source over the core task-set
+operations ([CONC-2](concurrency.md#conc-2-tasks)), which define their behaviour. Both take
+the set, wait in completion order and cancel and join every member they leave before
+returning, so no member outlives the call.
 
 ## Paths
 

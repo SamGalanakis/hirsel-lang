@@ -124,6 +124,10 @@ enum Wait {
     /// A host request that would block, parked under its readiness token
     /// (`crate::host_waits`); its poll re-issues the request.
     Host { token: u64 },
+    /// `task.await_any`, until a member of task set `set` holds its result or failed.
+    Any { set: u32 },
+    /// `task.cancel_all`, until every member of task set `set` completed.
+    Drain { set: u32 },
 }
 
 /// A completed child's result slot, inside its parked frame.
@@ -157,7 +161,21 @@ struct Task {
     handoff: Option<u32>,
     detached: bool,
     failure: Option<Vec<Chained>>,
+    /// Its place in completion order (CONC-2), set when it holds its result or failed.
+    completed: u64,
 }
+
+/// A task set (CONC-2): its scope and its members' Task words in add order, `None` once
+/// awaited.
+struct TaskSet {
+    generation: u32,
+    scope: u32,
+    members: Vec<Option<u64>>,
+}
+
+/// Task set words are run-local endpoint words with this bit too, so their drop's handle close
+/// reaches the scheduler; channel endpoint generations stay below it.
+pub(crate) const TASK_SET: u64 = 1 << 62;
 
 struct Scope {
     generation: u32,
@@ -194,6 +212,10 @@ pub(crate) struct Scheduler {
     idle_stacks: Vec<Stack>,
     /// The stack of a task that completed; the next task to run recycles it.
     retired: Option<Stack>,
+    sets: Vec<Option<TaskSet>>,
+    vacant_sets: Vec<u32>,
+    /// Children that held their result or failed so far: the next one's completion order.
+    completions: u64,
 }
 
 fn handle(index: u32, generation: u32) -> u64 {
@@ -311,6 +333,60 @@ impl Scheduler {
             .iter()
             .all(|&c| matches!(self.task(c).state, State::Holding | State::Done))
     }
+    /// Vacate task set row `set`; its members stay children of their scope.
+    fn close_set(&mut self, set: u32) {
+        self.sets[set as usize] = None;
+        self.vacant_sets.push(set);
+    }
+    /// `task` holds its result or failed: its place in completion order.
+    fn order(&mut self, task: u32) {
+        let order = self.completions;
+        self.completions += 1;
+        self.task(task).completed = order;
+    }
+    /// The task set a TaskSet word names, which must belong to `scope`.
+    fn set_handle(&mut self, word: u64, scope: u32) -> u32 {
+        let index = word as u32;
+        match self.sets.get(index as usize).and_then(Option::as_ref) {
+            Some(set)
+                if word & TASK_SET != 0
+                    && set.generation
+                        == ((word & !(crate::channels::ENDPOINT | TASK_SET)) >> 32) as u32
+                    && set.scope == scope =>
+            {
+                index
+            }
+            _ => fault("a TaskSet handle of another scope or a closed set"),
+        }
+    }
+    fn set(&mut self, index: u32) -> &mut TaskSet {
+        self.sets[index as usize]
+            .as_mut()
+            .unwrap_or_else(|| fault("a vacant task set row"))
+    }
+    /// The row a member's Task word names while the child has one.
+    fn member(&self, word: u64) -> Option<u32> {
+        let index = word as u32;
+        self.tasks
+            .get(index as usize)
+            .and_then(Option::as_ref)
+            .is_some_and(|t| t.generation == (word >> 32) as u32)
+            .then_some(index)
+    }
+    /// The add-order index of the unawaited member of `set` that completed first, if one has.
+    fn first_completed(&mut self, set: u32) -> Option<u64> {
+        let members = self.set(set).members.clone();
+        members
+            .iter()
+            .enumerate()
+            .filter_map(|(i, word)| {
+                let row = self.tasks[self.member((*word)?)? as usize].as_ref()?;
+                matches!(row.state, State::Holding | State::Done)
+                    .then_some((row.completed, i as u64))
+            })
+            .min()
+            .map(|(_, i)| i)
+    }
     fn vacate_task(&mut self, index: u32) {
         let task = self.tasks[index as usize]
             .take()
@@ -342,6 +418,7 @@ impl Task {
             handoff: None,
             detached: false,
             failure: None,
+            completed: 0,
         }
     }
 }
@@ -494,6 +571,9 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32) -> bool {
             // SAFETY: the context is live and `token` is this task's parked request.
             unsafe { crate::host_waits::poll(ctx, token, cause) }
         }
+        Some(Wait::Any { set }) => s.first_completed(set).is_some(),
+        // SAFETY: the parked task holds the set's row.
+        Some(Wait::Drain { set }) => unsafe { poll_drained(s, set) },
         None => fault("a parked task without a wait"),
     }
 }
@@ -646,6 +726,7 @@ unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> u32 {
     let detached = row.detached;
     if failed {
         row.failure = Some(chain);
+        s.order(index);
         // FAIL-2: a failed child cancels its siblings and its scope's later blocking effects.
         let scope_row = s.scope(scope);
         scope_row.canceled.get_or_insert(CANCEL_CHILD_FAILED);
@@ -956,6 +1037,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     }
     row.slot = Some(held);
     row.state = State::Holding;
+    s.order(current);
     // SAFETY: the context is live; a join or a discard hands control back here.
     unsafe { run_next(ctx) };
     STATUS_OK
@@ -980,6 +1062,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
+    // SAFETY: caller contract.
+    unsafe { join(ctx, scope, child, slot, size) }
+}
+
+/// Join `child` of `scope`, as [`hirsel_rt_v2_task_join`] does.
+///
+/// # Safety
+/// As for [`hirsel_rt_v2_task_join`].
+unsafe fn join(ctx: *mut RunCtx, scope: u32, child: u32, slot: *mut u8, size: u64) -> u8 {
+    let s = scheduler(ctx);
     match s.task(child).state {
         State::Holding => {
             let held = s.task(child).slot.take().unwrap();
@@ -1049,6 +1141,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
     let child = s.task_handle(unsafe { task.read() }, scope);
+    // SAFETY: the context is live.
+    unsafe {
+        detach(ctx, scope, child);
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// Detach `child` of `scope`: a holding child drops its result now, and a completed one
+/// leaves its scope's rows unless it failed.
+///
+/// # Safety
+/// `ctx` is live and `child` a child of live `scope`.
+unsafe fn detach(ctx: *mut RunCtx, scope: u32, child: u32) {
+    let s = scheduler(ctx);
     s.task(child).detached = true;
     if s.task(child).state == State::Holding {
         s.task(child).slot = None;
@@ -1063,9 +1170,249 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
         s.scope(scope).children.retain(|&c| c != child);
         s.vacate_task(child);
     }
+}
+
+/// `task.set(s) -> TaskSet[R] of s` (CONC-2): an empty task set of `s`.
+///
+/// # Safety
+/// `ctx` is live, `out` writable and `scope` names a live scope.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_set(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    scope: *const u64,
+) -> u8 {
+    let s = scheduler(ctx);
+    // SAFETY: caller contract.
+    let scope = s.scope_handle(unsafe { scope.read() });
+    let generation = s.fresh_generation() & 0x3fff_ffff;
+    let row = TaskSet {
+        generation,
+        scope,
+        members: Vec::new(),
+    };
+    let index = match s.vacant_sets.pop() {
+        Some(index) => {
+            s.sets[index as usize] = Some(row);
+            index
+        }
+        None => {
+            s.sets.push(Some(row));
+            (s.sets.len() - 1) as u32
+        }
+    };
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(
+            crate::channels::ENDPOINT | TASK_SET | u64::from(generation) << 32 | u64::from(index),
+        );
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `task.add(s, mut set, take h)`: `h` becomes the set's next member.
+///
+/// # Safety
+/// `ctx` is live and `set`, `task` name a task set and a child of live `scope`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_add(
+    ctx: *mut RunCtx,
+    scope: *const u64,
+    set: *mut u64,
+    task: *mut u64,
+) -> u8 {
+    let s = scheduler(ctx);
+    // SAFETY: caller contract.
+    let (scope, set, word) = unsafe { (s.scope_handle(scope.read()), set.read(), task.read()) };
+    s.task_handle(word, scope);
+    let set = s.set_handle(set, scope);
+    s.set(set).members.push(Some(word));
     // SAFETY: the context is live.
     unsafe { yield_now(ctx) };
     STATUS_OK
+}
+
+/// `Option[u64]`'s image: the tag, then the payload.
+#[repr(C)]
+pub struct IndexOption {
+    tag: u32,
+    padding: u32,
+    index: u64,
+}
+
+/// `task.await_any(s, set) -> Option[u64]`: the add-order index of the unawaited member that
+/// completed first, waiting until one has; `None` when every member was awaited. A join, not
+/// a cancellation point; completion order is the schedule's, so a replay chooses the same.
+///
+/// # Safety
+/// `ctx` is live, `out` writable and `set` names a task set of live `scope`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut IndexOption,
+    scope: *const u64,
+    set: *const u64,
+) -> u8 {
+    let s = scheduler(ctx);
+    // SAFETY: caller contract.
+    let scope = s.scope_handle(unsafe { scope.read() });
+    let set = s.set_handle(unsafe { set.read() }, scope);
+    let waiting = s.set(set).members.iter().any(Option::is_some);
+    if waiting && s.first_completed(set).is_none() {
+        // SAFETY: the set outlives the wait: the caller borrows it.
+        unsafe { block(ctx, Wait::Any { set }, true) };
+    } else {
+        // SAFETY: the context is live.
+        unsafe { yield_now(ctx) };
+    }
+    let index = if waiting {
+        scheduler(ctx).first_completed(set)
+    } else {
+        None
+    };
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(IndexOption {
+            tag: u32::from(index.is_some()),
+            padding: 0,
+            index: index.unwrap_or(0),
+        })
+    };
+    STATUS_OK
+}
+
+/// `$intrinsic.TaskSetHas(s, set, index) -> bool`: whether member `index` is unawaited, which
+/// `task.await_at`'s compiled body checks (CONC-2) before it takes and joins it. Not a yield.
+///
+/// # Safety
+/// `ctx` is live, `out` writable and `set` names a task set of live `scope`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
+    ctx: *mut RunCtx,
+    out: *mut u8,
+    scope: *const u64,
+    set: *const u64,
+    index: u64,
+) -> u8 {
+    let s = scheduler(ctx);
+    // SAFETY: caller contract.
+    let scope = s.scope_handle(unsafe { scope.read() });
+    let set = s.set_handle(unsafe { set.read() }, scope);
+    let has = usize::try_from(index)
+        .ok()
+        .and_then(|i| s.set(set).members.get(i))
+        .is_some_and(Option::is_some);
+    // SAFETY: caller contract.
+    unsafe { out.write(u8::from(has)) };
+    STATUS_OK
+}
+
+/// `$intrinsic.TaskSetTake(s, mut set, index) -> Task[R] of s`: unawaited member `index`'s Task
+/// word, which the set gives up for the join that follows. Not a yield.
+///
+/// # Safety
+/// `ctx` is live, `out` writable, `set` names a task set of live `scope` and its member
+/// `index` is unawaited.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    scope: *const u64,
+    set: *mut u64,
+    index: u64,
+) -> u8 {
+    let s = scheduler(ctx);
+    // SAFETY: caller contract.
+    let scope = s.scope_handle(unsafe { scope.read() });
+    let set = s.set_handle(unsafe { set.read() }, scope);
+    let word = usize::try_from(index)
+        .ok()
+        .and_then(|i| s.set(set).members.get_mut(i))
+        .and_then(Option::take)
+        .unwrap_or_else(|| fault("a task set member taken twice"));
+    // SAFETY: caller contract.
+    unsafe { out.write(word) };
+    STATUS_OK
+}
+
+/// `task.cancel_all(s, take set)`: cancel every unawaited member (`Requested`), detach it, and
+/// wait until each has completed; their results are dropped and a failure among them belongs
+/// to the scope, as a detached child's does.
+///
+/// # Safety
+/// `ctx` is live and `set` names a task set of live `scope`, which the call takes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
+    ctx: *mut RunCtx,
+    scope: *const u64,
+    set: *mut u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    let set = unsafe { release_members(ctx, scope, set, true) };
+    let s = scheduler(ctx);
+    // SAFETY: the context is live; the set row stays until the drain is over.
+    if unsafe { poll_drained(s, set) } {
+        unsafe { yield_now(ctx) };
+    } else {
+        unsafe { block(ctx, Wait::Drain { set }, true) };
+    }
+    scheduler(ctx).close_set(set);
+    STATUS_OK
+}
+
+/// `task.detach_all(s, take set)`: detach every unawaited member.
+///
+/// # Safety
+/// `ctx` is live and `set` names a task set of live `scope`, which the call takes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
+    ctx: *mut RunCtx,
+    scope: *const u64,
+    set: *mut u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    let set = unsafe { release_members(ctx, scope, set, false) };
+    scheduler(ctx).close_set(set);
+    // SAFETY: the context is live.
+    unsafe { yield_now(ctx) };
+    STATUS_OK
+}
+
+/// Detach every unawaited member of `set`, canceling each first when `cancel`.
+///
+/// # Safety
+/// As for [`hirsel_rt_v2_task_cancel_all`].
+unsafe fn release_members(ctx: *mut RunCtx, scope: *const u64, set: *mut u64, cancel: bool) -> u32 {
+    let s = scheduler(ctx);
+    // SAFETY: caller contract.
+    let scope = s.scope_handle(unsafe { scope.read() });
+    let set = s.set_handle(unsafe { set.read() }, scope);
+    let members: Vec<u64> = s.set(set).members.iter().flatten().copied().collect();
+    for word in members {
+        let child = scheduler(ctx).task_handle(word, scope);
+        if cancel {
+            scheduler(ctx).cancel(child, CANCEL_REQUESTED);
+        }
+        // SAFETY: caller contract.
+        unsafe { detach(ctx, scope, child) };
+    }
+    set
+}
+
+/// Whether every unawaited member of `set` has completed.
+///
+/// # Safety
+/// `set` is a live task set row.
+unsafe fn poll_drained(s: &mut Scheduler, set: u32) -> bool {
+    let members = s.set(set).members.clone();
+    members.iter().flatten().all(|&word| {
+        s.member(word)
+            .is_none_or(|t| s.task(t).state == State::Done)
+    })
 }
 
 /// `$intrinsic.TaskCanceled(s)` (CONC-3): 0, or 1 + the running task's cancellation cause
@@ -1255,6 +1602,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
 /// # Safety
 /// `ctx` is live and `word` an open endpoint of its run.
 pub(crate) unsafe fn close_endpoint(ctx: *mut RunCtx, word: u64, anchor: u64) -> u8 {
+    if word & TASK_SET != 0 {
+        // A dropped task set: its members stay children of their scope, joined at its exit.
+        let s = scheduler(ctx);
+        let index = word as u32;
+        match s.sets.get(index as usize).and_then(Option::as_ref) {
+            Some(set)
+                if set.generation
+                    == ((word & !(crate::channels::ENDPOINT | TASK_SET)) >> 32) as u32 =>
+            {
+                s.close_set(index)
+            }
+            _ => fault("a dropped TaskSet handle of a closed set"),
+        }
+        return STATUS_OK;
+    }
     let left = scheduler(ctx).channels.close(word);
     let mut status = STATUS_OK;
     for message in left {

@@ -130,6 +130,7 @@ pub const BODIES: &[&LibraryBody] = &[
     &tasks::SCOPE_UNTIL,
     &tasks::ASYNC,
     &tasks::AWAIT,
+    &tasks::AWAIT_AT,
     &tasks::MAIN,
     &tasks::CHECK_CANCELED,
     &isolate::ISOLATE,
@@ -247,7 +248,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 18;
+pub const REVISION: u32 = 19;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

@@ -58,7 +58,8 @@ impl Channels {
     }
 
     fn endpoint(&mut self, channel: u32, sender: bool) -> u64 {
-        self.generation = (self.generation + 1) & 0x7fff_ffff;
+        // Below `tasks::TASK_SET`, which marks a task set's endpoint word.
+        self.generation = (self.generation + 1) & 0x3fff_ffff;
         self.endpoints.push(Some(Endpoint {
             generation: self.generation,
             channel,

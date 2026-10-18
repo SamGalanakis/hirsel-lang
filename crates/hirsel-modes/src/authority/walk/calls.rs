@@ -714,12 +714,15 @@ impl Checker<'_> {
             used = used.join(self.used(arg.value));
         }
         if arguments.iter().any(|a| !self.valid(a.value)) {
+            self.abandon_tasks(arguments);
             return;
         }
         if call.state == CallState::Recovery {
+            self.abandon_tasks(arguments);
             return;
         }
         if call.state == CallState::MissingCapabilities {
+            self.abandon_tasks(arguments);
             let supplied: BTreeSet<_> = call
                 .arguments
                 .iter()
@@ -1255,19 +1258,30 @@ impl Checker<'_> {
                 }
             }
         }
+        if !obligation_valid {
+            self.abandon_tasks(arguments);
+        }
         if obligation_valid {
+            let reported = self.out.diagnostics.len();
             self.generic_obligations(e, &f, arguments, intrinsic);
             // Literal reception may replace its header row. Construction
             // evidence stays indexed by the received row, not this old snapshot.
             let received_args: Vec<_> = arguments.iter().filter_map(|a| self.ty(a.value)).collect();
             self.static_intrinsic(e, intrinsic, &received_args, &f);
-            if matches!(
-                intrinsic,
-                Some(Intrinsic::TaskAwait | Intrinsic::TaskDetach)
-            ) {
-                if let Some(handle) = arguments.get(1) {
-                    for task in self.task_handles(handle.value) {
-                        self.pending_tasks.remove(&task);
+            // CONC-2: a handle or task set passed `take` to a parameter declared `Task` or
+            // `TaskSet` carries its await-or-detach obligation into the callee.
+            if self.out.diagnostics.len() > reported {
+                self.abandon_tasks(arguments);
+            } else if let Some(declared) = definition.as_ref().and_then(|d| self.read(d)) {
+                if let SignatureKind::Function(df) = &declared.kind {
+                    for (i, a) in &ordered {
+                        if df.parameters.get(*i).is_some_and(|p| {
+                            p.passing == PassingMode::Take && task_obligation(&declared.types, p.ty)
+                        }) {
+                            for task in self.task_handles(a.value) {
+                                self.pending_tasks.remove(&task);
+                            }
+                        }
                     }
                 }
             }
@@ -1436,16 +1450,7 @@ impl Checker<'_> {
         let result = declared_receipt_evidence(&mut self.out.body.types, result)
             .expect("declared call result");
         self.set_ty(e, result);
-        if obligation_valid
-            && intrinsic == Some(Intrinsic::TaskAsync)
-            && matches!(
-                self.out.body.types.get(result).unwrap().kind,
-                TypeKind::Builtin {
-                    kind: BuiltinType::Task,
-                    ..
-                }
-            )
-        {
+        if obligation_valid && task_obligation(&self.out.body.types, result) {
             self.pending_tasks.insert(e, span);
             self.task_values.insert(e, BTreeSet::from([e]));
         }
@@ -3258,5 +3263,31 @@ impl Checker<'_> {
         self.capture_views = before_views;
         self.invalid = before_invalid;
         self.facts.insert(e, authority);
+    }
+}
+
+impl Checker<'_> {
+    /// An invalid call reports its own error, so the CONC-2 obligations its arguments carry
+    /// are not reported again (section 23).
+    fn abandon_tasks(&mut self, arguments: &[Argument]) {
+        for argument in arguments {
+            for task in self.task_handles(argument.value) {
+                self.pending_tasks.remove(&task);
+            }
+        }
+    }
+}
+
+/// CONC-2: a task handle or task set, each of which must be awaited or detached.
+pub(super) fn task_obligation(types: &hirsel_types::TypeStore, ty: TypeId) -> bool {
+    match types.get(ty).map(|t| &t.kind) {
+        Some(TypeKind::Builtin {
+            kind: BuiltinType::Task,
+            ..
+        }) => true,
+        Some(TypeKind::Named { definition, .. }) => {
+            *definition == hirsel_syntax::DefPath::core("TaskSet")
+        }
+        _ => false,
     }
 }

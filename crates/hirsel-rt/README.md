@@ -486,6 +486,15 @@ deadline fired, from which the body builds `Expired(r)` or `Finished(r)`. The ta
 holds a scope deadline as the `sleep_until` request, `blocked` and `ready` events of a timer
 wait, exactly as the interpreter's HostLibrary records it.
 
+Task sets (CONC-2) are scheduler rows holding their members' Task words in add order; a set word
+is a run-local endpoint word with `tasks::TASK_SET` too, so its drop's handle close reaches the
+scheduler, which drops only the row. A child takes its place in completion order when it holds
+its result or fails, and `task.await_any` returns the unawaited member that came first, parking
+(`Wait::Any`) until one has. `task.await_at`'s compiled body checks `$intrinsic.TaskSetHas` (CONC-2
+when false), takes the member's word with `$intrinsic.TaskSetTake` and joins it as `task.await`
+does. `task.cancel_all` cancels and detaches the members, then parks (`Wait::Drain`) until each
+completed; `task.detach_all` only detaches them.
+
 `task.check_canceled`'s compiled body reads the running task's cancellation through
 `hirsel_rt_v2_task_canceled` (0, or 1 + the `CancelCause` ordinal), which yields as the operation
 does, and builds `Ok(())` or `Error(Canceled(cause))`.

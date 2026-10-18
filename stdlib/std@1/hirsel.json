@@ -480,6 +480,12 @@
       "module": [
         "results"
       ]
+    },
+    {
+      "path": "task.hir",
+      "module": [
+        "task"
+      ]
     }
   ],
   "dependencies": []

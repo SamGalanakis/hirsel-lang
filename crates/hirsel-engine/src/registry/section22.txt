@@ -97,6 +97,12 @@ fn task.async[R: sendable](s: Scope, take f: once fn() -> R) -> Task[R] of s
 fn task.await[R](s: Scope, take h: Task[R] of s) -> R
 N fn task.cancel[R](s: Scope, h: Task[R] of s) -> ()
 fn task.detach[R](s: Scope, take h: Task[R] of s) -> ()
+fn task.set[R](s: Scope) -> TaskSet[R] of s
+N fn task.add[R](s: Scope, mut set: TaskSet[R] of s, take h: Task[R] of s) -> ()
+fn task.await_any[R](s: Scope, set: TaskSet[R] of s) -> Option[u64]
+fn task.await_at[R](s: Scope, mut set: TaskSet[R] of s, index: u64) -> R
+fn task.cancel_all[R](s: Scope, take set: TaskSet[R] of s) -> ()
+fn task.detach_all[R](s: Scope, take set: TaskSet[R] of s) -> ()
 N fn task.check_canceled(s: Scope) -> Result[(), CancelError]
 fn task.isolate[R: sendable](tasks: Tasks, take body: once fn() -> R) -> Result[R, Failure]
 fn mutex.create[T: sendable](tasks: Tasks, take v: unique T) -> Mutex[T]

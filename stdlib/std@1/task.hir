@@ -1,0 +1,47 @@
+// Await every member of `set` in completion order (CONC-2), which a replay reproduces. The
+// first `Error` to complete cancels the members still running, joins them and is returned;
+// otherwise the results are in add order.
+pub fn all[T, E](s: Scope, take set: TaskSet[Result[T, E]] of s) -> Result[List[T], E] {
+  let mut members = take set
+  let mut results: unique List[Option[T]] = unique []
+  while true {
+    let index = match core@1/task.await_any(s, members) {
+      Some(i) => i,
+      None => break,
+    }
+    match core@1/task.await_at(s, mut members, index) {
+      Ok(value) => {
+        while core@1/list.len(results) <= index {
+          core@1/list.push(mut results, None())
+        }
+        results[index] = Some(value)
+      },
+      Error(e) => {
+        core@1/task.cancel_all(s, take members)
+        return Error(e)
+      },
+    }
+  }
+  core@1/task.cancel_all(s, take members)
+  let mut out: List[T] = []
+  for slot in take results {
+    match take slot {
+      Some(value) => core@1/list.push(mut out, take value),
+      None => {},
+    }
+  }
+  Ok(take out)
+}
+
+// The add-order index and result of the member of `set` that completes first; the others
+// are canceled and joined before it returns. An empty set fails CONC-2.
+pub fn select[R](s: Scope, take set: TaskSet[R] of s) -> (u64, R) {
+  let mut members = take set
+  let index = match core@1/task.await_any(s, members) {
+    Some(i) => i,
+    None => 0,
+  }
+  let value = core@1/task.await_at(s, mut members, index)
+  core@1/task.cancel_all(s, take members)
+  (index, value)
+}

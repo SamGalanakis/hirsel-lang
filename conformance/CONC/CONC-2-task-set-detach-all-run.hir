@@ -1,0 +1,37 @@
+// rule: CONC-2
+// expect: run
+// stdout: empty
+// stdout: child
+// An empty task set has nothing to await; "task.detach_all" leaves its members running, and
+// the scope's exit joins them.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let mut set: TaskSet[Result[(), OutputError]] of s = task.set(s)
+      let none = task.await_any(s, set)
+      let _ = out.print(
+        stdout,
+        if none == None() {
+          "empty\n"
+        } else {
+          "wrong\n"
+        }
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[(), OutputError] {
+            out.print(stdout, "child\n")
+          }
+        )
+      )
+      task.detach_all(s, take set)
+    }
+  )
+  Ok(())
+}

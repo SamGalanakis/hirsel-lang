@@ -1,0 +1,65 @@
+// rule: CONC-2
+// expect: run
+// stdout: error 7
+// "task.all" returns the first Error to complete. It cancels the members still running and
+// joins them first, so the child blocked on a receive is canceled there and its later print,
+// a cancellation point, has no effect.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let (tx, rx): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let outcome = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[u64], u64] {
+      let mut set: TaskSet[Result[u64, u64]] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, u64] {
+            Ok(1)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, u64] {
+            let mut r = take rx
+            let _ = channel.receive(tasks, mut r)
+            let _ = out.print(stdout, "late\n")
+            Ok(3)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, u64] {
+            Error(7)
+          }
+        )
+      )
+      task.all(s, take set)
+    }
+  )
+  match outcome {
+    Ok(_) => out.print(stdout, "all ok\n") ? Output,
+    Error(code) => out.print(
+      stdout,
+      if code == 7 {
+        "error 7\n"
+      } else {
+        "wrong error\n"
+      }
+    ) ? Output,
+  }
+  Ok(())
+}

@@ -114,6 +114,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "task.scope_until"
             | "task.async"
             | "task.await"
+            | "task.await_at"
             | "channel.send"
             | "channel.receive"
             | "mutex.create"
@@ -228,7 +229,12 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "$intrinsic.TaskFinish" => Some("hirsel_rt_v2_task_finish".into()),
         "$intrinsic.TaskJoin" => Some("hirsel_rt_v2_task_join".into()),
         "$intrinsic.TaskCanceled" => Some("hirsel_rt_v2_task_canceled".into()),
-        "task.cancel" | "task.detach" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
+        "task.cancel" | "task.detach" | "task.set" | "task.add" | "task.await_any"
+        | "task.cancel_all" | "task.detach_all" => {
+            Some(format!("hirsel_rt_v2_{}", name.replace('.', "_")))
+        }
+        "$intrinsic.TaskSetHas" => Some("hirsel_rt_v2_task_set_has".into()),
+        "$intrinsic.TaskSetTake" => Some("hirsel_rt_v2_task_set_take".into()),
         // Channels (CONC-6), in the task runtime: the compiled send and receive bodies move a
         // message's block through these entries.
         "channel.open" | "sender.dup" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
@@ -491,6 +497,48 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         symbol: "hirsel_rt_v2_task_detach",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_set",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_add",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_await_any",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_set_has",
+        destination: false,
+        result: Some((1, 1)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_set_take",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_cancel_all",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_detach_all",
         destination: false,
         result: None,
         parameters: &[Physical::Pointer, Physical::Pointer],
@@ -1373,6 +1421,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.TaskSpawn",
     "$intrinsic.TaskFinish",
     "$intrinsic.TaskJoin",
+    "$intrinsic.TaskSetHas",
+    "$intrinsic.TaskSetTake",
     "$intrinsic.ChannelSend",
     "$intrinsic.ChannelReceive",
     "$intrinsic.MutexCreate",
@@ -1556,14 +1606,20 @@ pub const NATIVE_PATHS: &[&str] = &[
     "string.positions",
     "string.scalars",
     "string.slice",
+    "task.add",
     "task.async",
     "task.await",
+    "task.await_any",
+    "task.await_at",
     "task.cancel",
+    "task.cancel_all",
     "task.check_canceled",
     "task.detach",
+    "task.detach_all",
     "task.isolate",
     "task.scope",
     "task.scope_until",
+    "task.set",
     "test.check",
     "test.check_case",
     "test.dir",

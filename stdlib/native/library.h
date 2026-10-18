@@ -149,6 +149,15 @@ uint8_t hirsel_rt_v2_task_finish(hirsel_rt_v2_ctx*, uint8_t*, const uint8_t*, ui
 uint8_t hirsel_rt_v2_task_join(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_task_cancel(hirsel_rt_v2_ctx*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_task_detach(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
+/* Task sets (CONC-2): a set word is a run-local endpoint word; await_any writes an Option[u64]
+   image (tag, then the index); await_at's compiled body checks and takes a member, then joins it. */
+uint8_t hirsel_rt_v2_task_set(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_task_add(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, uint64_t*);
+uint8_t hirsel_rt_v2_task_await_any(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_task_set_has(hirsel_rt_v2_ctx*, uint8_t*, const uint64_t*, const uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_task_set_take(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_task_cancel_all(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
+uint8_t hirsel_rt_v2_task_detach_all(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
 /* Channels (CONC-6). Sender and Receiver are run-local handle words; a message crosses as the
    block of a one-element list, moved out of and into Option[List[T]] slots. The status is 0
    sent or received, 1 closed, 2 + cause canceled. */

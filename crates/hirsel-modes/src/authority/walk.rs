@@ -491,6 +491,7 @@ impl<'a> Checker<'a> {
                 .push((NameSite::Item(self.item), result));
         }
         if let Some(body) = body {
+            self.parameter_tasks();
             let temporaries = self.temporaries.len();
             self.expr(
                 body,
@@ -697,6 +698,30 @@ impl<'a> Checker<'a> {
         self.binding(e)
             .and_then(|b| self.task_bindings.get(&binding_key(&b)).cloned())
             .unwrap_or_default()
+    }
+    /// CONC-2: a parameter taking a `Task` or `TaskSet` holds its caller's obligation, keyed
+    /// by an expression identity past the body's own.
+    fn parameter_tasks(&mut self) {
+        let (ItemKind::Function { signature, .. }, SignatureKind::Function(f)) = (
+            &self.tree.items[self.item.0 as usize].kind,
+            &self.signature.kind,
+        ) else {
+            return;
+        };
+        for (i, (p, syntax)) in f.parameters.iter().zip(&signature.parameters).enumerate() {
+            if p.passing != PassingMode::Take
+                || !calls::task_obligation(&self.signature.types, p.ty)
+            {
+                continue;
+            }
+            let task = ExprId(u32::MAX - i as u32);
+            self.pending_tasks
+                .insert(task, self.tree.types[syntax.ty.0 as usize].origin.span);
+            self.task_bindings.insert(
+                (NameSite::Item(self.item), 0, i as u32),
+                BTreeSet::from([task]),
+            );
+        }
     }
     fn check_pending_tasks(&mut self) {
         for span in self.pending_tasks.values().copied().collect::<Vec<_>>() {

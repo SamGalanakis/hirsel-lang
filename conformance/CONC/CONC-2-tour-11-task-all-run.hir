@@ -1,0 +1,56 @@
+// rule: CONC-2
+// expect: run
+// stdout: 55
+// stdout: 155
+pub type AppError = Grant(GrantError) | Output(OutputError) | Range(RangeError)
+
+pub type RangeError = Empty(u64, u64)
+
+fn total(from: u64, to: u64) -> Result[u64, RangeError] {
+  if from > to {
+    return Error(Empty(from, to))
+  }
+  let mut sum: u64 = 0
+  let mut i = from
+  while i <= to {
+    sum += i
+    i += 1
+  }
+  Ok(sum)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let sums = task.scope(
+    tasks,
+    fn(s: Scope) -> Result[List[u64], RangeError] {
+      let mut set: TaskSet[Result[u64, RangeError]] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, RangeError] {
+            total(1, 10)
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> Result[u64, RangeError] {
+            total(11, 20)
+          }
+        )
+      )
+      task.all(s, take set)
+    }
+  ) ? Range
+  for sum in sums {
+    out.print(output, f"{sum}\n") ? Output
+  }
+  Ok(())
+}

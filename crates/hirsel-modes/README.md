@@ -11,6 +11,9 @@ Invariants and boundary:
 - No storage overlaps for mut; counted task captures cannot borrow; shared roots bound deep uniqueness (OWN-3/6, MODE-2).
 - Keep brands and placement separate; substitute parameter origins at calls; join brands explicitly (PROV-1/2).
 - Authority includes captures and drops; unknown authority cannot satisfy uses {} (CAP-2/3).
+- CONC-2 obligations: a call returning a `Task` or `TaskSet` creates one, passing it `take` to a
+  parameter declared `Task` or `TaskSet` moves it to the callee, whose taking parameter holds it
+  in the body; a call reported invalid drops its arguments' obligations (section 23).
 - Lowering uses mode-checked UseKinds and origins; it may compute CFG liveness but must not change acceptance.
 - Diagnostics name causes (section 23): `explain.rs` holds the closed cause and
   requirement kinds, their wording, the one qualifier spelling function and the

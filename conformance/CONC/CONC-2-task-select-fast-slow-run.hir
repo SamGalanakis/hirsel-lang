@@ -1,0 +1,62 @@
+// rule: CONC-2
+// expect: run
+// stdout: 1 fast
+// "task.select" returns the index and result of the member that completes first, here the
+// one added second; the slow one is canceled and joined before it returns, so it never
+// reaches its print.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let stdout = io.stdout(rt) ? Grant
+  let (index, winner) = task.scope(
+    tasks,
+    fn(s: Scope) -> (u64, String) {
+      let mut set: TaskSet[String] of s = task.set(s)
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> String {
+            let mut i: u64 = 0
+            while i < 10 {
+              let canceled = task.scope(
+                tasks,
+                fn(inner: Scope) -> bool {
+                  task.check_canceled(inner) != Ok(())
+                }
+              )
+              if canceled {
+                return "canceled"
+              }
+              i += 1
+            }
+            let _ = out.print(stdout, "slow finished\n")
+            "slow"
+          }
+        )
+      )
+      task.add(
+        s,
+        mut set,
+        task.async(
+          s,
+          fn() -> String {
+            "fast"
+          }
+        )
+      )
+      task.select(s, take set)
+    }
+  )
+  out.print(
+    stdout,
+    if index == 1 && winner == "fast" {
+      "1 fast\n"
+    } else {
+      "wrong\n"
+    }
+  ) ? Output
+  Ok(())
+}

@@ -27,8 +27,35 @@ explicitly detached; detaching discards the result but never lets the child outl
 scope. Detached completion releases its result and scheduling metadata without waiting
 for scope exit; an already-completed result is discarded by `detach`. A detached child's
 failure still belongs to the scope and is ordered with other child failures by spawn
-order. `task.all` and `task.select` are library functions built on these. Foreign functions
-declared `@blocking` run on a bounded synchronous pool.
+order. Foreign functions declared `@blocking` run on a bounded synchronous pool.
+
+A task set collects handles of one scope: `task.set(s)` creates an empty `TaskSet[R] of s`,
+and `task.add(s, mut set, take h)` moves `h` in as its next member. `task.await_any(s, set)`
+waits until an unawaited member has completed and returns the add-order index of the one that
+completed first, or `None` when every member was awaited. Completion order is the
+scheduler's, an input of the run like every scheduling choice, so a replay chooses the same.
+`task.await_at(s, mut set, index)` awaits member `index`; one never added or already awaited
+fails CONC-2. `task.cancel_all(s, take set)` cancels every unawaited member and returns once
+each has completed, dropping their results; `task.detach_all(s, take set)` detaches them. A
+failure of a member that nobody awaited belongs to the scope, as a detached child's does. The
+standard library builds the combinators on these:
+
+```text
+fn task.all[T, E](s: Scope, take set: TaskSet[Result[T, E]] of s) -> Result[List[T], E]
+fn task.select[R](s: Scope, take set: TaskSet[R] of s) -> (u64, R)
+```
+
+`task.all` returns every result in add order, or the first `Error` to complete once it has
+canceled and joined the members still running. `task.select` returns the add-order index and
+result of the member that completes first once it has canceled and joined the others; an
+empty set fails CONC-2. Neither returns while a member runs.
+
+A set holds its members' obligations, so it is consumed exactly as a handle is. A handle or
+set passed `take` to a parameter declared `Task` or `TaskSet` (`task.await`, `task.detach`,
+`task.add`, `task.cancel_all`, `task.detach_all`, or a function of the program) takes its
+obligation along, and in that function's body the parameter holds it. Passing one anywhere
+else, such as into a `List`, leaves the obligation behind. A set dropped by a failure exit
+leaves its members to the scope's exit join.
 
 ```hirsel
 fn sizes(tasks: Tasks, dir: Dir, a: Path, b: Path) -> Result[(u64, u64), FileError] {
@@ -49,8 +76,9 @@ Sender, since those handles are run-owned ([MODE-4](ownership.md#mode-4-sendable
 Cancellation is level-triggered: once a scope is cancelled, every later blocking `Io` call
 in it returns `Canceled(cause)`, and every blocking `Io` error type includes that variant.
 Nonblocking grant projections and clock sampling introduce no cancellation check and use
-their stated grant or source error variants. Joins and mutex acquisition are not
-cancellation points. `Canceled` is returned only when the operation had no effect. Pure code
+their stated grant or source error variants. Joins (`task.await`, `task.await_any`,
+`task.await_at`, `task.cancel_all`) and mutex acquisition are not cancellation points: a
+cancelled scope cancels its children, so a join waits only for them. `Canceled` is returned only when the operation had no effect. Pure code
 is not cancellable; `task.check_canceled(s)?` marks long loops. Each operation's signature
 states what it owns on success and on failure; a borrow or `mut` loan lasts until the call
 completes. Deadlines read the granted monotonic clock. A scope can carry a deadline:

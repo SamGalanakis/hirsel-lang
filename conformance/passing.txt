@@ -437,6 +437,8 @@ conformance/CONC/CONC-2-cancel-then-await.hir
 conformance/CONC/CONC-2-detach-joins-before-exit.hir
 conformance/CONC/CONC-2-detach.hir
 conformance/CONC/CONC-2-detached-result-cleanup-run.hir
+conformance/CONC/CONC-2-handle-parameter-bad.hir
+conformance/CONC/CONC-2-handle-parameter-ok.hir
 conformance/CONC/CONC-2-nested-handle-capture-bad.hir
 conformance/CONC/CONC-2-nested-handle-capture-ok.hir
 conformance/CONC/CONC-2-nested-sender-capture-ok.hir
@@ -444,7 +446,18 @@ conformance/CONC/CONC-2-scope-owned-capture.hir
 conformance/CONC/CONC-2-sizes-example.hir
 conformance/CONC/CONC-2-taken-block-sender-capture-run.hir
 conformance/CONC/CONC-2-taken-direct-sender-capture-run.hir
+conformance/CONC/CONC-2-task-all-failing-child-run.hir
+conformance/CONC/CONC-2-task-all-ok-run.hir
+conformance/CONC/CONC-2-task-select-fast-slow-run.hir
+conformance/CONC/CONC-2-task-set-await-twice-fail.hir
+conformance/CONC/CONC-2-task-set-detach-all-run.hir
+conformance/CONC/CONC-2-task-set-first-completed-run.hir
+conformance/CONC/CONC-2-task-set-parameter-bad.hir
+conformance/CONC/CONC-2-task-set-parameter-ok.hir
+conformance/CONC/CONC-2-task-set-unconsumed-bad.hir
+conformance/CONC/CONC-2-task-set-unconsumed-ok.hir
 conformance/CONC/CONC-2-tour-11-concurrency-run.hir
+conformance/CONC/CONC-2-tour-11-task-all-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir
 conformance/CONC/CONC-2-unconsumed-handle-ok.hir
 conformance/CONC/CONC-3-canceled-pure-child.hir

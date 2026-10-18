@@ -1,0 +1,21 @@
+// rule: CONC-2
+// expect: accept
+// A parameter taking a task handle holds its caller's await-or-detach obligation.
+fn finish(s: Scope, take h: Task[u64] of s) -> u64 {
+  task.await(s, take h)
+}
+
+fn launch(tasks: Tasks) -> u64 {
+  task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let h = task.async(
+        s,
+        fn() -> u64 {
+          1
+        }
+      )
+      finish(s, take h)
+    }
+  )
+}
