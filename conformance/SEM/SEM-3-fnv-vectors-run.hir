@@ -1,0 +1,18 @@
+// rule: SEM-3
+// expect: run
+// Zig FNV-1a 64 reference vectors (lib/std/hash/fnv.zig).
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/fnv.digest(string.as_bytes("")) == 0xcbf29ce484222325,
+    TextInvariant()
+  )
+  failure.check(
+    std@1/fnv.digest(string.as_bytes("a")) == 0xaf63dc4c8601ec8c,
+    TextInvariant()
+  )
+  failure.check(
+    std@1/fnv.digest(string.as_bytes("foobar")) == 0x85944171f73967e8,
+    TextInvariant()
+  )
+  Ok(())
+}

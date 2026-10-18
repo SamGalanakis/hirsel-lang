@@ -93,8 +93,8 @@ fn random.below(r: Random, upper_exclusive: u64) -> Result[u64, random.SampleErr
 ```
 
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`,
-`task` and the `format_into` and NFC functions below) define their contracts by their declared
-signatures and the rules in this part.
+`fnv`, `derive`, `task` and the `format_into` and NFC functions below) define their contracts by
+their declared signatures and the rules in this part.
 
 ## Conventions
 
@@ -1244,6 +1244,51 @@ order. Round additions wrap deliberately at 32 bits. `digest` is the one-shot
 form over the same kernel. Hexadecimal rendering is a separate codec;
 `digest_hex` is `hex.encode(bytes.from_inline(digest(data)))`. This is a
 digest, without password-hashing or signature operations.
+
+## FNV-1a hashing
+
+`std@1/fnv` implements 64-bit FNV-1a in ordinary, allocation-free source, with the
+`new`, `update` and `finish` shape of the other std checksums. `fnv.new()` holds the
+offset basis; `fnv.update(mut state, data)` folds each byte in (xor, then multiply
+by the FNV prime modulo 2^64); `fnv.finish(take state)` returns the `u64` hash, and
+`fnv.digest(data)` is the one-shot form. It is a fast non-cryptographic hash for
+tables and fingerprints, not a cryptographic digest.
+
+## Derived bodies
+
+`std@1/derive` holds generators for `= comptime` function bodies
+([CT-5](compile-time.md#ct-5-generation)). Each takes a record or variant type's
+shape and returns the body for the header written in source:
+
+```text
+fn derive.json_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses {}], String] uses {}
+fn derive.from_json[T](s: TypeShape[T]) -> Result[Body[fn(json.Value) -> Result[T, String] uses {}], String] uses {}
+fn derive.equal[T](s: TypeShape[T]) -> Result[Body[fn(T, T) -> bool uses {}], String] uses {}
+fn derive.format[T](s: TypeShape[T]) -> Result[Body[fn(T, mut List[u8]) -> () uses {}], String] uses {}
+fn derive.hash[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {}
+```
+
+```text
+fn todo_value(t: Todo) -> json.Value uses {} = comptime derive.json_value(shape(Todo))
+```
+
+Field and payload types may be `bool`, `String`, the sized integers, and
+`Option` and `List` of supported types; any other is the generator's `Error`,
+`no JSON form for T` or `no text form for T`, which CT-5 reports as CT-1 at the
+declaration. A record's JSON form is an object with a member per field, in
+declaration order; integers are JSON numbers, `None` is `null` and a list is an
+array. A variant without payload is its name as a JSON string, and one with
+payloads is an object whose single member, its name, holds the array of its
+payloads. `from_json` reads that form back. An absent member of an `Option`
+field decodes as `None`. Any other mismatch is `Error` with a message that
+begins with the type's name. `equal` compares every field, or the payloads of
+equal variants, with `==`. `format` writes `Name(field: value, ..)` for a record
+and `Variant(payload, ..)` or `Variant` for a variant; strings are written
+unquoted, `Option` as `Some(..)` or `None` and lists as `[a, b]`. Its header is
+that of an `@format` function. `hash` is the FNV-1a hash of each field's value as
+`format` writes it, or of the variant's name and each payload, with a zero byte
+after each. `json_bool`, `json_text`, `json_number` and `parsed` are the
+helpers generated decoders call.
 
 ## ASCII radix digits
 

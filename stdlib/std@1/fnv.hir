@@ -1,0 +1,46 @@
+// FNV-1a 64-bit hashing, adapted from Zig lib/std/hash/fnv.zig,
+// bff490a23889750de7096d9057c0a432efc929a8. Like the other std checksums it is
+// new, update and finish over a State, with digest as the one-shot form.
+const OFFSET: u64 = 14695981039346656037
+
+const PRIME: u64 = 1099511628211
+
+// The running hash.
+pub type State {
+  value: u64,
+}
+
+// A state holding the FNV-1a 64 offset basis, the hash of no bytes.
+@noalloc
+pub fn new() -> State uses {} {
+  State(value: OFFSET)
+}
+
+// Folds each byte of `data` in: xor, then multiply by the prime modulo 2^64.
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  let len = core@1/bytes.len(data)
+  let mut i: u64 = 0
+  while i < len {
+    let byte: u64 = core@1/int.widen(data[i])
+    // Multiplication modulo 2^64: the low half of the u128 product.
+    let wide: u128 = core@1/int.widen(state.value ^ byte)
+    let prime: u128 = core@1/int.widen(PRIME)
+    state.value = core@1/int.truncate(wide * prime)
+    i += 1
+  }
+}
+
+// The hash of every byte fed so far.
+@noalloc
+pub fn finish(take state: State) -> u64 uses {} {
+  state.value
+}
+
+// The hash of `data` alone.
+@noalloc
+pub fn digest(data: Bytes) -> u64 uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state)
+}

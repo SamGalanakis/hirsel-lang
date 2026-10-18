@@ -713,6 +713,9 @@ conformance/CT/CT-5-literal-type-bad.hir
 conformance/CT/CT-5-literal-type-ok.hir
 conformance/CT/CT-5-not-literal-bad.hir
 conformance/CT/CT-5-not-literal-ok.hir
+conformance/CT/CT-5-std-derive-run.hir
+conformance/CT/CT-5-std-derive-unsupported-bad.hir
+conformance/CT/CT-5-std-derive-unsupported-ok.hir
 conformance/DET/DET-1-explicit-output.hir
 conformance/DET/DET-1-file-stream-read-run.hir
 conformance/DET/DET-1-file-stream-write-run.hir
@@ -4397,6 +4400,7 @@ conformance/SEM/SEM-3-flate-gzip-run.hir
 conformance/SEM/SEM-3-flate-inflate-run.hir
 conformance/SEM/SEM-3-flate-long-codes-run.hir
 conformance/SEM/SEM-3-flate-zlib-run.hir
+conformance/SEM/SEM-3-fnv-vectors-run.hir
 conformance/SEM/SEM-3-format-alias-bad.hir
 conformance/SEM/SEM-3-format-alias-ok.hir
 conformance/SEM/SEM-3-format-enum-run.hir

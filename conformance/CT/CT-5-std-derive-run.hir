@@ -1,0 +1,110 @@
+// rule: CT-5
+// expect: run
+// stdout: {"id":7,"title":"write","done":false,"tags":["a","b"],"note":null}
+// stdout: round trip equal: true
+// stdout: hash equal: true
+// stdout: changed equal: false
+// stdout: changed hash differs: true
+// stdout: Todo(id: 7, title: write, done: true, tags: [a, b], note: Some(n))
+// stdout: {"Circle":[2]} Circle(2) true
+// stdout: {"Rect":[3,4]} Rect(3, 4) true
+// stdout: "Empty" Empty true
+// stdout: Todo: expected a JSON object
+// std@1/derive generates JSON encoding and decoding, equality, text and hashing for a
+// record and a variant from their shapes.
+type Todo {
+  id: u64,
+  title: String,
+  done: bool,
+  tags: List[String],
+  note: Option[String],
+}
+
+type Shape = Circle(u32) | Rect(width: u32, height: u32) | Empty
+
+fn todo_value(t: Todo) -> json.Value uses {} = comptime derive.json_value(shape(Todo))
+
+fn todo_from(v: json.Value) -> Result[Todo, String] uses {} = comptime derive.from_json(
+  shape(Todo)
+)
+
+fn todo_equal(a: Todo, b: Todo) -> bool uses {} = comptime derive.equal(shape(Todo))
+
+fn todo_format(t: Todo, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Todo)
+)
+
+fn todo_hash(t: Todo) -> u64 uses {} = comptime derive.hash(shape(Todo))
+
+fn shape_value(s: Shape) -> json.Value uses {} = comptime derive.json_value(
+  shape(Shape)
+)
+
+fn shape_from(v: json.Value) -> Result[Shape, String] uses {} = comptime derive.from_json(
+  shape(Shape)
+)
+
+fn shape_equal(a: Shape, b: Shape) -> bool uses {} = comptime derive.equal(shape(Shape))
+
+fn shape_format(s: Shape, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Shape)
+)
+
+fn shape_hash(s: Shape) -> u64 uses {} = comptime derive.hash(shape(Shape))
+
+fn show(mut out: List[u8], text: String) -> () uses {} {
+  text.append(mut out, text)
+  text.append(mut out, "\n")
+}
+
+fn json_text(v: json.Value) -> unique String uses {} {
+  match json.stringify(v) {
+    Ok(text) => unique text,
+    Error(_) => unique "?",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let mut text: List[u8] = []
+  let t = Todo(id: 7, title: "write", done: false, tags: ["a", "b"], note: None)
+  let encoded = json_text(todo_value(t))
+  show(mut text, encoded)
+  let Ok(parsed) = json.parse(copy encoded) else {
+    return Ok(())
+  }
+  match todo_from(parsed) {
+    Ok(back) => {
+      show(mut text, f"round trip equal: {todo_equal(t, back)}")
+      show(mut text, f"hash equal: {todo_hash(t) == todo_hash(back)}")
+    },
+    Error(e) => show(mut text, e),
+  }
+  let u = Todo(id: 7, title: "write", done: true, tags: ["a", "b"], note: Some("n"))
+  show(mut text, f"changed equal: {todo_equal(t, u)}")
+  show(mut text, f"changed hash differs: {todo_hash(t) != todo_hash(u)}")
+  let mut formatted: List[u8] = []
+  todo_format(u, mut formatted)
+  show(mut text, text.finish_valid(take formatted))
+  let shapes: List[Shape] = [Circle(2), Rect(width: 3, height: 4), Empty]
+  for s in shapes {
+    let shape_json = json_text(shape_value(s))
+    let mut line: List[u8] = []
+    shape_format(s, mut line)
+    let Ok(shape_parsed) = json.parse(copy shape_json) else {
+      return Ok(())
+    }
+    let same = match shape_from(shape_parsed) {
+      Ok(back) => shape_equal(s, back) && shape_hash(s) == shape_hash(back),
+      Error(_) => false,
+    }
+    show(mut text, f"{shape_json} {text.finish_valid(take line)} {same}")
+  }
+  let not_object: json.Value = Text("x")
+  match todo_from(not_object) {
+    Ok(_) => show(mut text, "accepted"),
+    Error(e) => show(mut text, e),
+  }
+  let _ = out.print(out, text.finish_valid(take text))
+  Ok(())
+}

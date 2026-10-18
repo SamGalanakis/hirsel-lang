@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-952 exported definitions; 287 variants.
+966 exported definitions; 287 variants.
 
 ## Types and roots
 
@@ -2373,6 +2373,63 @@ References: [`std@1/deque/Deque`](#def-std_401_2fdeque_2fDeque)
 References: [`std@1/deque/Deque`](#def-std_401_2fdeque_2fDeque)
 
 
+## derive
+
+<a id="def-std_401_2fderive_2fequal"></a>
+
+- `pub fn derive.equal[T](s: TypeShape[T]) -> Result[Body[fn(T, T) -> bool uses {}], String] uses {}`
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fderive_2fformat"></a>
+
+- `pub fn derive.format[T](s: TypeShape[T]) -> Result[ Body[fn(T, mut List[u8]) -> () uses {}], String ] uses {}`
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fderive_2ffrom_5fjson"></a>
+
+- `pub fn derive.from_json[T](s: TypeShape[T]) -> Result[ Body[fn(json.Value) -> Result[T, String] uses {}], String ] uses {}`
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fderive_2fhash"></a>
+
+- `pub fn derive.hash[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {}`
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fderive_2fjson_5fbool"></a>
+
+- `pub fn derive.json_bool(value: json.Value) -> Result[bool, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fderive_2fjson_5fnumber"></a>
+
+- `pub fn derive.json_number(value: json.Value) -> Result[unique String, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fderive_2fjson_5ftext"></a>
+
+- `pub fn derive.json_text(value: json.Value) -> Result[unique String, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fderive_2fjson_5fvalue"></a>
+
+- `pub fn derive.json_value[T](s: TypeShape[T]) -> Result[ Body[fn(T) -> json.Value uses {}], String ] uses {}`
+
+References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fderive_2fparsed"></a>
+
+- `pub fn derive.parsed[N, E](take value: Result[N, E], ty: String) -> Result[N, String] uses {value}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString)
+
+
 ## dir
 
 <a id="def-core_401_2fdir_2fnarrow"></a>
@@ -3150,6 +3207,39 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 <a id="def-core_401_2ffloat_2ftotal_5forder"></a>
 
 - `@noalloc fn float.total_order[F](a: F, b: F) -> i32`
+
+
+## fnv
+
+<a id="def-std_401_2ffnv_2fState"></a>
+
+- `pub type fnv.State { value: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ffnv_2fdigest"></a>
+
+- `@noalloc pub fn fnv.digest(data: Bytes) -> u64 uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ffnv_2ffinish"></a>
+
+- `@noalloc pub fn fnv.finish(take state: State) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/fnv/State`](#def-std_401_2ffnv_2fState)
+
+<a id="def-std_401_2ffnv_2fnew"></a>
+
+- `@noalloc pub fn fnv.new() -> State uses {}`
+
+References: [`std@1/fnv/State`](#def-std_401_2ffnv_2fState)
+
+<a id="def-std_401_2ffnv_2fupdate"></a>
+
+- `@noalloc pub fn fnv.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/fnv/State`](#def-std_401_2ffnv_2fState)
 
 
 ## glob

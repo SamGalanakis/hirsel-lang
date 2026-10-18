@@ -595,6 +595,18 @@
       "module": [
         "flate"
       ]
+    },
+    {
+      "path": "fnv.hir",
+      "module": [
+        "fnv"
+      ]
+    },
+    {
+      "path": "derive.hir",
+      "module": [
+        "derive"
+      ]
     }
   ],
   "dependencies": []

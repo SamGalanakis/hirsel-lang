@@ -1,0 +1,11 @@
+// rule: CT-5
+// expect: accept
+// The same record with a supported field type derives its JSON form.
+type Reading {
+  sensor: String,
+  value: i64,
+}
+
+fn reading_value(r: Reading) -> json.Value uses {} = comptime derive.json_value(
+  shape(Reading)
+)

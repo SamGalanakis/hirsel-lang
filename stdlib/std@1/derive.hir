@@ -1,0 +1,509 @@
+// Generators for `= comptime` function bodies (CT-5). Each reads a record or
+// variant type's shape and returns one function literal for the header written
+// in source; a field type it has no form for is its Error, naming the type.
+// Supported field and payload types: bool, String, the sized integers, and
+// Option and List of supported types. Generated text spells every type and std
+// call by its canonical versioned path, so it checks the same way in every
+// module.
+// The argument of `ty` when it is `prefix` + argument + `]`, such as `u64` for
+// `List[u64]` and prefix `List[`.
+fn argument(ty: String, prefix: String) -> Option[unique String] uses {} {
+  if !string.starts_with(ty, prefix) || !string.ends_with(ty, "]") {
+    return None
+  }
+  let Some(start) = core@1/string.position(ty, core@1/string.byte_len(prefix)) else {
+    return None
+  }
+  let Some(end) = core@1/string.position(ty, core@1/string.byte_len(ty) - 1) else {
+    return None
+  }
+  Some(unique core@1/string.slice(ty, start, end))
+}
+
+const INTEGERS: List[String] = [
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "u128",
+  "i8",
+  "i16",
+  "i32",
+  "i64",
+  "i128"
+]
+
+fn integer(ty: String) -> bool uses {} {
+  for name in INTEGERS {
+    if ty == name {
+      return true
+    }
+  }
+  false
+}
+
+// A nominal type's path without type arguments: `app@1/m.Pair` for
+// `app@1/m.Pair[u64]`, which names its record constructor in any module.
+fn constructor(name: String) -> unique String uses {} {
+  let Some(at) = string.find(name, "[") else {
+    return unique name
+  }
+  let Some(start) = core@1/string.position(name, 0) else {
+    return unique name
+  }
+  unique core@1/string.slice(name, start, at)
+}
+
+// The declared name alone: `Todo` for `app@1/todo.Todo`.
+fn short_name(name: String) -> unique String uses {} {
+  let mut last = constructor(name)
+  let separators: List[String] = ["/", "."]
+  for separator in separators {
+    let parts = string.split(take last, separator)
+    last = unique parts[list.len(parts) - 1]
+  }
+  take last
+}
+
+// Positional binding names `prefix0, prefix1, ..` for `count` payloads.
+fn binders(prefix: String, count: u64) -> List[String] uses {} {
+  let mut names: List[String] = []
+  let mut i: u64 = 0
+  while i < count {
+    list.push(mut names, f"{prefix}{i}")
+    i += 1
+  }
+  take names
+}
+
+// A variant pattern or construction: `Name`, `Name(a, b)` or, for labelled
+// payloads, `Name(label: a, ..)`.
+fn variant_form(v: VariantShape, names: List[String]) -> unique String uses {} {
+  if list.len(v.payload) == 0 {
+    return unique v.name
+  }
+  let mut parts: List[String] = []
+  let mut i: u64 = 0
+  for p in v.payload {
+    match p.label {
+      Some(label) => list.push(mut parts, f"{label}: {names[i]}"),
+      None => list.push(mut parts, unique names[i]),
+    }
+    i += 1
+  }
+  f"{v.name}({string.join(parts, ", ")})"
+}
+
+// ---- JSON ----
+// An expression of type std@1/json.Value for `read`, of canonical type `ty`.
+fn json_of(ty: String, read: String, depth: u64) -> Result[unique String, String] uses {} {
+  if ty == "bool" {
+    return Ok(f"Bool({read})")
+  }
+  if ty == "String" {
+    return Ok(f"Text(unique {read})")
+  }
+  if integer(ty) {
+    return Ok(f"Number(std@1/{ty}.to_string({read}))")
+  }
+  let item = f"item{depth}"
+  if let Some(inner) = argument(ty, "core@1/Option[") {
+    let value = json_of(inner, item, depth + 1)?
+    return Ok(f"match {read} {{ Some({item}) => {value}, None => Null }}")
+  }
+  if let Some(inner) = argument(ty, "List[") {
+    let value = json_of(inner, item, depth + 1)?
+    let items = f"items{depth}"
+    return Ok(
+      f"{{\n    let mut {items}: List[std@1/json.Value] = []\n    for {item} in {read} {{\n      list.push(mut {items}, {value})\n    }}\n    Array(take {items})\n  }}"
+    )
+  }
+  Error(f"no JSON form for {ty}")
+}
+
+// A record's JSON form is an object with a member per field. A variant without
+// payload is its name as a string; one with payloads is an object whose one
+// member, its name, holds the array of its payloads.
+pub fn json_value[T](s: TypeShape[T]) -> Result[
+  Body[fn(T) -> json.Value uses {}],
+  String
+] uses {} {
+  let info = type_shape.info(s)
+  let mut lines: List[String] = [
+    f"fn(value: {info.name}) -> std@1/json.Value uses {{}} {{"
+  ]
+  match info.body {
+    Record(fields) => {
+      list.push(
+        mut lines,
+        "  let mut fields: Map[String, std@1/json.Value] = map.empty()"
+      )
+      for f in fields {
+        let value = json_of(f.ty, f"value.{f.name}", 0)?
+        list.push(mut lines, f"  map.insert(mut fields, \"{f.name}\", {value})")
+      }
+      list.push(mut lines, "  Object(take fields)")
+    },
+    Choice(variants) => {
+      list.push(mut lines, "  match value {")
+      for v in variants {
+        if list.len(v.payload) == 0 {
+          list.push(mut lines, f"    {v.name} => Text(\"{v.name}\"),")
+        } else {
+          let names = binders("p", list.len(v.payload))
+          list.push(mut lines, f"    {variant_form(v, names)} => {{")
+          list.push(mut lines, "      let mut payload: List[std@1/json.Value] = []")
+          let mut i: u64 = 0
+          for p in v.payload {
+            let value = json_of(p.ty, names[i], 0)?
+            list.push(mut lines, f"      list.push(mut payload, {value})")
+            i += 1
+          }
+          list.push(
+            mut lines,
+            "      let mut tagged: Map[String, std@1/json.Value] = map.empty()"
+          )
+          list.push(
+            mut lines,
+            f"      map.insert(mut tagged, \"{v.name}\", Array(take payload))"
+          )
+          list.push(mut lines, "      Object(take tagged)")
+          list.push(mut lines, "    },")
+        }
+      }
+      list.push(mut lines, "  }")
+    },
+  }
+  list.push(mut lines, "}")
+  Ok(codegen.body(string.join(lines, "\n")))
+}
+
+// An expression of canonical type `ty` decoding `read`, a std@1/json.Value; a
+// mismatch returns `Error` from the generated function.
+fn from_json_of(ty: String, read: String, depth: u64) -> Result[unique String, String] uses {} {
+  if ty == "bool" {
+    return Ok(f"std@1/derive.json_bool({read})?")
+  }
+  if ty == "String" {
+    return Ok(f"std@1/derive.json_text({read})?")
+  }
+  if integer(ty) {
+    return Ok(
+      f"std@1/derive.parsed(std@1/{ty}.parse(std@1/derive.json_number({read})?), \"{ty}\")?"
+    )
+  }
+  let item = f"item{depth}"
+  if let Some(inner) = argument(ty, "core@1/Option[") {
+    let value = from_json_of(inner, item, depth + 1)?
+    return Ok(f"match {read} {{ Null => None, {item} => Some({value}) }}")
+  }
+  if let Some(inner) = argument(ty, "List[") {
+    let value = from_json_of(inner, item, depth + 1)?
+    return Ok(
+      f"{{\n    let Array(array{depth}) = {read} else {{\n      return Error(\"expected a JSON array\")\n    }}\n    let mut items{depth}: List[{inner}] = []\n    for {item} in array{depth} {{\n      list.push(mut items{depth}, {value})\n    }}\n    take items{depth}\n  }}"
+    )
+  }
+  Error(f"no JSON form for {ty}")
+}
+
+// Decodes the JSON form that `json_value` writes. A missing member of an Option
+// field decodes as None; any other mismatch is an Error naming the type.
+pub fn from_json[T](s: TypeShape[T]) -> Result[
+  Body[fn(json.Value) -> Result[T, String] uses {}],
+  String
+] uses {} {
+  let info = type_shape.info(s)
+  let name = short_name(info.name)
+  let mut lines: List[String] = [
+    f"fn(value: std@1/json.Value) -> core@1/Result[{info.name}, String] uses {{}} {{"
+  ]
+  match info.body {
+    Record(fields) => {
+      list.push(mut lines, "  let Object(fields) = value else {")
+      list.push(mut lines, f"    return Error(\"{name}: expected a JSON object\")")
+      list.push(mut lines, "  }")
+      let mut arguments: List[String] = []
+      let mut i: u64 = 0
+      for f in fields {
+        let value = from_json_of(f.ty, f"field{i}", 0)?
+        if string.starts_with(f.ty, "core@1/Option[") {
+          list.push(
+            mut lines,
+            f"  let decoded{i}: {f.ty} = match map.get(fields, \"{f.name}\") {{"
+          )
+          list.push(mut lines, "    None => None,")
+          list.push(mut lines, f"    Some(field{i}) => {value},")
+          list.push(mut lines, "  }")
+        } else {
+          list.push(
+            mut lines,
+            f"  let Some(field{i}) = map.get(fields, \"{f.name}\") else {{"
+          )
+          list.push(mut lines, f"    return Error(\"{name}: missing member {f.name}\")")
+          list.push(mut lines, "  }")
+          list.push(mut lines, f"  let decoded{i}: {f.ty} = {value}")
+        }
+        list.push(mut arguments, f"{f.name}: take decoded{i}")
+        i += 1
+      }
+      list.push(
+        mut lines,
+        f"  Ok({constructor(info.name)}({string.join(arguments, ", ")}))"
+      )
+    },
+    Choice(variants) => {
+      list.push(mut lines, "  match value {")
+      list.push(mut lines, "    Text(tag) => {")
+      for v in variants {
+        if list.len(v.payload) == 0 {
+          list.push(mut lines, f"      if tag == \"{v.name}\" {{")
+          list.push(mut lines, f"        return Ok({v.name})")
+          list.push(mut lines, "      }")
+        }
+      }
+      list.push(
+        mut lines,
+        f"      Error(std@1/string.concat(\"{name}: unknown variant \", tag))"
+      )
+      list.push(mut lines, "    },")
+      list.push(mut lines, "    Object(tagged) => {")
+      for v in variants {
+        let count = list.len(v.payload)
+        if count != 0 {
+          list.push(
+            mut lines,
+            f"      if let Some(Array(payload)) = map.get(tagged, \"{v.name}\") {{"
+          )
+          list.push(mut lines, f"        if core@1/list.len(payload) != {count} {{")
+          list.push(
+            mut lines,
+            f"          return Error(\"{name}: expected {count} payloads for {v.name}\")"
+          )
+          list.push(mut lines, "        }")
+          let names = binders("take decoded", count)
+          let mut i: u64 = 0
+          for p in v.payload {
+            let value = from_json_of(p.ty, f"payload[{i}]", 0)?
+            list.push(mut lines, f"        let decoded{i}: {p.ty} = {value}")
+            i += 1
+          }
+          list.push(mut lines, f"        return Ok({variant_form(v, names)})")
+          list.push(mut lines, "      }")
+        }
+      }
+      list.push(mut lines, f"      Error(\"{name}: unknown variant\")")
+      list.push(mut lines, "    },")
+      list.push(
+        mut lines,
+        f"    _ => Error(\"{name}: expected a JSON string or object\"),"
+      )
+      list.push(mut lines, "  }")
+    },
+  }
+  list.push(mut lines, "}")
+  Ok(codegen.body(string.join(lines, "\n")))
+}
+
+// A JSON boolean, for generated decoders.
+pub fn json_bool(value: json.Value) -> Result[bool, String] uses {} {
+  match value {
+    Bool(b) => Ok(b),
+    _ => Error("expected a JSON boolean"),
+  }
+}
+
+// A JSON string, for generated decoders.
+pub fn json_text(value: json.Value) -> Result[unique String, String] uses {} {
+  match value {
+    Text(text) => Ok(unique text),
+    _ => Error("expected a JSON string"),
+  }
+}
+
+// A JSON number's text, for generated decoders.
+pub fn json_number(value: json.Value) -> Result[unique String, String] uses {} {
+  match value {
+    Number(text) => Ok(unique text),
+    _ => Error("expected a JSON number"),
+  }
+}
+
+// A parsed number, or an error naming the type it does not fit.
+pub fn parsed[N, E](take value: Result[N, E], ty: String) -> Result[N, String] uses {value} {
+  match take value {
+    Ok(n) => Ok(take n),
+    Error(_) => Error(f"expected a JSON number fitting {ty}"),
+  }
+}
+
+// ---- Equality ----
+// Equality by `==` on every field, or on the payloads of equal variants.
+pub fn equal[T](s: TypeShape[T]) -> Result[Body[fn(T, T) -> bool uses {}], String] uses {} {
+  let info = type_shape.info(s)
+  let mut lines: List[String] = [
+    f"fn(left: {info.name}, right: {info.name}) -> bool uses {{}} {{"
+  ]
+  match info.body {
+    Record(fields) => {
+      let mut terms: List[String] = []
+      for f in fields {
+        list.push(mut terms, f"left.{f.name} == right.{f.name}")
+      }
+      if list.len(terms) == 0 {
+        list.push(mut terms, "true")
+      }
+      list.push(mut lines, f"  {string.join(terms, " && ")}")
+    },
+    Choice(variants) => {
+      list.push(mut lines, "  match left {")
+      for v in variants {
+        let count = list.len(v.payload)
+        let mut terms: List[String] = []
+        let mut i: u64 = 0
+        while i < count {
+          list.push(mut terms, f"l{i} == r{i}")
+          i += 1
+        }
+        if count == 0 {
+          list.push(mut terms, "true")
+        }
+        let lefts = variant_form(v, binders("l", count))
+        let rights = variant_form(v, binders("r", count))
+        list.push(mut lines, f"    {lefts} => match right {{")
+        list.push(mut lines, f"      {rights} => {string.join(terms, " && ")},")
+        list.push(mut lines, "      _ => false,")
+        list.push(mut lines, "    },")
+      }
+      list.push(mut lines, "  }")
+    },
+  }
+  list.push(mut lines, "}")
+  Ok(codegen.body(string.join(lines, "\n")))
+}
+
+// ---- Text and hashing ----
+// Statements appending the text of `read`, of canonical type `ty`, to `out`:
+// Option as `Some(..)` or `None` and List as `[a, b]`.
+fn write_of(ty: String, read: String, depth: u64, indent: String) -> Result[
+  unique String,
+  String
+] uses {} {
+  if ty == "String" {
+    return Ok(f"{indent}std@1/text.append(mut out, {read})\n")
+  }
+  if ty == "bool" || integer(ty) {
+    return Ok(f"{indent}std@1/text.append(mut out, std@1/{ty}.to_string({read}))\n")
+  }
+  let item = f"item{depth}"
+  if let Some(inner) = argument(ty, "core@1/Option[") {
+    let some = write_of(inner, item, depth + 1, f"{indent}    ")?
+    return Ok(
+      f"{indent}match {read} {{\n{indent}  Some({item}) => {{\n{indent}    std@1/text.append(mut out, \"Some(\")\n{some}{indent}    std@1/text.append(mut out, \")\")\n{indent}  }},\n{indent}  None => std@1/text.append(mut out, \"None\"),\n{indent}}}\n"
+    )
+  }
+  if let Some(inner) = argument(ty, "List[") {
+    let element = write_of(inner, item, depth + 1, f"{indent}  ")?
+    return Ok(
+      f"{indent}std@1/text.append(mut out, \"[\")\n{indent}let mut first{depth} = true\n{indent}for {item} in {read} {{\n{indent}  if !first{depth} {{\n{indent}    std@1/text.append(mut out, \", \")\n{indent}  }}\n{indent}  first{depth} = false\n{element}{indent}}}\n{indent}std@1/text.append(mut out, \"]\")\n"
+    )
+  }
+  Error(f"no text form for {ty}")
+}
+
+// Writes `Name(field: value, ..)` for a record and `Variant(payload, ..)` or
+// `Variant` for a variant, with the header of a `@format` function.
+pub fn format[T](s: TypeShape[T]) -> Result[
+  Body[fn(T, mut List[u8]) -> () uses {}],
+  String
+] uses {} {
+  let info = type_shape.info(s)
+  let mut lines: List[String] = [
+    f"fn(value: {info.name}, mut out: List[u8]) -> () uses {{}} {{"
+  ]
+  match info.body {
+    Record(fields) => {
+      list.push(
+        mut lines,
+        f"  std@1/text.append(mut out, \"{short_name(info.name)}(\")"
+      )
+      let mut i: u64 = 0
+      for f in fields {
+        let separator = if i == 0 {
+          ""
+        } else {
+          ", "
+        }
+        list.push(mut lines, f"  std@1/text.append(mut out, \"{separator}{f.name}: \")")
+        list.push(mut lines, write_of(f.ty, f"value.{f.name}", 0, "  ")?)
+        i += 1
+      }
+      list.push(mut lines, "  std@1/text.append(mut out, \")\")")
+    },
+    Choice(variants) => {
+      list.push(mut lines, "  match value {")
+      for v in variants {
+        if list.len(v.payload) == 0 {
+          list.push(
+            mut lines,
+            f"    {v.name} => std@1/text.append(mut out, \"{v.name}\"),"
+          )
+        } else {
+          let names = binders("p", list.len(v.payload))
+          list.push(mut lines, f"    {variant_form(v, names)} => {{")
+          list.push(mut lines, f"      std@1/text.append(mut out, \"{v.name}(\")")
+          let mut i: u64 = 0
+          for p in v.payload {
+            if i != 0 {
+              list.push(mut lines, "      std@1/text.append(mut out, \", \")")
+            }
+            list.push(mut lines, write_of(p.ty, names[i], 0, "      ")?)
+            i += 1
+          }
+          list.push(mut lines, "      std@1/text.append(mut out, \")\")")
+          list.push(mut lines, "    },")
+        }
+      }
+      list.push(mut lines, "  }")
+    },
+  }
+  list.push(mut lines, "}")
+  Ok(codegen.body(string.join(lines, "\n")))
+}
+
+// An FNV-1a 64 hash (std@1/fnv) of the text `format` writes for each field, or
+// for the variant's name and payloads, each followed by a zero byte.
+pub fn hash[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {} {
+  let info = type_shape.info(s)
+  let mut lines: List[String] = [
+    f"fn(value: {info.name}) -> u64 uses {{}} {{",
+    "  let mut out: List[u8] = []"
+  ]
+  match info.body {
+    Record(fields) => {
+      for f in fields {
+        list.push(mut lines, write_of(f.ty, f"value.{f.name}", 0, "  ")?)
+        list.push(mut lines, "  list.push(mut out, 0u8)")
+      }
+    },
+    Choice(variants) => {
+      list.push(mut lines, "  match value {")
+      for v in variants {
+        let names = binders("p", list.len(v.payload))
+        list.push(mut lines, f"    {variant_form(v, names)} => {{")
+        list.push(mut lines, f"      std@1/text.append(mut out, \"{v.name}\")")
+        list.push(mut lines, "      list.push(mut out, 0u8)")
+        let mut i: u64 = 0
+        for p in v.payload {
+          list.push(mut lines, write_of(p.ty, names[i], 0, "      ")?)
+          list.push(mut lines, "      list.push(mut out, 0u8)")
+          i += 1
+        }
+        list.push(mut lines, "    },")
+      }
+      list.push(mut lines, "  }")
+    },
+  }
+  list.push(mut lines, "  std@1/fnv.digest(core@1/bytes.from_list(take out))")
+  list.push(mut lines, "}")
+  Ok(codegen.body(string.join(lines, "\n")))
+}

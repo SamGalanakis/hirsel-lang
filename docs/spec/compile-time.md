@@ -192,8 +192,9 @@ independent of topology ([PROG-5](programs.md#prog-5-topology)).
   generated body is checked and lowered like any body. The same inputs give the same text.
   Generation that needs its own result is a CT-4 cycle at `e`.
 
-**Worked example.** `examples/todo-api` derives its `todo_value` this way, here with the
-generator written out:
+**Worked example.** `examples/todo-api` derives its `todo_value` with
+[`std@1/derive.json_value`](std-library.md#derived-bodies); this is that generator reduced to
+three field types:
 
 ```text
 type Todo { id: u64, title: String, done: bool }

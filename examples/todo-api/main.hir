@@ -40,13 +40,12 @@ fn text_value(s: String) -> json.Value uses {} {
   Text(unique s)
 }
 
-fn todo_value(t: Todo) -> json.Value uses {} {
-  let mut fields: Map[String, json.Value] = map.empty()
-  map.insert(mut fields, "id", Number(u64.to_string(t.id)))
-  map.insert(mut fields, "title", text_value(t.title))
-  map.insert(mut fields, "done", Bool(t.done))
-  Object(take fields)
-}
+// A todo's JSON object and its decoding are generated from Todo's shape (CT-5).
+fn todo_value(t: Todo) -> json.Value uses {} = comptime derive.json_value(shape(Todo))
+
+fn todo_from(value: json.Value) -> Result[Todo, String] uses {} = comptime derive.from_json(
+  shape(Todo)
+)
 
 fn todo_json(t: Todo) -> unique String uses {} {
   match json.stringify(todo_value(t)) {
@@ -125,19 +124,10 @@ fn parse_store(take text: String) -> Result[unique Store, ServerError] uses {} {
   }
   let mut todos: List[Todo] = []
   for item in items {
-    let Object(entry) = item else {
-      return Error(Corrupt("todo"))
+    match todo_from(item) {
+      Ok(decoded) => list.push(mut todos, unique decoded),
+      Error(message) => return Error(Corrupt(take message)),
     }
-    let Some(id) = u64_field(entry, "id") else {
-      return Error(Corrupt("todo id"))
-    }
-    let Some(title) = text_field(entry, "title") else {
-      return Error(Corrupt("todo title"))
-    }
-    let Some(done) = bool_field(entry, "done") else {
-      return Error(Corrupt("todo done"))
-    }
-    list.push(mut todos, Todo(id: id, title: take title, done: done))
   }
   Ok(Store(next_id: next_id, version: 0, todos: take todos))
 }
