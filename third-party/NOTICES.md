@@ -5,6 +5,7 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| Go standard library | `src/net/url/{url.go,url_test.go}` parseQuery, QueryUnescape, QueryEscape and ParseQuery vectors; ordered owned pairs, atomic errors and byte offsets replace Go maps and partial results | `stdlib/std@1/uri.hir`, URI query conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Rust standard library | `library/core/src/fmt/{mod,num,float}.rs`, `library/alloctests/tests/fmt.rs`, `library/coretests/tests/num/flt2dec/mod.rs` padding, sign/prefix, scalar precision and format vectors; `library/alloc/src/fmt.rs` named `name$` width/precision count grammar | `stdlib/std@1/format.hir`, scalar `format_into_spec`, `text.pad_from`, `crates/hirsel-parser/src/formats.rs`, `conformance/SEM/SEM-3-fstring-*`, `conformance/SEM/SEM-3-format-*` | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Zig standard library | `lib/std/unicode.zig` utf8Encode and scalar-boundary cases | `stdlib/std@1/utf8.hir`, UTF-8 conformance; JSON and NFC share the scalar appender | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | Rust standard library | `library/core/src/str/validations.rs`, `library/alloc/src/string.rs`, `library/alloctests/tests/string.rs` lossy-prefix/error-span semantics and test_from_utf8_lossy vectors | `stdlib/std@1/utf8.hir`, UTF-8 conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |

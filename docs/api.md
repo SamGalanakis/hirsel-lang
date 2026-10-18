@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-768 exported definitions; 242 variants.
+771 exported definitions; 245 variants.
 
 
 ## Types and roots
@@ -1243,6 +1243,10 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Query -> uri.Part` — Variant of uri.Part. <!-- std@1/uri/Part#Query -->
 - `Unreserved -> uri.Part` — Variant of uri.Part. <!-- std@1/uri/Part#Unreserved -->
 - `User -> uri.Part` — Variant of uri.Part. <!-- std@1/uri/Part#User -->
+- `pub type uri.QueryError = InvalidEscape(u64) | InvalidSeparator(u64) | InvalidUtf8(u64)` — Go net/url parseQuery and QueryUnescape, adapted to ordered, owned pairs. <!-- std@1/uri/QueryError -->
+- `InvalidEscape(u64) -> uri.QueryError` — Variant of uri.QueryError. <!-- std@1/uri/QueryError#InvalidEscape -->
+- `InvalidSeparator(u64) -> uri.QueryError` — Variant of uri.QueryError. <!-- std@1/uri/QueryError#InvalidSeparator -->
+- `InvalidUtf8(u64) -> uri.QueryError` — Variant of uri.QueryError. <!-- std@1/uri/QueryError#InvalidUtf8 -->
 - `pub type uri.Uri { scheme: String, user: Option[Component], password: Option[Component], host: Option[Component], port: Option[u16], path: Component, query: Option[Component], fragment: Option[Component], }` <!-- std@1/uri/Uri -->
 - `pub type uri.UriError = UnexpectedCharacter | InvalidFormat | InvalidPort | InvalidHostName` <!-- std@1/uri/UriError -->
 - `InvalidFormat -> uri.UriError` — Variant of uri.UriError. <!-- std@1/uri/UriError#InvalidFormat -->
@@ -1252,10 +1256,12 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn uri.component_encoded(component: Component, part: Part) -> unique String uses {}` <!-- std@1/uri/component_encoded -->
 - `pub fn uri.component_raw(component: Component) -> unique Bytes uses {}` <!-- std@1/uri/component_raw -->
 - `pub fn uri.component_text(component: Component) -> Result[unique String, unique Bytes] uses {}` <!-- std@1/uri/component_text -->
+- `pub fn uri.encode_query(pairs: List[(String, String)]) -> unique String uses {}` — Go QueryEscape's alphabet; pair order and repeated keys are preserved. <!-- std@1/uri/encode_query -->
 - `pub fn uri.format(parsed_uri: Uri) -> unique String uses {}` — Zig writeToStream(.all): an empty path is rendered as '/'. <!-- std@1/uri/format -->
 - `pub fn uri.parse(text: String) -> Result[Uri, UriError] uses {}` <!-- std@1/uri/parse -->
 - `pub fn uri.percent_decode(text: String) -> unique Bytes uses {}` — Zig formatRaw: invalid or incomplete escapes stay literal; '+' stays '+'. <!-- std@1/uri/percent_decode -->
 - `pub fn uri.percent_encode(data: Bytes) -> unique String uses {}` <!-- std@1/uri/percent_encode -->
+- `pub fn uri.query_pairs(query: String) -> Result[unique List[(unique String, unique String)], QueryError] uses {}` — The input is the query without '?', or an application/x-www-form-urlencoded body. <!-- std@1/uri/query_pairs -->
 - `pub fn uri.remove_dot_segments(path: String) -> unique String uses {}` — Zig remove_dot_segments, RFC3986 §5.2.4. <!-- std@1/uri/remove_dot_segments -->
 - `pub fn uri.resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {}` — Zig resolveInPlace and merge_paths; the result owns its copied base components. <!-- std@1/uri/resolve -->
 

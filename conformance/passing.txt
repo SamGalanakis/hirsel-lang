@@ -3985,6 +3985,7 @@ conformance/SEM/SEM-3-tour-14-fstrings-run.hir
 conformance/SEM/SEM-3-tour-15-format-run.hir
 conformance/SEM/SEM-3-unicode-positions.hir
 conformance/SEM/SEM-3-unicode-scalars.hir
+conformance/SEM/SEM-3-uri-query-pairs-run.hir
 conformance/SEM/SEM-3-wave1-byte-alias-run.hir
 conformance/SEM/SEM-3-wave1-bytes-slice-past-fail.hir
 conformance/SEM/SEM-3-wave1-bytes-slice-past-run.hir

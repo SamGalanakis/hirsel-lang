@@ -423,6 +423,17 @@ owning helper's global input requirement.
 and `ends_in_number` is the numeric-host test of
 [CAP-1](capabilities.md#cap-1-authority). Zone and flow identifiers are not represented.
 
+`uri.query_pairs(query)` decodes a query without `?` or a form-urlencoded body to
+`Result[unique List[(unique String, unique String)], QueryError]`. It preserves pair
+order and repeated keys, ignores empty ampersand fields, splits at the first `=`,
+and gives a missing value the empty string. Plus decodes to space. Percent escapes
+must contain two hex digits; `InvalidEscape(offset)` identifies the percent byte
+in the original input. A literal semicolon is `InvalidSeparator(offset)`. Decoded
+strings must be UTF-8 (`InvalidUtf8(component_start)` otherwise). Errors return no
+partial pairs. `uri.encode_query(List[(String, String)])` preserves order, writes
+spaces as plus and percent-encodes bytes outside the unreserved alphabet with
+uppercase hex; it always writes `=` between key and value.
+
 `std@1/uri` parses, formats and resolves RFC 3986 references: `parse`, `format`,
 `resolve`, `remove_dot_segments`, `percent_encode` and `percent_decode`, with components
 kept as `Raw(String) | Encoded(String)` and `UriError = UnexpectedCharacter |

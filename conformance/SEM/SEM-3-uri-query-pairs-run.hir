@@ -1,0 +1,104 @@
+// rule: SEM-3
+// expect: run
+// Go net/url/url_test.go ParseQuery and QueryEscape vectors.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+pub fn main(t: Test) -> Result[(), uri.QueryError] {
+  check(uri.query_pairs("a=1")? == [("a", "1")])
+  check(uri.query_pairs("a=1&b=2")? == [("a", "1"), ("b", "2")])
+  check(
+    uri.query_pairs("a=1&a=2&a=banana")? == [("a", "1"), ("a", "2"), ("a", "banana")]
+  )
+  check(uri.query_pairs("ascii=%3Ckey%3A+0x90%3E")? == [("ascii", "<key: 0x90>")])
+  check(uri.query_pairs("a=%3B")? == [("a", ";")])
+  check(uri.query_pairs("a%3Bb=1")? == [("a;b", "1")])
+  check(uri.query_pairs("")? == [])
+  check(uri.query_pairs("&&a&&b=&=x&")? == [("a", ""), ("b", ""), ("", "x")])
+  check(uri.query_pairs("a=x=y")? == [("a", "x=y")])
+  check(uri.query_pairs("q=%E2%98%BA+%2B%00")? == [("q", "☺ +\0")])
+  check(uri.query_pairs("a=1;b=2") == Error(InvalidSeparator(3u64)))
+  check(uri.query_pairs("a;b=1") == Error(InvalidSeparator(1u64)))
+  check(uri.query_pairs("a=1&a=2;a=banana") == Error(InvalidSeparator(7u64)))
+  check(uri.query_pairs("a;b&c=1") == Error(InvalidSeparator(1u64)))
+  check(uri.query_pairs("a=1&b=2;a=3&c=4") == Error(InvalidSeparator(7u64)))
+  check(uri.query_pairs("a=1&b=2;c=3") == Error(InvalidSeparator(7u64)))
+  check(uri.query_pairs(";") == Error(InvalidSeparator(0u64)))
+  check(uri.query_pairs("a=1;") == Error(InvalidSeparator(3u64)))
+  check(uri.query_pairs("a=1&;") == Error(InvalidSeparator(4u64)))
+  check(uri.query_pairs(";a=1&b=2") == Error(InvalidSeparator(0u64)))
+  check(uri.query_pairs("a=1&b=2;") == Error(InvalidSeparator(7u64)))
+  check(uri.query_pairs("%") == Error(InvalidEscape(0u64)))
+  check(uri.query_pairs("%a") == Error(InvalidEscape(0u64)))
+  check(uri.query_pairs("x=%zz") == Error(InvalidEscape(2u64)))
+  check(uri.query_pairs("a=ok&%0g=x") == Error(InvalidEscape(5u64)))
+  check(uri.query_pairs("x=123%45%6") == Error(InvalidEscape(8u64)))
+  check(uri.query_pairs("x=%+1") == Error(InvalidEscape(2u64)))
+  check(uri.query_pairs("x=%-0") == Error(InvalidEscape(2u64)))
+  check(uri.query_pairs("x=%FF") == Error(InvalidUtf8(2u64)))
+  check(
+    uri.encode_query([("one two", "10%"), ("q", " ?&=#+")]) == "one+two=10%25&q=+%3F%26%3D%23%2B"
+  )
+  let encoded = uri.encode_query([("☺", "é+ /"), ("x", ""), ("x", "two")])
+  check(uri.encode_query(uri.query_pairs(encoded)?) == encoded)
+  // Moving a decoded field proves its String is unique at the public boundary.
+  let mut pairs = uri.query_pairs("name=owned")?
+  let (key, value) = list.remove(mut pairs, 0)
+  let moved_key: unique String = take key
+  let moved_value: unique String = take value
+  check(moved_key == "name" && moved_value == "owned")
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(b"POST / HTTP/1.1\r\nContent-Length: 15\r\n\r\nx=one+two&x=%2B"),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 15\r\nConnection: close\r\n\r\nx=one+two&x=%2B"
+              ),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let mut stream = match net.connect(n, "example.com", 80u16, Unbounded()) {
+    Ok(stream) => take stream,
+    Error(_) => {
+      check(false)
+      return Ok(())
+    },
+  }
+  let request = match http.receive_request(n, mut stream, 1024, 1024) {
+    Ok(request) => take request,
+    Error(_) => {
+      check(false)
+      return Ok(())
+    },
+  }
+  let form = match string.from_bytes(unique request.body) {
+    Ok(form) => take form,
+    Error(_) => {
+      check(false)
+      return Ok(())
+    },
+  }
+  let form_pairs = uri.query_pairs(form)?
+  check(form_pairs == [("x", "one two"), ("x", "+")])
+  let body = uri.encode_query(form_pairs)
+  match http.respond(n, mut stream, 200u16, [], string.as_bytes(body)) {
+    Ok(()) => (),
+    Error(_) => check(false),
+  }
+  net.close(n, take stream)
+  Ok(())
+}
