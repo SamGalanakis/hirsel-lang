@@ -100,18 +100,29 @@ def categories(rows):
 
 
 def attribute_actions(commands, rows, operation_names, operation_categories):
-    """Use the sizing tool's conservative join for named compile phases."""
-    records = {op: row for op, row in rows.items()
-               if row.get('category') == 'rustc' and row.get('exit') == '0'
-               and all(row.get(key, '-').isdigit() for key in
-                       ('wall_ms', 'cpu_usec', 'peak_bytes', 'requested_cpu', 'requested_kb'))}
-    actions = [c for c in commands if c['category'] == 'rustc' and not c['cached'] and not c['failed']]
-    for action, row in join(actions, records):
-        if row is None:
+    """Conservatively join named remote targets, keeping action categories apart."""
+    categories = defaultdict(dict)
+    for op, row in rows.items():
+        if row.get('exit') != '0' or not all(row.get(key, '-').isdigit() for key in
+                ('wall_ms', 'cpu_usec', 'peak_bytes', 'requested_cpu', 'requested_kb')):
             continue
-        op = row['op']
-        operation_names[op] = f"rustc {action['profile']} {action['display']} {action['phase']}"
-        operation_categories[op] = 'rustc link' if action['phase'].split()[0] == 'link' else 'rustc compile'
+        category = 'test' if row.get('test', '').startswith('run:') else row.get('category', '-')
+        categories[category][op] = row
+    by_category = defaultdict(list)
+    for command in commands:
+        if not command['cached'] and not command['failed']:
+            by_category[command['category']].append(command)
+    for category, actions in by_category.items():
+        for action, row in join(actions, categories[category]):
+            if row is None:
+                continue
+            op = row['op']
+            if category == 'rustc':
+                operation_names[op] = f"rustc {action['profile']} {action['display']} {action['phase']}"
+                operation_categories[op] = 'rustc link' if action['phase'].split()[0] == 'link' else 'rustc compile'
+            else:
+                operation_names[op] = re.sub(r'-shard-\d+$', '', action['display'])
+                operation_categories[op] = category
 
 
 def repeated_actions(commands, newest, hours, top):
@@ -162,9 +173,11 @@ def report(events, operation_names, operation_categories, repo, hours, top):
     total = [sum(row[i] for row in lanes.values()) for i in range(5)]
 
     def table(title, rows):
-        lines = [f'{title:44s} {"runs":>6s} {"res CPU-h":>10s} {"used":>8s} {"used%":>6s} {"res GiB-h":>10s} {"used":>8s}']
-        for name, (n, cpu, used, gib, used_gib) in sorted(rows.items(), key=lambda x: -x[1][1])[:top]:
-            lines.append(f'{name[:44]:44s} {n:6d} {cpu:10.2f} {used:8.2f} {used / cpu if cpu else 0:6.0%} {gib:10.2f} {used_gib:8.2f}')
+        selected = sorted(rows.items(), key=lambda x: -x[1][1])[:top]
+        width = max([44] + [len(name) for name, _ in selected])
+        lines = [f'{title:{width}s} {"runs":>6s} {"res CPU-h":>10s} {"used":>8s} {"used%":>6s} {"res GiB-h":>10s} {"used":>8s}']
+        for name, (n, cpu, used, gib, used_gib) in selected:
+            lines.append(f'{name:{width}s} {n:6d} {cpu:10.2f} {used:8.2f} {used / cpu if cpu else 0:6.0%} {gib:10.2f} {used_gib:8.2f}')
         return lines
 
     out.append(f'{repo}: {total[1]:.1f} reserved CPU-hours, {total[1] / pool if pool else 0:.1%} of the pool\'s; '

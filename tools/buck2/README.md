@@ -406,8 +406,9 @@ python3 tools/buck2/pool_usage.py --hours 6 --trace /tmp/trace-*.jsonl \
   --usage /tmp/usage-*.log --events /tmp/build.pb.zst
 ```
 
-This reuses the compile-sizing tool's unique time/request match; unmatched or
-ambiguous rustc measurements stay in `rustc (phase unknown)`. It also reports
+This reuses the compile-sizing tool's unique time/request match, separately for
+each action category, so native observations and other helpers also get their
+target names. Unmatched or ambiguous rustc measurements stay in `rustc (phase unknown)`. It also reports
 repeated target/action-digest executions from retained compile and test events;
 cache hits and copies of the same merged execution do not count as reruns.
 The report states its log coverage; rotated history cannot be reconstructed.

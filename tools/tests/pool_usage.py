@@ -60,6 +60,26 @@ class Report(unittest.TestCase):
         self.assertEqual(rows['rustc'][2:5], ['1', '1.00', '0.50'])
         self.assertEqual(rows['gate'][1:3], ['2', '5.00'])
 
+    def test_non_rust_actions_are_named_without_matching_other_categories(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'events.jsonl'
+            encoded = json.loads(action('native-observation-with-a-long-distinct-program-name', 'run', 100, 3))
+            encoded['Event']['data']['SpanEnd']['data']['ActionExecution']['name']['category'] = 'native_observation'
+            path.write_text(json.dumps(encoded))
+            commands = list(pool_usage.event_logs.commands([path]))
+        usage = ['103\top=native\tcategory=native_observation\texit=0\twall_ms=3000\tcpu_usec=5000000\tpeak_bytes=512\trequested_cpu=2\trequested_kb=1024',
+                 '103\top=compiler\tcategory=rustc\texit=0\twall_ms=3000\tcpu_usec=5000000\tpeak_bytes=512\trequested_cpu=2\trequested_kb=1024']
+        rows = pool_usage.operations(usage, {'native', 'compiler'})
+        names, categories = pool_usage.names(rows), pool_usage.categories(rows)
+        pool_usage.attribute_actions(commands, rows, names, categories)
+        target = 'native-observation-with-a-long-distinct-program-name'
+        self.assertEqual(names['native'], target)
+        self.assertEqual(names['compiler'], 'rustc actions')
+        text = pool_usage.report(pool_usage.executions([
+            event('native', 'hirsel-lang', 'gate', 2, 1024, 3, 5, 512, 103)]),
+            names, categories, 'hirsel-lang', 1, 10)
+        self.assertIn(target, text)
+
     def test_worker_order_does_not_replace_a_successful_retry_with_its_old_kill(self):
         usage = ['20\top=retry\ttest=run:1:root//:hirsel-x\texit=0\twall_ms=1000',
                  '10\top=retry\ttest=run:1:root//:hirsel-x\texit=137\twall_ms=2000\tcategory=rustc']
