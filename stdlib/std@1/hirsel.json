@@ -254,6 +254,12 @@
       "module": [
         "iter"
       ]
+    },
+    {
+      "path": "glob.hir",
+      "module": [
+        "glob"
+      ]
     }
   ],
   "dependencies": []

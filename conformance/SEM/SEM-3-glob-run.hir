@@ -1,0 +1,55 @@
+// rule: SEM-3
+// expect: run
+// Go path/match_test.go vectors, plus Unicode and whole-path controls.
+fn check(pattern: String, path: String, expected: bool) {
+  match glob.compile(pattern) {
+    Ok(p) => failure.check(glob.matches(p, path) == expected, TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+fn invalid(pattern: String, offset: u64) {
+  failure.check(
+    match glob.compile(pattern) {
+      Error(Syntax(at)) => at == offset,
+      _ => false,
+    },
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check("abc", "abc", true)
+  check("*", "abc", true)
+  check("*c", "abc", true)
+  check("a*", "a", true)
+  check("a*", "ab/c", false)
+  check("a*/b", "abc/b", true)
+  check("a*/b", "a/c/b", false)
+  check("a*b*c*d*e*/f", "axbxcxdxexxx/f", true)
+  check("a*b?c*x", "abxbbxdbxebxczzx", true)
+  check("a*b?c*x", "abxbbxdbxebxczzy", false)
+  check("ab[b-d]", "abc", true)
+  check("ab[^b-d]", "abc", false)
+  check("ab[^e-g]", "abc", true)
+  check("a\\*b", "a*b", true)
+  check("a?b", "a☺b", true)
+  check("a???b", "a☺b", false)
+  check("[a-ζ]*", "α", true)
+  check("a?b", "a/b", false)
+  check("a*b", "a/b", false)
+  check("[\\]a]", "]", true)
+  check("[\\-]", "-", true)
+  check("[x\\-]", "x", true)
+  check("*x", "xxx", true)
+  check("**", "a/b", false)
+  check("", "", true)
+  check("?", "", false)
+  check("é*", "é🦀", true)
+  check("[/]", "/", true)
+  invalid("é[", 3)
+  invalid("[-]", 1)
+  invalid("[x-]", 3)
+  invalid("\\", 1)
+  Ok(())
+}

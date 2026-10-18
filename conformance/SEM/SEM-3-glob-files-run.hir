@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), glob.ExpandError] {
+  let dir = test.dir(
+    t,
+    [
+      (path.of("z.hir"), b"z"),
+      (path.of("a.hir"), b"a"),
+      (path.of("sub/b.hir"), b"b"),
+      (path.of("a.txt"), b"x")
+    ]
+  )
+  let selected = glob.files(dir, "*.hir")?
+  test.check(t, selected == [path.of("a.hir"), path.of("z.hir")])
+  test.check(t, glob.files(dir, "sub/?.hir")? == [path.of("sub/b.hir")])
+  test.check(
+    t,
+    match glob.files(dir, "[") {
+      Error(InvalidPattern(Syntax(1))) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

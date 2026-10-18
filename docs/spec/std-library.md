@@ -501,3 +501,35 @@ Collect and fold consume items, preserving move-only ownership. Early destructio
 callback failure and normal exhaustion release captured sources and callbacks
 through their ordinary cleanup. Authority and capture bounds propagate from the
 selected inputs; a file-walk pipeline retains its Dir authority.
+
+## Slash glob patterns
+
+`glob` compiles immutable patterns and matches pure strings without authority:
+
+```text
+pub type glob.PatternError = Syntax(u64)
+pub type glob.ExpandError = InvalidPattern(glob.PatternError) | Files(FileError)
+fn glob.compile(pattern: String) -> Result[glob.Pattern, glob.PatternError] uses {}
+fn glob.matches(pattern: glob.Pattern, path: String) -> bool uses {}
+fn glob.files(d: Dir, pattern: String) -> Result[List[Path], glob.ExpandError]
+```
+
+Matching covers the whole path, over Unicode scalars. `*` matches zero or more
+non-slash scalars; `?` matches one non-slash scalar. `[abc]`, `[a-z]` and
+`[^a-z]` match scalar classes; as in Go's `path.Match`, classes may match `/`.
+A backslash escapes the following scalar, including inside classes. Classes
+must be nonempty; unescaped `-` and `]` cannot be class range endpoints.
+Reversed ranges are empty. Syntax offsets are UTF-8 byte offsets of the
+unexpected scalar, or pattern byte length for an unexpected end.
+Repeated stars have ordinary star meaning. There is no recursive `**`, brace,
+tilde, environment or shell expansion, host separator conversion or path
+normalization. Empty patterns match only empty paths. Matching uses two DP
+rows, O(pattern scalars * path scalars) work and O(pattern scalars) space.
+
+`files` validates and compiles once before calling `file.walk(d)`, filters its
+file paths relative to the grant with the same matcher, and preserves the
+walk's deterministic order. It returns files, including no inferred directory
+entries. Both walk creation and per-entry errors propagate as `Files`.
+`InvalidPattern` distinguishes the expansion error constructor from the opaque
+`Pattern` type's constructor. Compilation and matching acquire no capability;
+only `files` uses the explicit Dir.

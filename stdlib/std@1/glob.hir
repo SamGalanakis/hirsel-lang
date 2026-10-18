@@ -1,0 +1,167 @@
+// Slash grammar and class parsing adapted from Go path/match.go.
+// Copyright 2010 The Go Authors. BSD-3-Clause; see third-party/NOTICES.md.
+pub type PatternError = Syntax(u64)
+
+pub type ExpandError = InvalidPattern(PatternError) | Files(FileError)
+
+type Token {
+  kind: u8,
+  scalar: u32,
+  negated: bool,
+  ranges: List[(u32, u32)],
+}
+
+pub opaque type Pattern: copyable + inert + noalloc_drop uses {} {
+  tokens: List[Token],
+}
+
+fn width(cp: u32) -> u64 uses {} {
+  if cp < 128 {
+    1
+  } else if cp < 2048 {
+    2
+  } else if cp < 65536 {
+    3
+  } else {
+    4
+  }
+}
+
+fn offset(scalars: List[u32], end: u64) -> u64 uses {} {
+  let mut out: u64 = 0
+  let mut i: u64 = 0
+  while i < end {
+    out += width(scalars[i])
+    i += 1
+  }
+  out
+}
+
+fn escaped(scalars: List[u32], mut at: u64) -> Result[u32, PatternError] uses {} {
+  let len = core@1/list.len(scalars)
+  if at >= len || scalars[at] == 45 || scalars[at] == 93 {
+    return Error(Syntax(offset(scalars, at)))
+  }
+  if scalars[at] == 92 {
+    at += 1
+  }
+  if at >= len {
+    return Error(Syntax(offset(scalars, at)))
+  }
+  let cp = scalars[at]
+  at += 1
+  Ok(cp)
+}
+
+pub fn compile(pattern: String) -> Result[Pattern, PatternError] uses {} {
+  let mut scalars: List[u32] = []
+  for cp in core@1/string.scalars(pattern) {
+    core@1/list.push(mut scalars, cp)
+  }
+  let len = core@1/list.len(scalars)
+  let mut at: u64 = 0
+  let mut tokens: List[Token] = []
+  while at < len {
+    let cp = scalars[at]
+    at += 1
+    let mut token = Token(kind: 0, scalar: cp, negated: false, ranges: [])
+    if cp == 42 {
+      token.kind = 1
+    } else if cp == 63 {
+      token.kind = 2
+    } else if cp == 92 {
+      if at == len {
+        return Error(Syntax(offset(scalars, at)))
+      }
+      token.scalar = scalars[at]
+      at += 1
+    } else if cp == 91 {
+      token.kind = 3
+      if at < len && scalars[at] == 94 {
+        token.negated = true
+        at += 1
+      }
+      while at < len && scalars[at] != 93 {
+        let lo = escaped(scalars, mut at)?
+        let mut hi = lo
+        if at < len && scalars[at] == 45 {
+          at += 1
+          hi = escaped(scalars, mut at)?
+        }
+        core@1/list.push(mut token.ranges, (lo, hi))
+      }
+      if at == len || core@1/list.len(token.ranges) == 0 {
+        return Error(Syntax(offset(scalars, at)))
+      }
+      at += 1
+    }
+    core@1/list.push(mut tokens, take token)
+  }
+  Ok(Pattern(tokens: take tokens))
+}
+
+fn accepts(token: Token, cp: u32) -> bool uses {} {
+  if token.kind == 0 {
+    return token.scalar == cp
+  }
+  if token.kind == 1 || token.kind == 2 {
+    return cp != 47
+  }
+  let mut found = false
+  for (lo, hi) in token.ranges {
+    if lo <= cp && cp <= hi {
+      found = true
+    }
+  }
+  found != token.negated
+}
+
+// Two DP rows: O(pattern scalars * path scalars), O(pattern scalars) memory.
+// Unlike recursive wildcard expansion, repeated stars cannot cause exponential work.
+pub fn matches(pattern: Pattern, path: String) -> bool uses {} {
+  let count = core@1/list.len(pattern.tokens)
+  let mut row: List[bool] = [true]
+  let mut i: u64 = 0
+  while i < count {
+    core@1/list.push(mut row, row[i] && pattern.tokens[i].kind == 1)
+    i += 1
+  }
+  for cp in core@1/string.scalars(path) {
+    let mut next: List[bool] = [false]
+    i = 0
+    while i < count {
+      let token = pattern.tokens[i]
+      let yes = if token.kind == 1 {
+        next[i] || row[i + 1] && accepts(token, cp)
+      } else {
+        row[i] && accepts(token, cp)
+      }
+      core@1/list.push(mut next, yes)
+      i += 1
+    }
+    row = take next
+  }
+  row[count]
+}
+
+pub fn files(d: Dir, pattern: String) -> Result[List[Path], ExpandError] {
+  let compiled = match compile(pattern) {
+    Ok(value) => take value,
+    Error(e) => return Error(InvalidPattern(take e)),
+  }
+  let paths = match core@1/file.walk(d) {
+    Ok(value) => take value,
+    Error(e) => return Error(Files(take e)),
+  }
+  let mut out: List[Path] = []
+  for step in take paths {
+    let p = match step {
+      Ok(p) => take p,
+      Error(e) => return Error(Files(take e)),
+    }
+    if matches(compiled, core@1/path.text(p)) {
+      core@1/list.push(mut out, copy p)
+    }
+  }
+  Ok(take out)
+}
