@@ -8,13 +8,6 @@ pub type JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNum
 // Policy counts open arrays/objects; scalars do not consume a level.
 pub const MAX_NESTING: u64 = 128
 
-// Adapted serde_json src/de.rs parse_integer digit recognition,
-// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
-@noalloc
-fn json_digit(c: u8) -> bool uses {} {
-  c >= 48 && c <= 57
-}
-
 // Adapted serde_json src/de.rs peek_or_null,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: EOF is the zero sentinel.
 @noalloc
@@ -50,11 +43,11 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
   let first = json_peek(data, pos)
   if first == 48 {
     pos += 1
-    if json_digit(json_peek(data, pos)) {
+    if std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
       return Error(Syntax(pos))
     }
-  } else if first >= 49 && first <= 57 {
-    while json_digit(json_peek(data, pos)) {
+  } else if std@1/ascii.is_digit(core@1/int.widen(first)) {
+    while std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
       pos += 1
     }
   } else {
@@ -62,10 +55,10 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
   }
   if json_peek(data, pos) == 46 {
     pos += 1
-    if !json_digit(json_peek(data, pos)) {
+    if !std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
       return Error(Syntax(pos))
     }
-    while json_digit(json_peek(data, pos)) {
+    while std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
       pos += 1
     }
   }
@@ -74,10 +67,10 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
     if json_peek(data, pos) == 43 || json_peek(data, pos) == 45 {
       pos += 1
     }
-    if !json_digit(json_peek(data, pos)) {
+    if !std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
       return Error(Syntax(pos))
     }
-    while json_digit(json_peek(data, pos)) {
+    while std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
       pos += 1
     }
   }
@@ -110,14 +103,9 @@ fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
   let mut i: u64 = 0
   while i < 4 {
     let c = json_peek(data, pos)
-    let d: u64 = if c >= 48 && c <= 57 {
-      core@1/int.widen(c - 48)
-    } else if c >= 65 && c <= 70 {
-      core@1/int.widen(c - 55)
-    } else if c >= 97 && c <= 102 {
-      core@1/int.widen(c - 87)
-    } else {
-      return Error(Syntax(pos))
+    let d: u64 = match std@1/ascii.digit_value_radix(core@1/int.widen(c), 16) {
+      Some(digit) => core@1/int.widen(digit),
+      None() => return Error(Syntax(pos)),
     }
     n = n * 16 + d
     pos += 1
@@ -236,7 +224,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
   if c == 34 {
     return Ok(Text(json_quoted(data, mut pos)?))
   }
-  if c == 45 || json_digit(c) {
+  if c == 45 || std@1/ascii.is_digit(core@1/int.widen(c)) {
     let start = pos
     json_number_end(data, mut pos)?
     return Ok(Number(json_owned_text(data, start, pos)))

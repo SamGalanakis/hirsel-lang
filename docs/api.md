@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-670 exported definitions; 224 variants.
+671 exported definitions; 224 variants.
 
 
 ## Types and roots
@@ -277,6 +277,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## ascii
 
 - `@noalloc pub fn ascii.digit_value(c: u32) -> Option[u32] uses {}` <!-- std@1/ascii/digit_value -->
+- `@noalloc pub fn ascii.digit_value_radix(cp: u32, radix: u8) -> Option[u32] uses {}` — Zig ascii.charToDigit, extended to an explicit radix without narrowing cp. <!-- std@1/ascii/digit_value_radix -->
 - `@noalloc pub fn ascii.is_alnum(c: u32) -> bool uses {}` <!-- std@1/ascii/is_alnum -->
 - `@noalloc pub fn ascii.is_alpha(c: u32) -> bool uses {}` <!-- std@1/ascii/is_alpha -->
 - `@noalloc pub fn ascii.is_digit(c: u32) -> bool uses {}` — Adapted from Zig lib/std/ascii.zig; see third-party/NOTICES.md. <!-- std@1/ascii/is_digit -->

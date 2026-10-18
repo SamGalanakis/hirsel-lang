@@ -41,33 +41,25 @@ fn piece(text: String, begin: u64, end: u64) -> unique String uses {} {
   finish(take out)
 }
 
-@noalloc
-fn uri_hex(byte: u8) -> u8 uses {} {
-  if byte >= 48 && byte <= 57 {
-    byte - 48
-  } else if byte >= 65 && byte <= 70 {
-    byte - 55
-  } else if byte >= 97 && byte <= 102 {
-    byte - 87
-  } else {
-    16
-  }
-}
-
 // Uri delegates two-byte escape parsing to fmt.parseInt(u8, pair, 16).
 // Preserve its optional sign, including -0, rather than silently tightening it.
 @noalloc
 fn hex_pair(a: u8, b: u8) -> u16 uses {} {
-  if a == 43 && uri_hex(b) < 16 {
-    return core@1/int.widen(uri_hex(b))
+  let first = std@1/ascii.digit_value_radix(core@1/int.widen(a), 16)
+  let second = std@1/ascii.digit_value_radix(core@1/int.widen(b), 16)
+  if core@1/int.widen(a) == '+' {
+    match second {
+      Some(digit) => return core@1/int.narrow(digit),
+      None() => (),
+    }
   }
-  if a == 45 && b == 48 {
+  if core@1/int.widen(a) == '-' && core@1/int.widen(b) == '0' {
     return 0
   }
-  if uri_hex(a) < 16 && uri_hex(b) < 16 {
-    return core@1/int.widen(uri_hex(a)) * 16u16 + core@1/int.widen(uri_hex(b))
+  match (first, second) {
+    (Some(high), Some(low)) => core@1/int.narrow(high * 16u32 + low),
+    _ => 256,
   }
-  256
 }
 
 // Zig fmt.zig parseIntWithSign, specialized to u16 and explicit base 10.
@@ -88,10 +80,10 @@ fn parse_port(data: Bytes, start: u64, end: u64) -> Result[u16, UriError] uses {
   while i < end {
     let byte = data[i]
     if byte != 95 {
-      if byte < 48 || byte > 57 {
-        return Error(InvalidPort())
+      let next: u64 = match std@1/ascii.digit_value(core@1/int.widen(byte)) {
+        Some(digit) => core@1/int.widen(digit),
+        None() => return Error(InvalidPort()),
       }
-      let next: u64 = core@1/int.widen(byte - 48)
       if negative && next != 0 || value > (65535u64 - next) / 10 {
         return Error(InvalidPort())
       }
@@ -121,13 +113,8 @@ pub fn percent_decode(text: String) -> unique Bytes uses {} {
 }
 
 @noalloc
-fn alpha(byte: u8) -> bool uses {} {
-  byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122
-}
-
-@noalloc
 fn unreserved(byte: u8) -> bool uses {} {
-  alpha(byte) || byte >= 48 && byte <= 57 || byte == 45 || byte == 46 || byte == 95 || byte == 126
+  std@1/ascii.is_alnum(core@1/int.widen(byte)) || byte == 45 || byte == 46 || byte == 95 || byte == 126
 }
 
 @noalloc
@@ -202,13 +189,13 @@ pub fn component_encoded(component: Component, part: Part) -> unique String uses
 
 @noalloc
 fn valid_scheme(data: Bytes, end: u64) -> bool uses {} {
-  if end == 0 || !alpha(data[0]) {
+  if end == 0 || !std@1/ascii.is_alpha(core@1/int.widen(data[0])) {
     return false
   }
   let mut i: u64 = 1
   while i < end {
     let byte = data[i]
-    if !alpha(byte) && !(byte >= 48 && byte <= 57) && byte != 43 && byte != 45 && byte != 46 {
+    if !std@1/ascii.is_alnum(core@1/int.widen(byte)) && byte != 43 && byte != 45 && byte != 46 {
       return false
     }
     i += 1

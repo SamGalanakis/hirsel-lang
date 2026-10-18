@@ -5,19 +5,6 @@ pub type AddrParseError = Invalid()
 
 pub type HostError = NameTooLong | InvalidHostName
 
-@noalloc
-fn net_digit(byte: u8) -> u64 uses {} {
-  if byte >= 48 && byte <= 57 {
-    core@1/int.widen(byte - 48)
-  } else if byte >= 65 && byte <= 70 {
-    core@1/int.widen(byte - 55)
-  } else if byte >= 97 && byte <= 102 {
-    core@1/int.widen(byte - 87)
-  } else {
-    16
-  }
-}
-
 // Rust read_radix_max_digits/read_decimal: restore the cursor on failure.
 @noalloc
 fn number(
@@ -32,8 +19,14 @@ fn number(
   let start = pos
   let mut cursor: u64 = copy pos
   let mut value: u64 = 0
-  while cursor < end && net_digit(data[cursor]) < radix {
-    let next = net_digit(data[cursor])
+  while cursor < end {
+    let next: u64 = match std@1/ascii.digit_value_radix(
+      core@1/int.widen(data[cursor]),
+      core@1/int.narrow(radix)
+    ) {
+      Some(digit) => core@1/int.widen(digit),
+      None() => break,
+    }
     if cursor - start >= max_digits || value > (max - next) / radix {
       return None()
     }
@@ -339,7 +332,7 @@ pub fn ends_in_number(text: String) -> bool uses {} {
   let mut decimal: bool = true
   let mut i = begin
   while i < end {
-    if data[i] < 48 || data[i] > 57 {
+    if !std@1/ascii.is_digit(core@1/int.widen(data[i])) {
       decimal = false
     }
     i += 1
@@ -350,7 +343,7 @@ pub fn ends_in_number(text: String) -> bool uses {} {
   if end - begin >= 2 && data[begin] == 48 && (data[begin + 1] == 120 || data[begin + 1] == 88) {
     i = begin + 2
     while i < end {
-      if net_digit(data[i]) >= 16 {
+      if std@1/ascii.digit_value_radix(core@1/int.widen(data[i]), 16) == None() {
         return false
       }
       i += 1
@@ -358,11 +351,6 @@ pub fn ends_in_number(text: String) -> bool uses {} {
     return true
   }
   false
-}
-
-@noalloc
-fn alphanumeric(byte: u8) -> bool uses {} {
-  byte >= 48 && byte <= 57 || byte >= 65 && byte <= 90 || byte >= 97 && byte <= 122
 }
 
 // Zig lib/std/Io/net/HostName.zig validate, bff490a2 (MIT).
@@ -391,7 +379,9 @@ pub fn validate_host(text: String) -> Result[(), HostError] uses {} {
   while i < end {
     let byte = data[i]
     if byte == 46 {
-      if label_len == 0 || label_len > 63 || !alphanumeric(data[i - 1]) {
+      if label_len == 0 || label_len > 63 || !std@1/ascii.is_alnum(
+        core@1/int.widen(data[i - 1])
+      ) {
         return Error(InvalidHostName())
       }
       label_len = 0
@@ -401,14 +391,16 @@ pub fn validate_host(text: String) -> Result[(), HostError] uses {} {
       }
       label_len += 1
     } else {
-      if !alphanumeric(byte) {
+      if !std@1/ascii.is_alnum(core@1/int.widen(byte)) {
         return Error(InvalidHostName())
       }
       label_len += 1
     }
     i += 1
   }
-  if label_len == 0 || label_len > 63 || !alphanumeric(data[end - 1]) {
+  if label_len == 0 || label_len > 63 || !std@1/ascii.is_alnum(
+    core@1/int.widen(data[end - 1])
+  ) {
     return Error(InvalidHostName())
   }
   Ok(())

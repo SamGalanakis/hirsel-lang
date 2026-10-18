@@ -1,0 +1,87 @@
+// rule: SEM-3
+// expect: run
+// Zig ASCII radix boundaries and shared codec/parser regression controls.
+pub fn main() -> Result[(), ()] {
+  failure.check(std@1/ascii.digit_value('9') == Some(9u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value('a') == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('0', 2) == Some(0u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('1', 2) == Some(1u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('2', 2) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('9', 10) == Some(9u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('a', 10) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('A', 11) == Some(10u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('f', 16) == Some(15u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('F', 16) == Some(15u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('g', 16) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('z', 35) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('Z', 36) == Some(35u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('z', 36) == Some(35u32), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('0', 0) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('0', 1) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('0', 37) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix('0', 255) == None(), TextInvariant())
+  let rejected: List[u32] = [
+    '/',
+    ':',
+    '@',
+    '[',
+    '`',
+    '{',
+    'é',
+    '９',
+    0xd800u32,
+    0x110000u32,
+    0xffffffffu32
+  ]
+  for cp in rejected {
+    failure.check(std@1/ascii.digit_value_radix(cp, 36) == None(), TextInvariant())
+  }
+  failure.check(std@1/ascii.is_space('\u{b}'), TextInvariant())
+  failure.check(
+    string.split_ascii_whitespace("a\u{b}b") == ["a\u{b}b"],
+    TextInvariant()
+  )
+  failure.check(string.trim("\u{b}a\u{b}") == "a", TextInvariant())
+  failure.check(string.ascii_lower("ÉAbC") == "Éabc", TextInvariant())
+  let mut all: List[u8] = []
+  for cp in 0u32..256u32 {
+    list.push(mut all, int.narrow(cp))
+  }
+  let data = bytes.from_list(take all)
+  let encoded = std@1/hex.encode(data)
+  failure.check(
+    encoded == "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    TextInvariant()
+  )
+  failure.check(std@1/hex.decode(encoded) == Ok(copy data), TextInvariant())
+  failure.check(
+    std@1/hex.decode(string.ascii_upper(encoded)) == Ok(copy data),
+    TextInvariant()
+  )
+  match std@1/json.parse("-1.2e+3") {
+    Ok(Number(value)) => failure.check(value == "-1.2e+3", TextInvariant()),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match std@1/json.parse("\"\\u00Af\"") {
+    Ok(Text(value)) => failure.check(value == "¯", TextInvariant()),
+    _ => failure.check(false, TextInvariant()),
+  }
+  failure.check(std@1/uri.percent_decode("%+f%-0%2F") == b"\x0f\x00/", TextInvariant())
+  failure.check(std@1/net.ends_in_number("0xFf"), TextInvariant())
+  failure.check(!std@1/net.ends_in_number("0xg"), TextInvariant())
+  failure.check(std@1/net.validate_host("A-b.Example.") == Ok(()), TextInvariant())
+  match std@1/net.parse_ipv6("2001:db8::1") {
+    Ok(_) => (),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match std@1/uri.parse("https://example.test:+080/path") {
+    Ok(_) => (),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  failure.check(std@1/u8.parse_radix("ff", 16) == Ok(255u8), TextInvariant())
+  failure.check(std@1/u8.parse_radix("100", 16) == Error(OutOfRange), TextInvariant())
+  failure.check(std@1/u8.parse_radix("100g", 16) == Error(Invalid), TextInvariant())
+  failure.check(std@1/u8.parse_radix("-1", 16) == Error(Invalid), TextInvariant())
+  failure.check(std@1/i8.parse_radix("-80", 16) == Ok(-128i8), TextInvariant())
+  Ok(())
+}

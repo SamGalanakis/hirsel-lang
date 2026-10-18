@@ -52,13 +52,13 @@ pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> String uses 
       let third: u64 = core@1/int.widen(value / 64u32 % 64u32)
       core@1/list.push(mut out, table[third])
     } else if padding == Required() {
-      core@1/list.push(mut out, 61u8)
+      core@1/list.push(mut out, core@1/int.narrow('='))
     }
     if remaining > 2 {
       let fourth: u64 = core@1/int.widen(value % 64u32)
       core@1/list.push(mut out, table[fourth])
     } else if padding == Required() {
-      core@1/list.push(mut out, 61u8)
+      core@1/list.push(mut out, core@1/int.narrow('='))
     }
     i += if remaining > 2 {
       3
@@ -77,15 +77,16 @@ pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> String uses 
 
 @noalloc
 fn sextet(byte: u8, alphabet: Alphabet) -> u32 uses {} {
-  if byte >= 65 && byte <= 90 {
-    core@1/int.widen(byte - 65)
-  } else if byte >= 97 && byte <= 122 {
-    core@1/int.widen(byte - 71)
-  } else if byte >= 48 && byte <= 57 {
-    core@1/int.widen(byte + 4)
-  } else if alphabet == Standard() && byte == 43 || alphabet == UrlSafe() && byte == 45 {
+  let cp: u32 = core@1/int.widen(byte)
+  if std@1/ascii.is_upper(cp) {
+    cp - 'A'
+  } else if std@1/ascii.is_lower(cp) {
+    cp - 'a' + 26u32
+  } else if std@1/ascii.is_digit(cp) {
+    cp - '0' + 52u32
+  } else if alphabet == Standard() && cp == '+' || alphabet == UrlSafe() && cp == '-' {
     62
-  } else if alphabet == Standard() && byte == 47 || alphabet == UrlSafe() && byte == 95 {
+  } else if alphabet == Standard() && cp == '/' || alphabet == UrlSafe() && cp == '_' {
     63
   } else {
     64
@@ -101,7 +102,7 @@ pub fn decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[
   let mut end = len
   let mut i: u64 = 0
   while i < len {
-    if data[i] == 61 {
+    if core@1/int.widen(data[i]) == '=' {
       if padding == Omitted() {
         return Error(InvalidPadding(i))
       }

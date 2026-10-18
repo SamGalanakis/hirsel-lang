@@ -47,7 +47,7 @@ pub fn split(take s: String, separator: String) -> List[String] uses {} {
 // ASCII whitespace under this API (unlike this module's trim policy).
 @noalloc
 fn ascii_whitespace(byte: u8) -> bool uses {} {
-  whitespace(byte) && byte != 11
+  std@1/ascii.is_space(core@1/int.widen(byte)) && byte != 11
 }
 
 pub fn split_ascii_whitespace(take s: String) -> List[String] uses {} {
@@ -136,19 +136,14 @@ pub fn ends_with(s: String, pattern: String) -> bool uses {} {
 }
 
 @noalloc
-fn whitespace(byte: u8) -> bool uses {} {
-  byte == 32 || byte >= 9 && byte <= 13
-}
-
-@noalloc
 pub fn trim(s: String) -> String in s uses {} {
   let source = core@1/string.as_bytes(s)
   let mut begin: u64 = 0
   let mut end = core@1/bytes.len(source)
-  while begin < end && whitespace(source[begin]) {
+  while begin < end && std@1/ascii.is_space(core@1/int.widen(source[begin])) {
     begin += 1
   }
-  while begin < end && whitespace(source[end - 1]) {
+  while begin < end && std@1/ascii.is_space(core@1/int.widen(source[end - 1])) {
     end -= 1
   }
   piece(s, begin, end)
@@ -172,14 +167,12 @@ fn ascii_case(s: String, lower: bool) -> unique String uses {} {
   let mut i: u64 = 0
   while i < core@1/bytes.len(source) {
     let byte = source[i]
-    let converted = if lower && byte >= 65 && byte <= 90 {
-      byte + 32
-    } else if !lower && byte >= 97 && byte <= 122 {
-      byte - 32
+    let converted = if lower {
+      std@1/ascii.to_lower(core@1/int.widen(byte))
     } else {
-      byte
+      std@1/ascii.to_upper(core@1/int.widen(byte))
     }
-    core@1/list.push(mut builder, converted)
+    core@1/list.push(mut builder, core@1/int.narrow(converted))
     i += 1
   }
   finish_valid(take builder)

@@ -108,3 +108,8 @@ fn unicode16_property_tables_regenerate() {
             .success()
     );
 }
+
+#[test]
+fn ascii_radix_is_ordinary_source() {
+    source_codec("ascii-radix", "ascii", &["digit_value_radix"]);
+}

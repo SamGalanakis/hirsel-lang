@@ -611,6 +611,17 @@ order. Round additions wrap deliberately at 32 bits. `digest` is the one-shot
 form over the same kernel. Hexadecimal rendering is a separate codec. This is a
 digest, without password-hashing or signature operations.
 
+## ASCII radix digits
+
+`ascii.digit_value_radix(cp: u32, radix: u8) -> Option[u32] uses {}` accepts
+radices 2 through 36 and decimal ASCII digits plus both ASCII letter cases.
+Values outside the radix, invalid radices, and non-ASCII scalars return None.
+It shares the decimal `digit_value` and ASCII case kernel; the existing decimal
+helper retains its signature. `ascii.is_space` remains the sole ASCII-whitespace
+predicate (space and HT/LF/VT/FF/CR); split_ascii_whitespace retains its documented
+exclusion of VT. Hex/JSON/URI/network parsing and string ASCII helpers reuse these
+scalar kernels rather than retaining private digit/classification copies.
+
 ## Common string helpers
 
 `string.contains(s: String, pattern: String) -> bool uses {}` delegates to

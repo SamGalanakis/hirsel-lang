@@ -18,17 +18,10 @@ pub fn read_radix(text: String, radix: u8, signed: bool, positive_limit: u128, n
   let mut overflow: bool = false
   while i < length {
     let byte = bytes[i]
-    let digit_byte = if byte >= 48 && byte <= 57 {
-      byte - 48
-    } else if byte >= 65 && byte <= 90 {
-      byte - 65 + 10
-    } else if byte >= 97 && byte <= 122 {
-      byte - 97 + 10
-    } else {
-      return Error(Invalid)
+    let digit: u128 = match std@1/ascii.digit_value_radix(core@1/int.widen(byte), radix) {
+      Some(digit_value) => core@1/int.widen(digit_value),
+      None() => return Error(Invalid),
     }
-    if digit_byte >= radix { return Error(Invalid) }
-    let digit: u128 = core@1/int.widen(digit_byte)
     if !overflow {
       if value > cutoff || value == cutoff && digit > last_digit {
         overflow = true
