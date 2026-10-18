@@ -173,6 +173,14 @@ fn normalize_inner(
                 let Some(contract) = &abi.contract else {
                     return foreign("an extern states its aliasing contract in a doc comment");
                 };
+                // MODE-2: a promise is proved on a body, and C has none.
+                if f.state_promises.iter().any(|p| p.preserve_unique) {
+                    return Err(diagnostic(
+                        const { RuleId::of("LANG-7") },
+                        item.origin.span,
+                        "an extern cannot declare @preserves_unique: C has no body to prove it",
+                    ));
+                }
                 f.foreign = Some(ForeignContract {
                     abi: abi.name().to_owned(),
                     blocking: attrs.blocking,

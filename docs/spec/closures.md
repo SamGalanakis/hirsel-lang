@@ -110,7 +110,9 @@ state parameter is `mut` (`@preserves_unique` may also select a `take` parameter
   unique at every exit (MODE-2's hand-back), and for a selected `take` parameter every
   returned value must be unique. A claim this check cannot prove is MODE-2. The selection names a whole
   parameter, with no field path. It prefixes only a function declaration, never a
-  function type (LANG-7), so a closure literal never receives it, and only a direct
+  function type (LANG-7), so a closure literal never receives it, and never an
+  `extern`, since C has no body to prove it (LANG-7; PROG-4 trusts only a wrapper's
+  kind and model), and only a direct
   call to that declaration uses it: a call through a function value hands its `mut`
   arguments back shared.
 - `@captures(state, next)` on a callable returning an `Iter` or function value: the

@@ -412,3 +412,19 @@ fn a_related_result_share_ends_with_the_result() {
         "{kinds:?}"
     );
 }
+
+#[test]
+fn a_foreign_promise_is_not_used() {
+    let mut f = preserving_call(true, false);
+    f.valid(); // A proved callee keeps `x` unique.
+    let SignatureKind::Function(fun) = &mut f.signatures.get_mut(&path("callee")).unwrap().kind
+    else {
+        panic!()
+    };
+    fun.foreign = Some(ForeignContract {
+        abi: "c".into(),
+        blocking: false,
+        aliasing_contract: "Retains nothing.".into(),
+    });
+    handback_error(&f, "preserved unique hand-back");
+}

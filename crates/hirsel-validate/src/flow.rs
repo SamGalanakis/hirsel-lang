@@ -4153,10 +4153,12 @@ impl Checker<'_> {
             // MODE-2: a function value's promise may come from an unproved body.
             Callee::Indirect { .. } => None,
         };
+        // A foreign declaration has no body to prove a promise (LANG-7).
         function.is_some_and(|f| {
-            f.state_promises
-                .iter()
-                .any(|p| p.selector.parameter == ParameterRef::bound(ordinal) && p.preserve_unique)
+            f.foreign.is_none()
+                && f.state_promises.iter().any(|p| {
+                    p.selector.parameter == ParameterRef::bound(ordinal) && p.preserve_unique
+                })
         })
     }
     /// A borrowed parameter a bodyless core promise reads and stores nothing of.

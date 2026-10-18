@@ -1,0 +1,14 @@
+// rule: LANG-7
+// expect: accept
+// The same extern without the promise: its `mut ctx: unique Acc` hands the
+// context back as declared. Twin is LANG-7-extern-preserves-unique-bad.
+type Acc {
+  items: List[u64],
+}
+
+/// Calls f(ctx, n) once during the call and retains neither.
+extern "c" fn visit(
+  u: Unsafe,
+  f: FnPtr[fn(mut ctx: unique Acc, n: u64) -> i32],
+  mut ctx: unique Acc
+) -> ()

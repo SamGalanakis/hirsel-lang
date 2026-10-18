@@ -15,7 +15,8 @@ interner, FileContext, shared Resolution, shared Metadata and ordered declaratio
 sites for the queried owner. Metadata supplies
 public visibility and alias status per DefPath, canonical Unsafe/Result roles,
 the selected `unsafe ffi` packages and their declared safe wrappers; an extern's
-ForeignContract is its ABI and attached doc comment (PROG-4). These facts are never
+ForeignContract is its ABI and attached doc comment (PROG-4); an extern declaring
+`@preserves_unique` is LANG-7, since no body can prove it. These facts are never
 read from bodies. Normalization
 uses fixed grammar defaults and records all named-type/contract signature reads.
 The sibling body checker owns todo marking validation and incomplete-call checks.

@@ -358,7 +358,7 @@ bound independently of elapsed time.
 A `mut` call argument marks its root shared unless the callee declares the parameter
 `unique`, preserves its state, or is a `Callee::Definition` declaring
 `@preserves_unique` on it (never an indirect callee, whose function value may come
-from an unproved closure) with every borrowed argument plain or a handle when the
+from an unproved closure, nor a foreign one, whose C body proves nothing) with every borrowed argument plain or a handle when the
 callee is core@1 (bodyless, so it may store a share of one) and its promise does not
 list that parameter `unretained`, and every
 counted taken and `mut` argument currently unique; the same promise on a taken
