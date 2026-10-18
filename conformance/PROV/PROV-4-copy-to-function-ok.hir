@@ -1,0 +1,24 @@
+// rule: PROV-4
+// expect: accept
+fn seven() -> u8 {
+  7u8
+}
+
+fn bounded() -> Result[u8, OutOfSpace] {
+  arena.bounded(
+    64,
+    fn(a: Arena) -> u8 {
+      let copied = copy_to(a, seven)
+      copied()
+    }
+  )
+}
+
+fn confined() -> u8 {
+  arena.with(
+    fn(a: Arena) -> u8 {
+      let copied = copy_to(a, seven)
+      copied()
+    }
+  )
+}

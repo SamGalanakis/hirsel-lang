@@ -1333,8 +1333,16 @@ impl Checker<'_> {
                 }
             }
         }
-        let declared_result = self.result_at(
-            f.result,
+        // Specialize the type contract before applying its argument-derived
+        // placement and capture evidence, including callable type actuals.
+        let declared_result = if generic_arguments.is_empty() {
+            f.result
+        } else {
+            self.substitute(f.result, &generic_arguments, &generic_authorities)
+                .unwrap_or(f.result)
+        };
+        let result = self.result_at(
+            declared_result,
             &allocation_targets,
             &origins,
             &actuals,
@@ -1342,12 +1350,6 @@ impl Checker<'_> {
             &capture_arguments,
             &partitions,
         );
-        let result = if generic_arguments.is_empty() {
-            declared_result
-        } else {
-            self.substitute(declared_result, &generic_arguments, &generic_authorities)
-                .unwrap_or(declared_result)
-        };
         let result = declared_receipt_evidence(&mut self.out.body.types, result)
             .expect("declared call result");
         self.set_ty(e, result);

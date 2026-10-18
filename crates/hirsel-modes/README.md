@@ -314,6 +314,11 @@ fields select Escaping capture context using declared field types and source
 labels. A real body/J/I regression checks `MODE-2-plain-part-preserves` and both
 `CLO-4-stored-borrowed-capture` programs against their rule and line headers.
 
+Ordinary call results specialize generic type contracts before applying allocator,
+origin, lifetime, authority and erased-capture evidence from the actual arguments.
+A concrete callable's access modes therefore cannot overwrite the arena placement
+required by `copy_to`.
+
 `authority::check_file_with_clauses` receives H-authored implicit open/next
 calls as shared `CursorPlan` rows forwarded by the driver. One refinement sequence
 substitutes library parameter origins before caller generic graphs, derives both

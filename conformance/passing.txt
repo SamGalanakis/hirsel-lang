@@ -3392,6 +3392,8 @@ conformance/PROV/PROV-4-constructed-binding-relation-bad.hir
 conformance/PROV/PROV-4-constructed-binding-relation-ok.hir
 conformance/PROV/PROV-4-constructed-part-relation-bad.hir
 conformance/PROV/PROV-4-constructed-part-relation-ok.hir
+conformance/PROV/PROV-4-copy-to-function-bad.hir
+conformance/PROV/PROV-4-copy-to-function-ok.hir
 conformance/PROV/PROV-4-escaping-arena-boxed-part-capture-bad.hir
 conformance/PROV/PROV-4-escaping-arena-boxed-part-capture-ok.hir
 conformance/PROV/PROV-4-escaping-arena-caller-list-capture-bad.hir
