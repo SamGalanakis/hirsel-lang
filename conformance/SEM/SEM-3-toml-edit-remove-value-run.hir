@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: removing a pair takes the comment lines above it and its trailing comment.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // test_remove_value: a pair takes its comment lines and trailing comment.
+  let mut pairs = load(
+    "\n        name = \"hello\"\n        # delete this\n        version = \"1.0.0\" # please\n        documentation = \"https://docs.rs/hello\""
+  )
+  done(toml.remove(mut pairs, [k("version")]))
+  produces(
+    pairs,
+    "\n        name = \"hello\"\n        documentation = \"https://docs.rs/hello\""
+  )
+  Ok(())
+}

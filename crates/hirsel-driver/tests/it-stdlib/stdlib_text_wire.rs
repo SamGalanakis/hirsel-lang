@@ -308,3 +308,8 @@ fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
 fn yaml_is_ordinary_source() {
     source_codec("yaml", "yaml", &["parse", "parse_all", "stringify"]);
 }
+
+#[test]
+fn toml_is_ordinary_source() {
+    source_codec("toml-edit-cargo", "toml", &["document", "set", "source"]);
+}

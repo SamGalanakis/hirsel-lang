@@ -1,0 +1,52 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: respelling one value keeps every other byte of the document.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // parsed_document_outlives_input: respelling one value keeps all decor.
+  let input = "# leading comment\n[ parent . 'child' ] # header\nvalue = { dotted . key = [ 1, 2, ], other = 'text' } # value\n\n[[ parent . 'entries' ]] # first\nname = \"first\"\n\n[[ parent . 'entries' ]] # second\nname = \"second\"\n# trailing comment\n"
+  let mut doc = load(input)
+  produces(doc, input)
+  done(
+    toml.set(mut doc, [k("parent"), k("entries"), Index(1), k("name")], Text("updated"))
+  )
+  produces(doc, string.replace(input, "\"second\"", "\"updated\""))
+  done(
+    toml.set(
+      mut doc,
+      [k("parent"), k("child"), k("value"), k("dotted"), k("key"), Index(1)],
+      Integer(3)
+    )
+  )
+  failure.check(
+    toml.get(doc, [k("parent"), k("child"), k("value"), k("dotted"), k("key")]) == Some(
+      Array([Integer(1), Integer(3)])
+    ),
+    TextInvariant()
+  )
+  failure.check(string.contains(toml.source(doc), "[ 1, 3, ]"), TextInvariant())
+  Ok(())
+}

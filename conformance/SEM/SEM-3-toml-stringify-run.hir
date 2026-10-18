@@ -1,0 +1,48 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml stringify's layout: pairs first, then one section per table and array-of-tables
+// element; tables holding only tables get no header of their own; errors.
+fn parsed(text: String) -> toml.Value {
+  match toml.parse(unique text) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Bool(false)
+    },
+  }
+}
+
+fn written(value: toml.Value) -> String {
+  match toml.stringify(value) {
+    Ok(s) => s,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+fn single(key: String, take value: toml.Value) -> toml.Value {
+  let mut entries: Map[String, toml.Value] = map.empty()
+  map.insert(mut entries, unique key, take value)
+  Table(take entries)
+}
+
+pub fn main() -> Result[(), ()] {
+  // stringify: pairs first, then one section per table and array-of-tables element;
+  // tables holding only tables get no header of their own.
+  let source = "z = 1\nstr = \"q\\\"\\\\ \\u0001\"\nlit = 'C:\\x'\n\"key with space\" = 0x10\nwhen = 1979-05-27T07:32:00-08:00\nempty = {}\nmixed = [1, { a = 1 }]\n[t.u]\nv = { w = 1 }\n[[aot]]\nn = 1\n[aot.sub]\nm = 2\n[[aot]]\n"
+  let expected_text = "z = 1\nstr = \"q\\\"\\\\ \\u0001\"\nlit = 'C:\\x'\n\"key with space\" = 16\nwhen = 1979-05-27T07:32:00-08:00\nmixed = [1, { a = 1 }]\n\n[empty]\n\n[t.u.v]\nw = 1\n\n[[aot]]\nn = 1\n\n[aot.sub]\nm = 2\n\n[[aot]]\n"
+  let out = written(parsed(source))
+  failure.check(out == expected_text, TextInvariant())
+  failure.check(written(parsed(out)) == out, TextInvariant())
+  failure.check(written(Table(map.empty())) == "", TextInvariant())
+  failure.check(toml.stringify(Integer(1)) == Error(NotTable()), TextInvariant())
+  failure.check(
+    toml.stringify(single("d", Datetime("1979-05-27T25:00:00"))) == Error(
+      InvalidValue()
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,59 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: Cargo.toml-style edits keep indentation, CRLF, dotted keys and a missing final
+// newline.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // despan_keys: a missing final newline is kept.
+  let mut despan = load("aaaaaa = 1")
+  done(toml.set(mut despan, [k("bbb")], Integer(2)))
+  produces(despan, "aaaaaa = 1\nbbb = 2")
+  // Cargo.toml-style edits: indentation of the previous pair, CRLF and dotted keys.
+  let mut manifest = load(
+    "# Cargo\r\n[package]\r\n  name = \"demo\" # the name\r\n  version = \"0.1.0\"\r\n\r\n[dependencies]\r\nserde = { version = \"1.0\", features = [\"derive\"] }\r\n"
+  )
+  done(toml.set(mut manifest, [k("package"), k("version")], Text("0.2.0")))
+  done(toml.set(mut manifest, [k("package"), k("edition")], Text("2021")))
+  done(
+    toml.set(
+      mut manifest,
+      [k("dependencies"), k("serde"), k("features"), Index(1)],
+      Text("rc")
+    )
+  )
+  done(toml.set(mut manifest, [k("profile"), k("release"), k("lto")], Bool(true)))
+  produces(
+    manifest,
+    "# Cargo\r\n[package]\r\n  name = \"demo\" # the name\r\n  version = \"0.2.0\"\r\n  edition = \"2021\"\r\n\r\n[dependencies]\r\nserde = { version = \"1.0\", features = [\"derive\", \"rc\"] }\r\n\r\n[profile.release]\r\nlto = true\r\n"
+  )
+  let mut tool = load("[tool]\nx.y = 1 # keep\nz = 2\n")
+  done(toml.set(mut tool, [k("tool"), k("x"), k("w")], Integer(3)))
+  produces(tool, "[tool]\nx.y = 1 # keep\nx.w = 3\nz = 2\n")
+  let mut root_only = load("# top\n[a]\n")
+  done(toml.set(mut root_only, [k("first")], Integer(1)))
+  produces(root_only, "first = 1\n# top\n[a]\n")
+  Ok(())
+}

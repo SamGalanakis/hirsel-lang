@@ -1,0 +1,33 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml stringify writes floats with the shortest round-trip digits, whole
+// numbers with a fraction, a signed zero, and nan, inf and -inf.
+fn parsed(text: String) -> toml.Value {
+  match toml.parse(unique text) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Bool(false)
+    },
+  }
+}
+
+fn written(value: toml.Value) -> String {
+  match toml.stringify(value) {
+    Ok(s) => s,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let source = "f = [1.0, 1e30, -0.0, 1.5e-7, 3e2, nan, inf, -inf]\n"
+  let out = written(parsed(source))
+  failure.check(
+    out == "f = [1.0, 1e30, -0.0, 1.5e-7, 300.0, nan, inf, -inf]\n",
+    TextInvariant()
+  )
+  Ok(())
+}

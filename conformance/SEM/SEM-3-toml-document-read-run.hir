@@ -1,0 +1,46 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml a document reads like the parsed tree: get by key and index, root, source.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn parsed(text: String) -> toml.Value {
+  match toml.parse(unique text) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Bool(false)
+    },
+  }
+}
+
+fn at(line: u64, column: u64) -> toml.Position {
+  toml.Position(line: line, column: column)
+}
+
+pub fn main() -> Result[(), ()] {
+  // A document reads like the parsed tree.
+  let Ok(doc) = toml.document("[server]\nport = 8080 # default\nhosts = ['a', 'b']\n") else {
+    return Error(())
+  }
+  failure.check(
+    toml.get(doc, [k("server"), k("port")]) == Some(Integer(8080)),
+    TextInvariant()
+  )
+  failure.check(
+    toml.get(doc, [k("server"), k("hosts"), Index(1)]) == Some(Text("b")),
+    TextInvariant()
+  )
+  failure.check(toml.get(doc, [k("server"), k("missing")]) == None(), TextInvariant())
+  failure.check(
+    toml.get(doc, [k("server"), k("port"), k("x")]) == None(),
+    TextInvariant()
+  )
+  failure.check(toml.root(doc) == parsed(toml.source(doc)), TextInvariant())
+  match toml.document("[a]\n[a]\n") {
+    Ok(_) => failure.check(false, TextInvariant()),
+    Error(e) => failure.check(e == DuplicateKey(at(2, 2)), TextInvariant()),
+  }
+  Ok(())
+}

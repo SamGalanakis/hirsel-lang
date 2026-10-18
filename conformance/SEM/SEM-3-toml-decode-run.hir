@@ -1,0 +1,53 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml decoded shapes: every string form, integer bases and bounds, float and
+// date-time spellings, headers and arrays of tables; NaN keeps its sign-free identity.
+fn parsed(text: String) -> toml.Value {
+  match toml.parse(unique text) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Bool(false)
+    },
+  }
+}
+
+fn single(key: String, take value: toml.Value) -> toml.Value {
+  let mut entries: Map[String, toml.Value] = map.empty()
+  map.insert(mut entries, unique key, take value)
+  Table(take entries)
+}
+
+pub fn main() -> Result[(), ()] {
+  let v = parsed(
+    "title = \"TOML \\u00e9\"\nhex = 0xDEAD_beef\noct = 0o755\nbin = 0b1101\nmin = -9_223_372_036_854_775_808\nmax = +9223372036854775807\nf = 6.626e-34\nwhole = 1e3\nneg = -inf\nwhen = 1979-05-27 07:32:00z\nday = 1979-05-27\nclock = 07:32:00.999\n[owner]\nname = 'C:\\Users'\n[[fruit]]\nname = \"\"\"\nred\\\n   apple\"\"\"\n[[fruit]]\n"
+  )
+  let mut owner: Map[String, toml.Value] = map.empty()
+  map.insert(mut owner, "name", Text("C:\\Users"))
+  let fruit: List[toml.Value] = [single("name", Text("redapple")), Table(map.empty())]
+  let mut root: Map[String, toml.Value] = map.empty()
+  map.insert(mut root, "title", Text("TOML é"))
+  map.insert(mut root, "hex", Integer(3735928559))
+  map.insert(mut root, "oct", Integer(493))
+  map.insert(mut root, "bin", Integer(13))
+  map.insert(mut root, "min", Integer(-9223372036854775807 - 1))
+  map.insert(mut root, "max", Integer(9223372036854775807))
+  map.insert(mut root, "f", Float(6.626e-34))
+  map.insert(mut root, "whole", Float(1000.0))
+  map.insert(mut root, "neg", Float(-1.0 / 0.0))
+  map.insert(mut root, "when", Datetime("1979-05-27 07:32:00z"))
+  map.insert(mut root, "day", Datetime("1979-05-27"))
+  map.insert(mut root, "clock", Datetime("07:32:00.999"))
+  map.insert(mut root, "owner", Table(take owner))
+  map.insert(mut root, "fruit", Array(take fruit))
+  let expected: toml.Value = Table(take root)
+  failure.check(v == expected, TextInvariant())
+  let Table(signed) = parsed("x = -nan") else {
+    return Error(())
+  }
+  let Some(Float(nan)) = map.get(signed, "x") else {
+    return Error(())
+  }
+  failure.check(nan != nan, TextInvariant())
+  Ok(())
+}

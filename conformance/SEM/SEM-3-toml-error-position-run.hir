@@ -1,0 +1,43 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml Syntax and DuplicateKey carry the one-based line and Unicode scalar column of the
+// offending byte.
+fn error_of(text: String) -> Option[toml.TomlError] {
+  match toml.parse(unique text) {
+    Ok(_) => None(),
+    Error(e) => Some(e),
+  }
+}
+
+fn at(line: u64, column: u64) -> toml.Position {
+  toml.Position(line: line, column: column)
+}
+
+pub fn main() -> Result[(), ()] {
+  // Positions are one-based lines and Unicode scalar columns.
+  failure.check(error_of("a = 1\nb = \n") == Some(Syntax(at(2, 5))), TextInvariant())
+  failure.check(error_of("x = \"é\" y") == Some(Syntax(at(1, 9))), TextInvariant())
+  failure.check(
+    error_of("a = 1\r\na = 2\r\n") == Some(DuplicateKey(at(2, 1))),
+    TextInvariant()
+  )
+  failure.check(
+    error_of("[a]\n[ a ]\n") == Some(DuplicateKey(at(2, 3))),
+    TextInvariant()
+  )
+  failure.check(
+    error_of("[a]\nb.c = 1\n[a.b]\n") == Some(DuplicateKey(at(3, 4))),
+    TextInvariant()
+  )
+  failure.check(
+    error_of("n = 9223372036854775808") == Some(Syntax(at(1, 5))),
+    TextInvariant()
+  )
+  failure.check(error_of("d = 2023-02-29") == Some(Syntax(at(1, 5))), TextInvariant())
+  failure.check(
+    error_of("s = 'tab\tok' # bell \u{7}") == Some(Syntax(at(1, 21))),
+    TextInvariant()
+  )
+  failure.check(error_of("x = 1\ry = 2") == Some(Syntax(at(1, 6))), TextInvariant())
+  Ok(())
+}

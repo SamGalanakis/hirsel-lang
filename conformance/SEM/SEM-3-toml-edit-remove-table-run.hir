@@ -1,0 +1,63 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: removing a table takes its headers, sub-tables, pairs and the comments above them;
+// an array-of-tables element takes its section.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // test_remove_leaf_table: a header takes the comments above it.
+  let mut servers = load(
+    "\n        [servers]\n\n        # Indentation (tabs and/or spaces) is allowed but not required\n[servers.alpha]\n        ip = \"10.0.0.1\"\n        dc = \"eqdc10\"\n\n        [servers.beta]\n        ip = \"10.0.0.2\"\n        dc = \"eqdc10\""
+  )
+  done(toml.remove(mut servers, [k("servers"), k("alpha")]))
+  produces(
+    servers,
+    "\n        [servers]\n\n        [servers.beta]\n        ip = \"10.0.0.2\"\n        dc = \"eqdc10\""
+  )
+  // test_remove_nonleaf_table: every section under the table goes.
+  let mut nested = load(
+    "\n        title = \"not relevant\"\n\n        # comment 1\n        [a.b.c] # comment 1.1\n        key1 = 1 # comment 1.2\n        # comment 2\n        [b] # comment 2.1\n        key2 = 2 # comment 2.2\n\n        # comment 3\n        [a] # comment 3.1\n        key3 = 3 # comment 3.2\n        [[a.'array']]\n        b = 1\n\n        [[a.b.c.trololololololo]] # ohohohohoho\n        c = 2\n        key3 = 42\n\n           # comment on some other table\n           [some.other.table]\n\n\n\n\n        # comment 4\n        [a.b] # comment 4.1\n        key4 = 4 # comment 4.2\n        key41 = 41 # comment 4.3\n\n\n    "
+  )
+  done(toml.remove(mut nested, [k("a")]))
+  produces(
+    nested,
+    "\n        title = \"not relevant\"\n        # comment 2\n        [b] # comment 2.1\n        key2 = 2 # comment 2.2\n\n           # comment on some other table\n           [some.other.table]\n\n\n    "
+  )
+  // test_remove_array_entry and test_remove_array
+  let cargo = "\n        [package]\n        name = \"hello\"\n        version = \"1.0.0\"\n\n        [[bin]]\n        name = \"world\"\n        path = \"src/bin/world/main.rs\"\n\n        [dependencies]\n        nom = \"4.0\" # future is here\n\n        [[bin]]\n        name = \"delete me please\"\n        path = \"src/bin/dmp/main.rs\""
+  let mut entry = load(cargo)
+  done(toml.remove(mut entry, [k("bin"), Index(1)]))
+  produces(
+    entry,
+    "\n        [package]\n        name = \"hello\"\n        version = \"1.0.0\"\n\n        [[bin]]\n        name = \"world\"\n        path = \"src/bin/world/main.rs\"\n\n        [dependencies]\n        nom = \"4.0\" # future is here\n"
+  )
+  let mut bins = load(cargo)
+  done(toml.remove(mut bins, [k("bin")]))
+  produces(
+    bins,
+    "\n        [package]\n        name = \"hello\"\n        version = \"1.0.0\"\n\n        [dependencies]\n        nom = \"4.0\" # future is here\n"
+  )
+  Ok(())
+}

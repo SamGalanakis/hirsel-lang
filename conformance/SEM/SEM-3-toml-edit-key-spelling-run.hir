@@ -1,0 +1,61 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: new keys are bare when possible, literal to avoid escaping quotes or backslashes,
+// and basic otherwise.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // key_value_roundtrip: keys are bare when possible, literal to avoid escaping
+  // quotes or backslashes, and basic otherwise.
+  let keys: List[(String, String)] = [
+    ("", "\"\""),
+    ("a", "a"),
+    ("tab \t tab", "\"tab \\t tab\""),
+    ("lf \n lf", "\"lf \\n lf\""),
+    ("crlf \r\n crlf", "\"crlf \\r\\n crlf\""),
+    ("bell \u{8} bell", "\"bell \\b bell\""),
+    ("feed \u{c} feed", "\"feed \\f feed\""),
+    ("backslash \\ backslash", "'backslash \\ backslash'"),
+    ("squote ' squote", "\"squote ' squote\""),
+    ("triple squote ''' triple squote", "\"triple squote ''' triple squote\""),
+    ("end squote '", "\"end squote '\""),
+    ("quote \" quote", "'quote \" quote'"),
+    ("triple quote \"\"\" triple quote", "'triple quote \"\"\" triple quote'"),
+    ("end quote \"", "'end quote \"'"),
+    ("quoted \"content\" quoted", "'quoted \"content\" quoted'"),
+    ("squoted 'content' squoted", "\"squoted 'content' squoted\""),
+    (
+      "mixed quoted \"start\" 'end'' mixed quote",
+      "\"mixed quoted \\\"start\\\" 'end'' mixed quote\""
+    )
+  ]
+  for (key, spelled) in keys {
+    let mut one = load("")
+    done(toml.set(mut one, [k(key)], Integer(1)))
+    produces(one, string.concat(spelled, " = 1\n"))
+    failure.check(toml.get(one, [k(key)]) == Some(Integer(1)), TextInvariant())
+  }
+  Ok(())
+}

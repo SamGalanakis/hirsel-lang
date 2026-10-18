@@ -1,0 +1,2271 @@
+// TOML 1.0 contracts: STD-OP-toml.* and TYPE-ROW-Value/TomlError/Segment/Document.
+// Grammar and table-definition rules follow toml-lang/toml v1.0.0 (toml.abnf) as
+// exercised by toml-test ff49d109861c1ad25af53f687f2aef19ab650600; the document
+// model and edit placement adapt toml-rs/toml crates/toml_edit at
+// ceac6e4412420d5a5c19e4f7293ad005cf1a31b2 (MIT/Apache-2.0).
+pub type Value = Text(String) | Integer(i64) | Float(f64) | Bool(bool) | Datetime(
+  String
+) | Array(List[Value]) | Table(Map[String, Value])
+
+pub type Position {
+  line: u64,
+  column: u64,
+}
+
+pub type TomlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | InvalidValue | NotFound | NotTable
+
+pub type Segment = Key(String) | Index(u64)
+
+// A Datetime as std@1/time values; an offset is in seconds east of UTC.
+pub type Moment = OffsetDateTime(time.DateTime, i32) | LocalDateTime(time.DateTime) | LocalDate(
+  time.Date
+) | LocalTime(time.TimeOfDay)
+
+// Policy counts tables and arrays below the root; scalars do not consume a level.
+pub const MAX_NESTING: u64 = 128
+
+const NONE: u64 = 18446744073709551615
+
+// Node kinds.
+const TABLE: u8 = 0
+
+const ARRAY: u8 = 1
+
+const LEAF: u8 = 2
+
+// Node origins: how a table or array came to exist, which decides what may extend it.
+// IMPLICIT tables were named only as a header prefix; EXPLICIT ones by a header, an
+// array-of-tables element or the root; DOTTED ones by dotted keys; INLINE values are sealed.
+const IMPLICIT: u8 = 0
+
+const EXPLICIT: u8 = 1
+
+const DOTTED: u8 = 2
+
+const INLINE: u8 = 3
+
+const TABLES: u8 = 4
+
+// Entry kinds: document lines and the entries of inline tables and arrays.
+const KEYVAL: u8 = 0
+
+const HEADER: u8 = 1
+
+const ARRAY_HEADER: u8 = 2
+
+const ELEMENT: u8 = 3
+
+type Node {
+  kind: u8,
+  origin: u8,
+  leaf: Value,
+  keys: Map[String, u64],
+  items: List[u64],
+  parent: u64,
+  depth: u64,
+  value_start: u64,
+  value_end: u64,
+}
+
+// One line of the document (container NONE) or one entry of an inline table or array.
+// A document line owns the trivia from the end of the previous line (trivia_start)
+// to the end of its own line, newline included (line_end).
+type Entry {
+  kind: u8,
+  container: u64,
+  path: List[Segment],
+  node: u64,
+  section: u64,
+  key_start: u64,
+  value_start: u64,
+  value_end: u64,
+  trivia_start: u64,
+  line_end: u64,
+}
+
+type Tree {
+  nodes: List[Node],
+  entries: List[Entry],
+}
+
+pub opaque type Document: copyable + inert + noalloc_drop uses {} {
+  text: String,
+  tree: Tree,
+}
+
+@noalloc
+fn peek(data: Bytes, pos: u64) -> u8 uses {} {
+  if pos < core@1/bytes.len(data) {
+    data[pos]
+  } else {
+    0
+  }
+}
+
+@noalloc
+fn at_end(data: Bytes, pos: u64) -> bool uses {} {
+  pos >= core@1/bytes.len(data)
+}
+
+// One-based line and Unicode scalar column of a byte offset.
+fn position_of(data: Bytes, offset: u64) -> Position uses {} {
+  let mut line: u64 = 1
+  let mut column: u64 = 1
+  let mut i: u64 = 0
+  while i < offset && i < core@1/bytes.len(data) {
+    let c = data[i]
+    if c == b'\n' {
+      line += 1
+      column = 1
+    } else if c & 192 != 128 {
+      column += 1
+    }
+    i += 1
+  }
+  Position(line: line, column: column)
+}
+
+fn syntax(data: Bytes, offset: u64) -> TomlError uses {} {
+  Syntax(position_of(data, offset))
+}
+
+fn duplicate(data: Bytes, offset: u64) -> TomlError uses {} {
+  DuplicateKey(position_of(data, offset))
+}
+
+@noalloc
+fn is_bare(c: u8) -> bool uses {} {
+  std@1/ascii.is_alnum(c) || c == b'_' || c == b'-'
+}
+
+// Controls other than tab are never literal TOML text (toml.abnf non-ascii/comment rules).
+@noalloc
+fn is_control(c: u8) -> bool uses {} {
+  c < 32 && c != b'\t' || c == 127
+}
+
+@noalloc
+fn skip_space(data: Bytes, mut pos: u64) -> () uses {} {
+  while peek(data, pos) == b' ' || peek(data, pos) == b'\t' {
+    pos += 1
+  }
+}
+
+fn skip_comment(data: Bytes, mut pos: u64) -> Result[(), TomlError] uses {} {
+  if peek(data, pos) != b'#' {
+    return Ok(())
+  }
+  pos += 1
+  while !at_end(data, pos) {
+    let c = data[pos]
+    if c == b'\n' || c == b'\r' && peek(data, pos + 1) == b'\n' {
+      return Ok(())
+    }
+    if is_control(c) {
+      return Error(syntax(data, pos))
+    }
+    pos += 1
+  }
+  Ok(())
+}
+
+// Consumes one LF or CRLF; false when neither is next.
+@noalloc
+fn eat_newline(data: Bytes, mut pos: u64) -> bool uses {} {
+  if peek(data, pos) == b'\n' {
+    pos += 1
+    return true
+  }
+  if peek(data, pos) == b'\r' && peek(data, pos + 1) == b'\n' {
+    pos += 2
+    return true
+  }
+  false
+}
+
+// Whitespace, comments and newlines between array elements.
+fn skip_array_trivia(data: Bytes, mut pos: u64) -> Result[(), TomlError] uses {} {
+  while true {
+    skip_space(data, mut pos)
+    skip_comment(data, mut pos)?
+    if !eat_newline(data, mut pos) {
+      return Ok(())
+    }
+  }
+  Ok(())
+}
+
+// The rest of a line after a key/value pair or header: spaces, a comment, then a
+// newline or the end of input.
+fn line_end(data: Bytes, mut pos: u64) -> Result[(), TomlError] uses {} {
+  skip_space(data, mut pos)
+  skip_comment(data, mut pos)?
+  if at_end(data, pos) || eat_newline(data, mut pos) {
+    return Ok(())
+  }
+  Error(syntax(data, pos))
+}
+
+fn hex_value(data: Bytes, mut pos: u64, digits: u64) -> Result[u32, TomlError] uses {} {
+  let start = pos
+  let mut n: u32 = 0
+  let mut i: u64 = 0
+  while i < digits {
+    let Some(d) = std@1/ascii.digit_value_radix(peek(data, pos), 16) else {
+      return Error(syntax(data, pos))
+    }
+    let dv: u32 = core@1/int.widen(d)
+    n = n * 16 + dv
+    pos += 1
+    i += 1
+  }
+  if n > 1114111 || n >= 55296 && n <= 57343 {
+    return Error(syntax(data, start - 2))
+  }
+  Ok(n)
+}
+
+// Basic-string escapes (toml.abnf escape-seq-char); pos is after the backslash.
+@preserves_unique(output)
+fn parse_escape(data: Bytes, mut pos: u64, mut output: List[u8]) -> Result[
+  (),
+  TomlError
+] uses {} {
+  let e = peek(data, pos)
+  pos += 1
+  if e == b'"' || e == b'\\' {
+    core@1/list.push(mut output, e)
+  } else if e == b'b' {
+    core@1/list.push(mut output, 8)
+  } else if e == b't' {
+    core@1/list.push(mut output, 9)
+  } else if e == b'n' {
+    core@1/list.push(mut output, 10)
+  } else if e == b'f' {
+    core@1/list.push(mut output, 12)
+  } else if e == b'r' {
+    core@1/list.push(mut output, 13)
+  } else if e == b'u' || e == b'U' {
+    let digits: u64 = if e == b'u' {
+      4
+    } else {
+      8
+    }
+    let n = hex_value(data, mut pos, digits)?
+    match core@1/char.from_u32(n) {
+      Some(scalar) => char.format_into(scalar, mut output),
+      None() => return Error(syntax(data, pos - digits - 2)),
+    }
+  } else {
+    return Error(syntax(data, pos - 2))
+  }
+  Ok(())
+}
+
+fn finish_text(data: Bytes, take output: unique List[u8], at: u64) -> Result[
+  unique String,
+  TomlError
+] uses {} {
+  match text.finish(take output) {
+    Ok(s) => Ok(s),
+    Error(_) => Error(syntax(data, at)),
+  }
+}
+
+// Single-line basic or literal string; pos is at the opening quote.
+fn quoted(data: Bytes, mut pos: u64) -> Result[unique String, TomlError] uses {} {
+  let quote = data[pos]
+  pos += 1
+  let mut output: List[u8] = []
+  while !at_end(data, pos) {
+    let c = data[pos]
+    if c == quote {
+      pos += 1
+      return finish_text(data, take output, pos)
+    }
+    if is_control(c) {
+      return Error(syntax(data, pos))
+    }
+    pos += 1
+    if c == b'\\' && quote == b'"' {
+      parse_escape(data, mut pos, mut output)?
+    } else {
+      core@1/list.push(mut output, c)
+    }
+  }
+  Error(syntax(data, pos))
+}
+
+// Multi-line basic or literal string; pos is at the first of three quotes. A newline
+// right after the delimiter is trimmed, a closing run may carry two content quotes,
+// and a basic string's line-ending backslash trims the following whitespace.
+fn multiline(data: Bytes, mut pos: u64) -> Result[unique String, TomlError] uses {} {
+  let quote = data[pos]
+  pos += 3
+  eat_newline(data, mut pos)
+  let mut output: List[u8] = []
+  while !at_end(data, pos) {
+    let c = data[pos]
+    if c == quote && peek(data, pos + 1) == quote && peek(data, pos + 2) == quote {
+      let mut run: u64 = 3
+      while peek(data, pos + run) == quote {
+        run += 1
+      }
+      if run > 5 {
+        return Error(syntax(data, pos + 5))
+      }
+      let mut extra = run - 3
+      while extra > 0 {
+        core@1/list.push(mut output, quote)
+        extra -= 1
+      }
+      pos += run
+      return finish_text(data, take output, pos)
+    }
+    if c == b'\n' || c == b'\r' && peek(data, pos + 1) == b'\n' {
+      eat_newline(data, mut pos)
+      core@1/list.push(mut output, b'\n')
+    } else if is_control(c) {
+      return Error(syntax(data, pos))
+    } else if c == b'\\' && quote == b'"' {
+      let mut probe = pos + 1
+      skip_space(data, mut probe)
+      if peek(data, probe) == b'\n' || peek(data, probe) == b'\r' {
+        if !eat_newline(data, mut probe) {
+          return Error(syntax(data, probe))
+        }
+        pos = probe
+        while true {
+          skip_space(data, mut pos)
+          if !eat_newline(data, mut pos) {
+            break
+          }
+        }
+      } else {
+        pos += 1
+        parse_escape(data, mut pos, mut output)?
+      }
+    } else {
+      core@1/list.push(mut output, c)
+      pos += 1
+    }
+  }
+  Error(syntax(data, pos))
+}
+
+// One simple key: bare, basic or literal (multi-line strings are not keys).
+fn simple_key(data: Bytes, mut pos: u64) -> Result[unique String, TomlError] uses {} {
+  let c = peek(data, pos)
+  if c == b'"' || c == b'\'' {
+    return quoted(data, mut pos)
+  }
+  let start = pos
+  while is_bare(peek(data, pos)) {
+    pos += 1
+  }
+  if pos == start {
+    return Error(syntax(data, pos))
+  }
+  let Ok(key) = core@1/string.from_bytes(unique core@1/bytes.slice(data, start, pos)) else {
+    return Error(syntax(data, start))
+  }
+  Ok(unique key)
+}
+
+// A dotted key: simple keys separated by dots with optional surrounding spaces.
+fn dotted_key(data: Bytes, mut pos: u64, mut keys: List[String], mut starts: List[u64]) -> Result[
+  (),
+  TomlError
+] uses {} {
+  while true {
+    skip_space(data, mut pos)
+    core@1/list.push(mut starts, pos)
+    let key = simple_key(data, mut pos)?
+    core@1/list.push(mut keys, take key)
+    skip_space(data, mut pos)
+    if peek(data, pos) != b'.' {
+      return Ok(())
+    }
+    pos += 1
+  }
+  Ok(())
+}
+
+@noalloc
+fn digit_run(data: Bytes, pos: u64, count: u64) -> bool uses {} {
+  let mut i: u64 = 0
+  while i < count {
+    if !std@1/ascii.is_digit(peek(data, pos + i)) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+@noalloc
+fn two_digits(data: Bytes, pos: u64) -> u64 uses {} {
+  let a: u64 = core@1/int.widen(data[pos] - b'0')
+  let b: u64 = core@1/int.widen(data[pos + 1] - b'0')
+  a * 10 + b
+}
+
+@noalloc
+fn days_in_month(year: u64, month: u64) -> u64 uses {} {
+  if month == 2 {
+    if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+      29
+    } else {
+      28
+    }
+  } else if month == 4 || month == 6 || month == 9 || month == 11 {
+    30
+  } else {
+    31
+  }
+}
+
+// RFC 3339 partial-time with mandatory seconds (TOML 1.0): HH:MM:SS[.fraction].
+fn time_part(data: Bytes, mut pos: u64) -> Result[(), TomlError] uses {} {
+  if !digit_run(data, pos, 2) || peek(data, pos + 2) != b':' || !digit_run(
+    data,
+    pos + 3,
+    2
+  ) || peek(data, pos + 5) != b':' || !digit_run(data, pos + 6, 2) {
+    return Error(syntax(data, pos))
+  }
+  if two_digits(data, pos) > 23 || two_digits(data, pos + 3) > 59 || two_digits(
+    data,
+    pos + 6
+  ) > 60 {
+    return Error(syntax(data, pos))
+  }
+  pos += 8
+  if peek(data, pos) == b'.' {
+    pos += 1
+    if !std@1/ascii.is_digit(peek(data, pos)) {
+      return Error(syntax(data, pos))
+    }
+    while std@1/ascii.is_digit(peek(data, pos)) {
+      pos += 1
+    }
+  }
+  Ok(())
+}
+
+// Offset or local date-time, local date or local time; pos is at its first digit.
+fn scan_datetime(data: Bytes, mut pos: u64) -> Result[(), TomlError] uses {} {
+  if digit_run(data, pos, 2) && peek(data, pos + 2) == b':' {
+    return time_part(data, mut pos)
+  }
+  let start = pos
+  if !digit_run(data, pos, 4) || peek(data, pos + 4) != b'-' || !digit_run(
+    data,
+    pos + 5,
+    2
+  ) || peek(data, pos + 7) != b'-' || !digit_run(data, pos + 8, 2) {
+    return Error(syntax(data, pos))
+  }
+  let year = two_digits(data, pos) * 100 + two_digits(data, pos + 2)
+  let month = two_digits(data, pos + 5)
+  let day = two_digits(data, pos + 8)
+  if month < 1 || month > 12 || day < 1 || day > days_in_month(year, month) {
+    return Error(syntax(data, start))
+  }
+  pos += 10
+  let sep = peek(data, pos)
+  let spaced = sep == b' ' && digit_run(data, pos + 1, 2) && peek(data, pos + 3) == b':'
+  if sep != b'T' && sep != b't' && !spaced {
+    return Ok(())
+  }
+  pos += 1
+  time_part(data, mut pos)?
+  let z = peek(data, pos)
+  if z == b'Z' || z == b'z' {
+    pos += 1
+  } else if z == b'+' || z == b'-' {
+    if !digit_run(data, pos + 1, 2) || peek(data, pos + 3) != b':' || !digit_run(
+      data,
+      pos + 4,
+      2
+    ) {
+      return Error(syntax(data, pos))
+    }
+    if two_digits(data, pos + 1) > 23 || two_digits(data, pos + 4) > 59 {
+      return Error(syntax(data, pos))
+    }
+    pos += 6
+  }
+  Ok(())
+}
+
+// Digits of one radix with single underscores between digits; at least one digit.
+@noalloc
+fn digits_ok(data: Bytes, mut pos: u64, radix: u8) -> bool uses {} {
+  let mut seen: bool = false
+  while true {
+    let c = peek(data, pos)
+    if let Some(_) = std@1/ascii.digit_value_radix(c, radix) {
+      seen = true
+      pos += 1
+    } else if c == b'_' && seen {
+      if let None() = std@1/ascii.digit_value_radix(peek(data, pos + 1), radix) {
+        return false
+      }
+      pos += 1
+    } else {
+      return seen
+    }
+  }
+  seen
+}
+
+// Accumulates underscore-separated digits into a magnitude bounded by limit.
+fn magnitude(data: Bytes, start: u64, end: u64, radix: u8, limit: u64) -> Result[
+  u64,
+  TomlError
+] uses {} {
+  let base: u64 = core@1/int.widen(radix)
+  let mut n: u64 = 0
+  let mut i = start
+  while i < end {
+    if let Some(d) = std@1/ascii.digit_value_radix(data[i], radix) {
+      let dv: u64 = core@1/int.widen(d)
+      if n > (limit - dv) / base {
+        return Error(syntax(data, start))
+      }
+      n = n * base + dv
+    }
+    i += 1
+  }
+  Ok(n)
+}
+
+// Integer, float, boolean or date-time token starting at pos.
+fn parse_scalar(data: Bytes, mut pos: u64) -> Result[Value, TomlError] uses {} {
+  let start = pos
+  let c = peek(data, pos)
+  if std@1/ascii.is_digit(c) && (digit_run(data, pos, 4) && peek(data, pos + 4) == b'-' || digit_run(
+    data,
+    pos,
+    2
+  ) && peek(data, pos + 2) == b':') {
+    scan_datetime(data, mut pos)?
+    let Ok(spelling) = core@1/string.from_bytes(
+      unique core@1/bytes.slice(data, start, pos)
+    ) else {
+      return Error(syntax(data, start))
+    }
+    return Ok(Datetime(unique spelling))
+  }
+  while is_bare(peek(data, pos)) || peek(data, pos) == b'+' || peek(data, pos) == b'.' {
+    pos += 1
+  }
+  let token = core@1/bytes.slice(data, start, pos)
+  if token == b"true" {
+    return Ok(Bool(true))
+  }
+  if token == b"false" {
+    return Ok(Bool(false))
+  }
+  let mut at = start
+  let sign = peek(data, at)
+  if sign == b'+' || sign == b'-' {
+    at += 1
+  }
+  let rest = core@1/bytes.slice(data, at, pos)
+  if rest == b"inf" || rest == b"nan" {
+    let negative = sign == b'-'
+    let value: f64 = if rest == b"nan" {
+      0.0 / 0.0
+    } else if negative {
+      -1.0 / 0.0
+    } else {
+      1.0 / 0.0
+    }
+    return Ok(Float(value))
+  }
+  if at == start && peek(data, at) == b'0' && (peek(data, at + 1) == b'x' || peek(
+    data,
+    at + 1
+  ) == b'o' || peek(data, at + 1) == b'b') {
+    let marker = data[at + 1]
+    let radix: u8 = if marker == b'x' {
+      16
+    } else if marker == b'o' {
+      8
+    } else {
+      2
+    }
+    let mut end = at + 2
+    if !digits_ok(data, mut end, radix) || end != pos {
+      return Error(syntax(data, start))
+    }
+    let n = magnitude(data, at + 2, end, radix, 9223372036854775807)?
+    return Ok(Integer(core@1/int.narrow(n)))
+  }
+  // Decimal integer part: 0 or a nonzero digit followed by digits.
+  let mut end = at
+  if peek(data, end) == b'0' {
+    end += 1
+  } else if !digits_ok(data, mut end, 10) {
+    return Error(syntax(data, start))
+  }
+  let int_end = end
+  let mut is_float = false
+  if peek(data, end) == b'.' {
+    end += 1
+    if !digits_ok(data, mut end, 10) {
+      return Error(syntax(data, end))
+    }
+    is_float = true
+  }
+  if peek(data, end) == b'e' || peek(data, end) == b'E' {
+    end += 1
+    if peek(data, end) == b'+' || peek(data, end) == b'-' {
+      end += 1
+    }
+    if !digits_ok(data, mut end, 10) {
+      return Error(syntax(data, end))
+    }
+    is_float = true
+  }
+  if end != pos {
+    return Error(syntax(data, end))
+  }
+  if !is_float {
+    let negative = sign == b'-'
+    let limit: u64 = if negative {
+      9223372036854775808
+    } else {
+      9223372036854775807
+    }
+    let n = magnitude(data, at, int_end, 10, limit)?
+    if negative {
+      if n == 0 {
+        return Ok(Integer(0))
+      }
+      let below: i64 = core@1/int.narrow(n - 1)
+      return Ok(Integer(-below - 1))
+    }
+    return Ok(Integer(core@1/int.narrow(n)))
+  }
+  let mut spelling: List[u8] = []
+  let mut i = start
+  if sign == b'+' {
+    i += 1
+  }
+  while i < pos {
+    if data[i] != b'_' {
+      core@1/list.push(mut spelling, data[i])
+    }
+    i += 1
+  }
+  let Ok(plain) = text.finish(take spelling) else {
+    return Error(syntax(data, start))
+  }
+  match std@1/f64.parse(plain) {
+    Ok(f) => Ok(Float(f)),
+    Error(OutOfRange()) => {
+      let infinite: f64 = if sign == b'-' {
+        -1.0 / 0.0
+      } else {
+        1.0 / 0.0
+      }
+      Ok(Float(infinite))
+    },
+    Error(_) => Error(syntax(data, start)),
+  }
+}
+
+fn new_node(kind: u8, origin: u8, take leaf: Value, parent: u64, depth: u64) -> Node uses {} {
+  Node(
+    kind: kind,
+    origin: origin,
+    leaf: take leaf,
+    keys: core@1/map.empty(),
+    items: [],
+    parent: parent,
+    depth: depth,
+    value_start: NONE,
+    value_end: NONE
+  )
+}
+
+fn add_node(
+  mut tree: Tree,
+  data: Bytes,
+  at: u64,
+  kind: u8,
+  origin: u8,
+  take leaf: Value,
+  parent: u64
+) -> Result[u64, TomlError] uses {} {
+  let depth: u64 = if parent == NONE {
+    0
+  } else {
+    tree.nodes[parent].depth + 1
+  }
+  if kind != LEAF && depth > MAX_NESTING {
+    return Error(Nesting(position_of(data, at)))
+  }
+  let id = core@1/list.len(tree.nodes)
+  core@1/list.push(mut tree.nodes, new_node(kind, origin, take leaf, parent, depth))
+  Ok(id)
+}
+
+fn placeholder() -> Value uses {} {
+  Bool(false)
+}
+
+fn child_of(tree: Tree, table: u64, key: String) -> Option[u64] uses {} {
+  core@1/map.get(tree.nodes[table].keys, key)
+}
+
+fn path_with(path: List[Segment], take segment: Segment) -> List[Segment] uses {} {
+  let mut out: List[Segment] = unique path
+  core@1/list.push(mut out, take segment)
+  out
+}
+
+// Walks the dotted prefix of a key/value pair from `table`, creating DOTTED tables;
+// only tables created by dotted keys in this same table may be extended.
+fn dotted_parent(
+  mut tree: Tree,
+  data: Bytes,
+  table: u64,
+  keys: List[String],
+  starts: List[u64],
+  mut path: List[Segment]
+) -> Result[u64, TomlError] uses {} {
+  let mut current = table
+  let mut i: u64 = 0
+  let n = core@1/list.len(keys)
+  while i + 1 < n {
+    let key = keys[i]
+    match child_of(tree, current, key) {
+      Some(next) => {
+        if tree.nodes[next].kind != TABLE || tree.nodes[next].origin != DOTTED {
+          return Error(duplicate(data, starts[i]))
+        }
+        current = next
+      },
+      None() => {
+        let next = add_node(
+          mut tree,
+          data,
+          starts[i],
+          TABLE,
+          DOTTED,
+          placeholder(),
+          current
+        )?
+        core@1/map.insert(mut tree.nodes[current].keys, unique key, next)
+        current = next
+      },
+    }
+    core@1/list.push(mut path, Key(unique key))
+    i += 1
+  }
+  let last = keys[n - 1]
+  if let Some(_) = child_of(tree, current, last) {
+    return Error(duplicate(data, starts[n - 1]))
+  }
+  core@1/list.push(mut path, Key(unique last))
+  Ok(current)
+}
+
+fn new_entry(
+  kind: u8,
+  container: u64,
+  take path: List[Segment],
+  node: u64,
+  section: u64,
+  key_start: u64
+) -> Entry uses {} {
+  Entry(
+    kind: kind,
+    container: container,
+    path: take path,
+    node: node,
+    section: section,
+    key_start: key_start,
+    value_start: NONE,
+    value_end: NONE,
+    trivia_start: NONE,
+    line_end: NONE
+  )
+}
+
+// Parses `key = value` inside `table`, recording the entry; returns its entry index.
+fn keyval(
+  mut tree: Tree,
+  data: Bytes,
+  mut pos: u64,
+  table: u64,
+  container: u64,
+  base: List[Segment],
+  section: u64
+) -> Result[u64, TomlError] uses {} {
+  let key_start = pos
+  let mut keys: List[String] = []
+  let mut starts: List[u64] = []
+  dotted_key(data, mut pos, mut keys, mut starts)?
+  let mut path: List[Segment] = unique base
+  let parent = dotted_parent(mut tree, data, table, keys, starts, mut path)?
+  if peek(data, pos) != b'=' {
+    return Error(syntax(data, pos))
+  }
+  pos += 1
+  skip_space(data, mut pos)
+  let value_start = pos
+  let id = parse_value(mut tree, data, mut pos, parent, path)?
+  let last = keys[core@1/list.len(keys) - 1]
+  core@1/map.insert(mut tree.nodes[parent].keys, unique last, id)
+  let mut e = new_entry(KEYVAL, container, take path, id, section, key_start)
+  e.value_start = value_start
+  e.value_end = pos
+  let index = core@1/list.len(tree.entries)
+  core@1/list.push(mut tree.entries, take e)
+  Ok(index)
+}
+
+// Parses one value whose node will belong to `parent`, recording inline spans.
+fn parse_value(
+  mut tree: Tree,
+  data: Bytes,
+  mut pos: u64,
+  parent: u64,
+  path: List[Segment]
+) -> Result[u64, TomlError] uses {} {
+  let start = pos
+  let c = peek(data, pos)
+  let id = if c == b'[' {
+    let id = add_node(mut tree, data, pos, ARRAY, INLINE, placeholder(), parent)?
+    pos += 1
+    let mut index: u64 = 0
+    while true {
+      skip_array_trivia(data, mut pos)?
+      if peek(data, pos) == b']' {
+        break
+      }
+      let element_start = pos
+      let element_path = path_with(path, Index(index))
+      let element = parse_value(mut tree, data, mut pos, id, element_path)?
+      core@1/list.push(mut tree.nodes[id].items, element)
+      let mut e = new_entry(
+        ELEMENT,
+        id,
+        take element_path,
+        element,
+        NONE,
+        element_start
+      )
+      e.value_start = element_start
+      e.value_end = pos
+      core@1/list.push(mut tree.entries, take e)
+      index += 1
+      skip_array_trivia(data, mut pos)?
+      if peek(data, pos) == b',' {
+        pos += 1
+      } else if peek(data, pos) != b']' {
+        return Error(syntax(data, pos))
+      }
+    }
+    pos += 1
+    id
+  } else if c == b'{' {
+    let id = add_node(mut tree, data, pos, TABLE, INLINE, placeholder(), parent)?
+    pos += 1
+    skip_space(data, mut pos)
+    if peek(data, pos) == b'}' {
+      pos += 1
+    } else {
+      while true {
+        keyval(mut tree, data, mut pos, id, id, path, NONE)?
+        skip_space(data, mut pos)
+        let next = peek(data, pos)
+        pos += 1
+        if next == b'}' {
+          break
+        }
+        if next != b',' {
+          return Error(syntax(data, pos - 1))
+        }
+        skip_space(data, mut pos)
+      }
+    }
+    // Dotted tables inside an inline table are sealed with it.
+    seal(mut tree, id)
+    id
+  } else if c == b'"' || c == b'\'' {
+    let s = if peek(data, pos + 1) == c && peek(data, pos + 2) == c {
+      multiline(data, mut pos)?
+    } else {
+      quoted(data, mut pos)?
+    }
+    add_node(mut tree, data, start, LEAF, INLINE, Text(take s), parent)?
+  } else {
+    let v = parse_scalar(data, mut pos)?
+    add_node(mut tree, data, start, LEAF, INLINE, take v, parent)?
+  }
+  tree.nodes[id].value_start = start
+  tree.nodes[id].value_end = pos
+  Ok(id)
+}
+
+fn seal(mut tree: Tree, id: u64) -> () uses {} {
+  tree.nodes[id].origin = INLINE
+  let mut children: List[u64] = []
+  for (_, c) in tree.nodes[id].keys {
+    if tree.nodes[c].kind == TABLE && tree.nodes[c].origin == DOTTED {
+      core@1/list.push(mut children, c)
+    }
+  }
+  for c in children {
+    seal(mut tree, c)
+  }
+}
+
+// Resolves a [table] or [[array]] header to its table node and full path.
+fn open_header(
+  mut tree: Tree,
+  data: Bytes,
+  keys: List[String],
+  starts: List[u64],
+  tables: bool,
+  mut path: List[Segment]
+) -> Result[u64, TomlError] uses {} {
+  let mut current: u64 = 0
+  let n = core@1/list.len(keys)
+  let mut i: u64 = 0
+  while i + 1 < n {
+    let key = keys[i]
+    core@1/list.push(mut path, Key(unique key))
+    match child_of(tree, current, key) {
+      Some(next) => {
+        let kind = tree.nodes[next].kind
+        let origin = tree.nodes[next].origin
+        if kind == TABLE && origin != INLINE {
+          current = next
+        } else if kind == ARRAY && origin == TABLES {
+          let count = core@1/list.len(tree.nodes[next].items)
+          core@1/list.push(mut path, Index(count - 1))
+          current = tree.nodes[next].items[count - 1]
+        } else {
+          return Error(duplicate(data, starts[i]))
+        }
+      },
+      None() => {
+        let next = add_node(
+          mut tree,
+          data,
+          starts[i],
+          TABLE,
+          IMPLICIT,
+          placeholder(),
+          current
+        )?
+        core@1/map.insert(mut tree.nodes[current].keys, unique key, next)
+        current = next
+      },
+    }
+    i += 1
+  }
+  let last = keys[n - 1]
+  let at = starts[n - 1]
+  core@1/list.push(mut path, Key(unique last))
+  if !tables {
+    match child_of(tree, current, last) {
+      Some(existing) => {
+        if tree.nodes[existing].kind != TABLE || tree.nodes[existing].origin != IMPLICIT {
+          return Error(duplicate(data, at))
+        }
+        tree.nodes[existing].origin = EXPLICIT
+        return Ok(existing)
+      },
+      None() => {
+        let id = add_node(mut tree, data, at, TABLE, EXPLICIT, placeholder(), current)?
+        core@1/map.insert(mut tree.nodes[current].keys, unique last, id)
+        return Ok(id)
+      },
+    }
+  }
+  let array = match child_of(tree, current, last) {
+    Some(existing) => {
+      if tree.nodes[existing].kind != ARRAY || tree.nodes[existing].origin != TABLES {
+        return Error(duplicate(data, at))
+      }
+      existing
+    },
+    None() => {
+      let id = add_node(mut tree, data, at, ARRAY, TABLES, placeholder(), current)?
+      core@1/map.insert(mut tree.nodes[current].keys, unique last, id)
+      id
+    },
+  }
+  let element = add_node(mut tree, data, at, TABLE, EXPLICIT, placeholder(), array)?
+  core@1/list.push(mut path, Index(core@1/list.len(tree.nodes[array].items)))
+  core@1/list.push(mut tree.nodes[array].items, element)
+  Ok(element)
+}
+
+// toml.abnf expression lines: whitespace, comments, [table], [[array]] and key/value
+// pairs, each recorded as a document entry owning its preceding trivia.
+fn parse_tree(data: Bytes) -> Result[Tree, TomlError] uses {} {
+  let mut tree = Tree(
+    nodes: [new_node(TABLE, EXPLICIT, placeholder(), NONE, 0)],
+    entries: []
+  )
+  let mut pos: u64 = 0
+  let mut section: u64 = 0
+  let mut section_path: List[Segment] = []
+  let mut trivia_start: u64 = 0
+  while true {
+    skip_space(data, mut pos)
+    skip_comment(data, mut pos)?
+    if at_end(data, pos) {
+      break
+    }
+    if eat_newline(data, mut pos) {
+      continue
+    }
+    let start = pos
+    let c = data[pos]
+    let index = if c == b'[' {
+      let tables = peek(data, pos + 1) == b'['
+      pos += if tables {
+        2
+      } else {
+        1
+      }
+      let mut keys: List[String] = []
+      let mut starts: List[u64] = []
+      dotted_key(data, mut pos, mut keys, mut starts)?
+      if peek(data, pos) != b']' || tables && peek(data, pos + 1) != b']' {
+        return Error(syntax(data, pos))
+      }
+      pos += if tables {
+        2
+      } else {
+        1
+      }
+      let mut path: List[Segment] = []
+      let table = open_header(mut tree, data, keys, starts, tables, mut path)?
+      section = table
+      section_path = copy path
+      let kind = if tables {
+        ARRAY_HEADER
+      } else {
+        HEADER
+      }
+      let index = core@1/list.len(tree.entries)
+      core@1/list.push(
+        mut tree.entries,
+        new_entry(kind, NONE, take path, table, table, start)
+      )
+      index
+    } else if c == b'\r' {
+      return Error(syntax(data, pos))
+    } else {
+      keyval(mut tree, data, mut pos, section, NONE, section_path, section)?
+    }
+    line_end(data, mut pos)?
+    tree.entries[index].trivia_start = trivia_start
+    tree.entries[index].line_end = pos
+    trivia_start = pos
+  }
+  Ok(take tree)
+}
+
+fn build(tree: Tree, id: u64) -> Value uses {} {
+  let kind = tree.nodes[id].kind
+  if kind == LEAF {
+    return unique tree.nodes[id].leaf
+  }
+  if kind == ARRAY {
+    let mut items: List[Value] = []
+    for item in tree.nodes[id].items {
+      core@1/list.push(mut items, build(tree, item))
+    }
+    return Array(take items)
+  }
+  let mut entries: Map[String, Value] = core@1/map.empty()
+  for (key, item) in tree.nodes[id].keys {
+    core@1/map.insert(mut entries, unique key, build(tree, item))
+  }
+  Table(take entries)
+}
+
+// Parses TOML 1.0 text into its root table.
+pub fn parse(take text: String) -> Result[Value, TomlError] uses {} {
+  let data = core@1/string.as_bytes(text)
+  let parsed = parse_tree(data)?
+  Ok(build(parsed, 0))
+}
+
+// Parses TOML text into an editable document that keeps every byte of its source.
+pub fn document(take text: String) -> Result[Document, TomlError] uses {} {
+  let parsed = parse_tree(core@1/string.as_bytes(text))?
+  Ok(Document(text: take text, tree: take parsed))
+}
+
+// The document's current text.
+pub fn source(doc: Document) -> String in doc uses {} {
+  doc.text
+}
+
+// The document's data as one root table.
+pub fn root(doc: Document) -> Value uses {} {
+  build(doc.tree, 0)
+}
+
+fn find(tree: Tree, path: List[Segment]) -> Option[u64] uses {} {
+  let mut current: u64 = 0
+  for segment in path {
+    let n = tree.nodes[current]
+    match segment {
+      Key(k) => {
+        if n.kind != TABLE {
+          return None()
+        }
+        match core@1/map.get(n.keys, k) {
+          Some(next) => {
+            current = next
+          },
+          None() => return None(),
+        }
+      },
+      Index(i) => {
+        if n.kind != ARRAY || i >= core@1/list.len(n.items) {
+          return None()
+        }
+        current = n.items[i]
+      },
+    }
+  }
+  Some(current)
+}
+
+// The value at `path`, if present.
+pub fn get(doc: Document, path: List[Segment]) -> Option[Value] uses {} {
+  match find(doc.tree, path) {
+    Some(id) => Some(build(doc.tree, id)),
+    None() => None(),
+  }
+}
+
+// Writing.
+@noalloc
+fn bare_key(key: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(key)
+  if core@1/bytes.len(data) == 0 {
+    return false
+  }
+  for c in data {
+    if !is_bare(c) {
+      return false
+    }
+  }
+  true
+}
+
+// Basic string with escapes, or a literal string when that avoids escaping quotes
+// or backslashes (toml_edit's default string representation).
+@preserves_unique(out)
+fn write_string(s: String, mut out: List[u8]) -> () uses {} {
+  let data = core@1/string.as_bytes(s)
+  let mut literal = false
+  let mut plain = true
+  for c in data {
+    if c == b'"' || c == b'\\' {
+      literal = true
+    }
+    if c == b'\'' || is_control(c) {
+      plain = false
+    }
+  }
+  if literal && plain {
+    core@1/list.push(mut out, b'\'')
+    text.append(mut out, s)
+    core@1/list.push(mut out, b'\'')
+    return
+  }
+  let hex: Bytes = b"0123456789ABCDEF"
+  core@1/list.push(mut out, b'"')
+  for c in data {
+    if c == b'"' || c == b'\\' {
+      core@1/list.push(mut out, b'\\')
+      core@1/list.push(mut out, c)
+    } else if c == 8 {
+      text.append(mut out, "\\b")
+    } else if c == 9 {
+      text.append(mut out, "\\t")
+    } else if c == 10 {
+      text.append(mut out, "\\n")
+    } else if c == 12 {
+      text.append(mut out, "\\f")
+    } else if c == 13 {
+      text.append(mut out, "\\r")
+    } else if is_control(c) {
+      text.append(mut out, "\\u00")
+      core@1/list.push(mut out, hex[core@1/int.widen(c >> 4)])
+      core@1/list.push(mut out, hex[core@1/int.widen(c & 15)])
+    } else {
+      core@1/list.push(mut out, c)
+    }
+  }
+  core@1/list.push(mut out, b'"')
+}
+
+@preserves_unique(out)
+fn write_key(key: String, mut out: List[u8]) -> () uses {} {
+  if bare_key(key) {
+    text.append(mut out, key)
+  } else {
+    write_string(key, mut out)
+  }
+}
+
+@preserves_unique(out)
+fn write_keys(path: List[Segment], from: u64, mut out: List[u8]) -> () uses {} {
+  let mut i = from
+  let mut first = true
+  while i < core@1/list.len(path) {
+    if let Key(k) = path[i] {
+      if !first {
+        core@1/list.push(mut out, b'.')
+      }
+      first = false
+      write_key(k, mut out)
+    }
+    i += 1
+  }
+}
+
+// Shortest round-trip digits; whole numbers keep a fraction so they stay floats.
+@preserves_unique(out)
+fn write_float(f: f64, mut out: List[u8]) -> () uses {} {
+  if f != f {
+    text.append(mut out, "nan")
+    return
+  }
+  let start = core@1/list.len(out)
+  std@1/f64.format_into(f, mut out)
+  let mut i = start
+  while i < core@1/list.len(out) {
+    let c = out[i]
+    if c == b'.' || c == b'e' || c == b'n' {
+      return
+    }
+    i += 1
+  }
+  text.append(mut out, ".0")
+}
+
+fn valid_datetime(s: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(s)
+  if !std@1/ascii.is_digit(peek(data, 0)) {
+    return false
+  }
+  let mut pos: u64 = 0
+  match scan_datetime(data, mut pos) {
+    Ok(_) => pos == core@1/bytes.len(data),
+    Error(_) => false,
+  }
+}
+
+// HH:MM:SS[.fraction] at pos of a validated spelling, the fraction truncated to
+// nanoseconds; a leap second has no time of day.
+fn time_of(data: Bytes, pos: u64) -> Result[(time.TimeOfDay, u64), TomlError] uses {} {
+  let hour: u8 = core@1/int.narrow(two_digits(data, pos))
+  let minute: u8 = core@1/int.narrow(two_digits(data, pos + 3))
+  let second: u8 = core@1/int.narrow(two_digits(data, pos + 6))
+  let mut end = pos + 8
+  let mut nanos: u32 = 0
+  let mut scale: u32 = 100000000
+  if peek(data, end) == b'.' {
+    end += 1
+    while std@1/ascii.is_digit(peek(data, end)) {
+      let digit: u32 = core@1/int.widen(data[end] - b'0')
+      nanos += digit * scale
+      scale /= 10
+      end += 1
+    }
+  }
+  let Some(clock) = time_of_day.new(hour, minute, second, nanos) else {
+    return Error(InvalidValue())
+  }
+  Ok((clock, end))
+}
+
+// The std@1/time values of a Datetime spelling: an offset date-time, local
+// date-time, local date or local time. Fractions beyond nanoseconds truncate; a
+// spelling that is not a TOML date-time, or a leap second, is InvalidValue.
+pub fn moment(spelling: String) -> Result[Moment, TomlError] uses {} {
+  if !valid_datetime(spelling) {
+    return Error(InvalidValue())
+  }
+  let data = core@1/string.as_bytes(spelling)
+  if peek(data, 2) == b':' {
+    let (clock, _) = time_of(data, 0)?
+    return Ok(LocalTime(clock))
+  }
+  let year: i32 = core@1/int.narrow(two_digits(data, 0) * 100 + two_digits(data, 2))
+  let month: u8 = core@1/int.narrow(two_digits(data, 5))
+  let day: u8 = core@1/int.narrow(two_digits(data, 8))
+  let Some(civil) = date.new(year, month, day) else {
+    return Error(InvalidValue())
+  }
+  if core@1/bytes.len(data) == 10 {
+    return Ok(LocalDate(civil))
+  }
+  let (clock, end) = time_of(data, 11)?
+  let at = time.DateTime(date: civil, time: clock)
+  if end == core@1/bytes.len(data) {
+    return Ok(LocalDateTime(at))
+  }
+  let sign = data[end]
+  if sign == b'Z' || sign == b'z' {
+    return Ok(OffsetDateTime(at, 0))
+  }
+  let minutes: i32 = core@1/int.narrow(
+    two_digits(data, end + 1) * 60 + two_digits(data, end + 4)
+  )
+  let offset = if sign == b'-' {
+    -minutes * 60
+  } else {
+    minutes * 60
+  }
+  Ok(OffsetDateTime(at, offset))
+}
+
+@preserves_unique(out)
+fn write_date(value: time.Date, mut out: List[u8]) -> Result[(), TomlError] uses {} {
+  let year = date.year(value)
+  if year < 0 || year > 9999 {
+    return Error(InvalidValue())
+  }
+  date.format_into(value, mut out)
+  Ok(())
+}
+
+// The Datetime value spelling `value` in RFC 3339 form: `T` between date and time,
+// the shortest fraction, and `Z` for a zero offset. A year outside 0000 to 9999 or
+// an offset that is not whole minutes within ±23:59 is InvalidValue.
+pub fn datetime(value: Moment) -> Result[Value, TomlError] uses {} {
+  let mut out: List[u8] = []
+  match value {
+    OffsetDateTime(at, offset) => {
+      let east = if offset < 0 {
+        -offset
+      } else {
+        offset
+      }
+      if east % 60 != 0 || east > 86340 {
+        return Error(InvalidValue())
+      }
+      write_date(at.date, mut out)?
+      core@1/list.push(mut out, b'T')
+      time_of_day.format_into(at.time, mut out)
+      if offset == 0 {
+        core@1/list.push(mut out, b'Z')
+      } else {
+        core@1/list.push(
+          mut out,
+          if offset < 0 {
+            b'-'
+          } else {
+            b'+'
+          }
+        )
+        write_two_digits(east / 3600, mut out)
+        core@1/list.push(mut out, b':')
+        write_two_digits(east % 3600 / 60, mut out)
+      }
+    },
+    LocalDateTime(at) => {
+      write_date(at.date, mut out)?
+      core@1/list.push(mut out, b'T')
+      time_of_day.format_into(at.time, mut out)
+    },
+    LocalDate(day) => write_date(day, mut out)?,
+    LocalTime(clock) => time_of_day.format_into(clock, mut out),
+  }
+  Ok(Datetime(text.finish_valid(take out)))
+}
+
+@preserves_unique(out)
+fn write_two_digits(n: i32, mut out: List[u8]) -> () uses {} {
+  let tens: u8 = core@1/int.narrow(n / 10)
+  let ones: u8 = core@1/int.narrow(n % 10)
+  core@1/list.push(mut out, b'0' + tens)
+  core@1/list.push(mut out, b'0' + ones)
+}
+
+fn is_table(value: Value) -> bool uses {} {
+  match value {
+    Table(_) => true,
+    _ => false,
+  }
+}
+
+// A table value written as a header section rather than inline.
+fn section_shaped(value: Value) -> bool uses {} {
+  match value {
+    Table(_) => true,
+    Array(items) => {
+      let mut tables = core@1/list.len(items) > 0
+      for item in items {
+        if !is_table(item) {
+          tables = false
+        }
+      }
+      tables
+    },
+    _ => false,
+  }
+}
+
+// One array-of-tables element at `path` as a `[[path]]` section, its table at
+// level `depth`.
+@preserves_unique(out)
+fn write_element(
+  path: List[Segment],
+  element: Value,
+  mut out: List[u8],
+  depth: u64,
+  nl: String
+) -> Result[(), TomlError] uses {} {
+  match element {
+    Table(members) => {
+      write_header(path, true, mut out, nl)
+      write_pairs(members, mut out, depth, nl)?
+      write_sections(path, members, mut out, depth, nl)
+    },
+    _ => Ok(()),
+  }
+}
+
+@preserves_unique(out)
+fn write_inline(value: Value, mut out: List[u8], depth: u64) -> Result[(), TomlError] uses {} {
+  match value {
+    Text(s) => write_string(s, mut out),
+    Integer(n) => std@1/i64.format_into(n, mut out),
+    Float(f) => write_float(f, mut out),
+    Bool(b) => text.append(
+      mut out,
+      if b {
+        "true"
+      } else {
+        "false"
+      }
+    ),
+    Datetime(s) => {
+      if !valid_datetime(s) {
+        return Error(InvalidValue())
+      }
+      text.append(mut out, s)
+    },
+    Array(items) => {
+      if depth > MAX_NESTING {
+        return Error(InvalidValue())
+      }
+      core@1/list.push(mut out, b'[')
+      let mut first = true
+      for item in items {
+        if !first {
+          text.append(mut out, ", ")
+        }
+        first = false
+        write_inline(item, mut out, depth + 1)?
+      }
+      core@1/list.push(mut out, b']')
+    },
+    Table(entries) => {
+      if depth > MAX_NESTING {
+        return Error(InvalidValue())
+      }
+      if core@1/map.len(entries) == 0 {
+        text.append(mut out, "{}")
+        return Ok(())
+      }
+      text.append(mut out, "{ ")
+      let mut first = true
+      for (key, item) in entries {
+        if !first {
+          text.append(mut out, ", ")
+        }
+        first = false
+        write_key(key, mut out)
+        text.append(mut out, " = ")
+        write_inline(item, mut out, depth + 1)?
+      }
+      text.append(mut out, " }")
+    },
+  }
+  Ok(())
+}
+
+// Key/value lines of a table, skipping members written as sections.
+@preserves_unique(out)
+fn write_pairs(entries: Map[String, Value], mut out: List[u8], depth: u64, nl: String) -> Result[
+  (),
+  TomlError
+] uses {} {
+  for (key, item) in entries {
+    if !section_shaped(item) {
+      write_key(key, mut out)
+      text.append(mut out, " = ")
+      write_inline(item, mut out, depth + 1)?
+      text.append(mut out, nl)
+    }
+  }
+  Ok(())
+}
+
+// A header line, preceded by a blank line unless it starts the output.
+@preserves_unique(out)
+fn write_header(path: List[Segment], tables: bool, mut out: List[u8], nl: String) -> () uses {} {
+  if core@1/list.len(out) > 0 {
+    text.append(mut out, nl)
+  }
+  text.append(
+    mut out,
+    if tables {
+      "[["
+    } else {
+      "["
+    }
+  )
+  write_keys(path, 0, mut out)
+  text.append(
+    mut out,
+    if tables {
+      "]]"
+    } else {
+      "]"
+    }
+  )
+  text.append(mut out, nl)
+}
+
+// Section-shaped members of a table at `path`, recursively. A table holding only
+// sections has no header line of its own.
+@preserves_unique(out)
+fn write_sections(
+  path: List[Segment],
+  entries: Map[String, Value],
+  mut out: List[u8],
+  depth: u64,
+  nl: String
+) -> Result[(), TomlError] uses {} {
+  for (key, item) in entries {
+    if !section_shaped(item) {
+      continue
+    }
+    // A table member is one level down; an array-of-tables element two.
+    let child_path = path_with(path, Key(unique key))
+    match item {
+      Table(members) => {
+        if depth + 1 > MAX_NESTING {
+          return Error(InvalidValue())
+        }
+        write_table(child_path, members, mut out, depth + 1, nl)?
+      },
+      Array(items) => {
+        if depth + 2 > MAX_NESTING {
+          return Error(InvalidValue())
+        }
+        for element in items {
+          write_element(child_path, element, mut out, depth + 2, nl)?
+        }
+      },
+      _ => (),
+    }
+  }
+  Ok(())
+}
+
+@preserves_unique(out)
+fn write_table(
+  path: List[Segment],
+  entries: Map[String, Value],
+  mut out: List[u8],
+  depth: u64,
+  nl: String
+) -> Result[(), TomlError] uses {} {
+  let mut pairs: u64 = 0
+  let mut sections: u64 = 0
+  for (_, item) in entries {
+    if section_shaped(item) {
+      sections += 1
+    } else {
+      pairs += 1
+    }
+  }
+  if pairs > 0 || sections == 0 {
+    write_header(path, false, mut out, nl)
+    write_pairs(entries, mut out, depth, nl)?
+  }
+  write_sections(path, entries, mut out, depth, nl)
+}
+
+// Writes a root table as a TOML document: its key/value pairs, then one section per
+// table and array-of-tables element. Only a Table is a document.
+pub fn stringify(value: Value) -> Result[unique String, TomlError] uses {} {
+  let Table(entries) = value else {
+    return Error(NotTable())
+  }
+  let mut out: List[u8] = []
+  write_pairs(entries, mut out, 0, "\n")?
+  write_sections([], entries, mut out, 0, "\n")?
+  match text.finish(take out) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(InvalidValue()),
+  }
+}
+
+// Editing. Every edit splices the source text and reparses it, so bytes outside the
+// edited span (comments, blank lines, ordering, quoting, number spellings) survive.
+fn has_prefix(path: List[Segment], prefix: List[Segment]) -> bool uses {} {
+  let n = core@1/list.len(prefix)
+  if core@1/list.len(path) < n {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < n {
+    if path[i] != prefix[i] {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+fn take_prefix(path: List[Segment], n: u64) -> List[Segment] uses {} {
+  let mut out: List[Segment] = []
+  let mut i: u64 = 0
+  while i < n {
+    core@1/list.push(mut out, unique path[i])
+    i += 1
+  }
+  out
+}
+
+// The newline the document already uses.
+fn line_break(data: Bytes) -> String uses {} {
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    if data[i] == b'\n' {
+      if i > 0 && data[i - 1] == b'\r' {
+        return "\r\n"
+      }
+      return "\n"
+    }
+    i += 1
+  }
+  "\n"
+}
+
+fn splice(data: Bytes, start: u64, end: u64, insert: String) -> Result[
+  unique String,
+  TomlError
+] uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < start {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  text.append(mut out, insert)
+  i = end
+  while i < core@1/bytes.len(data) {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  match text.finish(take out) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(InvalidValue()),
+  }
+}
+
+// Replaces the document with edited text, which must parse; the document is
+// unchanged otherwise.
+fn commit(mut doc: Document, take edited: String) -> Result[(), TomlError] uses {} {
+  let parsed = match parse_tree(core@1/string.as_bytes(edited)) {
+    Ok(t) => t,
+    Error(_) => return Error(InvalidValue()),
+  }
+  doc.text = take edited
+  doc.tree = take parsed
+  Ok(())
+}
+
+fn is_within(tree: Tree, id: u64, ancestor: u64) -> bool uses {} {
+  let mut current = id
+  while current != NONE {
+    if current == ancestor {
+      return true
+    }
+    current = tree.nodes[current].parent
+  }
+  false
+}
+
+// Entries that spell the value at `path`, in their outermost container.
+fn spelled(tree: Tree, path: List[Segment], target: u64) -> List[u64] uses {} {
+  let mut out: List[u64] = []
+  let mut i: u64 = 0
+  while i < core@1/list.len(tree.entries) {
+    let e = tree.entries[i]
+    let outer = e.container == NONE || !is_within(tree, e.container, target)
+    if outer && has_prefix(e.path, path) {
+      core@1/list.push(mut out, i)
+    }
+    i += 1
+  }
+  out
+}
+
+@noalloc
+fn is_blank(c: u8) -> bool uses {} {
+  c == b' ' || c == b'\t'
+}
+
+// Start of the line holding `pos`.
+@noalloc
+fn line_start(data: Bytes, pos: u64) -> u64 uses {} {
+  let mut i = pos
+  while i > 0 && data[i - 1] != b'\n' {
+    i -= 1
+  }
+  i
+}
+
+// The span an inline entry or element owns, after toml_edit's decor model: an entry on
+// its own line takes that whole line, comment included; otherwise the first entry
+// takes its comma and the following blanks, a later one the comma before it.
+fn inline_span(tree: Tree, data: Bytes, index: u64) -> (u64, u64) uses {} {
+  let e = tree.entries[index]
+  let container = tree.nodes[e.container]
+  let open = container.value_start + 1
+  let close = container.value_end - 1
+  let mut previous_end: u64 = NONE
+  for other in tree.entries {
+    if other.container == e.container {
+      if other.value_end <= e.key_start && (previous_end == NONE || other.value_end > previous_end) {
+        previous_end = other.value_end
+      }
+    }
+  }
+  // Just trailing the comma leading this entry, or the opening bracket.
+  let mut leading = open
+  if previous_end != NONE {
+    let mut probe = previous_end
+    while probe < e.key_start {
+      if data[probe] == b',' {
+        leading = probe + 1
+        break
+      }
+      probe += 1
+    }
+  }
+  // Just trailing the comma following this entry, if any.
+  let mut trailing: u64 = NONE
+  let mut probe = e.value_end
+  while probe < close {
+    let c = data[probe]
+    if c == b',' {
+      trailing = probe + 1
+      break
+    }
+    if c == b'#' {
+      while probe < close && data[probe] != b'\n' {
+        probe += 1
+      }
+    } else if is_blank(c) || c == b'\n' || c == b'\r' {
+      probe += 1
+    } else {
+      break
+    }
+  }
+  let mut line: u64 = NONE
+  let mut i = leading
+  while i < e.key_start {
+    if data[i] == b'\n' {
+      line = i + 1
+      break
+    }
+    i += 1
+  }
+  if line != NONE {
+    let mut end = if trailing == NONE {
+      e.value_end
+    } else {
+      trailing
+    }
+    while end < close && is_blank(data[end]) {
+      end += 1
+    }
+    if end < close && data[end] == b'#' {
+      while end < close && data[end] != b'\n' {
+        end += 1
+      }
+    }
+    if end < close && data[end] == b'\r' {
+      end += 1
+    }
+    if end < close && data[end] == b'\n' {
+      end += 1
+    }
+    return (line, end)
+  }
+  if previous_end == NONE {
+    let mut end = if trailing == NONE {
+      e.value_end
+    } else {
+      trailing
+    }
+    while end < close && is_blank(data[end]) {
+      end += 1
+    }
+    return (e.key_start, end)
+  }
+  if trailing != NONE {
+    return (leading, trailing)
+  }
+  (previous_end, e.value_end)
+}
+
+fn removed(doc: Document, path: List[Segment]) -> Result[unique String, TomlError] uses {} {
+  let data = core@1/string.as_bytes(doc.text)
+  let Some(target) = find(doc.tree, path) else {
+    return Error(NotFound())
+  }
+  let indices = spelled(doc.tree, path, target)
+  let count = core@1/list.len(indices)
+  if count == 0 {
+    return Error(NotFound())
+  }
+  let first = doc.tree.entries[indices[0]]
+  if first.container != NONE {
+    let (start, end) = inline_span(doc.tree, data, indices[count - 1])
+    return splice(data, start, end, "")
+  }
+  let mut out: List[u8] = []
+  let mut at: u64 = 0
+  for index in indices {
+    let e = doc.tree.entries[index]
+    while at < e.trivia_start {
+      core@1/list.push(mut out, data[at])
+      at += 1
+    }
+    at = e.line_end
+  }
+  while at < core@1/bytes.len(data) {
+    core@1/list.push(mut out, data[at])
+    at += 1
+  }
+  match text.finish(take out) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(InvalidValue()),
+  }
+}
+
+// Removes the value at `path` with the comments and blank lines it owns: a table
+// takes its sections and sub-tables, an inline entry or element its separator.
+pub fn remove(mut doc: Document, path: List[Segment]) -> Result[(), TomlError] uses {} {
+  if core@1/list.len(path) == 0 {
+    return Error(NotFound())
+  }
+  let Some(target) = find(doc.tree, path) else {
+    return Error(NotFound())
+  }
+  let indices = spelled(doc.tree, path, target)
+  if core@1/list.len(indices) == 0 {
+    return Error(NotFound())
+  }
+  // Document lines go in one splice; an inline container drops one entry (and its
+  // separator) per splice, so dotted entries of one key take several.
+  let mut remaining: u64 = if doc.tree.entries[indices[0]].container == NONE {
+    1
+  } else {
+    core@1/list.len(indices)
+  }
+  let mut scratch = copy doc
+  while remaining > 0 {
+    let edited = removed(scratch, path)?
+    commit(mut scratch, take edited)?
+    remaining -= 1
+  }
+  let edited = unique scratch.text
+  commit(mut doc, take edited)
+}
+
+fn render(value: Value) -> Result[unique String, TomlError] uses {} {
+  let mut out: List[u8] = []
+  write_inline(value, mut out, 0)?
+  match text.finish(take out) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(InvalidValue()),
+  }
+}
+
+// Header sections for a table or array-of-tables value at `path`.
+fn render_sections(path: List[Segment], value: Value, nl: String) -> Result[
+  unique String,
+  TomlError
+] uses {} {
+  let mut out: List[u8] = []
+  let depth = core@1/list.len(path)
+  match value {
+    Table(members) => write_table(path, members, mut out, depth, nl)?,
+    Array(items) => {
+      for element in items {
+        write_element(path, element, mut out, depth + 1, nl)?
+      }
+    },
+    _ => return Error(InvalidValue()),
+  }
+  match text.finish(take out) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error(InvalidValue()),
+  }
+}
+
+// Inserts text at `at`; leading text after a line with no newline gets one first.
+fn insert_line(data: Bytes, at: u64, line: String, nl: String) -> Result[
+  unique String,
+  TomlError
+] uses {} {
+  if at > 0 && data[at - 1] != b'\n' {
+    let mut joined: List[u8] = []
+    text.append(mut joined, nl)
+    text.append(mut joined, line)
+    let s = text.finish_valid(take joined)
+    return splice(data, at, at, s)
+  }
+  splice(data, at, at, line)
+}
+
+// Section text placed after the last line under `parent`, separated by a blank line.
+fn insert_sections(
+  doc: Document,
+  parent: List[Segment],
+  path: List[Segment],
+  value: Value
+) -> Result[unique String, TomlError] uses {} {
+  let data = core@1/string.as_bytes(doc.text)
+  let nl = line_break(data)
+  let body = render_sections(path, value, nl)?
+  let mut at = core@1/bytes.len(data)
+  for e in doc.tree.entries {
+    if e.container == NONE && has_prefix(e.path, parent) {
+      at = e.line_end
+    }
+  }
+  if at == 0 {
+    return splice(data, 0, 0, body)
+  }
+  let mut line: List[u8] = []
+  text.append(mut line, nl)
+  text.append(mut line, body)
+  insert_line(data, at, text.finish_valid(take line), nl)
+}
+
+// `key = value` lines into a table that has a document section or dotted keys.
+fn insert_pair(
+  doc: Document,
+  parent: u64,
+  parent_path: List[Segment],
+  key: String,
+  value: Value
+) -> Result[unique String, TomlError] uses {} {
+  let data = core@1/string.as_bytes(doc.text)
+  let nl = line_break(data)
+  let rendered = render(value)?
+  let n = doc.tree.nodes[parent]
+  // The section holding the new line, and the keys relative to it.
+  let mut section = parent
+  let mut anchor: u64 = NONE
+  if n.origin == DOTTED {
+    for e in doc.tree.entries {
+      if e.kind == KEYVAL && has_prefix(e.path, parent_path) && e.container == NONE {
+        section = e.section
+      }
+    }
+  }
+  let mut i: u64 = 0
+  while i < core@1/list.len(doc.tree.entries) {
+    let e = doc.tree.entries[i]
+    if e.container == NONE {
+      if (e.kind == HEADER || e.kind == ARRAY_HEADER) && e.node == section && anchor == NONE {
+        anchor = i
+      }
+      if e.kind == KEYVAL && e.section == section && (n.origin != DOTTED || has_prefix(
+        e.path,
+        parent_path
+      )) {
+        anchor = i
+      }
+    }
+    i += 1
+  }
+  let mut base: u64 = 0
+  if section != 0 {
+    for e in doc.tree.entries {
+      if e.container == NONE && e.kind != KEYVAL && e.node == section {
+        base = core@1/list.len(e.path)
+      }
+    }
+  }
+  let mut line: List[u8] = []
+  let mut at: u64 = 0
+  if anchor != NONE {
+    let a = doc.tree.entries[anchor]
+    at = a.line_end
+    if a.kind == KEYVAL {
+      let mut j = line_start(data, a.key_start)
+      while j < a.key_start && is_blank(data[j]) {
+        core@1/list.push(mut line, data[j])
+        j += 1
+      }
+    }
+  }
+  write_keys(parent_path, base, mut line)
+  if core@1/list.len(parent_path) > base {
+    core@1/list.push(mut line, b'.')
+  }
+  write_key(key, mut line)
+  text.append(mut line, " = ")
+  text.append(mut line, rendered)
+  if at == core@1/bytes.len(data) && at > 0 && data[at - 1] != b'\n' {
+    return insert_line(data, at, text.finish_valid(take line), nl)
+  }
+  text.append(mut line, nl)
+  splice(data, at, at, text.finish_valid(take line))
+}
+
+// A header for an implicit table, placed before its first sub-table.
+fn insert_implicit(doc: Document, parent_path: List[Segment], key: String, value: Value) -> Result[
+  unique String,
+  TomlError
+] uses {} {
+  let data = core@1/string.as_bytes(doc.text)
+  let nl = line_break(data)
+  let mut at: u64 = NONE
+  for e in doc.tree.entries {
+    if at == NONE && e.container == NONE && has_prefix(e.path, parent_path) {
+      at = e.trivia_start
+    }
+  }
+  let mut members: Map[String, Value] = core@1/map.empty()
+  core@1/map.insert(mut members, unique key, unique value)
+  let body = render_sections(parent_path, Table(take members), nl)?
+  if at == 0 {
+    return splice(data, 0, 0, body)
+  }
+  let mut line: List[u8] = []
+  text.append(mut line, nl)
+  text.append(mut line, body)
+  splice(data, at, at, text.finish_valid(take line))
+}
+
+// An entry appended to an inline table or array.
+// `keys` spells the member's key relative to the container; empty for an element.
+fn insert_inline(doc: Document, container: u64, keys: List[Segment], value: Value) -> Result[
+  unique String,
+  TomlError
+] uses {} {
+  let data = core@1/string.as_bytes(doc.text)
+  let n = doc.tree.nodes[container]
+  let mut item: List[u8] = []
+  if core@1/list.len(keys) > 0 {
+    write_keys(keys, 0, mut item)
+    text.append(mut item, " = ")
+  }
+  write_inline(value, mut item, 0)?
+  let rendered = text.finish_valid(take item)
+  let mut last: u64 = NONE
+  let mut i: u64 = 0
+  while i < core@1/list.len(doc.tree.entries) {
+    let e = doc.tree.entries[i]
+    if e.container == container && (last == NONE || e.value_end > doc.tree.entries[last].value_end) {
+      last = i
+    }
+    i += 1
+  }
+  if last == NONE {
+    let mut whole: List[u8] = []
+    if n.kind == TABLE {
+      text.append(mut whole, "{ ")
+      text.append(mut whole, rendered)
+      text.append(mut whole, " }")
+    } else {
+      core@1/list.push(mut whole, b'[')
+      text.append(mut whole, rendered)
+      core@1/list.push(mut whole, b']')
+    }
+    return splice(data, n.value_start, n.value_end, text.finish_valid(take whole))
+  }
+  let e = doc.tree.entries[last]
+  // A multi-line array with a trailing comma gets a new line in the same style.
+  let close = n.value_end - 1
+  let mut probe = e.value_end
+  while probe < close && is_blank(data[probe]) {
+    probe += 1
+  }
+  if n.kind == ARRAY && probe < close && data[probe] == b',' {
+    let mut j = probe + 1
+    while j < close && data[j] != b'\n' {
+      j += 1
+    }
+    if j < close {
+      let mut line: List[u8] = []
+      let mut k = line_start(data, e.key_start)
+      while k < e.key_start && is_blank(data[k]) {
+        core@1/list.push(mut line, data[k])
+        k += 1
+      }
+      text.append(mut line, rendered)
+      core@1/list.push(mut line, b',')
+      let nl = line_break(data)
+      text.append(mut line, nl)
+      return splice(data, j + 1, j + 1, text.finish_valid(take line))
+    }
+  }
+  let mut joined: List[u8] = []
+  text.append(mut joined, ", ")
+  text.append(mut joined, rendered)
+  splice(data, e.value_end, e.value_end, text.finish_valid(take joined))
+}
+
+fn inserted(doc: Document, path: List[Segment], value: Value) -> Result[
+  unique String,
+  TomlError
+] uses {} {
+  let n = core@1/list.len(path)
+  let parent_path = take_prefix(path, n - 1)
+  let Some(parent) = find(doc.tree, parent_path) else {
+    let Key(k) = path[n - 1] else {
+      return Error(NotFound())
+    }
+    let mut wrapper: Map[String, Value] = core@1/map.empty()
+    core@1/map.insert(mut wrapper, unique k, unique value)
+    return inserted(doc, parent_path, Table(take wrapper))
+  }
+  let p = doc.tree.nodes[parent]
+  match path[n - 1] {
+    Index(i) => {
+      if p.kind != ARRAY {
+        return Error(NotTable())
+      }
+      if i != core@1/list.len(p.items) {
+        return Error(NotFound())
+      }
+      if p.origin == TABLES {
+        let Table(_) = value else {
+          return Error(InvalidValue())
+        }
+        let wrapped: Value = Array([unique value])
+        return insert_sections(doc, parent_path, parent_path, wrapped)
+      }
+      insert_inline(doc, parent, [], value)
+    },
+    Key(k) => {
+      if p.kind != TABLE {
+        return Error(NotTable())
+      }
+      if p.origin == INLINE {
+        // A dotted table inside an inline table takes a dotted member of the
+        // nearest enclosing inline table.
+        let mut container = parent
+        let mut levels: u64 = 0
+        while doc.tree.nodes[container].value_start == NONE {
+          container = doc.tree.nodes[container].parent
+          levels += 1
+        }
+        let mut keys: List[Segment] = []
+        let mut i = n - 1 - levels
+        while i < n {
+          core@1/list.push(mut keys, unique path[i])
+          i += 1
+        }
+        return insert_inline(doc, container, keys, value)
+      }
+      if section_shaped(value) {
+        return insert_sections(doc, parent_path, path, value)
+      }
+      if p.origin == IMPLICIT {
+        return insert_implicit(doc, parent_path, k, value)
+      }
+      insert_pair(doc, parent, parent_path, k, value)
+    },
+  }
+}
+
+// Sets the value at `path`. An existing inline value is respelled in place; a table
+// or array of tables is replaced. A missing key is added to its table's section (a
+// table or array of tables as new sections after its parent's last line), and
+// missing parent tables are created. Index(len) appends to an array.
+pub fn set(mut doc: Document, path: List[Segment], value: Value) -> Result[
+  (),
+  TomlError
+] uses {} {
+  render(value)?
+  if core@1/list.len(path) == 0 {
+    let whole = stringify(value)?
+    return commit(mut doc, take whole)
+  }
+  match find(doc.tree, path) {
+    Some(id) => {
+      let n = doc.tree.nodes[id]
+      if n.value_start != NONE {
+        let rendered = render(value)?
+        let edited = splice(
+          core@1/string.as_bytes(doc.text),
+          n.value_start,
+          n.value_end,
+          rendered
+        )?
+        return commit(mut doc, take edited)
+      }
+      // A table spelled by headers is replaced where its first header stood.
+      let indices = spelled(doc.tree, path, id)
+      if core@1/list.len(indices) > 0 && section_shaped(value) {
+        let first = doc.tree.entries[indices[0]]
+        if first.container == NONE && first.kind != KEYVAL {
+          let nl = line_break(core@1/string.as_bytes(doc.text))
+          let body = if let Index(_) = path[core@1/list.len(path) - 1] {
+            let element: Value = Array([unique value])
+            render_sections(path, element, nl)?
+          } else {
+            render_sections(path, value, nl)?
+          }
+          let mut line: List[u8] = []
+          if first.trivia_start > 0 {
+            text.append(mut line, nl)
+          }
+          text.append(mut line, body)
+          let without = removed(doc, path)?
+          let edited = splice(
+            core@1/string.as_bytes(without),
+            first.trivia_start,
+            first.trivia_start,
+            text.finish_valid(take line)
+          )?
+          return commit(mut doc, take edited)
+        }
+      }
+      let mut scratch = copy doc
+      remove(mut scratch, path)?
+      let edited = inserted(scratch, path, value)?
+      commit(mut doc, take edited)
+    },
+    None() => {
+      let edited = inserted(doc, path, value)?
+      commit(mut doc, take edited)
+    },
+  }
+}

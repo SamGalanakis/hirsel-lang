@@ -452,6 +452,12 @@
       ]
     },
     {
+      "path": "toml.hir",
+      "module": [
+        "toml"
+      ]
+    },
+    {
       "path": "test.hir",
       "module": [
         "test"

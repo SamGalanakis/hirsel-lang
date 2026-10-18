@@ -1,0 +1,51 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: inline-table members are added before the closing brace and removed with their
+// separator, dotted members included.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // test_insert_into_inline_table, test_remove_from_inline_table
+  let mut inline = load("\n        a = {a=2,  c = 3}\n        b = {}")
+  done(toml.set(mut inline, [k("a"), k("b")], Integer(42)))
+  done(toml.set(mut inline, [k("b"), k("hello")], Text("world")))
+  produces(
+    inline,
+    "\n        a = {a=2,  c = 3, b = 42}\n        b = { hello = \"world\" }"
+  )
+  let mut fewer = load(
+    "\n        a = {a=2,  c = 3, b = 42}\n        b = {'hello' = \"world\"}"
+  )
+  done(toml.remove(mut fewer, [k("a"), k("c")]))
+  done(toml.remove(mut fewer, [k("b"), k("hello")]))
+  produces(fewer, "\n        a = {a=2, b = 42}\n        b = {}")
+  let mut dotted = load("x = { a.b = 1, d = 3, a.c = 2 }\n")
+  done(toml.remove(mut dotted, [k("x"), k("a")]))
+  produces(dotted, "x = { d = 3 }\n")
+  let mut sealed = load("x = { a.b = 1 }\n")
+  done(toml.set(mut sealed, [k("x"), k("a"), k("c")], Integer(2)))
+  produces(sealed, "x = { a.b = 1, a.c = 2 }\n")
+  Ok(())
+}

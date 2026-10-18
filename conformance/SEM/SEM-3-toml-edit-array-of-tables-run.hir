@@ -1,0 +1,57 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: array-of-tables elements are appended and replaced as sections; an inline value set
+// to a table stays inline.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn table(pairs: List[(String, toml.Value)]) -> toml.Value {
+  let mut entries: Map[String, toml.Value] = map.empty()
+  for (key, item) in pairs {
+    map.insert(mut entries, unique key, unique item)
+  }
+  Table(take entries)
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // array_of_tables_insert_at_end and array_of_tables_replace
+  let fruit = "[[fruit]]\nname = \"apple\"\n\n# tropical\n[[fruit]]\nname = \"banana\"\n"
+  let mut end = load(fruit)
+  done(toml.set(mut end, [k("fruit"), Index(2)], table([("name", Text("cherry"))])))
+  produces(end, string.concat(fruit, "\n[[fruit]]\nname = \"cherry\"\n"))
+  let mut replace = load(fruit)
+  done(toml.set(mut replace, [k("fruit"), Index(1)], table([("name", Text("cherry"))])))
+  produces(replace, "[[fruit]]\nname = \"apple\"\n\n[[fruit]]\nname = \"cherry\"\n")
+  let mut first = load(fruit)
+  done(toml.set(mut first, [k("fruit"), Index(0)], table([("name", Text("cherry"))])))
+  produces(
+    first,
+    "[[fruit]]\nname = \"cherry\"\n\n# tropical\n[[fruit]]\nname = \"banana\"\n"
+  )
+  // An inline value set to a table stays inline (toml_edit writes a section).
+  let mut foo = load("\n# hello i'm a comment\nfoo = { bar = 1 }\n")
+  done(toml.set(mut foo, [k("foo")], table([("bar", Integer(1)), ("baz", Integer(2))])))
+  produces(foo, "\n# hello i'm a comment\nfoo = { bar = 1, baz = 2 }\n")
+  Ok(())
+}

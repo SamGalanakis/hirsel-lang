@@ -1,0 +1,109 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: a new table becomes sections after the last line under its parent; an implicit
+// table gets its header before its first sub-table; quoted keys keep their quotes.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn table(pairs: List[(String, toml.Value)]) -> toml.Value {
+  let mut entries: Map[String, toml.Value] = map.empty()
+  for (key, item) in pairs {
+    map.insert(mut entries, unique key, unique item)
+  }
+  Table(take entries)
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // test_insert_leaf_table
+  let mut leaf = load(
+    "[servers]\n\n        [servers.alpha]\n        ip = \"10.0.0.1\"\n        dc = \"eqdc10\"\n\n        [other.table]"
+  )
+  done(
+    toml.set(
+      mut leaf,
+      [k("servers"), k("beta")],
+      table([("ip", Text("10.0.0.2")), ("dc", Text("eqdc10"))])
+    )
+  )
+  produces(
+    leaf,
+    "[servers]\n\n        [servers.alpha]\n        ip = \"10.0.0.1\"\n        dc = \"eqdc10\"\n\n[servers.beta]\nip = \"10.0.0.2\"\ndc = \"eqdc10\"\n\n        [other.table]"
+  )
+  // test_inserted_leaf_table_goes_after_last_sibling
+  let mut sibling = load(
+    "\n        [package]\n        [dependencies]\n        [[example]]\n        [dependencies.opencl]\n        [dev-dependencies]"
+  )
+  done(toml.set(mut sibling, [k("dependencies"), k("newthing")], table([])))
+  produces(
+    sibling,
+    "\n        [package]\n        [dependencies]\n        [[example]]\n        [dependencies.opencl]\n\n[dependencies.newthing]\n        [dev-dependencies]"
+  )
+  // test_insert_nonleaf_table: a table holding only tables has no header line.
+  let mut nonleaf = load("\n        [other.table]")
+  done(
+    toml.set(
+      mut nonleaf,
+      [k("servers")],
+      table([("alpha", table([("ip", Text("10.0.0.1")), ("dc", Text("eqdc10"))]))])
+    )
+  )
+  produces(
+    nonleaf,
+    "\n        [other.table]\n\n[servers.alpha]\nip = \"10.0.0.1\"\ndc = \"eqdc10\"\n"
+  )
+  // test_insert_array
+  let mut aot = load("\n        [package]\n        title = \"withoutarray\"")
+  done(
+    toml.set(mut aot, [k("bin")], Array([table([("hello", Text("world"))]), table([])]))
+  )
+  produces(
+    aot,
+    "\n        [package]\n        title = \"withoutarray\"\n\n[[bin]]\nhello = \"world\"\n\n[[bin]]\n"
+  )
+  // test_insert_values: an implicit table gets its header before its first sub-table.
+  let mut values = load("\n        [tbl.son]")
+  done(toml.set(mut values, [k("tbl"), k("key1")], Text("value1")))
+  done(toml.set(mut values, [k("tbl"), k("key2")], Integer(42)))
+  done(toml.set(mut values, [k("tbl"), k("key3")], Float(8.1415926)))
+  produces(
+    values,
+    "[tbl]\nkey1 = \"value1\"\nkey2 = 42\nkey3 = 8.1415926\n\n        [tbl.son]"
+  )
+  // test_insert_key_with_quotes
+  let mut quotes = load(
+    "\n        [package]\n        name = \"foo\"\n\n        [target]\n        "
+  )
+  done(
+    toml.set(
+      mut quotes,
+      [k("target"), k("cfg(target_os = \"linux\")"), k("dependencies"), k("name")],
+      Text("dep")
+    )
+  )
+  produces(
+    quotes,
+    "\n        [package]\n        name = \"foo\"\n\n        [target]\n\n[target.'cfg(target_os = \"linux\")'.dependencies]\nname = \"dep\"\n        "
+  )
+  Ok(())
+}

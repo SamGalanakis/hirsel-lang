@@ -1,0 +1,245 @@
+// toml-test decoder checks: a valid case decodes to the suite's tagged JSON and
+// survives a stringify/parse round trip; an invalid case is rejected.
+fn output_error(take e: OutputError) -> () {}
+
+fn report(s: Stdout, kind: String, name: String) -> u64 {
+  let line = string.concat(string.concat(kind, name), "\n")
+  match out.print(s, line) {
+    _ => 1,
+  }
+}
+
+// RFC 3339 spellings compare with an upper-case T separator and Z, and without
+// trailing fractional zeros, as toml-test does.
+fn normal_datetime(text: String) -> String {
+  let data = string.as_bytes(text)
+  let mut output: List[u8] = []
+  let mut fraction: u64 = 18446744073709551615
+  let mut i: u64 = 0
+  while i < bytes.len(data) {
+    let mut c = data[i]
+    if c == b't' || c == b' ' && i == 10 {
+      c = b'T'
+    }
+    if c == b'z' {
+      c = b'Z'
+    }
+    if c == b'.' {
+      fraction = list.len(output)
+    } else if fraction != 18446744073709551615 && !ascii.is_digit(c) {
+      while list.len(output) > fraction + 1 && output[list.len(output) - 1] == b'0' {
+        let _ = list.pop(mut output)
+      }
+      if list.len(output) == fraction + 1 {
+        let _ = list.pop(mut output)
+      }
+      fraction = 18446744073709551615
+    }
+    list.push(mut output, c)
+    i += 1
+  }
+  if fraction != 18446744073709551615 {
+    while list.len(output) > fraction + 1 && output[list.len(output) - 1] == b'0' {
+      let _ = list.pop(mut output)
+    }
+    if list.len(output) == fraction + 1 {
+      let _ = list.pop(mut output)
+    }
+  }
+  text.finish_valid(take output)
+}
+
+fn datetime_type(text: String) -> String {
+  let data = string.as_bytes(text)
+  if bytes.len(data) < 10 || data[4] != b'-' {
+    return "time-local"
+  }
+  if bytes.len(data) == 10 {
+    return "date-local"
+  }
+  let last = data[bytes.len(data) - 1]
+  if last == b'Z' || last == b'z' || data[bytes.len(data) - 6] == b'+' || data[bytes.len(
+    data
+  ) - 6] == b'-' {
+    "datetime"
+  } else {
+    "datetime-local"
+  }
+}
+
+// The generator spells each expected float as its decimal binary64 bit pattern, or
+// nan for any NaN.
+fn float_matches(f: f64, expected: String) -> bool {
+  if expected == "nan" {
+    return f != f
+  }
+  u64.parse(expected) == Ok(f64.bits(f))
+}
+
+fn leaf_matches(actual: toml.Value, kind: String, expected: String) -> bool {
+  match actual {
+    Text(s) => kind == "string" && s == expected,
+    Integer(n) => kind == "integer" && i64.parse(expected) == Ok(n),
+    Float(f) => kind == "float" && float_matches(f, expected),
+    Bool(b) => kind == "bool" && expected == if b {
+      "true"
+    } else {
+      "false"
+    },
+    Datetime(s) => kind == datetime_type(s) && normal_datetime(s) == normal_datetime(
+      expected
+    ),
+    _ => false,
+  }
+}
+
+fn tagged(entries: Map[String, json.Value]) -> Option[(String, String)] {
+  if map.len(entries) != 2 {
+    return None()
+  }
+  let Some(Text(kind)) = map.get(entries, "type") else {
+    return None()
+  }
+  let Some(Text(spelling)) = map.get(entries, "value") else {
+    return None()
+  }
+  Some((unique kind, unique spelling))
+}
+
+fn matches(actual: toml.Value, expected: json.Value) -> bool {
+  match expected {
+    Object(entries) => {
+      if let Some((kind, spelling)) = tagged(entries) {
+        return leaf_matches(actual, kind, spelling)
+      }
+      let Table(members) = actual else {
+        return false
+      }
+      if map.len(members) != map.len(entries) {
+        return false
+      }
+      for (key, item) in entries {
+        let Some(member) = map.get(members, key) else {
+          return false
+        }
+        if !matches(member, item) {
+          return false
+        }
+      }
+      true
+    },
+    Array(items) => {
+      let Array(elements) = actual else {
+        return false
+      }
+      if list.len(elements) != list.len(items) {
+        return false
+      }
+      let mut i: u64 = 0
+      while i < list.len(items) {
+        if !matches(elements[i], items[i]) {
+          return false
+        }
+        i += 1
+      }
+      true
+    },
+    _ => false,
+  }
+}
+
+fn same_items(xs: List[toml.Value], ys: List[toml.Value]) -> bool {
+  let mut equal = list.len(xs) == list.len(ys)
+  let mut i: u64 = 0
+  while equal && i < list.len(xs) {
+    equal = same(xs[i], ys[i])
+    i += 1
+  }
+  equal
+}
+
+fn same_members(xs: Map[String, toml.Value], ys: Map[String, toml.Value]) -> bool {
+  let mut equal = map.len(xs) == map.len(ys)
+  for (key, x) in xs {
+    equal = equal && match map.get(ys, key) {
+      Some(y) => same(x, y),
+      None() => false,
+    }
+  }
+  equal
+}
+
+// Structural equality in which NaN equals NaN.
+fn same(a: toml.Value, b: toml.Value) -> bool {
+  match a {
+    Float(x) => match b {
+      Float(y) => x == y || x != x && y != y,
+      _ => false,
+    },
+    Array(xs) => match b {
+      Array(ys) => same_items(xs, ys),
+      _ => false,
+    },
+    Table(xs) => match b {
+      Table(ys) => same_members(xs, ys),
+      _ => false,
+    },
+    _ => a == b,
+  }
+}
+
+// 0 when `input` decodes to the tagged JSON `expected`; else 1.
+pub fn decodes(s: Stdout, name: String, input: String, expected: String) -> u64 {
+  let Ok(want) = json.parse(unique expected) else {
+    return report(s, "bad expectation: ", name)
+  }
+  let Ok(value) = toml.parse(unique input) else {
+    return report(s, "rejected: ", name)
+  }
+  if !matches(value, want) {
+    return report(s, "decoded differently: ", name)
+  }
+  0
+}
+
+// 0 when `input` stringifies to text that parses to an equal value; else 1.
+pub fn round_trips(s: Stdout, name: String, input: String) -> u64 {
+  let Ok(value) = toml.parse(unique input) else {
+    return report(s, "rejected: ", name)
+  }
+  let Ok(written) = toml.stringify(value) else {
+    return report(s, "unwritable: ", name)
+  }
+  let Ok(again) = toml.parse(take written) else {
+    return report(s, "written text rejected: ", name)
+  }
+  if !same(value, again) {
+    return report(s, "round trip changed: ", name)
+  }
+  0
+}
+
+// 0 when `input` decodes to `expected` and round-trips; else the failures.
+pub fn valid(s: Stdout, name: String, input: String, expected: String) -> u64 {
+  let decoded = decodes(s, name, input, expected)
+  if decoded != 0 {
+    return decoded
+  }
+  round_trips(s, name, input)
+}
+
+// 0 when `input` is rejected; else 1.
+pub fn invalid(s: Stdout, name: String, input: String) -> u64 {
+  match toml.parse(unique input) {
+    Ok(_) => report(s, "accepted: ", name),
+    Error(_) => 0,
+  }
+}
+
+// Inputs that are not UTF-8 never become a String, which toml.parse takes.
+pub fn invalid_bytes(s: Stdout, name: String, input: Bytes) -> u64 {
+  match string.from_bytes(unique input) {
+    Ok(text) => invalid(s, name, text),
+    Error(_) => 0,
+  }
+}

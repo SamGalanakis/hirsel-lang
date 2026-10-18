@@ -81,6 +81,16 @@ fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 fn yaml.parse(take text: String) -> Result[yaml.Value, yaml.YamlError] uses {}
 fn yaml.parse_all(take text: String) -> Result[List[yaml.Value], yaml.YamlError] uses {}
 fn yaml.stringify(value: yaml.Value) -> Result[unique String, yaml.YamlError] uses {}
+fn toml.parse(take text: String) -> Result[toml.Value, toml.TomlError] uses {}
+fn toml.stringify(value: toml.Value) -> Result[unique String, toml.TomlError] uses {}
+fn toml.document(take text: String) -> Result[toml.Document, toml.TomlError] uses {}
+fn toml.source(doc: toml.Document) -> String in doc uses {}
+fn toml.root(doc: toml.Document) -> toml.Value uses {}
+fn toml.get(doc: toml.Document, path: List[toml.Segment]) -> Option[toml.Value] uses {}
+fn toml.set(mut doc: toml.Document, path: List[toml.Segment], value: toml.Value) -> Result[(), toml.TomlError] uses {}
+fn toml.remove(mut doc: toml.Document, path: List[toml.Segment]) -> Result[(), toml.TomlError] uses {}
+fn toml.moment(spelling: String) -> Result[toml.Moment, toml.TomlError] uses {}
+fn toml.datetime(value: toml.Moment) -> Result[toml.Value, toml.TomlError] uses {}
 @track_caller N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
 @track_caller N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
 @track_caller fn test.assert_eq[T: data](t: Test, actual: T, expected: T, show: fn(T) -> String) -> ()
@@ -437,6 +447,110 @@ DEL as `\xXX`, C1 controls as `\xXX` (NEL as `\N`), U+2028 and U+2029 as `\L` an
 written (plain or quoted) becomes an explicit `? key` entry, with its `:` on the next
 line. A collection that would be level 129 is
 `InvalidValue`; nothing else fails. The output parses to an equal value, NaN to NaN.
+
+## TOML
+
+```text
+Value     = Text(String) | Integer(i64) | Float(f64) | Bool(bool) | Datetime(String)
+          | Array(List[Value]) | Table(Map[String, Value])
+Position  = { line: u64, column: u64 }
+TomlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position)
+          | InvalidValue() | NotFound() | NotTable()
+Segment   = Key(String) | Index(u64)
+Moment    = OffsetDateTime(time.DateTime, i32) | LocalDateTime(time.DateTime)
+          | LocalDate(time.Date) | LocalTime(time.TimeOfDay)
+```
+
+`toml.parse` takes a UTF-8 `String` holding a TOML 1.0.0 document and returns its root
+`Table`, keys in order of first definition. It accepts every table form (headers,
+implicit parents, dotted keys, inline tables, arrays of tables), the four string forms,
+integers in decimal, hexadecimal, octal and binary with single underscores between
+digits, floats including `inf` and `nan` with either sign, booleans and the four
+date-time shapes. Integers are `i64`; a literal outside that range is `Syntax` at its
+first digit. Floats round correctly to binary64, overflowing to infinity. Newlines in
+multi-line strings decode as LF. A `Datetime` holds the validated source spelling
+verbatim: an offset date-time, local date-time, local date or local time, told apart
+by shape (a date has `-` at its fifth byte; a date-time adds a time after `T`, `t` or
+a space; an offset date-time ends in `Z`, `z` or `±HH:MM`). Months, days (leap years
+included), hours, minutes, seconds (up to 60) and offsets are range-checked.
+
+A header defines a table once; a header naming a table first created as another
+header's prefix defines it then. Dotted keys extend only tables created by dotted keys
+of the same table, so neither a header nor a later section's dotted key may add to
+one created elsewhere, and a header may not define a table its dotted keys created.
+Inline tables and arrays are complete when they close. `[[a]]` appends an element to
+array of tables `a`; a header path through an array of tables names its last
+element. Every violation is `DuplicateKey` at the offending key.
+
+`Syntax`, `DuplicateKey` and `Nesting` carry the one-based line and one-based Unicode
+scalar column of the offending byte (a tab counts one column; end of input is past the
+last scalar). The constant `MAX_NESTING: u64 = 128` counts tables and arrays below the
+root, those created by headers and dotted keys included; scalars use no level. The
+container that would be level 129 is `Nesting` at its opening bracket, brace or key.
+
+`toml.moment` converts a `Datetime` spelling to `std@1/time` values: an offset
+date-time is `OffsetDateTime` with its offset in seconds east of UTC (`Z` is 0),
+and the local shapes are `LocalDateTime`, `LocalDate` and `LocalTime`. Fraction
+digits beyond nanoseconds truncate. A spelling that is not one of the four shapes,
+or a leap second (`time.TimeOfDay` has none), is `InvalidValue`. `toml.datetime`
+spells a `Moment` as a `Datetime` value: `T` between date and time, the fraction
+without trailing zeros, `Z` for offset 0 and `±HH:MM` otherwise. A year outside
+0000 to 9999, or an offset that is not a whole number of minutes within ±23:59, is
+`InvalidValue`. `moment` of a value `datetime` returns gives back the same `Moment`.
+
+`toml.stringify` borrows a `Table` and writes a document; any other value is
+`NotTable`. Pairs whose value is neither a table nor a non-empty array of tables come
+first, then one section per table and per element of such an array (`[[path]]`), each
+preceded by a blank line; a table whose members are all such sections has no header of
+its own, and an empty table is a bare header. Other arrays and tables nested in arrays
+are written inline (`[1, 2]`, `{ a = 1 }`). Keys are bare when they are non-empty and
+consist of `A-Za-z0-9_-`. A string or key with a quote or backslash and no apostrophe
+or control is a literal string; otherwise a basic string escaping `"`, `\`, `\b`,
+`\t`, `\n`, `\f`, `\r` and other controls as `\u00XX`. Floats use the shortest
+round-trip digits of the `f64` module, with `.0` appended to whole numbers, and
+`nan`, `inf` and `-inf`. A `Datetime` must hold one of the four spellings above, and
+no container may exceed level 128; either violation is `InvalidValue`. The output
+parses to an equal value, NaN to NaN.
+
+`toml.document` parses like `toml.parse` and keeps the source text; `toml.source`
+returns the current text, `toml.root` the root table and `toml.get` the value at a
+path, if any. A path's `Key` selects a table member and `Index` an array element,
+including an element of an array of tables. Edits never re-render the document: each
+splices the text and reparses it, so every byte outside the edited span (comments,
+blank lines, ordering, quoting, number spellings) is unchanged, and new lines use the
+document's first newline (LF when it has none). A failed edit leaves the document
+unchanged.
+
+`toml.set(mut doc, path, value)` with an empty path replaces the document with
+`stringify(value)`. Otherwise it validates the value as `stringify` does, then:
+
+- an existing value written inline (a pair's value, an inline-table member, an array
+  element) is respelled in place, keeping the key and its comments; a `Table` value
+  stays inline there;
+- an existing table or array of tables spelled by headers, set to a table or array of
+  tables, is replaced by new sections where its first header stood; set to anything
+  else it is removed and the value added as below;
+- a missing key of a table with a section (the root, a header, an array-of-tables
+  element) becomes `key = value` after the section's last pair, with that pair's
+  indentation, or right after the header (at the start of the document for the
+  root); a member of a table created by dotted keys is added as a dotted key after
+  that table's last pair; a member of an implicit table gets a new header placed
+  before the table's first sub-table;
+- a missing key whose value is a table or array of tables becomes new sections after
+  the last line under its parent table (the end of the document for the root);
+- a missing member of an inline table is appended before its closing brace;
+  `Index(len)` appends to an inline array (on a line of its own when the last
+  element's comma ends a line) or adds an `[[path]]` section after the array's last
+  element; other missing indices are `NotFound`;
+- missing parent tables are created by setting the parent to a one-member table.
+
+A path through a scalar, a `Key` on an array or an `Index` on a table is `NotTable`.
+`toml.remove(mut doc, path)` removes the value at `path`, or returns `NotFound`. A
+document line takes with it the comment and blank lines above it back to the previous
+line and its own trailing comment; a table takes all its headers, sub-tables and pairs;
+an inline-table member or array element on its own line takes that line, and
+otherwise its comma (the first entry the comma after it, a later entry the comma
+before it).
 
 ## The formatting protocol
 

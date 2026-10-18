@@ -1,0 +1,52 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml edits: array elements are respelled, appended in the array's own style and removed with
+// their separator.
+// Ported from toml_edit tests/testsuite/edit.rs (toml-rs/toml ceac6e44); where
+// toml_edit re-renders the document, the expectation keeps the source bytes.
+fn k(name: String) -> toml.Segment {
+  Key(unique name)
+}
+
+fn load(text: String) -> toml.Document {
+  match toml.document(unique text) {
+    Ok(doc) => doc,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      load("")
+    },
+  }
+}
+
+fn done(outcome: Result[(), toml.TomlError]) -> () {
+  failure.check(outcome == Ok(()), TextInvariant())
+}
+
+fn produces(doc: toml.Document, expected: String) -> () {
+  failure.check(toml.source(doc) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  // test_insert_replace_into_array, test_remove_from_array
+  let mut arrays = load("\n        a = [1,2,3]\n        b = []")
+  done(toml.set(mut arrays, [k("a"), Index(3)], Integer(4)))
+  done(toml.set(mut arrays, [k("b"), Index(0)], Text("hello")))
+  done(toml.set(mut arrays, [k("b"), Index(1)], Text("world")))
+  done(toml.set(mut arrays, [k("b"), Index(0)], Text("zoink")))
+  produces(arrays, "\n        a = [1,2,3, 4]\n        b = [\"zoink\", \"world\"]")
+  let mut shrink = load("\n        a = [1, 2, 3, 4]\n        b = [\"hello\"]")
+  done(toml.remove(mut shrink, [k("a"), Index(3)]))
+  done(toml.remove(mut shrink, [k("b"), Index(0)]))
+  produces(shrink, "\n        a = [1, 2, 3]\n        b = []")
+  let mut lines = load(
+    "a = [\n  'one', # one comment\n  'two', # two comment\n  'three'\n]\n"
+  )
+  done(toml.remove(mut lines, [k("a"), Index(1)]))
+  produces(lines, "a = [\n  'one', # one comment\n  'three'\n]\n")
+  done(toml.remove(mut lines, [k("a"), Index(0)]))
+  produces(lines, "a = [\n  'three'\n]\n")
+  let mut trailing = load("a = [\n  1,\n  2,\n]\n")
+  done(toml.set(mut trailing, [k("a"), Index(2)], Integer(3)))
+  produces(trailing, "a = [\n  1,\n  2,\n  3,\n]\n")
+  Ok(())
+}

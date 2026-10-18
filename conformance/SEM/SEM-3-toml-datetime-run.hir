@@ -1,0 +1,133 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml Datetime values convert to and from std@1/time values: all four shapes,
+// offsets in seconds east of UTC, fractions truncated to nanoseconds, and the
+// spellings, leap seconds, years and offsets that have no counterpart.
+fn at(day: time.Date, t: time.TimeOfDay) -> time.DateTime {
+  time.DateTime(date: day, time: t)
+}
+
+pub fn main() -> Result[(), ()] {
+  let Some(year_minus_one) = date.new(-1, 1, 1) else {
+    return Error(())
+  }
+  let Some(day) = date.new(1979, 5, 27) else {
+    return Error(())
+  }
+  let Some(leap_day) = date.new(2000, 2, 29) else {
+    return Error(())
+  }
+  let Some(one_second) = time_of_day.new(0, 0, 1, 0) else {
+    return Error(())
+  }
+  let Some(half_past) = time_of_day.new(0, 32, 0, 500000000) else {
+    return Error(())
+  }
+  let Some(last_second) = time_of_day.new(23, 59, 59, 0) else {
+    return Error(())
+  }
+  let Some(morning) = time_of_day.new(7, 32, 0, 0) else {
+    return Error(())
+  }
+  let Some(morning_120ms) = time_of_day.new(7, 32, 0, 120000000) else {
+    return Error(())
+  }
+  let Some(morning_micros) = time_of_day.new(7, 32, 0, 999999000) else {
+    return Error(())
+  }
+  let Some(morning_nanos) = time_of_day.new(7, 32, 0, 999999999) else {
+    return Error(())
+  }
+  failure.check(
+    toml.moment("1979-05-27T07:32:00.999999-07:00") == Ok(
+      OffsetDateTime(at(day, morning_micros), -25200)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    toml.moment("1979-05-27 07:32:00.9999999999z") == Ok(
+      OffsetDateTime(at(day, morning_nanos), 0)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    toml.moment("1979-05-27t07:32:00") == Ok(LocalDateTime(at(day, morning))),
+    TextInvariant()
+  )
+  failure.check(toml.moment("1979-05-27") == Ok(LocalDate(day)), TextInvariant())
+  failure.check(toml.moment("00:32:00.5") == Ok(LocalTime(half_past)), TextInvariant())
+  // A spelling toml.parse accepts converts as the parsed value holds it.
+  let Ok(Table(entries)) = toml.parse("when = 2000-02-29T23:59:59+05:30\n") else {
+    return Error(())
+  }
+  let Some(Datetime(spelling)) = map.get(entries, "when") else {
+    return Error(())
+  }
+  failure.check(
+    toml.moment(spelling) == Ok(OffsetDateTime(at(leap_day, last_second), 19800)),
+    TextInvariant()
+  )
+  failure.check(
+    toml.moment("1990-12-31T23:59:60Z") == Error(InvalidValue()),
+    TextInvariant()
+  )
+  failure.check(toml.moment("noon") == Error(InvalidValue()), TextInvariant())
+  failure.check(
+    toml.moment("1979-05-27T07:32") == Error(InvalidValue()),
+    TextInvariant()
+  )
+  // Writing uses T, the shortest fraction and Z for a zero offset.
+  failure.check(
+    toml.datetime(OffsetDateTime(at(day, morning_micros), -25200)) == Ok(
+      Datetime("1979-05-27T07:32:00.999999-07:00")
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    toml.datetime(OffsetDateTime(at(day, morning), 0)) == Ok(
+      Datetime("1979-05-27T07:32:00Z")
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    toml.datetime(OffsetDateTime(at(day, morning), 86340)) == Ok(
+      Datetime("1979-05-27T07:32:00+23:59")
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    toml.datetime(LocalDateTime(at(day, morning_120ms))) == Ok(
+      Datetime("1979-05-27T07:32:00.12")
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    toml.datetime(LocalDate(day)) == Ok(Datetime("1979-05-27")),
+    TextInvariant()
+  )
+  failure.check(
+    toml.datetime(LocalTime(one_second)) == Ok(Datetime("00:00:01")),
+    TextInvariant()
+  )
+  failure.check(
+    toml.datetime(OffsetDateTime(at(day, morning_micros), 30)) == Error(InvalidValue()),
+    TextInvariant()
+  )
+  failure.check(
+    toml.datetime(OffsetDateTime(at(day, morning_micros), 86400)) == Error(
+      InvalidValue()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    toml.datetime(LocalDate(year_minus_one)) == Error(InvalidValue()),
+    TextInvariant()
+  )
+  // moment reads back what datetime writes.
+  let written: toml.Moment = OffsetDateTime(at(leap_day, morning_nanos), 19800)
+  let Ok(Datetime(spelled)) = toml.datetime(written) else {
+    return Error(())
+  }
+  failure.check(toml.moment(spelled) == Ok(written), TextInvariant())
+  Ok(())
+}
