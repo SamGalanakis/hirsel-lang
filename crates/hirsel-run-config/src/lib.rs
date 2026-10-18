@@ -9,6 +9,8 @@ mod grants;
 pub use grants::{
     grants_within, mount_within, net_operation_within, net_rule_within, process_rule_within,
 };
+mod outcome;
+pub use outcome::{BudgetKind, Environmental, Failure, Returned, RunOutcome, Site, exit};
 mod program;
 pub use program::{ProgramNode, ProgramRevision, RevisionError};
 mod net;
@@ -623,44 +625,13 @@ impl ValidatedRun {
         }
         Ok(())
     }
-    /// The host supplies authority and evidence; these inputs cannot come from the record.
-    /// No time/revocation check is performed by operations on the admitted result.
-    pub fn admit(&self, host: &mut dyn HostAuthority, now: i64) -> Result<AdmittedRun, RunRefusal> {
-        let mut revocation = None;
-        if let Some(admission) = &self.record.admission {
-            if let Some(not_before) = admission.not_before
-                && now < not_before
-            {
-                return Err(RunRefusal::NotYetValid { not_before, now });
-            }
-            if let Some(expires) = admission.expires
-                && now > expires
-            {
-                return Err(RunRefusal::Expired { expires, now });
-            }
-            if let Some(reference) = &admission.revocation {
-                let evidence = host.revocation(reference)?;
-                if evidence.reference != *reference || evidence.revision.is_empty() {
-                    return Err(RunRefusal::MissingEvidence {
-                        reference: reference.clone(),
-                    });
-                }
-                if evidence.revoked {
-                    return Err(RunRefusal::Revoked {
-                        reference: reference.clone(),
-                    });
-                }
-                revocation = Some(evidence);
-            }
-        }
-        host.authorize(&self.record)?;
-        Ok(AdmittedRun {
-            run: self.clone(),
-            evidence: AdmissionEvidence {
-                at: now,
-                revocation,
-            },
-        })
+    /// Check this run against the code it would execute, before any host is consulted: the
+    /// binding (program, entry, launch kind), then the entry's roots. Pure: no clock, grant or
+    /// host state is read, so a replay binds exactly as a live launch does.
+    pub fn bind(self, facts: &ProgramFacts) -> Result<BoundRun, RunRefusal> {
+        self.check_program(facts.program, &facts.entry, facts.launch)?;
+        self.require_roots(&facts.roots)?;
+        Ok(BoundRun { run: self })
     }
     /// Historical accepted admission replay. No HostAuthority is available on this path.
     pub fn check_replay(
@@ -725,6 +696,80 @@ impl ValidatedRun {
             ));
         }
         Ok(())
+    }
+}
+/// What binding needs to know about the compiled code a run would execute: its semantic
+/// program digest, entry, launch kind and the roots the entry declares.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramFacts {
+    pub program: [u8; 32],
+    pub entry: String,
+    pub launch: LaunchKind,
+    pub roots: Vec<Root>,
+}
+impl ProgramFacts {
+    pub fn of(revision: &ProgramRevision, launch: LaunchKind, roots: Vec<Root>) -> Self {
+        Self {
+            program: revision.digest(),
+            entry: revision.entry().into(),
+            launch,
+            roots,
+        }
+    }
+}
+
+/// A validated run bound to the code it executes ([`ValidatedRun::bind`]). Binding mints no
+/// authority: only [`BoundRun::admit`], with a host, does. A replay runs a bound run without
+/// admission.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BoundRun {
+    run: ValidatedRun,
+}
+impl BoundRun {
+    pub fn run(&self) -> &ValidatedRun {
+        &self.run
+    }
+    pub fn into_run(self) -> ValidatedRun {
+        self.run
+    }
+    /// The host supplies authority and evidence; these inputs cannot come from the record.
+    /// No time/revocation check is performed by operations on the admitted result.
+    pub fn admit(&self, host: &mut dyn HostAuthority, now: i64) -> Result<AdmittedRun, RunRefusal> {
+        let mut revocation = None;
+        if let Some(admission) = &self.run.record.admission {
+            if let Some(not_before) = admission.not_before
+                && now < not_before
+            {
+                return Err(RunRefusal::NotYetValid { not_before, now });
+            }
+            if let Some(expires) = admission.expires
+                && now > expires
+            {
+                return Err(RunRefusal::Expired { expires, now });
+            }
+            if let Some(reference) = &admission.revocation {
+                let evidence = host.revocation(reference)?;
+                if evidence.reference != *reference || evidence.revision.is_empty() {
+                    return Err(RunRefusal::MissingEvidence {
+                        reference: reference.clone(),
+                    });
+                }
+                if evidence.revoked {
+                    return Err(RunRefusal::Revoked {
+                        reference: reference.clone(),
+                    });
+                }
+                revocation = Some(evidence);
+            }
+        }
+        host.authorize(&self.run.record)?;
+        Ok(AdmittedRun {
+            run: self.run.clone(),
+            evidence: AdmissionEvidence {
+                at: now,
+                revocation,
+            },
+        })
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

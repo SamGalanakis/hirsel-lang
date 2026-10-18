@@ -259,9 +259,20 @@ fn validated_host_admission_reports_recorder_overlap_before_entry_for_read_only_
             recorder: None,
         };
         let mut entered = false;
-        let result = run.admit(&mut host, 0).map(|_| {
-            entered = true;
-        });
+        let facts = hirsel_run_config::ProgramFacts {
+            program: run.program(),
+            entry: run.record().entry.clone(),
+            launch: run.record().launch,
+            roots: vec![],
+        };
+        let result = run
+            .clone()
+            .bind(&facts)
+            .unwrap()
+            .admit(&mut host, 0)
+            .map(|_| {
+                entered = true;
+            });
         assert_eq!(entered, !overlap);
         if overlap {
             assert_eq!(

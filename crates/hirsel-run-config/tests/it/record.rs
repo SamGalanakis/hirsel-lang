@@ -10,6 +10,16 @@ fn bytes(record: &RunConfig) -> Vec<u8> {
 fn valid(record: &RunConfig) -> ValidatedRun {
     RunConfig::validate(&bytes(record)).unwrap()
 }
+/// The run bound to the code it names, with no roots.
+fn bound(run: &ValidatedRun) -> BoundRun {
+    let facts = ProgramFacts {
+        program: run.program(),
+        entry: run.record().entry.clone(),
+        launch: run.record().launch,
+        roots: vec![],
+    };
+    run.clone().bind(&facts).unwrap()
+}
 fn refused(record: &RunConfig) {
     assert!(RunConfig::validate(&bytes(record)).is_err());
 }
@@ -324,15 +334,15 @@ fn expiry_revocation_and_host_permissions_are_admission_only() {
         deny: false,
     };
     assert!(matches!(
-        run.admit(&mut host, 9),
+        bound(&run).admit(&mut host, 9),
         Err(RunRefusal::NotYetValid { .. })
     ));
     assert!(matches!(
-        run.admit(&mut host, 21),
+        bound(&run).admit(&mut host, 21),
         Err(RunRefusal::Expired { .. })
     ));
     assert_eq!(host.calls, 0);
-    let accepted = run.admit(&mut host, 20).unwrap();
+    let accepted = bound(&run).admit(&mut host, 20).unwrap();
     assert_eq!(host.calls, 2);
     host.revoked = true;
     host.deny = true;
@@ -343,16 +353,16 @@ fn expiry_revocation_and_host_permissions_are_admission_only() {
         .unwrap();
     assert_eq!(host.calls, 2);
     assert!(matches!(
-        run.admit(&mut host, 21),
+        bound(&run).admit(&mut host, 21),
         Err(RunRefusal::Expired { .. })
     ));
     assert!(matches!(
-        run.admit(&mut host, 20),
+        bound(&run).admit(&mut host, 20),
         Err(RunRefusal::Revoked { .. })
     ));
     host.revoked = false;
     assert!(matches!(
-        run.admit(&mut host, 10),
+        bound(&run).admit(&mut host, 10),
         Err(RunRefusal::Unauthorized { .. })
     ));
     let no_proof = AdmissionEvidence {

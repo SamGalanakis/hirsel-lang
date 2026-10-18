@@ -152,7 +152,12 @@ members; arrays ordered as specified (`args` order preserved, grant sets sorted 
 normalized UTF-8 key); no duplicate or unknown fields; canonical unsigned decimal integers
 without leading zeros; canonical JSON strings (escape quote and backslash, encode
 U+0000–U+001F as lowercase `\u00xx`, emit other scalar values as UTF-8 without
-normalization); explicit `null` for absence; no whitespace. Digests are 64 lowercase
+normalization); explicit `null` for absence, except run-policy members; no whitespace.
+A run-policy member (the recording level, budgets, the admission code policy, and any later
+member that chooses how a run is executed rather than what it may do) is absent from the
+canonical bytes when it equals its default: validation normalizes a default value to absence,
+so adding a policy member changes neither an existing record's identity nor a recorded tape's
+header. Digests are 64 lowercase
 hexadecimal SHA-256 digits; admission timestamps are signed decimal `i64` Unix nanoseconds,
 zero spelled `0`. The record's identity hashes these bytes with a domain-separated,
 length-prefixed SHA-256. A parser for human input may normalize member order and whitespace

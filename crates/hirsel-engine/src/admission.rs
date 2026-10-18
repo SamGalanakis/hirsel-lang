@@ -1,7 +1,7 @@
 //! Production entry selection and admission, before any evaluator starts.
 use hirsel_run_config::{
-    AdmittedRun, HostAuthority, LaunchKind, ProgramRevision, Root, RunConfig, RunRefusal,
-    ValidatedRun,
+    AdmittedRun, HostAuthority, LaunchKind, ProgramFacts, ProgramRevision, Root, RunConfig,
+    RunRefusal, ValidatedRun,
 };
 use hirsel_syntax::Visibility;
 use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeKind};
@@ -105,15 +105,10 @@ pub fn admit_run(
             field: "entry.signature".into(),
         });
     }
-    let default;
     let run = match requested {
-        Some(run) => run,
-        None => {
-            default = RunConfig::for_program(revision, launch).validated()?;
-            &default
-        }
+        Some(run) => run.clone(),
+        None => RunConfig::for_program(revision, launch).validated()?,
     };
-    run.check_revision(revision, launch)?;
-    run.require_roots(&roots)?;
-    run.admit(host, now)
+    run.bind(&ProgramFacts::of(revision, launch, roots))?
+        .admit(host, now)
 }

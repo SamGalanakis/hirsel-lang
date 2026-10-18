@@ -99,6 +99,21 @@ impl Launch {
     fn is_zero(&self) -> bool {
         matches!(self, Self::Zero(_) | Self::Roots(_, 0))
     }
+    /// The code a selected run binds to. The embedded launch configuration already binds the
+    /// run's identity to this executable, so its program and entry are the run's own.
+    fn facts(
+        &self,
+        run: &hirsel_run_config::ValidatedRun,
+    ) -> Result<hirsel_run_config::ProgramFacts, hirsel_run_config::RunRefusal> {
+        use crate::standalone::{ROOT_ARGS, ROOT_IO, ROOT_TEST};
+        let mask = match self {
+            Self::Zero(_) => 0,
+            Self::Main(_) => ROOT_IO | ROOT_ARGS,
+            Self::Test(_) => ROOT_TEST,
+            Self::Roots(_, mask) => *mask,
+        };
+        crate::standalone::facts(run.program(), &run.record().entry, mask)
+    }
 }
 /// The largest inline result an entry may return.
 pub const RESULT_MAX: u64 = 64;
@@ -1225,7 +1240,13 @@ unsafe fn launch(
     let requested = if arguments.first().is_some_and(|a| a == "--hirsel-replay") {
         match arguments.as_slice() {
             [_, path] => crate::host_launch::replay(std::path::Path::new(path))
-                .map(|(io, run)| Some(crate::standalone::Selected::Replay { run, io }))
+                .and_then(|(io, run)| {
+                    let facts = entry.facts(&run)?;
+                    Ok(Some(crate::standalone::Selected::Replay {
+                        run: run.bind(&facts)?,
+                        io,
+                    }))
+                })
                 .map_err(|e| e.to_string()),
             _ => Err("expected only --hirsel-replay <tape>".into()),
         }
@@ -1235,13 +1256,18 @@ unsafe fn launch(
         crate::standalone::live_options(&arguments)
             .and_then(|options| match options.input {
                 [flag, path] if flag == "--hirsel-run" => {
-                    hirsel_run_config::RunConfig::read_path(std::path::Path::new(path)).map(|run| {
-                        Some(crate::standalone::Selected::Live {
-                            run,
-                            tape: options.tape,
-                            revocations: options.revocations,
+                    hirsel_run_config::RunConfig::read_path(std::path::Path::new(path))
+                        .and_then(|run| {
+                            let facts = entry.facts(&run)?;
+                            run.bind(&facts)
                         })
-                    })
+                        .map(|run| {
+                            Some(crate::standalone::Selected::Live {
+                                run,
+                                tape: options.tape,
+                                revocations: options.revocations,
+                            })
+                        })
                 }
                 _ => Err(hirsel_run_config::RunRefusal::Invalid {
                     field: "argv".into(),
@@ -1292,15 +1318,6 @@ unsafe fn execute(
     let mut production_io = None;
     let mut production_replay = None;
     if let Some(selected) = selected {
-        if let Launch::Roots(_, roots) = &entry {
-            let roots = match crate::standalone::required_roots(*roots) {
-                Ok(roots) => roots,
-                Err(e) => return refuse(&e.to_string()),
-            };
-            if let Err(e) = selected.run().require_roots(&roots) {
-                return refuse(&e.to_string());
-            }
-        }
         match selected {
             // A replay performs no host effect: no admission, clock or provider.
             crate::standalone::Selected::Replay { io, .. } => production_replay = Some(io),

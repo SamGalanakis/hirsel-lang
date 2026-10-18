@@ -371,9 +371,14 @@ pub(crate) fn bind_host_run(
             let (io, run) = hirsel_rt::host_launch::replay(tape).map_err(refused)?;
             let roots =
                 hirsel_engine::entry_roots(&signature, LaunchKind::Main).map_err(refused)?;
-            run.check_revision(&revision, LaunchKind::Main)
-                .and_then(|()| run.require_roots(&roots))
-                .map_err(refused)?;
+            let run = run
+                .bind(&hirsel_run_config::ProgramFacts::of(
+                    &revision,
+                    LaunchKind::Main,
+                    roots,
+                ))
+                .map_err(refused)?
+                .into_run();
             Ok(HostRun::Replay { run, io })
         }
     }

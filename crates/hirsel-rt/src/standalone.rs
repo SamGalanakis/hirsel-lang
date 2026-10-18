@@ -1,5 +1,5 @@
 //! Standalone process inputs are explicit: one run record and an optional argv snapshot.
-use hirsel_run_config::{LaunchKind, Root, RunConfig, RunRefusal, ValidatedRun};
+use hirsel_run_config::{BoundRun, LaunchKind, ProgramFacts, Root, RunConfig, RunRefusal};
 use std::ffi::OsString;
 
 pub(crate) const ROOT_IO: u8 = 1;
@@ -39,12 +39,12 @@ pub(crate) fn required_roots(mask: u8) -> Result<Vec<Root>, RunRefusal> {
 /// tape, or a replay of a recording, which binds its own run and needs no grants.
 pub(crate) enum Selected {
     Live {
-        run: ValidatedRun,
+        run: BoundRun,
         tape: Option<std::path::PathBuf>,
         revocations: Option<std::path::PathBuf>,
     },
     Replay {
-        run: ValidatedRun,
+        run: BoundRun,
         io: crate::io_sim::SimIo,
     },
 }
@@ -53,9 +53,9 @@ impl Selected {
     pub(crate) fn taped(&self) -> bool {
         matches!(self, Self::Replay { .. } | Self::Live { tape: Some(_), .. })
     }
-    pub(crate) fn run(&self) -> &ValidatedRun {
+    pub(crate) fn run(&self) -> &hirsel_run_config::ValidatedRun {
         match self {
-            Self::Live { run, .. } | Self::Replay { run, .. } => run,
+            Self::Live { run, .. } | Self::Replay { run, .. } => run.run(),
         }
     }
 }
@@ -79,8 +79,7 @@ pub(crate) fn select(
             });
         };
         let (io, run) = crate::host_launch::replay(std::path::Path::new(path))?;
-        run.check_program(program, entry, launch_kind(roots))?;
-        run.require_roots(&required_roots(roots)?)?;
+        let run = run.bind(&facts(program, entry, roots)?)?;
         return Ok(Selected::Replay { run, io });
     }
     let options = live_options(&arguments)?;
@@ -122,6 +121,16 @@ pub(crate) fn live_options(arguments: &[OsString]) -> Result<LiveOptions<'_>, Ru
     })
 }
 
+/// The compiled code a standalone launch binds its run to.
+pub(crate) fn facts(program: [u8; 32], entry: &str, roots: u8) -> Result<ProgramFacts, RunRefusal> {
+    Ok(ProgramFacts {
+        program,
+        entry: entry.into(),
+        launch: launch_kind(roots),
+        roots: required_roots(roots)?,
+    })
+}
+
 fn launch_kind(roots: u8) -> LaunchKind {
     if roots == ROOT_TEST {
         LaunchKind::Test
@@ -138,7 +147,7 @@ fn select_run(
     program: [u8; 32],
     entry: &str,
     roots: u8,
-) -> Result<ValidatedRun, RunRefusal> {
+) -> Result<BoundRun, RunRefusal> {
     let launch = launch_kind(roots);
     let invalid = || {
         RunRefusal::Invalid {
@@ -173,10 +182,7 @@ fn select_run(
     };
     // Preserve all configured inputs and grants; the process snapshot is the
     // only changed field and contributes to the admitted run's identity.
-    let run = record.validated()?;
-    run.check_program(program, entry, launch)?;
-    run.require_roots(&required_roots(roots)?)?;
-    Ok(run)
+    record.validated()?.bind(&facts(program, entry, roots)?)
 }
 
 #[cfg(test)]
@@ -240,7 +246,7 @@ mod tests {
                 entry,
                 ROOT_ARGS
             ),
-            Ok(Selected::Live { tape: Some(_), run, .. }) if run.record().args.as_deref() == Some(["x".to_string()].as_slice())
+            Ok(Selected::Live { tape: Some(_), run, .. }) if run.run().record().args.as_deref() == Some(["x".to_string()].as_slice())
         ));
     }
     #[test]
@@ -258,6 +264,7 @@ mod tests {
             ROOT_ARGS,
         )
         .unwrap();
+        let run = run.run();
         assert_eq!(
             run.record().args.as_deref(),
             Some(["one".into(), "--flag".into()].as_slice())
