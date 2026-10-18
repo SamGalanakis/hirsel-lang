@@ -1,0 +1,38 @@
+// rule: SEM-3
+// expect: run
+// A reader made with tar.reader(Some(Gzip())) decompresses the archive as it
+// reads it: a two-entry USTAR archive that ends at a block boundary without
+// the end-of-archive marker, gzip level 9 (zlib 1.3), extracts as the
+// uncompressed archive would.
+type Source {
+  data: Bytes,
+  at: u64,
+}
+
+fn feed(mut s: Source, mut buffer: List[u8], requested: u64) -> Result[u64, ()] uses {} {
+  let end = if s.at + requested < core@1/bytes.len(s.data) {
+    s.at + requested
+  } else {
+    core@1/bytes.len(s.data)
+  }
+  for byte in core@1/bytes.slice(s.data, s.at, end) {
+    list.push(mut buffer, byte)
+  }
+  let fed = end - s.at
+  s.at = end
+  Ok(fed)
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  let dir = test.dir(t, [])
+  let mut reader = tar.reader(Some(Gzip()))
+  let mut r = bufio.new(64)
+  let mut source = Source(
+    data: b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xcbH\xcd\xc9\xc9\xd7+\xa9(a\xa0\x1d0\x00\x023\x13\x130\x0d\x04\xe8\xb4\x81\x81\xa1\x09\x83\xa1\x89\xa9\x91\x89\xb9\xb9\x81\x09H\xdc\xd0\xc0\xc8\xc0\x88A\xc1\x80\x81\x0e\xa0\xb4\xb8$\xb1\x08\xe8\x94R\x02\xea\xd2\x19\x86%\xc8\x00\xc5\xbf\x8eBzUf\x01\x17\xc3(\x18q\xa0\xb84I?1=13\x8f\x86e\x00\x19\xf9\xdf\xdc\xc4|4\xff\xd3-\xff+\x80S\xc0h\xfe\x1f\x81\x00\x00\xe2P]Z\x00\x08\x00\x00",
+    at: 0
+  )
+  test.check(t, tar.extract(dir, mut reader, mut r, mut source, feed, 1000) == Ok(2))
+  test.check(t, file.read_bytes(dir, path.of("hello.txt"))? == b"hello, gzip\n")
+  test.check(t, file.read_bytes(dir, path.of("sub/again.txt"))? == b"hello again\n")
+  Ok(())
+}

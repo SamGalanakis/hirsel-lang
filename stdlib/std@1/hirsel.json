@@ -735,6 +735,12 @@
       ]
     },
     {
+      "path": "tar.hir",
+      "module": [
+        "tar"
+      ]
+    },
+    {
       "path": "fnv.hir",
       "module": [
         "fnv"

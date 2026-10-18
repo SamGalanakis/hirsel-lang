@@ -1,0 +1,54 @@
+// tar.extract under a host Dir grant refuses paths through or onto symlinks
+// that lead out of the grant, and writes inside it.
+type Source {
+  data: Bytes,
+  at: u64,
+}
+
+fn feed(mut s: Source, mut buffer: List[u8], requested: u64) -> Result[u64, ()] uses {} {
+  let end = if s.at + requested < core@1/bytes.len(s.data) {
+    s.at + requested
+  } else {
+    core@1/bytes.len(s.data)
+  }
+  for byte in core@1/bytes.slice(s.data, s.at, end) {
+    list.push(mut buffer, byte)
+  }
+  let fed = end - s.at
+  s.at = end
+  Ok(fed)
+}
+
+fn one(name: String) -> Bytes {
+  let mut w = tar.writer()
+  let mut out: List[u8] = []
+  let _ = tar.write_header(mut w, tar.header(unique name, Regular(), 4), mut out)
+  let _ = tar.write(mut w, b"evil", mut out)
+  let _ = tar.close(mut w, mut out)
+  core@1/bytes.from_list(take out)
+}
+
+fn extract(into: Dir, take data: Bytes) -> Result[u64, tar.ExtractError[()]] {
+  let mut t = tar.reader(None())
+  let mut r = bufio.new(512)
+  let mut source = Source(data: take data, at: 0)
+  tar.extract(into, mut t, mut r, mut source, feed, 100)
+}
+
+pub type Error = Files(FileError) | Grant(GrantError)
+
+pub fn main(rt: Io) -> Result[(), Error] {
+  let d = io.dir(rt, path.of("data")) ? Files
+  let through = extract(d, one("out/evil.txt")) == Error(Insecure("out/evil.txt"))
+  let onto = extract(d, one("link.txt")) == Error(Insecure("link.txt"))
+  let inside = extract(d, one("fine/ok.txt")) == Ok(1)
+  let _ = out.print(
+    io.stdout(rt) ? Grant,
+    if through && onto && inside {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

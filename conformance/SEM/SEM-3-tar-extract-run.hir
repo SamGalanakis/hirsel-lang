@@ -1,0 +1,65 @@
+// rule: SEM-3
+// expect: run
+// tar.extract writes directories and regular files into a Dir grant,
+// creating missing parents and dropping leading "./" pieces,
+// accepting a total of exactly `limit` bytes; it returns the number of
+// entries written, replacing an existing file.
+type Source {
+  data: Bytes,
+  at: u64,
+}
+
+fn feed(mut s: Source, mut buffer: List[u8], requested: u64) -> Result[u64, ()] uses {} {
+  let end = if s.at + requested < core@1/bytes.len(s.data) {
+    s.at + requested
+  } else {
+    core@1/bytes.len(s.data)
+  }
+  for byte in core@1/bytes.slice(s.data, s.at, end) {
+    list.push(mut buffer, byte)
+  }
+  let fed = end - s.at
+  s.at = end
+  Ok(fed)
+}
+
+// An archive of the entries, written with tar.writer.
+fn archive(entries: List[(String, tar.Kind, Bytes)]) -> Bytes {
+  let mut w = tar.writer()
+  let mut out: List[u8] = []
+  for (name, kind, data) in entries {
+    let mut h = tar.header(unique name, kind, core@1/bytes.len(data))
+    if kind == Symlink() {
+      h.linkname = "target"
+    }
+    failure.check(tar.write_header(mut w, h, mut out) == Ok(()), Bounds())
+    failure.check(tar.write(mut w, data, mut out) == Ok(()), Bounds())
+  }
+  failure.check(tar.close(mut w, mut out) == Ok(()), Bounds())
+  core@1/bytes.from_list(take out)
+}
+
+fn extract(into: Dir, take data: Bytes, limit: u64) -> Result[u64, tar.ExtractError[()]] {
+  let mut t = tar.reader(None())
+  let mut r = bufio.new(512)
+  let mut source = Source(data: take data, at: 0)
+  tar.extract(into, mut t, mut r, mut source, feed, limit)
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  let dir = test.dir(t, [(path.of("keep.txt"), b"kept")])
+  let data = archive(
+    [
+      ("docs/", Directory(), b""),
+      ("./docs/a.txt", Regular(), b"alpha"),
+      ("b/c/d.txt", Regular(), b"delta"),
+      ("keep.txt", Regular(), b"new")
+    ]
+  )
+  test.check(t, extract(dir, take data, 13) == Ok(4))
+  test.check(t, file.read_bytes(dir, path.of("docs/a.txt"))? == b"alpha")
+  test.check(t, file.read_bytes(dir, path.of("b/c/d.txt"))? == b"delta")
+  test.check(t, file.read_bytes(dir, path.of("keep.txt"))? == b"new")
+  test.check(t, file.metadata(dir, path.of("b/c"))?.kind == Directory())
+  Ok(())
+}

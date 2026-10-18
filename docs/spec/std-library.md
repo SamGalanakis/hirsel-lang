@@ -2019,6 +2019,103 @@ header has no name, comment or time, zlib's extra flags (2 at level 9, 4 below l
 and operating system 255 (unknown), with a CRC-32 and the input size modulo 2^32 after
 the stream.
 
+## Tar archives
+
+`std@1/tar` reads and writes tar archives: V7, USTAR and POSIX.1-2001 PAX headers on
+read and write, GNU and STAR headers and GNU long names on read. It is a port of Go
+`archive/tar` without sparse files.
+
+```text
+Kind = Regular | Link | Symlink | Char | Block | Directory | Fifo | Global | Other(u8)
+Header { name: String, kind: Kind, linkname: String, size: u64, mode: u64, uid: u64, gid: u64, uname: String, gname: String, modified: i64, devmajor: u64, devminor: u64, records: Map[String,String] }
+TarError = Header(u64) | Encoding(u64) | Unsupported(u64) | Truncated
+ReadError[E] = Input(bufio.ReadError[E]) | Data(flate.FlateError) | Archive(TarError)
+WriteError = Field | TooLong | Short | Closed
+ExtractError[E] = Read(ReadError[E]) | Insecure(String) | Unsupported(String) | TooLarge | File(FileError)
+fn tar.reader(compression: Option[flate.Format]) -> unique Reader uses {}
+fn tar.writer() -> unique Writer uses {}
+fn tar.header(take name: String, kind: Kind, size: u64) -> Header uses {}
+fn tar.next[S,E](mut t: Reader, mut r: bufio.Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E]) -> Result[Option[Header],tar.ReadError[E]]
+@preserves_unique(out) fn tar.read[S,E](mut t: Reader, mut r: bufio.Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,tar.ReadError[E]]
+fn tar.file_next(dir: Dir, mut f: File of dir, mut t: Reader, mut r: bufio.Reader) -> Result[Option[Header],tar.ReadError[FileError]]
+@preserves_unique(out) fn tar.file_read(dir: Dir, mut f: File of dir, mut t: Reader, mut r: bufio.Reader, mut out: List[u8], max: u64) -> Result[u64,tar.ReadError[FileError]]
+@preserves_unique(out) fn tar.write_header(mut w: Writer, h: Header, mut out: List[u8]) -> Result[(),WriteError]
+@preserves_unique(out) fn tar.write(mut w: Writer, data: Bytes, mut out: List[u8]) -> Result[(),WriteError]
+@preserves_unique(out) fn tar.close(mut w: Writer, mut out: List[u8]) -> Result[(),WriteError]
+fn tar.extract[S,E](into: Dir, mut t: Reader, mut r: bufio.Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], limit: u64) -> Result[u64,tar.ExtractError[E]]
+fn tar.file_extract(from: Dir, mut f: File of from, into: Dir, mut t: Reader, limit: u64) -> Result[u64,tar.ExtractError[FileError]]
+```
+
+**Reading.** A `Reader` made with `Some(format)` decodes the archive through a
+`flate.Decoder` of that format as it reads. `next` skips the rest of the current entry
+and its padding and returns the next entry's header. It returns `None` after two zero
+blocks, after one zero block followed by the end of the input, or at the end of the
+input on a block boundary; after that every `next` returns `None`. `read` appends at
+most `max` bytes of the current entry's data and returns how many, and zero at its end.
+Link, symlink, device, directory and FIFO entries have no data, whatever their `size`.
+The reader buffers the source in pieces of at most 32 KiB and holds at most one PAX or
+GNU long-name payload (1 MiB at most) beyond that, so memory is bounded whatever the
+archive. Bytes after the end of the archive may already have been read from the source.
+
+The header block's checksum must match as an unsigned or a signed byte sum, and
+numeric fields are octal or base-256. A negative base-256 field other than the
+modification time is a `Header` error. A NUL type flag is `Regular`, or `Directory`
+when the name ends in `/`. A USTAR or PAX header's 155-byte prefix and a STAR header's
+131-byte prefix are joined to the name with `/`. A GNU header whose time fields do not
+parse has its USTAR prefix applied, as Go reads archives written by Go 1.7. A GNU `L`
+or `K` entry sets the next entry's name or link name, cut at its first NUL. A PAX `x`
+header's records apply to the next entry: `path`, `linkpath`, `uname`, `gname`, `uid`,
+`gid` and `size` replace those fields, and `mtime` replaces `modified` with its whole
+seconds, rounded toward negative infinity. An empty record value keeps the header's
+field. Only the last of several `L`, `K` or `x` headers applies. A PAX `g` header is
+returned as a `Global` entry whose name is its `path` record or its header name, with
+size 0. `records` holds every record that applied, in archive order.
+
+`Header(n)` names the offset of the header block (or of the meta header) that is
+malformed. That covers a bad checksum or number, a zero block followed by a non-zero
+one, a malformed PAX record, a NUL in a key or in a `path`, `linkpath`, `uname` or
+`gname` value, a non-decimal number or time, and a payload over 1 MiB. `Encoding(n)` is
+a name or link name that is not UTF-8 after the replacements above, or a user or group
+name that is not UTF-8.
+`Unsupported(n)` is a GNU sparse entry (type `S` or GNU sparse PAX records).
+`Truncated` is input that ends inside a header or an entry, and `Data` a compressed
+stream that does not decode.
+
+**Writing.** `write_header` completes the previous entry (`Short` when its data is
+incomplete) by padding it to a block, then appends the header. It writes USTAR when
+every field fits, a name over 100 bytes split at a `/` into prefix and name when it
+can be. Otherwise it writes a PAX `x` header first, named `PaxHeaders.0/` beside the
+entry, with records for the fields that do not fit: a name or link name that is long or
+not ASCII, a user or group name over 32 bytes or not ASCII, a uid or gid of 2^21 or
+more, a size of 8 GiB or more, and a negative or 2^33-or-later time. Records sorted by
+key bytes follow Go's `"<length> <key>=<value>\n"` form. When a PAX header is written,
+the USTAR fields that do not fit are cut or zeroed. `records` passed in are written
+unless they would conflict. A basic record (`path`, `linkpath`, `uname`, `gname`,
+`uid`, `gid`, `size`, `mtime`) is kept only when it equals the field. `atime`, `ctime`
+and `GNU.sparse.*` are dropped, and any record makes the entry PAX. A `Global` header
+writes a `g` header of all its records, named `GlobalHead.0.0` when unnamed, with no
+entry after it. `Field` refuses a header that cannot be encoded: a mode or device
+number of 2^21 or more, a NUL in the name, a record key that is empty or holds `=` or
+NUL, a type flag `x`, `L` or `K`, a regular, device or FIFO entry whose name ends in
+`/`, or records over 1 MiB. `write` appends data to the entry, and data past its size is
+`TooLong` with nothing appended. `close` completes the last entry and appends two zero
+blocks; later calls are `Closed`. Output matches Go's `tar.Writer` for these headers.
+
+**Extraction.** `extract` reads every entry and writes directories and regular files
+into `into`, creating missing parent directories and replacing existing files; it
+returns the number of entries written. A name is refused as `Insecure(name)`, before
+anything is written for it, when it is empty, absolute, holds a `..` component, a NUL
+or a backslash, or has no component but `.`; leading `./` components are dropped. Every
+existing component of the destination is examined without following symlinks: a
+symlink there, including at the final component, is `Insecure`, and a non-directory
+parent is `File(NotDirectory())`. Extraction therefore never writes through a symlink,
+even one inside the grant, on top of `Dir`'s own confinement. Link, symlink, device,
+FIFO and other entries are `Unsupported(name)`; `Global` entries are skipped.
+`limit` bounds the total of regular files' declared sizes: an entry that would take it
+past `limit` is `TooLarge` before any of its data is written. This is the expansion
+limit for decompression bombs. Permissions, owners and times are not applied. The
+first refusal stops extraction with the entries before it in place.
+
 ## Cookies
 
 `std@1/cookie` parses Cookie request headers and formats Set-Cookie response

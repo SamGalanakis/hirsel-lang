@@ -1,0 +1,1608 @@
+// Tar archives: a port of Go src/archive/tar reader.go, writer.go, strconv.go
+// and format.go (golang/go ebe2feef, BSD-3-Clause; third-party/NOTICES.md)
+// for V7, USTAR, PAX and GNU long-name headers, without sparse files.
+// Reading pulls blocks through a buffered source, optionally through a gzip or
+// zlib decoder; writing appends blocks to an output list.
+/// An entry's type flag (POSIX.1-2001 ustar typeflag).
+pub type Kind = Regular | Link | Symlink | Char | Block | Directory | Fifo | Global | Other(
+  u8
+)
+
+/// One entry's metadata. `records` holds the PAX extended header records that
+/// applied to it, which `name`, `size` and the other fields already reflect.
+pub type Header {
+  name: String,
+  kind: Kind,
+  linkname: String,
+  size: u64,
+  mode: u64,
+  uid: u64,
+  gid: u64,
+  uname: String,
+  gname: String,
+  modified: i64,
+  devmajor: u64,
+  devminor: u64,
+  records: Map[String, String],
+}
+
+/// Malformed archive data. `Header(n)` names the byte offset of the header
+/// block that is invalid; `Encoding(n)` one whose name is not UTF-8;
+/// `Unsupported(n)` a GNU sparse entry.
+pub type TarError = Header(u64) | Encoding(u64) | Unsupported(u64) | Truncated
+
+/// A read from the buffered source failed, a compressed archive does not
+/// decode, or the archive is malformed.
+pub type ReadError[E] = Input(bufio.ReadError[E]) | Data(flate.FlateError) | Archive(
+  TarError
+)
+
+/// A header that the writer cannot encode, data beyond or short of the
+/// declared size, or a write after `close`.
+pub type WriteError = Field | TooLong | Short | Closed
+
+/// Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),
+/// would exceed its byte limit, or a file operation failed.
+pub type ExtractError[E] = Read(ReadError[E]) | Insecure(String) | Unsupported(String) | TooLarge | File(
+  FileError
+)
+
+/// Reading state: the decompressor (if any), the archive offset and the
+/// current entry's unread data and padding.
+pub opaque type Reader: copyable + inert + noalloc_drop uses {} {
+  compressed: bool,
+  decoder: flate.Decoder,
+  buffer: List[u8],
+  at: u64,
+  offset: u64,
+  left: u64,
+  pad: u64,
+  ended: bool,
+}
+
+/// Writing state: the current entry's unwritten data and padding.
+pub opaque type Writer: copyable + inert + noalloc_drop uses {} {
+  left: u64,
+  pad: u64,
+  closed: bool,
+}
+
+const BLOCK: u64 = 512
+
+// Go maxSpecialFileSize: the largest PAX or GNU long-name payload.
+const SPECIAL: u64 = 1048576
+
+/// A reader of an uncompressed archive, or of one compressed as `format`.
+pub fn reader(compression: Option[flate.Format]) -> unique Reader uses {} {
+  match compression {
+    Some(format) => Reader(
+      compressed: true,
+      decoder: flate.decoder(format),
+      buffer: [],
+      at: 0,
+      offset: 0,
+      left: 0,
+      pad: 0,
+      ended: false
+    ),
+    None() => Reader(
+      compressed: false,
+      decoder: flate.decoder(Raw()),
+      buffer: [],
+      at: 0,
+      offset: 0,
+      left: 0,
+      pad: 0,
+      ended: false
+    ),
+  }
+}
+
+pub fn writer() -> unique Writer uses {} {
+  Writer(left: 0, pad: 0, closed: false)
+}
+
+pub fn header(take name: String, kind: Kind, size: u64) -> Header uses {} {
+  Header(
+    name: name,
+    kind: kind,
+    linkname: "",
+    size: size,
+    mode: 0o644,
+    uid: 0,
+    gid: 0,
+    uname: "",
+    gname: "",
+    modified: 0,
+    devmajor: 0,
+    devminor: 0,
+    records: map.empty()
+  )
+}
+
+// Archive bytes are pulled this many at a time into the reader's buffer.
+const CHUNK: u64 = 32768
+
+// Buffers at least `count` unread archive bytes, or all the input has left,
+// and returns how many are buffered.
+fn want[S, E](
+  mut t: Reader,
+  mut r: bufio.Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  count: u64
+) -> Result[u64, ReadError[E]] uses {refill} {
+  let mut have = core@1/list.len(t.buffer) - t.at
+  if have >= count {
+    return Ok(have)
+  }
+  if t.at > 0 {
+    let mut kept: List[u8] = []
+    let mut i = t.at
+    while i < core@1/list.len(t.buffer) {
+      core@1/list.push(mut kept, t.buffer[i])
+      i += 1
+    }
+    t.buffer = take kept
+    t.at = 0
+  }
+  while have < count {
+    let n = if t.compressed {
+      match flate.read(mut t.decoder, mut r, mut source, refill, mut t.buffer, CHUNK) {
+        Ok(got) => got,
+        Error(Input(error)) => return Error(Input(error)),
+        Error(Data(error)) => return Error(Data(error)),
+      }
+    } else if bufio.buffered(r) > 0 {
+      bufio.read(mut r, mut source, refill, mut t.buffer, CHUNK) ? Input
+    } else {
+      // Once `r` is drained, the source fills the buffer directly.
+      let previous = core@1/list.len(t.buffer)
+      let got = match refill(mut source, mut t.buffer, CHUNK) {
+        Ok(got) => got,
+        Error(error) => return Error(Input(Source(error))),
+      }
+      if got > CHUNK || core@1/list.len(t.buffer) != previous + got {
+        return Error(Input(InvalidRead()))
+      }
+      got
+    }
+    if n == 0 {
+      return Ok(have)
+    }
+    have += n
+  }
+  Ok(have)
+}
+
+// Go discard: skips `count` archive bytes.
+fn skip[S, E](
+  mut t: Reader,
+  mut r: bufio.Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  count: u64
+) -> Result[(), ReadError[E]] uses {refill} {
+  let mut left = count
+  while left > 0 {
+    let have = want(mut t, mut r, mut source, refill, 1)?
+    if have == 0 {
+      return Error(Archive(Truncated()))
+    }
+    let n = if have < left {
+      have
+    } else {
+      left
+    }
+    t.at += n
+    t.offset += n
+    left -= n
+  }
+  Ok(())
+}
+
+// The sum of the 512 bytes from `base`: zero only for a zero block.
+@noalloc
+fn block_sum(b: List[u8], base: u64) -> u64 uses {} {
+  let mut sum: u64 = 0
+  let mut i = base
+  let end = base + BLOCK
+  while i < end {
+    sum += core@1/int.widen(b[i])
+    i += 1
+  }
+  sum
+}
+
+// Go parser.parseString: the bytes before the first NUL.
+fn field_text(b: List[u8], start: u64, end: u64) -> Result[unique String, ()] uses {} {
+  let mut builder: List[u8] = []
+  let mut i = start
+  while i < end && b[i] != 0 {
+    core@1/list.push(mut builder, b[i])
+    i += 1
+  }
+  match text.finish(take builder) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error(()),
+  }
+}
+
+// Go parser.parseOctal: spaces and NULs trimmed from both ends, then octal
+// digits up to the first NUL.
+fn octal(b: List[u8], start: u64, end: u64) -> Result[u64, ()] uses {} {
+  let mut i = start
+  let mut j = end
+  while i < j && (b[i] == 32 || b[i] == 0) {
+    i += 1
+  }
+  while j > i && (b[j - 1] == 32 || b[j - 1] == 0) {
+    j -= 1
+  }
+  let mut value: u64 = 0
+  while i < j && b[i] != 0 {
+    let c = b[i]
+    if c < 48 || c > 55 || value >> 61 != 0 {
+      return Error(())
+    }
+    value = value << 3 | core@1/int.widen(c - 48)
+    i += 1
+  }
+  Ok(value)
+}
+
+// Go parser.parseNumeric: base-256 when the high bit is set, else octal.
+// Only non-negative values are accepted.
+fn numeric(b: List[u8], start: u64, end: u64) -> Result[u64, ()] uses {} {
+  if end > start && b[start] & 0x80 != 0 {
+    if b[start] & 0x40 != 0 {
+      return Error(())
+    }
+    let mut value: u64 = 0
+    let mut i = start
+    while i < end {
+      let mut c = b[i]
+      if i == start {
+        c = c & 0x7f
+      }
+      if value >> 56 != 0 {
+        return Error(())
+      }
+      value = value << 8 | core@1/int.widen(c)
+      i += 1
+    }
+    if value >> 63 != 0 {
+      return Error(())
+    }
+    return Ok(value)
+  }
+  octal(b, start, end)
+}
+
+// Like numeric, for the signed modification time.
+fn signed_numeric(b: List[u8], start: u64, end: u64) -> Result[i64, ()] uses {} {
+  if end > start && b[start] & 0xc0 == 0xc0 {
+    let mut value: u64 = 0
+    let mut i = start
+    while i < end {
+      let mut c = b[i] ^ 0xff
+      if i == start {
+        c = c & 0x7f
+      }
+      if value >> 56 != 0 {
+        return Error(())
+      }
+      value = value << 8 | core@1/int.widen(c)
+      i += 1
+    }
+    if value >> 63 != 0 {
+      return Error(())
+    }
+    let positive: i64 = core@1/int.narrow(value)
+    return Ok(-1 - positive)
+  }
+  let value = numeric(b, start, end)?
+  if value >> 63 != 0 {
+    return Error(())
+  }
+  Ok(core@1/int.narrow(value))
+}
+
+// Go block.computeChecksum, with the checksum field read as spaces: the
+// unsigned sum, given the block's plain sum.
+fn unsigned_checksum(b: List[u8], base: u64, sum: u64) -> u64 uses {} {
+  let mut field: u64 = 0
+  let mut i = base + 148
+  while i < base + 156 {
+    field += core@1/int.widen(b[i])
+    i += 1
+  }
+  sum - field + 256
+}
+
+// The signed sum, as historic Sun tar computed it.
+fn signed_checksum(b: List[u8], base: u64) -> i64 uses {} {
+  let mut signed: i64 = 256
+  let mut i: u64 = 0
+  while i < BLOCK {
+    if i < 148 || i >= 156 {
+      let c: i8 = core@1/int.truncate(b[base + i])
+      signed += core@1/int.widen(c)
+    }
+    i += 1
+  }
+  signed
+}
+
+// Go block.getFormat for the block at `o` whose plain sum is `sum`: 0
+// unknown, 1 V7, 2 USTAR or PAX, 3 GNU, 4 STAR.
+fn block_format(b: List[u8], o: u64, sum: u64) -> u64 uses {} {
+  let stored = match octal(b, o + 148, o + 156) {
+    Ok(value) => value,
+    Error(_) => return 0,
+  }
+  if stored >> 32 != 0 {
+    return 0
+  }
+  if stored != unsigned_checksum(b, o, sum) {
+    let signed_stored: i64 = core@1/int.narrow(stored)
+    if signed_stored != signed_checksum(b, o) {
+      return 0
+    }
+  }
+  let ustar = b[o + 257] == 117 && b[o + 258] == 115 && b[o + 259] == 116 && b[o + 260] == 97 && b[o + 261] == 114
+  if ustar && b[o + 262] == 0 {
+    if b[o + 508] == 116 && b[o + 509] == 97 && b[o + 510] == 114 && b[o + 511] == 0 {
+      return 4
+    }
+    return 2
+  }
+  if ustar && b[o + 262] == 32 && b[o + 263] == 32 && b[o + 264] == 0 {
+    return 3
+  }
+  1
+}
+
+fn kind_of(flag: u8) -> Kind uses {} {
+  if flag == 48 {
+    Regular()
+  } else if flag == 49 {
+    Link()
+  } else if flag == 50 {
+    Symlink()
+  } else if flag == 51 {
+    Char()
+  } else if flag == 52 {
+    Block()
+  } else if flag == 53 {
+    Directory()
+  } else if flag == 54 {
+    Fifo()
+  } else if flag == 103 {
+    Global()
+  } else {
+    Other(flag)
+  }
+}
+
+fn flag_of(kind: Kind) -> u8 uses {} {
+  match kind {
+    Regular() => 48,
+    Link() => 49,
+    Symlink() => 50,
+    Char() => 51,
+    Block() => 52,
+    Directory() => 53,
+    Fifo() => 54,
+    Global() => 103,
+    Other(flag) => flag,
+  }
+}
+
+// Go isHeaderOnlyType: kinds whose size field describes no data.
+fn header_only(kind: Kind) -> bool uses {} {
+  match kind {
+    Link() | Symlink() | Char() | Block() | Directory() | Fifo() => true,
+    _ => false,
+  }
+}
+
+// Go Reader.readHeader on a non-zero block at archive offset `at`. A name or
+// link name that is not UTF-8 is left empty and noted in `bad` (1 and 2), for
+// a GNU long name or PAX record to replace.
+fn parse_header(b: List[u8], o: u64, sum: u64, at: u64, mut bad: u64) -> Result[
+  Header,
+  TarError
+] uses {} {
+  let format = block_format(b, o, sum)
+  if format == 0 {
+    return Error(Header(at))
+  }
+  bad = 0
+  let mut name = match field_text(b, o + 0, o + 100) {
+    Ok(value) => value,
+    Error(_) => {
+      bad = 1
+      ""
+    },
+  }
+  let linkname = match field_text(b, o + 157, o + 257) {
+    Ok(value) => value,
+    Error(_) => {
+      bad = bad | 2
+      ""
+    },
+  }
+  let size = match numeric(b, o + 124, o + 136) {
+    Ok(value) => value,
+    Error(_) => return Error(Header(at)),
+  }
+  let mode = match numeric(b, o + 100, o + 108) {
+    Ok(value) => value,
+    Error(_) => return Error(Header(at)),
+  }
+  let uid = match numeric(b, o + 108, o + 116) {
+    Ok(value) => value,
+    Error(_) => return Error(Header(at)),
+  }
+  let gid = match numeric(b, o + 116, o + 124) {
+    Ok(value) => value,
+    Error(_) => return Error(Header(at)),
+  }
+  let modified = match signed_numeric(b, o + 136, o + 148) {
+    Ok(value) => value,
+    Error(_) => return Error(Header(at)),
+  }
+  let mut h = Header(
+    name: "",
+    kind: kind_of(b[o + 156]),
+    linkname: linkname,
+    size: size,
+    mode: mode,
+    uid: uid,
+    gid: gid,
+    uname: "",
+    gname: "",
+    modified: modified,
+    devmajor: 0,
+    devminor: 0,
+    records: map.empty()
+  )
+  if format > 1 {
+    h.uname = match field_text(b, o + 265, o + 297) {
+      Ok(value) => value,
+      Error(_) => return Error(Encoding(at)),
+    }
+    h.gname = match field_text(b, o + 297, o + 329) {
+      Ok(value) => value,
+      Error(_) => return Error(Encoding(at)),
+    }
+    h.devmajor = match numeric(b, o + 329, o + 337) {
+      Ok(value) => value,
+      Error(_) => return Error(Header(at)),
+    }
+    h.devminor = match numeric(b, o + 337, o + 345) {
+      Ok(value) => value,
+      Error(_) => return Error(Header(at)),
+    }
+    // USTAR and PAX keep a 155-byte name prefix, STAR a 131-byte one; GNU
+    // stores access and change times there instead, unless they do not parse
+    // (archives Go 1.7 wrote), when an ASCII USTAR prefix applies.
+    let mut prefix_end: u64 = if format == 2 {
+      500
+    } else if format == 4 {
+      476
+    } else {
+      345
+    }
+    if format == 3 {
+      let access_bad = b[o + 345] != 0 && numeric(b, o + 345, o + 357) == Error(())
+      let change_bad = b[o + 357] != 0 && numeric(b, o + 357, o + 369) == Error(())
+      if access_bad || change_bad {
+        prefix_end = 500
+        let mut i = o + 345
+        while i < o + 500 {
+          if b[i] >= 0x80 {
+            prefix_end = 345
+          }
+          i += 1
+        }
+      }
+    }
+    let prefix = match field_text(b, o + 345, o + prefix_end) {
+      Ok(value) => value,
+      Error(_) => {
+        bad = bad | 1
+        ""
+      },
+    }
+    if prefix != "" {
+      name = string.concat(string.concat(prefix, "/"), name)
+    }
+  }
+  h.name = take name
+  // Go TypeRegA: a NUL flag is a regular file, or a directory when its name
+  // ends in a slash.
+  if b[o + 156] == 0 {
+    h.kind = if string.ends_with(h.name, "/") {
+      Directory()
+    } else {
+      Regular()
+    }
+  }
+  Ok(take h)
+}
+
+// Go parsePAXRecord over `data` from `start`: the key, value and next start.
+fn pax_record(data: List[u8], start: u64) -> Result[
+  (unique String, unique String, u64),
+  ()
+] uses {} {
+  let end = core@1/list.len(data)
+  let mut i = start
+  let mut length: u64 = 0
+  while i < end && data[i] != 32 {
+    let c = data[i]
+    if c < 48 || c > 57 || length > 100000000 {
+      return Error(())
+    }
+    length = length * 10 + core@1/int.widen(c - 48)
+    i += 1
+  }
+  if i == start || i == end || length < 5 || length > end - start {
+    return Error(())
+  }
+  let record_end = start + length
+  if record_end <= i + 1 || data[record_end - 1] != 10 {
+    return Error(())
+  }
+  let mut equals = i + 1
+  while equals < record_end - 1 && data[equals] != 61 {
+    equals += 1
+  }
+  if equals == record_end - 1 || equals == i + 1 {
+    return Error(())
+  }
+  let mut key_bytes: List[u8] = []
+  let mut k = i + 1
+  while k < equals {
+    core@1/list.push(mut key_bytes, data[k])
+    k += 1
+  }
+  let mut value_bytes: List[u8] = []
+  let mut v = equals + 1
+  let mut nul = false
+  while v < record_end - 1 {
+    nul = nul || data[v] == 0
+    core@1/list.push(mut value_bytes, data[v])
+    v += 1
+  }
+  let key_text = match text.finish(take key_bytes) {
+    Ok(value) => value,
+    Error(_) => return Error(()),
+  }
+  let value_text = match text.finish(take value_bytes) {
+    Ok(value) => value,
+    Error(_) => return Error(()),
+  }
+  // Go validPAXRecord: path, linkpath, uname and gname values hold no NUL;
+  // other keys hold no NUL.
+  if key_text == "path" || key_text == "linkpath" || key_text == "uname" || key_text == "gname" {
+    if nul {
+      return Error(())
+    }
+  } else if string.contains(key_text, "\x00") {
+    return Error(())
+  }
+  Ok((take key_text, take value_text, record_end))
+}
+
+fn decimal(value: String) -> Result[u64, ()] uses {} {
+  let chars = core@1/string.as_bytes(value)
+  let len = core@1/bytes.len(chars)
+  if len == 0 {
+    return Error(())
+  }
+  // Go strconv.ParseInt(v, 10, 64): digits of a value below 2^63.
+  let mut n: u64 = 0
+  let mut i: u64 = 0
+  while i < len {
+    let c = chars[i]
+    if c < 48 || c > 57 || n > 922337203685477580 || n == 922337203685477580 && c > 55 {
+      return Error(())
+    }
+    n = n * 10 + core@1/int.widen(c - 48)
+    i += 1
+  }
+  Ok(n)
+}
+
+// Go parsePAXTime: seconds, optionally signed, then optional digits after a
+// dot; returns the whole seconds, truncated toward negative infinity.
+fn pax_time(value: String) -> Result[i64, ()] uses {} {
+  let chars = core@1/string.as_bytes(value)
+  let len = core@1/bytes.len(chars)
+  let mut i: u64 = 0
+  let negative = len > 0 && chars[0] == 45
+  if negative || len > 0 && chars[0] == 43 {
+    i = 1
+  }
+  let mut seconds: u64 = 0
+  let begin = i
+  while i < len && chars[i] != 46 {
+    let c = chars[i]
+    if c < 48 || c > 57 || seconds > 922337203685477580 {
+      return Error(())
+    }
+    seconds = seconds * 10 + core@1/int.widen(c - 48)
+    i += 1
+  }
+  if i == begin {
+    return Error(())
+  }
+  let mut fraction = false
+  if i < len {
+    i += 1
+    while i < len {
+      let c = chars[i]
+      if c < 48 || c > 57 {
+        return Error(())
+      }
+      fraction = fraction || c != 48
+      i += 1
+    }
+  }
+  let whole: i64 = core@1/int.narrow(seconds)
+  if negative {
+    if fraction {
+      return Ok(-whole - 1)
+    }
+    return Ok(-whole)
+  }
+  Ok(whole)
+}
+
+// Go mergePAX: records override the header's fields; empty values keep them.
+fn merge_pax(mut h: Header, take records: Map[String, String], at: u64) -> Result[
+  (),
+  TarError
+] uses {} {
+  for (key, value) in records {
+    if value == "" {
+      continue
+    }
+    if key == "path" {
+      h.name = value
+    } else if key == "linkpath" {
+      h.linkname = value
+    } else if key == "uname" {
+      h.uname = value
+    } else if key == "gname" {
+      h.gname = value
+    } else if key == "uid" {
+      h.uid = match decimal(value) {
+        Ok(n) => n,
+        Error(_) => return Error(Header(at)),
+      }
+    } else if key == "gid" {
+      h.gid = match decimal(value) {
+        Ok(n) => n,
+        Error(_) => return Error(Header(at)),
+      }
+    } else if key == "size" {
+      h.size = match decimal(value) {
+        Ok(n) => n,
+        Error(_) => return Error(Header(at)),
+      }
+    } else if key == "mtime" {
+      h.modified = match pax_time(value) {
+        Ok(n) => n,
+        Error(_) => return Error(Header(at)),
+      }
+    } else if key == "atime" || key == "ctime" {
+      if pax_time(value) == Error(()) {
+        return Error(Header(at))
+      }
+    }
+  }
+  h.records = take records
+  Ok(())
+}
+
+// Go readSpecialFile: a PAX or GNU long-name payload of `size` bytes.
+fn special[S, E](
+  mut t: Reader,
+  mut r: bufio.Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  size: u64,
+  at: u64
+) -> Result[unique List[u8], ReadError[E]] uses {refill} {
+  if size > SPECIAL {
+    return Error(Archive(Header(at)))
+  }
+  if want(mut t, mut r, mut source, refill, size)? < size {
+    return Error(Archive(Truncated()))
+  }
+  let mut data: List[u8] = []
+  let end = t.at + size
+  while t.at < end {
+    core@1/list.push(mut data, t.buffer[t.at])
+    t.at += 1
+  }
+  t.offset += size
+  t.pad = (BLOCK - size % BLOCK) % BLOCK
+  Ok(take data)
+}
+
+/// Go Reader.Next: skips the rest of the current entry and returns the next
+/// entry's header, or None after the end-of-archive marker or at the end of
+/// the input at a block boundary. PAX `x` records and GNU long names apply to
+/// the entry that follows them; a PAX global header is returned as a `Global`
+/// entry. Entry names are returned as stored: `extract` refuses unsafe ones.
+pub fn next[S, E](
+  mut t: Reader,
+  mut r: bufio.Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E]
+) -> Result[Option[Header], ReadError[E]] uses {refill} {
+  let mut records: Map[String, String] = map.empty()
+  let mut long_name: Option[String] = None()
+  let mut long_link: Option[String] = None()
+  if t.ended {
+    return Ok(None())
+  }
+  while true {
+    skip(mut t, mut r, mut source, refill, t.left + t.pad)?
+    t.left = 0
+    t.pad = 0
+    let at = t.offset
+    let n = want(mut t, mut r, mut source, refill, BLOCK)?
+    if n == 0 {
+      t.ended = true
+      return Ok(None())
+    }
+    if n < BLOCK {
+      return Error(Archive(Truncated()))
+    }
+    let o = t.at
+    let sum = block_sum(t.buffer, o)
+    t.at += BLOCK
+    t.offset += BLOCK
+    if sum == 0 {
+      let m = want(mut t, mut r, mut source, refill, BLOCK)?
+      if m == 0 || m >= BLOCK && block_sum(t.buffer, t.at) == 0 {
+        t.ended = true
+        return Ok(None())
+      }
+      if m < BLOCK {
+        return Error(Archive(Truncated()))
+      }
+      return Error(Archive(Header(at)))
+    }
+    let mut bad: u64 = 0
+    let mut h = parse_header(t.buffer, o, sum, at, mut bad) ? Archive
+    let flag = t.buffer[o + 156]
+    let data_size = if header_only(h.kind) {
+      0u64
+    } else {
+      h.size
+    }
+    if flag == 120 || flag == 103 {
+      // Go parsePAX.
+      let data = special(mut t, mut r, mut source, refill, data_size, at)?
+      let mut parsed: Map[String, String] = map.empty()
+      let mut i: u64 = 0
+      while i < core@1/list.len(data) {
+        let (key, value, rest) = match pax_record(data, i) {
+          Ok(record) => record,
+          Error(_) => return Error(Archive(Header(at))),
+        }
+        map.insert(mut parsed, take key, take value)
+        i = rest
+      }
+      if flag == 103 {
+        merge_pax(mut h, take parsed, at) ? Archive
+        h.kind = Global()
+        h.size = 0
+        return Ok(Some(take h))
+      }
+      records = take parsed
+    } else if flag == 76 || flag == 75 {
+      let data = special(mut t, mut r, mut source, refill, data_size, at)?
+      let value = match field_text(data, 0, core@1/list.len(data)) {
+        Ok(value) => value,
+        Error(_) => return Error(Archive(Encoding(at))),
+      }
+      if flag == 76 {
+        long_name = Some(take value)
+      } else {
+        long_link = Some(take value)
+      }
+    } else if flag == 83 || map.contains(records, "GNU.sparse.major") || map.contains(
+      records,
+      "GNU.sparse.map"
+    ) || map.contains(records, "GNU.sparse.offset") {
+      return Error(Archive(Unsupported(at)))
+    } else {
+      let named = long_name != None() || map.get(records, "path") != None() && map.get(
+        records,
+        "path"
+      ) != Some("")
+      let linked = long_link != None() || map.get(records, "linkpath") != None() && map.get(
+        records,
+        "linkpath"
+      ) != Some("")
+      if bad & 1 != 0 && !named || bad & 2 != 0 && !linked {
+        return Error(Archive(Encoding(at)))
+      }
+      merge_pax(mut h, take records, at) ? Archive
+      if let Some(name) = long_name {
+        h.name = name
+      }
+      if let Some(link) = long_link {
+        h.linkname = link
+      }
+      t.left = if header_only(h.kind) {
+        0
+      } else {
+        h.size
+      }
+      t.pad = (BLOCK - t.left % BLOCK) % BLOCK
+      return Ok(Some(take h))
+    }
+  }
+  Ok(None())
+}
+
+/// Appends at most `max` bytes of the current entry's data to `out` and
+/// returns how many, zero at the end of the entry.
+@preserves_unique(out)
+pub fn read[S, E](
+  mut t: Reader,
+  mut r: bufio.Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  mut out: List[u8],
+  max: u64
+) -> Result[u64, ReadError[E]] uses {refill} {
+  let count = if t.left < max {
+    t.left
+  } else {
+    max
+  }
+  if count == 0 {
+    return Ok(0)
+  }
+  let have = want(mut t, mut r, mut source, refill, 1)?
+  if have == 0 {
+    return Error(Archive(Truncated()))
+  }
+  let n = if have < count {
+    have
+  } else {
+    count
+  }
+  let end = t.at + n
+  while t.at < end {
+    core@1/list.push(mut out, t.buffer[t.at])
+    t.at += 1
+  }
+  t.offset += n
+  t.left -= n
+  Ok(n)
+}
+
+/// `next` from a file through the buffered reader `r`.
+pub fn file_next(dir: Dir, mut f: File of dir, mut t: Reader, mut r: bufio.Reader) -> Result[
+  Option[Header],
+  ReadError[FileError]
+] {
+  next(
+    mut t,
+    mut r,
+    mut f,
+    fn(mut handle: File of dir, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(dir, mut handle, mut buffer, requested)
+    }
+  )
+}
+
+/// `read` from a file through the buffered reader `r`.
+@preserves_unique(out)
+pub fn file_read(
+  dir: Dir,
+  mut f: File of dir,
+  mut t: Reader,
+  mut r: bufio.Reader,
+  mut out: List[u8],
+  max: u64
+) -> Result[u64, ReadError[FileError]] {
+  read(
+    mut t,
+    mut r,
+    mut f,
+    fn(mut handle: File of dir, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(dir, mut handle, mut buffer, requested)
+    },
+    mut out,
+    max
+  )
+}
+
+// Go isASCII: no byte at or above 0x80 and no NUL.
+fn ascii(s: String) -> bool uses {} {
+  for c in core@1/string.as_bytes(s) {
+    if c >= 0x80 || c == 0 {
+      return false
+    }
+  }
+  true
+}
+
+// Go toASCII.
+fn to_ascii(s: String) -> unique String uses {} {
+  let mut builder: List[u8] = []
+  for c in core@1/string.as_bytes(s) {
+    if c < 0x80 && c != 0 {
+      core@1/list.push(mut builder, c)
+    }
+  }
+  text.finish_valid(take builder)
+}
+
+// Go formatter.formatString into b[start..end): copies what fits, a NUL
+// after a shorter value, and a NUL over a trailing slash run when truncated.
+@preserves_unique(b)
+fn put_text(mut b: List[u8], start: u64, end: u64, s: String) -> bool uses {} {
+  let bytes = core@1/string.as_bytes(s)
+  let len = core@1/bytes.len(bytes)
+  let size = end - start
+  let mut i: u64 = 0
+  while i < len && i < size {
+    b[start + i] = bytes[i]
+    i += 1
+  }
+  if len < size {
+    b[start + len] = 0
+  }
+  if len > size && b[end - 1] == 47 {
+    let mut n = size - 1
+    while n > 0 && bytes[n - 1] == 47 {
+      n -= 1
+    }
+    b[start + n] = 0
+  }
+  len <= size
+}
+
+// Go fitsInOctal for a field of `size` bytes.
+fn fits_octal(size: u64, value: u64) -> bool uses {} {
+  size >= 22 || value < 1u64 << (size - 1) * 3
+}
+
+// Go formatter.formatOctal: zero-padded octal and a NUL, or zero when the
+// value does not fit.
+@preserves_unique(b)
+fn put_octal(mut b: List[u8], start: u64, end: u64, value: u64) -> bool uses {} {
+  let size = end - start
+  let fits = fits_octal(size, value)
+  let mut v = if fits {
+    value
+  } else {
+    0
+  }
+  let mut i = end - 1
+  b[i] = 0
+  while i > start {
+    i -= 1
+    let digit: u8 = core@1/int.truncate(v & 7)
+    b[i] = 48 + digit
+    v = v >> 3
+  }
+  fits
+}
+
+// put_octal for the signed modification time; negative times do not fit.
+@preserves_unique(b)
+fn put_time(mut b: List[u8], value: i64) -> bool uses {} {
+  if value < 0 {
+    put_octal(mut b, 136, 148, 0)
+    return false
+  }
+  let v: u64 = core@1/int.truncate(value)
+  put_octal(mut b, 136, 148, v)
+}
+
+// Go block.setFormat for USTAR and PAX: the magic, version and checksum.
+@preserves_unique(b)
+fn seal(mut b: List[u8]) -> () uses {} {
+  b[257] = 117
+  b[258] = 115
+  b[259] = 116
+  b[260] = 97
+  b[261] = 114
+  b[262] = 0
+  b[263] = 48
+  b[264] = 48
+  let sum = block_sum(b, 0)
+  put_octal(mut b, 148, 155, unsigned_checksum(b, 0, sum))
+  b[155] = 32
+}
+
+const ZERO_BLOCK: List[u8] = comptime zeros(BLOCK)
+
+fn zeros(n: u64) -> unique List[u8] uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < n {
+    core@1/list.push(mut out, 0)
+    i += 1
+  }
+  take out
+}
+
+// Go templateV7Plus: the V7 and USTAR fields, with what does not fit cut or
+// zeroed.
+fn template(h: Header, name: String, ascii_only: bool) -> unique List[u8] uses {} {
+  let mut b = unique ZERO_BLOCK
+  let mut fits = true
+  b[156] = flag_of(h.kind)
+  if ascii_only {
+    fits = put_text(mut b, 0, 100, to_ascii(name)) && fits
+    fits = put_text(mut b, 157, 257, to_ascii(h.linkname)) && fits
+    fits = put_text(mut b, 265, 297, to_ascii(h.uname)) && fits
+    fits = put_text(mut b, 297, 329, to_ascii(h.gname)) && fits
+  } else {
+    fits = put_text(mut b, 0, 100, name) && fits
+    fits = put_text(mut b, 157, 257, h.linkname) && fits
+    fits = put_text(mut b, 265, 297, h.uname) && fits
+    fits = put_text(mut b, 297, 329, h.gname) && fits
+  }
+  fits = put_octal(mut b, 100, 108, h.mode) && fits
+  fits = put_octal(mut b, 108, 116, h.uid) && fits
+  fits = put_octal(mut b, 116, 124, h.gid) && fits
+  fits = put_octal(mut b, 124, 136, h.size) && fits
+  fits = put_time(mut b, h.modified) && fits
+  fits = put_octal(mut b, 329, 337, h.devmajor) && fits
+  fits = put_octal(mut b, 337, 345, h.devminor) && fits
+  take b
+}
+
+// Go splitUSTARPath: a 155-byte prefix and 100-byte name split at a slash.
+fn split_ustar(name: String) -> Option[u64] uses {} {
+  let bytes = core@1/string.as_bytes(name)
+  let total = core@1/bytes.len(bytes)
+  if total <= 100 || !ascii(name) {
+    return None()
+  }
+  let mut length = total
+  if length > 156 {
+    length = 156
+  } else if bytes[length - 1] == 47 {
+    length -= 1
+  }
+  let mut i = length
+  while i > 0 && bytes[i - 1] != 47 {
+    i -= 1
+  }
+  if i <= 1 {
+    return None()
+  }
+  let slash = i - 1
+  let suffix = total - slash - 1
+  if suffix > 100 || suffix == 0 || slash > 155 {
+    return None()
+  }
+  Some(slash)
+}
+
+fn piece(s: String, start: u64, end: u64) -> unique String uses {} {
+  let bytes = core@1/string.as_bytes(s)
+  let mut builder: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut builder, bytes[i])
+    i += 1
+  }
+  match text.finish(take builder) {
+    Ok(value) => take value,
+    Error(_) => "",
+  }
+}
+
+// Go formatPAXRecord: "<length> <key>=<value>\n", the length counting itself.
+fn pax_line(mut out: List[u8], key: String, value: String) -> () uses {} {
+  let base = string.byte_len(key) + string.byte_len(value) + 3
+  let mut size = base + string.byte_len(u64.to_string(base))
+  if string.byte_len(u64.to_string(size)) + base != size {
+    size = string.byte_len(u64.to_string(size)) + base
+  }
+  text.append(mut out, u64.to_string(size))
+  core@1/list.push(mut out, 32)
+  text.append(mut out, key)
+  core@1/list.push(mut out, 61)
+  text.append(mut out, value)
+  core@1/list.push(mut out, 10)
+}
+
+@noalloc
+fn by_bytes(a: String, b: String) -> i32 uses {} {
+  let x = core@1/string.as_bytes(a)
+  let y = core@1/string.as_bytes(b)
+  let n = core@1/bytes.len(x)
+  let m = core@1/bytes.len(y)
+  let mut i: u64 = 0
+  while i < n && i < m {
+    if x[i] != y[i] {
+      if x[i] < y[i] {
+        return -1
+      }
+      return 1
+    }
+    i += 1
+  }
+  if n < m {
+    -1
+  } else if n == m {
+    0
+  } else {
+    1
+  }
+}
+
+// Go path.Join(dir, "PaxHeaders.0", file) for the name split after its last
+// slash.
+fn pax_name(name: String) -> String uses {} {
+  let bytes = core@1/string.as_bytes(name)
+  let total = core@1/bytes.len(bytes)
+  let mut slash = total
+  while slash > 0 && bytes[slash - 1] != 47 {
+    slash -= 1
+  }
+  let dir = piece(name, 0, slash)
+  let file = piece(name, slash, total)
+  let mut full = string.concat(string.concat(dir, "PaxHeaders.0/"), file)
+  if let Ok(clean) = path.normalize(core@1/path.of(full)) {
+    full = core@1/path.text(clean)
+  }
+  take full
+}
+
+// Go Writer.writeRawFile for a PAX header: a V7 block with zero numbers and
+// the name made ASCII, cut to 100 bytes and stripped of trailing slashes,
+// then the records padded to a block.
+@preserves_unique(out)
+fn raw_file(mut out: List[u8], name: String, data: List[u8], flag: u8) -> () uses {} {
+  let mut short = to_ascii(name)
+  if string.byte_len(short) > 100 {
+    short = piece(short, 0, 100)
+  }
+  let mut end = string.byte_len(short)
+  while end > 0 && core@1/string.as_bytes(short)[end - 1] == 47 {
+    end -= 1
+  }
+  let mut b = unique ZERO_BLOCK
+  b[156] = flag
+  put_text(mut b, 0, 100, piece(short, 0, end))
+  put_octal(mut b, 100, 108, 0)
+  put_octal(mut b, 108, 116, 0)
+  put_octal(mut b, 116, 124, 0)
+  put_octal(mut b, 124, 136, core@1/list.len(data))
+  put_octal(mut b, 136, 148, 0)
+  seal(mut b)
+  for byte in b {
+    core@1/list.push(mut out, byte)
+  }
+  for byte in data {
+    core@1/list.push(mut out, byte)
+  }
+  let mut pad = (BLOCK - core@1/list.len(data) % BLOCK) % BLOCK
+  while pad > 0 {
+    core@1/list.push(mut out, 0)
+    pad -= 1
+  }
+}
+
+// Go Writer.Flush: the previous entry must be complete; pads it to a block.
+@preserves_unique(out)
+fn flush(mut w: Writer, mut out: List[u8]) -> Result[(), WriteError] uses {} {
+  if w.closed {
+    return Error(Closed())
+  }
+  if w.left > 0 {
+    return Error(Short())
+  }
+  while w.pad > 0 {
+    core@1/list.push(mut out, 0)
+    w.pad -= 1
+  }
+  Ok(())
+}
+
+/// Go Writer.WriteHeader: finishes the previous entry and appends `h`'s
+/// header blocks, USTAR when its fields fit (a long name split into prefix
+/// and name), else a PAX extended header first; the entry's `size` bytes of
+/// data follow through `write`.
+@preserves_unique(out)
+pub fn write_header(mut w: Writer, h: Header, mut out: List[u8]) -> Result[
+  (),
+  WriteError
+] uses {} {
+  flush(mut w, mut out)?
+  let flag = flag_of(h.kind)
+  if flag == 120 || flag == 76 || flag == 75 {
+    return Error(Field())
+  }
+  let trailing = string.ends_with(h.name, "/")
+  match h.kind {
+    Regular() | Char() | Block() | Fifo() => {
+      if trailing {
+        return Error(Field())
+      }
+    },
+    _ => (),
+  }
+  // Go allowedFormats: the records that USTAR cannot carry.
+  let mut pax: Map[String, String] = map.empty()
+  let mut ustar = true
+  let split = split_ustar(h.name)
+  if !ascii(h.name) || string.byte_len(h.name) > 100 {
+    if split == None() {
+      ustar = false
+    }
+    map.insert(mut pax, "path", unique h.name)
+  }
+  if !ascii(h.linkname) || string.byte_len(h.linkname) > 100 {
+    ustar = false
+    map.insert(mut pax, "linkpath", unique h.linkname)
+  }
+  if !ascii(h.uname) || string.byte_len(h.uname) > 32 {
+    ustar = false
+    map.insert(mut pax, "uname", unique h.uname)
+  }
+  if !ascii(h.gname) || string.byte_len(h.gname) > 32 {
+    ustar = false
+    map.insert(mut pax, "gname", unique h.gname)
+  }
+  if !fits_octal(8, h.mode) || !fits_octal(8, h.devmajor) || !fits_octal(8, h.devminor) {
+    return Error(Field())
+  }
+  if !fits_octal(8, h.uid) {
+    ustar = false
+    map.insert(mut pax, "uid", u64.to_string(h.uid))
+  }
+  if !fits_octal(8, h.gid) {
+    ustar = false
+    map.insert(mut pax, "gid", u64.to_string(h.gid))
+  }
+  if !fits_octal(12, h.size) {
+    ustar = false
+    map.insert(mut pax, "size", u64.to_string(h.size))
+  }
+  if h.modified < 0 || !fits_octal(12, core@1/int.truncate(h.modified)) {
+    ustar = false
+    map.insert(mut pax, "mtime", i64.to_string(h.modified))
+  }
+  // Records the header already states are kept when they agree; others are
+  // copied unless they would conflict.
+  for (key, value) in h.records {
+    if map.contains(pax, key) {
+      continue
+    }
+    let stated: Option[String] = if key == "path" {
+      Some(h.name)
+    } else if key == "linkpath" {
+      Some(h.linkname)
+    } else if key == "uname" {
+      Some(h.uname)
+    } else if key == "gname" {
+      Some(h.gname)
+    } else if key == "uid" {
+      Some(u64.to_string(h.uid))
+    } else if key == "gid" {
+      Some(u64.to_string(h.gid))
+    } else if key == "size" {
+      Some(u64.to_string(h.size))
+    } else if key == "mtime" {
+      Some(i64.to_string(h.modified))
+    } else {
+      None()
+    }
+    if h.kind == Global() {
+      map.insert(mut pax, unique key, unique value)
+      continue
+    }
+    match stated {
+      Some(current) => {
+        if current == value {
+          map.insert(mut pax, unique key, unique value)
+        }
+      },
+      None() => {
+        if key != "atime" && key != "ctime" && !string.starts_with(key, "GNU.sparse.") {
+          map.insert(mut pax, unique key, unique value)
+        }
+      },
+    }
+  }
+  if map.len(h.records) > 0 || h.kind == Global() {
+    ustar = false
+  }
+  for (key, value) in pax {
+    if key == "" || string.contains(key, "=") || string.contains(key, "\x00") {
+      return Error(Field())
+    }
+    if (key == "path" || key == "linkpath" || key == "uname" || key == "gname") && string.contains(
+      value,
+      "\x00"
+    ) {
+      return Error(Field())
+    }
+  }
+  if ustar {
+    let (prefix, name) = match split {
+      Some(slash) => (
+        piece(h.name, 0, slash),
+        piece(h.name, slash + 1, string.byte_len(h.name))
+      ),
+      None() => ("", unique h.name),
+    }
+    let mut b = template(h, name, false)
+    put_text(mut b, 345, 500, prefix)
+    seal(mut b)
+    for byte in b {
+      core@1/list.push(mut out, byte)
+    }
+  } else {
+    let mut keys: List[String] = []
+    for (key, _) in pax {
+      core@1/list.push(mut keys, unique key)
+    }
+    list.sort(mut keys, by_bytes)
+    let mut data: List[u8] = []
+    for key in keys {
+      match map.get(pax, key) {
+        Some(value) => pax_line(mut data, key, value),
+        None() => (),
+      }
+    }
+    if core@1/list.len(data) > SPECIAL {
+      return Error(Field())
+    }
+    if h.kind == Global() {
+      let name = if h.name == "" {
+        "GlobalHead.0.0"
+      } else {
+        h.name
+      }
+      raw_file(mut out, name, data, 103)
+      return Ok(())
+    }
+    if map.len(pax) > 0 {
+      raw_file(mut out, pax_name(h.name), data, 120)
+    }
+    let mut b = template(h, h.name, true)
+    seal(mut b)
+    for byte in b {
+      core@1/list.push(mut out, byte)
+    }
+  }
+  w.left = if header_only(h.kind) {
+    0
+  } else {
+    h.size
+  }
+  w.pad = (BLOCK - w.left % BLOCK) % BLOCK
+  Ok(())
+}
+
+/// Appends `data` to the current entry. Data beyond the declared size is
+/// `TooLong`, and nothing is appended.
+@preserves_unique(out)
+pub fn write(mut w: Writer, data: Bytes, mut out: List[u8]) -> Result[(), WriteError] uses {} {
+  if w.closed {
+    return Error(Closed())
+  }
+  let len = core@1/bytes.len(data)
+  if len > w.left {
+    return Error(TooLong())
+  }
+  for byte in data {
+    core@1/list.push(mut out, byte)
+  }
+  w.left -= len
+  Ok(())
+}
+
+/// Go Writer.Close: finishes the last entry and appends the two zero blocks
+/// that end an archive; later writes are `Closed`.
+@preserves_unique(out)
+pub fn close(mut w: Writer, mut out: List[u8]) -> Result[(), WriteError] uses {} {
+  flush(mut w, mut out)?
+  let mut i: u64 = 0
+  while i < 2 * BLOCK {
+    core@1/list.push(mut out, 0)
+    i += 1
+  }
+  w.closed = true
+  Ok(())
+}
+
+// A name extraction accepts: relative, nonempty after leading "./" pieces,
+// without "..", NUL or backslash; returns its components.
+fn local_parts(name: String) -> Option[unique List[String]] uses {} {
+  if name == "" || string.starts_with(name, "/") || string.contains(name, "\x00") || string.contains(
+    name,
+    "\\"
+  ) {
+    return None()
+  }
+  let mut parts: List[String] = []
+  let components = path.components(core@1/path.of(name))
+  for part in components {
+    if part == ".." {
+      return None()
+    }
+    if part != "." {
+      core@1/list.push(mut parts, unique part)
+    }
+  }
+  if core@1/list.len(parts) == 0 {
+    return None()
+  }
+  Some(take parts)
+}
+
+fn joined(parts: List[String], count: u64) -> unique String uses {} {
+  let mut builder: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    if i > 0 {
+      core@1/list.push(mut builder, 47)
+    }
+    text.append(mut builder, parts[i])
+    i += 1
+  }
+  text.finish_valid(take builder)
+}
+
+// Creates the directories `parts[0..count)` names; None refuses a symlink.
+fn directories(into: Dir, parts: List[String], count: u64) -> Result[
+  (),
+  Option[FileError]
+] {
+  let mut i: u64 = 1
+  while i <= count {
+    let p = core@1/path.of(joined(parts, i))
+    match core@1/file.metadata(into, p) {
+      Ok(meta) => match meta.kind {
+        Directory() => (),
+        Symlink() => return Error(None()),
+        _ => return Error(Some(NotDirectory())),
+      },
+      Error(NotFound()) => match core@1/file.mkdir(into, p) {
+        Ok(()) => (),
+        Error(error) => return Error(Some(error)),
+      },
+      Error(error) => return Error(Some(error)),
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+/// Extracts every entry from the reader into `into` and returns how many
+/// were written: directories and regular files only, creating missing parent
+/// directories. A name that is empty, absolute or holds a `..` component, a
+/// NUL or a backslash is `Insecure`, as is a path through or onto an existing
+/// symlink: extraction never follows one. Links, devices, FIFOs and other
+/// kinds are `Unsupported`; PAX global headers are skipped. An entry whose
+/// data would take the total past `limit` bytes is `TooLarge` before any of
+/// it is written. Permissions and times are not applied. The first refusal
+/// stops extraction, leaving earlier entries in place.
+pub fn extract[S, E](
+  into: Dir,
+  mut t: Reader,
+  mut r: bufio.Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
+  limit: u64
+) -> Result[u64, ExtractError[E]] {
+  let mut written: u64 = 0
+  let mut entries: u64 = 0
+  while true {
+    let h = match next(mut t, mut r, mut source, refill) {
+      Ok(Some(h)) => h,
+      Ok(None()) => return Ok(entries),
+      Error(error) => return Error(Read(error)),
+    }
+    match h.kind {
+      Global() => continue,
+      Directory() | Regular() => (),
+      _ => return Error(Unsupported(h.name)),
+    }
+    let parts = match local_parts(h.name) {
+      Some(parts) => parts,
+      None() => return Error(Insecure(h.name)),
+    }
+    let count = core@1/list.len(parts)
+    match h.kind {
+      Directory() => match directories(into, parts, count) {
+        Ok(()) => (),
+        Error(None()) => return Error(Insecure(h.name)),
+        Error(Some(error)) => return Error(File(error)),
+      },
+      _ => {
+        if h.size > limit - written {
+          return Error(TooLarge())
+        }
+        match directories(into, parts, count - 1) {
+          Ok(()) => (),
+          Error(None()) => return Error(Insecure(h.name)),
+          Error(Some(error)) => return Error(File(error)),
+        }
+        let p = core@1/path.of(joined(parts, count))
+        match core@1/file.metadata(into, p) {
+          Ok(meta) => match meta.kind {
+            Symlink() => return Error(Insecure(h.name)),
+            _ => (),
+          },
+          Error(NotFound()) => (),
+          Error(error) => return Error(File(error)),
+        }
+        let mut f = match core@1/file.create(into, p) {
+          Ok(f) => f,
+          Error(error) => return Error(File(error)),
+        }
+        while true {
+          let mut chunk: List[u8] = []
+          let n = match read(mut t, mut r, mut source, refill, mut chunk, 32768) {
+            Ok(n) => n,
+            Error(error) => return Error(Read(error)),
+          }
+          if n == 0 {
+            break
+          }
+          match core@1/file.append(into, mut f, core@1/bytes.from_list(take chunk)) {
+            Ok(()) => (),
+            Error(error) => return Error(File(error)),
+          }
+          written += n
+        }
+      },
+    }
+    entries += 1
+  }
+  Ok(entries)
+}
+
+/// `extract` from an archive file, through a 64 KiB buffer.
+pub fn file_extract(
+  from: Dir,
+  mut f: File of from,
+  into: Dir,
+  mut t: Reader,
+  limit: u64
+) -> Result[u64, ExtractError[FileError]] {
+  let mut r = bufio.new(65536)
+  extract(
+    into,
+    mut t,
+    mut r,
+    mut f,
+    fn(mut handle: File of from, mut buffer: List[u8], requested: u64) -> Result[
+      u64,
+      FileError
+    ] {
+      core@1/file.read(from, mut handle, mut buffer, requested)
+    },
+    limit
+  )
+}

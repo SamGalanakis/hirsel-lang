@@ -1167,6 +1167,38 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     std::fs::remove_file(source).unwrap();
 }
 
+#[test]
+fn tar_extract_never_follows_host_symlinks_out_of_the_grant_in_both_engines() {
+    let source = std_file(include_str!("fixtures/tar-symlink-escape.hir"));
+    let root = source.with_extension("root");
+    let outside = source.with_extension("outside");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("out")).unwrap();
+    std::os::unix::fs::symlink(outside.join("target.txt"), root.join("link.txt")).unwrap();
+    for native in [false, true] {
+        let record = run_record(
+            &source,
+            serde_json::json!({"io":{"stdout":"stdout.bytes@1","dirs":[{"path":"data","host":root,"access":"read_write"}]},"args":[]}),
+        );
+        let output = host_run(&source, &record, native).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "native={native}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"ok\n");
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        assert_eq!(std::fs::read(root.join("fine/ok.txt")).unwrap(), b"evil");
+        std::fs::remove_dir_all(root.join("fine")).unwrap();
+        std::fs::remove_file(record).unwrap();
+    }
+    std::fs::remove_dir_all(root).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+    std::fs::remove_file(source).unwrap();
+}
+
 fn build_executable(source: &std::path::Path, profile: &[&str]) -> std::path::PathBuf {
     let executable = source.with_extension(format!("{}-exe", profile.join("-")));
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))

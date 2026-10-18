@@ -1,0 +1,64 @@
+// rule: SEM-3
+// expect: run
+// tar.extract refuses a directory named by a leading ".." and an absolute
+// file name as Insecure, creating neither. SEM-3-tar-extract-run is the
+// accepted twin.
+type Source {
+  data: Bytes,
+  at: u64,
+}
+
+fn feed(mut s: Source, mut buffer: List[u8], requested: u64) -> Result[u64, ()] uses {} {
+  let end = if s.at + requested < core@1/bytes.len(s.data) {
+    s.at + requested
+  } else {
+    core@1/bytes.len(s.data)
+  }
+  for byte in core@1/bytes.slice(s.data, s.at, end) {
+    list.push(mut buffer, byte)
+  }
+  let fed = end - s.at
+  s.at = end
+  Ok(fed)
+}
+
+// An archive of the entries, written with tar.writer.
+fn archive(entries: List[(String, tar.Kind, Bytes)]) -> Bytes {
+  let mut w = tar.writer()
+  let mut out: List[u8] = []
+  for (name, kind, data) in entries {
+    let mut h = tar.header(unique name, kind, core@1/bytes.len(data))
+    if kind == Symlink() {
+      h.linkname = "target"
+    }
+    failure.check(tar.write_header(mut w, h, mut out) == Ok(()), Bounds())
+    failure.check(tar.write(mut w, data, mut out) == Ok(()), Bounds())
+  }
+  failure.check(tar.close(mut w, mut out) == Ok(()), Bounds())
+  core@1/bytes.from_list(take out)
+}
+
+fn extract(into: Dir, take data: Bytes, limit: u64) -> Result[u64, tar.ExtractError[()]] {
+  let mut t = tar.reader(None())
+  let mut r = bufio.new(512)
+  let mut source = Source(data: take data, at: 0)
+  tar.extract(into, mut t, mut r, mut source, feed, limit)
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  let dir = test.dir(t, [])
+  test.check(
+    t,
+    extract(dir, archive([("../evil", Directory(), b"")]), 100) == Error(
+      Insecure("../evil")
+    )
+  )
+  test.check(
+    t,
+    extract(dir, archive([("/etc/evil", Regular(), b"x")]), 100) == Error(
+      Insecure("/etc/evil")
+    )
+  )
+  test.check(t, file.read_dir(dir, path.of("."))? == [])
+  Ok(())
+}
