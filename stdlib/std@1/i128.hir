@@ -30,7 +30,7 @@ pub fn format_into(value: i128, mut out: List[u8]) -> () uses {} {
 pub fn to_string(value: i128) -> unique String uses {} {
   let mut out: List[u8] = []
   i128.format_into(value, mut out)
-  internal.decimal.finish(take out)
+  text.finish_valid(take out)
 }
 
 @noalloc

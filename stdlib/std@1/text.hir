@@ -13,3 +13,17 @@ pub fn append(mut builder: List[u8], text: String) -> () uses {} {
 pub fn finish(take builder: List[u8]) -> Result[String, Bytes] uses {} {
   core@1/string.from_bytes(core@1/bytes.from_list(take builder))
 }
+
+// The text that appends through the formatting protocol left in an empty
+// builder: `format_into` and `append` only add valid UTF-8, so every
+// `to_string` and every f-string finishes here; invalid bytes fail TextInvariant.
+@preserves_unique(builder)
+pub fn finish_valid(take builder: List[u8]) -> String uses {} {
+  match finish(take builder) {
+    Ok(text) => take text,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}

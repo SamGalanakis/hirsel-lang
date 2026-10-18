@@ -106,7 +106,7 @@ pub fn format_into(value: f64, mut out: List[u8]) -> () uses {} {
 pub fn to_string(value: f64) -> unique String uses {} {
   let mut out: List[u8] = []
   format_into(value, mut out)
-  internal.decimal.finish(take out)
+  text.finish_valid(take out)
 }
 
 @noalloc

@@ -18,7 +18,7 @@ pub fn format_into(value: u32, mut out: List[u8]) -> () uses {} {
 pub fn to_string(value: u32) -> unique String uses {} {
   let mut out: List[u8] = []
   u32.format_into(value, mut out)
-  internal.decimal.finish(take out)
+  text.finish_valid(take out)
 }
 
 @noalloc

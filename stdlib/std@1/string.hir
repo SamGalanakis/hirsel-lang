@@ -150,17 +150,6 @@ pub fn trim(s: String) -> String in s uses {} {
 }
 
 // Builders below only append valid UTF-8 or change one ASCII byte to another.
-@preserves_unique(builder)
-fn finish_valid(take builder: List[u8]) -> String uses {} {
-  match text.finish(take builder) {
-    Ok(text) => take text,
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      ""
-    },
-  }
-}
-
 fn ascii_case(s: String, lower: bool) -> unique String uses {} {
   let source = core@1/string.as_bytes(s)
   let mut builder: List[u8] = []
@@ -175,7 +164,7 @@ fn ascii_case(s: String, lower: bool) -> unique String uses {} {
     core@1/list.push(mut builder, core@1/int.narrow(converted))
     i += 1
   }
-  finish_valid(take builder)
+  text.finish_valid(take builder)
 }
 
 pub fn ascii_lower(s: String) -> unique String uses {} {
@@ -203,7 +192,7 @@ pub fn concat(a: String, b: String) -> unique String uses {} {
   let mut builder: List[u8] = []
   text.append(mut builder, a)
   text.append(mut builder, b)
-  finish_valid(take builder)
+  text.finish_valid(take builder)
 }
 
 pub fn join(parts: List[String], separator: String) -> unique String uses {} {
@@ -216,7 +205,7 @@ pub fn join(parts: List[String], separator: String) -> unique String uses {} {
     text.append(mut builder, parts[i])
     i += 1
   }
-  finish_valid(take builder)
+  text.finish_valid(take builder)
 }
 
 @noalloc
@@ -274,5 +263,5 @@ pub fn replace(s: String, old: String, new: String) -> unique String uses {} {
       }
     }
   }
-  finish_valid(take out)
+  text.finish_valid(take out)
 }

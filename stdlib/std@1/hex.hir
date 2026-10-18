@@ -14,13 +14,7 @@ pub fn encode(data: Bytes) -> unique String uses {} {
     core@1/list.push(mut out, digits[low])
     i += 1
   }
-  match text.finish(take out) {
-    Ok(s) => take s,
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      ""
-    },
-  }
+  text.finish_valid(take out)
 }
 
 pub fn decode(text: String) -> Result[Bytes, DecodeError] uses {} {

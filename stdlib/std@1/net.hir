@@ -203,17 +203,6 @@ pub fn parse_socket_addr(text: String) -> Result[SocketAddr, AddrParseError] use
   Ok(SocketAddr(ip: ip, port: core@1/int.narrow(value)))
 }
 
-@preserves_unique(builder)
-fn finish(take builder: List[u8]) -> String uses {} {
-  match text.finish(take builder) {
-    Ok(text) => take text,
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      ""
-    },
-  }
-}
-
 @preserves_unique(out)
 fn write_v4(octets: Inline[u8, 4], mut out: List[u8]) -> () uses {} {
   let mut i: u64 = 0
@@ -295,7 +284,7 @@ pub fn format_ip(ip: IpAddr) -> unique String uses {} {
       }
     },
   }
-  finish(take out)
+  text.finish_valid(take out)
 }
 
 pub fn format_socket_addr(addr: SocketAddr) -> unique String uses {} {
@@ -310,7 +299,7 @@ pub fn format_socket_addr(addr: SocketAddr) -> unique String uses {} {
   }
   core@1/list.push(mut out, 58)
   u16.format_into(addr.port, mut out)
-  finish(take out)
+  text.finish_valid(take out)
 }
 
 // WHATWG URL ends-in-a-number checker; shared by host validation and URI parsing.

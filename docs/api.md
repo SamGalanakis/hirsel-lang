@@ -702,7 +702,6 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn internal.big.big_word(a: Big) -> u64 uses {}` <!-- std@1/internal/big/big_word -->
 - `@preserves_unique(out) pub fn internal.decimal.append(mut out: List[u8], magnitude: u128, negative: bool) -> () uses {}` — Appends the decimal text of 'magnitude' to 'out', after a minus sign when 'negative', after one reservation of its exact count. <!-- std@1/internal/decimal/append -->
 - `@preserves_unique(out) pub fn internal.decimal.append_prefix(mut out: List[u8], buffer: Inline[u8, 40], count: u64) -> () uses {}` — Appends the first 'count' bytes of a 'format' buffer. <!-- std@1/internal/decimal/append_prefix -->
-- `@preserves_unique(builder) pub fn internal.decimal.finish(take builder: List[u8]) -> String uses {}` — The UTF-8 text a formatter appended to an empty builder. <!-- std@1/internal/decimal/finish -->
 - `@noalloc pub fn internal.decimal.write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Count first so capacity failure leaves every byte unchanged. <!-- std@1/internal/decimal/write_unsigned -->
 - `@noalloc pub fn internal.float_decimal.parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.ParseError] uses {}` — At most 800 significant decimal digits are retained. <!-- std@1/internal/float_decimal/parse -->
 - `@noalloc pub fn internal.float_decimal.render[n: size]( significand: u64, scale: i32, negative: bool, mut buffer: Inline[u8, n] ) -> Result[u64, scalar.FormatError] uses {}` — Number::toString fixed/scientific thresholds: https://tc39.es/ecma262/#sec-numeric-types-number-tostring <!-- std@1/internal/float_decimal/render -->
@@ -1005,6 +1004,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `@preserves_unique(builder) pub fn text.append(mut builder: List[u8], text: String) -> () uses {}` — An ordinary List[u8] is the UTF-8 builder. <!-- std@1/text/append -->
 - `@preserves_unique(builder) pub fn text.finish(take builder: List[u8]) -> Result[String, Bytes] uses {}` <!-- std@1/text/finish -->
+- `@preserves_unique(builder) pub fn text.finish_valid(take builder: List[u8]) -> String uses {}` — The text that appends through the formatting protocol left in an empty builder: 'format_into' and 'append' only add valid UTF-8, so every 'to_string' and every f-string finishes here; invalid bytes fail TextInvariant. <!-- std@1/text/finish_valid -->
 
 ## time
 

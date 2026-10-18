@@ -159,11 +159,5 @@ pub fn normalize_nfc(s: String) -> unique String uses {} {
       Error(_) => core@1/failure.check(false, TextInvariant()),
     }
   }
-  match core@1/string.from_bytes(core@1/bytes.from_list(take bytes)) {
-    Ok(text) => take text,
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      ""
-    },
-  }
+  text.finish_valid(take bytes)
 }

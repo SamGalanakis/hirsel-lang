@@ -19,17 +19,6 @@ pub type UriError = UnexpectedCharacter | InvalidFormat | InvalidPort | InvalidH
 
 pub type Part = Unreserved | User | Password | Host | Path | Query | Fragment
 
-@preserves_unique(builder)
-fn finish(take builder: List[u8]) -> String uses {} {
-  match text.finish(take builder) {
-    Ok(s) => take s,
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      ""
-    },
-  }
-}
-
 fn piece(text: String, begin: u64, end: u64) -> unique String uses {} {
   let data = core@1/string.as_bytes(text)
   let mut out: List[u8] = []
@@ -38,7 +27,7 @@ fn piece(text: String, begin: u64, end: u64) -> unique String uses {} {
     core@1/list.push(mut out, data[i])
     i += 1
   }
-  finish(take out)
+  std@1/text.finish_valid(take out)
 }
 
 // Uri delegates two-byte escape parsing to fmt.parseInt(u8, pair, 16).
@@ -153,7 +142,7 @@ fn encode(data: Bytes, part: Part) -> unique String uses {} {
     }
     i += 1
   }
-  finish(take out)
+  text.finish_valid(take out)
 }
 
 pub fn percent_encode(data: Bytes) -> unique String uses {} {
@@ -410,7 +399,7 @@ pub fn format(parsed_uri: Uri) -> unique String uses {} {
     },
     None() => (),
   }
-  finish(take out)
+  text.finish_valid(take out)
 }
 
 // Zig remove_dot_segments, RFC3986 §5.2.4. Active output length replaces a
@@ -474,7 +463,7 @@ pub fn remove_dot_segments(path: String) -> unique String uses {} {
     core@1/list.push(mut result_bytes, out[i])
     i += 1
   }
-  finish(take result_bytes)
+  text.finish_valid(take result_bytes)
 }
 
 // Zig resolveInPlace and merge_paths; the result owns its copied base components.

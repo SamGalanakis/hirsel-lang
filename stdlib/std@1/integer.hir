@@ -39,7 +39,7 @@ pub fn format_radix(value: u128, negative: bool, radix: u8) -> Result[String, sc
   if radix == 10 {
     let mut decimal: List[u8] = []
     internal.decimal.append(mut decimal, value, negative)
-    return Ok(internal.decimal.finish(take decimal))
+    return Ok(text.finish_valid(take decimal))
   }
   let mut digits: Inline[u8, 129] = [
     0u8,
@@ -187,5 +187,5 @@ pub fn format_radix(value: u128, negative: bool, radix: u8) -> Result[String, sc
   let mut out: List[u8] = []
   core@1/list.reserve(mut out, 129 - start)
   for i in start..129u64 { core@1/list.push(mut out, digits[i]) }
-  Ok(internal.decimal.finish(take out))
+  Ok(text.finish_valid(take out))
 }

@@ -32,18 +32,6 @@ pub fn write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u
   Ok(count + prefix)
 }
 
-// The UTF-8 text a formatter appended to an empty builder.
-@preserves_unique(builder)
-pub fn finish(take builder: List[u8]) -> String uses {} {
-  match core@1/string.from_bytes(core@1/bytes.from_list(take builder)) {
-    Ok(text) => take text,
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      ""
-    },
-  }
-}
-
 // Appends the first `count` bytes of a `format` buffer.
 @preserves_unique(out)
 pub fn append_prefix(mut out: List[u8], buffer: Inline[u8, 40], count: u64) -> () uses {} {
