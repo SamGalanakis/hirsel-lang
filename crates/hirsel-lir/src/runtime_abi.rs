@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 14;
+pub const ABI_VERSION: u32 = 15;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -144,7 +144,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 9;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 10;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -179,6 +179,11 @@ pub const LAYOUT_KEYED: u32 = 256;
 /// charged and copies a shared one at its capacity; growth regrows it in its arena
 /// (`hirsel_rt_v2_arena_regrow`), the compiled column copy moving its columns.
 pub const LAYOUT_COLUMNS: u32 = 512;
+/// The payload is a sequential sequence's, of `Packed` values (descriptor version 10, MEM-6,
+/// MEM-13): a deep copy into an arena tracks a block of it as a [`LAYOUT_SEQUENCE`] one. A push
+/// to a tracked one is charged and copies a shared one at its capacity; `hirsel_rt_v2_block_grow`
+/// regrows a tracked one in its arena.
+pub const LAYOUT_SEQUENTIAL: u32 = 1024;
 pub const STEP_RELEASE: u32 = 1;
 pub const STEP_FINALIZE: u32 = 2;
 pub const STEP_CLOSE_HANDLE: u32 = 3;

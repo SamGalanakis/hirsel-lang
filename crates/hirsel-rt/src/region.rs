@@ -444,13 +444,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_reserve(
     unsafe { prepare(ctx, block, count, element_size, element_align, out_block) }
 }
 
-/// Regrow the tracked arena `@soa` List block `block` (MEM-6, runtime ABI 14): a fresh,
+/// Regrow the tracked arena `@soa` or sequential List block `block` (MEM-6, runtime ABI 14): a fresh,
 /// unshared tracked block of its layout in its arena, of `extent` bytes at `align`, uncharged,
 /// its drop program scheduled there. The caller moves or copies the columns into it and
 /// empties an unshared `block`, whose storage is abandoned.
 ///
 /// # Safety
-/// `ctx` is live and `block` a live tracked arena block of a columns layout.
+/// `ctx` is live and `block` a live tracked arena block of a columns or sequential layout.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_arena_regrow(
     ctx: *mut RunCtx,
@@ -499,9 +499,13 @@ unsafe fn prepare(
             return crate::STATUS_EXHAUSTED;
         }
         // An `@soa` List's columns move with its capacity, which only the compiled column
-        // copy lays out: a shared one is copied at its capacity, and growth regrows it in its
-        // arena (`hirsel_rt_v2_arena_regrow`).
-        if (*(*ctx).descriptor((*block).index())).flags & crate::release::LAYOUT_COLUMNS != 0 {
+        // copy lays out, and a Packed List's elements have no stride: a shared one is copied
+        // at its capacity, and growth regrows it in its arena (`hirsel_rt_v2_arena_regrow`,
+        // `hirsel_rt_v2_block_grow`).
+        if (*(*ctx).descriptor((*block).index())).flags
+            & (crate::release::LAYOUT_COLUMNS | crate::release::LAYOUT_SEQUENTIAL)
+            != 0
+        {
             let fresh = if shared {
                 crate::copy::copy_held(ctx, block, region, true)
             } else {

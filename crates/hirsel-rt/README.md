@@ -134,7 +134,8 @@ Invariants and boundary:
   request is unknown.
   `hirsel_rt_v2_block_grow(ctx, block, keep, extent, align)` is the same growth by bytes:
   a block that holds `extent` payload bytes is left alone, otherwise its first `keep` bytes
-  move. A sequential Packed sequence (MEM-13, `SeqAppend`) grows through it.
+  move. A sequential Packed sequence (MEM-13, `SeqAppend`) grows through it; a tracked arena
+  one regrows in its arena instead, its old block emptied rather than freed.
 - `Shared[T]` roots (MEM-11, runtime ABI 8, `shared.rs`): a root is a heap block whose payload
   descriptor carries `LAYOUT_FROZEN` and holds the frozen value inline at offset 0; its header
   count is the root count, so compiled `Dup`, `Release` and the uniqueness test add, give up
@@ -308,7 +309,10 @@ effect (runtime ABI 13): compiled code first calls `hirsel_rt_v2_arena_reserve`,
 them and copies or relocates the List as a push does, so the read appends in place. An
 `@soa` List (`LAYOUT_COLUMNS`, descriptor version 9) is tracked too: a push charges its row and
 copies a shared block at its capacity, and the compiled column copy regrows a full one in its
-arena through `hirsel_rt_v2_arena_regrow` (runtime ABI 14). A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
+arena through `hirsel_rt_v2_arena_regrow` (runtime ABI 14). A sequential `Packed` List
+(`LAYOUT_SEQUENTIAL`, descriptor version 10) is tracked as well: a push charges its element's
+logical size, and `hirsel_rt_v2_block_grow` (runtime ABI 15) regrows a full unshared one in its
+arena and empties the old block. A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
 cleanup failed too: then the failure propagates with the `OutOfSpace` primary (FAIL-3). The
 reference interpreter (`hirsel-interp`, `src/bounded.rs`) charges from
 `hirsel_types::logical`; H and native execution charge from layouts

@@ -1813,8 +1813,8 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
             }
             // One push's preparation of a List block (MEM-6, LIR schema
-            // revision 32): `list.push`'s, never a sequential one's, of rows or
-            // of `@soa` columns (revision 35). One of `count` elements prepares
+            // revision 32): `list.push`'s, of rows, of `@soa` columns (revision
+            // 35) or of `Packed` values (revision 36). One of `count` elements prepares
             // an Io read's appends, which import places in user code (revision
             // 34).
             Inst::ArenaPush {
@@ -1837,7 +1837,9 @@ impl<S: Stage> Checker<'_, '_, S> {
                     .is_some_and(|r| {
                         matches!(
                             r.kind,
-                            LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. }
+                            LayoutKind::Sequence { .. }
+                                | LayoutKind::SoaColumns { .. }
+                                | LayoutKind::Sequential { .. }
                         )
                     });
                 if !sequence {

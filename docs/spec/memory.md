@@ -150,8 +150,9 @@ entries are then held twice and so shared, then the write proceeds; a write that
 bounds check, and a `set.insert` of a member the Set holds, copies nothing, and
 `list.reserve` is only a hint there. A remove charges nothing and returns nothing to the
 budget. An `@soa` List is tracked like any other, its columns copied and relocated
-together. A List of `Packed` values ([MEM-13](#mem-13-packed-variants)), whose storage is
-sequential, is not tracked: a write to one is not charged. An unshared List grows in place,
+together. A List of `Packed[T]` values ([MEM-13](#mem-13-packed-variants)), whose storage is
+sequential, is tracked too: an element is charged `T`'s logical size whatever extent it
+takes, and its active extents are copied and relocated together. An unshared List grows in place,
 relocating within its arena by doubling from four elements when full, so its storage is at
 most four times its charged bytes plus four elements; an unshared Map or Set keeps its
 entries the same way. Consequently a push or insert through a nested place

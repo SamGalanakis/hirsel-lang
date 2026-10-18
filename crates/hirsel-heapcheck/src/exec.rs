@@ -1388,10 +1388,22 @@ impl<'p, S: Stage> Machine<'p, S> {
                 .get_mut(block.alloc)
                 .extent
                 .take(0, keep, FREE_POISON, None);
-            let grown = self.heap_alloc(payload, need.max(2 * held), align)?;
+            // An unshared tracked arena block grows in its arena, uncharged
+            // (MEM-6); its abandoned storage holds nothing.
+            let grown = match self.tracked_region(block)? {
+                Some(region) => {
+                    let grown = self.arena_alloc(region, payload, need.max(2 * held))?;
+                    self.ledger.get_mut(grown.alloc).count = Some(Count::Arena { shared: false });
+                    grown
+                }
+                None => {
+                    let grown = self.heap_alloc(payload, need.max(2 * held), align)?;
+                    self.ledger.get_mut(block.alloc).count = None;
+                    self.ledger.free(block.alloc)?;
+                    grown
+                }
+            };
             self.ledger.get_mut(grown.alloc).extent.place(0, moved);
-            self.ledger.get_mut(block.alloc).count = None;
-            self.ledger.free(block.alloc)?;
             if let Some(field) = self.open_elements.remove(&block.alloc) {
                 self.open_elements.insert(grown.alloc, field);
             }
@@ -3581,7 +3593,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                         _ => return fail(V::TypeConfusion, "an arena push count is no u64"),
                     },
                 };
-                let (r, block, element) = self.sequence_place(f, address, false)?;
+                let sequential = self.holds_sequential(f, address)?;
+                let (r, block, element) = self.sequence_place(f, address, sequential)?;
                 if let Some(region) = self.arena_push(&r, block, element, count)? {
                     return self.exhaust(f, failure, region);
                 }
@@ -5727,9 +5740,13 @@ impl<'p, S: Stage> Machine<'p, S> {
         if !self.charge(region, each.saturating_mul(count).saturating_add(copied)) {
             return Ok(Some(region));
         }
-        // An `@soa` List's columns move with its capacity: a shared one is
-        // copied at its capacity, and its growth regrows it in its arena.
-        if matches!(self.record(layout)?.kind, LayoutKind::SoaColumns { .. }) {
+        // An `@soa` List's columns move with its capacity and a Packed List's
+        // elements have no stride: a shared one is copied at its capacity, and
+        // its growth regrows it in its arena.
+        if matches!(
+            self.record(layout)?.kind,
+            LayoutKind::SoaColumns { .. } | LayoutKind::Sequential { .. }
+        ) {
             if shared {
                 let copy = self.detach_block(block, 0)?;
                 let Cell::Data { counted, .. } = self.read_cell(r.ptr)? else {
@@ -6744,7 +6761,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             let image = a.extent.copy(0, size, None);
             let sequence = matches!(
                 self.record(layout)?.kind,
-                LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. }
+                LayoutKind::Sequence { .. }
+                    | LayoutKind::SoaColumns { .. }
+                    | LayoutKind::Sequential { .. }
             ) || hirsel_lir::layout::keyed(&self.program.layouts, layout);
             let tracks = below && !self.untracked_below(layout)?;
             // A Map's or Set's index is never tracked.

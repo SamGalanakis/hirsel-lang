@@ -339,7 +339,8 @@ is `Error::Unavailable`, as is a copy of a callable into a bounded arena.
 A List, Array, Map or Set block in an arena carries `ArenaStorage` (its arena, one
 element's or entry's charge and a shared flag): `list.push` and an insert of a new key
 charge one element or entry, and the first write to a shared one charges its length or
-entry count (`eval.rs` `list_write`, `keyed_write`).
+entry count (`eval.rs` `list_write`, `keyed_write`). A List of `Packed[T]` carries one too,
+charged `T`'s logical size per element.
 
 The private heap producer returns an opaque stable `$Heap` handle with identity zero. It performs no allocation. This executes the heap keyword independently of the M2 `copy_to` operation.
 

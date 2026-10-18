@@ -39,7 +39,7 @@ use crate::context::RunCtx;
 use crate::count::check_live_block;
 use crate::region::{ALLOC_TRACKED, Region, is_tracked, tracked_region};
 use crate::release::{
-    LAYOUT_COLUMNS, LAYOUT_KEYED, LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_SEQUENCE,
+    LAYOUT_COLUMNS, LAYOUT_KEYED, LAYOUT_LOGICAL_PER_ELEMENT, LAYOUT_SEQUENCE, LAYOUT_SEQUENTIAL,
     LAYOUT_UNTRACKED_BELOW, LOGICAL_UNSUPPORTED,
 };
 use crate::release::{
@@ -263,7 +263,13 @@ unsafe fn copy_graph(
                     let tracked = match first.take() {
                         Some(root) => root && arena,
                         None => {
-                            below && flags & (LAYOUT_SEQUENCE | LAYOUT_KEYED | LAYOUT_COLUMNS) != 0
+                            below
+                                && flags
+                                    & (LAYOUT_SEQUENCE
+                                        | LAYOUT_KEYED
+                                        | LAYOUT_COLUMNS
+                                        | LAYOUT_SEQUENTIAL)
+                                    != 0
                         }
                     };
                     let target = clone_block(&mut *raw, child, destination, tracked);

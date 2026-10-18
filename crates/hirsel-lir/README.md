@@ -609,3 +609,10 @@ capacity when shared, never relocated, since only the compiled column copy lays 
 columns out. That copy, `SeqReserve`'s, writes an unshared tracked block in place and
 regrows a tracked one in its arena (runtime ABI 14 `hirsel_rt_v2_arena_regrow`), emptying
 the abandoned block.
+
+LIR revision 36 (MEM-6) tracks a sequential `Packed` List in a bounded arena the same way.
+`ConstructSite::tracked` also marks a List of `Sequential` layout, a deep copy tracks one
+(descriptor version 10 `LAYOUT_SEQUENTIAL`), and `ArenaPush` accepts its place with a zero
+payload size: the element's logical size is in its charge, and its block is copied when
+shared, never relocated. `SeqAppend`'s growth, `hirsel_rt_v2_block_grow` (runtime ABI 15),
+regrows an unshared tracked block in its arena and empties the abandoned one.

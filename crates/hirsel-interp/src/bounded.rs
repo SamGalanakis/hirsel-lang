@@ -174,39 +174,12 @@ pub(crate) fn storage<'a>(
     ) {
         return Ok(None);
     }
-    let resolve = resolver(runtime);
-    if sequential(&Logical::new(&resolve), ty, &Scope::root(store)).map_err(logical_error)? {
-        return Ok(None);
-    }
     let element = if bounded {
         element(runtime, store, ty)?
     } else {
         0
     };
     Ok(Some(ArenaStorage::fresh(arena, element)))
-}
-
-/// Whether `ty` is a sequence of `Packed` values, whose storage is sequential
-/// (MEM-13) and untracked: MEM-6 does not charge its pushes.
-fn sequential<'a>(
-    logical: &Logical<'a, '_>,
-    ty: TypeId,
-    scope: &Scope<'a>,
-) -> Result<bool, LogicalError> {
-    let Resolved::Structural(row, scope) = logical.resolve(ty, scope)? else {
-        return Ok(false);
-    };
-    let TypeKind::Builtin { arguments, .. } = &row.kind else {
-        return Ok(false);
-    };
-    let Some(&element) = type_arguments(arguments).first() else {
-        return Ok(false);
-    };
-    Ok(matches!(
-        logical.resolve(element, &scope)?,
-        Resolved::Structural(row, _)
-            if matches!(row.kind, TypeKind::Builtin { kind: BuiltinType::Packed, .. })
-    ))
 }
 
 /// Retag every List, Array, Map and Set block of `value`'s tree as fresh
@@ -279,12 +252,8 @@ pub(crate) fn retag<'a>(
                             ..
                         },
                     ) => {
-                        *tag = if sequential(&logical, ty, &scope).map_err(logical_error)? {
-                            None
-                        } else {
-                            let each = logical.size(*element, &scope).map_err(logical_error)?;
-                            Some(ArenaStorage::fresh(arena, each))
-                        };
+                        let each = logical.size(*element, &scope).map_err(logical_error)?;
+                        *tag = Some(ArenaStorage::fresh(arena, each));
                         for element_value in elements.iter_mut().flatten() {
                             work.push((element_value, *element, scope.clone()));
                         }

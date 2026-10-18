@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 14
+#define HIRSEL_RT_V2_ABI_VERSION 15
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -123,7 +123,7 @@ extern "C" {
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 9
+#define HIRSEL_RT_V2_LAYOUT_VERSION 10
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -148,6 +148,10 @@ extern "C" {
 /* An @soa List's columns payload (version 9): tracked in a bounded arena as a sequence's; a push
  * copies a shared one at its capacity and growth regrows it there (MEM-6, ABI 14). */
 #define HIRSEL_RT_V2_LAYOUT_COLUMNS 512
+/* A sequential sequence's payload, of Packed values (version 10): tracked in a bounded arena as a
+ * sequence's; a push copies a shared one at its capacity and block_grow regrows it there (MEM-6,
+ * ABI 15). */
+#define HIRSEL_RT_V2_LAYOUT_SEQUENTIAL 1024
 #define HIRSEL_RT_V2_INDEX_MASK 0x1fffffffu
 #define HIRSEL_RT_V2_KIND_SHIFT 29
 #define HIRSEL_RT_V2_KIND_SMALL 0
@@ -511,7 +515,7 @@ uint8_t hirsel_rt_v2_arena_push(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *bloc
 uint8_t hirsel_rt_v2_arena_reserve(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t count,
                                    uint64_t element_size, uint64_t element_align,
                                    hirsel_rt_v2_header **out_block);
-/* Regrow the tracked arena @soa List block `block` (MEM-6, ABI 14): a fresh unshared tracked
+/* Regrow the tracked arena @soa or sequential List block `block` (MEM-6, ABI 14): a fresh unshared tracked
  * block of its layout in its arena, of `extent` bytes at `align`, uncharged, its drop program
  * scheduled; the caller moves or copies the columns and empties an unshared `block`. */
 hirsel_rt_v2_header *hirsel_rt_v2_arena_regrow(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block,

@@ -1802,8 +1802,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
     }
 }
 
-/// Block growth (LIR schema revision 19, `Inst::SeqAppend`). Make the unique heap block
-/// `block` hold at least `extent` payload bytes, aligned to `align`. A block that already
+/// Block growth (LIR schema revision 19, `Inst::SeqAppend`). Make the unique heap block, or
+/// unshared tracked arena block (runtime ABI 15), `block` hold at least `extent` payload bytes,
+/// aligned to `align`; a tracked one grows in its arena. A block that already
 /// holds them is left alone. Otherwise its first `keep` payload bytes move bitwise into fresh
 /// storage of the class that fits, the old storage is freed shallowly, never scanned, and the
 /// new block is returned. Faults and exhaustion are as for [`hirsel_rt_v2_seq_grow`].
@@ -1821,6 +1822,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_block_grow(
 ) -> *mut Header {
     // SAFETY: caller contract.
     unsafe {
+        // An unshared tracked arena block (MEM-6, runtime ABI 15) grows in its arena,
+        // uncharged; its abandoned storage is emptied, holding no reference.
+        if crate::region::is_tracked(block) && (*block).count == crate::COUNT_ARENA_UNIQUE {
+            if align == 0 || !align.is_power_of_two() {
+                fault("a sequence element alignment is not a power of two");
+            }
+            let (capacity, _) = (*ctx).heap.usable(block);
+            if capacity >= extent {
+                return block;
+            }
+            if keep > capacity || keep > extent {
+                fault("a sequence count exceeds its storage");
+            }
+            let grown = crate::region::hirsel_rt_v2_arena_regrow(ctx, block, extent, align.max(8));
+            ptr::copy_nonoverlapping(payload(block), payload(grown), keep as usize);
+            payload(block).cast::<u64>().write(0);
+            return grown;
+        }
         unique_heap_block(ctx, block, align);
         if (*ctx).heap.capacity(block) >= extent {
             return block;

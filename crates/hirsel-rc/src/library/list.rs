@@ -140,15 +140,16 @@ fn push(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
 /// A push's charge and room in an arena (MEM-6): before the push reads the
 /// List, so a tracked arena List it copies or relocates has room for the
 /// element and never takes the growth branch. Its own place, so P4 leaves the
-/// block to it. A List of SoA columns is charged and copied when shared, and
-/// grows through the growth branch's column copy, which regrows it in its
-/// arena.
+/// block to it. A List of SoA columns or of Packed values is charged and
+/// copied when shared, and grows through the growth branch's column copy or
+/// the append's growth, which regrow it in its arena.
 fn arena_push(b: &mut Body<'_, '_>, list: super::builder::Parameter) -> Result<(), PassError> {
     let rows = b.cx.payload(list.layout).is_some_and(|p| {
         matches!(
             b.cx.record(p).kind,
             hirsel_lir::layout_types::LayoutKind::Sequence { .. }
                 | hirsel_lir::layout_types::LayoutKind::SoaColumns { .. }
+                | hirsel_lir::layout_types::LayoutKind::Sequential { .. }
         )
     });
     if !rows {
@@ -201,6 +202,7 @@ fn push_sequential(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let [list, value] = b.parameters[..] else {
         return Err(PassError::Malformed("list.push parameters".into()));
     };
+    arena_push(&mut b, list)?;
     let moved = b.take(value.address)?;
     b.seq_append(list.address, moved)?;
     ret_unit(&mut b);

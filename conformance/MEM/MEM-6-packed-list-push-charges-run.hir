@@ -1,0 +1,105 @@
+// rule: MEM-6
+// expect: run
+// stdout: 200 fits
+// stdout: 199 out of space
+// stdout: 60 fits
+// stdout: 59 out of space
+// stdout: 100 fits
+// stdout: 99 out of space
+// "Each list.push to a List in it charges its element's logical size before it consumes its
+// argument." A Packed[Choice] is 20 logical bytes, a tag and the largest variant, whatever
+// extent each element takes: ten pushes from [] charge 200 while the List grows in the arena,
+// a copy_to of two then a push charge 60, and a push to a shared List first copies its two
+// elements, so a literal of two, the copy and the push charge 100. Every element reads back.
+type Choice = Small(value: u64) | Large(value: u64, extra: u64)
+
+fn choice(i: u64) -> Packed[Choice] {
+  if i % 3u64 == 0u64 {
+    Large(value: i, extra: 2u64)
+  } else {
+    Small(value: i)
+  }
+}
+
+fn total(xs: List[Packed[Choice]]) -> u64 {
+  let mut sum = 0u64
+  let mut k = 0u64
+  for x in xs {
+    if k % 3u64 == 0u64 {
+      sum = sum + x.Large.value * x.Large.extra
+    } else {
+      sum = sum + x.Small.value
+    }
+    k = k + 1u64
+  }
+  sum
+}
+
+fn grow(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[Packed[Choice]] in a = []
+      for i in 0u64..10u64 {
+        list.push(mut xs, choice(i))
+      }
+      total(xs)
+    }
+  )
+}
+
+fn copied(cap: u64) -> Result[u64, OutOfSpace] {
+  let source: List[Packed[Choice]] = [choice(0u64), choice(1u64)]
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[Packed[Choice]] in a = copy_to(a, source)
+      list.push(mut xs, choice(2u64))
+      total(xs)
+    }
+  )
+}
+
+fn shared(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut xs: List[Packed[Choice]] in a = [choice(0u64), choice(1u64)]
+      let held = copy xs
+      list.push(mut xs, choice(2u64))
+      total(xs) * 10u64 + total(held)
+    }
+  )
+}
+
+fn report(
+  stdout: Stdout,
+  fits: String,
+  over: String,
+  r: Result[u64, OutOfSpace],
+  value: u64
+) -> () {
+  if r == Ok(value) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  report(stdout, "200 fits\n", "200 out of space\n", grow(200u64), 63u64)
+  report(stdout, "199 fits\n", "199 out of space\n", grow(199u64), 63u64)
+  report(stdout, "60 fits\n", "60 out of space\n", copied(60u64), 3u64)
+  report(stdout, "59 fits\n", "59 out of space\n", copied(59u64), 3u64)
+  report(stdout, "100 fits\n", "100 out of space\n", shared(100u64), 31u64)
+  report(stdout, "99 fits\n", "99 out of space\n", shared(99u64), 31u64)
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

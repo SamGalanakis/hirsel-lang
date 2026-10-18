@@ -6,7 +6,7 @@
 use cranelift_codegen::ir::{InstBuilder, Value, condcodes::IntCC, types};
 use cranelift_frontend::Switch;
 use hirsel_lir::ir::*;
-use hirsel_lir::layout_types::DropStep;
+use hirsel_lir::layout_types::{DropStep, LayoutId};
 use hirsel_lir::runtime_abi::{
     COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_OFFSET, COUNT_UNIQUE, RuntimeEntry,
     TRACKED_REGION_BACK,
@@ -170,13 +170,16 @@ impl FnEmitter<'_, '_, '_> {
         failure: FailureId,
     ) -> Emitted {
         let place = self.place(address)?;
-        let Some(element) = self.sequence_element(place.layout)? else {
-            return self.invalid("an arena push of a place that holds no List block");
+        // A Packed List's elements have no stride: the runtime only charges it and
+        // copies a shared one, so it reads no element shape.
+        let (size, align) = match self.sequence_element(place.layout)? {
+            Some(element) => (
+                self.fixed_size(element)?,
+                u64::from(self.layout(element)?.align),
+            ),
+            None if self.sequential_payload(place.layout)? => (0, 8),
+            None => return self.invalid("an arena push of a place that holds no List block"),
         };
-        let (size, align) = (
-            self.fixed_size(element)?,
-            u64::from(self.layout(element)?.align),
-        );
         let Some(code) = self.bounded_code() else {
             return Ok(());
         };
@@ -207,6 +210,17 @@ impl FnEmitter<'_, '_, '_> {
         let pushed = self.load_ptr(out);
         self.store_at(pushed, place.ptr, 0);
         Ok(())
+    }
+
+    /// Whether `layout` is a block of a sequential sequence of `Packed` values (MEM-13).
+    fn sequential_payload(&self, layout: LayoutId) -> Emitted<bool> {
+        Ok(match self.layout_payload(layout)? {
+            Some(payload) => matches!(
+                self.layout(payload)?.kind,
+                hirsel_lir::layout_types::LayoutKind::Sequential { .. }
+            ),
+            None => false,
+        })
     }
 
     /// Takes the exhaustion of the arena the tracked block `block` names when `status`

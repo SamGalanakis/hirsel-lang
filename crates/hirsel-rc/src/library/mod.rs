@@ -197,28 +197,21 @@ pub struct CallShape<'a> {
 
 /// `core@1/$native.<name>`: a helper or finalizer no registry row names.
 /// `$` cannot occur in a source identifier.
-/// Whether `ty` of `store` is a List or Array, not of `Packed` values whose
-/// storage is sequential (MEM-13): the blocks MEM-6 tracks in an arena.
+/// Whether `ty` of `store` is a List or Array: the blocks MEM-6 tracks in an
+/// arena.
 pub(crate) fn list_or_array(store: &hirsel_types::TypeStore, ty: TypeId) -> bool {
-    use hirsel_types::BuiltinType;
-    let Some(TypeKind::Builtin {
-        kind: BuiltinType::List | BuiltinType::Array,
-        arguments,
-    }) = store.get(ty).map(|t| &t.kind)
-    else {
-        return false;
-    };
-    !arguments.iter().any(|a| {
-        matches!(a, GenericArgument::Type(e) if matches!(
-            store.get(*e).map(|t| &t.kind),
-            Some(TypeKind::Builtin { kind: BuiltinType::Packed, .. })
-        ))
-    })
+    matches!(
+        store.get(ty).map(|t| &t.kind),
+        Some(TypeKind::Builtin {
+            kind: hirsel_types::BuiltinType::List | hirsel_types::BuiltinType::Array,
+            ..
+        })
+    )
 }
 
 /// Whether a block of the TIR type `ty` of `store`, whose block payload is
-/// `payload`, is tracked in an arena (MEM-6): a List or Array of rows or of
-/// `@soa` columns, or a Map or Set.
+/// `payload`, is tracked in an arena (MEM-6): a List or Array of rows, of
+/// `@soa` columns or of `Packed` values, or a Map or Set.
 pub(crate) fn tracked_block(
     store: &hirsel_types::TypeStore,
     ty: TypeId,
@@ -232,6 +225,7 @@ pub(crate) fn tracked_block(
                 Some(
                     hirsel_lir::layout_types::LayoutKind::Sequence { .. }
                         | hirsel_lir::layout_types::LayoutKind::SoaColumns { .. }
+                        | hirsel_lir::layout_types::LayoutKind::Sequential { .. }
                 )
             ))
 }
