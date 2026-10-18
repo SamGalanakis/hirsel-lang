@@ -928,13 +928,12 @@ impl HostLibrary {
                     id,
                     if name == "net.narrow" {
                         "Net"
-                    } else if name == "net.listen" {
-                        "Listener"
                     } else {
                         "Stream"
                     },
                 )
             }),
+            C::Listened(r) => result(r, |(id, _)| self.handle(id, "Listener")),
             C::Accepted(r) => result(r, |(id, addr)| {
                 Value::Tuple(vec![Some(self.handle(id, "Stream")), Some(address(addr))])
             }),

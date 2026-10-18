@@ -524,6 +524,7 @@ conformance/DET/DET-1-explicit-output.hir
 conformance/DET/DET-1-file-stream-read-run.hir
 conformance/DET/DET-1-file-stream-write-run.hir
 conformance/DET/DET-1-http-fetch-repeat-run.hir
+conformance/DET/DET-1-net-ephemeral-listeners-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
 conformance/DET/DET-2-first-failure-site.hir
 conformance/DET/DET-2-left-to-right-effects.hir

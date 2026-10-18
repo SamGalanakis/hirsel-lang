@@ -41,7 +41,7 @@ fn net(io: &mut impl Adapter) -> u64 {
 }
 fn handle(completion: Result<Completion, AdapterError>) -> u64 {
     match completion {
-        Ok(Completion::NetHandle(Ok(id))) => id,
+        Ok(Completion::NetHandle(Ok(id)) | Completion::Listened(Ok((id, _)))) => id,
         other => panic!("expected a handle: {other:?}"),
     }
 }
@@ -346,6 +346,7 @@ fn denied_and_invalid_operations_issue_no_provider_call() {
     let denied = |c: Result<Completion, AdapterError>| match c {
         Ok(
             Completion::NetHandle(Err(e))
+            | Completion::Listened(Err(e))
             | Completion::NetUnit(Err(e))
             | Completion::NetBytes(Err(e))
             | Completion::Addresses(Err(e))
@@ -690,9 +691,24 @@ fn listeners_accept_under_a_listen_rule() {
     assert_eq!(peer.std(), client.join().unwrap());
     assert_eq!(read_to_end(&mut io, n, s, 64).concat(), b"hello");
     assert_eq!(
+        io.call(Request::Close { handle: s }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    assert_eq!(
         io.call(Request::Close { handle: l }),
         Ok(Completion::Unit(Ok(())))
     );
+    let mut sim = replay(
+        &BTreeSet::from([rule("127.0.0.1", 0, NetOperation::Listen)]),
+        io.tape().to_vec(),
+    );
+    for event in io.tape() {
+        assert_eq!(
+            sim.call(event.request.clone()),
+            Ok(event.completion.clone())
+        );
+    }
+    sim.finish().unwrap();
 }
 
 #[test]
@@ -827,6 +843,7 @@ fn tape_v6_round_trips_every_network_event_and_other_versions_are_refused() {
     ];
     let mut completions = vec![
         Completion::NetHandle(Ok(9)),
+        Completion::Listened(Ok((10, a4))),
         Completion::Addresses(Ok(vec![])),
         Completion::Addresses(Ok(vec![a4, a6])),
         Completion::NetBytes(Ok(vec![])),
@@ -839,6 +856,7 @@ fn tape_v6_round_trips_every_network_event_and_other_versions_are_refused() {
     completions.extend(errors.iter().flat_map(|e| {
         [
             Completion::NetHandle(Err(*e)),
+            Completion::Listened(Err(*e)),
             Completion::Addresses(Err(*e)),
             Completion::NetBytes(Err(*e)),
             Completion::Count(Err(*e)),

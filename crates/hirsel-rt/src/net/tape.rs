@@ -279,6 +279,10 @@ pub(crate) fn render_request(request: &Request) -> String {
 pub(crate) fn render_completion(completion: &Completion) -> String {
     use Completion as C;
     match completion {
+        C::Listened(v) => format!(
+            "listened {}",
+            outcome(v, |(id, local)| format!("{id} {}", address(local)))
+        ),
         C::NetHandle(v) => format!("net_handle {}", outcome(v, u64::to_string)),
         C::Addresses(v) => format!("addresses {}", outcome(v, |a| addresses(a))),
         C::NetBytes(v) => format!("net_bytes {}", outcome(v, |b| hex(b))),
@@ -393,6 +397,10 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
 pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, String> {
     use Completion as C;
     Ok(Some(match words {
+        ["listened", r @ ..] => C::Listened(parse_outcome(r, |w| match w {
+            [id, local] => Ok((number(id)?, parse_address(local)?)),
+            _ => Err("bad tape listened".into()),
+        })?),
         ["net_handle", r @ ..] => C::NetHandle(parse_outcome(r, |w| number(one(w)?))?),
         ["addresses", r @ ..] => C::Addresses(parse_outcome(r, |w| parse_addresses(one(w)?))?),
         ["net_bytes", r @ ..] => C::NetBytes(parse_outcome(r, |w| unhex(one(w)?))?),

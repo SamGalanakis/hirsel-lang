@@ -108,3 +108,9 @@ revision and whether the named grant was listed. It supplies no authority itself
 template's directory and canonicalizes them before record validation. Absolute
 hosts retain strict canonical designator validation. `bind_grants` accepts bytes
 without a location and therefore requires absolute hosts, as do bound records.
+
+Scripted port-0 listeners bind their client queue to the first ephemeral listen on
+that IP. Each world allocates from 49152 upward, skips script-reserved and bound
+ports, and shares the sequence through narrowed Nets; independent worlds restart
+it. Outbound connects do not consume ports. Listen completions retain the assigned
+address for replay.

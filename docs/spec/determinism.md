@@ -108,7 +108,13 @@ wait resumes, with destruction shielded as required by CONC-3. `net.stream@1` is
 network with the [network semantics of the core library](core-library.md#network).
 `net.script@2` additionally takes `peers`, an array of scripted peer records in schema
 order, and serves the program from them exactly as `test.net` does; `peers` is invalid under
-any other provider. Peer variants are external snake_case tags: `"plain"`,
+any other provider. In each isolated scripted world (`net.script@2` or `test.net`),
+port-0 listens allocate ports from 49152 upward in program order, skipping nonzero
+ports reserved by the script or already bound in that world; narrowed Nets share
+that sequence, outbound connects do not consume it, exhaustion is `AddrInUse()`,
+and the chosen local address is recorded in the listen completion for replay.
+A scripted listener with port 0 supplies clients for the first port-0 listen on
+its IP, using the assigned port. Peer variants are external snake_case tags: `"plain"`,
 `{"certificate": [names]}` or `{"fails": failure}` for TLS (a `TlsFailure` tag such as
 `"unknown_issuer"` or `{"alert_received": 40}`); `"refused"`, `"unanswered"` or
 `{"open": [steps]}` for connections; `{"send": [bytes]}`, `{"expect": [bytes]}`, `"stall"`,

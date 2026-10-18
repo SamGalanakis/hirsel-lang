@@ -1,0 +1,56 @@
+// rule: DET-1
+// expect: run
+// entry: trial
+// Ephemeral listens share a world counter through narrowed Nets, skip reserved
+// script ports, and bind port-zero clients only to the first such listen.
+fn home(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+
+fn allocated(t: Test, n: Net, expected: u16) -> Result[(), NetError] {
+  let listener = net.listen(n, home(0u16))?
+  test.check(t, net.local_addr(n, listener)? == home(expected))
+  Ok(())
+}
+
+pub fn trial(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 49156u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([])]
+      )
+    ],
+    [
+      NetListener(address: home(49152u16), clients: []),
+      NetListener(
+        address: home(0u16),
+        clients: [NetClient(from: home(40001u16), steps: [Expect(b"ok")])]
+      )
+    ]
+  )
+  {
+    let mut listener = net.listen(n, home(0u16))?
+    test.check(t, net.local_addr(n, listener)? == home(49153u16))
+    let mut (stream, from) = net.accept(n, mut listener)?
+    test.check(t, from == home(40001u16))
+    net.write_all(n, mut stream, b"ok")?
+    net.close(n, take stream)
+  }
+  let stream = net.connect(n, "example.com", 49156u16, Unbounded())?
+  net.close(n, take stream)
+  let narrowed = net.narrow(
+    n,
+    [NetRule(address: "127.0.0.1", port: 0u16, operation: Listen())]
+  )?
+  allocated(t, narrowed, 49154u16)?
+  allocated(t, n, 49155u16)?
+  allocated(t, n, 49157u16)?
+  let independent = test.net(t, [], [NetListener(address: home(0u16), clients: [])])
+  allocated(t, independent, 49152u16)?
+  Ok(())
+}

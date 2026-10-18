@@ -626,10 +626,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_listen(
         net: unsafe { n.read() },
         addr: unsafe { (*addr).get() },
     };
-    let Some(Completion::NetHandle(value)) = (unsafe { call(ctx, request) }) else {
+    let Some(Completion::Listened(value)) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;
     };
-    unsafe { out.write(NetWordResult::of(value)) };
+    unsafe { out.write(NetWordResult::of(value.map(|(id, _)| id))) };
     STATUS_OK
 }
 /// `net.local_addr(n, listener) -> Result[SocketAddr, NetError]`.

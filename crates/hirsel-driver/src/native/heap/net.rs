@@ -412,6 +412,7 @@ impl Io {
                     io_ok(self.network_handle(r.ok()?, false))
                 }
             }
+            C::Listened(r) => result(r, |(id, _)| self.network_handle(id, true)),
             C::NetHandle(r) => result(r, |id| self.network_handle(id, name != "narrow")),
             C::NetBytes(r) => match r {
                 Ok(b) => {

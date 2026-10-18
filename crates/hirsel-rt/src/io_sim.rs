@@ -567,12 +567,14 @@ impl Recorded<'_> {
         match self.0 {
             Completion::NetUnit(value) => Ok(*value),
             Completion::NetHandle(value) => Ok(value.map(|_| ())),
+            Completion::Listened(value) => Ok(value.map(|_| ())),
             _ => Err(AdapterError::InvalidCompletion),
         }
     }
     fn address(&self) -> crate::net::Provided<SocketAddr> {
         match self.0 {
             Completion::Address(value) => Ok(*value),
+            Completion::Listened(value) => Ok(value.map(|(_, local)| local)),
             Completion::Accepted(value) => Ok(value.map(|(_, peer)| peer)),
             _ => Err(AdapterError::InvalidCompletion),
         }

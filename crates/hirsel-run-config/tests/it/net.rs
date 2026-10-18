@@ -617,7 +617,6 @@ fn scripted_listeners_are_script_only_canonical_and_round_trip() {
     stream["listeners"] = json!([listener]);
     invalid(stream, "io.net.listeners");
     for (field, value) in [
-        ("port", json!(0)),
         ("address", json!("localhost")),
         ("address", json!("::0001")),
     ] {
@@ -627,6 +626,11 @@ fn scripted_listeners_are_script_only_canonical_and_round_trip() {
         net["listeners"] = json!([bad]);
         invalid(net, "io.net.listeners");
     }
+    let mut ephemeral = listener.clone();
+    ephemeral["port"] = json!(0);
+    let mut ephemeral_net = script();
+    ephemeral_net["listeners"] = json!([ephemeral]);
+    validate(ephemeral_net).unwrap();
     let mut client = listener.clone();
     client["clients"][0]["address"] = json!("192.000.2.1");
     let mut net = script();

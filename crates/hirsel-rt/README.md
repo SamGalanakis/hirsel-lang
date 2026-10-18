@@ -694,3 +694,9 @@ CooperativeNet and CooperativeStdin over one Readiness (`into_parts`);
 snapshot before admission. Without it a grant requiring revocation evidence refuses.
 Ordinary tapes retain the accepted reference, file digest and decision beside the
 admission time; replay reads none of the current host evidence.
+
+Scripted port-0 listeners bind their client queue to the first ephemeral listen on
+that IP. Each world allocates from 49152 upward, skips script-reserved and bound
+ports, and shares the sequence through narrowed Nets; independent worlds restart
+it. Outbound connects do not consume ports. Listen completions retain the assigned
+address for replay.

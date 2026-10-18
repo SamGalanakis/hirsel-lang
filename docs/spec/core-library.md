@@ -423,8 +423,10 @@ others never return `Canceled`.
 **Scripted peers.** `test.net` returns a fake `Net` served by its peers, whose rules are
 `(address, port, ConnectTls())` for a `Certificate` or `Fails` peer and
 `(address, port, Connect())` for a `Plain` peer, plus `(literal, port, Listen())` for each
-listener's address. Duplicate `(address, port)` peers, duplicate listener addresses and a
-listener on port 0 are invalid input.
+listener's address. Duplicate `(address, port)` peers and duplicate listener addresses
+are invalid input. A `NetListener` with port 0 binds its clients to the first port-0
+listen on that IP; clients target that listener's assigned address. Later port-0
+listens on that IP have no scripted clients.
 
 - Resolving a peer's address returns `resolves_to` with the peer's port; other names are
   `UnknownHost()`. `peer_addr` is a literal-address peer's literal, or a host-name peer's
@@ -442,7 +444,8 @@ listener on port 0 are invalid input.
   them exist; a mismatch is `Reset()` at that point. Writes are otherwise accepted.
 - `net.listen` on a scripted listener's address succeeds; a second listen on it while the
   first listener is open is `AddrInUse()`. A granted listen on an address with no scripted
-  listener has no clients. `net.local_addr` is the listen address.
+  listener has no clients. `net.local_addr` is the assigned listen address, including
+  the deterministic ephemeral port for a port-0 listen ([simulation](determinism.md#det-1-contract)).
 - `net.accept` takes the address's next client in list order, across every listener opened
   on it. The stream follows the client's steps as `Open(steps)` does, and the accepted
   address and `peer_addr` are `from`. After the last client, accept returns
@@ -457,7 +460,10 @@ listener on port 0 are invalid input.
   reporting `test failure: net client C of A expected E but the program closed after
   writing W`, with `W` the bytes written toward it. Closing a listener while its address
   has an unaccepted client with an `Expect` fails LANG-9 after reporting
-  `test failure: net client C of A was never accepted`.
+  `test failure: net client C of A was never accepted`. The assertion runs at close;
+  re-listening cannot defer or undo it. For example, opening a listener whose first
+  client has `Expect(b"pong")`, then leaving its scope without accepting that client,
+  fails LANG-9 immediately, even if the next statement would listen on the same address.
 - `tls.connect` to a `Certificate(names)` peer succeeds exactly when `server_name` is in
   `names`, otherwise `Tls(NameMismatch())`; to a `Plain()` peer it is
   `Tls(HandshakeFailure())`; to a `Fails(f)` peer it is `Tls(f)`, after the same grant checks

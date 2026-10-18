@@ -24,6 +24,7 @@ use std::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct World {
     peers: Vec<NetPeer>,
+    next_port: u32,
     next: Vec<usize>,
     listeners: Vec<NetListener>,
     /// The next client of each scripted listener address.
@@ -34,6 +35,7 @@ impl World {
         Self {
             next: vec![0; peers.len()],
             peers,
+            next_port: 49152,
             accepted: vec![0; listeners.len()],
             listeners,
         }
@@ -668,33 +670,60 @@ impl Simulation {
                     }
                 }
                 "net.listen" => {
-                    let address = socket_addr(arg(a, 1)?)?;
+                    let mut address = socket_addr(arg(a, 1)?)?;
                     let host = address.ip().to_string();
                     let service = address.port().to_string();
                     if !ruleset.iter().any(|r| {
                         r.address == host && r.service == service && r.operation == "listen"
                     }) {
                         Err(NetFault::NotGranted)
-                    } else if self
-                        .net_listeners
-                        .values()
-                        .any(|l| l.world == world && l.address == address)
-                    {
-                        Err(NetFault::AddrInUse)
                     } else {
-                        let listener = self.handle("Listener", Grant::Listener { net });
-                        let Value::Handle { id, .. } = &listener else {
-                            unreachable!()
-                        };
-                        self.net_listeners.insert(
-                            *id,
-                            ScriptListener {
-                                net,
-                                world,
-                                address,
-                            },
-                        );
-                        Ok(listener)
+                        if address.port() == 0 {
+                            let w = self.net_worlds.get_mut(&world).unwrap();
+                            while w.next_port <= u32::from(u16::MAX)
+                                && (w.listeners.iter().any(|l| u32::from(l.port) == w.next_port)
+                                    || w.peers.iter().any(|p| u32::from(p.port) == w.next_port)
+                                    || self.net_listeners.values().any(|l| {
+                                        l.world == world
+                                            && u32::from(l.address.port()) == w.next_port
+                                    }))
+                            {
+                                w.next_port += 1;
+                            }
+                            let Ok(port) = u16::try_from(w.next_port) else {
+                                break 'operation Err(NetFault::AddrInUse);
+                            };
+                            w.next_port += 1;
+                            address.set_port(port);
+                            if let Some(template) = w
+                                .listeners
+                                .iter_mut()
+                                .find(|l| l.port == 0 && l.address == host)
+                            {
+                                template.port = port;
+                            }
+                        }
+                        if self
+                            .net_listeners
+                            .values()
+                            .any(|l| l.world == world && l.address == address)
+                        {
+                            Err(NetFault::AddrInUse)
+                        } else {
+                            let listener = self.handle("Listener", Grant::Listener { net });
+                            let Value::Handle { id, .. } = &listener else {
+                                unreachable!()
+                            };
+                            self.net_listeners.insert(
+                                *id,
+                                ScriptListener {
+                                    net,
+                                    world,
+                                    address,
+                                },
+                            );
+                            Ok(listener)
+                        }
                     }
                 }
                 "net.local_addr" => {
@@ -1047,6 +1076,16 @@ impl Simulation {
         } else {
             encode_arguments(a)
         };
+        if name == "net.listen"
+            && let Value::Variant { variant: 0, fields } = &value
+            && let Some(Some(Value::Handle { id, .. })) = fields.first()
+        {
+            let address = self.net_listeners[id].address;
+            recorded = Some(encode_arguments(&[
+                value.clone(),
+                addr_value(address.ip(), address.port()),
+            ]));
+        }
         self.record(
             "Net",
             if name == "net.read_into" {

@@ -506,3 +506,120 @@ fn net_script_configured_root_executes_and_replays_with_explicit_policy() {
     }
     sim.finish().unwrap();
 }
+
+#[test]
+fn ephemeral_listen_completions_record_assigned_ports_and_refuse_altered_replay() {
+    use hirsel_rt::io::{Adapter, Completion as C, Request as R, Tree};
+    use hirsel_rt::io_sim::SimIo;
+    use hirsel_run_config::{NetClient, NetListener};
+    let address = |port| SocketAddr {
+        ip: std::net::Ipv4Addr::LOCALHOST.into(),
+        port,
+    };
+    let listeners = vec![
+        NetListener {
+            address: "127.0.0.1".into(),
+            port: 49152,
+            clients: vec![],
+        },
+        NetListener {
+            address: "127.0.0.1".into(),
+            port: 0,
+            clients: vec![NetClient {
+                address: "192.0.2.1".into(),
+                port: 40001,
+                steps: vec![NetStep::Send(b"hi".to_vec())],
+            }],
+        },
+    ];
+    let rules = [NetRule {
+        address: "127.0.0.1".into(),
+        port: 0,
+        operation: NetOperation::Listen,
+    }]
+    .into();
+    let mut io = script_adapter();
+    io.set_net_rules(rules);
+    io.set_net_script(vec![], listeners.clone()).unwrap();
+    assert_eq!(io.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
+    assert_eq!(
+        io.call(R::Listen {
+            net: 2,
+            addr: address(0)
+        }),
+        Ok(C::Listened(Ok((3, address(49153)))))
+    );
+    assert_eq!(
+        io.call(R::LocalAddr {
+            net: 2,
+            listener: 3
+        }),
+        Ok(C::Address(Ok(address(49153))))
+    );
+    let from = SocketAddr {
+        ip: "192.0.2.1".parse().unwrap(),
+        port: 40001,
+    };
+    assert_eq!(
+        io.call(R::Accept {
+            net: 2,
+            listener: 3
+        }),
+        Ok(C::Accepted(Ok((4, from))))
+    );
+    assert_eq!(
+        io.call(R::NetRead {
+            net: 2,
+            stream: 4,
+            max: 2
+        }),
+        Ok(C::NetBytes(Ok(b"hi".to_vec())))
+    );
+    assert_eq!(io.call(R::Close { handle: 4 }), Ok(C::Unit(Ok(()))));
+    assert_eq!(io.call(R::Close { handle: 3 }), Ok(C::Unit(Ok(()))));
+    assert_eq!(
+        io.call(R::Listen {
+            net: 2,
+            addr: address(0)
+        }),
+        Ok(C::Listened(Ok((5, address(49154)))))
+    );
+    assert_eq!(
+        io.call(R::Accept {
+            net: 2,
+            listener: 5
+        }),
+        Ok(C::Accepted(Err(NetError::ConnectionAborted)))
+    );
+    assert_eq!(io.call(R::Close { handle: 5 }), Ok(C::Unit(Ok(()))));
+    let text = hirsel_rt::launch::render_tape(io.tape()).unwrap();
+    let tape = hirsel_rt::launch::parse_tape(&text).unwrap();
+    assert_eq!(tape, io.tape());
+    for altered in [false, true] {
+        let mut input = tape.clone();
+        if altered {
+            input[1].completion = C::Listened(Ok((3, address(49155))));
+        }
+        let mut sim = SimIo::new(Tree::default(), input);
+        sim.set_net_rules(
+            [NetRule {
+                address: "127.0.0.1".into(),
+                port: 0,
+                operation: NetOperation::Listen,
+            }]
+            .into(),
+        );
+        sim.set_net_script(vec![], listeners.clone()).unwrap();
+        for (index, event) in tape.iter().enumerate() {
+            let result = sim.call(event.request.clone());
+            if altered && index == 1 {
+                assert!(result.is_err());
+                break;
+            }
+            assert_eq!(result, Ok(event.completion.clone()));
+        }
+        if !altered {
+            sim.finish().unwrap();
+        }
+    }
+}

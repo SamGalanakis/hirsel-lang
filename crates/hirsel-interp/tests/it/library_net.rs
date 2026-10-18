@@ -819,3 +819,32 @@ fn script_provider_listeners_serve_granted_addresses_and_never_widen_rules() {
     );
     assert_eq!(h.value("net.accept", vec![n, idle]), error(v(7, vec![])));
 }
+
+#[test]
+fn configured_port_zero_listen_assigns_an_address_without_widening_authority() {
+    // Explicit simulation grants cannot be supplied by a conformance header.
+    let mut h = Harness::scripted(
+        vec![],
+        vec![],
+        vec![NetRule {
+            address: "127.0.0.1".into(),
+            service: "0".into(),
+            operation: "listen".into(),
+        }],
+    );
+    let n = h.net();
+    assert_eq!(
+        h.value("net.listen", vec![n.clone(), loopback(49152)]),
+        denied()
+    );
+    let first = unok(h.value("net.listen", vec![n.clone(), loopback(0)]));
+    assert_eq!(
+        h.value("net.local_addr", vec![n.clone(), first]),
+        ok(loopback(49152))
+    );
+    let second = unok(h.value("net.listen", vec![n.clone(), loopback(0)]));
+    assert_eq!(
+        h.value("net.local_addr", vec![n, second]),
+        ok(loopback(49153))
+    );
+}

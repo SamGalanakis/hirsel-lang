@@ -108,6 +108,7 @@ impl Connection {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScriptNet {
     peers: Vec<NetPeer>,
+    next_port: u32,
     next_connection: Vec<usize>,
     listeners: Vec<NetListener>,
     /// The next client of each scripted listener address.
@@ -139,6 +140,7 @@ impl ScriptNet {
         Ok(Self {
             next_connection: vec![0; peers.len()],
             peers,
+            next_port: 49152,
             next_client: vec![0; listeners.len()],
             listeners,
             open_listeners: BTreeMap::new(),
@@ -375,9 +377,39 @@ impl NetProvider for ScriptNet {
         let s = self.connection(id)?;
         Ok(if s.tls { s.check() } else { Ok(()) })
     }
-    fn listen(&mut self, id: u64, addr: SocketAddr) -> Provided<()> {
+    fn listen(&mut self, id: u64, mut addr: SocketAddr) -> Provided<()> {
         if self.open_listeners.contains_key(&id) || self.streams.contains_key(&id) {
             return Err(AdapterError::InvalidHandle(id));
+        }
+        if addr.port == 0 {
+            while self.next_port <= u32::from(u16::MAX)
+                && (self
+                    .listeners
+                    .iter()
+                    .any(|l| u32::from(l.port) == self.next_port)
+                    || self
+                        .peers
+                        .iter()
+                        .any(|p| u32::from(p.port) == self.next_port)
+                    || self
+                        .open_listeners
+                        .values()
+                        .any(|a| u32::from(a.port) == self.next_port))
+            {
+                self.next_port += 1;
+            }
+            let Ok(port) = u16::try_from(self.next_port) else {
+                return Ok(Err(NetError::AddrInUse));
+            };
+            self.next_port += 1;
+            addr.port = port;
+            if let Some(template) = self
+                .listeners
+                .iter_mut()
+                .find(|l| l.port == 0 && l.address == addr.ip.to_string())
+            {
+                template.port = port;
+            }
         }
         if self.open_listeners.values().any(|open| *open == addr) {
             return Ok(Err(NetError::AddrInUse));

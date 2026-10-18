@@ -59,7 +59,8 @@ pub struct NetClient {
     pub steps: Vec<NetStep>,
 }
 
-/// Scripted listeners name canonical IP literals and nonzero ports, each address once.
+/// Scripted listeners name canonical IP literals, each address/port once.
+/// Port zero binds its clients to the first ephemeral listen on that IP.
 pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
     let mut seen = std::collections::BTreeMap::new();
     for (index, listener) in listeners.iter().enumerate() {
@@ -67,9 +68,6 @@ pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
             return Err(format!(
                 "duplicate listener address at entries {first} and {index}"
             ));
-        }
-        if listener.port == 0 {
-            return Err(format!("listener {index} has port 0"));
         }
         if !canonical_ip(&listener.address)
             || !listener.clients.iter().all(|c| canonical_ip(&c.address))

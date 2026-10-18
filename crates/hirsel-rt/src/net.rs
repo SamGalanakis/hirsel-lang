@@ -654,13 +654,22 @@ impl crate::io::State {
                 let (rules, world) = self.net_grant(*net)?;
                 let literal = ip_literal(addr.ip);
                 if permits(&rules, &literal, addr.port, Some(NetOperation::Listen)).is_none() {
-                    return Ok(C::NetHandle(Err(NetError::NotGranted)));
+                    return Ok(C::Listened(Err(NetError::NotGranted)));
                 }
                 let id = self.handles.next();
-                let value = provided(self.world(world, host)?.listen(id, *addr))?;
-                Ok(C::NetHandle(value.map(|()| {
-                    self.handles.insert(Grant::Listener { net: *net })
-                })))
+                if let Err(error) = provided(self.world(world, host)?.listen(id, *addr))? {
+                    return Ok(C::Listened(Err(error)));
+                }
+                let local = provided(self.world(world, host)?.local_addr(id))?
+                    .map_err(|_| AdapterError::InvalidCompletion)?;
+                if local.ip != addr.ip
+                    || local.port == 0
+                    || (addr.port != 0 && local.port != addr.port)
+                {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                let id = self.handles.insert(Grant::Listener { net: *net });
+                Ok(C::Listened(Ok((id, local))))
             }
             R::Accept { net, listener } => {
                 let world = self.listener_grant(*net, *listener)?;

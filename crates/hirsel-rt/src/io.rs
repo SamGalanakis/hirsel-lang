@@ -332,6 +332,7 @@ pub enum Completion {
     Bytes(Result<Vec<u8>, IoError>),
     Paths(Result<Vec<String>, IoError>),
     NetHandle(Result<u64, NetError>),
+    Listened(Result<(u64, SocketAddr), NetError>),
     Addresses(Result<Vec<SocketAddr>, NetError>),
     NetBytes(Result<Vec<u8>, NetError>),
     Count(Result<u64, NetError>),

@@ -146,3 +146,9 @@ code, while missing entries use NotFound. File-specific faults are rejected by
 the stdin, stdout and network script domains.
 
 `codec.encode` and `codec.decode` prove concrete schemas from driver-supplied checked declarations and convert values iteratively through hirsel-types::wire. All format validation stays in that shared codec; only complete decoded values become evaluator data. Malformed input returns DecodeError, while codec budgets remain operational refusal.
+
+Scripted port-0 listeners bind their client queue to the first ephemeral listen on
+that IP. Each world allocates from 49152 upward, skips script-reserved and bound
+ports, and shares the sequence through narrowed Nets; independent worlds restart
+it. Outbound connects do not consume ports. Listen completions retain the assigned
+address for replay.
