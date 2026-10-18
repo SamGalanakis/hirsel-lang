@@ -333,6 +333,10 @@ class Selection:
         if 'BUCK' in self.paths:
             old = subprocess.run(['git', 'show', f'{base}:BUCK'], cwd=root, capture_output=True, text=True).stdout
             self.classified.buck = impact.buck_targets(old, buck_text)
+        if 'tools/buck2/test_sizes.bzl' in self.paths:
+            old = git('show', f'{base}:tools/buck2/test_sizes.bzl', root=root)
+            self.classified.test_requests = impact.changed_test_requests(
+                old, (root / 'tools/buck2/test_sizes.bzl').read_text())
         self.tests: list[str] = []
         self.campaigns: set[str] = set()
 
@@ -365,6 +369,17 @@ class Selection:
             scope = f'rdeps(//..., {" + ".join(scopes)})'
             self.tests = uquery(f'(kind("_rust_test", {scope}) + attrfilter(labels, doctest, {scope}))'
                                 ' - attrfilter(labels, gate, //...)')
+        if c.test_requests:
+            # A reservation changes the run, not its harness or downstream users.
+            # Full-only stages remain absent from this per-push graph. Changed-
+            # program native stages need explicit filters and are checked by the
+            # producer lane, rather than launching an empty campaign here.
+            resized = uquery(f'kind("_rust_test", {macro_targets(c.test_requests)})'
+                             ' - attrfilter(labels, gate, //...)')
+            self.tests = sorted(set(self.tests) | set(resized))
+            for campaign, targets in CAMPAIGN_TARGETS.items():
+                if any(re.sub(r'-shard-\d+$', '', short(t)) in c.test_requests for t in targets):
+                    self.campaigns.add(campaign)
 
     def native_programs(self):
         return impact.native_programs(self.paths, self.crates, ROOT)

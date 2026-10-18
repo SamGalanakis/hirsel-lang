@@ -21,6 +21,7 @@ build-wide.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import ast
 import re
 
 CONFORMANCE = 'conformance'
@@ -122,7 +123,9 @@ TOOL_PATHS = (
     'tools/gate', 'tools/land', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py', 'tools/tests/*',
     *(f'tools/buck2/{name}.py' for name in (
         'action_sizes_from_log', 'agree', 'clippy', 'conformance', 'fmt', 'full_gate_counts',
-        'gating', 'impact', 'pool_usage', 'sync', 'test_costs')),
+        'gating', 'impact', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
+    'tools/buck2/test-sizes.json',
+    'tools/buck2/test_sizes.bzl',
 )
 
 # Inputs of every action or of the toolchains: the Cargo workspace and lock,
@@ -151,6 +154,8 @@ class Classified:
     crates: set[str] = field(default_factory=set)
     campaigns: set[str] = field(default_factory=set)
     unknown_crates: set[str] = field(default_factory=set)
+    # Reservation changes select the resized binaries, without their rdeps.
+    test_requests: set[str] = field(default_factory=set)
 
     @property
     def everything(self) -> bool:
@@ -158,7 +163,7 @@ class Classified:
 
     @property
     def needs_buck2(self) -> bool:
-        return self.everything or bool(self.owned) or bool(self.buck)
+        return self.everything or bool(self.owned) or bool(self.buck) or bool(self.test_requests)
 
 
 def pattern(glob: str) -> re.Pattern:
@@ -249,3 +254,28 @@ def buck_targets(old: str, new: str) -> bool | set[str]:
     if old_header != new_header:
         return True
     return {name for name, rule in new_rules.items() if old_rules.get(name) != rule}
+
+
+def changed_test_requests(old: str, new: str) -> set[str]:
+    """Compare generated request values; evidence-only edits run tool checks.
+
+    Parse literals rather than executing repository code. Refuse a changed
+    file shape so a rule change cannot silently be treated as sizing data.
+    """
+    def requests(text):
+        tree = ast.parse(text)
+        if (len(tree.body) != 1 or not isinstance(tree.body[0], ast.Assign)
+                or len(tree.body[0].targets) != 1
+                or not isinstance(tree.body[0].targets[0], ast.Name)
+                or tree.body[0].targets[0].id != 'TEST_REQUESTS'):
+            raise ValueError('test_sizes.bzl must contain only the generated TEST_REQUESTS assignment')
+        rows = ast.literal_eval(tree.body[0].value)
+        if not isinstance(rows, dict) or any(
+                not isinstance(name, str) or not isinstance(row, list) or len(row) != 3
+                or type(row[0]) is not int or not 1 <= row[0] <= 4
+                or type(row[1]) is not int or row[1] <= 0 or not isinstance(row[2], str)
+                for name, row in rows.items()):
+            raise ValueError('invalid TEST_REQUESTS')
+        return rows
+    before, after = requests(old), requests(new)
+    return {name for name in before.keys() | after.keys() if before.get(name) != after.get(name)}

@@ -87,6 +87,22 @@ class Classification(unittest.TestCase):
         self.assertEqual(len(c.tools), 5)
         self.assertFalse(c.needs_buck2)
 
+    def test_sizing_evidence_and_generator_do_not_select_every_test(self):
+        c = self.classify('tools/buck2/test_sizes_from_usage.py', 'tools/buck2/test-sizes.json',
+                          'tools/buck2/test_sizes.bzl')
+        self.assertEqual(len(c.tools), 3)
+        self.assertFalse(c.needs_buck2)
+
+    def test_request_diff_selects_only_changed_added_or_removed_binaries(self):
+        old = 'TEST_REQUESTS = {"same": [1, 512, ""], "changed": [2, 512, ""], "gone": [1, 512, ""]}'
+        new = '# evidence refresh\nTEST_REQUESTS = {"changed": [1, 512, ""], "same": [1, 512, ""], "new": [1, 512, ""]}'
+        self.assertEqual(impact.changed_test_requests(old, new), {'changed', 'gone', 'new'})
+        self.assertEqual(impact.changed_test_requests(old, '# comment\n' + old), set())
+        for text in ['TEST_REQUESTS = {}\nother = 1', 'TEST_REQUESTS = call()',
+                     'TEST_REQUESTS = {"bad": [0, 512, ""]}']:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                impact.changed_test_requests(old, text)
+
     def test_build_wide_inputs_select_everything(self):
         for path in ['Cargo.toml', '.buckconfig', 'tools/buck2/defs.bzl', 'tools/buck2/test_launcher.sh',
                      'tools/buck2/prelude_overlay.py', 'third-party/BUCK', 'rust-toolchain.toml']:
@@ -261,6 +277,18 @@ class Queries(unittest.TestCase):
         selection, asked = self.resolve(['.buckconfig'])
         self.assertEqual(asked, [gating.ALL_TESTS])
         self.assertEqual(selection.campaigns, set(impact.CAMPAIGNS))
+
+    def test_resizing_selects_runs_without_rdeps_or_unrelated_campaigns(self):
+        selection = gating.Selection.__new__(gating.Selection)
+        selection.classified = impact.Classified(test_requests={
+            'hirsel-cli-test-cli', 'gate-conformance', 'gate-native-full'})
+        selection.tests, selection.campaigns = [], set()
+        with patch.object(gating, 'uquery', return_value=['root//:hirsel-cli-test-cli']) as query:
+            selection.resolve()
+        self.assertEqual(selection.tests, ['root//:hirsel-cli-test-cli'])
+        self.assertEqual(selection.campaigns, {impact.CONFORMANCE})
+        self.assertNotIn('rdeps', query.call_args.args[0])
+        self.assertTrue(selection.classified.needs_buck2)
 
 
 class NativePrograms(unittest.TestCase):
