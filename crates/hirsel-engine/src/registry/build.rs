@@ -341,6 +341,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "statuses: List[ExitStatus],stdout: Bytes,stderr: Bytes",
         ),
         (
+            "GroupOutput",
+            "",
+            "statuses: List[ExitStatus],stderr: List[Bytes]",
+        ),
+        (
             "ProcessScript",
             "",
             "program: String,args: List[String],outcome: Result[ProcessOutput,ProcessError]",
@@ -451,6 +456,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("Listener", "Net"),
         ("UdpSocket", "Net"),
         ("Child", "Proc"),
+        ("ChildGroup", "Proc"),
     ] {
         let b = Builder::new("").with_declarations(&out);
         let mut t = type_definition(vec![], None);

@@ -128,6 +128,10 @@ float.min_number	a19be2b294edaf3db4729e3b8d2d335ed2fa311cc156f16f14547f988bcfe6b
 float.mul_add	c2e6cabcc5eeff228d296cfdd07ccc99c652107224f82c2bbdaf9790db7846f2	0:b:n;1:b:n;2:b:n->n
 float.to_i32	fb862fc6cb83ea4026108eacc2f06c78095b1047e8345557663744c034a9fe0f	0:b:n->n
 float.total_order	f32f7edf3a9efec58a30b81fcb8c5f989a02cea98ffd3da9ca1e70f30afcbb5f	0:b:n;1:b:n->n
+group.close_stdin	da229b511a293c42b9a5b5e7a9d35feef4b51849aa254dd136c3a040db4917da	0:b:n;1:m:n->n
+group.kill	72ef0ecb7c051ac2b0449c2b1f696b1040859783179a362d29e4280ec5898239	0:b:n;1:m:n;2:b:n->n
+group.read_stdout	5b2aafd6f436dd4b96c2d8e6b4699fbd319a17f04306d890c24f942dbc00df65	0:b:n;1:m:n;2:m:n;3:b:n->n
+group.write	7ca98039d9c4f959173de6d99673720a885a874da34bb7d4aad5cc2753131436	0:b:n;1:m:n;2:b:n->n
 instant.checked_add	ac764efd8e343b54e1234d2c7959cff55fd4be791a91fe69f06c70fbce32bd15	0:b:n;1:b:n;2:b:n->n
 instant.ticks	b8e96968ef470fbad7561b04823e4c0bd3dbbc799cc287060e36d58f513c9fcf	0:b:n->n
 int.checked_add	cee5d5734474bb89e3de4c6c068abf641748f7285b212d1643fe58282e0e4b88	0:b:n;1:b:n->n
@@ -193,6 +197,8 @@ path.text	2b64ffbe434db8749e7da99306a5c6012938fe105c7f49842f4705d7544575d9	0:b:n
 proc.pipeline	621c75bf9e1fadd2ffc88d0f9a4dc51e2b2d13d32820cb5bad55cf14b4e6773b	0:b:n;1:b:n;2:b:n;3:b:n;4:b:n->n
 proc.run	dbb73bcd0a226abfe1bb4d865ce69255414fb220a55a35a9de28dfa8c1f71487	0:b:n;1:b:n;2:b:n;3:b:n;4:b:n->n
 proc.spawn	ea678ac3668d587c8f423c6ef32b8bda1cd6be1c857a73c006878cb30842a5e8	0:b:n;1:b:n->n
+proc.spawn_pipeline	1cee34c119669fb6cd71a738720259d5468dd1f96f46eed615a4d49e807311a4	0:b:n;1:b:n;2:b:n->n
+proc.wait_group	5a1d9f34f02e701469f9de924138e220c47f9435a7e656ef9491536f0a2d16d8	0:b:n;1:t:n;2:b:n->n
 random.bytes	e39710af2db6defeb28c1ef50f1cd2965341d69faff536ff53f6fab68ba83552	0:b:n;1:b:n->n
 region.with	8adc31225084d866b1dac6aed6bb15af6fed65df7b7de481931de4f779750277	0:m:[0];1:b:a->[1]
 reservations.insert	a946f3a3b8b944467c6e320a367e7cb1ed9e7c83f46334c1223c6ba1a10fee78	0:b:n;1:b:n->n

@@ -41,11 +41,13 @@ pub enum Grant {
         rules: Vec<hirsel_run_config::ProcessRule>,
         world: crate::process::ProcessWorld,
     },
-    /// A streaming child of Proc `process`, served by that Proc's world.
+    /// A streaming child of Proc `process`, served by that Proc's world; with `group` a
+    /// spawned pipeline, its stage count and standard-error bound.
     Child {
         process: u64,
         world: crate::process::ProcessWorld,
         stdin_open: bool,
+        group: Option<(usize, u64)>,
     },
     Directory {
         root: String,

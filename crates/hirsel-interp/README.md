@@ -542,7 +542,9 @@ refuses. `proc.spawn` makes the same checks and plays the first unused scripted 
 entry with `hirsel_run_config::ScriptChild`, minting a `Child` grant of its Proc. A read
 at an `Expect` parks its task as a scripted peer's read does (`waiting_call`), and a
 contradicted or unmet `Expect` (at a write, `close_stdin`, `wait` or the Child's drop)
-fails LANG-9 after its Test report. Host children, like host runs, go through the
+fails LANG-9 after its Test report. `proc.spawn_pipeline` plays its stages' entries with
+`hirsel_run_config::ScriptGroup` behind a `ChildGroup` grant, which the `group.*`
+operations and `proc.wait_group` take. Host children, like host runs, go through the
 driver's host library to the runtime.
 
 SimulationConfig supplies stdin bytes and exact Env name-to-optional-value snapshots.

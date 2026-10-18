@@ -62,6 +62,9 @@ conformance/CAP/CAP-1-output-no-added-newline.hir
 conformance/CAP/CAP-1-process-child-signal-run.hir
 conformance/CAP/CAP-1-process-env-run.hir
 conformance/CAP/CAP-1-process-env-scripted-run.hir
+conformance/CAP/CAP-1-process-group-bad.hir
+conformance/CAP/CAP-1-process-group-ok.hir
+conformance/CAP/CAP-1-process-group-scripted-run.hir
 conformance/CAP/CAP-1-process-pipeline-scripted-run.hir
 conformance/CAP/CAP-1-process-projection-bad.hir
 conformance/CAP/CAP-1-process-projection-ok.hir
@@ -536,6 +539,7 @@ conformance/CONC/CONC-3-clock-deadline-receive-run.hir
 conformance/CONC/CONC-3-clock-deadline-sleep-run.hir
 conformance/CONC/CONC-3-clock-deadline-tls-run.hir
 conformance/CONC/CONC-3-clock-denied-run.hir
+conformance/CONC/CONC-3-clock-group-deadline-run.hir
 conformance/CONC/CONC-3-clock-pipeline-deadline-run.hir
 conformance/CONC/CONC-3-clock-process-deadline-run.hir
 conformance/CONC/CONC-3-clock-process-races-run.hir
@@ -1825,6 +1829,8 @@ conformance/LANG/LANG-9-child-expect-mismatch-fail.hir
 conformance/LANG/LANG-9-child-expect-unmet-drop-fail.hir
 conformance/LANG/LANG-9-explicit-check.hir
 conformance/LANG/LANG-9-fake-directory.hir
+conformance/LANG/LANG-9-group-stage-mismatch-fail.hir
+conformance/LANG/LANG-9-group-stage-unmet-fail.hir
 conformance/LANG/LANG-9-native-property-fail.hir
 conformance/LANG/LANG-9-native-property-run.hir
 conformance/LANG/LANG-9-native-test-check-fail.hir
@@ -3841,6 +3847,8 @@ conformance/PROV/PROV-1-fresh-alias-indexed-run.hir
 conformance/PROV/PROV-1-fresh-alias-match-run.hir
 conformance/PROV/PROV-1-fresh-alias-range-run.hir
 conformance/PROV/PROV-1-fresh-alias-while-run.hir
+conformance/PROV/PROV-1-group-other-proc-bad.hir
+conformance/PROV/PROV-1-group-other-proc-ok.hir
 conformance/PROV/PROV-1-index-container-bad.hir
 conformance/PROV/PROV-1-index-container-ok.hir
 conformance/PROV/PROV-1-index-field-container-bad.hir

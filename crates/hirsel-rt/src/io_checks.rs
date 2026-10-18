@@ -181,10 +181,13 @@ pub fn cancel(
         R::ProcessPipeline { .. } => C::Pipeline(hirsel_run_config::PipelineOutcome::Error(
             ProcessFailure::Canceled(cause),
         )),
-        R::ProcessSpawn { .. } => C::Spawned(Err(ProcessFailure::Canceled(cause))),
+        R::ProcessSpawn { .. } | R::ProcessSpawnPipeline { .. } => {
+            C::Spawned(Err(ProcessFailure::Canceled(cause)))
+        }
         R::ChildWrite { .. } => C::ChildUnit(Err(ProcessFailure::Canceled(cause))),
         R::ChildRead { .. } => C::ChildBytes(Err(ProcessFailure::Canceled(cause))),
         R::ChildWait { .. } => C::ChildExit(Err(ProcessFailure::Canceled(cause))),
+        R::GroupWait { .. } => C::GroupExit(Err(ProcessFailure::Canceled(cause))),
         R::UdpBind { .. }
         | R::UdpSend { .. }
         | R::UdpRecv { .. }
@@ -227,7 +230,7 @@ pub fn cancel(
         R::TlsConnect { stream, .. } | R::TlsAccept { stream, .. } | R::TlsClose { stream, .. } => {
             Some(*stream)
         }
-        R::ChildWait { child, .. } => Some(*child),
+        R::ChildWait { child, .. } | R::GroupWait { group: child, .. } => Some(*child),
         R::Commit { file, .. } => Some(*file),
         _ => None,
     };

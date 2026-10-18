@@ -1,0 +1,67 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// process: {"provider":"process.script@1","rules":[{"program":"/bin/cat"},{"program":"/usr/bin/sort"}],"runs":[],"children":[{"program":"/bin/cat","args":[],"steps":[{"expect":[120]}]},{"program":"/usr/bin/sort","args":[],"steps":[{"expect":[121]}]},{"program":"/bin/cat","args":[],"steps":[{"print_err":[99]}]},{"program":"/usr/bin/sort","args":[],"steps":[{"print_err":[115]}]}]}
+// stdout: timed out
+// stdout: ran 2 stages, stderr c s
+// stdout: at 0
+// A group wait whose deadline the clock already reached ends every stage at once without
+// checking an Expect; a scripted group takes no time, so one with a later deadline ends
+// by itself and reports each stage's standard error.
+fn after(c: MonotonicClock, start: Instant of c, ns: u64) -> Deadline {
+  match instant.checked_add(c, start, ns) {
+    Some(at) => Deadline(clock: c, at: at),
+    None() => Deadline(clock: c, at: start),
+  }
+}
+
+fn stages() -> List[Command] {
+  [
+    Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None()),
+    Command(program: path.of("/usr/bin/sort"), args: [], dir: None(), env: None())
+  ]
+}
+
+fn outcome(r: Result[GroupOutput, ProcessError]) -> String {
+  match r {
+    Ok(ran) if ran.stderr == [b"c", b"s"] => f"ran {list.len(ran.statuses)} stages, stderr c s\n",
+    Ok(_) => "other stderr\n",
+    Error(TimedOut()) => "timed out\n",
+    Error(_) => "failed\n",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let p = io.process(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  match proc.spawn_pipeline(p, stages(), 64u64) {
+    Ok(g) => {
+      let _ = out.print(
+        output,
+        outcome(proc.wait_group(p, take g, Some(after(c, start, 0u64))))
+      )
+    },
+    Error(_) => return Ok(()),
+  }
+  match proc.spawn_pipeline(p, stages(), 64u64) {
+    Ok(g) => {
+      let _ = out.print(
+        output,
+        outcome(proc.wait_group(p, take g, Some(after(c, start, 1000u64))))
+      )
+    },
+    Error(_) => return Ok(()),
+  }
+  match clock.monotonic(c) {
+    Ok(now) => {
+      let _ = out.print(output, f"at {instant.ticks(now) - instant.ticks(start)}\n")
+    },
+    Error(_) => return Ok(()),
+  }
+  Ok(())
+}

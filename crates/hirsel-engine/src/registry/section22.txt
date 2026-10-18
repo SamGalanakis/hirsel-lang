@@ -109,6 +109,12 @@ fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64)
 fn child.read_stderr(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
 N fn child.wait(p: Proc, take c: Child of p, deadline: Option[Deadline]) -> Result[ExitStatus, ProcessError]
 N fn child.kill(p: Proc, mut c: Child of p, signal: Signal) -> ()
+fn proc.spawn_pipeline(p: Proc, stages: List[Command], max_stderr: u64) -> Result[ChildGroup of p, ProcessError]
+N fn group.write(p: Proc, mut g: ChildGroup of p, data: Bytes) -> Result[(), ProcessError]
+N fn group.close_stdin(p: Proc, mut g: ChildGroup of p) -> ()
+fn group.read_stdout(p: Proc, mut g: ChildGroup of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
+fn proc.wait_group(p: Proc, take g: ChildGroup of p, deadline: Option[Deadline]) -> Result[GroupOutput, ProcessError]
+N fn group.kill(p: Proc, mut g: ChildGroup of p, signal: Signal) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R

@@ -1210,7 +1210,7 @@ impl Operations for Library {
             }
             return Ok(());
         }
-        if kind == "Child" {
+        if kind == "Child" || kind == "ChildGroup" {
             if !matches!(
                 self.simulation.grants.get(&id),
                 Some(super::simulation::Grant::Child { .. })
@@ -1224,7 +1224,11 @@ impl Operations for Library {
             }
             self.simulation.record(
                 "Proc",
-                "child.close",
+                if kind == "Child" {
+                    "child.close"
+                } else {
+                    "group.close"
+                },
                 id.to_le_bytes().to_vec(),
                 if report.is_some() {
                     b"failure:LANG-9".to_vec()
@@ -1375,7 +1379,7 @@ primary_operations! { self, call, context, name, a, value;
     },
     // A rejected replay never publishes effects or consumes script entries; a scripted
     // child's read parks as a scripted peer's does.
-    Capability: "io.process" | "proc.run" | "proc.pipeline" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" => {
+    Capability: "io.process" | "proc.run" | "proc.pipeline" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" | "proc.spawn_pipeline" | "group.write" | "group.close_stdin" | "group.read_stdout" | "proc.wait_group" | "group.kill" => {
         return self.network_call(name, &call, context).map(Some);
     },
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },

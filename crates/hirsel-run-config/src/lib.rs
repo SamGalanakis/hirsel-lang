@@ -24,13 +24,13 @@ pub use net::{
 };
 mod child;
 pub mod tls;
-pub use child::{ChildStream, ScriptChild, ScriptRead, Signal, child_mismatch, child_unmet};
+pub use child::{ChildStream, ScriptChild, ScriptGroup, ScriptRead, Signal};
 mod process;
 pub use process::{
-    ChildRun, ChildStep, Command, ExitStatus, PipelineOutcome, ProcessFailure, ProcessGrant,
-    ProcessOutcome, ProcessRule, ProcessRun, canonical_program, decode_child_runs,
+    ChildRun, ChildStep, Command, ExitStatus, GroupOutput, PipelineOutcome, ProcessFailure,
+    ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, canonical_program, decode_child_runs,
     decode_process_runs, encode_child_runs, encode_process_runs, script_pipeline, scriptable,
-    validate_process_grant,
+    take_children, validate_process_grant,
 };
 
 /// A host-supplied, immutable admission snapshot. Its revision hashes the exact file.

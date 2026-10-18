@@ -198,6 +198,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         ("Listener", true),
         ("UdpSocket", true),
         ("Child", true),
+        ("ChildGroup", true),
         ("TaskSet", true),
     ] {
         if let Some(signature) = signatures.get(&hirsel_syntax::DefPath::core(name)) {

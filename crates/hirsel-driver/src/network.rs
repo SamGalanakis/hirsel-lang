@@ -724,7 +724,13 @@ impl HostLibrary {
     ) -> Result<OperationResult, Error> {
         if !matches!(
             name,
-            "child.write" | "child.read_stdout" | "child.read_stderr" | "child.wait"
+            "child.write"
+                | "child.read_stdout"
+                | "child.read_stderr"
+                | "child.wait"
+                | "group.write"
+                | "group.read_stdout"
+                | "proc.wait_group"
         ) {
             return self.child_request(name, a, None, cx);
         }
@@ -770,22 +776,45 @@ impl HostLibrary {
                     ))));
                 }
             },
-            "child.write" => R::ChildWrite {
+            "proc.spawn_pipeline" => {
+                let mut stages = vec![];
+                for stage in fields(&a[1])? {
+                    match self.command(stage)? {
+                        Some(command) => stages.push(command),
+                        None => {
+                            return Ok(OperationResult::returned(error(failure_value(
+                                ProcessFailure::InvalidInput,
+                            ))));
+                        }
+                    }
+                }
+                R::ProcessSpawnPipeline {
+                    process,
+                    stages,
+                    max_stderr: word(&a[2])?,
+                }
+            }
+            "proc.wait_group" => R::GroupWait {
+                process,
+                group: self.id(&a[1])?,
+                deadline: self.deadline(&a[2])?,
+            },
+            "child.write" | "group.write" => R::ChildWrite {
                 process,
                 child: self.id(&a[1])?,
                 bytes: bytes(&a[2])?,
             },
-            "child.close_stdin" => R::ChildCloseStdin {
+            "child.close_stdin" | "group.close_stdin" => R::ChildCloseStdin {
                 process,
                 child: self.id(&a[1])?,
             },
-            "child.read_stdout" | "child.read_stderr" => R::ChildRead {
+            "child.read_stdout" | "child.read_stderr" | "group.read_stdout" => R::ChildRead {
                 process,
                 child: self.id(&a[1])?,
-                stream: if name == "child.read_stdout" {
-                    hirsel_rt::process::ChildStream::Stdout
-                } else {
+                stream: if name == "child.read_stderr" {
                     hirsel_rt::process::ChildStream::Stderr
+                } else {
+                    hirsel_rt::process::ChildStream::Stdout
                 },
                 max: word(&a[3])?,
             },
@@ -794,7 +823,7 @@ impl HostLibrary {
                 child: self.id(&a[1])?,
                 deadline: self.deadline(&a[2])?,
             },
-            "child.kill" => R::ChildKill {
+            "child.kill" | "group.kill" => R::ChildKill {
                 process,
                 child: self.id(&a[1])?,
                 signal: hirsel_rt::process::Signal::of_ordinal(tag(&a[2])?).ok_or_else(invalid)?,
@@ -816,15 +845,21 @@ impl HostLibrary {
         }
         let completion = completion?;
         // The wait consumes its Child on every outcome.
-        if name == "child.wait"
+        if matches!(name, "child.wait" | "proc.wait_group")
             && let Value::Handle { id, .. } = a[1]
         {
             self.handles.remove(&id);
         }
         let mut updates = vec![];
         let value = match completion {
+            C::Spawned(Ok(child)) if name == "proc.spawn_pipeline" => {
+                ok(self.handle(child, "ChildGroup"))
+            }
             C::Spawned(Ok(child)) => ok(self.handle(child, "Child")),
-            C::ChildUnit(Ok(())) if name == "child.write" => ok(Value::Unit),
+            C::ChildUnit(Ok(())) if name == "child.write" || name == "group.write" => {
+                ok(Value::Unit)
+            }
+            C::GroupExit(outcome) => hirsel_interp::library::process::group_value(&outcome),
             C::ChildUnit(Ok(())) => Value::Unit,
             C::ChildBytes(Ok(read)) => {
                 let n = read.len() as u64;
@@ -850,7 +885,7 @@ impl HostLibrary {
         Ok(OperationResult::Complete {
             value,
             arguments: updates,
-            consumed: if name == "child.wait" {
+            consumed: if matches!(name, "child.wait" | "proc.wait_group") {
                 vec![1]
             } else {
                 vec![]
@@ -1733,7 +1768,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
             };
         }
-        if name.starts_with("child.") {
+        if name.starts_with("child.") || name.starts_with("group.") || name == "proc.wait_group" {
             if canceled {
                 self.io.adapter().finish(token);
                 self.waits.remove(&token);
@@ -1819,7 +1854,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 return self.storage(&name, call.arguments).map(Some);
             }
             if name == "io.process"
-                || (name.starts_with("proc.") || name.starts_with("child."))
+                || (name.starts_with("proc.")
+                    || name.starts_with("child.")
+                    || name.starts_with("group."))
                     && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
             {
                 if name == "io.process" {
@@ -1875,11 +1912,13 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     ) -> Result<(), Error> {
         if matches!(
             kind,
-            "Stream" | "Listener" | "UdpSocket" | "File" | "AtomicFile" | "Child"
+            "Stream" | "Listener" | "UdpSocket" | "File" | "AtomicFile" | "Child" | "ChildGroup"
         ) && let Some(handle) = self.handles.remove(&id)
         {
             // Dropping a scripted child closes its input, which can leave an Expect unmet.
-            if self.host(R::Close { handle })? == C::Checked(false) && kind == "Child" {
+            if self.host(R::Close { handle })? == C::Checked(false)
+                && matches!(kind, "Child" | "ChildGroup")
+            {
                 self.library.fail_drop("scripted child unmet");
             }
             return Ok(());

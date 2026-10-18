@@ -147,6 +147,12 @@ fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64)
 fn child.read_stderr(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
 N fn child.wait(p: Proc, take c: Child of p, deadline: Option[Deadline]) -> Result[ExitStatus, ProcessError]
 N fn child.kill(p: Proc, mut c: Child of p, signal: Signal) -> ()
+fn proc.spawn_pipeline(p: Proc, stages: List[Command], max_stderr: u64) -> Result[ChildGroup of p, ProcessError]
+N fn group.write(p: Proc, mut g: ChildGroup of p, data: Bytes) -> Result[(), ProcessError]
+N fn group.close_stdin(p: Proc, mut g: ChildGroup of p) -> ()
+fn group.read_stdout(p: Proc, mut g: ChildGroup of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
+fn proc.wait_group(p: Proc, take g: ChildGroup of p, deadline: Option[Deadline]) -> Result[GroupOutput, ProcessError]
+N fn group.kill(p: Proc, mut g: ChildGroup of p, signal: Signal) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R
@@ -837,6 +843,7 @@ ExitStatus    = Exited(i32) | Signaled(i32)
 Signal        = Interrupt() | Terminate() | Kill()
 ProcessOutput = { status: ExitStatus, stdout: Bytes, stderr: Bytes }
 PipelineOutput = { statuses: List[ExitStatus], stdout: Bytes, stderr: Bytes }
+GroupOutput   = { statuses: List[ExitStatus], stderr: List[Bytes] }
 ProcessError  = NotGranted() | InvalidInput() | NotFound() | PermissionDenied()
               | OutputLimit() | Fault(u32) | TimedOut() | Canceled(CancelCause)
               | InputClosed()
@@ -854,9 +861,10 @@ and its environment. `proc.run(p, cmd, stdin, max_output, deadline)` runs one ch
 completion and returns its exit status and everything it wrote to standard output and
 standard error. `proc.pipeline(p, stages, stdin, max_output, deadline)` runs commands
 connected as a shell pipeline. `proc.spawn(p, cmd)` starts a streaming child that the
-program talks to while it runs. Each makes these checks of each command in this order,
-each before any host effect; a pipeline checks every stage in stage order before
-anything is spawned, and an empty `stages` is `InvalidInput()`:
+program talks to while it runs, and `proc.spawn_pipeline(p, stages, max_stderr)` a streaming
+pipeline. Each makes these checks of each command in this order, each before any host
+effect; a pipeline checks every stage in stage order before anything is spawned, and an
+empty `stages` is `InvalidInput()`:
 
 1. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
    `..` component and no trailing `/`, and no argument contains a NUL byte. With `env`
@@ -960,6 +968,35 @@ input, sends the child SIGKILL, reaps it, then closes its output pipes, discardi
 bytes. The finalizer is `@noalloc`, and it never waits on the child except to reap it after
 SIGKILL. A program that wants the child's exit status calls `child.wait`.
 
+**Streaming pipelines.** `proc.spawn_pipeline` starts its stages connected as
+`proc.pipeline` connects them and returns them as a `ChildGroup of p`, a noncopyable,
+sendable resource carrying `Proc` authority like a `Child`. The program streams to the first
+stage's standard input and from the last stage's standard output: `group.write`,
+`group.close_stdin` and `group.read_stdout` are `child.write`, `child.close_stdin` and
+`child.read_stdout` on those ends, parking, cancelling and failing as they do. Each stage
+writes standard error to a pipe of its own, which the provider drains while the group runs,
+so no stage waits on it however the program streams; a stage that writes more than
+`max_stderr` bytes there makes the provider send every stage SIGKILL, and the group's wait is
+then `OutputLimit()`. A stage that cannot start (`NotFound()`, `PermissionDenied()`,
+`Fault(_)`) kills and reaps the stages started before it and is the result.
+
+- `proc.wait_group(p, take g, deadline)` closes standard input if it is open, reads and
+  discards whatever the last stage still writes until every stage has closed its output and
+  standard error, reaps every stage and returns `GroupOutput`: `statuses` every stage's
+  `ExitStatus` in stage order (a stage that exits early can end an earlier one with
+  SIGPIPE, `Signaled(13)`) and `stderr` every stage's standard error, each its own `Bytes`,
+  in stage order. With `deadline` `Some(d)` the wait must end by `d.at` as a `child.wait`
+  does: when `d.clock` reaches it first, every stage is sent SIGTERM, then SIGKILL if it has
+  not exited one second later, and once all are reaped the result is `TimedOut()`. It
+  consumes the group on every outcome; a cancelled wait returns `Canceled(cause)` and drops
+  the group it took.
+- `group.kill(p, mut g, signal)` sends `signal` to every stage, as `child.kill` does to a
+  child.
+
+Dropping a `ChildGroup` closes its standard input, sends every stage SIGKILL, reaps them all,
+then closes its pipes, discarding unread output and captured standard error. The finalizer
+is `@noalloc`.
+
 **Scripted runs.** `test.process(t, runs, children)` returns a fake `Proc` whose rules are
 the distinct `program` values of its runs and children, with no environment names. A
 script outcome or step that is not valid for a host child (a noncanonical `program`, or an
@@ -1000,7 +1037,27 @@ host read does, and so can leave a run Blocked ([CONC-8](concurrency.md#conc-8-g
 Writes never wait. `child.kill` with any signal ends the script at once without checking an
 `Expect`, and a later `wait` returns `Signaled(n)` with that signal's number. A scripted
 child takes no time: a `wait` deadline matters only when `d.clock` has already reached it,
-which ends the script the same way and returns `TimedOut()`. Every scripted operation is recorded as the same request
+which ends the script the same way and returns `TimedOut()`.
+
+A `proc.spawn_pipeline` on it makes every stage's checks, then each stage takes the first
+unused child entry whose `program` and `args` equal its own, all or none: with a stage that
+has none the result is `NotFound()` and no entry is taken. The stages play their steps as
+spawned children do, connected: the program's writes are the first stage's input, the bytes
+every other stage's `Print` steps make available are written to the next stage's input at
+once, the end of a stage closes the next stage's input, and `group.read_stdout` reads the
+last stage's `Print` steps as `child.read_stdout` does. Each stage's `PrintErr` bytes are
+its captured standard error, bounded by `max_stderr`: a stage past it ends every stage as
+`group.kill(p, g, Kill())` does, and the wait returns `OutputLimit()`. An `Expect` of a later
+stage that its input stage contradicts fails LANG-9 after reporting
+`test failure: child P expected E but its input stage Q wrote W`, and one left unmet when its
+input stage ends after reporting
+`test failure: child P expected E but its input stage Q closed its output after writing W`,
+where `Q` is the previous stage's program; the first stage reports as a child does. Such a
+failure occurs at the operation that moved the bytes or ended the stage, `proc.spawn_pipeline`
+included. `group.kill` with any signal ends every stage at once without checking an `Expect`,
+and each stage's status is then `Signaled(n)` unless it had already ended; a wait whose
+deadline `d.clock` has already reached ends every stage the same way and returns `TimedOut()`.
+Every scripted operation is recorded as the same request
 and completion a host child produces, so a simulated run replays like a real one
 ([process recording](determinism.md#process-recording)).
 

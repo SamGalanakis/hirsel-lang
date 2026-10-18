@@ -247,7 +247,7 @@ impl Operations for Io {
                 output.extend(self.network.take_report());
                 return outcome;
             }
-            (Some("proc" | "child"), _, _) => {
+            (Some("proc" | "child" | "group"), _, _) => {
                 self.yielded = true;
                 let outcome = self.process(module, &path.name, args, Some(cause));
                 output.extend(self.network.take_report());

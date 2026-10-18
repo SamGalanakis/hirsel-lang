@@ -12,8 +12,9 @@
 use crate::handles::Grant;
 use crate::io::{AdapterError, Completion, Request, State};
 pub use hirsel_run_config::{
-    ChildRun, ChildStep, ChildStream, Command, ExitStatus, PipelineOutcome, ProcessFailure,
-    ProcessOutcome, ProcessRule, ProcessRun, ScriptChild, ScriptRead, Signal, canonical_program,
+    ChildRun, ChildStep, ChildStream, Command, ExitStatus, GroupOutput, PipelineOutcome,
+    ProcessFailure, ProcessOutcome, ProcessRule, ProcessRun, ScriptChild, ScriptGroup, ScriptRead,
+    Signal, canonical_program,
 };
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -98,6 +99,15 @@ pub enum HostCall<'a> {
         child: u64,
         spec: &'a ProcessSpec<'a>,
     },
+    /// `proc.spawn_pipeline` of two or more checked stages as ChildGroup handle `group`:
+    /// [`Completion::Spawned`] with that handle.
+    SpawnPipeline {
+        group: u64,
+        stages: &'a [ProcessSpec<'a>],
+        max_stderr: u64,
+    },
+    /// The operations below take a Child or a ChildGroup, whose input is its first stage's
+    /// and whose output its last stage's; a ChildGroup is never read for standard error.
     /// Nonempty `data` to open input: [`Completion::ChildUnit`].
     Write { child: u64, data: &'a [u8] },
     /// [`Completion::ChildUnit`] `Ok`.
@@ -111,9 +121,11 @@ pub enum HostCall<'a> {
     /// [`Completion::ChildExit`]; `TimedOut` only with a deadline, in CLOCK_MONOTONIC
     /// nanoseconds.
     Wait { child: u64, deadline: Option<u64> },
-    /// [`Completion::ChildUnit`] `Ok`.
+    /// `proc.wait_group`: [`Completion::GroupExit`], `TimedOut` only with a deadline.
+    WaitGroup { group: u64, deadline: Option<u64> },
+    /// [`Completion::ChildUnit`] `Ok`: `signal` to every stage.
     Kill { child: u64, signal: Signal },
-    /// The drop of a Child never waited: [`Completion::Unit`] `Ok`.
+    /// The drop of a Child or ChildGroup never waited: [`Completion::Unit`] `Ok`.
     Close { child: u64 },
 }
 
@@ -283,13 +295,16 @@ impl State {
             }
             // Every stage passes its checks, in stage order, before anything is spawned.
             Request::ProcessPipeline {
-                process,
-                stages,
-                deadline,
-                ..
+                process, stages, ..
+            }
+            | Request::ProcessSpawnPipeline {
+                process, stages, ..
             } => {
                 let (rules, world) = self.process_grant(*process)?;
-                if let Some(d) = deadline {
+                if let Request::ProcessPipeline {
+                    deadline: Some(d), ..
+                } = request
+                {
                     self.expect(d.clock, Grant::MonotonicClock)?;
                 }
                 if stages.is_empty() {
@@ -306,24 +321,36 @@ impl State {
                 }
             }
             Request::ChildWrite { process, child, .. } => {
-                let (_, open) = self.child_grant(*process, *child)?;
+                let (_, open, _) = self.child_grant(*process, *child)?;
                 (!open).then_some(ProcessFailure::InvalidInput)
             }
+            // A ChildGroup has no standard error to read.
             Request::ChildRead {
                 process,
                 child,
+                stream,
                 max,
-                ..
             } => {
-                self.child_grant(*process, *child)?;
+                let (_, _, group) = self.child_grant(*process, *child)?;
+                if group.is_some() && *stream == ChildStream::Stderr {
+                    return Err(AdapterError::InvalidHandle(*child));
+                }
                 (*max == 0).then_some(ProcessFailure::InvalidInput)
             }
             Request::ChildWait {
                 process,
                 child,
                 deadline,
+            }
+            | Request::GroupWait {
+                process,
+                group: child,
+                deadline,
             } => {
-                self.child_grant(*process, *child)?;
+                let (_, _, group) = self.child_grant(*process, *child)?;
+                if group.is_some() != matches!(request, Request::GroupWait { .. }) {
+                    return Err(AdapterError::InvalidHandle(*child));
+                }
                 if let Some(d) = deadline {
                     self.expect(d.clock, Grant::MonotonicClock)?;
                 }
@@ -334,7 +361,9 @@ impl State {
         Ok(failure.map(|f| match request {
             Request::ProcessRun { .. } => Completion::Process(ProcessOutcome::Error(f)),
             Request::ProcessPipeline { .. } => Completion::Pipeline(PipelineOutcome::Error(f)),
-            Request::ProcessSpawn { .. } => Completion::Spawned(Err(f)),
+            Request::ProcessSpawn { .. } | Request::ProcessSpawnPipeline { .. } => {
+                Completion::Spawned(Err(f))
+            }
             Request::ChildRead { .. } => Completion::ChildBytes(Err(f)),
             _ => Completion::ChildUnit(Err(f)),
         }))
@@ -478,6 +507,70 @@ impl State {
                         process: *process,
                         world,
                         stdin_open: true,
+                        group: None,
+                    });
+                }
+                Ok(Completion::Spawned(spawned))
+            }
+            Request::ProcessSpawnPipeline {
+                process,
+                stages,
+                max_stderr,
+            } => {
+                let (rules, world) = self.process_grant(*process)?;
+                let group = self.handles.next();
+                let spawned = match world {
+                    ProcessWorld::Script(id) => {
+                        let children = self
+                            .child_scripts
+                            .get_mut(&id)
+                            .ok_or(AdapterError::InvalidCompletion)?;
+                        match hirsel_run_config::take_children(children, stages) {
+                            Ok(runs) => {
+                                let (script, report) = ScriptGroup::new(runs, *max_stderr);
+                                if let Some(report) = report {
+                                    return Ok(self.child_failure(&report));
+                                }
+                                self.script_groups.insert(group, script);
+                                Ok(group)
+                            }
+                            Err(failure) => Err(failure),
+                        }
+                    }
+                    ProcessWorld::Host => {
+                        let mut specs = vec![];
+                        for stage in stages {
+                            let rule = stage
+                                .check(&rules)
+                                .map_err(|_| AdapterError::InvalidCompletion)?;
+                            specs.push(ProcessSpec::of(stage, rule));
+                        }
+                        match host(HostCall::SpawnPipeline {
+                            group,
+                            stages: &specs,
+                            max_stderr: *max_stderr,
+                        })? {
+                            Completion::Spawned(Ok(id)) if id == group => Ok(group),
+                            Completion::Spawned(Err(
+                                failure @ (ProcessFailure::NotFound
+                                | ProcessFailure::PermissionDenied
+                                | ProcessFailure::Fault(_)),
+                            )) => Err(failure),
+                            Completion::Spawned(Err(ProcessFailure::InvalidInput))
+                                if stages.iter().any(|s| s.directory.is_some()) =>
+                            {
+                                Err(ProcessFailure::InvalidInput)
+                            }
+                            _ => return Err(AdapterError::InvalidCompletion),
+                        }
+                    }
+                };
+                if spawned.is_ok() {
+                    self.handles.insert(Grant::Child {
+                        process: *process,
+                        world,
+                        stdin_open: true,
+                        group: Some((stages.len(), *max_stderr)),
                     });
                 }
                 Ok(Completion::Spawned(spawned))
@@ -487,11 +580,17 @@ impl State {
                 child,
                 bytes,
             } => {
-                let (world, _) = self.child_grant(*process, *child)?;
+                let (world, _, group) = self.child_grant(*process, *child)?;
                 if bytes.is_empty() {
                     return Ok(Completion::ChildUnit(Ok(())));
                 }
                 match world {
+                    ProcessWorld::Script(_) if group.is_some() => {
+                        match self.script_group(*child)?.write(bytes) {
+                            Ok(written) => Ok(Completion::ChildUnit(written)),
+                            Err(report) => Ok(self.child_failure(&report)),
+                        }
+                    }
                     ProcessWorld::Script(_) => match self.script_child(*child)?.write(bytes) {
                         Ok(written) => Ok(Completion::ChildUnit(written)),
                         Err(report) => Ok(self.child_failure(&report)),
@@ -508,12 +607,16 @@ impl State {
                 }
             }
             Request::ChildCloseStdin { process, child } => {
-                let (world, stdin_open) = self.child_grant(*process, *child)?;
+                let (world, stdin_open, group) = self.child_grant(*process, *child)?;
                 if stdin_open {
                     self.close_child_input(*child);
                     match world {
                         ProcessWorld::Script(_) => {
-                            if let Some(report) = self.script_child(*child)?.close_stdin() {
+                            let report = match group {
+                                Some(_) => self.script_group(*child)?.close_stdin(),
+                                None => self.script_child(*child)?.close_stdin(),
+                            };
+                            if let Some(report) = report {
                                 return Ok(self.child_failure(&report));
                             }
                         }
@@ -534,15 +637,23 @@ impl State {
                 stream,
                 max,
             } => {
-                let (world, _) = self.child_grant(*process, *child)?;
-                match world {
+                let (world, _, group) = self.child_grant(*process, *child)?;
+                let script = match (world, group) {
+                    (ProcessWorld::Host, _) => None,
+                    (ProcessWorld::Script(_), Some(_)) => {
+                        Some(self.script_group(*child)?.read(*max))
+                    }
+                    (ProcessWorld::Script(_), None) => {
+                        Some(self.script_child(*child)?.read(*stream, *max))
+                    }
+                };
+                match script {
                     // At an Expect only the program's own writes can make bytes available.
-                    ProcessWorld::Script(_) => match self.script_child(*child)?.read(*stream, *max)
-                    {
+                    Some(script) => match script {
                         ScriptRead::Bytes(bytes) => Ok(Completion::ChildBytes(Ok(bytes))),
                         ScriptRead::Waiting => Err(AdapterError::Blocked),
                     },
-                    ProcessWorld::Host => match host(HostCall::Read {
+                    None => match host(HostCall::Read {
                         child: *child,
                         stream: *stream,
                         max: *max,
@@ -562,7 +673,7 @@ impl State {
                 child,
                 deadline,
             } => {
-                let (world, stdin_open) = self.child_grant(*process, *child)?;
+                let (world, stdin_open, _) = self.child_grant(*process, *child)?;
                 let status = match world {
                     // A scripted child takes no time: only a deadline the clock's latest
                     // reading already reached ends it, at once and without checking an
@@ -609,13 +720,72 @@ impl State {
                 self.end_child(*child);
                 Ok(Completion::ChildExit(status))
             }
+            Request::GroupWait {
+                process,
+                group,
+                deadline,
+            } => {
+                let (world, _, shape) = self.child_grant(*process, *group)?;
+                let (stages, max_stderr) = shape.ok_or(AdapterError::InvalidHandle(*group))?;
+                let output = match world {
+                    // A scripted group takes no time: only a deadline the clock's latest
+                    // reading already reached ends it, at once and without checking an
+                    // Expect, as a kill does.
+                    ProcessWorld::Script(_)
+                        if deadline.is_some_and(|d| {
+                            self.last_monotonic.is_some_and(|now| now >= d.ticks)
+                        }) =>
+                    {
+                        Err(ProcessFailure::TimedOut)
+                    }
+                    ProcessWorld::Script(_) => {
+                        self.close_child_input(*group);
+                        if let Some(report) = self.script_group(*group)?.close_stdin() {
+                            self.end_child(*group);
+                            return Ok(self.child_failure(&report));
+                        }
+                        self.script_group(*group)?.output()
+                    }
+                    ProcessWorld::Host => match host(HostCall::WaitGroup {
+                        group: *group,
+                        deadline: deadline.map(|d| d.ticks),
+                    })? {
+                        Completion::GroupExit(Ok(output))
+                            if output.statuses.len() == stages
+                                && output.stderr.len() == stages
+                                && output.stderr.iter().all(|e| e.len() as u64 <= max_stderr) =>
+                        {
+                            Ok(output)
+                        }
+                        Completion::GroupExit(Err(
+                            failure @ (ProcessFailure::Fault(_) | ProcessFailure::OutputLimit),
+                        )) => Err(failure),
+                        Completion::GroupExit(Err(ProcessFailure::TimedOut))
+                            if deadline.is_some() =>
+                        {
+                            Err(ProcessFailure::TimedOut)
+                        }
+                        _ => return Err(AdapterError::InvalidCompletion),
+                    },
+                };
+                // A completed timeout proves the clock reached the deadline.
+                if let (Err(ProcessFailure::TimedOut), Some(d)) = (&output, deadline) {
+                    self.last_monotonic = Some(self.last_monotonic.unwrap_or(0).max(d.ticks));
+                }
+                // The wait consumes the ChildGroup on every outcome.
+                self.end_child(*group);
+                Ok(Completion::GroupExit(output))
+            }
             Request::ChildKill {
                 process,
                 child,
                 signal,
             } => {
-                let (world, _) = self.child_grant(*process, *child)?;
+                let (world, _, group) = self.child_grant(*process, *child)?;
                 match world {
+                    ProcessWorld::Script(_) if group.is_some() => {
+                        self.script_group(*child)?.kill(*signal)
+                    }
                     ProcessWorld::Script(_) => self.script_child(*child)?.kill(*signal),
                     ProcessWorld::Host => {
                         if host(HostCall::Kill {
@@ -632,12 +802,18 @@ impl State {
             // A dropped Child: its input closes first, so an unmet Expect still fails.
             Request::Close { handle } => {
                 let Some(Grant::Child {
-                    world, stdin_open, ..
+                    world,
+                    stdin_open,
+                    group,
+                    ..
                 }) = self.handles.rows.get(handle).cloned()
                 else {
                     return Err(AdapterError::InvalidHandle(*handle));
                 };
                 let report = match world {
+                    ProcessWorld::Script(_) if stdin_open && group.is_some() => {
+                        self.script_group(*handle)?.close_stdin()
+                    }
                     ProcessWorld::Script(_) if stdin_open => {
                         self.script_child(*handle)?.close_stdin()
                     }
@@ -658,17 +834,29 @@ impl State {
             _ => Err(AdapterError::InvalidCompletion),
         }
     }
-    /// The world and input state of `child`, which must be a Child of `process` (CAP-2).
-    fn child_grant(&self, process: u64, child: u64) -> Result<(ProcessWorld, bool), AdapterError> {
+    /// The world, input state and group shape of `child`, which must be a Child or
+    /// ChildGroup of `process` (CAP-2).
+    #[allow(clippy::type_complexity)]
+    fn child_grant(
+        &self,
+        process: u64,
+        child: u64,
+    ) -> Result<(ProcessWorld, bool, Option<(usize, u64)>), AdapterError> {
         self.process_grant(process)?;
         match self.handles.rows.get(&child) {
             Some(Grant::Child {
                 process: owner,
                 world,
                 stdin_open,
-            }) if *owner == process => Ok((*world, *stdin_open)),
+                group,
+            }) if *owner == process => Ok((*world, *stdin_open, *group)),
             _ => Err(AdapterError::InvalidHandle(child)),
         }
+    }
+    fn script_group(&mut self, group: u64) -> Result<&mut ScriptGroup, AdapterError> {
+        self.script_groups
+            .get_mut(&group)
+            .ok_or(AdapterError::InvalidCompletion)
     }
     fn script_child(&mut self, child: u64) -> Result<&mut ScriptChild, AdapterError> {
         self.script_children
@@ -683,6 +871,7 @@ impl State {
     fn end_child(&mut self, child: u64) {
         self.handles.rows.remove(&child);
         self.script_children.remove(&child);
+        self.script_groups.remove(&child);
     }
     /// A scripted child's LANG-9 failure, after its Test report.
     fn child_failure(&mut self, report: &str) -> Completion {
@@ -699,6 +888,8 @@ pub(crate) fn is_process_request(request: &Request) -> bool {
             | Request::ProcessRun { .. }
             | Request::ProcessPipeline { .. }
             | Request::ProcessSpawn { .. }
+            | Request::ProcessSpawnPipeline { .. }
+            | Request::GroupWait { .. }
             | Request::ChildWrite { .. }
             | Request::ChildCloseStdin { .. }
             | Request::ChildRead { .. }
@@ -988,6 +1179,13 @@ pub fn run_host(
     }
 }
 
+/// What a [`HostJob`] ends with: a run's, a pipeline's or a child wait's outcome, or a
+/// group wait's.
+pub(crate) enum JobOutcome {
+    Run(PipelineOutcome),
+    Group(Result<GroupOutput, ProcessFailure>),
+}
+
 /// A host operation under a cooperative scheduler, on a helper thread. Its completion is
 /// sent, then a byte makes `wake` readable, which is the parked request's readiness
 /// interest. Dropping the job (a finished or cancelled wait) makes `cancel` readable, so a
@@ -996,13 +1194,11 @@ pub fn run_host(
 pub(crate) struct HostJob {
     wake: std::os::unix::net::UnixStream,
     cancel: std::os::unix::net::UnixStream,
-    result: std::sync::mpsc::Receiver<PipelineOutcome>,
+    result: std::sync::mpsc::Receiver<JobOutcome>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl HostJob {
-    fn start(
-        body: impl FnOnce(RawFd) -> PipelineOutcome + Send + 'static,
-    ) -> std::io::Result<Self> {
+    fn start(body: impl FnOnce(RawFd) -> JobOutcome + Send + 'static) -> std::io::Result<Self> {
         use std::os::unix::net::UnixStream;
         let (wake, signal) = UnixStream::pair()?;
         let (cancel, canceled) = UnixStream::pair()?;
@@ -1035,8 +1231,8 @@ impl Drop for HostJob {
 /// begins it the first time. A job that cannot start is a host fault.
 pub(crate) fn cooperative_job(
     readiness: &crate::readiness::Readiness,
-    start: impl FnOnce() -> Option<Box<dyn FnOnce(RawFd) -> PipelineOutcome + Send>>,
-) -> Result<PipelineOutcome, AdapterError> {
+    start: impl FnOnce() -> Option<Box<dyn FnOnce(RawFd) -> JobOutcome + Send>>,
+) -> Result<JobOutcome, AdapterError> {
     let mut pending = readiness.pending();
     if let Some(job) = &pending.process {
         return match job.result.try_recv() {
@@ -1048,8 +1244,9 @@ pub(crate) fn cooperative_job(
             Err(_) => Err(AdapterError::Blocked),
         };
     }
+    let fault = || JobOutcome::Run(PipelineOutcome::Error(ProcessFailure::Fault(1)));
     let Some(body) = start() else {
-        return Ok(PipelineOutcome::Error(ProcessFailure::Fault(1)));
+        return Ok(fault());
     };
     match HostJob::start(body) {
         Ok(job) => {
@@ -1057,7 +1254,7 @@ pub(crate) fn cooperative_job(
             pending.process = Some(job);
             Err(AdapterError::Blocked)
         }
-        Err(_) => Ok(PipelineOutcome::Error(ProcessFailure::Fault(1))),
+        Err(_) => Ok(fault()),
     }
 }
 
@@ -1114,8 +1311,12 @@ pub(crate) fn run_cooperative(
                 .iter()
                 .map(|c| c.as_ref().map(AsRawFd::as_raw_fd))
                 .collect();
-            run_host(&run, &cwds, Some(cancel))
+            JobOutcome::Run(run_host(&run, &cwds, Some(cancel)))
         }))
+    })
+    .map(|outcome| match outcome {
+        JobOutcome::Run(outcome) => outcome,
+        JobOutcome::Group(_) => PipelineOutcome::Error(ProcessFailure::Fault(1)),
     })
 }
 
@@ -1544,22 +1745,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
             stdout,
             stderr,
         } => {
-            // ExitStatus is pointer-free (u32 tag, i32 at 4), like the runtime address list.
-            let block =
-                unsafe { crate::alloc::allocate_sequence(ctx, 0, statuses.len() as u64, 8, 4) };
-            let first = crate::alloc::sequence_elements_offset(4) as usize;
-            for (index, status) in statuses.into_iter().enumerate() {
-                let (kind, code) = match status {
-                    ExitStatus::Exited(code) => (0u32, code as u32),
-                    ExitStatus::Signaled(signal) => (1, signal as u32),
-                };
-                unsafe {
-                    let slot = crate::alloc::payload(block).add(first + index * 8);
-                    slot.cast::<u32>().write(kind);
-                    slot.add(4).cast::<u32>().write(code);
-                }
-            }
-            result.statuses = block as u64;
+            result.statuses = unsafe { status_list(ctx, &statuses) } as u64;
             result.stdout = unsafe { crate::text::allocate_bytes(ctx, &stdout) };
             result.stderr = unsafe { crate::text::allocate_bytes(ctx, &stderr) };
         }
@@ -1848,4 +2034,106 @@ pub unsafe extern "C" fn hirsel_rt_v2_child_kill(
         Ok(_) => crate::fault("child completion mismatch"),
         Err(()) => crate::STATUS_FAILURE,
     }
+}
+
+/// `proc.spawn_pipeline(p, stages, max_stderr) -> Result[ChildGroup of p, ProcessError]`;
+/// a scripted stage whose first output contradicts the next stage's Expect fails LANG-9.
+/// # Safety
+/// Context is bound; Proc and the List[Command] block are borrowed live values; out is
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_pipeline(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut ChildWordResult,
+    process: *const u64,
+    stages: *mut crate::Header,
+    max_stderr: u64,
+) -> u8 {
+    let request = Request::ProcessSpawnPipeline {
+        process: unsafe { process.read() },
+        stages: unsafe { list(stages, 40, |at| command(ctx, at)) },
+        max_stderr,
+    };
+    let Some(Completion::Spawned(value)) =
+        (unsafe { crate::net_abi::call_recording(ctx, request) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(ChildWordResult::of(value)) };
+    crate::STATUS_OK
+}
+
+/// `Result[GroupOutput, ProcessError]`. Ok: the statuses List block at 8 and the per-stage
+/// stderr `List[Bytes]` block at 16. Error: ProcessError (u32 tag, Fault's u32) at 8.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct GroupResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub statuses: u64,
+    pub stderr: u64,
+}
+
+/// A fresh `List[ExitStatus]`: pointer-free (u32 tag, i32 at 4), like the runtime address
+/// list.
+unsafe fn status_list(ctx: *mut crate::RunCtx, statuses: &[ExitStatus]) -> *mut crate::Header {
+    let block = unsafe { crate::alloc::allocate_sequence(ctx, 0, statuses.len() as u64, 8, 4) };
+    let first = crate::alloc::sequence_elements_offset(4) as usize;
+    for (index, status) in statuses.iter().enumerate() {
+        let (kind, code) = match *status {
+            ExitStatus::Exited(code) => (0u32, code as u32),
+            ExitStatus::Signaled(signal) => (1, signal as u32),
+        };
+        unsafe {
+            let slot = crate::alloc::payload(block).add(first + index * 8);
+            slot.cast::<u32>().write(kind);
+            slot.add(4).cast::<u32>().write(code);
+        }
+    }
+    block
+}
+
+/// `proc.wait_group(p, take g, deadline) -> Result[GroupOutput, ProcessError]`; the
+/// ChildGroup is consumed on every outcome, and closing at a scripted stage's unmet Expect
+/// fails LANG-9.
+/// # Safety
+/// Context is bound; p readable; g the address of the transferred ChildGroup word; the
+/// `Option[Deadline]` borrowed; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_proc_wait_group(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut GroupResult,
+    p: *const u64,
+    g: *mut u64,
+    deadline: *const u8,
+) -> u8 {
+    let request = Request::GroupWait {
+        process: unsafe { p.read() },
+        group: unsafe { g.read() },
+        deadline: unsafe { deadline_of(deadline) },
+    };
+    // Erasing the transferred word makes accidental reuse fail closed.
+    unsafe { g.write(0) };
+    let Some(Completion::GroupExit(value)) =
+        (unsafe { crate::net_abi::call_recording(ctx, request) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    // Zero padding and the inactive arm; no pointer is made from error bits.
+    let mut result: GroupResult = unsafe { std::mem::zeroed() };
+    match value {
+        Ok(output) => {
+            result.statuses = unsafe { status_list(ctx, &output.statuses) } as u64;
+            result.stderr = unsafe { crate::text::allocate_bytes_list(ctx, &output.stderr) } as u64;
+        }
+        Err(failure) => {
+            result.tag = 1;
+            let (kind, code) = failure_parts(failure);
+            result.statuses = u64::from(kind) | u64::from(code) << 32;
+        }
+    }
+    unsafe { out.write(result) };
+    crate::STATUS_OK
 }

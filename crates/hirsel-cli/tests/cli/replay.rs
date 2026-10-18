@@ -523,6 +523,87 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 }
 "#;
 
+/// A streaming `cat | sort` group waited under a deadline, per-stage standard error, a
+/// deadline that ends every stage, a kill of every stage, and a dropped group.
+const GROUP_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
+fn failed(take e: ProcessError) -> () {}
+
+fn stage(args: Args, index: u64, take words: List[String]) -> Command {
+  let program = match arg.path(args, index) {
+    Ok(program) => program,
+    Error(_) => path.of("/missing"),
+  }
+  Command(program: program, args: words, dir: None(), env: None())
+}
+
+fn drain(p: Proc, mut g: ChildGroup of p) -> Result[Bytes, ProcessError] {
+  let mut got: List[u8] = []
+  while group.read_stdout(p, mut g, mut got, 64u64)? > 0u64 {}
+  Ok(bytes.from_list(take got))
+}
+
+fn show(out: Stdout, take b: Bytes) -> () {
+  match string.from_bytes(take b) {
+    Ok(s) => {
+      let _ = out.print(out, s)
+    },
+    Error(_) => {},
+  }
+}
+
+fn after(c: MonotonicClock, ns: u64) -> Option[Deadline] {
+  match clock.monotonic(c) {
+    Ok(now) => match instant.checked_add(c, now, ns) {
+      Some(at) => Some(Deadline(clock: c, at: at)),
+      None() => None(),
+    },
+    Error(_) => None(),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant
+  let p = io.process(rt) ? grant
+  let c = io.monotonic_clock(rt) ? grant
+  let mut g = proc.spawn_pipeline(p, [stage(args, 0u64, []), stage(args, 1u64, [])], 4096u64) ? failed
+  group.write(p, mut g, b"pear\n") ? failed
+  group.write(p, mut g, b"apple\n") ? failed
+  group.close_stdin(p, mut g)
+  show(out, drain(p, mut g) ? failed)
+  let done = proc.wait_group(p, take g, after(c, 30000000000u64)) ? failed
+  if done.statuses == [Exited(0), Exited(0)] {
+    let _ = out.print(out, "exited 0 0\n")
+  }
+  let e = proc.spawn_pipeline(
+    p,
+    [stage(args, 2u64, ["-c", "echo one >&2; cat"]), stage(args, 2u64, ["-c", "echo two >&2; cat"])],
+    64u64
+  ) ? failed
+  let errors = proc.wait_group(p, take e, None()) ? failed
+  if errors.stderr == [b"one\n", b"two\n"] {
+    let _ = out.print(out, "stderr per stage\n")
+  }
+  let slow = proc.spawn_pipeline(
+    p,
+    [stage(args, 2u64, ["-c", "exec sleep 30"]), stage(args, 2u64, ["-c", "exec sleep 30"])],
+    64u64
+  ) ? failed
+  if proc.wait_group(p, take slow, after(c, 100000000u64)) == Error(TimedOut()) {
+    let _ = out.print(out, "timed out\n")
+  }
+  let mut k = proc.spawn_pipeline(p, [stage(args, 0u64, []), stage(args, 0u64, [])], 64u64) ? failed
+  group.kill(p, mut k, Kill())
+  match proc.wait_group(p, take k, None()) {
+    Ok(killed) if killed.statuses == [Signaled(9), Signaled(9)] => {
+      let _ = out.print(out, "killed\n")
+    },
+    _ => {},
+  }
+  let _ = proc.spawn_pipeline(p, [stage(args, 0u64, []), stage(args, 1u64, [])], 64u64)
+  Ok(())
+}
+"#;
+
 /// Record `program` in both engines with each of `children` granted and passed as an
 /// argument in order, then delete the granted programs and replay each tape in both
 /// engines: nothing is spawned, and the output is the recorded one.
@@ -787,6 +868,27 @@ fn a_host_pipeline_reports_every_status_and_replays_without_spawning() {
         PIPELINE_PROGRAM,
         &programs.each_ref().map(PathBuf::as_path),
         b"exited 0\nexited 0\nexited 0\n      1 a\n      2 b\npipefail exited 2\nstderr shared\n",
+        None,
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_streaming_group_round_trips_and_replays_without_spawning() {
+    let root = process_root("replay-group");
+    let [cat, sort, sh] = ["cat", "sort", "sh"].map(|name| root.join(name));
+    for (from, to) in [
+        ("/bin/cat", &cat),
+        ("/usr/bin/sort", &sort),
+        ("/bin/sh", &sh),
+    ] {
+        std::fs::copy(from, to).unwrap();
+    }
+    process_round_trip(
+        "group",
+        GROUP_PROGRAM,
+        &[&cat, &sort, &sh],
+        b"apple\npear\nexited 0 0\nstderr per stage\ntimed out\nkilled\n",
         None,
     );
     std::fs::remove_dir_all(&root).unwrap();

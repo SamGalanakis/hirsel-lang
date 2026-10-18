@@ -113,10 +113,12 @@ pub(crate) enum Grant {
         world: u64,
         rules: Vec<hirsel_run_config::ProcessRule>,
     },
-    /// A streaming child of Proc `process`; scripted children are in `script_children`.
+    /// A streaming child of Proc `process`, or with `group` a spawned pipeline (a
+    /// ChildGroup); scripted ones are in `script_children` and `script_groups`.
     Child {
         process: u64,
         stdin_open: bool,
+        group: bool,
     },
     UdpSocket {
         net: u64,
@@ -154,6 +156,8 @@ pub struct Simulation {
     pub(super) process_children: BTreeMap<u64, super::process::Children>,
     /// Spawned scripted children, by Child handle.
     pub(super) script_children: BTreeMap<u64, hirsel_run_config::ScriptChild>,
+    /// Spawned scripted pipelines, by ChildGroup handle.
+    pub(super) script_groups: BTreeMap<u64, hirsel_run_config::ScriptGroup>,
     pub(super) udp_sockets: BTreeMap<u64, super::net::ScriptUdp>,
     pub(super) net_listeners: BTreeMap<u64, super::net::ScriptListener>,
     pub config: SimulationConfig,
@@ -358,6 +362,7 @@ impl Simulation {
             process_worlds,
             process_children,
             script_children: BTreeMap::new(),
+            script_groups: BTreeMap::new(),
             net_listeners: BTreeMap::new(),
             udp_sockets: BTreeMap::new(),
             config,
@@ -711,7 +716,9 @@ impl Simulation {
                 Some(Grant::Net { .. }) => kind == "Net",
                 Some(Grant::Stream { .. }) => kind == "Stream",
                 Some(Grant::Proc { .. }) => kind == "Proc",
-                Some(Grant::Child { .. }) => kind == "Child",
+                Some(Grant::Child { group, .. }) => {
+                    kind == if *group { "ChildGroup" } else { "Child" }
+                }
                 Some(Grant::UdpSocket { .. }) => kind == "UdpSocket",
                 Some(Grant::Listener { .. }) => kind == "Listener",
                 Some(Grant::Root(name)) => name == kind,

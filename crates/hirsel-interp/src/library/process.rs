@@ -9,9 +9,10 @@ use super::{
 };
 use crate::{Error, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_run_config::{
-    ChildRun, ChildStep, ChildStream, Command, ExitStatus, PipelineOutcome, ProcessFailure,
-    ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, ProviderContract, ScriptChild,
-    ScriptRead, Signal, canonical_program, script_pipeline, scriptable,
+    ChildRun, ChildStep, ChildStream, Command, ExitStatus, GroupOutput, PipelineOutcome,
+    ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, ProviderContract,
+    ScriptChild, ScriptGroup, ScriptRead, Signal, canonical_program, script_pipeline, scriptable,
+    take_children,
 };
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
@@ -233,6 +234,26 @@ pub fn decode_pipeline(bytes: &[u8]) -> Option<PipelineOutcome> {
         stdout,
         stderr,
     })
+}
+
+/// `Result[GroupOutput, ProcessError]` for one completion.
+pub fn group_value(outcome: &Result<GroupOutput, ProcessFailure>) -> Value {
+    match outcome {
+        Ok(GroupOutput { statuses, stderr }) => ok(Value::Record {
+            definition: hirsel_syntax::DefPath::core("GroupOutput"),
+            fields: vec![
+                Some(collection::sequence(
+                    BuiltinType::List,
+                    statuses.iter().map(|s| status_value(*s)),
+                )),
+                Some(collection::sequence(
+                    BuiltinType::List,
+                    stderr.iter().map(|e| Value::Bytes(e.clone())),
+                )),
+            ],
+        }),
+        Err(failure) => error(failure_value(*failure)),
+    }
 }
 
 /// `Result[PipelineOutput, ProcessError]` for one completion.
@@ -605,8 +626,19 @@ impl Simulation {
                     pipeline_value(&outcome)
                 }
             }
-            "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout"
-            | "child.read_stderr" | "child.wait" | "child.kill" => {
+            "proc.spawn"
+            | "child.write"
+            | "child.close_stdin"
+            | "child.read_stdout"
+            | "child.read_stderr"
+            | "child.wait"
+            | "child.kill"
+            | "proc.spawn_pipeline"
+            | "group.write"
+            | "group.close_stdin"
+            | "group.read_stdout"
+            | "proc.wait_group"
+            | "group.kill" => {
                 return self.child_call(name, call, cx, canceled);
             }
             _ => return Err(invalid("unknown process operation")),
@@ -623,6 +655,7 @@ impl Simulation {
     ) -> Result<OperationResult, Error> {
         if name.starts_with("proc.")
             || name.starts_with("child.")
+            || name.starts_with("group.")
             || matches!(name, "io.process" | "test.process")
         {
             self.process_call(name, call, cx, canceled)
@@ -630,17 +663,24 @@ impl Simulation {
             self.net_call(name, call, cx, canceled)
         }
     }
-    /// The Child `c` of Proc `p` and whether its input is open.
-    fn child_grant(&self, p: &Value, c: &Value) -> Result<(u64, bool), Error> {
+    /// The Child (or with `kind` "ChildGroup" the ChildGroup) `c` of Proc `p` and whether
+    /// its input is open.
+    fn child_grant(&self, p: &Value, c: &Value, kind: &str) -> Result<(u64, bool), Error> {
         let process = self.id(p, "Proc")?;
-        let child = self.id(c, "Child")?;
+        let child = self.id(c, kind)?;
         match self.grants.get(&child) {
             Some(Grant::Child {
                 process: owner,
                 stdin_open,
+                ..
             }) if *owner == process => Ok((child, *stdin_open)),
             _ => Err(invalid("Child of another Proc")),
         }
+    }
+    fn script_group(&mut self, group: u64) -> Result<&mut ScriptGroup, Error> {
+        self.script_groups
+            .get_mut(&group)
+            .ok_or_else(|| invalid("missing scripted group"))
     }
     fn script_child(&mut self, child: u64) -> Result<&mut ScriptChild, Error> {
         self.script_children
@@ -652,7 +692,7 @@ impl Simulation {
             *stdin_open = false;
         }
     }
-    /// Drop a Child: its input closes first, so an unmet Expect reports.
+    /// Drop a Child or ChildGroup: its input closes first, so an unmet Expect reports.
     pub(super) fn close_child(&mut self, child: u64) -> Option<String> {
         let open = matches!(
             self.grants.remove(&child),
@@ -661,6 +701,9 @@ impl Simulation {
                 ..
             })
         );
+        if let Some(mut group) = self.script_groups.remove(&child) {
+            return if open { group.close_stdin() } else { None };
+        }
         let script = self.script_children.remove(&child)?;
         if open { script.close_stdin() } else { None }
     }
@@ -680,6 +723,8 @@ impl Simulation {
         let mut recorded = None;
         // A scripted child's contradicted or unmet Expect fails LANG-9 after its report.
         let mut report = None;
+        let group = name.starts_with("group.") || name == "proc.wait_group";
+        let kind = if group { "ChildGroup" } else { "Child" };
         let value = match name {
             "proc.spawn" => {
                 let (world, rules) = self.process_grant(arg(a, 0)?)?;
@@ -720,6 +765,7 @@ impl Simulation {
                                     Grant::Child {
                                         process,
                                         stdin_open: true,
+                                        group: false,
                                     },
                                 );
                                 self.script_children
@@ -730,9 +776,106 @@ impl Simulation {
                     }
                 }
             }
-            "child.write" => {
+            "proc.spawn_pipeline" => {
+                let (world, rules) = self.process_grant(arg(a, 0)?)?;
+                let process = self.id(arg(a, 0)?, "Proc")?;
+                let stages = collection::elements(arg(a, 1)?, BuiltinType::List)?
+                    .iter()
+                    .map(|stage| self.command(stage))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let max_stderr = match arg(a, 2)? {
+                    Value::Integer(n) if n.kind() == Primitive::U64 => n.bits() as u64,
+                    _ => return Err(invalid("max_stderr requires u64")),
+                };
+                // Every stage's checks, in stage order, precede cancellation.
+                let checked = if stages.is_empty() {
+                    Err(ProcessFailure::InvalidInput)
+                } else {
+                    stages
+                        .iter()
+                        .try_for_each(|stage| stage.check(&rules).map(|_| ()))
+                }
+                .and_then(|()| {
+                    canceled.map_or(Ok(()), |cause| Err(ProcessFailure::Canceled(cause)))
+                });
+                match checked {
+                    Err(failure) => error(failure_value(failure)),
+                    Ok(())
+                        if world == 0
+                            && self.config.process.as_ref().is_some_and(|p| {
+                                ProviderContract::parse(&p.provider)
+                                    == Some(ProviderContract::ProcessSpawn)
+                            }) =>
+                    {
+                        return Err(Error::Unavailable(format!(
+                            "the reference spawns host children only through a host adapter; simulation requires {}",
+                            ProviderContract::ProcessScript.name()
+                        )));
+                    }
+                    Ok(()) => {
+                        let children = self
+                            .process_children
+                            .get_mut(&world)
+                            .ok_or_else(|| invalid("missing process world"))?;
+                        match take_children(children, &stages) {
+                            Err(failure) => error(failure_value(failure)),
+                            Ok(runs) => {
+                                let (script, first) = ScriptGroup::new(runs, max_stderr);
+                                report = first;
+                                let handle = self.handle(
+                                    "ChildGroup",
+                                    Grant::Child {
+                                        process,
+                                        stdin_open: true,
+                                        group: true,
+                                    },
+                                );
+                                self.script_groups
+                                    .insert(self.id(&handle, "ChildGroup")?, script);
+                                ok(handle)
+                            }
+                        }
+                    }
+                }
+            }
+            "proc.wait_group" => {
+                // The wait consumes its ChildGroup on every outcome.
+                consumed.push(1);
+                let (group, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
+                let deadline = deadline(arg(a, 2)?)?;
+                if deadline.is_some_and(
+                    |(clock, _)| !matches!(clock, Value::Handle { kind, .. } if kind == "MonotonicClock"),
+                ) {
+                    return Err(invalid("expected MonotonicClock"));
+                }
+                match canceled {
+                    // A canceled wait drops the ChildGroup it took.
+                    Some(cause) => {
+                        report = self.close_child(group);
+                        error(failure_value(ProcessFailure::Canceled(cause)))
+                    }
+                    // A scripted group takes no time: a reached deadline ends every stage at
+                    // once, without checking an Expect, as a kill does.
+                    None if deadline.is_some_and(|(_, ticks)| ticks <= self.monotonic_now()) => {
+                        self.grants.remove(&group);
+                        self.script_groups.remove(&group);
+                        error(failure_value(ProcessFailure::TimedOut))
+                    }
+                    None => {
+                        report = self.script_group(group)?.close_stdin();
+                        let output = self.script_group(group)?.output();
+                        self.grants.remove(&group);
+                        self.script_groups.remove(&group);
+                        match report {
+                            Some(_) => Value::Unit,
+                            None => group_value(&output),
+                        }
+                    }
+                }
+            }
+            "child.write" | "group.write" => {
                 let data = bytes(arg(a, 2)?)?.to_vec();
-                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
                 match canceled.filter(|_| open) {
                     Some(cause) => error(failure_value(ProcessFailure::Canceled(cause))),
                     None => {
@@ -741,7 +884,12 @@ impl Simulation {
                         } else if data.is_empty() {
                             ok(Value::Unit)
                         } else {
-                            match self.script_child(child)?.write(&data) {
+                            let written = if group {
+                                self.script_group(child)?.write(&data)
+                            } else {
+                                self.script_child(child)?.write(&data)
+                            };
+                            match written {
                                 Ok(Ok(())) => ok(Value::Unit),
                                 Ok(Err(failure)) => error(failure_value(failure)),
                                 Err(text) => {
@@ -753,15 +901,19 @@ impl Simulation {
                     }
                 }
             }
-            "child.close_stdin" => {
-                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+            "child.close_stdin" | "group.close_stdin" => {
+                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
                 if open {
                     self.close_child_input(child);
-                    report = self.script_child(child)?.close_stdin();
+                    report = if group {
+                        self.script_group(child)?.close_stdin()
+                    } else {
+                        self.script_child(child)?.close_stdin()
+                    };
                 }
                 Value::Unit
             }
-            "child.read_stdout" | "child.read_stderr" => {
+            "child.read_stdout" | "child.read_stderr" | "group.read_stdout" => {
                 let max = match arg(a, 3)? {
                     Value::Integer(n) if n.kind() == Primitive::U64 => n.bits() as u64,
                     _ => return Err(invalid("max requires u64")),
@@ -773,13 +925,18 @@ impl Simulation {
                 } else if let Some(cause) = canceled {
                     error(failure_value(ProcessFailure::Canceled(cause)))
                 } else {
-                    let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
-                    let stream = if name == "child.read_stdout" {
-                        ChildStream::Stdout
-                    } else {
+                    let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
+                    let stream = if name == "child.read_stderr" {
                         ChildStream::Stderr
+                    } else {
+                        ChildStream::Stdout
                     };
-                    match self.script_child(child)?.read(stream, max) {
+                    let read = if group {
+                        self.script_group(child)?.read(max)
+                    } else {
+                        self.script_child(child)?.read(stream, max)
+                    };
+                    match read {
                         ScriptRead::Waiting => {
                             let anchor =
                                 cx.anchor().cloned().unwrap_or(crate::observation::Anchor {
@@ -815,7 +972,7 @@ impl Simulation {
             "child.wait" => {
                 // The wait consumes its Child on every outcome.
                 consumed.push(1);
-                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
                 let deadline = deadline(arg(a, 2)?)?;
                 if deadline.is_some_and(
                     |(clock, _)| !matches!(clock, Value::Handle { kind, .. } if kind == "MonotonicClock"),
@@ -850,14 +1007,18 @@ impl Simulation {
                     }
                 }
             }
-            "child.kill" => {
-                let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+            "child.kill" | "group.kill" => {
+                let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
                 let signal = match arg(a, 2)? {
                     Value::Variant { variant, .. } => Signal::of_ordinal(*variant),
                     _ => None,
                 }
                 .ok_or_else(|| invalid("Signal representation"))?;
-                self.script_child(child)?.kill(signal);
+                if group {
+                    self.script_group(child)?.kill(signal);
+                } else {
+                    self.script_child(child)?.kill(signal);
+                }
                 Value::Unit
             }
             _ => return Err(invalid("unknown child operation")),

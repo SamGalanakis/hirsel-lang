@@ -1238,3 +1238,333 @@ fn scripted_children_play_steps_wait_at_an_expect_and_fail_a_contradiction() {
         Ok(Completion::Checked(false))
     );
 }
+
+fn spawn_pipeline(process: u64, stages: &[(&str, &[&str])], max_stderr: u64) -> Request {
+    Request::ProcessSpawnPipeline {
+        process,
+        stages: stages.iter().map(|(p, a)| command(p, a)).collect(),
+        max_stderr,
+    }
+}
+
+fn wait_group(process: u64, group: u64, deadline: Option<Deadline>) -> Request {
+    Request::GroupWait {
+        process,
+        group,
+        deadline,
+    }
+}
+
+fn grouped(statuses: &[ExitStatus], stderr: &[&[u8]]) -> Completion {
+    Completion::GroupExit(Ok(GroupOutput {
+        statuses: statuses.to_vec(),
+        stderr: stderr.iter().map(|e| e.to_vec()).collect(),
+    }))
+}
+
+/// Wait out a cooperative request under `token`, re-issuing it whenever it is ready.
+fn parked(io: &mut RealIo, token: u64, request: Request) -> Result<Completion, AdapterError> {
+    io.enter(token);
+    let completion = loop {
+        match io.call(request.clone()) {
+            Err(AdapterError::Blocked) => {
+                while !io.ready(token).unwrap() {
+                    assert!(io.wait().unwrap());
+                }
+                io.enter(token);
+            }
+            other => break other,
+        }
+    };
+    io.finish(token);
+    completion
+}
+
+#[test]
+fn a_cat_sort_group_streams_and_waits_under_a_deadline() {
+    let (_temp, mut io, p) = host(&[("/bin/cat", &[]), ("/usr/bin/sort", &[])]);
+    let cat_sort: &[(&str, &[&str])] = &[("/bin/cat", &[]), ("/usr/bin/sort", &[])];
+    assert_eq!(
+        io.call(spawn_pipeline(p, &[], 64)),
+        Ok(Completion::Spawned(Err(ProcessFailure::InvalidInput)))
+    );
+    assert_eq!(
+        io.call(spawn_pipeline(
+            p,
+            &[("/bin/cat", &[]), ("/bin/sh", &[])],
+            64
+        )),
+        Ok(Completion::Spawned(Err(ProcessFailure::NotGranted)))
+    );
+    let g = spawned(&mut io, spawn_pipeline(p, cat_sort, 64));
+    for line in [&b"b\n"[..], b"c\n", b"a\n"] {
+        assert_eq!(io.call(write(p, g, line)), Ok(UNIT));
+    }
+    // A group has no standard error to read, and a Child's wait does not take it.
+    assert_eq!(
+        io.call(Request::ChildRead {
+            process: p,
+            child: g,
+            stream: ChildStream::Stderr,
+            max: 64,
+        }),
+        Err(AdapterError::InvalidHandle(g))
+    );
+    assert_eq!(
+        io.call(Request::ChildWait {
+            process: p,
+            child: g,
+            deadline: None,
+        }),
+        Err(AdapterError::InvalidHandle(g))
+    );
+    // sort answers once its input ends.
+    assert_eq!(
+        io.call(Request::ChildCloseStdin {
+            process: p,
+            child: g,
+        }),
+        Ok(UNIT)
+    );
+    assert_eq!(read_line(&mut io, p, g, 7), b"a\nb\nc\n");
+    assert_eq!(read_line(&mut io, p, g, 1), b"");
+    let (clock, now) = clock(&mut io);
+    let deadline = Some(Deadline {
+        clock,
+        ticks: now + 10_000_000_000,
+    });
+    assert_eq!(
+        io.call(wait_group(p, g, deadline)),
+        Ok(grouped(&[ExitStatus::Exited(0); 2], &[b"", b""]))
+    );
+    // The wait consumed the ChildGroup, and a Child is not a group.
+    assert_eq!(
+        io.call(wait_group(p, g, None)),
+        Err(AdapterError::InvalidHandle(g))
+    );
+    let c = spawned(&mut io, spawn(p, "/bin/cat", &[]));
+    assert_eq!(
+        io.call(wait_group(p, c, None)),
+        Err(AdapterError::InvalidHandle(c))
+    );
+}
+
+#[test]
+fn each_stage_keeps_its_own_stderr_and_the_bound_kills_every_stage() {
+    let (_temp, mut io, p) = host(&[(SH, &[])]);
+    let g = spawned(
+        &mut io,
+        spawn_pipeline(
+            p,
+            &[
+                (SH, &["-c", "echo one >&2; cat; echo three >&2"]),
+                (SH, &["-c", "echo two >&2; tr a-z A-Z"]),
+            ],
+            64,
+        ),
+    );
+    assert_eq!(io.call(write(p, g, b"up\n")), Ok(UNIT));
+    // tr writes once its input ends.
+    assert_eq!(
+        io.call(Request::ChildCloseStdin {
+            process: p,
+            child: g,
+        }),
+        Ok(UNIT)
+    );
+    assert_eq!(read_line(&mut io, p, g, 4), b"UP\n");
+    assert_eq!(
+        io.call(wait_group(p, g, None)),
+        Ok(grouped(
+            &[ExitStatus::Exited(0); 2],
+            &[b"one\nthree\n", b"two\n"]
+        ))
+    );
+    // A stage that floods its standard error past the bound gets every stage killed, even
+    // one that would run for a minute.
+    let begun = std::time::Instant::now();
+    let g = spawned(
+        &mut io,
+        spawn_pipeline(
+            p,
+            &[(SH, &["-c", "yes >&2"]), (SH, &["-c", "sleep 60"])],
+            4096,
+        ),
+    );
+    assert_eq!(
+        io.call(wait_group(p, g, None)),
+        Ok(Completion::GroupExit(Err(ProcessFailure::OutputLimit)))
+    );
+    assert!(begun.elapsed() < std::time::Duration::from_secs(10));
+}
+
+#[test]
+fn a_group_kill_and_a_wait_deadline_stop_every_stage() {
+    let (temp, mut io, p) = host(&[(SH, &[]), ("/bin/cat", &[])]);
+    let g = spawned(
+        &mut io,
+        spawn_pipeline(p, &[("/bin/cat", &[]), ("/bin/cat", &[])], 64),
+    );
+    assert_eq!(
+        io.call(Request::ChildKill {
+            process: p,
+            child: g,
+            signal: Signal::Kill,
+        }),
+        Ok(UNIT)
+    );
+    assert_eq!(
+        io.call(wait_group(p, g, None)),
+        Ok(grouped(&[ExitStatus::Signaled(9); 2], &[b"", b""]))
+    );
+    // At the deadline every stage gets SIGTERM, and one that ignores it SIGKILL once the
+    // grace passes: neither lives to touch its file.
+    let Ok(Completion::Handle(Ok(dir))) = io.call(Request::Directory {
+        io: 1,
+        path: "".into(),
+    }) else {
+        panic!("root Dir")
+    };
+    let stage = |script: &str| Command {
+        directory: Some(dir),
+        ..command(SH, &["-c", script])
+    };
+    let Ok(Completion::Spawned(Ok(g))) = io.call(Request::ProcessSpawnPipeline {
+        process: p,
+        stages: vec![
+            stage("sleep 2; touch first"),
+            stage("trap '' TERM; sleep 2; touch second"),
+        ],
+        max_stderr: 64,
+    }) else {
+        panic!("spawn_pipeline")
+    };
+    let (clock, now) = clock(&mut io);
+    let begun = std::time::Instant::now();
+    assert_eq!(
+        io.call(wait_group(
+            p,
+            g,
+            Some(Deadline {
+                clock,
+                ticks: now + 100_000_000,
+            })
+        )),
+        Ok(Completion::GroupExit(Err(ProcessFailure::TimedOut)))
+    );
+    assert!(begun.elapsed() >= TERMINATION_GRACE);
+    assert!(begun.elapsed() < std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_millis(2500) - begun.elapsed());
+    assert!(!temp.0.join("first").exists());
+    assert!(!temp.0.join("second").exists());
+    // A dropped group kills every stage at once.
+    let g = spawned(
+        &mut io,
+        spawn_pipeline(
+            p,
+            &[(SH, &["-c", "sleep 30"]), (SH, &["-c", "sleep 30"])],
+            64,
+        ),
+    );
+    let begun = std::time::Instant::now();
+    assert_eq!(
+        io.call(Request::Close { handle: g }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    assert!(begun.elapsed() < std::time::Duration::from_secs(1));
+}
+
+#[test]
+fn a_cooperative_group_parks_its_reads_and_wait() {
+    let (_temp, mut io, p) = host(&[(SH, &[]), ("/bin/cat", &[])]);
+    io.set_cooperative(hirsel_rt::readiness::Readiness::default());
+    let g = spawned(
+        &mut io,
+        spawn_pipeline(
+            p,
+            &[
+                (SH, &["-c", "sleep 0.1; echo late; echo err >&2"]),
+                ("/bin/cat", &[]),
+            ],
+            64,
+        ),
+    );
+    io.enter(5);
+    assert_eq!(io.call(read(p, g, 64)), Err(AdapterError::Blocked));
+    io.finish(5);
+    assert_eq!(
+        parked(&mut io, 6, read(p, g, 64)),
+        Ok(Completion::ChildBytes(Ok(b"late\n".to_vec())))
+    );
+    assert_eq!(
+        parked(&mut io, 7, wait_group(p, g, None)),
+        Ok(grouped(&[ExitStatus::Exited(0); 2], &[b"err\n", b""]))
+    );
+}
+
+#[test]
+fn groups_record_and_replay_without_spawning() {
+    use hirsel_rt::launch::{parse_tape, render_tape};
+    let (_temp, mut io, p) = host(&[(SH, &[]), ("/bin/cat", &[])]);
+    let g = spawned(
+        &mut io,
+        spawn_pipeline(
+            p,
+            &[(SH, &["-c", "echo e >&2; cat"]), ("/bin/cat", &[])],
+            64,
+        ),
+    );
+    io.call(write(p, g, b"echo\n")).unwrap();
+    assert_eq!(read_line(&mut io, p, g, 5), b"echo\n");
+    io.call(Request::ChildCloseStdin {
+        process: p,
+        child: g,
+    })
+    .unwrap();
+    io.call(wait_group(p, g, None)).unwrap();
+    let g = spawned(
+        &mut io,
+        spawn_pipeline(p, &[("/bin/cat", &[]), ("/bin/cat", &[])], 64),
+    );
+    io.call(Request::ChildKill {
+        process: p,
+        child: g,
+        signal: Signal::Terminate,
+    })
+    .unwrap();
+    io.call(Request::Close { handle: g }).unwrap();
+    let tape = io.tape().to_vec();
+    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    let replay = |tape: Vec<Event>| {
+        let mut sim = SimIo::new(Tree::default(), tape.clone());
+        sim.set_process_grant(&grant(&[(SH, &[]), ("/bin/cat", &[])]));
+        tape.iter()
+            .map(|event| sim.call(event.request.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        replay(tape.clone()),
+        tape.iter()
+            .map(|e| Ok(e.completion.clone()))
+            .collect::<Vec<_>>()
+    );
+    let wait_at = tape
+        .iter()
+        .position(|e| matches!(e.request, Request::GroupWait { .. }))
+        .unwrap();
+    assert_eq!(
+        tape[wait_at].completion,
+        grouped(&[ExitStatus::Exited(0); 2], &[b"e\n", b""])
+    );
+    // Replay re-derives the shape: a wait with a missing stage or an over-bound stderr
+    // contradicts the spawn.
+    for forged in [
+        grouped(&[ExitStatus::Exited(0)], &[b""]),
+        grouped(&[ExitStatus::Exited(0); 2], &[&[b'x'; 65], b""]),
+        Completion::GroupExit(Err(ProcessFailure::TimedOut)),
+    ] {
+        let mut tape = tape.clone();
+        tape[wait_at].completion = forged;
+        assert!(replay(tape)[wait_at].is_err());
+    }
+}

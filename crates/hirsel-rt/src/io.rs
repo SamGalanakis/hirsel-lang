@@ -154,7 +154,15 @@ pub enum Request {
         process: u64,
         command: hirsel_run_config::Command,
     },
+    /// `proc.spawn_pipeline`.
+    ProcessSpawnPipeline {
+        process: u64,
+        stages: Vec<hirsel_run_config::Command>,
+        max_stderr: u64,
+    },
     /// The streaming child operations name their Proc, as stream operations name their Net.
+    /// `group.write`, `group.close_stdin`, `group.read_stdout` and `group.kill` are these
+    /// requests on a ChildGroup handle.
     ChildWrite {
         process: u64,
         child: u64,
@@ -179,6 +187,12 @@ pub enum Request {
         process: u64,
         child: u64,
         signal: hirsel_run_config::Signal,
+    },
+    /// `proc.wait_group`.
+    GroupWait {
+        process: u64,
+        group: u64,
+        deadline: Option<crate::process::Deadline>,
     },
     TestCheck {
         test: u64,
@@ -549,13 +563,15 @@ pub enum Completion {
     Process(hirsel_run_config::ProcessOutcome),
     /// `proc.pipeline`.
     Pipeline(hirsel_run_config::PipelineOutcome),
-    /// `proc.spawn`: the Child handle.
+    /// `proc.spawn` and `proc.spawn_pipeline`: the Child or ChildGroup handle.
     Spawned(Result<u64, hirsel_run_config::ProcessFailure>),
     /// `child.write`, `child.close_stdin` and `child.kill`.
     ChildUnit(Result<(), hirsel_run_config::ProcessFailure>),
     /// A child read: the bytes it delivered, empty at end of stream.
     ChildBytes(Result<Vec<u8>, hirsel_run_config::ProcessFailure>),
     ChildExit(Result<hirsel_run_config::ExitStatus, hirsel_run_config::ProcessFailure>),
+    /// `proc.wait_group`.
+    GroupExit(Result<hirsel_run_config::GroupOutput, hirsel_run_config::ProcessFailure>),
     /// The request would block and its task parked; `committed` when it already made part
     /// of its effect, so cancellation no longer completes it.
     Blocked {
@@ -783,6 +799,8 @@ pub(crate) struct State {
     pub child_scripts: BTreeMap<u64, Vec<Option<hirsel_run_config::ChildRun>>>,
     /// Spawned scripted children, keyed by Child handle.
     pub script_children: BTreeMap<u64, hirsel_run_config::ScriptChild>,
+    /// Spawned scripted pipelines, keyed by ChildGroup handle.
+    pub script_groups: BTreeMap<u64, hirsel_run_config::ScriptGroup>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -812,6 +830,7 @@ impl Default for State {
             process_scripts: BTreeMap::new(),
             child_scripts: BTreeMap::new(),
             script_children: BTreeMap::new(),
+            script_groups: BTreeMap::new(),
             projections: [
                 "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
             ]

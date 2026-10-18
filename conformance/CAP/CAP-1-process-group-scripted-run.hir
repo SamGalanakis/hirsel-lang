@@ -1,0 +1,100 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// A scripted pipeline group connects its stages: the program writes the first stage's
+// input, each stage's prints reach the next stage's Expect, the last stage's prints are
+// read, and the wait returns every status with each stage's own stderr. Spawns check every
+// stage first and take all their entries or none; a kill or the stderr bound ends every
+// stage.
+fn stage(program: String, take args: List[String]) -> Command {
+  Command(program: path.of(program), args: args, dir: None(), env: None())
+}
+
+fn cat_sort() -> List[Command] {
+  [stage("/bin/cat", []), stage("/usr/bin/sort", [])]
+}
+
+fn cat(take steps: List[ChildStep]) -> ChildScript {
+  ChildScript(program: "/bin/cat", args: [], steps: steps)
+}
+
+fn sort(take steps: List[ChildStep]) -> ChildScript {
+  ChildScript(program: "/usr/bin/sort", args: [], steps: steps)
+}
+
+fn refused(p: Proc, r: Result[ChildGroup of p, ProcessError], e: ProcessError) -> bool {
+  match r {
+    Error(found) => found == e,
+    Ok(_) => false,
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), ProcessError] {
+  let p = test.process(
+    t,
+    [],
+    [
+      cat([Expect(b"b\na\n"), Print(b"b\na\n")]),
+      sort([PrintErr(b"sort: note\n"), Expect(b"b\na\n"), Print(b"a\nb\n")]),
+      cat([Expect(b"x")]),
+      sort([Expect(b"y")]),
+      cat([PrintErr(b"0123456789"), Expect(b"x")]),
+      sort([])
+    ]
+  )
+  // Every stage's checks come first, in stage order, and take no entry.
+  test.check(t, refused(p, proc.spawn_pipeline(p, [], 64u64), InvalidInput()))
+  test.check(
+    t,
+    refused(
+      p,
+      proc.spawn_pipeline(p, [stage("/bin/cat", []), stage("sort", [])], 64u64),
+      InvalidInput()
+    )
+  )
+  test.check(
+    t,
+    refused(
+      p,
+      proc.spawn_pipeline(p, [stage("/bin/cat", []), stage("/bin/sh", [])], 64u64),
+      NotGranted()
+    )
+  )
+  // A stage with no entry is NotFound and takes no other stage's entry.
+  test.check(
+    t,
+    refused(
+      p,
+      proc.spawn_pipeline(
+        p,
+        [stage("/bin/cat", []), stage("/usr/bin/sort", ["-r"])],
+        64u64
+      ),
+      NotFound()
+    )
+  )
+  let mut g = proc.spawn_pipeline(p, cat_sort(), 64u64)?
+  let mut out: List[u8] = []
+  group.write(p, mut g, b"b\n")?
+  group.write(p, mut g, b"a\n")?
+  test.check(t, group.read_stdout(p, mut g, mut out, 0u64) == Error(InvalidInput()))
+  test.check(t, group.read_stdout(p, mut g, mut out, 64u64)? == 4u64)
+  test.check(t, out == [97u8, 10u8, 98u8, 10u8])
+  test.check(t, group.read_stdout(p, mut g, mut out, 64u64)? == 0u64)
+  group.close_stdin(p, mut g)
+  test.check(t, group.write(p, mut g, b"x") == Error(InvalidInput()))
+  let done = proc.wait_group(p, take g, None())?
+  test.check(t, done.statuses == [Exited(0), Exited(0)])
+  test.check(t, done.stderr == [b"", b"sort: note\n"])
+  // A kill ends every stage without checking an Expect.
+  let mut killed = proc.spawn_pipeline(p, cat_sort(), 64u64)?
+  group.kill(p, mut killed, Terminate())
+  test.check(t, group.write(p, mut killed, b"x") == Error(InputClosed()))
+  let ended = proc.wait_group(p, take killed, None())?
+  test.check(t, ended.statuses == [Signaled(15), Signaled(15)])
+  // A stage past the stderr bound ends every stage, and the wait is OutputLimit.
+  let bounded = proc.spawn_pipeline(p, cat_sort(), 4u64)?
+  test.check(t, proc.wait_group(p, take bounded, None()) == Error(OutputLimit()))
+  test.check(t, refused(p, proc.spawn_pipeline(p, cat_sort(), 64u64), NotFound()))
+  Ok(())
+}

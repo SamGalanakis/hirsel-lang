@@ -240,3 +240,9 @@ uint8_t hirsel_rt_v2_child_read_stderr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_ch
 /* The Child word is transferred and zeroed; the trailing operand is Option[Deadline]. */
 uint8_t hirsel_rt_v2_child_wait(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_pair_result*, const uint64_t*, uint64_t*, const void*);
 uint8_t hirsel_rt_v2_child_kill(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, const uint32_t*);
+/* group.write, group.close_stdin, group.read_stdout and group.kill are the child entries on a ChildGroup word. */
+uint8_t hirsel_rt_v2_proc_spawn_pipeline(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_child_word_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t);
+/* Result[GroupOutput, ProcessError]: the statuses List or ProcessError at 8, the List[Bytes] of each stage's stderr at 16. */
+typedef struct { uint32_t tag, padding; uint64_t statuses, stderr_lists; } hirsel_rt_v2_group_result;
+/* The ChildGroup word is transferred and zeroed; the trailing operand is Option[Deadline]. */
+uint8_t hirsel_rt_v2_proc_wait_group(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_group_result*, const uint64_t*, uint64_t*, const void*);

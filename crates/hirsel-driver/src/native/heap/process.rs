@@ -314,7 +314,27 @@ impl Io {
                 },
                 Err(fail) => return Some(fail),
             },
-            (Some("child"), _, [p, c, rest @ ..]) => {
+            (Some("proc"), "spawn_pipeline", [p, OpValue::Sequence(commands), max]) => {
+                let mut stages = vec![];
+                for command in commands {
+                    match self.command(command)? {
+                        Ok(command) => stages.push(command),
+                        Err(fail) => return Some(fail),
+                    }
+                }
+                R::ProcessSpawnPipeline {
+                    process: self.network_id(p)?,
+                    stages,
+                    max_stderr: word(max)?,
+                }
+            }
+            // A ChildGroup's operations are a Child's on its handle; its wait is
+            // `proc.wait_group`.
+            (Some(module @ ("child" | "group" | "proc")), _, [p, c, rest @ ..])
+                if module != "proc" || name == "wait_group" =>
+            {
+                let group = module != "child";
+                let name = if name == "wait_group" { "wait" } else { name };
                 let (process, child) = (self.network_id(p)?, self.network_id(c)?);
                 let request = match (name, rest) {
                     ("write", [data]) => R::ChildWrite {
@@ -338,12 +358,21 @@ impl Io {
                             Ok(deadline) => deadline,
                             Err(fail) => return Some(fail),
                         };
-                        let request = R::ChildWait {
-                            process,
-                            child,
-                            deadline: deadline.map(|(_, at, _, clock)| {
-                                hirsel_rt::process::Deadline { clock, ticks: at }
-                            }),
+                        let deadline_request = deadline.map(|(_, at, _, clock)| {
+                            hirsel_rt::process::Deadline { clock, ticks: at }
+                        });
+                        let request = if group {
+                            R::GroupWait {
+                                process,
+                                group: child,
+                                deadline: deadline_request,
+                            }
+                        } else {
+                            R::ChildWait {
+                                process,
+                                child,
+                                deadline: deadline_request,
+                            }
                         };
                         return Some(match self.child(name, args, request, cancellation) {
                             // A wait that started before its deadline and found its child's
@@ -477,7 +506,20 @@ impl Io {
                 };
             }
             C::ChildExit(Ok(status)) => io_ok(status_value(status)),
-            C::ChildUnit(Err(f)) | C::ChildBytes(Err(f)) | C::ChildExit(Err(f)) => v(1, failure(f)),
+            C::GroupExit(Ok(output)) => io_ok(OpValue::Aggregate(vec![
+                OpValue::Sequence(output.statuses.into_iter().map(status_value).collect()),
+                OpValue::Sequence(
+                    output
+                        .stderr
+                        .into_iter()
+                        .map(OpValue::ByteSequence)
+                        .collect(),
+                ),
+            ])),
+            C::ChildUnit(Err(f))
+            | C::ChildBytes(Err(f))
+            | C::ChildExit(Err(f))
+            | C::GroupExit(Err(f)) => v(1, failure(f)),
             // A scripted child's contradicted or unmet Expect.
             C::Checked(false) if name == "wait" => {
                 self.forget(&args[1]);

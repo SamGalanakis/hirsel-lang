@@ -1,7 +1,8 @@
 //! Scripted streaming children (docs/spec/core-library.md#processes, scripted runs): every
-//! provider plays `test.process` and process.script@1 children with [`ScriptChild`].
+//! provider plays `test.process` and process.script@1 children with [`ScriptChild`], and
+//! the connected stages of a spawned pipeline with [`ScriptGroup`].
 use crate::net::byte_literal;
-use crate::process::{ChildRun, ChildStep, ExitStatus, ProcessFailure};
+use crate::process::{ChildRun, ChildStep, ExitStatus, GroupOutput, ProcessFailure};
 use std::collections::VecDeque;
 
 /// Which output stream of a child a read takes.
@@ -55,6 +56,13 @@ pub struct ScriptChild {
     failed: bool,
 }
 
+/// Who writes a scripted child's input: the program, or a group's previous stage.
+#[derive(Clone, Copy, Debug)]
+enum Writer<'a> {
+    Program,
+    Stage(&'a str),
+}
+
 /// A scripted read: the bytes it delivers (empty at end of stream), or none available yet.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ScriptRead {
@@ -75,12 +83,12 @@ impl ScriptChild {
             exit: None,
             failed: false,
         };
-        script.progress();
+        script.progress(Writer::Program);
         script
     }
     /// Play every step that needs no more input: the Test report of an `Expect` the
-    /// written bytes contradict, if one does.
-    fn progress(&mut self) -> Option<String> {
+    /// bytes `writer` wrote contradict, if one does.
+    fn progress(&mut self, writer: Writer<'_>) -> Option<String> {
         while self.exit.is_none() {
             match self.steps.get(self.step) {
                 None => self.exit = Some(ExitStatus::Exited(0)),
@@ -95,7 +103,7 @@ impl ScriptChild {
                     let wrote = &wrote[..expected.len()];
                     if wrote != expected.as_slice() {
                         self.failed = true;
-                        return Some(child_mismatch(&self.program, expected, wrote));
+                        return Some(mismatch(&self.program, expected, wrote, writer));
                     }
                     self.consumed += expected.len();
                 }
@@ -108,6 +116,13 @@ impl ScriptChild {
     /// `child.write` of `data` to open input: accepted, or `InputClosed()` once the child
     /// ended. `Err` is the Test report of a contradicted `Expect` (LANG-9).
     pub fn write(&mut self, data: &[u8]) -> Result<Result<(), ProcessFailure>, String> {
+        self.feed(data, Writer::Program)
+    }
+    fn feed(
+        &mut self,
+        data: &[u8],
+        writer: Writer<'_>,
+    ) -> Result<Result<(), ProcessFailure>, String> {
         if data.is_empty() {
             return Ok(Ok(()));
         }
@@ -115,18 +130,22 @@ impl ScriptChild {
             return Ok(Err(ProcessFailure::InputClosed));
         }
         self.written.extend_from_slice(data);
-        match self.progress() {
+        match self.progress(writer) {
             Some(report) => Err(report),
             None => Ok(Ok(())),
         }
     }
     /// The program closed the child's input: the Test report when an `Expect` is unmet.
     pub fn close_stdin(&self) -> Option<String> {
+        self.close_input(Writer::Program)
+    }
+    fn close_input(&self, writer: Writer<'_>) -> Option<String> {
         match (self.exit, self.steps.get(self.step)) {
-            (None, Some(ChildStep::Expect(expected))) if !self.failed => Some(child_unmet(
+            (None, Some(ChildStep::Expect(expected))) if !self.failed => Some(unmet(
                 &self.program,
                 expected,
                 &self.written[self.consumed..],
+                writer,
             )),
             _ => None,
         }
@@ -163,23 +182,153 @@ impl ScriptChild {
     }
 }
 
-/// The Test report of a scripted child whose `Expect` the program's input contradicts,
-/// with its trailing newline.
-pub fn child_mismatch(program: &str, expected: &[u8], wrote: &[u8]) -> String {
-    format!(
-        "test failure: child {program} expected {} but the program wrote {}\n",
-        byte_literal(expected),
-        byte_literal(wrote)
-    )
+/// The Test report of a scripted child whose `Expect` its input contradicts, with its
+/// trailing newline.
+fn mismatch(program: &str, expected: &[u8], wrote: &[u8], writer: Writer<'_>) -> String {
+    let (expected, wrote) = (byte_literal(expected), byte_literal(wrote));
+    match writer {
+        Writer::Program => {
+            format!(
+                "test failure: child {program} expected {expected} but the program wrote {wrote}\n"
+            )
+        }
+        Writer::Stage(stage) => format!(
+            "test failure: child {program} expected {expected} but its input stage {stage} wrote {wrote}\n"
+        ),
+    }
 }
 
 /// The Test report of a scripted child's input closed at an unmet `Expect`.
-pub fn child_unmet(program: &str, expected: &[u8], wrote: &[u8]) -> String {
-    format!(
-        "test failure: child {program} expected {} but the program closed its input after writing {}\n",
-        byte_literal(expected),
-        byte_literal(wrote)
-    )
+fn unmet(program: &str, expected: &[u8], wrote: &[u8], writer: Writer<'_>) -> String {
+    let (expected, wrote) = (byte_literal(expected), byte_literal(wrote));
+    match writer {
+        Writer::Program => format!(
+            "test failure: child {program} expected {expected} but the program closed its input after writing {wrote}\n"
+        ),
+        Writer::Stage(stage) => format!(
+            "test failure: child {program} expected {expected} but its input stage {stage} closed its output after writing {wrote}\n"
+        ),
+    }
+}
+
+/// One spawned scripted pipeline group (`proc.spawn_pipeline`): its stages play as spawned
+/// children, connected. The program writes the first stage's input and reads the last
+/// stage's output; the bytes every other stage prints are written to the next stage's input
+/// as soon as they are available, and the end of a stage closes the next stage's input. Each
+/// stage's standard error is captured, bounded by `max_stderr`: a stage past it ends every
+/// stage, as a kill does, and the group's wait is `OutputLimit()`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScriptGroup {
+    stages: Vec<ScriptChild>,
+    /// Whether each stage's input is open.
+    open: Vec<bool>,
+    stderr: Vec<Vec<u8>>,
+    max_stderr: u64,
+    over_limit: bool,
+    /// A report already failed the run: later closes report nothing more.
+    failed: bool,
+}
+
+impl ScriptGroup {
+    /// The group of nonempty `stages`, and the Test report of an `Expect` that a stage's
+    /// first output contradicts.
+    pub fn new(stages: Vec<ChildRun>, max_stderr: u64) -> (Self, Option<String>) {
+        let count = stages.len();
+        let mut group = Self {
+            stages: stages.into_iter().map(ScriptChild::new).collect(),
+            open: vec![true; count],
+            stderr: vec![vec![]; count],
+            max_stderr,
+            over_limit: false,
+            failed: false,
+        };
+        let report = group.settle();
+        (group, report)
+    }
+    /// Move every stage's new output on, in stage order, so each stage's input holds what
+    /// the stage before it printed: the Test report of the first `Expect` that contradicts
+    /// it, or that the end of its input stage leaves unmet.
+    fn settle(&mut self) -> Option<String> {
+        for i in 0..self.stages.len() {
+            let stderr: Vec<u8> = self.stages[i].stderr.drain(..).flatten().collect();
+            self.stderr[i].extend_from_slice(&stderr);
+            if self.stderr[i].len() as u64 > self.max_stderr && !self.over_limit {
+                self.over_limit = true;
+                self.kill(Signal::Kill);
+            }
+            if i + 1 == self.stages.len() {
+                break;
+            }
+            let stdout: Vec<u8> = self.stages[i].stdout.drain(..).flatten().collect();
+            let (upstream, downstream) = self.stages.split_at_mut(i + 1);
+            let writer = Writer::Stage(&upstream[i].program);
+            // An ended stage discards what it is written, as a closed pipe does.
+            if let Err(report) = downstream[0].feed(&stdout, writer) {
+                return self.report(report);
+            }
+            if upstream[i].exit.is_some() && self.open[i + 1] {
+                self.open[i + 1] = false;
+                if let Some(report) = downstream[0].close_input(writer) {
+                    return self.report(report);
+                }
+            }
+        }
+        None
+    }
+    fn report(&mut self, report: String) -> Option<String> {
+        (!std::mem::replace(&mut self.failed, true)).then_some(report)
+    }
+    /// `group.write` of `data` to the first stage's open input, as [`ScriptChild::write`].
+    pub fn write(&mut self, data: &[u8]) -> Result<Result<(), ProcessFailure>, String> {
+        let written = match self.stages[0].feed(data, Writer::Program) {
+            Ok(written) => written,
+            Err(report) => {
+                self.failed = true;
+                return Err(report);
+            }
+        };
+        match self.settle() {
+            Some(report) => Err(report),
+            None => Ok(written),
+        }
+    }
+    /// The program closed the first stage's input: the Test report of an `Expect` that
+    /// leaves unmet, in that stage or (once it ends) a later one.
+    pub fn close_stdin(&mut self) -> Option<String> {
+        if std::mem::replace(&mut self.open[0], false)
+            && !self.failed
+            && let Some(report) = self.stages[0].close_input(Writer::Program)
+        {
+            return self.report(report);
+        }
+        self.settle()
+    }
+    /// At most `max` (positive) bytes of the next chunk of the last stage's output.
+    pub fn read(&mut self, max: u64) -> ScriptRead {
+        let last = self.stages.len() - 1;
+        self.stages[last].read(ChildStream::Stdout, max)
+    }
+    /// `group.kill`: every stage ends at once without checking an `Expect`.
+    pub fn kill(&mut self, signal: Signal) {
+        for stage in &mut self.stages {
+            stage.kill(signal);
+        }
+    }
+    /// `proc.wait_group` after the program's input closed with no report: every stage's
+    /// status and captured standard error, or `OutputLimit()` when a stage passed the bound.
+    pub fn output(&self) -> Result<GroupOutput, ProcessFailure> {
+        if self.over_limit {
+            return Err(ProcessFailure::OutputLimit);
+        }
+        Ok(GroupOutput {
+            statuses: self
+                .stages
+                .iter()
+                .map(|stage| stage.exit.expect("every stage of a closed group ended"))
+                .collect(),
+            stderr: self.stderr.clone(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -253,5 +402,97 @@ mod tests {
         let mut ended = child(vec![]);
         ended.kill(Signal::Kill);
         assert_eq!(ended.status(), Some(ExitStatus::Exited(0)));
+    }
+
+    fn stage(program: &str, steps: Vec<ChildStep>) -> ChildRun {
+        ChildRun {
+            program: program.into(),
+            args: vec![],
+            steps,
+        }
+    }
+
+    #[test]
+    fn a_group_connects_its_stages_and_captures_each_stderr() {
+        let (mut g, report) = ScriptGroup::new(
+            vec![
+                stage(
+                    "/bin/cat",
+                    vec![
+                        ChildStep::Expect(b"b\na\n".to_vec()),
+                        ChildStep::Print(b"b\na\n".to_vec()),
+                    ],
+                ),
+                stage(
+                    "/usr/bin/sort",
+                    vec![
+                        ChildStep::PrintErr(b"sort: note\n".to_vec()),
+                        ChildStep::Expect(b"b\na\n".to_vec()),
+                        ChildStep::Print(b"a\nb\n".to_vec()),
+                        ChildStep::Exit(ExitStatus::Exited(2)),
+                    ],
+                ),
+            ],
+            64,
+        );
+        assert_eq!(report, None);
+        assert_eq!(g.read(100), ScriptRead::Waiting);
+        assert_eq!(g.write(b"b\n"), Ok(Ok(())));
+        assert_eq!(g.read(100), ScriptRead::Waiting);
+        assert_eq!(g.write(b"a\n"), Ok(Ok(())));
+        assert_eq!(g.read(100), ScriptRead::Bytes(b"a\nb\n".to_vec()));
+        assert_eq!(g.read(100), ScriptRead::Bytes(vec![]));
+        assert_eq!(g.close_stdin(), None);
+        assert_eq!(
+            g.output(),
+            Ok(GroupOutput {
+                statuses: vec![ExitStatus::Exited(0), ExitStatus::Exited(2)],
+                stderr: vec![vec![], b"sort: note\n".to_vec()],
+            })
+        );
+    }
+
+    #[test]
+    fn a_later_stage_reports_its_input_stage_and_a_kill_or_the_bound_ends_every_stage() {
+        let pair = |first: Vec<ChildStep>| {
+            ScriptGroup::new(
+                vec![
+                    stage("/bin/cat", first),
+                    stage("/usr/bin/sort", vec![ChildStep::Expect(b"ab".to_vec())]),
+                ],
+                4,
+            )
+        };
+        assert_eq!(
+            pair(vec![ChildStep::Print(b"ax".to_vec())]).1,
+            Some("test failure: child /usr/bin/sort expected b\"ab\" but its input stage /bin/cat wrote b\"ax\"\n".into())
+        );
+        assert_eq!(
+            pair(vec![ChildStep::Print(b"a".to_vec())]).1,
+            Some("test failure: child /usr/bin/sort expected b\"ab\" but its input stage /bin/cat closed its output after writing b\"a\"\n".into())
+        );
+        let (mut g, report) = pair(vec![ChildStep::Expect(b"go".to_vec())]);
+        assert_eq!(report, None);
+        assert_eq!(
+            g.close_stdin(),
+            Some("test failure: child /bin/cat expected b\"go\" but the program closed its input after writing b\"\"\n".into())
+        );
+        assert_eq!(g.close_stdin(), None);
+        let (mut g, _) = pair(vec![ChildStep::Expect(b"go".to_vec())]);
+        g.kill(Signal::Terminate);
+        assert_eq!(g.write(b"go"), Ok(Err(ProcessFailure::InputClosed)));
+        assert_eq!(g.close_stdin(), None);
+        assert_eq!(
+            g.output().map(|o| o.statuses),
+            Ok(vec![ExitStatus::Signaled(15); 2])
+        );
+        let (mut g, report) = pair(vec![
+            ChildStep::PrintErr(b"12345".to_vec()),
+            ChildStep::Expect(b"go".to_vec()),
+        ]);
+        assert_eq!(report, None);
+        assert_eq!(g.read(100), ScriptRead::Bytes(vec![]));
+        assert_eq!(g.close_stdin(), None);
+        assert_eq!(g.output(), Err(ProcessFailure::OutputLimit));
     }
 }

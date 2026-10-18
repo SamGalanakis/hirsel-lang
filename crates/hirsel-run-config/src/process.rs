@@ -184,6 +184,36 @@ pub fn script_pipeline(
     }
 }
 
+/// A `proc.wait_group` value: every stage's status and its captured standard error, in
+/// stage order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GroupOutput {
+    pub statuses: Vec<ExitStatus>,
+    pub stderr: Vec<Vec<u8>>,
+}
+
+/// A scripted world's spawned pipeline (docs/spec/core-library.md#processes, scripted runs):
+/// each stage takes the first unused child entry whose program and args equal its own, all
+/// or none (`NotFound()` when one has none).
+pub fn take_children(
+    children: &mut [Option<ChildRun>],
+    stages: &[Command],
+) -> Result<Vec<ChildRun>, ProcessFailure> {
+    let mut taken: Vec<usize> = vec![];
+    for stage in stages {
+        let entry = children.iter().enumerate().position(|(i, c)| {
+            !taken.contains(&i)
+                && c.as_ref()
+                    .is_some_and(|c| c.program == stage.program && c.args == stage.args)
+        });
+        taken.push(entry.ok_or(ProcessFailure::NotFound)?);
+    }
+    Ok(taken
+        .into_iter()
+        .map(|i| children[i].take().unwrap())
+        .collect())
+}
+
 /// `ExitStatus`, in its docs/spec/core-library.md variant order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]

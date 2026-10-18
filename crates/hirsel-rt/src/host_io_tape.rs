@@ -109,6 +109,27 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
             }
             text
         }
+        // The stage count leads, so the words after it are that many commands.
+        Request::ProcessSpawnPipeline {
+            process,
+            stages,
+            max_stderr,
+        } => {
+            let mut text = format!(
+                "process_spawn_pipeline {process} {max_stderr} {}",
+                stages.len()
+            );
+            for stage in stages {
+                text.push(' ');
+                text.push_str(&command_words(stage));
+            }
+            text
+        }
+        Request::GroupWait {
+            process,
+            group,
+            deadline,
+        } => format!("group_wait {process} {group} {}", deadline_word(*deadline)),
         Request::ChildWrite {
             process,
             child,
@@ -216,6 +237,22 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         Completion::ChildUnit(Ok(())) => "child_unit ok".into(),
         Completion::ChildBytes(Ok(bytes)) => format!("child_bytes ok {}", hex(bytes)),
         Completion::ChildExit(Ok(status)) => format!("child_exit ok {}", status_words(*status)),
+        // Every status, then every stage's standard error, in stage order.
+        Completion::GroupExit(Ok(output)) => {
+            let mut text = format!("group_exit ok {}", output.statuses.len());
+            for status in &output.statuses {
+                text.push(' ');
+                text.push_str(&status_words(*status));
+            }
+            for stderr in &output.stderr {
+                text.push(' ');
+                text.push_str(&hex(stderr));
+            }
+            text
+        }
+        Completion::GroupExit(Err(failure)) => {
+            format!("group_exit error {}", failure_word(*failure))
+        }
         Completion::Spawned(Err(failure))
         | Completion::ChildUnit(Err(failure))
         | Completion::ChildBytes(Err(failure))
@@ -396,6 +433,35 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
                 deadline: parse_deadline(deadline)?,
             }
         }
+        [
+            "process_spawn_pipeline",
+            process,
+            max_stderr,
+            count,
+            rest @ ..,
+        ] => {
+            let mut words = rest.iter().copied();
+            let mut used = 0;
+            let mut stages = vec![];
+            for _ in 0..number::<usize>(count)? {
+                let (stage, n) = parse_command(&mut words)?;
+                used += n;
+                stages.push(stage);
+            }
+            if used != rest.len() {
+                return Err("trailing process tape words".into());
+            }
+            Request::ProcessSpawnPipeline {
+                process: number(process)?,
+                stages,
+                max_stderr: number(max_stderr)?,
+            }
+        }
+        ["group_wait", process, group, deadline] => Request::GroupWait {
+            process: number(process)?,
+            group: number(group)?,
+            deadline: parse_deadline(deadline)?,
+        },
         ["process_spawn", process, rest @ ..] => Request::ProcessSpawn {
             process: number(process)?,
             command: parse_command(&mut rest.iter().copied()).and_then(ended(rest))?,
@@ -525,6 +591,30 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
             } else {
                 ExitStatus::Signaled(code)
             }))
+        }
+        ["group_exit", "ok", count, rest @ ..] => {
+            let count = number::<usize>(count)?;
+            if rest.len() != count.saturating_mul(3) {
+                return Err("process tape stage count".into());
+            }
+            let (statuses, stderr) = rest.split_at(count * 2);
+            Completion::GroupExit(Ok(hirsel_run_config::GroupOutput {
+                statuses: statuses
+                    .chunks(2)
+                    .map(|pair| {
+                        let code = number(pair[1])?;
+                        match pair[0] {
+                            "exited" => Ok(ExitStatus::Exited(code)),
+                            "signaled" => Ok(ExitStatus::Signaled(code)),
+                            _ => Err("bad process tape status".to_string()),
+                        }
+                    })
+                    .collect::<Result<_, _>>()?,
+                stderr: stderr.iter().map(|b| bytes(b)).collect::<Result<_, _>>()?,
+            }))
+        }
+        ["group_exit", "error", failure @ ..] => {
+            Completion::GroupExit(Err(parse_failure(failure)?))
         }
         ["spawned", "error", failure @ ..] => Completion::Spawned(Err(parse_failure(failure)?)),
         ["child_unit", "error", failure @ ..] => {

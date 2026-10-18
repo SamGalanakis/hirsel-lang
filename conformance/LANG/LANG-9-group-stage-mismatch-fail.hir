@@ -1,0 +1,29 @@
+// rule: LANG-9
+// expect: fail LANG-9 at line 23
+// stdout: test failure: child /usr/bin/sort expected b"ping\n" but its input stage /bin/cat wrote b"pong\n"
+// entry: trial
+pub fn trial(t: Test) -> Result[(), ProcessError] {
+  let p = test.process(
+    t,
+    [],
+    [
+      ChildScript(
+        program: "/bin/cat",
+        args: [],
+        steps: [Expect(b"go"), Print(b"pong\n")]
+      ),
+      ChildScript(program: "/usr/bin/sort", args: [], steps: [Expect(b"ping\n")])
+    ]
+  )
+  let mut g = proc.spawn_pipeline(
+    p,
+    [plain(path.of("/bin/cat")), plain(path.of("/usr/bin/sort"))],
+    64u64
+  )?
+  group.write(p, mut g, b"go")?
+  Ok(())
+}
+
+fn plain(program: Path) -> Command {
+  Command(program: program, args: [], dir: None(), env: None())
+}

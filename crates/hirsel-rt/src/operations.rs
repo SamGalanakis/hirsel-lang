@@ -203,10 +203,17 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "child.read_stderr"
         | "child.wait"
         | "child.kill"
+        | "proc.spawn_pipeline"
+        | "proc.wait_group"
         | "test.process"
         | "random.bytes"
         | "clock.sleep_until"
         | "instant.checked_add" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
+        // A ChildGroup's streams and kill are a Child's entries on its handle.
+        "group.write" | "group.close_stdin" | "group.read_stdout" | "group.kill" => Some(format!(
+            "hirsel_rt_v2_child_{}",
+            name.strip_prefix("group.").unwrap_or_default()
+        )),
         // Streams and listeners use the same explicit Net policy.
         "net.udp_bind"
         | "udp.send_to"
@@ -314,6 +321,12 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "child.read_stderr"
             | "child.wait"
             | "child.kill"
+            | "proc.spawn_pipeline"
+            | "group.write"
+            | "group.close_stdin"
+            | "group.read_stdout"
+            | "proc.wait_group"
+            | "group.kill"
             | "test.process"
             | "file.open"
             | "file.read"
@@ -356,6 +369,10 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "child.write"
             | "child.close_stdin"
             | "child.wait"
+            | "proc.spawn_pipeline"
+            | "group.write"
+            | "group.close_stdin"
+            | "proc.wait_group"
     ) {
         row.failure = None;
     }
@@ -1255,6 +1272,20 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_proc_spawn_pipeline",
+        destination: true,
+        result: Some((16, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_proc_wait_group",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_io_random",
         destination: true,
         result: Some((16, 8)),
@@ -1870,6 +1901,12 @@ pub const NATIVE_PATHS: &[&str] = &[
     "child.read_stderr",
     "child.wait",
     "child.kill",
+    "proc.spawn_pipeline",
+    "group.write",
+    "group.close_stdin",
+    "group.read_stdout",
+    "proc.wait_group",
+    "group.kill",
     "iter.from",
     "iter.map",
     "iter.next",

@@ -330,6 +330,12 @@ A streaming child is recorded at the stream API, as a network stream is: `proc.s
 (the signal), `wait` (the deadline's clock handle and ticks or none; the `ExitStatus` or
 the error, `TimedOut()` included) and the close of a dropped `Child`. The bytes `wait`
 discards are never recorded. Reads, writes and waits park and are readied as recorded.
+A streaming pipeline is recorded the same way: `proc.spawn_pipeline` (the `Proc` handle,
+every stage's command in stage order and `max_stderr`; the `ChildGroup` handle or the error),
+`group.write`, `group.close_stdin`, `group.read_stdout` and `group.kill` as the Child
+operations they are on the group's handle, `proc.wait_group` (the deadline; every stage's
+`ExitStatus` with exactly each stage's captured standard-error bytes, or the error) and the
+close of a dropped `ChildGroup`.
 
 Replay returns the recorded completions without spawning, reading or writing anything, and
 re-derives the program check from the bound run configuration: a recorded completion that

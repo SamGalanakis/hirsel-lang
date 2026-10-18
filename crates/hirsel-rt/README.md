@@ -278,6 +278,21 @@ it took (`host_waits.rs`). Child tape forms are `process_spawn`, `child_write`,
 `child_close_stdin`, `child_read` (with `stdout` or `stderr`), `child_wait` (with its
 deadline or `none`) and `child_kill` (with `interrupt`, `terminate` or `kill`) requests, the dropped Child's `close`, and `spawned`, `child_unit`,
 `child_bytes` and `child_exit` completions; `SimIo` replays them without spawning.
+`proc.spawn_pipeline` makes every stage's checks and mints a `Grant::Child` whose `group`
+holds its stage count and `max_stderr`; `group.write`, `group.close_stdin`,
+`group.read_stdout` and `group.kill` are the child requests (and the child ABI entries) on
+its handle, a standard-error read of a group is refused, and `proc.wait_group` is
+`Request::GroupWait`, whose completion must hold one status and one at-most-`max_stderr`
+standard error per stage. A scripted world plays the entries with
+`hirsel_run_config::ScriptGroup`, its stages connected. A host group (`host_child.rs`) is a
+`HostChild` of several stages: the program holds the first stage's input and the last
+stage's output, and a `Capture` thread drains every stage's standard error into its own
+buffer from the spawn, SIGKILLing every stage once one passes the bound; no stage is reaped
+before that thread ends, so every pid it signals still names its stage. The wait discards
+the last stage's output, waits for the capture, reaps every stage and returns
+`GroupOutput`, its stderr a runtime `List[Bytes]`. Tape forms are `process_spawn_pipeline`
+(`max_stderr`, the stage count, then each command) and `group_wait` requests and
+`group_exit` completions.
 
 ## Random draws and timer waits
 
