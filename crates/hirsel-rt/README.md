@@ -472,6 +472,20 @@ scalar payload as the `Some` image of an `Option`, which the runtime copies. A m
 yield, so no task observes a mutex another holds. A failing body kills its mutex, which keeps the
 failure chain; a later `mutex.with` fails FAIL-4 continued by that chain.
 
+`task.scope_until`'s compiled body is `task.scope`'s over `hirsel_rt_v2_task_scope_enter_until`
+and `hirsel_rt_v2_task_scope_exit_until` (CONC-3). The entry takes the `Deadline` (clock handle,
+then the Instant's ticks) and, before its yield, arms the scope's timer through
+`host_waits::arm`: a `SleepUntil` under a token of its own, issued whatever the task's
+cancellation. A completed one (a reached deadline, or an unreadable clock) expires the scope at
+once; a blocked one stays armed. `poll_parked` first asks `host_waits::expired` for the armed
+tokens a poll finds ready, by deadline with ties in arming order, and expires their scopes: the
+scope's row is canceled `DeadlineExceeded`, each child too, and the children of the scopes its
+owner entered inside it `Parent`. Armed deadlines keep `host_waits::wait` sleeping. The exit
+joins as usual, then disarms a timer that has not fired (no tape event) and writes whether the
+deadline fired, from which the body builds `Expired(r)` or `Finished(r)`. The tape therefore
+holds a scope deadline as the `sleep_until` request, `blocked` and `ready` events of a timer
+wait, exactly as the interpreter's HostLibrary records it.
+
 `task.check_canceled`'s compiled body reads the running task's cancellation through
 `hirsel_rt_v2_task_canceled` (0, or 1 + the `CancelCause` ordinal), which yields as the operation
 does, and builds `Ok(())` or `Error(Canceled(cause))`.

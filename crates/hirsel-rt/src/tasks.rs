@@ -51,6 +51,7 @@ pub type TaskCode = unsafe extern "C" fn(*mut RunCtx, *mut Header) -> u8;
 pub(crate) const CANCEL_REQUESTED: u32 = 0;
 pub(crate) const CANCEL_PARENT: u32 = 1;
 pub(crate) const CANCEL_CHILD_FAILED: u32 = 2;
+pub(crate) const CANCEL_DEADLINE: u32 = 3;
 
 /// The root task: the entry, on the thread's own stack.
 const ROOT: u32 = 0;
@@ -160,8 +161,18 @@ struct Task {
 
 struct Scope {
     generation: u32,
+    /// The task whose body runs in the scope.
+    owner: u32,
     children: Vec<u32>,
     canceled: Option<u32>,
+    /// `task.scope_until`'s deadline (CONC-3).
+    deadline: Option<ScopeDeadline>,
+}
+
+/// A scope's deadline: its armed timer's host token until it fires or the scope exits.
+struct ScopeDeadline {
+    token: Option<u64>,
+    expired: bool,
 }
 
 /// Every task and scope of one run, and the runnable queue.
@@ -259,6 +270,37 @@ impl Scheduler {
                 } else {
                     CANCEL_PARENT
                 });
+            }
+        }
+    }
+    /// `scope`'s deadline fired (CONC-3): the scope is canceled `DeadlineExceeded`, as is each
+    /// of its children, and the children of the scopes its owner entered inside it `Parent`.
+    pub(crate) fn expire(&mut self, scope: u32) {
+        let row = self.scope(scope);
+        let Some(deadline) = &mut row.deadline else {
+            fault("a scope without a deadline expired");
+        };
+        if deadline.expired {
+            return;
+        }
+        deadline.expired = true;
+        deadline.token = None;
+        row.canceled.get_or_insert(CANCEL_DEADLINE);
+        let (owner, children) = (row.owner, row.children.clone());
+        for child in children {
+            self.cancel(child, CANCEL_DEADLINE);
+        }
+        let inner: Vec<u32> = self
+            .task(owner)
+            .scopes
+            .iter()
+            .skip_while(|&&s| s != scope)
+            .skip(1)
+            .copied()
+            .collect();
+        for inner in inner {
+            for child in self.scope(inner).children.clone() {
+                self.cancel(child, CANCEL_PARENT);
             }
         }
     }
@@ -387,6 +429,11 @@ fn recycle(ctx: *mut RunCtx) {
 /// # Safety
 /// `ctx` is live.
 unsafe fn poll_parked(ctx: *mut RunCtx) {
+    // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
+    // SAFETY: the context is live.
+    for scope in unsafe { crate::host_waits::expired(ctx) } {
+        scheduler(ctx).expire(scope);
+    }
     let s = scheduler(ctx);
     let mut parked = std::mem::take(&mut s.parked);
     // Original request ticks preserve exact ties; readiness's host Instant is
@@ -651,12 +698,26 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
     out: *mut u64,
     _tasks: *const u64,
 ) -> u8 {
+    let (index, generation) = open_scope(ctx, None);
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(handle(index, generation));
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// A fresh scope of the running task, its row and generation.
+fn open_scope(ctx: *mut RunCtx, deadline: Option<ScopeDeadline>) -> (u32, u32) {
     let s = scheduler(ctx);
     let generation = s.fresh_generation();
+    let current = s.current;
     let row = Scope {
         generation,
+        owner: current,
         children: Vec::new(),
         canceled: None,
+        deadline,
     };
     let index = match s.vacant_scopes.pop() {
         Some(index) => {
@@ -668,8 +729,43 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
             (s.scopes.len() - 1) as u32
         }
     };
-    let current = s.current;
     s.task(current).scopes.push(index);
+    (index, generation)
+}
+
+/// `$intrinsic.TaskScopeEnterUntil(tasks, deadline)`: a fresh scope of the running task that
+/// its deadline (the clock handle, then the Instant's ticks) cancels (CONC-3). Its timer is
+/// armed under a host token of its own before the entry's yield; a deadline already reached,
+/// or a clock that cannot be read, cancels the scope at once.
+///
+/// # Safety
+/// `ctx` is live with its Io bound, `out` writable and `deadline` two readable words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    _tasks: *const u64,
+    deadline: *const [u64; 2],
+) -> u8 {
+    // SAFETY: caller contract.
+    let [clock, at] = unsafe { deadline.read() };
+    let (index, generation) = open_scope(
+        ctx,
+        Some(ScopeDeadline {
+            token: None,
+            expired: false,
+        }),
+    );
+    // SAFETY: the context is live and its Io bound.
+    match unsafe { crate::host_waits::arm(ctx, index, clock, at) } {
+        Some(token) => {
+            if let Some(d) = &mut scheduler(ctx).scope(index).deadline {
+                d.token = Some(token);
+            }
+        }
+        None => scheduler(ctx).expire(index),
+    }
     // SAFETY: caller contract.
     unsafe {
         out.write(handle(index, generation));
@@ -692,6 +788,35 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     scope: *const u64,
     error: u8,
 ) -> u8 {
+    // SAFETY: caller contract.
+    unsafe { exit_scope(ctx, scope, error) }.0
+}
+
+/// `$intrinsic.TaskScopeExitUntil(s, error) -> bool`: the exit of a `task.scope_until` scope,
+/// which removes its timer and writes whether its deadline fired, including while the exit
+/// waited for children.
+///
+/// # Safety
+/// As for [`hirsel_rt_v2_task_scope_exit`]; `out` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
+    ctx: *mut RunCtx,
+    out: *mut u8,
+    scope: *const u64,
+    error: u8,
+) -> u8 {
+    // SAFETY: caller contract.
+    let (status, expired) = unsafe { exit_scope(ctx, scope, error) };
+    // SAFETY: caller contract.
+    unsafe { out.write(u8::from(expired)) };
+    status
+}
+
+/// A scope's exit: its status and whether its deadline fired.
+///
+/// # Safety
+/// As for [`hirsel_rt_v2_task_scope_exit`].
+unsafe fn exit_scope(ctx: *mut RunCtx, scope: *const u64, error: u8) -> (u8, bool) {
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let index = s.scope_handle(unsafe { scope.read() });
@@ -729,14 +854,25 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
         }
         s.vacate_task(child);
     }
-    s.scopes[index as usize] = None;
+    let deadline = s.scopes[index as usize].take().and_then(|row| row.deadline);
     s.vacant_scopes.push(index);
+    // A scope that exits before its deadline removes the timer; nothing is recorded.
+    if let Some(ScopeDeadline {
+        token: Some(token), ..
+    }) = &deadline
+    {
+        let token = *token;
+        // SAFETY: the context is live and its Io bound, as the entry armed it.
+        unsafe { crate::host_waits::disarm(ctx, token) };
+    }
+    let expired = deadline.is_some_and(|d| d.expired);
     // SAFETY: the context is live.
-    if unsafe { (*ctx).failure.active() } {
+    let status = if unsafe { (*ctx).failure.active() } {
         STATUS_FAILURE
     } else {
         STATUS_OK
-    }
+    };
+    (status, expired)
 }
 
 /// `$intrinsic.TaskSpawn[R](s, take main)`: a child of `s` running `main` (the compiled

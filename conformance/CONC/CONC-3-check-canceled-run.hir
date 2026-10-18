@@ -11,6 +11,7 @@ fn code(status: Result[(), CancelError]) -> u8 {
     Error(Canceled(Requested())) => 1,
     Error(Canceled(Parent())) => 2,
     Error(Canceled(ChildFailed())) => 3,
+    Error(Canceled(DeadlineExceeded())) => 4,
   }
 }
 
@@ -21,8 +22,10 @@ fn text(n: u8) -> String {
     "requested\n"
   } else if n == 2 {
     "parent\n"
-  } else {
+  } else if n == 3 {
     "child failed\n"
+  } else {
+    "deadline\n"
   }
 }
 

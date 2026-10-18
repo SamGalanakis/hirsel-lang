@@ -1,0 +1,16 @@
+// rule: PROV-5
+// expect: accept
+// A scope's deadline is an instant of the clock stored beside it.
+fn bounded(tasks: Tasks, c: MonotonicClock) -> Bounded[u64] {
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Finished(0),
+  }
+  task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) -> u64 {
+      1
+    }
+  )
+}

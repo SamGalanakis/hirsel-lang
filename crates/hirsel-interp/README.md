@@ -555,6 +555,14 @@ wait for external readiness and ask the scheduler to poll again. Parked operatio
 polled only at suspension points, so pure code does not issue readiness syscalls. `Operations::wait_deadline`
 exposes a timer's absolute ticks to the scheduler: timer polls use deadline order,
 with equal deadlines in suspension order, in both virtual time and host adapters.
+`Operations::expire_deadlines` runs at every poll before the parked tasks: the simulation
+cancels each `task.scope_until` scope whose deadline its virtual reading reached (deadline
+order, ties in entry order), recording `task.scope_until.expire`, and pending scope
+deadlines count as the earliest timer when no task is runnable. An expired scope cancels
+its children `DeadlineExceeded` and the children of the scopes its owner entered inside it
+`Parent`, and its exit wraps the body's result in `Expired` or `Finished`. A host adapter
+calls `Library::host_deadlines` and arms the entered scopes (`take_deadlines`) on its own
+clock, firing them with `expire_deadline`.
 
 Detached task results are released on the child's evaluator stack before completion;
 an already-completed result is released by detach's ordinary Complete.released work.

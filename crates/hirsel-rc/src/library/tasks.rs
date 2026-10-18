@@ -14,6 +14,9 @@
 //! on both outcomes: a failed body, or one returning `Err` when `R` is a
 //! `Result`, exits as an error, which cancels the children before joining
 //! them; a failed child fails the exit, and the body's result is dropped.
+//! `task.scope_until` is the same body over `TaskScopeEnterUntil`, which arms the scope's
+//! deadline, and `TaskScopeExitUntil`, which says whether it fired: the result is then
+//! `Expired(r)`, otherwise `Finished(r)` (CONC-3).
 use super::builder::{Body, Cx};
 use super::iter::{local, option};
 use super::{BINDER, LibraryBody, Request, native_path};
@@ -34,6 +37,10 @@ type R<T> = Result<T, PassError>;
 pub static SCOPE: LibraryBody = LibraryBody {
     path: || DefPath::core("task.scope"),
     build: scope,
+};
+pub static SCOPE_UNTIL: LibraryBody = LibraryBody {
+    path: || DefPath::core("task.scope_until"),
+    build: scope_until,
 };
 pub static ASYNC: LibraryBody = LibraryBody {
     path: || DefPath::core("task.async"),
@@ -228,31 +235,55 @@ pub(super) fn operation(
 }
 
 fn scope(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    scoped(cx, false)
+}
+
+fn scope_until(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    scoped(cx, true)
+}
+
+/// `task.scope`, or with `until` `task.scope_until`.
+fn scoped(cx: &mut Cx<'_>, until: bool) -> R<LirUnit<Value>> {
+    use super::arena::{payload, variant};
     let result = cx.type_actual(0)?;
     let is_result = matches!(
         cx.store.get(result).map(|t| &t.kind),
         Some(TypeKind::Named { definition, .. }) if *definition == DefPath::core("Result")
     );
-    let callback = parameter(&cx.store, cx.callable, 1)?;
+    let callback = parameter(&cx.store, cx.callable, if until { 2 } else { 1 })?;
     let body_abi = cx
         .layouts
         .fn_abi(&cx.store, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
-    let enter = intrinsic(cx, "TaskScopeEnter", Vec::new())?;
-    let exit = intrinsic(cx, "TaskScopeExit", Vec::new())?;
+    let (enter, exit) = if until {
+        ("TaskScopeEnterUntil", "TaskScopeExitUntil")
+    } else {
+        ("TaskScopeEnter", "TaskScopeExit")
+    };
+    let enter = intrinsic(cx, enter, Vec::new())?;
+    let exit = intrinsic(cx, exit, Vec::new())?;
     let mut b = Body::new(cx)?;
-    let &[tasks, body] = b.parameters.as_slice() else {
-        return Err(PassError::Malformed("task.scope parameters".into()));
+    let (tasks, deadline, body) = match b.parameters.as_slice() {
+        &[tasks, body] if !until => (tasks, None, body),
+        &[tasks, deadline, body] if until => (tasks, Some(deadline), body),
+        _ => return Err(PassError::Malformed("task.scope parameters".into())),
     };
     let tasks = b.read_bits(tasks.address)?;
+    let mut arguments = vec![argument(0, Passing::Borrow, tasks)];
+    let mut loans = Vec::new();
+    if let Some(deadline) = deadline {
+        let (deadline, loan) = b.borrow(deadline.address, false)?;
+        arguments.push(argument(1, Passing::Borrow, deadline));
+        loans.push(loan);
+    }
     let propagate = b.failure(None);
     let callee = operation(&mut b, &enter);
     let s = invoke(
         &mut b,
         callee,
         enter.abi,
-        vec![argument(0, Passing::Borrow, tasks)],
-        &[],
+        arguments,
+        &loans,
         propagate,
         BlockKind::Body,
     )
@@ -330,7 +361,7 @@ fn scope(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     // A failed exit drops the body's result with the rest of the frame.
     let failure = b.failure(None);
     let callee = operation(&mut b, &exit);
-    invoke(
+    let expired = invoke(
         &mut b,
         callee,
         exit.abi,
@@ -353,7 +384,37 @@ fn scope(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         }
         None => None,
     };
-    b.ret(value);
+    if !until {
+        b.ret(value);
+        return Ok(b.finish());
+    }
+    // `Expired(r)` when the deadline fired, otherwise `Finished(r)`.
+    let expired =
+        expired.ok_or_else(|| PassError::Malformed("TaskScopeExitUntil returns a flag".into()))?;
+    let bounded =
+        b.cx.fn_abi()
+            .result
+            .map(|r| r.layout)
+            .ok_or_else(|| PassError::Malformed("task.scope_until returns Bounded".into()))?;
+    let at = b.current();
+    let mut edges = Vec::new();
+    for ordinal in [0u32, 1] {
+        let arm = b.block(BlockKind::Body, &[]);
+        b.at(arm);
+        let body = match value {
+            Some(value) => Some(value),
+            None => payload(&b, bounded, ordinal).map(|unit| b.constant(unit, ConstantValue::Unit)),
+        };
+        let wrapped = variant(&mut b, bounded, "Bounded", ordinal, body.as_slice());
+        b.ret(Some(wrapped));
+        edges.push(b.edge(arm, &[]));
+    }
+    b.at(at);
+    b.terminate(Terminator::Branch {
+        condition: expired,
+        yes: edges[1],
+        no: edges[0],
+    });
     Ok(b.finish())
 }
 
@@ -663,7 +724,7 @@ fn check_canceled(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     .ok_or_else(|| PassError::Malformed("TaskCanceled returns a status".into()))?;
     let at = b.current();
     let mut arms = Vec::new();
-    for code in 0..=3u32 {
+    for code in 0..=4u32 {
         let arm = b.block(BlockKind::Body, &[]);
         b.at(arm);
         let value = if code == 0 {

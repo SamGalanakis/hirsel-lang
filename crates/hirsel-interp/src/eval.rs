@@ -268,6 +268,14 @@ fn execute_frames(
         // checking host readiness on every interpreter instruction would make
         // a waiting socket slow all pure computation.
         if yield_now || frames.is_empty() {
+            operations.expire_deadlines(&mut OperationContext {
+                configuration,
+                sources,
+                stdout: &mut execution.stdout,
+                trace: &mut execution.trace,
+                trace_mode: runtime.trace_mode,
+                anchor: None,
+            })?;
             // Stable sorting keeps non-timer waits and equal-deadline timers in
             // suspension order. Poll timers by their original absolute ticks,
             // including when several deadlines passed during a blocking step.

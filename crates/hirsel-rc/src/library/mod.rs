@@ -127,6 +127,7 @@ pub const BODIES: &[&LibraryBody] = &[
     &net::READ_INTO,
     // tasks (tasks-native): structured concurrency over the scheduler's entries.
     &tasks::SCOPE,
+    &tasks::SCOPE_UNTIL,
     &tasks::ASYNC,
     &tasks::AWAIT,
     &tasks::MAIN,
@@ -246,7 +247,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 17;
+pub const REVISION: u32 = 18;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

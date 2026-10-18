@@ -247,6 +247,8 @@ pub(crate) struct HostLibrary {
     next: u64,
     next_wait: u64,
     waits: BTreeMap<u64, HostWait>,
+    /// Armed scope deadlines (CONC-3), in entry order: token, scope and its timer request.
+    armed: Vec<(u64, u64, R)>,
     yield_now: bool,
 }
 struct HostWait {
@@ -287,11 +289,14 @@ impl HostLibrary {
             test_seed: record.inputs.test_seed,
             ..Default::default()
         };
+        let mut library = Library::new(run, config)?;
+        library.host_deadlines();
         Ok(Self {
             next_wait: 1 << 62,
             waits: BTreeMap::new(),
+            armed: Vec::new(),
             yield_now: false,
-            library: Library::new(run, config)?,
+            library,
             io,
             refused: None,
             echoed: (0, 0),
@@ -544,6 +549,37 @@ impl HostLibrary {
             )),
             Err(hirsel_rt::io::WaitError::Canceled(cause)) => wait_canceled(cause),
         }))
+    }
+    /// Arm `scope`'s deadline as a timer wait on its clock under a token of its own; no
+    /// cancellation applies to it. A reached deadline, or a clock the host cannot read,
+    /// expires the scope at once (CONC-3).
+    fn arm_deadline(
+        &mut self,
+        scope: u64,
+        clock: &Value,
+        at: u64,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        let request = R::SleepUntil {
+            clock: self.id(clock)?,
+            deadline: at,
+        };
+        let token = self.next_wait;
+        self.next_wait += 1;
+        self.io.adapter().enter(token);
+        match self.host(request.clone()) {
+            Err(Error::Blocked(_)) => {
+                self.armed.push((token, scope, request));
+                Ok(())
+            }
+            completion => {
+                self.io.adapter().finish(token);
+                let C::Wait(_) = completion? else {
+                    return Err(invalid());
+                };
+                self.library.expire_deadline(scope, cx)
+            }
+        }
     }
     /// Read host stdin into the simulation the library then consumes. False when no
     /// byte is available yet: the token keeps the descriptor's readiness interest.
@@ -1453,6 +1489,47 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         let host = std::mem::take(&mut self.yield_now);
         self.library.take_yield() || host
     }
+    /// Poll the armed scope deadlines by deadline, ties in entry order; a scope that
+    /// exited first removes its timer and records nothing.
+    fn expire_deadlines(&mut self, cx: &mut OperationContext<'_>) -> Result<(), Error> {
+        let mut armed = std::mem::take(&mut self.armed);
+        armed.retain(|(token, scope, _)| {
+            let live = self.library.deadline_pending(*scope);
+            if !live {
+                self.io.adapter().finish(*token);
+            }
+            live
+        });
+        armed.sort_by_key(|(token, _, request)| match request {
+            R::SleepUntil { deadline, .. } => (*deadline, *token),
+            _ => (u64::MAX, *token),
+        });
+        for (token, scope, request) in armed {
+            let ready = self
+                .io
+                .adapter()
+                .ready(token)
+                .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))?;
+            if !ready {
+                self.armed.push((token, scope, request));
+                continue;
+            }
+            self.io.adapter().enter(token);
+            match self.host(request.clone()) {
+                Err(Error::Blocked(_)) => self.armed.push((token, scope, request)),
+                completion => {
+                    self.io.adapter().finish(token);
+                    let C::Wait(_) = completion? else {
+                        return Err(invalid());
+                    };
+                    self.library.expire_deadline(scope, cx)?;
+                }
+            }
+        }
+        // Keep entry order for the next poll's ties.
+        self.armed.sort_by_key(|(token, _, _)| *token);
+        Ok(())
+    }
     fn wait(&mut self) -> Result<bool, Error> {
         self.io
             .adapter()
@@ -1644,7 +1721,11 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 return self.host_network(&name, call.arguments, cx).map(Some);
             }
         }
-        self.library.call(call, cx)
+        let result = self.library.call(call, cx);
+        for (scope, clock, at) in self.library.take_deadlines() {
+            self.arm_deadline(scope, &clock, at, cx)?;
+        }
+        result
     }
     fn drop_handle(
         &mut self,

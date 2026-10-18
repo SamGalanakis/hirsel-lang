@@ -152,4 +152,11 @@ with the compiler parser, retaining source signatures and constructor payloads.
 
 Host timer waits expose their original absolute deadline to the interpreter's poll
 ordering. Several overdue timers resume by deadline, with suspension order breaking
-ties, identically in live recording and replay.
+ties, identically in live recording and replay. A `task.scope_until` scope's deadline is
+armed after the library enters the scope, as a `clock.sleep_until` request under a token
+of its own that no cancellation reaches: a reached deadline completes at once and expires
+the scope, otherwise the token parks on its Readiness timer. Every poll looks at the armed
+tokens first, by deadline with ties in entry order, and a ready one's reissued wait
+expires its scope; a scope that exited first has its token finished, recording nothing.
+The compiled runtime (`hirsel-rt/src/host_waits.rs`) arms and polls the same requests, so
+tapes replay in either engine.

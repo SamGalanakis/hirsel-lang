@@ -1039,6 +1039,9 @@ impl Operations for Library {
     fn take_yield(&mut self) -> bool {
         std::mem::take(&mut self.tasks.yield_now)
     }
+    fn expire_deadlines(&mut self, context: &mut OperationContext<'_>) -> Result<(), Error> {
+        self.expire_due(context)
+    }
     /// Virtual time: pending timer waits are the simulation's only outstanding event source.
     fn wait(&mut self) -> Result<bool, Error> {
         Ok(self.advance_virtual_time())
@@ -1280,7 +1283,7 @@ primary_operations! { self, call, context, name, a, value;
             }
             return self.capability(name, &call, context);
             },
-    Capability: "task.scope" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" => { return self.task_call(name, &call, context).map(Some); },
+    Capability: "task.scope" | "task.scope_until" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.check_canceled" | "task.isolate" => { return self.task_call(name, &call, context).map(Some); },
     Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { let saved = (!context.configuration.inputs.is_empty()).then(|| self.channels.clone());
         let result = self.channel_call(name, &call, context);
         if result.is_err() && let Some(saved) = saved { self.channels = saved; }
@@ -1298,7 +1301,7 @@ primary_operations! { self, call, context, name, a, value;
     Capability: "io.process" | "proc.run" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" => {
         return self.network_call(name, &call, context).map(Some);
     },
-    Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
+    Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
     Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
     Unavailable: "reservations.insert" | "stock.get" | "stock.put" | "store.transact" => { return Err(Error::Unavailable(format!("{name} is a signature-only application fixture"))); },
     Primitive: "path.of" => path(text(arg(a, 0)?)?),

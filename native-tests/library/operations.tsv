@@ -49,7 +49,9 @@ $intrinsic.TaskCanceled	4aac6de2fa80a1ac0826e4809abcff91d2ec02aa7854e8941dc7316f
 $intrinsic.TaskFinish	74d30c3f3a78e2564bb7a2605b1400b64bfc51e1cdf038727498e9aaa2066b23	0:m:[0];1:b:[0];2:b:n->n
 $intrinsic.TaskJoin	217ec8b21ef07462af0ff39be27170d4b2a8555541bc3df47cd1fff6d7d817e4	0:b:n;1:t:[0];2:m:[0];3:b:n->n
 $intrinsic.TaskScopeEnter	c5d627a548d8b4c994feb3c0491923eef908e3cf3fb7b6a69153dcd2d00a5751	0:b:n->n
+$intrinsic.TaskScopeEnterUntil	2eb0d3f76289edfa2294fae08ae62ea6653f2a695ae351f8648eccb9134af7dd	0:b:n;1:b:n->n
 $intrinsic.TaskScopeExit	c4a5961519001d7e53976f4b049b371238184480f91e25c4518c7b9500d0ecf9	0:b:n;1:b:n->n
+$intrinsic.TaskScopeExitUntil	9624d141fd2af8d833feccc23628f2f4d83d3871df725a1c4027305dbd8ac395	0:b:n;1:b:n->n
 $intrinsic.TaskSpawn	3b558c6d1e1d2767b9537ea1f2dd041fbd8fec11d7d6a98a76f9cb86e03bc209	0:b:n;1:t:a->[0]
 $intrinsic.UnicodeScalars_next	729df212aaa56ae5e95986e7116a2e1afa4d72664268fba4f4a057c90b35cf4b	0:m:[0]->[0]
 $intrinsic.UnicodeScalars_open	9de26ec6054f9a8afbc8cd33ffbdb67cd4265e77edd4737f5210582d88dbd86a	0:b:n->n
@@ -221,6 +223,7 @@ task.check_canceled	2f39008c0597d7cb615c792a3d0d0e89e1c0f369e9a459c61f779b9c9ff1
 task.detach	0afdd099183222c522a7e590e479da7bea3c042d2bab7af2223c0a4d173fa023	0:b:n;1:t:[0]->n
 task.isolate	fe8fed66cf57978242cc740cdaee60fb6120fa3daf64fb3273f9280ca28f4f51	0:b:n;1:t:a->[0]
 task.scope	d2ac19e834531b07c8f6c90f8c9800d43aa3ab134ab16a4dd2cce5c243a4b106	0:b:n;1:b:a->[0]
+task.scope_until	a7c9fb39704a3243d4205504812b9017401b884b867ccabd7490b4ac64dbe3b0	0:b:n;1:b:n;2:b:a->[0]
 test.check	7b1f8bcf2e4f55960071146ff3f75567f86f8599441ea71def881bf4b30128d9	0:b:n;1:b:n->n
 test.check_case	027e53cb84a4b98084bb95d53030934f921abe1bc207492d6b3483fd86306ccf	0:b:n;1:b:n;2:b:n->n
 test.dir	7713520aef8144eadc6d99d37d081d641db40cb5d3e46aa145828ae3d35ac34b	0:b:n;1:b:n->n

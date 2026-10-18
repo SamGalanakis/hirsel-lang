@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-814 exported definitions; 254 variants.
+816 exported definitions; 257 variants.
 
 
 ## Types and roots
@@ -23,9 +23,13 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `type Array[T] uses {T}` <!-- core@1/Array -->
 - `type Atomic[A] uses {Tasks, A}` <!-- core@1/Atomic -->
 - `resource type AtomicFile: noalloc_drop uses {Dir} = { dir: Dir, tmp: Path, dst: Path }` <!-- core@1/AtomicFile -->
+- `type Bounded[R] uses {R} = Finished(R) | Expired(R)` <!-- core@1/Bounded -->
+- `Expired(R) -> Bounded[R]` — Variant of Bounded. <!-- core@1/Bounded#Expired -->
+- `Finished(R) -> Bounded[R]` — Variant of Bounded. <!-- core@1/Bounded#Finished -->
 - `type Bytes: copyable + data + inert + noalloc_drop + key uses {}` <!-- core@1/Bytes -->
-- `type CancelCause: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Requested() | Parent() | ChildFailed()` <!-- core@1/CancelCause -->
+- `type CancelCause: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Requested() | Parent() | ChildFailed() | DeadlineExceeded()` <!-- core@1/CancelCause -->
 - `ChildFailed() -> CancelCause` — Variant of CancelCause. <!-- core@1/CancelCause#ChildFailed -->
+- `DeadlineExceeded() -> CancelCause` — Variant of CancelCause. <!-- core@1/CancelCause#DeadlineExceeded -->
 - `Parent() -> CancelCause` — Variant of CancelCause. <!-- core@1/CancelCause#Parent -->
 - `Requested() -> CancelCause` — Variant of CancelCause. <!-- core@1/CancelCause#Requested -->
 - `type CancelError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Canceled(CancelCause)` <!-- core@1/CancelError -->
@@ -1137,6 +1141,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `fn task.detach[R](s: Scope, take h: Task[R] of s) -> ()` <!-- core@1/task/detach -->
 - `fn task.isolate[R: sendable](tasks: Tasks, take body: once fn() -> R) -> Result[R, Failure]` <!-- core@1/task/isolate -->
 - `fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R` <!-- core@1/task/scope -->
+- `fn task.scope_until[R](tasks: Tasks, deadline: Deadline, body: once fn(s: Scope) -> R) -> Bounded[R]` <!-- core@1/task/scope_until -->
 
 ## test
 

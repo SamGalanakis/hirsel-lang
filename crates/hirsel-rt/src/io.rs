@@ -987,7 +987,9 @@ impl State {
                     Err(InputError::InvalidInput) => *max == 0,
                     Ok(bytes) => *max > 0 && bytes.len() as u64 <= *max,
                     Err(InputError::Fault(_)) => *max > 0,
-                    Err(InputError::Canceled(cause)) => *max > 0 && *cause <= 2,
+                    Err(InputError::Canceled(cause)) => {
+                        *max > 0 && *cause <= crate::tasks::CANCEL_DEADLINE
+                    }
                     Err(InputError::InvalidUtf8) => false,
                 };
                 if !valid {

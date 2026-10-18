@@ -140,6 +140,10 @@ uint8_t hirsel_rt_v2_tls_close(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_unit_r
    task's code is a compiled `once fn() -> ()` closure; results cross as whole Option images. */
 uint8_t hirsel_rt_v2_task_scope_enter(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_task_scope_exit(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t);
+/* task.scope_until (CONC-3): the deadline is the clock handle, then the Instant's ticks; the
+   exit writes 1 when the deadline fired. */
+uint8_t hirsel_rt_v2_task_scope_enter_until(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_task_scope_exit_until(hirsel_rt_v2_ctx*, uint8_t*, const uint64_t*, uint8_t);
 uint8_t hirsel_rt_v2_task_spawn(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, uint8_t (*)(hirsel_rt_v2_ctx*, hirsel_rt_v2_header*), hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_task_finish(hirsel_rt_v2_ctx*, uint8_t*, const uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_task_join(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*, uint8_t*, uint64_t);

@@ -2,6 +2,8 @@ use std::{
     process::Command,
     sync::atomic::{AtomicUsize, Ordering},
 };
+#[path = "cli/deadlines.rs"]
+mod deadlines;
 #[path = "cli/entropy_waits.rs"]
 mod entropy_waits;
 #[path = "cli/ergonomics.rs"]

@@ -1,7 +1,7 @@
 //! Structured task state. Frames and destruction belong to the evaluator.
 use super::dispatch::{arg, variant};
 use super::{Library, error, none, ok, some, u64_value};
-use crate::observation::FailureRecord;
+use crate::observation::{Anchor, FailureRecord};
 use crate::{
     BlockedWait, Error, OperationCall, OperationContext, OperationResult, TaskStart, Value, invalid,
 };
@@ -20,9 +20,24 @@ pub(super) struct Tasks {
     tasks: BTreeMap<u64, Child>,
     scopes: BTreeMap<u64, ScopeState>,
     pub pending: BTreeMap<u64, Pending>,
+    /// A host adapter observes scope deadlines on its own clock (`take_deadlines`); the
+    /// simulation expires them at its virtual readings.
+    pub host_deadlines: bool,
+    /// Deadline scopes entered since the host adapter last took them: scope, clock, ticks.
+    entered: Vec<(u64, Value, u64)>,
+}
+/// A scope's deadline (CONC-3): when it is due, whether it fired, and the entry's anchor,
+/// where its expiry is recorded.
+pub(super) struct ScopeDeadline {
+    pub at: u64,
+    pub expired: bool,
+    anchor: Option<Anchor>,
 }
 #[derive(Default)]
 struct ScopeState {
+    /// The task whose body runs in the scope.
+    owner: u64,
+    deadline: Option<ScopeDeadline>,
     children: Vec<u64>,
     // Completed detached failures still belong to the scope. Keep each child's
     // chain separately so completion order cannot change spawn-order reporting.
@@ -243,21 +258,78 @@ impl Library {
             context,
         )?;
         Ok(match name {
-            "task.scope" => {
+            "task.scope" | "task.scope_until" => {
                 self.simulation.id(arg(a, 0)?, "Tasks")?;
+                let until = name == "task.scope_until";
+                // `scope_until` returns `Bounded[R]`: the error exit reads R.
+                let mut body_type = call.result_type;
+                if until {
+                    match &call
+                        .types
+                        .get(body_type)
+                        .ok_or_else(|| invalid("scope result type"))?
+                        .kind
+                    {
+                        hirsel_types::TypeKind::Named { arguments, .. } => {
+                            match arguments.first() {
+                                Some(hirsel_types::GenericArgument::Type(r)) => body_type = *r,
+                                _ => return Err(invalid("Bounded without its result type")),
+                            }
+                        }
+                        _ => return Err(invalid("task.scope_until returns Bounded")),
+                    }
+                }
+                let deadline = if until {
+                    let Value::Record { fields, .. } = arg(a, 1)? else {
+                        return Err(invalid("expected a Deadline"));
+                    };
+                    let (Some(Some(clock)), Some(Some(Value::Handle { kind, id: at }))) =
+                        (fields.first(), fields.get(1))
+                    else {
+                        return Err(invalid("a Deadline without its fields"));
+                    };
+                    if kind != "Instant" {
+                        return Err(invalid("a Deadline without its Instant"));
+                    }
+                    if !self.tasks.host_deadlines {
+                        self.simulation.id(clock, "MonotonicClock")?;
+                    }
+                    Some((clock.clone(), *at))
+                } else {
+                    None
+                };
                 let scope = self.tasks.fresh();
-                self.tasks.scopes.insert(scope, ScopeState::default());
+                self.tasks.scopes.insert(
+                    scope,
+                    ScopeState {
+                        owner: self.tasks.current,
+                        deadline: deadline.as_ref().map(|(_, at)| ScopeDeadline {
+                            at: *at,
+                            expired: false,
+                            anchor: context.anchor().cloned(),
+                        }),
+                        ..Default::default()
+                    },
+                );
                 self.tasks
                     .active_scopes
                     .entry(self.tasks.current)
                     .or_default()
                     .push(scope);
+                if let Some((clock, at)) = deadline {
+                    if self.tasks.host_deadlines {
+                        self.tasks.entered.push((scope, clock, at));
+                    } else if at <= self.simulation.monotonic_now() {
+                        // A deadline already reached cancels the scope before its body runs.
+                        self.expire_scope(scope, context)?;
+                    }
+                }
                 self.task_callback(
                     Pending::Scope {
                         scope,
                         result: match &call
                             .types
-                            .get(call.result_type)
+                            .get(body_type)
                             .ok_or_else(|| invalid("scope result type"))?
                             .kind
                         {
@@ -268,7 +340,7 @@ impl Library {
                             _ => Some(false),
                         },
                     },
-                    arg(a, 1)?.clone(),
+                    arg(a, if until { 2 } else { 1 })?.clone(),
                     vec![handle("Scope", scope)],
                 )
             }
@@ -430,6 +502,7 @@ impl Library {
             ));
         }
         let scope_state = self.tasks.scopes.remove(&scope).unwrap();
+        let bounded = scope_state.deadline.as_ref().map(|d| d.expired);
         let mut completed: Vec<_> = scope_state
             .failures
             .into_iter()
@@ -483,6 +556,11 @@ impl Library {
             }
         }
         self.tasks.scope_canceled.remove(&scope);
+        // `task.scope_until`: `Finished(r)`, or `Expired(r)` when its deadline fired.
+        if let (Some(expired), OperationResult::Complete { value, .. }) = (bounded, &mut result) {
+            let body = std::mem::replace(value, Value::Unit);
+            *value = variant(u32::from(expired), vec![body]);
+        }
         match &mut result {
             OperationResult::Complete {
                 released: pending, ..
@@ -554,6 +632,133 @@ impl Library {
             pending @ Pending::Join { .. } => self.join_scope(pending, context).map(Some),
             _ => Err(invalid("callback is not a wait")),
         }
+    }
+}
+/// `CancelCause` ordinals (core library).
+const CANCEL_PARENT: u32 = 1;
+const CANCEL_DEADLINE: u32 = 3;
+impl Library {
+    /// Cancel `scope` for its deadline (CONC-3): the scope's later blocking calls and its
+    /// children see `DeadlineExceeded`, the children of scopes its owner entered inside it
+    /// `Parent`, and its exit reports `Expired`. The expiry is a recorded scheduling event.
+    pub(super) fn expire_scope(
+        &mut self,
+        scope: u64,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        let state = self
+            .tasks
+            .scopes
+            .get_mut(&scope)
+            .ok_or_else(|| invalid("an exited scope's deadline expired"))?;
+        let Some(deadline) = &mut state.deadline else {
+            return Err(invalid("a scope without a deadline expired"));
+        };
+        if deadline.expired {
+            return Ok(());
+        }
+        deadline.expired = true;
+        let (at, anchor, owner) = (deadline.at, deadline.anchor.clone(), state.owner);
+        let children = state.children.clone();
+        self.tasks
+            .scope_canceled
+            .entry(scope)
+            .or_insert(CANCEL_DEADLINE);
+        for child in children {
+            self.tasks.cancel(child, CANCEL_DEADLINE);
+        }
+        let inner: Vec<u64> = self
+            .tasks
+            .active_scopes
+            .get(&owner)
+            .map(|stack| {
+                stack
+                    .iter()
+                    .skip_while(|s| **s != scope)
+                    .skip(1)
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        for inner in inner {
+            for child in self.tasks.scopes[&inner].children.clone() {
+                self.tasks.cancel(child, CANCEL_PARENT);
+            }
+        }
+        let anchor = anchor.as_ref().or(context.anchor);
+        self.simulation.record(
+            "Tasks",
+            "task.scope_until.expire",
+            at.to_le_bytes().to_vec(),
+            vec![],
+            &mut OperationContext {
+                configuration: context.configuration,
+                sources: context.sources,
+                stdout: &mut *context.stdout,
+                trace: &mut *context.trace,
+                trace_mode: context.trace_mode,
+                anchor,
+            },
+        )
+    }
+    /// The simulation's scope deadlines its virtual reading reached, by deadline then entry.
+    pub(super) fn expire_due(&mut self, context: &mut OperationContext<'_>) -> Result<(), Error> {
+        if self.tasks.host_deadlines {
+            return Ok(());
+        }
+        let now = self.simulation.monotonic_now();
+        let mut due: Vec<(u64, u64)> = self
+            .tasks
+            .scopes
+            .iter()
+            .filter_map(|(id, s)| {
+                s.deadline
+                    .as_ref()
+                    .filter(|d| !d.expired && d.at <= now)
+                    .map(|d| (d.at, *id))
+            })
+            .collect();
+        // Scope identities grow in entry order.
+        due.sort();
+        for (_, scope) in due {
+            self.expire_scope(scope, context)?;
+        }
+        Ok(())
+    }
+    /// The earliest simulated scope deadline still pending: an outstanding event source.
+    pub(super) fn next_scope_deadline(&self) -> Option<u64> {
+        if self.tasks.host_deadlines {
+            return None;
+        }
+        self.tasks
+            .scopes
+            .values()
+            .filter_map(|s| s.deadline.as_ref().filter(|d| !d.expired).map(|d| d.at))
+            .min()
+    }
+    /// A host adapter observes scope deadlines on its own clock instead of virtual time.
+    pub fn host_deadlines(&mut self) {
+        self.tasks.host_deadlines = true;
+    }
+    /// The deadline scopes entered since the last call: scope, clock and deadline ticks.
+    pub fn take_deadlines(&mut self) -> Vec<(u64, Value, u64)> {
+        std::mem::take(&mut self.tasks.entered)
+    }
+    /// Whether `scope` is live and its deadline has not fired.
+    pub fn deadline_pending(&self, scope: u64) -> bool {
+        self.tasks
+            .scopes
+            .get(&scope)
+            .and_then(|s| s.deadline.as_ref())
+            .is_some_and(|d| !d.expired)
+    }
+    /// The host's timer for `scope` fired: cancel it as the simulation would.
+    pub fn expire_deadline(
+        &mut self,
+        scope: u64,
+        context: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        self.expire_scope(scope, context)
     }
 }
 pub(super) fn append_chain(primary: &mut Vec<FailureRecord>, mut chain: Vec<FailureRecord>) {

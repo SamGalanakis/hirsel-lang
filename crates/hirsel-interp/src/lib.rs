@@ -243,6 +243,11 @@ operation_boundary! {
     }
     }
     mutable {
+    /// At every poll, before the parked tasks: cancel the scopes whose deadline is due
+    /// (CONC-3), in deadline order with ties in entry order.
+    fn expire_deadlines(&mut self, _context: &mut OperationContext<'_>) -> Result<(), Error> {
+        Ok(())
+    }
     /// Publish the host's entry report before consuming its returned owner.
     /// False retains the raw evaluator's returned-value ownership policy.
     fn entry_returned(&mut self, _value: &Value, _runtime: &aggregate::RuntimeTypes,

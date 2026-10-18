@@ -307,7 +307,14 @@ without consulting any generator. A `random.system@1` draw is secret material: a
 holds one is as secret-bearing as its granted `Env` values, and no tool prints a tape's
 drawn bytes. A completed `clock.sleep_until` is recorded with its deadline ticks and its
 outcome; replay returns that outcome at once, never waits, and refuses a later recorded
-monotonic sample below a completed deadline. A cancelled wait issues no provider request.
+monotonic sample below a completed deadline. A cancelled wait issues no provider request. A
+scope deadline is recorded as the timer wait it arms: entering `task.scope_until` issues a
+`clock.sleep_until` request for the deadline, which completes at once for a reached
+deadline and otherwise parks (`blocked`) under its own wait ordinal; the poll that finds it
+ready is a `ready` event, and its completion cancels the scope. A scope that exits first
+removes its timer and records nothing more. Each poll looks at the scope deadlines before
+the parked tasks, in deadline order with ties in entry order, so replay expires every scope
+at its recorded poll.
 In deterministic simulation, virtual monotonic time advances to the earliest pending
 deadline only when no task is runnable. When several timer waits are ready at one
 poll, the scheduler resumes them in deadline order, with ties in suspension order;

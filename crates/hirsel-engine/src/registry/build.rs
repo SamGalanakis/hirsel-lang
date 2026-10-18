@@ -132,7 +132,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ),
         ("Option", "T", "None()|Some(T)"),
         ("CheckRule", "", "Arithmetic()|TextInvariant()|Bounds()"),
-        ("CancelCause", "", "Requested()|Parent()|ChildFailed()"),
+        (
+            "CancelCause",
+            "",
+            "Requested()|Parent()|ChildFailed()|DeadlineExceeded()",
+        ),
+        ("Bounded", "R", "Finished(R)|Expired(R)"),
         ("CancelError", "", "Canceled(CancelCause)"),
         ("ChannelError", "", "Closed()|Canceled(CancelCause)"),
         (
@@ -585,6 +590,20 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "$intrinsic.TaskScopeExit",
             "s: Scope, error: bool",
             "()",
+        ),
+        // `task.scope_until` (CONC-3): a scope whose deadline arms one timer at entry; the
+        // exit removes it and says whether it fired.
+        (
+            "",
+            "$intrinsic.TaskScopeEnterUntil",
+            "tasks: Tasks, deadline: Deadline",
+            "Scope in tasks",
+        ),
+        (
+            "",
+            "$intrinsic.TaskScopeExitUntil",
+            "s: Scope, error: bool",
+            "bool",
         ),
         (
             "R",

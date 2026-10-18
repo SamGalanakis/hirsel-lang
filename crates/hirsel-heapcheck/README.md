@@ -349,6 +349,10 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
   `FinalizeBegin` and `FinalizeEnd`) is shielded, as the runtime's finalizer shield makes it:
   no cancellation check (check_canceled, send, receive, spawn) observes its cancellation. The
   shield lives in the task's own stack, so it swaps with the task.
+- H grants no clock (`io.monotonic_clock` is `NotGranted()`), so no H run holds a `Deadline`
+  and none reaches `task.scope_until`'s `$intrinsic.TaskScopeEnterUntil` or
+  `TaskScopeExitUntil`; a hand-built unit calling either is Unsupported. Scope deadlines are
+  checked by the interpreter under virtual time and by the native runtime on the host clock.
 - When every task waits and none is parked on a source that can complete, the run is Blocked
   (CONC-8): it stops with no cleanup and no terminal audit, and its observation says `blocked`.
 - While the scheduler holds a spawned closure it is a harness root. Its environment is

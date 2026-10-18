@@ -3796,6 +3796,8 @@ conformance/PROV/PROV-5-net-conn-sibling-brand-bad.hir
 conformance/PROV/PROV-5-net-conn-sibling-brand-ok.hir
 conformance/PROV/PROV-5-replace-brand-owner-bad.hir
 conformance/PROV/PROV-5-replace-brand-owner-ok.hir
+conformance/PROV/PROV-5-scope-deadline-same-clock-ok.hir
+conformance/PROV/PROV-5-scope-deadline-wrong-clock-bad.hir
 conformance/PROV/PROV-5-whole-record-replacement.hir
 conformance/SEM/SEM-1-branch-prefix-if-overflow-bad.hir
 conformance/SEM/SEM-1-branch-prefix-match-overflow-bad.hir

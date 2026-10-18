@@ -53,7 +53,19 @@ their stated grant or source error variants. Joins and mutex acquisition are not
 cancellation points. `Canceled` is returned only when the operation had no effect. Pure code
 is not cancellable; `task.check_canceled(s)?` marks long loops. Each operation's signature
 states what it owns on success and on failure; a borrow or `mut` loan lasts until the call
-completes. Deadlines read the granted monotonic clock. A network timeout (`NetTimeout`) is
+completes. Deadlines read the granted monotonic clock. A scope can carry a deadline:
+`task.scope_until(tasks, deadline, body)` runs `body` in a fresh scope as `task.scope`
+does, and when `deadline.clock` reaches `deadline.at` before that scope has exited, cancels
+the scope with cause `DeadlineExceeded`. From then every blocking `Io` call the body makes
+in the scope returns `Canceled(DeadlineExceeded())`, each child of the scope is cancelled
+with that cause and the children of scopes nested in the body with `Parent`, and the exit
+joins them as an error exit does. The call returns `Expired(r)` when the deadline cancelled
+the scope and `Finished(r)` otherwise, where `r` is the body's result. A deadline already
+reached at entry, or whose clock cannot be read, cancels the scope before the body runs.
+Nothing polls for a deadline: each scope arms one timer on its deadline's clock and removes
+it at exit. A pending scope deadline is an outstanding event source
+([CONC-8](#conc-8-global-quiescence)), so a body waiting for a message nobody will send is
+cancelled at its deadline, never Blocked. A network timeout (`NetTimeout`) is
 not a deadline: it is a relative bound measured by the network provider, observed only as
 the outcome `TimedOut()`, and needs no clock grant. Drops run shielded. An operation
 interrupted by environmental termination is never described as `Canceled` unless no effect

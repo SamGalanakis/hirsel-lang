@@ -147,7 +147,7 @@ fn channel_error(b: &mut Body<'_, '_>, status: ValueId, layout: LayoutId) -> R<V
     let channel_error = nominal(b, "ChannelError");
     let cancel_cause = nominal(b, "CancelCause");
     let at = b.current();
-    for code in 1..=4u32 {
+    for code in 1..=5u32 {
         let arm = b.block(BlockKind::Body, &[]);
         b.at(arm);
         let value = if code == 1 {

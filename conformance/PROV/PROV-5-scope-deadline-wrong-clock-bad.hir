@@ -1,0 +1,16 @@
+// rule: PROV-5
+// expect: reject PROV-5 at line 11
+// An instant of one clock cannot bound a scope on another.
+fn bounded(tasks: Tasks, a: MonotonicClock, b: MonotonicClock) -> Bounded[u64] {
+  let now = match clock.monotonic(a) {
+    Ok(now) => now,
+    Error(_) => return Finished(0),
+  }
+  task.scope_until(
+    tasks,
+    Deadline(clock: b, at: now),
+    fn(s: Scope) -> u64 {
+      1
+    }
+  )
+}

@@ -130,6 +130,7 @@ N fn child.kill(p: Proc, mut c: Child of p) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R
+fn task.scope_until[R](tasks: Tasks, deadline: Deadline, body: once fn(s: Scope) -> R) -> Bounded[R]
 fn task.async[R: sendable](s: Scope, take f: once fn() -> R) -> Task[R] of s
 fn task.await[R](s: Scope, take h: Task[R] of s) -> R
 N fn task.cancel[R](s: Scope, h: Task[R] of s) -> ()
@@ -245,7 +246,7 @@ declaration of a fake capability fixes its kind too.
 Errors are data:
 
 ```text
-CancelCause   = Requested | Parent | ChildFailed
+CancelCause   = Requested | Parent | ChildFailed | DeadlineExceeded
 CancelError   = Canceled(CancelCause)
 ChannelError  = Closed | Canceled(CancelCause)
 GrantError    = NotGranted()
@@ -465,12 +466,23 @@ Each nested `task.scope` inherits cancellation from its containing task. A child
 captured global `Tasks` value to open its own scope and obtain its own `Scope` for
 `check_canceled`; it never captures its parent's `Scope`. `cancel` targets the named
 child's cancellation subtree, not its siblings. An explicit cancellation's cause is
-`Requested`, an inherited one `Parent`, and a cancellation caused by a failed child
-`ChildFailed`. Joins deliver owned child results without a cancellation check. Closures
-passed to `task.async` and `task.isolate` obey [CLO-3](closures.md#clo-3-task-closures),
-the Receiver exception included; this constraint is part of those intrinsic signatures.
-Receiver captures are taken from immutable outer bindings and may then be rebound mutable
-inside the child.
+`Requested`, an inherited one `Parent`, a cancellation caused by a failed child
+`ChildFailed`, and one caused by its scope's deadline `DeadlineExceeded`. Joins deliver
+owned child results without a cancellation check. Closures passed to `task.async` and
+`task.isolate` obey [CLO-3](closures.md#clo-3-task-closures), the Receiver exception
+included; this constraint is part of those intrinsic signatures. Receiver captures are
+taken from immutable outer bindings and may then be rebound mutable inside the child.
+
+`task.scope_until` returns the root core type `Bounded[R] = Finished(R) | Expired(R)`,
+variant ordinals in the order written ([CONC-3](concurrency.md#conc-3-cancellation)). Its
+`Deadline` is the one `proc.run` takes, so `deadline.at` is an `Instant` of
+`deadline.clock` ([PROV-5](brands.md#prov-5-sibling-brands)). Whether the deadline fired
+is decided when the scope exits: a deadline that passes while the exit waits for children
+still cancels them and makes the result `Expired`. A scope cancelled for another cause
+first keeps that cause, and its deadline still decides `Expired`. In deterministic
+simulation the virtual clock advances to the earliest pending timer wait or scope deadline
+when no task is runnable, and a scope deadline due at a reading expires before the timer
+waits due at it resume.
 
 `Failure` is the data record
 `{ kind: FailureKind, rule: String, site: SourceSite, spawn: List[u64], cause: Option[box Failure] }`,
@@ -640,7 +652,9 @@ nothing. With `deadline` `Some(d)` the run must end by `d.at`: when `d.clock` re
 first, the child is sent SIGTERM, then SIGKILL if it has not exited one second later, and
 once it is reaped the result is `TimedOut()`, with its output discarded. A run that ends
 first returns as if it had no deadline, and `None()` sets none. A deadline grants nothing:
-its clock is a `MonotonicClock` the program already holds, and no other clock is read.
+its clock is a `MonotonicClock` the program already holds, and no other clock is read. A run's deadline ends
+only its child, gracefully, and returns `TimedOut()`; a scope deadline that passes during
+a run cancels it like any other cancellation.
 
 `proc.run` parks its task while the child runs, so other tasks keep running
 ([CONC-1](concurrency.md#conc-1-runtime)). It is a cancellation point throughout: cancelling

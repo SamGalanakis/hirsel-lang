@@ -122,13 +122,15 @@ impl Library {
         self.timers.pending.remove(&token);
         Ok(Some(OperationResult::returned(value)))
     }
-    /// With no runnable task, advance virtual time to the earliest pending deadline.
+    /// With no runnable task, advance virtual time to the earliest pending timer wait or
+    /// scope deadline (CONC-3).
     pub(super) fn advance_virtual_time(&mut self) -> bool {
         match self
             .timers
             .pending
             .values()
             .map(|(deadline, _)| *deadline)
+            .chain(self.next_scope_deadline())
             .min()
         {
             Some(deadline) => {

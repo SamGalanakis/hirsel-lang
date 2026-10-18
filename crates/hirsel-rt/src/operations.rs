@@ -111,6 +111,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "$intrinsic.InlineConsume_next"
             | "net.read_into"
             | "task.scope"
+            | "task.scope_until"
             | "task.async"
             | "task.await"
             | "channel.send"
@@ -221,6 +222,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         // The task runtime (`tasks.rs`) behind the compiled task bodies.
         "$intrinsic.TaskScopeEnter" => Some("hirsel_rt_v2_task_scope_enter".into()),
         "$intrinsic.TaskScopeExit" => Some("hirsel_rt_v2_task_scope_exit".into()),
+        "$intrinsic.TaskScopeEnterUntil" => Some("hirsel_rt_v2_task_scope_enter_until".into()),
+        "$intrinsic.TaskScopeExitUntil" => Some("hirsel_rt_v2_task_scope_exit_until".into()),
         "$intrinsic.TaskSpawn" => Some("hirsel_rt_v2_task_spawn".into()),
         "$intrinsic.TaskFinish" => Some("hirsel_rt_v2_task_finish".into()),
         "$intrinsic.TaskJoin" => Some("hirsel_rt_v2_task_join".into()),
@@ -443,6 +446,18 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_task_scope_exit",
         destination: false,
         result: None,
+        parameters: &[Physical::Pointer, Physical::I8],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_scope_enter_until",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_scope_exit_until",
+        destination: false,
+        result: Some((1, 1)),
         parameters: &[Physical::Pointer, Physical::I8],
     },
     AbiExport {
@@ -1353,6 +1368,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.NetReadInto",
     "$intrinsic.TaskScopeEnter",
     "$intrinsic.TaskScopeExit",
+    "$intrinsic.TaskScopeEnterUntil",
+    "$intrinsic.TaskScopeExitUntil",
     "$intrinsic.TaskSpawn",
     "$intrinsic.TaskFinish",
     "$intrinsic.TaskJoin",
@@ -1546,6 +1563,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "task.detach",
     "task.isolate",
     "task.scope",
+    "task.scope_until",
     "test.check",
     "test.check_case",
     "test.dir",

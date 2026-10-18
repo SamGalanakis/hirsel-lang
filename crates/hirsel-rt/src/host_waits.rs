@@ -28,6 +28,8 @@ use crate::process::{ProcessFailure, ProcessOutcome};
 pub(crate) struct Waits {
     next: u64,
     parked: BTreeMap<u64, Parked>,
+    /// Armed scope deadlines (CONC-3) by token: the scope and its timer request.
+    armed: BTreeMap<u64, (u32, Request)>,
 }
 struct Parked {
     request: Request,
@@ -157,6 +159,91 @@ pub(crate) unsafe fn issue(
     (completion, true)
 }
 
+/// Arm scope `scope`'s deadline: a timer wait for `at` on `clock` under a token of its own,
+/// issued whatever the running task's cancellation. The token, or `None` when the deadline
+/// is already reached or its clock cannot be read, which expires the scope at once.
+///
+/// # Safety
+/// `ctx` is live, its Binding bound, and no borrow of the Binding or scheduler is held.
+pub(crate) unsafe fn arm(ctx: *mut RunCtx, scope: u32, clock: u64, at: u64) -> Option<u64> {
+    let binding = unsafe { Binding::get(ctx) };
+    let token = binding.waits.next;
+    binding.waits.next += 1;
+    binding.adapter.enter(token);
+    let request = Request::SleepUntil {
+        clock,
+        deadline: at,
+    };
+    match binding.adapter.call(request.clone()) {
+        Err(AdapterError::Blocked) => {
+            binding.waits.armed.insert(token, (scope, request));
+            Some(token)
+        }
+        Ok(Completion::Wait(_)) => {
+            binding.adapter.finish(token);
+            None
+        }
+        Ok(_) => crate::fault("a scope deadline's timer completed as another request"),
+        Err(error) => crate::io::adapter_refusal(binding, error),
+    }
+}
+
+/// The scopes whose deadline a poll finds due, by deadline with ties in arming order; each
+/// leaves the armed set.
+///
+/// # Safety
+/// `ctx` is live; with no Binding bound nothing is armed.
+pub(crate) unsafe fn expired(ctx: *mut RunCtx) -> Vec<u32> {
+    // SAFETY: the context is live.
+    if unsafe { (*ctx).io_data() }.is_null() {
+        return Vec::new();
+    }
+    let binding = unsafe { Binding::get(ctx) };
+    if binding.waits.armed.is_empty() {
+        return Vec::new();
+    }
+    let mut armed: Vec<(u64, u64)> = binding
+        .waits
+        .armed
+        .iter()
+        .map(|(token, (_, request))| match request {
+            Request::SleepUntil { deadline, .. } => (*deadline, *token),
+            _ => crate::fault("an armed deadline that is not a timer"),
+        })
+        .collect();
+    armed.sort_unstable();
+    let mut due = Vec::new();
+    for (_, token) in armed {
+        match binding.adapter.ready(token) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(error) => crate::io::adapter_refusal(binding, error),
+        }
+        let (scope, request) = binding.waits.armed[&token].clone();
+        binding.adapter.enter(token);
+        match binding.adapter.call(request) {
+            Err(AdapterError::Blocked) => continue,
+            Ok(Completion::Wait(_)) => {}
+            Ok(_) => crate::fault("a scope deadline's timer completed as another request"),
+            Err(error) => crate::io::adapter_refusal(binding, error),
+        }
+        binding.adapter.finish(token);
+        binding.waits.armed.remove(&token);
+        due.push(scope);
+    }
+    due
+}
+
+/// A scope exited before its deadline: remove its timer, recording nothing.
+///
+/// # Safety
+/// `ctx` is live, its Binding bound, and `token` armed.
+pub(crate) unsafe fn disarm(ctx: *mut RunCtx, token: u64) {
+    let binding = unsafe { Binding::get(ctx) };
+    binding.adapter.finish(token);
+    binding.waits.armed.remove(&token);
+}
+
 /// Original absolute timer ticks for scheduler ordering, alike in live runs and replay.
 ///
 /// # Safety
@@ -221,7 +308,7 @@ pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> b
 /// `ctx` is live and its Binding bound.
 pub(crate) unsafe fn wait(ctx: *mut RunCtx) -> bool {
     let binding = unsafe { Binding::get(ctx) };
-    if binding.waits.parked.is_empty() {
+    if binding.waits.parked.is_empty() && binding.waits.armed.is_empty() {
         return false;
     }
     match binding.adapter.wait() {
