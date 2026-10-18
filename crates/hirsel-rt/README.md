@@ -423,6 +423,10 @@ payload with no drop (others stay M2), and an atomic's payload is a scalar. A mu
 yield, so no task observes a mutex another holds. A failing body kills its mutex, which keeps the
 failure chain; a later `mutex.with` fails FAIL-4 continued by that chain.
 
+`task.check_canceled`'s compiled body reads the running task's cancellation through
+`hirsel_rt_v2_task_canceled` (0, or 1 + the `CancelCause` ordinal), which yields as the operation
+does, and builds `Ok(())` or `Error(Canceled(cause))`.
+
 `isolate.rs` is `task.isolate` (FAIL-2). Its compiled body reads the running task's failure
 record count (`isolate_begin`, which yields as the operation does) and calls its callback; a
 failed callback has unwound when its cleanup reaches the `Isolate` terminator, whose

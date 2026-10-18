@@ -185,6 +185,7 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         "$intrinsic.TaskSpawn",
         "$intrinsic.TaskFinish",
         "$intrinsic.TaskJoin",
+        "$intrinsic.TaskCanceled",
         "task.cancel",
         "task.detach",
         "channel.open",
@@ -527,6 +528,18 @@ impl<S: Stage> Machine<'_, S> {
                 || name.starts_with("$intrinsic.Atomic") =>
             {
                 self.sync_operation(f, site, name, &arguments, normal)
+            }
+            "$intrinsic.TaskCanceled" => {
+                let status = self.scheduler().canceled().map_or(0, |cause| cause + 1);
+                self.task_yield()?;
+                let result = site
+                    .result
+                    .ok_or_else(|| err(V::Malformed, "a cancellation check without a status"))?;
+                let val = Val::Bits {
+                    scalar: ScalarKind::U32,
+                    bits: u128::from(status),
+                };
+                self.task_return(f, &arguments, Some((result, val)), normal)
             }
             name if name.starts_with("$intrinsic.Isolate") => {
                 self.isolate_operation(f, site, name, &arguments, normal)

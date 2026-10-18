@@ -1,0 +1,61 @@
+// rule: CONC-3
+// expect: run
+// stdout: ok
+// stdout: ok
+// stdout: requested
+// "task.check_canceled(s)? marks long loops": a check before the child is
+// canceled returns Ok, and a later one in its loop returns the cause.
+fn code(status: Result[(), CancelError]) -> u8 {
+  match status {
+    Ok(value) => 0,
+    Error(Canceled(Requested())) => 1,
+    Error(Canceled(Parent())) => 2,
+    Error(Canceled(ChildFailed())) => 3,
+  }
+}
+
+fn text(n: u8) -> String {
+  if n == 0 {
+    "ok\n"
+  } else if n == 1 {
+    "requested\n"
+  } else if n == 2 {
+    "parent\n"
+  } else {
+    "child failed\n"
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let child = task.async(
+        s,
+        fn() -> u8 {
+          task.scope(
+            tasks,
+            fn(inner: Scope) -> u8 {
+              let first = code(task.check_canceled(inner))
+              let mut last = first
+              let mut checks: u8 = 0
+              while last == 0 && checks < 8 {
+                last = code(task.check_canceled(inner))
+                checks = checks + 1
+              }
+              first * 4 + last
+            }
+          )
+        }
+      )
+      let _ = out.print(stdout, text(code(task.check_canceled(s))))
+      task.cancel(s, child)
+      let codes = task.await(s, take child)
+      let _ = out.print(stdout, text(codes / 4))
+      let _ = out.print(stdout, text(codes % 4))
+    }
+  )
+  Ok(())
+}

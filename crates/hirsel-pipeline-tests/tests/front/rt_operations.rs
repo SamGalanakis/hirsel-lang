@@ -201,6 +201,7 @@ fn inventory_set_equality_and_digest_control() {
         "atomic.load",
         "atomic.store",
         "task.isolate",
+        "task.check_canceled",
     ] {
         assert_eq!(
             native
@@ -212,15 +213,6 @@ fn inventory_set_equality_and_digest_control() {
             Disposition::Body
         );
     }
-    assert!(matches!(
-        native
-            .rows()
-            .find(|r| r.id.definition == hirsel_syntax::DefPath::core("task.check_canceled"))
-            .unwrap()
-            .dispositions
-            .native,
-        Disposition::Unavailable(Unavailable::M2(_))
-    ));
     // Scalar intrinsics and the inline library operations are instructions; the array
     // reductions name a float family.
     for &name in operations::SCALAR_INTRINSICS

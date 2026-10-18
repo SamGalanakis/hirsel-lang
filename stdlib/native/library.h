@@ -163,6 +163,8 @@ uint8_t hirsel_rt_v2_mutex_cause(hirsel_rt_v2_ctx*, const uint64_t*);
 uint8_t hirsel_rt_v2_atomic_create(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_atomic_load(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_atomic_store(hirsel_rt_v2_ctx*, const uint64_t*, const uint8_t*, uint64_t);
+/* task.check_canceled (CONC-3): 0, or 1 + the CancelCause ordinal. */
+uint8_t hirsel_rt_v2_task_canceled(hirsel_rt_v2_ctx*, uint32_t*, const uint64_t*);
 /* task.isolate (FAIL-2): the caught chain, record by record; the link shim registers the
    program's failure table of site positions and rule IDs. */
 typedef struct { uint64_t code; const uint8_t *definition; uint64_t definition_length, line, column; } hirsel_rt_v2_failure_site;

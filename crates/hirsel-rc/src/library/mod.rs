@@ -125,6 +125,7 @@ pub const BODIES: &[&LibraryBody] = &[
     &tasks::ASYNC,
     &tasks::AWAIT,
     &tasks::MAIN,
+    &tasks::CHECK_CANCELED,
     &isolate::ISOLATE,
     &channels::SEND,
     &channels::RECEIVE,

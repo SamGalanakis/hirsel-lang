@@ -924,6 +924,25 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     STATUS_OK
 }
 
+/// `$intrinsic.TaskCanceled(s)` (CONC-3): 0, or 1 + the running task's cancellation cause
+/// (`CancelCause`'s ordinal); the operation yields, as `task.check_canceled` does.
+///
+/// # Safety
+/// `ctx` is live and `out` writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
+    ctx: *mut RunCtx,
+    out: *mut u32,
+    _scope: *const u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(canceled(ctx).map_or(0, |cause| cause + 1));
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
 /// The running task's cancellation cause, if any: for `task.check_canceled` and the
 /// cancellation points of blocking Io (CONC-3). Shielded destruction observes none.
 ///

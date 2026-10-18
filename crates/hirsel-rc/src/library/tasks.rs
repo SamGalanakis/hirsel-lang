@@ -43,6 +43,10 @@ pub static AWAIT: LibraryBody = LibraryBody {
     path: || DefPath::core("task.await"),
     build: join,
 };
+pub static CHECK_CANCELED: LibraryBody = LibraryBody {
+    path: || DefPath::core("task.check_canceled"),
+    build: check_canceled,
+};
 pub static MAIN: LibraryBody = LibraryBody {
     path: || native_path("task_main"),
     build: main,
@@ -620,5 +624,72 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
             .result
             .map(|r| b.constant(r.layout, ConstantValue::Unit));
     b.ret(unit);
+    Ok(b.finish())
+}
+
+/// `task.check_canceled(s) -> Result[(), CancelError]` (CONC-3): `Ok(())`, or
+/// `Error(Canceled(cause))` for the running task's cancellation.
+fn check_canceled(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    use super::arena::{RESULT_ERROR, RESULT_OK, payload, variant};
+    let entry = intrinsic(cx, "TaskCanceled", Vec::new())?;
+    let returned = cx
+        .fn_abi()
+        .result
+        .map(|r| r.layout)
+        .ok_or_else(|| PassError::Malformed("task.check_canceled returns a Result".into()))?;
+    let mut b = Body::new(cx)?;
+    let &[s] = b.parameters.as_slice() else {
+        return Err(PassError::Malformed(
+            "task.check_canceled parameters".into(),
+        ));
+    };
+    let error = payload(&b, returned, RESULT_ERROR)
+        .ok_or_else(|| PassError::Malformed("a CancelError result".into()))?;
+    let cause = payload(&b, error, 0)
+        .ok_or_else(|| PassError::Malformed("a CancelError without its cause".into()))?;
+    let s = b.read_bits(s.address)?;
+    let failure = b.failure(None);
+    let callee = operation(&mut b, &entry);
+    let status = invoke(
+        &mut b,
+        callee,
+        entry.abi,
+        vec![argument(0, Passing::Borrow, s)],
+        &[],
+        failure,
+        BlockKind::Body,
+    )
+    .ok_or_else(|| PassError::Malformed("TaskCanceled returns a status".into()))?;
+    let at = b.current();
+    let mut arms = Vec::new();
+    for code in 0..=3u32 {
+        let arm = b.block(BlockKind::Body, &[]);
+        b.at(arm);
+        let value = if code == 0 {
+            let unit =
+                payload(&b, returned, RESULT_OK).map(|unit| b.constant(unit, ConstantValue::Unit));
+            variant(&mut b, returned, "Result", RESULT_OK, unit.as_slice())
+        } else {
+            let cause = variant(&mut b, cause, "CancelCause", code - 1, &[]);
+            let canceled = variant(&mut b, error, "CancelError", 0, &[cause]);
+            variant(&mut b, returned, "Result", RESULT_ERROR, &[canceled])
+        };
+        b.ret(Some(value));
+        let edge = b.edge(arm, &[]);
+        arms.push(SwitchArm { value: code, edge });
+    }
+    let broken = b.block(BlockKind::Body, &[]);
+    b.at(broken);
+    b.terminate(Terminator::InvariantFault {
+        reason: "a cancellation cause past CancelCause".into(),
+    });
+    b.at(at);
+    let otherwise = b.edge(broken, &[]);
+    let arms = PoolRange::push(&mut b.ed.unit.pools.switch_arms, arms);
+    b.terminate(Terminator::Switch {
+        value: status,
+        arms,
+        otherwise,
+    });
     Ok(b.finish())
 }

@@ -625,6 +625,8 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "a: Atomic[A], value: Option[A], size: u64",
             "()",
         ),
+        // 0, or 1 + the running task's `CancelCause` ordinal (CONC-3).
+        ("", "$intrinsic.TaskCanceled", "s: Scope", "u32"),
         // `task.isolate`'s caught chain, read record by record to build its `Failure` (FAIL-2).
         ("", "$intrinsic.IsolateBegin", "tasks: Tasks", "u64"),
         ("", "$intrinsic.IsolateCount", "tasks: Tasks", "u64"),

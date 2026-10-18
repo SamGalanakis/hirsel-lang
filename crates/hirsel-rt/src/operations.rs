@@ -119,6 +119,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "atomic.load"
             | "atomic.store"
             | "task.isolate"
+            | "task.check_canceled"
     ) || MAP_BODIES.contains(&name.as_str())
     {
         row.dispositions.native = Disposition::Body;
@@ -214,6 +215,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "$intrinsic.TaskSpawn" => Some("hirsel_rt_v2_task_spawn".into()),
         "$intrinsic.TaskFinish" => Some("hirsel_rt_v2_task_finish".into()),
         "$intrinsic.TaskJoin" => Some("hirsel_rt_v2_task_join".into()),
+        "$intrinsic.TaskCanceled" => Some("hirsel_rt_v2_task_canceled".into()),
         "task.cancel" | "task.detach" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         // Channels (CONC-6), in the task runtime: the compiled send and receive bodies move a
         // message's block through these entries.
@@ -515,6 +517,12 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: false,
         result: None,
         parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_task_canceled",
+        destination: false,
+        result: Some((4, 4)),
+        parameters: &[Physical::Pointer],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_isolate_begin",
@@ -1264,6 +1272,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.AtomicCreate",
     "$intrinsic.AtomicLoad",
     "$intrinsic.AtomicStore",
+    "$intrinsic.TaskCanceled",
     "$intrinsic.IsolateBegin",
     "$intrinsic.IsolateCount",
     "$intrinsic.IsolateKind",
