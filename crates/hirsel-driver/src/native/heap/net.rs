@@ -201,7 +201,7 @@ fn error(e: NetError) -> OpValue {
     use NetError::*;
     let (tag, payload) = match e {
         NotGranted => (0, OpValue::Unit),
-        Canceled(c) => (1, bits(ScalarKind::U32, c)),
+        Canceled(cause) => (1, v(cause, OpValue::Unit)),
         InvalidInput => (2, OpValue::Unit),
         UnknownHost => (3, OpValue::Unit),
         ResolverFailure => (4, OpValue::Unit),
@@ -288,6 +288,23 @@ impl Io {
             OpValue::OpenHandle(external)
         } else {
             OpValue::Handle(external)
+        }
+    }
+    /// A canceled `tls.connect` or `tls.close` (`hirsel-rt/src/host_waits.rs`): the call
+    /// takes its stream, which closes, and completes `Canceled(cause)`.
+    pub(super) fn close_canceled_tls(&mut self, stream: &OpValue, cause: u32) -> OpOutcome {
+        let Some(id) = self.network_id(stream) else {
+            return OpOutcome::Unsupported;
+        };
+        if let OpValue::Handle(h) = stream {
+            self.network_handles.remove(h);
+        }
+        match self.network.call(R::Close { handle: id }) {
+            Ok(C::Unit(Ok(()))) => OpOutcome::Complete {
+                result: Ok(error(NetError::Canceled(cause))),
+                consumed: vec![1],
+            },
+            _ => OpOutcome::Unsupported,
         }
     }
     pub(super) fn net(
@@ -501,7 +518,8 @@ mod tests {
             7,
             0,
             &super::super::HeapWorld::default(),
-        );
+        )
+        .unwrap();
         let peers = OpValue::Sequence(vec![OpValue::Aggregate(vec![
             OpValue::Bytes(b"example.com".to_vec()),
             bits(ScalarKind::U16, 80u16),

@@ -1,0 +1,92 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"example.com","service":"443","operation":"connect_tls"}],"peers":[{"address":"example.com","port":443,"resolves_to":["127.0.0.1"],"tls":{"certificate":["example.com"]},"connections":[{"open":[{"send":[104,105]},"stall"]},{"open":[]}]}]}
+// stdout: expired read 2, deadline, upgrade deadline, close deadline
+// stdout: at 1000
+// A canceled TLS upgrade or close takes its stream, which closes, and completes Canceled.
+fn cause(e: CancelCause) -> String {
+  match e {
+    Requested() => "requested",
+    Parent() => "parent",
+    ChildFailed() => "child failed",
+    DeadlineExceeded() => "deadline",
+  }
+}
+
+fn report(b: Bounded[String]) -> String {
+  match b {
+    Finished(text) => f"finished {text}\n",
+    Expired(text) => f"expired {text}\n",
+  }
+}
+
+fn after(c: MonotonicClock, start: Instant of c, ns: u64) -> Deadline {
+  match instant.checked_add(c, start, ns) {
+    Some(at) => Deadline(clock: c, at: at),
+    None() => Deadline(clock: c, at: start),
+  }
+}
+
+fn elapsed(c: MonotonicClock, start: Instant of c) -> String {
+  match clock.monotonic(c) {
+    Ok(now) => f"at {instant.ticks(now) - instant.ticks(start)}\n",
+    Error(_) => "no clock\n",
+  }
+}
+
+fn canceled(r: Result[(), NetError]) -> String {
+  match r {
+    Error(Canceled(e)) => cause(e),
+    Ok(()) => "closed",
+    Error(_) => "failed",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let n = io.net(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let bounded = task.scope_until(
+    tasks,
+    after(c, start, 1000u64),
+    fn(s: Scope) -> String {
+      let first = match net.connect(n, "example.com", 443u16, Unbounded()) {
+        Ok(stream) => take stream,
+        Error(_) => return "unconnected",
+      }
+      let mut secure = match tls.connect(n, take first, "example.com", WebPki()) {
+        Ok(stream) => take stream,
+        Error(_) => return "not secured",
+      }
+      let second = match net.connect(n, "example.com", 443u16, Unbounded()) {
+        Ok(stream) => take stream,
+        Error(_) => return "unconnected",
+      }
+      let mut buffer: List[u8] = []
+      let read = match net.read(n, mut secure, mut buffer, 16u64) {
+        Ok(count) => f"read {count}",
+        Error(_) => "failed",
+      }
+      let stalled = match net.read(n, mut secure, mut buffer, 16u64) {
+        Ok(count) => f"read {count}",
+        Error(Canceled(e)) => cause(e),
+        Error(_) => "failed",
+      }
+      let upgrade = match tls.connect(n, take second, "example.com", WebPki()) {
+        Ok(stream) => canceled(tls.close(n, take stream)),
+        Error(Canceled(e)) => cause(e),
+        Error(_) => "failed",
+      }
+      f"{read}, {stalled}, upgrade {upgrade}, close {canceled(tls.close(n, take secure))}"
+    }
+  )
+  let _ = out.print(output, report(bounded))
+  let _ = out.print(output, elapsed(c, start))
+  Ok(())
+}

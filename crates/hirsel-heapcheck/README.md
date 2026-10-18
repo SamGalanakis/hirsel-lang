@@ -344,7 +344,11 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
 - A capability operation (`Operations::yielded`) is a scheduling point.
 - A canceled, unshielded task's cancellation point (`Operations::canceled`: a stdin read, a print
   or a network request that can wait, as `hirsel-rt/src/host_waits.rs` lists them) completes
-  `Canceled` with no effect instead of being called.
+  `Canceled` with no effect instead of being called. A canceled `child.wait`, `tls.connect` or
+  `tls.close` still closes the Child or stream it takes, so the model completes it with that
+  operand consumed. `tests/it/canceled_close.rs` holds two hand-built controls on such a
+  close, canceled by its scope deadline: a leak only on that path, and a use of the stream
+  after the close took it, each with a passing twin.
 - A task running destruction (a drain, a finalizer frame, or an inline drop body between
   `FinalizeBegin` and `FinalizeEnd`) is shielded, as the runtime's finalizer shield makes it:
   no cancellation check (check_canceled, send, receive, spawn) observes its cancellation. The
@@ -405,8 +409,8 @@ controls whose leak lies only where the deadline fires first (a scope deadline c
 sleep, a run timing out): the clean run and every injected failure pass, the fired run finds
 the leak, and each fixed twin passes every run.
 
-The driver's model grants a monotonic clock, and a Main launch's scripted process world
-(process.script@1), only when its launch says so (`hirsel_driver::native::HeapWorld`); a wall
+The driver's model grants a monotonic clock, and a Main launch's scripted process
+(process.script@1) and network (net.script@2) worlds, only when its launch says so (`hirsel_driver::native::HeapWorld`); a wall
 clock is never granted. Its `proc.run` goes through the runtime's scripted policy
 (`hirsel_rt::io_net_script::ScriptIo`) with the deadline's reading, so a deadline already
 reached times the run out before it takes an entry, and a run that took one before its
@@ -417,7 +421,8 @@ each poll until the source answers, and completes it `Canceled` once its task is
 pending wait is no event source, so with nothing else pending the run is Blocked. The two
 stalled-source controls in `tests/it/clock.rs` cover a scope deadline ending one (with a
 leak on that path and its fixed twin) and a run left Blocked. A host (non-scripted) process
-child remains outside H's model: its operations are Unsupported.
+child or network (a grant with no scripted peers) is a real host effect, and an extern call
+or C callback runs foreign code: H models neither, so those operations are Unsupported.
 
 `exec/channels.rs` is the runtime's channel table (CONC-6). Each queued message is a harness
 root, a send and a receive move it out of and into the bodies' `Option` slots, and the last

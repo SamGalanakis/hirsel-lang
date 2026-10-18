@@ -348,7 +348,7 @@ pub fn differential_in(
     let world = super::HeapWorld {
         monotonic: fixture.monotonic,
         process: fixture.process.clone(),
-        ..Default::default()
+        net: fixture.net.clone(),
     };
     let sites = Sites::new(validated.snapshot());
     let mut built: Vec<(&Options, Result<ReadyProgram, NativeError>)> = Vec::new();

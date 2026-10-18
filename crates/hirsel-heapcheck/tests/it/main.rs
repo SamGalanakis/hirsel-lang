@@ -1,6 +1,7 @@
 //! The integration tests of this crate, linked as one binary.
 mod arena;
 mod box_payload;
+mod canceled_close;
 mod capture_mask;
 mod clock;
 mod defuse;

@@ -73,7 +73,7 @@ impl Io {
         test_seed: u64,
         random_seed: u64,
         world: &HeapWorld,
-    ) -> Self {
+    ) -> Result<Self, NativeError> {
         let mut io = Self::new();
         io.test_seed = test_seed;
         io.monotonic = world.monotonic;
@@ -81,6 +81,12 @@ impl Io {
         io.network = hirsel_rt::io_net_script::ScriptIo::new(
             matches!(kind, super::link::LaunchKind::Test).then_some(test_seed),
         );
+        // Peers the runtime's script refuses refuse the launch, as a host launch refuses them.
+        if let Some(grant) = &world.net {
+            io.network.set_net_grant(grant).map_err(|_| {
+                NativeError::new(StageName::Launch, "io.net.peers is not a valid script")
+            })?;
+        }
         if let Some(grant) = &world.process {
             io.network.set_process_grant(grant);
         }
@@ -91,7 +97,7 @@ impl Io {
             }
             super::link::LaunchKind::Main(_) => {}
         }
-        io
+        Ok(io)
     }
     fn new() -> Self {
         Self {
@@ -239,6 +245,11 @@ impl Operations for Io {
             (Some("child"), "wait", [_, c]) => {
                 self.yielded = true;
                 return Some(self.close_canceled_child(c, cause));
+            }
+            // A canceled TLS upgrade or close still closes the stream it took.
+            (Some("tls"), "connect" | "close", [_, stream, ..]) => {
+                self.yielded = true;
+                return Some(self.close_canceled_tls(stream, cause));
             }
             (module, name, _) => net::canceled(module, name, cause)
                 .or_else(|| process::canceled(module, name, cause))?,
@@ -1534,6 +1545,8 @@ pub struct HeapWorld {
     pub monotonic: Option<u64>,
     /// A Main launch's `io.process` grant; only a scripted one (process.script@1) runs.
     pub process: Option<hirsel_run_config::ProcessGrant>,
+    /// A Main launch's `io.net` grant; only a scripted one (net.script@2, with peers) runs.
+    pub net: Option<hirsel_run_config::NetGrant>,
 }
 
 /// Run `entry` once and audit it.
@@ -1570,7 +1583,7 @@ pub fn run_heap_in(
         program.launch.test_seed,
         program.launch.random_seed,
         world,
-    );
+    )?;
     io.positions = positions(program, sites);
     let run = hirsel_heapcheck::run_ready(&heap, entry, &args, &mut io, &config(None, kind));
     let audit = run
@@ -1616,21 +1629,18 @@ pub fn heap_campaign_in(
             .map(|root| Arg::Handle(super::link::root_handle(*root)))
             .collect(),
     };
-    let positions = positions(program, sites);
+    let mut io = Io::for_launch(
+        kind,
+        program.launch.test_seed,
+        program.launch.random_seed,
+        world,
+    )?;
+    io.positions = positions(program, sites);
     let campaign = hirsel_heapcheck::fault_campaign_ready(
         &heap,
         entry,
         &args,
-        &mut || {
-            let mut io = Io::for_launch(
-                kind,
-                program.launch.test_seed,
-                program.launch.random_seed,
-                world,
-            );
-            io.positions = positions.clone();
-            Box::new(io)
-        },
+        &mut || Box::new(io.clone()),
         &config(None, kind),
     );
     if let Some((site, v)) = campaign.first_violation() {

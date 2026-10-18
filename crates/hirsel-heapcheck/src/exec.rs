@@ -8142,8 +8142,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                 Ok(image)
             }
             OpValue::Bits { scalar, bits } => {
-                if self.record(layout)?.kind != LayoutKind::Scalar(scalar) {
-                    return fail(V::TypeConfusion, "operation scalar result layout");
+                let kind = &self.record(layout)?.kind;
+                if *kind != LayoutKind::Scalar(scalar) {
+                    return fail(
+                        V::TypeConfusion,
+                        format!("operation {scalar:?} result at a {kind:?} layout"),
+                    );
                 }
                 let size = self.size(layout)?;
                 let mut image = Extent::new(size);

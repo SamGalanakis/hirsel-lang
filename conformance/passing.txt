@@ -469,10 +469,12 @@ conformance/CONC/CONC-3-clock-deadline-child-run.hir
 conformance/CONC/CONC-3-clock-deadline-finished-run.hir
 conformance/CONC/CONC-3-clock-deadline-inner-first-run.hir
 conformance/CONC/CONC-3-clock-deadline-nested-child-run.hir
+conformance/CONC/CONC-3-clock-deadline-net-run.hir
 conformance/CONC/CONC-3-clock-deadline-outer-first-run.hir
 conformance/CONC/CONC-3-clock-deadline-past-run.hir
 conformance/CONC/CONC-3-clock-deadline-receive-run.hir
 conformance/CONC/CONC-3-clock-deadline-sleep-run.hir
+conformance/CONC/CONC-3-clock-deadline-tls-run.hir
 conformance/CONC/CONC-3-clock-denied-run.hir
 conformance/CONC/CONC-3-clock-process-deadline-run.hir
 conformance/CONC/CONC-3-clock-process-races-run.hir
