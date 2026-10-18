@@ -3,6 +3,8 @@
 Closed tooling data for PROG-3/6 and DET-1. Allowed dependencies: std, serde,
 serde_json and sha2. No compiler or execution implementation dependency.
 
+Host input read failures include the selected grants, run record or revocation path. A relative directory resolution failure includes its template-relative candidate.
+
 `RunConfig::validate(bytes)` is the sole parser, normalizer and schema validator.
 It returns an opaque `ValidatedRun`; serialization never supplies a validated tag.
 Canonical JSON has fixed member order, explicit nulls, sorted grant sets, exact

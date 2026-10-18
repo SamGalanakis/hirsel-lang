@@ -78,6 +78,9 @@ pub struct ObservedExecution {
     pub observation: Option<hirsel_interp::observation::Observable>,
     /// Output remains available without a semantic observation, including API errors.
     pub tooling_output: Vec<u8>,
+    pub tooling_stderr: Vec<u8>,
+    /// PROG-3 host text and its position, outside semantic observations and Io tape.
+    pub exit_report: Option<hirsel_interp::exit_report::Report>,
 }
 /// Diagnostics own their source snapshot, so locations cannot silently drift (FAIL-1).
 #[derive(Clone, Debug, Default)]

@@ -1,0 +1,8 @@
+// rule: PROG-3
+// expect: run
+// exit: 1
+pub type Trouble = Missing(path: String, code: i64, detail: box Option[List[u8]]) | Other
+
+pub fn main() -> Result[(), Trouble] {
+  Error(Missing(path: "data", code: -7i64, detail: box Some([1u8, 2u8])))
+}

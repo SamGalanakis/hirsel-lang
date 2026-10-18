@@ -1,0 +1,19 @@
+// rule: PROG-3
+// expect: run
+// exit: 1
+// stdout: beforedrop
+pub resource type Trouble {
+  stdout: Stdout,
+}
+drop(x) {
+  let _ = out.print(x.stdout, "drop\n")
+}
+
+pub fn main(rt: Io) -> Result[(), Trouble] {
+  let stdout = match io.stdout(rt) {
+    Ok(s) => s,
+    Error(_) => return Ok(()),
+  }
+  let _ = out.print(stdout, "before")
+  Error(Trouble(stdout: stdout))
+}

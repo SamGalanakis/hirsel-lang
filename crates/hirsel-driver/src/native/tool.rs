@@ -7,6 +7,16 @@ use hirsel_engine::{RunOutcome, ToolError};
 use std::io::Write;
 use std::path::Path;
 
+/// Output destinations for a user launch. Inheriting the two OS streams preserves
+/// the program's cross-stream write order; custom writers receive each stream.
+pub enum Output<'a> {
+    Inherit,
+    Streams {
+        stdout: &'a mut dyn Write,
+        stderr: &'a mut dyn Write,
+    },
+}
+
 /// Check `path` exactly as `run` does (the same first static diagnostics),
 /// then build it for x86-64 Linux with every optimization, link it against
 /// the in-tree runtime and launch it. The executable's output is written to
@@ -20,7 +30,7 @@ pub fn run_path_native(
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
-    run_path_native_with_config(path, None, None, stdout, stderr)
+    run_path_native_with_config(path, None, None, Output::Streams { stdout, stderr })
 }
 
 /// `run_path_native` with a host launch and PS-12 evidence; the proof report goes to
@@ -31,9 +41,13 @@ pub fn run_path_native_with_config(
     path: &Path,
     launch: Option<crate::HostLaunch<'_>>,
     evidence: Option<&super::Evidence>,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
+    output: Output<'_>,
 ) -> Result<Result<RunOutcome, NativeError>, ToolError> {
+    let (mut host_stdout, mut host_stderr) = (std::io::stdout(), std::io::stderr());
+    let (inherit, stdout, stderr): (bool, &mut dyn Write, &mut dyn Write) = match output {
+        Output::Inherit => (true, &mut host_stdout, &mut host_stderr),
+        Output::Streams { stdout, stderr } => (false, stdout, stderr),
+    };
     let mut loaded = crate::load_program(path)?;
     loaded.check_for_execution()?;
     if matches!(
@@ -107,6 +121,7 @@ pub fn run_path_native_with_config(
         &entry,
         host.as_ref().map(|(run, tape)| (run, *tape)),
         proofs.as_ref(),
+        inherit,
         stdout,
         stderr,
     )
@@ -145,6 +160,7 @@ fn run(
     entry: &hirsel_engine::DefPath,
     host: Option<(&hirsel_run_config::ValidatedRun, super::link::Tape<'_>)>,
     proofs: Option<&super::Proofs>,
+    inherit: bool,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<Observation, NativeError> {
@@ -172,7 +188,13 @@ fn run(
         let executable = super::link::link_objects_with_run(
             &program, entry, &objects, &toolchain, &scratch, run,
         )?;
-        let launched = if let Some((run, tape)) = host {
+        let launched = if host.is_some() || inherit {
+            let tape = host
+                .map(|(_, tape)| tape)
+                .unwrap_or(super::link::Tape::Live {
+                    record: None,
+                    revocations: None,
+                });
             super::link::launch_live(
                 &executable,
                 &target,
@@ -181,13 +203,18 @@ fn run(
                 tape,
                 super::link::LiveRun {
                     run,
+                    inherit,
                     stdout,
                     stderr,
                 },
             )?
         } else {
             let launched = super::link::launch(&executable, &target, &toolchain, &scratch, false)?;
-            stdout.write_all(&launched.stdout).map_err(io)?;
+            stdout
+                .write_all(&launched.stdout)
+                .and_then(|()| stdout.flush())
+                .map_err(io)?;
+            stderr.write_all(&launched.stderr).map_err(io)?;
             launched
         };
         let observation = observe(&launched, &program, &Sites::new(validated.snapshot()))?;

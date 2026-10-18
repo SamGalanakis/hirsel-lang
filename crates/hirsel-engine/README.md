@@ -377,6 +377,8 @@ No language failure is synthesized; observable returns None and CLI exits 2.
 Malformed operation schemas remain API errors.
 
 
+`ObservedExecution.exit_report` is the optional PROG-3 host diagnostic derived from the interpreter's returned value. It is outside the semantic observation and captured program output.
+
 ## Syntax review dispositions
 
 The nine grammar/spec questions retain existing behavior where the documents do

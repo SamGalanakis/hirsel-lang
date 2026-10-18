@@ -140,6 +140,8 @@ fn record_layouts_match_the_header() {
         ("stats", size_of::<Stats>()),
         ("audit", size_of::<Audit>()),
         ("failure", size_of::<FailureRecord>()),
+        ("report_node", size_of::<hirsel_rt::exit_report::Node>()),
+        ("report_field", size_of::<hirsel_rt::exit_report::Field>()),
     ];
     for (name, size) in sizes {
         assert_eq!(header_size(&header, name), size, "hirsel_rt_v2_{name}");

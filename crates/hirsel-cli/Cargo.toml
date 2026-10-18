@@ -12,6 +12,7 @@ test = false
 
 [dependencies]
 hirsel-cli-args = { path = "../hirsel-cli-args" }
+hirsel-diag = { path = "../hirsel-diag" }
 hirsel-driver = { path = "../hirsel-driver" }
 hirsel-engine = { path = "../hirsel-engine" }
 

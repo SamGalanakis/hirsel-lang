@@ -7,6 +7,8 @@ path entry points (`check_path`, `run_path`, `format_path`, `load_program*`)
 start sessions from it. `native/` compiles the engine's `ValidatedNativeInput`
 through hirsel-lir, hirsel-rc, hirsel-heapcheck, hirsel-llvm and hirsel-rt.
 
+Source launch boundaries flush stdout before writing the interpreter's PROG-3 return-payload report. Ready programs retain a checked, layout-derived diagnostic view for the native entry wrapper. Host reports are separate from semantic observations and Io tapes. Native CLI launches inherit the OS output streams, preserving the host report and finalizer order; custom-writer launches retain per-stream forwarding.
+
 This crate exports only that wiring. Callers import queries, sessions and their
 data from hirsel-engine directly, so each caller's dependency on the backends
 and front phases is explicit.

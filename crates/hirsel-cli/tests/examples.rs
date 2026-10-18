@@ -78,6 +78,16 @@ impl Fixture {
         Self(dir)
     }
     fn run(&self, native: bool, simulation: Option<serde_json::Value>, expected: &str, code: i32) {
+        self.run_with_report(native, simulation, expected, code, "");
+    }
+    fn run_with_report(
+        &self,
+        native: bool,
+        simulation: Option<serde_json::Value>,
+        expected: &str,
+        code: i32,
+        report: &str,
+    ) {
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command.arg("run");
         if native {
@@ -96,11 +106,7 @@ impl Fixture {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
-        assert!(
-            output.stderr.is_empty(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        assert_eq!(output.stderr, report.as_bytes());
     }
     // Exercise explicit Args/root/Net through the native fixture boundary.
     fn native_executable(&self) -> PathBuf {
@@ -441,7 +447,7 @@ fn csvjson_rejects_malformed_input() {
         include_str!("../../../examples/csvjson/main.hir"),
     );
     for data in ["a,a\n", "a,b\nx\n", "a\n\"unterminated", "a\n\"x\"bad\n"] {
-        fixture.run(false, Some(input(data, &[])), "", 1);
+        fixture.run_with_report(false, Some(input(data, &[])), "", 1, "error: Invalid\n");
     }
 }
 
@@ -602,7 +608,7 @@ fn calculator_stdin_session() {
     let text = "1 + 2\n1 / 0\n\n7 - 3";
     let expected = "3\nerror\n4\n";
     fixture.run(false, Some(serde_json::json!({"grants":["Io","Args"],"projections":["stdout","stdin"],"args":["-"],"stdin":text})), expected, 0);
-    fixture.run(false, Some(serde_json::json!({"grants":["Io","Args"],"projections":["stdout","stdin"],"args":["-"],"stdin":[49,32,43,32,50,10,255]})), "3\n", 1);
+    fixture.run_with_report(false, Some(serde_json::json!({"grants":["Io","Args"],"projections":["stdout","stdin"],"args":["-"],"stdin":[49,32,43,32,50,10,255]})), "3\n", 1, "error: Input(InvalidUtf8)\n");
     let manifest = fixture.0.join("hirsel.json");
     let record = fixture.0.join("host-stdin.json");
     let exported = Command::new(env!("CARGO_BIN_EXE_hirsel"))
@@ -654,7 +660,14 @@ fn calculator_stdin_session() {
                 String::from_utf8_lossy(&output.stderr)
             );
             assert_eq!(output.stdout, expected.as_bytes());
-            assert!(output.stderr.is_empty());
+            assert_eq!(
+                output.stderr,
+                if code == 0 {
+                    b"".as_slice()
+                } else {
+                    b"error: Input(InvalidUtf8)\n"
+                }
+            );
         }
     }
 }

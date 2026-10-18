@@ -1520,7 +1520,7 @@ unsafe fn execute(
     let mut result = [0u128; RESULT_MAX as usize / 16];
     let (mut rt, mut args) = (IO_HANDLE, ARGS_HANDLE);
     let mut roots = [IO_HANDLE, ARGS_HANDLE, u64::MAX, 0, TEST_HANDLE];
-    let status = unsafe {
+    let mut status = unsafe {
         match entry {
             Launch::Zero(entry) => entry(ctx, std::ptr::null_mut(), result.as_mut_ptr().cast()),
             Launch::Main(entry) => entry(
@@ -1544,6 +1544,45 @@ unsafe fn execute(
             ),
         }
     };
+    let mut echoed = (0, 0);
+    let mut echo_replay = || -> Result<(), String> {
+        if let Some(io) = &replay {
+            let io = io.borrow();
+            std::io::Write::write_all(&mut std::io::stdout(), &io.stdout()[echoed.0..])
+                .map_err(|e| format!("standard output: {e}"))?;
+            std::io::Write::write_all(&mut std::io::stderr(), &io.stderr()[echoed.1..])
+                .map_err(|e| format!("standard error: {e}"))?;
+            echoed = (io.stdout().len(), io.stderr().len());
+        }
+        Ok(())
+    };
+    let mut report_refusal = None;
+    if status == STATUS_OK
+        && let Some(returned) = unsafe { &mut *ctx }.entry_result.take()
+    {
+        let report = (|| -> Result<(), String> {
+            echo_replay()?;
+            std::io::Write::flush(&mut std::io::stdout())
+                .map_err(|e| format!("standard output: {e}"))?;
+            let text = unsafe { crate::exit_report::render(&returned) };
+            std::io::Write::write_all(&mut std::io::stderr(), text.as_bytes())
+                .and_then(|()| std::io::Write::flush(&mut std::io::stderr()))
+                .map_err(|e| format!("standard error: {e}"))
+        })();
+        report_refusal = report.err();
+        // Cleanup is mandatory even if the host's reporting sink failed.
+        let mut cleanup = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
+        status = unsafe {
+            crate::finalize::hirsel_rt_v2_finalize(
+                ctx,
+                returned.layout,
+                returned.value,
+                std::ptr::null(),
+                cleanup.as_mut_ptr(),
+                0,
+            )
+        };
+    }
     let bytes: Vec<u8> = result
         .iter()
         .flat_map(|w| w.to_le_bytes())
@@ -1609,17 +1648,14 @@ unsafe fn execute(
     record.push_str("audit unavailable\n");
     unsafe { hirsel_rt_v2_ctx_destroy(ctx) };
     drop(binding);
+    if let Some(error) = report_refusal {
+        return refuse(&error);
+    }
+    if let Err(error) = echo_replay() {
+        return refuse(&error);
+    }
     if let Some(io) = &replay {
-        // The simulated adapter holds what the program printed; every recorded event
-        // must have been consumed.
-        let io = io.borrow();
-        if let Err(error) = std::io::Write::write_all(&mut std::io::stdout(), io.stdout()) {
-            return refuse(&format!("standard output: {error}"));
-        }
-        if let Err(error) = std::io::Write::write_all(&mut std::io::stderr(), io.stderr()) {
-            return refuse(&format!("standard error: {error}"));
-        }
-        if let Err(error) = io.finish() {
+        if let Err(error) = io.borrow().finish() {
             let _ = std::io::Write::flush(&mut std::io::stdout());
             return refuse(&format!("the replayed tape: {error:?}"));
         }

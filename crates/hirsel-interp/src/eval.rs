@@ -80,6 +80,7 @@ pub fn run_with_runtime(
         },
         steps: 0,
     };
+    let mut entry_consumed = false;
     let result = execute_frames(
         provider,
         sources,
@@ -90,6 +91,7 @@ pub fn run_with_runtime(
         frames,
         constants,
         &mut execution,
+        &mut entry_consumed,
     );
     let result = match (result, &checker) {
         (Err(Error::Blocked(waits)), _) => {
@@ -101,8 +103,9 @@ pub fn run_with_runtime(
             Ok(())
         }
         (Ok(()), Some(state)) => {
-            execution.outcome = audit_resources(&state.borrow(), &execution.outcome)
-                .map_or(execution.outcome, |trap| Outcome::Trapped(*trap));
+            execution.outcome =
+                audit_resources(&state.borrow(), &execution.outcome, entry_consumed)
+                    .map_or(execution.outcome, |trap| Outcome::Trapped(*trap));
             Ok(())
         }
         (result, _) => result,
@@ -121,9 +124,16 @@ pub fn run_with_runtime(
 fn audit_resources(
     state: &crate::checked::State,
     outcome: &Outcome,
+    entry_consumed: bool,
 ) -> Option<Box<crate::checked::Trap>> {
     let returned = match outcome {
-        Outcome::Returned { value, .. } => crate::checked::resources_in(value),
+        Outcome::Returned { value, .. } => {
+            if entry_consumed {
+                0
+            } else {
+                crate::checked::resources_in(value)
+            }
+        }
         Outcome::Failed(_) => 0,
         _ => return None,
     };
@@ -153,7 +163,9 @@ fn execute_frames(
     mut frames: Vec<Frame>,
     mut constants: crate::constants::Constants,
     execution: &mut Execution,
+    entry_consumed: &mut bool,
 ) -> Result<(), Error> {
+    let mut returned_snapshot = None;
     let mut tooling = None;
     let mut budgets = crate::bounded::Budgets::default();
     let mut task = 0;
@@ -1072,6 +1084,38 @@ fn execute_frames(
                 continue;
             }
         }
+        // PROG-3 transfers the entry Result to the host. Keep only a tooling
+        // snapshot for observation; release the actual owner on this same stack.
+        if task == 0 && frames.len() == 1 && !*entry_consumed {
+            let frame = frames.last_mut().unwrap();
+            if let Some(crate::resources::Ending::Return(value)) = &frame.ending {
+                let site = site_of(frame)?;
+                let root_anchor = anchor(frame, site);
+                if operations.entry_returned(
+                    value,
+                    runtime,
+                    &mut OperationContext {
+                        configuration,
+                        sources,
+                        stdout: &mut execution.stdout,
+                        trace: &mut execution.trace,
+                        trace_mode: runtime.trace_mode,
+                        anchor: Some(&root_anchor),
+                    },
+                )? {
+                    returned_snapshot = Some(value.clone());
+                    *entry_consumed = true;
+                    let Some(crate::resources::Ending::Return(value)) = frame.ending.take() else {
+                        unreachable!()
+                    };
+                    frame.ending = Some(crate::resources::Ending::Return(Value::Unit));
+                    frame
+                        .work
+                        .push_back(crate::resources::Work::Release(value, root_anchor));
+                    continue;
+                }
+            }
+        }
         if let Some(ending) = frames.last_mut().unwrap().ending.take() {
             let mut finished = frames.pop().unwrap();
             // Map the result and mut write-backs into the caller's lifetimes, then
@@ -1303,10 +1347,11 @@ fn execute_frames(
                 } else {
                     match ending {
                         crate::resources::Ending::Return(value) => {
-                            if let Some(check) = &finished.check {
+                            if !*entry_consumed && let Some(check) = &finished.check {
                                 // The harness reads the result after every frame ended.
                                 check.state.borrow().access(&returned, "returned value")?;
                             }
+                            let value = returned_snapshot.take().unwrap_or(value);
                             Outcome::Returned {
                                 exit_code: exit_code(&value),
                                 value,

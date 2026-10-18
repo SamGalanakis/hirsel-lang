@@ -9,6 +9,7 @@ mod coverage;
 mod differential;
 mod emit;
 mod executable;
+mod exit_report;
 mod heap;
 mod link;
 mod observe;
@@ -40,7 +41,7 @@ pub use observe::{Failure, OBSERVATION_SCHEMA, Observation, Sites, site_codes};
 pub use pairwise::pairwise_matrix;
 pub use proofs::{Evidence, Proofs, parse as parse_sidecar};
 pub use stages::{NativeError, Options, ReadyProgram, StageName, build, build_program};
-pub use tool::{run_path_native, run_path_native_with_config};
+pub use tool::{Output, run_path_native, run_path_native_with_config};
 
 /// The pinned LLVM release emission binds, for reports and artifacts.
 pub fn llvm_version() -> String {

@@ -17,6 +17,8 @@ guessed from offsets. Invalid/unavailable IR and provider errors return
 operation results canonicalize float NaNs; equality of executions includes float
 bits and the selected trace. Semantic observations are identical across trace modes.
 
+`exit_report` formats the typed payload of a returned Error using a worklist. The scheduler consumes the returned entry Result after its entry hook publishes the report; the observation retains only a tooling snapshot of the value. The formatter performs no Io; `ObservedExecution.exit_report` carries the host text beside the semantic observation, and the driver decides when to write it.
+
 ## Core invariants
 
 - Bodies, instructions, operands, constructor fields, call arguments, and cleanup

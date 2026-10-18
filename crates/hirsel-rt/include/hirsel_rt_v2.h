@@ -477,6 +477,35 @@ uint8_t hirsel_rt_v2_failure_cause(hirsel_rt_v2_ctx *ctx, uint64_t index, hirsel
 void hirsel_rt_v2_failure_reanchor(hirsel_rt_v2_ctx *ctx, uint64_t site);
 void hirsel_rt_v2_failure_clear(hirsel_rt_v2_ctx *ctx);
 
+/* PROG-3 host return-value descriptions. Immutable compiler data; no Io grant.
+ * kind: 0 opaque text, 1 bool, 2 unsigned / 3 signed (a=bytes), 4 float
+ * (a=bytes), 5 String / 6 Bytes slice, 7 aggregate (text=open; a=close:
+ * 0 empty, 1 ')', 2 ' }', 3 ']'; b=1 means a one-tuple), 8 variant
+ * (a=tag offset, b=0 u32 / 1 pointer niche / 2 live bit; c=niche ordinals
+ * nullary in low32, dataful high32, or bit index), 9 box (a=payload offset),
+ * 10 counted sequence (a=data offset from header, b=stride, c=count offset),
+ * 11 inline sequence (a=count,b=stride), 12 transparent reference.
+ * Variant fields' offsets select ordinals; other fields select byte offsets. */
+typedef struct hirsel_rt_v2_report_node hirsel_rt_v2_report_node;
+typedef struct hirsel_rt_v2_report_field {
+    uint64_t offset;
+    const hirsel_rt_v2_report_node *node;
+    const uint8_t *label;
+    uint64_t label_len;
+} hirsel_rt_v2_report_field;
+struct hirsel_rt_v2_report_node {
+    uint64_t kind, a, b, c;
+    const uint8_t *text;
+    uint64_t text_len;
+    const hirsel_rt_v2_report_field *fields;
+    uint64_t field_count;
+};
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_report_node, 64);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_report_field, 32);
+void hirsel_rt_v2_exit_report(hirsel_rt_v2_ctx *ctx, uint8_t *value,
+                              uint32_t layout, uint64_t payload_offset,
+                              const hirsel_rt_v2_report_node *node);
+
 /* Diagnostic probe: panics inside the runtime; the process aborts at the C boundary. */
 void hirsel_rt_v2_invariant_fault(void);
 void hirsel_rt_v2_diag_panic(void);

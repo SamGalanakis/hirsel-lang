@@ -1053,6 +1053,27 @@ impl HostLibrary {
     }
 }
 impl hirsel_interp::OperationsAdapter for HostLibrary {
+    fn entry_returned(
+        &mut self,
+        value: &Value,
+        runtime: &hirsel_interp::aggregate::RuntimeTypes,
+        context: &mut OperationContext<'_>,
+    ) -> Result<bool, Error> {
+        use std::io::Write;
+        self.echo(context.stdout)?;
+        std::io::stdout()
+            .flush()
+            .map_err(|e| Error::Unavailable(format!("host stdout: {e}")))?;
+        let consume = self.library.entry_returned(value, runtime, context)?;
+        if let Some(report) = self.library.exit_report.take() {
+            std::io::stderr()
+                .write_all(report.text.as_bytes())
+                .and_then(|()| std::io::stderr().flush())
+                .map_err(|e| Error::Unavailable(format!("host exit report: {e}")))?;
+        }
+        Ok(consume)
+    }
+
     fn operations(&self) -> &dyn Operations {
         &self.library
     }

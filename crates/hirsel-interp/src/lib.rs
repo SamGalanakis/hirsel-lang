@@ -5,6 +5,7 @@ pub mod checked;
 mod constants;
 pub mod conversion;
 mod eval;
+pub mod exit_report;
 mod frame;
 pub mod library;
 pub mod observation;
@@ -239,6 +240,10 @@ operation_boundary! {
     }
     }
     mutable {
+    /// Publish the host's entry report before consuming its returned owner.
+    /// False retains the raw evaluator's returned-value ownership policy.
+    fn entry_returned(&mut self, _value: &Value, _runtime: &aggregate::RuntimeTypes,
+        _context: &mut OperationContext<'_>) -> Result<bool, Error> { Ok(false) }
     /// Publish callback snapshots even on failure/abandonment; return displaced owners.
     fn callback_finished(&mut self,
         _token: u64,

@@ -211,6 +211,7 @@ name = "hirsel-cli"
 version = "0.1.0"
 dependencies = [
  "hirsel-cli-args",
+ "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",
  "serde_json",

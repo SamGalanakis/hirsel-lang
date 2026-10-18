@@ -3076,6 +3076,11 @@ conformance/PROG/PROG-3-entry-main.hir
 conformance/PROG/PROG-3-entry-ok.hir
 conformance/PROG/PROG-3-entry-root-env.hir
 conformance/PROG/PROG-3-entry-root-unsafe.hir
+conformance/PROG/PROG-3-exit-report-resource-error-run.hir
+conformance/PROG/PROG-3-exit-report-string-error-run.hir
+conformance/PROG/PROG-3-exit-report-string-ok-run.hir
+conformance/PROG/PROG-3-exit-report-variant-error-run.hir
+conformance/PROG/PROG-3-exit-report-variant-ok-run.hir
 conformance/PROG/PROG-3-grants-template-entry-run.hir
 conformance/PROG/PROG-3-main-mut-args-run.hir
 conformance/PROG/PROG-3-main-mut-io-run.hir

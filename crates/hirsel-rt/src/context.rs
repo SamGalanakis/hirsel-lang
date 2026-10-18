@@ -120,6 +120,7 @@ pub struct RunCtx {
     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
     pub(crate) immortalized: u64,
     pub(crate) failure: FailureState,
+    pub(crate) entry_result: Option<crate::exit_report::Returned>,
     pub(crate) regions: RegionPool,
     pub(crate) close_handle: Option<CloseThunk>,
     pub(crate) hash_seed: u64,
@@ -320,6 +321,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         immortalized: 0,
         failure: FailureState::default(),
+        entry_result: None,
         regions: RegionPool::new(),
         close_handle: config.close_handle,
         hash_seed: config.hash_seed,

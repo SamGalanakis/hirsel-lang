@@ -443,11 +443,11 @@ fn execute(args: Vec<OsString>) -> u8 {
                     .as_ref()
                     .map(|launch| launch.host(arguments.as_deref())),
                 evidence.as_ref(),
-                &mut std::io::stdout().lock(),
-                &mut std::io::stderr().lock(),
+                hirsel_driver::native::Output::Inherit,
             ) {
-                Ok(Ok(RunOutcome::Exit(code))) => u8::from(code != 0),
-                Ok(Ok(_)) => 1,
+                // The native driver already wrote the complete failure chain.
+                Ok(Ok(RunOutcome::Failure { .. })) => 1,
+                Ok(Ok(outcome)) => run_result(Ok(outcome)),
                 Ok(Err(error)) => {
                     eprintln!("hirsel: {error}");
                     2
@@ -545,12 +545,14 @@ fn execute(args: Vec<OsString>) -> u8 {
                         return 2;
                     }
                 }
-                u8::from(
-                    output
-                        .diagnostics
-                        .iter()
-                        .any(|d| d.severity.as_str() == "error"),
-                )
+                let rejected = output
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.severity.as_str() == "error");
+                if rejected && json {
+                    rejection_cause(&output.diagnostics);
+                }
+                u8::from(rejected)
             }
             Err(error) => tool_error(error, json),
         },
@@ -572,6 +574,26 @@ fn execute(args: Vec<OsString>) -> u8 {
         _ => usage(),
     }
 }
+fn rejection_cause(diagnostics: &[hirsel_diag::Diagnostic]) {
+    if let Some(diagnostic) = diagnostics
+        .iter()
+        .find(|d| d.severity.as_str() == "error")
+        .or_else(|| diagnostics.first())
+    {
+        eprintln!(
+            "hirsel: {}: {}",
+            diagnostic.rule,
+            diagnostic
+                .message
+                .lines()
+                .next()
+                .unwrap_or("source rejected")
+        );
+    } else {
+        eprintln!("hirsel: source rejected");
+    }
+}
+
 fn tool_error(error: ToolError, json: bool) -> u8 {
     if let ToolError::Query {
         error: QueryError::Diagnostics(diagnostics),
@@ -585,6 +607,9 @@ fn tool_error(error: ToolError, json: bool) -> u8 {
             } else {
                 eprint!("{}", d.render_human(sources));
             }
+        }
+        if json || diagnostics.is_empty() {
+            rejection_cause(diagnostics);
         }
         return 1;
     }
@@ -600,9 +625,8 @@ fn tool_error(error: ToolError, json: bool) -> u8 {
                 "deterministic": parser_limit,
             })
         );
-    } else {
-        eprintln!("hirsel: {error}");
     }
+    eprintln!("hirsel: {error}");
     if parser_limit
         || matches!(
             error,
@@ -725,6 +749,7 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
 
 fn run_result(result: Result<RunOutcome, ToolError>) -> u8 {
     match result {
+        // The launch boundary has already written the PROG-3 payload report.
         Ok(RunOutcome::Exit(code)) => u8::from(code != 0),
         Ok(RunOutcome::Failure { rule, line }) => {
             eprintln!("runtime failure[{rule}] at line {line}");

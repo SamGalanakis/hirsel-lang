@@ -1250,22 +1250,27 @@ fn violation(entry: &DefPath, v: &hirsel_heapcheck::Violation, site: Option<u64>
 
 fn observation(
     audit: &hirsel_heapcheck::Audit,
+    output: &[u8],
     sites: &Sites<'_>,
 ) -> Result<Observation, NativeError> {
     let o = &audit.observation;
-    let exit_code = match &o.returned {
-        None => None,
-        Some(Observed::Variant { tag, .. }) => Some(i32::from(*tag != 0)),
-        Some(other) => {
-            return Err(NativeError::new(
-                StageName::Heap,
-                format!("the entry returned {other:?}, not a Result"),
-            ));
+    let exit_code = if !o.failures.is_empty() {
+        None
+    } else {
+        match &o.returned {
+            None => None,
+            Some(Observed::Variant { tag, .. }) => Some(i32::from(*tag != 0)),
+            Some(other) => {
+                return Err(NativeError::new(
+                    StageName::Heap,
+                    format!("the entry returned {other:?}, not a Result"),
+                ));
+            }
         }
     };
     Ok(Observation {
         exit_code,
-        output: o.output.clone(),
+        output: output.to_vec(),
         failures: o
             .failures
             .iter()
@@ -1308,7 +1313,7 @@ pub fn run_heap(
     );
     let audit = run.result.as_ref().map_err(|v| violation(entry, v, None))?;
     Ok(HeapRun {
-        observation: observation(audit, sites)?,
+        observation: observation(audit, &run.output, sites)?,
         sites: run.sites,
         counters: run.counters,
     })
@@ -1346,7 +1351,7 @@ pub fn heap_campaign(
     }
     let audit = campaign.clean.result.as_ref().expect("checked above");
     Ok(HeapRun {
-        observation: observation(audit, sites)?,
+        observation: observation(audit, &campaign.clean.output, sites)?,
         sites: campaign.clean.sites,
         counters: campaign.clean.counters,
     })

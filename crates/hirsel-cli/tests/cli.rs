@@ -4,6 +4,8 @@ use std::{
 };
 #[path = "cli/ergonomics.rs"]
 mod ergonomics;
+#[path = "cli/exit_report.rs"]
+mod exit_report;
 #[path = "cli/replay.rs"]
 mod replay;
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -595,7 +597,14 @@ fn source_projection_controls_distinguish_granted_and_empty_io() {
                 String::from_utf8_lossy(&output.stderr)
             );
             assert!(output.stdout.is_empty());
-            assert!(output.stderr.is_empty());
+            assert_eq!(
+                output.stderr,
+                if granted {
+                    b"".as_slice()
+                } else {
+                    b"error: NotGranted\n"
+                }
+            );
             std::fs::remove_file(config).unwrap();
         }
         std::fs::remove_file(source).unwrap();
@@ -814,7 +823,14 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
                 String::from_utf8_lossy(&output.stderr)
             );
             assert!(output.stdout.is_empty());
-            assert!(output.stderr.is_empty());
+            assert_eq!(
+                output.stderr,
+                if allowed {
+                    b"".as_slice()
+                } else {
+                    b"error: ()\n"
+                }
+            );
             std::fs::remove_file(record).unwrap();
         }
         for grants in [
@@ -834,11 +850,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
                 "{}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            assert!(
-                output.stderr.is_empty(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            assert_eq!(output.stderr, b"error: ()\n");
             std::fs::remove_file(record).unwrap();
         }
         // These refuse before the entry can bind a socket.
@@ -1369,7 +1381,7 @@ fn simulation_host_inputs_accept_binary_stdin_and_unset_env_and_route_stderr() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, b"error: NotGranted\n");
     std::fs::remove_file(simulation).unwrap();
     std::fs::remove_file(&source).unwrap();
     std::fs::remove_file(format!("{}.json", source.display())).unwrap();

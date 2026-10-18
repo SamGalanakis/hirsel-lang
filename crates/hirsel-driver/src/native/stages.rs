@@ -158,6 +158,7 @@ pub struct ReadyProgram {
     pub functions: BTreeMap<DefPath, ContentHash>,
     pub(crate) launches: BTreeMap<DefPath, super::link::LaunchKind>,
     pub(crate) revisions: BTreeMap<DefPath, hirsel_run_config::ProgramRevision>,
+    pub(crate) exit_reports: BTreeMap<DefPath, super::exit_report::Report>,
     /// The static data of every constant a unit reads (CT-2).
     pub statics: Vec<hirsel_lir::statics::StaticData>,
     /// The planned PS-13 sites some unit removed, as `validate_discharge`
@@ -193,6 +194,15 @@ impl ReadyProgram {
             .collect::<Result<_, _>>()?;
         self.foreign_links = input.snapshot().foreign_links.clone();
         self.foreign_unreplayable = input.snapshot().foreign_unreplayable;
+        self.exit_reports = self
+            .launches
+            .keys()
+            .filter(|entry| self.functions.contains_key(*entry))
+            .map(|entry| {
+                super::exit_report::derive(input.snapshot(), self, entry)
+                    .map(|report| (entry.clone(), report))
+            })
+            .collect::<Result<_, _>>()?;
         Ok(())
     }
     /// The Ready units, as the heap executor and dumps read them.
@@ -340,6 +350,7 @@ pub fn build_program(
         operations,
         launch: options.launch.clone(),
         revisions: BTreeMap::new(),
+        exit_reports: BTreeMap::new(),
         launches: program
             .signatures
             .iter()

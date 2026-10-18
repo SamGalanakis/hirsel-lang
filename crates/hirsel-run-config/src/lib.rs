@@ -29,7 +29,8 @@ pub struct Revocations {
 }
 impl Revocations {
     pub fn read_path(path: &std::path::Path) -> Result<Self, RunRefusal> {
-        let bytes = std::fs::read(path).map_err(|e| invalid("revocations", &e.to_string()))?;
+        let bytes = std::fs::read(path)
+            .map_err(|e| invalid("revocations", &format!("{}: {e}", path.display())))?;
         Self::validate(&bytes)
     }
     pub fn validate(bytes: &[u8]) -> Result<Self, RunRefusal> {
@@ -308,10 +309,10 @@ impl RunConfig {
             for mount in &mut io.dirs {
                 let host = std::path::Path::new(&mount.host);
                 if host.is_relative() {
-                    let canonical = base
-                        .join(host)
-                        .canonicalize()
-                        .map_err(|e| invalid("io.dirs.host", &e.to_string()))?;
+                    let candidate = base.join(host);
+                    let canonical = candidate.canonicalize().map_err(|e| {
+                        invalid("io.dirs.host", &format!("{}: {e}", candidate.display()))
+                    })?;
                     mount.host = canonical
                         .to_str()
                         .ok_or_else(|| invalid("io.dirs.host", "directory path is not UTF-8"))?
@@ -336,7 +337,8 @@ impl RunConfig {
         entry: String,
         launch: LaunchKind,
     ) -> Result<ValidatedRun, RunRefusal> {
-        let bytes = std::fs::read(path).map_err(|e| invalid("grants", &e.to_string()))?;
+        let bytes = std::fs::read(path)
+            .map_err(|e| invalid("grants", &format!("{}: {e}", path.display())))?;
         Self::bind_grants_at(&bytes, program, entry, launch, path.parent())
     }
 
@@ -345,8 +347,8 @@ impl RunConfig {
         if !path.is_absolute() {
             return Err(invalid("--hirsel-run", "expected an absolute record path"));
         }
-        let bytes =
-            std::fs::read(path).map_err(|error| invalid("--hirsel-run", &error.to_string()))?;
+        let bytes = std::fs::read(path)
+            .map_err(|error| invalid("--hirsel-run", &format!("{}: {error}", path.display())))?;
         Self::validate(&bytes)
     }
     /// Deny all roots while selecting the canonical semantic dependency closure.

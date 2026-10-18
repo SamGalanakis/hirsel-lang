@@ -15,6 +15,8 @@ use hirsel_types::{BuiltinType, GenericArgument, Primitive, TypeKind};
 
 pub struct Library {
     pub simulation: Simulation,
+    pub entry_signature: Option<hirsel_types::SignatureRef>,
+    pub exit_report: Option<crate::exit_report::Report>,
     pub(super) tasks: super::tasks::Tasks,
     pub(super) channels: super::channels::Channels,
     pub(super) synchronizers: super::synchronization::Synchronizers,
@@ -30,6 +32,8 @@ impl Library {
     pub fn new(run: &RunConfiguration, config: SimulationConfig) -> Result<Self, Error> {
         Ok(Self {
             simulation: Simulation::new(run, config)?,
+            entry_signature: None,
+            exit_report: None,
             tasks: Default::default(),
             channels: Default::default(),
             synchronizers: Default::default(),
@@ -934,6 +938,29 @@ impl Library {
     }
 }
 impl Operations for Library {
+    fn entry_returned(
+        &mut self,
+        value: &Value,
+        runtime: &crate::aggregate::RuntimeTypes,
+        context: &mut OperationContext<'_>,
+    ) -> Result<bool, Error> {
+        let Some(signature) = &self.entry_signature else {
+            return Ok(false);
+        };
+        self.exit_report =
+            crate::exit_report::returned_error(value, signature, runtime).map(|text| {
+                crate::exit_report::Report {
+                    text,
+                    stdout_len: context.stdout.len(),
+                    stderr_len: self.simulation.stderr.len(),
+                }
+            });
+        if matches!(value, Value::Variant { variant: 1, .. }) && self.exit_report.is_none() {
+            return Err(invalid("entry Error has no diagnostic payload view"));
+        }
+        Ok(true)
+    }
+
     fn callback_finished(
         &mut self,
         token: u64,

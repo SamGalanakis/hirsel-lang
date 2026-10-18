@@ -101,7 +101,15 @@ destructuring keep their defining-module restrictions.
 
 An entry is any `pub fn` whose parameters are root capabilities (`Io`, `Args`, `Env`,
 `Unsafe`) and which returns `Result[(), E]`. A completed entry returning `Ok(())` exits 0;
-`Error(e)` exits 1, independently of `E`'s variant numbering and without implicit output.
+`Error(e)` exits 1, independently of `E`'s variant numbering.
+
+When `main` returns `Error(e)`, the host writes `error: <e>` followed by a newline
+to standard error before exiting 1. String error values render as text; other error
+values render in debug/value form. This launch report requires no stderr grant and
+is not program output. The report is written after the program's buffered stdout
+is flushed. Replay reproduces it from the returned value, without an additional
+tape event. After writing the report, the host finalizes the returned Result,
+including its error value. Finalizer output follows the report in both engines.
 
 ```hirsel
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {

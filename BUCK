@@ -73,6 +73,7 @@ hirsel_binary(
     bin_name = "hirsel",
     deps = [
         "//:hirsel-cli-args",
+        "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
         "//third-party:serde_json",
@@ -91,6 +92,7 @@ hirsel_test(
     name = "hirsel-cli-test-cli",
     deps = [
         "//:hirsel-cli-args",
+        "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
         "//third-party:serde_json",
@@ -165,6 +167,7 @@ hirsel_test(
     name = "hirsel-cli-test-examples",
     deps = [
         "//:hirsel-cli-args",
+        "//:hirsel-diag",
         "//:hirsel-driver",
         "//:hirsel-engine",
         "//third-party:serde_json",

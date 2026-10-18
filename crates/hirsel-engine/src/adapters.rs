@@ -128,6 +128,7 @@ impl InterpreterPhase for InterpreterAdapter {
         sources: &SourceMap,
     ) -> Result<ObservedExecution, RuntimeError> {
         let mut final_state = None;
+        let mut exit_report = None;
         let execution = if let Some(signature) = &self.entry_signature {
             hirsel_interp::library::launch_with_runtime(
                 definitions,
@@ -138,7 +139,8 @@ impl InterpreterPhase for InterpreterAdapter {
                 self.limits,
                 &self.runtime,
             )
-            .map(|launched| {
+            .map(|mut launched| {
+                exit_report = launched.exit_report.take();
                 final_state = Some(launched.final_state);
                 launched.execution
             })
@@ -162,6 +164,8 @@ impl InterpreterPhase for InterpreterAdapter {
             Ok(execution) => execution,
             Err((error, Some(stdout))) => {
                 return Ok(ObservedExecution {
+                    exit_report: None,
+                    tooling_stderr: vec![],
                     outcome: Err(error),
                     observation: None,
                     tooling_output: stdout,
@@ -171,7 +175,7 @@ impl InterpreterPhase for InterpreterAdapter {
         };
         let mut observation = execution.observable(sources);
         if let Some(observation) = &mut observation {
-            observation.final_state = final_state;
+            observation.final_state = final_state.take();
             if let Some(signature) = &self.entry_signature {
                 if let hirsel_types::SignatureKind::Function(function) = &signature.kind {
                     match hirsel_types::encoding::canonical_type_encoding(
@@ -181,6 +185,8 @@ impl InterpreterPhase for InterpreterAdapter {
                         Ok(encoded) => observation.returned_type = Some(encoded),
                         Err(error) => {
                             return Ok(ObservedExecution {
+                                exit_report: None,
+                                tooling_stderr: vec![],
                                 outcome: Err(RuntimeError::Tool(format!(
                                     "observation result type: {error:?}"
                                 ))),
@@ -211,6 +217,8 @@ impl InterpreterPhase for InterpreterAdapter {
             },
         };
         Ok(ObservedExecution {
+            exit_report,
+            tooling_stderr: final_state.map(|s| s.stderr).unwrap_or_default(),
             tooling_output: if observation.is_none() {
                 execution.stdout
             } else {

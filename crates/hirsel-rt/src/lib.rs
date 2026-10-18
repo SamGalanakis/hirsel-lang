@@ -15,6 +15,7 @@
 pub mod handles;
 pub mod host_launch;
 
+pub mod exit_report;
 mod host_io_tape;
 pub mod host_paths;
 pub mod host_stdin;

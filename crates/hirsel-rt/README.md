@@ -208,6 +208,8 @@ qemu, on the diagnostic `//:hirsel-rt-archives` archive), which `tools/check-nat
 against glibc malloc, mimalloc, jemalloc and 48- and 32-byte-node mimalloc controls (the prior header controls) in paired rounds, with a tree freed by the walk
 (`hirsel-walk`) and by the compiled glue of the node layout (`hirsel`).
 
+The compiler's native entry wrapper registers the returned Error and its immutable `exit_report` diagnostic view. Launch flushes program stdout, formats and writes the report, then finalizes the returned ownership before task exit. Replay recreates the report from the returned value; no stderr capability or Io tape event is needed.
+
 ## Processes
 
 `process.rs` holds the Process capability (docs/spec/core-library.md#processes).

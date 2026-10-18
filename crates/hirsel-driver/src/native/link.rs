@@ -740,8 +740,33 @@ fn link_objects_impl(
         ));
         arguments.push_str(&format!(", ptr %root{index}"));
     }
+    let report = program.exit_reports.get(entry).ok_or_else(|| {
+        NativeError::new(StageName::Launch, "missing checked exit-report description")
+    })?;
+    let report_declarations = &report.declarations;
+    let report_root = report.root;
+    let report_offset = report.offset;
+    let result_index = registry
+        .index(report.result)
+        .ok_or_else(|| NativeError::new(StageName::Launch, "missing entry-result descriptor"))?;
     let declaration = format!(
-        "declare i8 @\"{symbol}\"(ptr, ptr, ptr{parameters})\ndefine private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{\n{loads} %s = call i8 @\"{symbol}\"(ptr %ctx, ptr %dest, ptr %out{arguments})\n ret i8 %s\n}}"
+        r#"{report_declarations}
+declare void @hirsel_rt_v2_exit_report(ptr, ptr, i32, i64, ptr)
+declare i8 @"{symbol}"(ptr, ptr, ptr{parameters})
+define private i8 @hirsel.entry(ptr %ctx, ptr %dest, ptr %out, ptr %roots) {{
+{loads} %s = call i8 @"{symbol}"(ptr %ctx, ptr %dest, ptr %out{arguments})
+ %ok = icmp eq i8 %s, 0
+ br i1 %ok, label %returned, label %done
+returned:
+ %tag = load i32, ptr %out, align 1
+ %error = icmp eq i32 %tag, 1
+ br i1 %error, label %report, label %done
+report:
+ call void @hirsel_rt_v2_exit_report(ptr %ctx, ptr %out, i32 {result_index}, i64 {report_offset}, ptr @hirsel.report.node.{report_root})
+ br label %done
+done:
+ ret i8 %s
+}}"#
     );
     // hirsel-rt's UNREPLAYABLE bit beside the roots (PROG-4).
     let mask = kind.mask() | if program.foreign_unreplayable { 32 } else { 0 };
@@ -1056,7 +1081,9 @@ fn launch_impl(
                 if let Some(path) = revocations {
                     command.arg("--hirsel-revocations").arg(absolute(path)?);
                 }
-                command.arg("--hirsel-run").arg(dir.join("run.json"));
+                if live.as_ref().is_some_and(|live| live.run.is_some()) {
+                    command.arg("--hirsel-run").arg(dir.join("run.json"));
+                }
             } else if let Some(path) = record {
                 command.env("HIRSEL_RT_TAPE", path);
             }
@@ -1078,11 +1105,9 @@ fn launch_impl(
         let stdin = !matches!(tape, Tape::Replay(_))
             && live
                 .run
-                .record()
-                .io
-                .as_ref()
+                .and_then(|run| run.record().io.as_ref())
                 .is_some_and(|io| io.stdin.is_some());
-        run_live(&mut command, stdin, live.stdout, live.stderr)?
+        run_live(&mut command, stdin, live.inherit, live.stdout, live.stderr)?
     } else {
         bounded(&mut command, toolchain.launch_timeout)?
     };
@@ -1100,7 +1125,8 @@ fn absolute(path: &Path) -> Result<PathBuf, NativeError> {
 }
 
 pub(crate) struct LiveRun<'a> {
-    pub run: &'a hirsel_run_config::ValidatedRun,
+    pub run: Option<&'a hirsel_run_config::ValidatedRun>,
+    pub inherit: bool,
     pub stdout: &'a mut dyn std::io::Write,
     pub stderr: &'a mut dyn std::io::Write,
 }
@@ -1119,12 +1145,30 @@ pub(crate) fn launch_live(
 fn run_live(
     command: &mut Command,
     stdin_granted: bool,
+    inherit: bool,
     stdout: &mut dyn std::io::Write,
     stderr: &mut dyn std::io::Write,
 ) -> Result<std::process::Output, NativeError> {
     use std::io::Read;
     use std::process::Stdio;
     let io = |e: std::io::Error| NativeError::new(StageName::Launch, e.to_string());
+    if inherit {
+        let status = command
+            .stdin(if stdin_granted {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(io)?;
+        return Ok(std::process::Output {
+            status,
+            stdout: vec![],
+            stderr: vec![],
+        });
+    }
     let mut child = command
         .stdin(if stdin_granted {
             Stdio::inherit()

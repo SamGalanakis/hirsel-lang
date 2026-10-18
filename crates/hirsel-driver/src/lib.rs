@@ -100,17 +100,43 @@ fn run_simulation(
         inputs: vec![],
     };
     let observed = hirsel_engine::run_observed_snapshot(&mut program.engine, &run, simulation)?;
-    if let Some(observation) = observed.observation {
-        stdout
-            .write_all(&observation.output)
-            .map_err(ToolError::Io)?;
-        if let Some(state) = observation.final_state {
-            stderr.write_all(&state.stderr).map_err(ToolError::Io)?;
-        }
+    let (output, program_stderr) = if let Some(observation) = observed.observation {
+        (
+            observation.output,
+            observation
+                .final_state
+                .map(|s| s.stderr)
+                .unwrap_or_default(),
+        )
     } else {
+        (observed.tooling_output, observed.tooling_stderr)
+    };
+    if let Some(report) = observed.exit_report {
+        if report.stdout_len > output.len() || report.stderr_len > program_stderr.len() {
+            return Err(ToolError::Runtime(
+                "invalid exit-report stream position".into(),
+            ));
+        }
         stdout
-            .write_all(&observed.tooling_output)
+            .write_all(&output[..report.stdout_len])
             .map_err(ToolError::Io)?;
+        stderr
+            .write_all(&program_stderr[..report.stderr_len])
+            .map_err(ToolError::Io)?;
+        stdout.flush().map_err(ToolError::Io)?;
+        stderr
+            .write_all(report.text.as_bytes())
+            .and_then(|()| stderr.flush())
+            .map_err(ToolError::Io)?;
+        stdout
+            .write_all(&output[report.stdout_len..])
+            .map_err(ToolError::Io)?;
+        stderr
+            .write_all(&program_stderr[report.stderr_len..])
+            .map_err(ToolError::Io)?;
+    } else {
+        stdout.write_all(&output).map_err(ToolError::Io)?;
+        stderr.write_all(&program_stderr).map_err(ToolError::Io)?;
     }
     observed.outcome.map_err(|error| match error {
         hirsel_engine::RuntimeError::Io(error) => ToolError::Io(error),

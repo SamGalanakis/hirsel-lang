@@ -21,6 +21,7 @@ pub enum LaunchError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchedExecution {
     pub execution: Execution,
+    pub exit_report: Option<crate::exit_report::Report>,
     pub events: Vec<CapabilityEvent>,
     pub final_state: super::simulation::ObservedSimulation,
 }
@@ -106,6 +107,7 @@ impl Library {
             roots.push(definition.0.name.clone());
         }
         // Validate all grants first, so an unavailable later root cannot partly launch.
+        self.entry_signature = Some(std::sync::Arc::new(signature.clone()));
         roots
             .iter()
             .map(|r| {
@@ -207,6 +209,7 @@ pub fn launch_with_runtime(
         }
     }
     Ok(LaunchedExecution {
+        exit_report: library.exit_report.take(),
         execution,
         final_state: library.simulation.observed_state(),
         events: library.simulation.events,

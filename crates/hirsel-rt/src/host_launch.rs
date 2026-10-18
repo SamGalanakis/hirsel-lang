@@ -57,7 +57,7 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
         detail,
     };
     let recording = std::fs::read_to_string(path)
-        .map_err(|e| invalid(e.to_string()))
+        .map_err(|e| invalid(format!("{}: {e}", path.display())))
         .and_then(|text| crate::launch::parse_recording(&text).map_err(invalid))?;
     let run = recording.bound_run()?;
     let mut io = SimIo::new(recording.tree, recording.events);
@@ -142,7 +142,7 @@ impl HostAuthority for HostGrants {
                 PinnedDirectory::open(std::path::Path::new(&mount.host))
                     .map(|pin| (mount.path.clone(), mount.access, pin))
                     .map_err(|error| RunRefusal::Unauthorized {
-                        field: format!("io.dirs.{}: {error}", mount.path),
+                        field: format!("io.dirs.{} ({}): {error}", mount.path, mount.host),
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
