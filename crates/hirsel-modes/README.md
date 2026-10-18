@@ -483,7 +483,10 @@ a currently unique root is itself unique, so it meets a `mut unique` parameter a
 keeps the root unique. A directly called declaration with `@preserves_unique(p)`
 (`callee_preserves_unique` checks the callee resolves to a definition) hands a selected
 `mut` argument back unique, or returns a unique result for a selected `take`
-parameter, when every non-plain taken and `mut` argument is unique at the call; that
+parameter, when every non-plain taken and `mut` argument is unique at the call, and,
+for a bodyless core@1 callee (`callee_definition`), every borrowed argument is Plain or
+Shared, since a ledger operation such as `map.insert` may store a share of it, unless the
+promise lists it `unretained` (`callee_unretained`: `sorted_map.insert`'s `by`); that
 result uniqueness is flow evidence only, so the published call row stays the
 declared one, as V derives it. A `mut x: unique T` parameter must be unique at every
 return and evaluation failure site (`mutable_crossing_exit`). A `@preserves_unique`

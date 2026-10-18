@@ -159,12 +159,12 @@ N fn string.byte_offset(s: String, pos: StrPos of s) -> u64
 fn path.text(p: Path) -> String
 N fn failure.check(condition: bool, rule: CheckRule) -> () uses {}
 fn map.empty[K: key, V]() -> unique Map[K, V]
-fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()
+@preserves_unique(m) fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()
 N fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
 fn set.empty[T: key]() -> unique Set[T]
 @preserves_unique(s) fn set.insert[T: key](mut s: Set[T], take value: T) -> ()
 N fn set.contains[T: key](s: Set[T], value: T) -> bool
 fn sorted_map.empty[K, V](by: Order[K]) -> unique SortedMap[K, V] of by
-fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()
+@preserves_unique(m) @unretained(by) fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()
 N fn simd.splat[A, n: size](value: A) -> Simd[A, n]
 N fn simd.add[I, n: size](a: Simd[I, n], b: Simd[I, n]) -> Simd[I, n]

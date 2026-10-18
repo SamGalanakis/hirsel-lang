@@ -55,9 +55,13 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
     for line in SECTION22
         .lines()
         .map(|l| {
-            l.strip_prefix("@preserves_unique(")
-                .and_then(|rest| rest.split_once(") "))
-                .map_or(l, |(_, rest)| rest)
+            ["@preserves_unique(", "@unretained("]
+                .iter()
+                .fold(l, |l, prefix| {
+                    l.strip_prefix(prefix)
+                        .and_then(|rest| rest.split_once(") "))
+                        .map_or(l, |(_, rest)| rest)
+                })
         })
         .filter(|l| l.starts_with("fn ") || l.starts_with("N fn "))
     {

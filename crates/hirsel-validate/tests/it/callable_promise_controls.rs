@@ -55,6 +55,7 @@ fn callback(f: &mut Fixture, guarantee: Guarantee, promised: bool) -> FunctionTy
                 advance_only: true,
                 preserve_captures: true,
                 preserve_unique: false,
+                unretained: Default::default(),
             }]
             .into()
         } else {

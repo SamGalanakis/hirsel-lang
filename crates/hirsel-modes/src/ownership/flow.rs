@@ -2468,13 +2468,32 @@ impl Checker<'_> {
                         && p.preserve_unique
                 })
             });
-        promised
-            && self
-                .body
-                .resolution
-                .expressions
-                .iter()
-                .any(|(e, name)| *e == callee && matches!(name, ResolvedName::Definition(_)))
+        promised && self.callee_definition(callee).is_some()
+    }
+    /// A borrowed parameter a bodyless core promise reads and stores nothing of.
+    fn callee_unretained(&self, callee: ExprId, ordinal: usize) -> bool {
+        self.ty(callee)
+            .and_then(|ty| self.body.types.get(ty))
+            .is_some_and(|row| {
+                let TypeKind::Function(function) = &row.kind else {
+                    return false;
+                };
+                function
+                    .state_promises
+                    .iter()
+                    .any(|p| p.preserve_unique && p.unretained.contains(&ParamId(ordinal as u32)))
+            })
+    }
+    /// The declaration a call names directly, if any.
+    fn callee_definition(&self, callee: ExprId) -> Option<&hirsel_syntax::DefPath> {
+        self.body
+            .resolution
+            .expressions
+            .iter()
+            .find_map(|(e, name)| match name {
+                ResolvedName::Definition(path) if *e == callee => Some(path),
+                _ => None,
+            })
     }
     fn mutable_crossing_exit(&mut self, state: &State, site: Span) {
         if !self.emit {
@@ -5862,18 +5881,31 @@ impl Checker<'_> {
                     value.content = Content::default();
                 }
                 // MODE-2: what a `@preserves_unique` callee may install comes
-                // from its taken and `mut` arguments only.
+                // from its taken and `mut` arguments only. A bodyless core
+                // callee may also store a share of a borrowed argument, so
+                // that argument must be Plain or Shared, unless the ledger
+                // marks it unretained.
+                let ledger = self
+                    .callee_definition(*callee)
+                    .is_some_and(|path| path.package_is("core", "1"));
                 let unique_inputs = arguments
                     .iter()
                     .zip(requirements)
                     .all(|(arg, requirement)| {
-                        requirement
+                        let borrowed = requirement
                             .as_ref()
-                            .is_none_or(|r| r.passing == PassingMode::Borrow)
+                            .is_none_or(|r| r.passing == PassingMode::Borrow);
+                        let retained = ledger
+                            && requirement
+                                .as_ref()
+                                .is_none_or(|r| !self.callee_unretained(*callee, r.parameter));
+                        borrowed && !retained
                             || self
                                 .property(arg.value)
                                 .is_some_and(|p| p.plain || p.shared)
-                            || self.value(state, arg.value).modes.uniqueness == Uniqueness::Unique
+                            || !borrowed
+                                && self.value(state, arg.value).modes.uniqueness
+                                    == Uniqueness::Unique
                     });
                 for (storage, mutable, argument) in &loans {
                     let declared = self

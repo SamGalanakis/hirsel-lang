@@ -638,6 +638,7 @@ fn borrowed_associations_and_scoped_promises_are_checked_at_native_import() {
         advance_only: true,
         preserve_captures: true,
         preserve_unique: false,
+        unretained: Default::default(),
     }]
     .into();
     assert!(engine.import_native_input(bad).is_err());

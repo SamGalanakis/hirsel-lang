@@ -4133,6 +4133,19 @@ impl Checker<'_> {
                 .any(|p| p.selector.parameter == ParameterRef::bound(ordinal) && p.preserve_unique)
         })
     }
+    /// A borrowed parameter a bodyless core promise reads and stores nothing of.
+    fn callee_unretained(&self, callee: &Callee, ordinal: hirsel_types::ParamId) -> bool {
+        let Callee::Definition { path, .. } = callee else {
+            return false;
+        };
+        self.signatures.get(path).is_some_and(|s| match &s.kind {
+            SignatureKind::Function(f) => f
+                .state_promises
+                .iter()
+                .any(|p| p.preserve_unique && p.unretained.contains(&ordinal)),
+            _ => false,
+        })
+    }
     fn mutable_storage_exit(&mut self, model: &Model, state: &State, report: bool) {
         for root in 0..model.mutable_parameters.len() {
             if !model.mutable_parameters[root] {
@@ -5402,9 +5415,15 @@ impl Checker<'_> {
                     self.read(model, state, o, report);
                 }
                 // MODE-2: a `@preserves_unique` callee installs content from its
-                // taken and `mut` arguments only.
+                // taken and `mut` arguments only, and a bodyless core callee
+                // also from a borrowed one the ledger does not mark unretained,
+                // which must then be plain or a handle.
+                let ledger = matches!(callee, Callee::Definition { path, .. }
+                    if path.package_is("core", "1"));
                 let unique_inputs = arguments.iter().all(|a| {
-                    a.value.usage == UseKind::Borrow
+                    let borrowed = a.value.usage == UseKind::Borrow;
+                    let retained = ledger && !self.callee_unretained(callee, a.parameter);
+                    borrowed && !retained
                         || !needs_release(
                             self,
                             self.place_type(a.value.place),
@@ -5414,7 +5433,7 @@ impl Checker<'_> {
                             &self.definition.types,
                             self.place_type(a.value.place),
                         )
-                        || self.operand_unique(state, &a.value)
+                        || !borrowed && self.operand_unique(state, &a.value)
                 });
                 for a in arguments {
                     if a.value.usage == UseKind::Mut

@@ -185,6 +185,15 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
             }
             None => (String::new(), line),
         };
+        // An `@unretained(q, ..) ` prefix after it has no source form: the
+        // oracle below supplies it by parameter name.
+        let (unretained, declaration) = match declaration.strip_prefix("@unretained(") {
+            Some(rest) => {
+                let (names, declaration) = rest.split_once(") ").unwrap();
+                (names.split(", ").collect::<Vec<_>>(), declaration)
+            }
+            None => (Vec::new(), declaration),
+        };
         if !(declaration.starts_with("fn ") || declaration.starts_with("N fn ")) {
             continue;
         }
@@ -272,6 +281,21 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
             _ => None,
         };
         if let SignatureKind::Function(f) = &mut normalized.kind {
+            if !unretained.is_empty() {
+                let ordinals: Vec<ParamId> = unretained
+                    .iter()
+                    .map(|n| {
+                        let p = f
+                            .parameters
+                            .iter()
+                            .position(|p| p.name.as_deref() == Some(n));
+                        ParamId(p.unwrap() as u32)
+                    })
+                    .collect();
+                let mut promises = f.state_promises.to_vec();
+                promises[0].unretained = ordinals.into();
+                f.state_promises = promises.into();
+            }
             let mut result = normalized.types.get(f.result).unwrap().clone();
             assert!(result.erased_captures.is_none());
             result.erased_captures = expected_captures;

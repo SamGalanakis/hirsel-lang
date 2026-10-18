@@ -438,14 +438,16 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     {
         publish(signature, &mut out);
     }
-    // `@preserves_unique(p)` may prefix a ledger line (MODE-2, CLO-2).
+    // `@preserves_unique(p)`, then `@unretained(q, ..)` naming the borrowed
+    // parameters it reads and stores nothing of, may prefix a ledger line
+    // (MODE-2, CLO-2).
     let ledger = SECTION22.lines().map(|line| {
-        line.strip_prefix("@preserves_unique(")
-            .and_then(|rest| rest.split_once(") "))
-            .map_or((None, line), |(selected, rest)| (Some(selected), rest))
+        let (preserves_unique, line) = ledger_prefix(line, "@preserves_unique(");
+        let (unretained, line) = ledger_prefix(line, "@unretained(");
+        (preserves_unique, unretained, line)
     });
-    for (preserves_unique, line) in
-        ledger.filter(|(_, l)| l.starts_with("fn ") || l.starts_with("N fn "))
+    for (preserves_unique, unretained, line) in
+        ledger.filter(|(_, _, l)| l.starts_with("fn ") || l.starts_with("N fn "))
     {
         let noalloc = line.starts_with("N ");
         let text = line.trim_start_matches("N ").trim_start_matches("fn ");
@@ -484,23 +486,38 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 advance_only: true,
                 preserve_captures: true,
                 preserve_unique: false,
+                unretained: Default::default(),
             }]
             .into();
             apply_state_promises(&mut b.types, &mut f.parameters, &f.state_promises);
         }
+        let ordinal = |name: &str| {
+            ParamId(
+                f.parameters
+                    .iter()
+                    .position(|p| p.name.as_deref() == Some(name))
+                    .unwrap() as u32,
+            )
+        };
         if let Some(selected) = preserves_unique {
-            let ordinal = f
-                .parameters
-                .iter()
-                .position(|p| p.name.as_deref() == Some(selected))
-                .unwrap();
+            let unretained =
+                unretained.map_or_else(Vec::new, |names| names.split(", ").map(ordinal).collect());
+            assert!(
+                unretained
+                    .iter()
+                    .all(|p| f.parameters[p.0 as usize].passing == PassingMode::Borrow),
+                "{name}: only a borrowed parameter is unretained"
+            );
             f.state_promises = vec![StatePromise {
-                selector: ParameterRef::bound(ParamId(ordinal as u32)).into(),
+                selector: ParameterRef::bound(ordinal(selected)).into(),
                 advance_only: false,
                 preserve_captures: false,
                 preserve_unique: true,
+                unretained: unretained.into(),
             }]
             .into();
+        } else {
+            assert!(unretained.is_none(), "{name}: @unretained needs a promise");
         }
         publish(
             b.signature(name, SignatureKind::Function(f), false),
@@ -1194,6 +1211,12 @@ fn builtin(n: &str) -> Option<BuiltinType> {
         "Ptr" => Ptr,
         _ => return None,
     })
+}
+/// A ledger line's leading `@attribute(arguments) `, if it starts with `opening`.
+fn ledger_prefix<'a>(line: &'a str, opening: &str) -> (Option<&'a str>, &'a str) {
+    line.strip_prefix(opening)
+        .and_then(|rest| rest.split_once(") "))
+        .map_or((None, line), |(arguments, rest)| (Some(arguments), rest))
 }
 fn matching(s: &str, start: usize) -> usize {
     let mut depth = 0;

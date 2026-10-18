@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: accept
+// map.insert stores only plain keys here, so a unique map stays unique, at a root
+// and through a unique field. Twin is MODE-2-map-insert-counted-key-bad.
+type Index {
+  by_id: unique Map[u64, u64],
+}
+
+fn need(mut m: unique Map[u64, u64]) -> () {}
+
+fn root(mut m: unique Map[u64, u64]) -> () {
+  map.insert(mut m, 1, 2)
+  need(mut m)
+}
+
+fn field(mut ix: unique Index) -> () {
+  map.insert(mut ix.by_id, 1, 2)
+  need(mut ix.by_id)
+}

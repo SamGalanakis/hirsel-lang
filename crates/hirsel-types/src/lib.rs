@@ -526,6 +526,9 @@ pub struct StatePromise {
     /// MODE-2: a unique selected argument comes back unique when every other
     /// non-plain taken or `mut` argument is unique too.
     pub preserve_unique: bool,
+    /// MODE-2: borrowed parameters a bodyless core operation reads and stores
+    /// nothing derived from, which its borrowed-argument clause exempts.
+    pub unretained: SharedSlice<ParamId>,
 }
 /// Preserve the selected incoming erased environment in the callable interface.
 /// Field selectors remain on the header: a nominal's representation is immutable.
@@ -576,6 +579,10 @@ pub fn state_promises_satisfy(actual: &[StatePromise], expected: &[StatePromise]
                 && (!expected.advance_only || actual.advance_only)
                 && (!expected.preserve_captures || actual.preserve_captures)
                 && (!expected.preserve_unique || actual.preserve_unique)
+                && expected
+                    .unretained
+                    .iter()
+                    .all(|p| actual.unretained.contains(p))
         })
     })
 }

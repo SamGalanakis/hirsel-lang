@@ -39,6 +39,7 @@ fn promise(f: &mut Fixture) {
         advance_only: false,
         preserve_captures: false,
         preserve_unique: true,
+        unretained: Default::default(),
     }]
     .into();
 }
@@ -128,6 +129,7 @@ fn preserving_call(preserves: bool, aliased: bool) -> Fixture {
             advance_only: false,
             preserve_captures: false,
             preserve_unique: true,
+            unretained: Default::default(),
         }]
         .into();
     }
@@ -187,6 +189,7 @@ fn preserving_result(preserves: bool) -> Fixture {
             advance_only: false,
             preserve_captures: false,
             preserve_unique: true,
+            unretained: Default::default(),
         }]
         .into();
     }
@@ -239,4 +242,82 @@ fn an_indirect_call_does_not_use_the_promise() {
         arguments: vec![],
     };
     handback_error(&f, "preserved unique hand-back");
+}
+
+/// `@preserves_unique(x) fn main(mut x: String, y: String)` calling a
+/// preserving `callee(mut x, y)` that borrows `y`, declared in core@1 when `core`,
+/// whose promise marks the `unretained` parameters.
+fn borrowing_call(core: bool, unretained: &[u32]) -> Fixture {
+    let (mut f, x) = handback(false);
+    let y = param(&mut f, TypeKind::Primitive(Primitive::String));
+    let callee_path = if core {
+        DefPath::core("test.keep")
+    } else {
+        path("callee")
+    };
+    let result = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
+    f.body().blocks[0].terminator = Terminator::Call {
+        callee: Callee::Definition {
+            path: callee_path.clone(),
+            arguments: vec![],
+        },
+        arguments: vec![
+            CallArgument {
+                parameter: ParamId(0),
+                value: operand(x, UseKind::Mut),
+            },
+            CallArgument {
+                parameter: ParamId(1),
+                value: operand(y, UseKind::Borrow),
+            },
+        ],
+        returns: Some(CallReturn {
+            destination: PlaceId(result),
+            next: BlockId(1),
+        }),
+        on_failure: CleanupId(0),
+    };
+    f.body().blocks.push(block(vec![], ret(result, 0)));
+    owner_sig(&mut f, &[PassingMode::Mut, PassingMode::Borrow]);
+    promise(&mut f);
+    let mut callee = function_signature(
+        "callee",
+        vec![
+            (PassingMode::Mut, TypeKind::Primitive(Primitive::String)),
+            (PassingMode::Borrow, TypeKind::Primitive(Primitive::String)),
+        ],
+        TypeKind::Tuple(vec![].into()),
+    );
+    callee.definition = callee_path.clone();
+    let SignatureKind::Function(fun) = &mut callee.kind else {
+        panic!()
+    };
+    fun.state_promises = vec![StatePromise {
+        selector: ParameterRef::bound(ParamId(0)).into(),
+        advance_only: false,
+        preserve_captures: false,
+        preserve_unique: true,
+        unretained: unretained
+            .iter()
+            .copied()
+            .map(ParamId)
+            .collect::<Vec<_>>()
+            .into(),
+    }]
+    .into();
+    f.signatures.insert(callee_path, callee);
+    f
+}
+
+#[test]
+fn a_bodyless_core_promise_needs_plain_borrowed_arguments() {
+    borrowing_call(false, &[]).valid(); // A proved body only shares out of `y`.
+    handback_error(&borrowing_call(true, &[]), "preserved unique hand-back");
+}
+
+#[test]
+fn an_unretained_borrowed_argument_is_exempt_from_the_core_clause() {
+    borrowing_call(true, &[1]).valid(); // The ledger says `y` is only read.
+    // Marking another parameter leaves `y` under the clause.
+    handback_error(&borrowing_call(true, &[0]), "preserved unique hand-back");
 }

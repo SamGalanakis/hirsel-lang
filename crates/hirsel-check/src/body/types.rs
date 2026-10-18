@@ -1066,6 +1066,7 @@ impl Checker<'_, '_> {
                     advance_only: false,
                     preserve_captures: false,
                     preserve_unique: false,
+                    unretained: Default::default(),
                 });
                 row.advance_only |= promise.kind == ast::StatePromiseKind::AdvanceOnly;
                 row.preserve_captures |= !unique;

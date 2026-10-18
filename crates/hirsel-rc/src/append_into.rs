@@ -2207,6 +2207,7 @@ fn derive_signature(signature: &Signature, into: &DefPath, derived: &Definition)
         advance_only: false,
         preserve_captures: false,
         preserve_unique: true,
+        unretained: Default::default(),
     });
     f.parameters = parameters.into();
     f.state_promises = promises.into();

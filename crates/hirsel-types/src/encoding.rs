@@ -679,6 +679,7 @@ impl Encoder {
             advance_only,
             preserve_captures,
             preserve_unique,
+            unretained,
         } in state_promises
         {
             self.parameter(selector.parameter);
@@ -689,6 +690,10 @@ impl Encoder {
             self.boolean(*advance_only);
             self.boolean(*preserve_captures);
             self.boolean(*preserve_unique);
+            self.number(unretained.len() as u64);
+            for parameter in unretained.iter() {
+                self.number(parameter.0 as u64);
+            }
         }
         self.number(parameters.len() as u64);
         for Parameter {

@@ -16,7 +16,10 @@ Qualified names identify library definitions; they are not dotted source declara
 float and `bool` scalars; these are intrinsic schema variables, not bounds or overloads.
 Other bracketed variables are ordinary generics. Omitted effects and modes take the
 [LANG-6](language.md#lang-6-signatures) defaults. `N` marks an explicit `@noalloc`
-signature; unmarked operations may allocate. Scoped callback authority and allocation join
+signature; unmarked operations may allocate. `@preserves_unique(p)` is the source attribute
+([closures](closures.md)); `@unretained(q)` after it is ledger notation, not source syntax,
+marking a borrowed parameter the operation reads and stores nothing derived from, which the
+promise's borrowed-argument clause exempts ([MODE-2](ownership.md#mode-2-uniqueness)). Scoped callback authority and allocation join
 under [CLO-2](closures.md#clo-2-transparent), even for an `N` operation. Result ownership
 follows the passing modes on every exit unless stated otherwise. Ordinary field and index
 syntax needs no library call.
@@ -185,13 +188,13 @@ N fn string.byte_offset(s: String, pos: StrPos of s) -> u64
 fn path.text(p: Path) -> String
 N fn failure.check(condition: bool, rule: CheckRule) -> () uses {}
 fn map.empty[K: key, V]() -> unique Map[K, V]
-fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()
+@preserves_unique(m) fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()
 N fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
 fn set.empty[T: key]() -> unique Set[T]
 @preserves_unique(s) fn set.insert[T: key](mut s: Set[T], take value: T) -> ()
 N fn set.contains[T: key](s: Set[T], value: T) -> bool
 fn sorted_map.empty[K, V](by: Order[K]) -> unique SortedMap[K, V] of by
-fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()
+@preserves_unique(m) @unretained(by) fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()
 N fn simd.splat[A, n: size](value: A) -> Simd[A, n]
 N fn simd.add[I, n: size](a: Simd[I, n], b: Simd[I, n]) -> Simd[I, n]
 ```

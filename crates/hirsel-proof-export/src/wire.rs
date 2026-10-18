@@ -499,7 +499,8 @@ snapshot_struct!(StatePromise {
     selector,
     advance_only,
     preserve_captures,
-    preserve_unique
+    preserve_unique,
+    unretained
 } in Cx);
 snapshot_struct!(FunctionType {
     state_promises,

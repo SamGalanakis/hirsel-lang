@@ -471,6 +471,7 @@ impl Checker<'_, '_> {
             advance_only: false,
             preserve_captures: true,
             preserve_unique: false,
+            unretained: Default::default(),
         });
         promises.sort_by(|a, b| a.selector.cmp(&b.selector));
         f.state_promises = promises.into();

@@ -1325,6 +1325,7 @@ fn state_selector_transport_preserves_nested_binders_and_field_paths() {
         advance_only: true,
         preserve_captures: true,
         preserve_unique: false,
+        unretained: Default::default(),
     }]
     .into();
     let inner = store.push(inner);
@@ -1406,6 +1407,7 @@ fn state_flags_and_selected_field_identity_change_canonical_bytes() {
         advance_only: false,
         preserve_captures: true,
         preserve_unique: false,
+        unretained: Default::default(),
     }]
     .into();
     let first = store.push(row.clone());

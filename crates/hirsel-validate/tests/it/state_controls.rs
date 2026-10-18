@@ -21,6 +21,7 @@ fn promise(f: &mut Fixture, advance: bool) {
         advance_only: advance,
         preserve_captures: true,
         preserve_unique: false,
+        unretained: Default::default(),
     }]
     .into();
 }
@@ -697,6 +698,7 @@ fn referenced_callback(promised: bool) -> Fixture {
             advance_only: false,
             preserve_captures: true,
             preserve_unique: false,
+            unretained: Default::default(),
         }]
         .into();
     }
@@ -916,6 +918,7 @@ fn select_field(f: &mut Fixture, fields: Vec<FieldId>, advance: bool) {
         advance_only: advance,
         preserve_captures: true,
         preserve_unique: false,
+        unretained: Default::default(),
     }]
     .into();
 }
@@ -964,6 +967,7 @@ fn field_call(callee_fields: Vec<FieldId>) -> Fixture {
         advance_only: true,
         preserve_captures: true,
         preserve_unique: false,
+        unretained: Default::default(),
     }]
     .into();
     f.signatures.insert(callee.definition.clone(), callee);

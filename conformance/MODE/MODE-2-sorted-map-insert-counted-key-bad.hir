@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 10
+// sorted_map.insert stores a share of its borrowed String key, so the map is
+// aliased after it; only `by` is unretained. Twin is
+// MODE-2-sorted-map-insert-unretained-order-ok.
+fn need(by: Order[String], mut m: unique SortedMap[String, u64] of by) -> () {}
+
+fn f(by: Order[String], mut m: unique SortedMap[String, u64] of by, k: String) -> () {
+  sorted_map.insert(by, mut m, k, 2)
+  need(by, mut m)
+}
