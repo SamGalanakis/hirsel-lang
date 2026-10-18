@@ -177,7 +177,7 @@ class Workspace(unittest.TestCase):
             self.assertEqual(set(gating.changed_paths(gating.merge_base('main', root), root)),
                              {'ours.txt', 'shared.txt', 'new.txt'})
 
-    def test_a_deleted_file_stands_for_its_directorys_files(self):
+    def test_a_deleted_file_stands_for_one_surviving_sibling(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'crates/a/src').mkdir(parents=True)
@@ -185,8 +185,35 @@ class Workspace(unittest.TestCase):
                 (root / path).write_text('')
             self.assertEqual(
                 gating.owned_paths(['crates/a/src/gone.rs', 'crates/a/Cargo.toml'], root),
-                ['crates/a/Cargo.toml', 'crates/a/src/kept.rs', 'crates/a/src/lib.rs'])
+                ['crates/a/Cargo.toml', 'crates/a/src/kept.rs'])
             self.assertEqual(gating.owned_paths(['crates/b/src/gone/deep.rs'], root), [])
+
+    def test_a_deleted_corpus_file_in_a_large_directory_keeps_the_query_small(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            corpus = root / 'conformance/MODE'
+            corpus.mkdir(parents=True)
+            for index in range(2000):
+                (corpus / f'MODE-2-case-{index:04}-ok.hir').write_text('')
+            files = gating.owned_paths(['conformance/MODE/MODE-2-renamed-bad.hir'], root)
+            self.assertEqual(files, ['conformance/MODE/MODE-2-case-0000-ok.hir'])
+
+    def test_a_query_reaches_buck2_through_an_argfile(self):
+        # One argument above Linux's 128 KiB limit per string would fail exec.
+        expression = ' + '.join(f'owner("conformance/MODE/case-{i:05}.hir")' for i in range(4000))
+        self.assertGreater(len(expression), 128 * 1024)
+        seen = []
+
+        def buck2(command, *arguments, **kwargs):
+            seen.append((command, arguments, Path(arguments[0][1:]).read_text()))
+            return subprocess.CompletedProcess([], 0, stdout='root//:a\n', stderr='')
+        with patch.object(gating, 'buck2', buck2):
+            self.assertEqual(gating.uquery(expression), ['root//:a'])
+        [(command, arguments, text)] = seen
+        self.assertEqual(command, 'uquery')
+        self.assertEqual(len(arguments), 1)
+        self.assertTrue(arguments[0].startswith('@'))
+        self.assertEqual(text, expression + '\n')
 
     def test_only_tool_crates_may_depend_on_the_driver(self):
         def package(name, *dependencies):
@@ -563,7 +590,8 @@ else
   printf '%s\\n' "$*" >> "$COMMANDS"
 fi
 case $1 in
-  uquery) [[ $* == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit 0 ;;
+  uquery) query=$*; last=${*: -1}; [[ $last == @* ]] && query=$(cat "${last#@}")
+    [[ $query == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit 0 ;;
   build)
     if [[ $* == *show-json-output* ]]; then
       echo '{"root//:hirsel-cli-bin-hirsel": ".buck2/bin/hirsel"}'

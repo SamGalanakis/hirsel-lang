@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import tempfile
 import sys
 import tempfile
 import time
@@ -297,7 +298,9 @@ def policy_errors(root=ROOT) -> list[str]:
 
 
 def owned_paths(paths, root=ROOT):
-    """The files to ask Buck2 about: a deleted file stands for its directory's files."""
+    """The files to ask Buck2 about: a deleted file stands for one surviving file
+    of its directory, which the same globs own, so the query stays small however
+    many files the directory holds."""
     files = set()
     for path in paths:
         if (root / path).is_file():
@@ -306,7 +309,9 @@ def owned_paths(paths, root=ROOT):
         directory = (root / path).parent
         while not directory.is_dir():
             directory = directory.parent
-        files.update(p.relative_to(root).as_posix() for p in directory.iterdir() if p.is_file())
+        survivors = sorted(p for p in directory.iterdir() if p.is_file())
+        if survivors:
+            files.add(survivors[0].relative_to(root).as_posix())
     return sorted(files)
 
 
@@ -317,7 +322,12 @@ def buck2(command, *arguments, **kwargs):
 
 
 def uquery(expression) -> list[str]:
-    result = buck2('uquery', expression, capture_output=True, text=True)
+    # Buck2 reads the query from an argfile itself, so a query of any length
+    # never meets the operating system's per-argument limit.
+    with tempfile.NamedTemporaryFile('w', prefix='hirsel-uquery-', suffix='.args') as argfile:
+        argfile.write(expression + '\n')
+        argfile.flush()
+        result = buck2('uquery', f'@{argfile.name}', capture_output=True, text=True)
     if result.returncode:
         raise SystemExit(f'buck2 uquery failed: {expression}\n{result.stderr}')
     return result.stdout.split()
