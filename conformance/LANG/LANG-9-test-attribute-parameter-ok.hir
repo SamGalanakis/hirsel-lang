@@ -1,4 +1,6 @@
 // rule: LANG-9
 // expect: test
 @test
-fn example(t: Test) { test.check(t, true) }
+fn example(t: Test) {
+  test.check(t, true)
+}

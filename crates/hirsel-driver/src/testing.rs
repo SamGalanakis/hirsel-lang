@@ -163,22 +163,7 @@ pub fn run_interpreted(
     tests
         .iter()
         .map(|test| {
-            let config = hirsel_tir::RunConfiguration {
-                entry: test.entry.clone(),
-                hash_seed: 0,
-                inputs: vec![],
-            };
-            let simulation = SimulationConfig {
-                grants: Default::default(),
-                test_seed: test.seed,
-                ..Default::default()
-            };
-            let run = if checked {
-                hirsel_engine::run_observed_checked
-            } else {
-                hirsel_engine::run_observed_snapshot
-            };
-            let failure = match run(&mut program.engine, &config, simulation) {
+            let failure = match execute(program, test, checked, 0) {
                 Ok(execution) => match execution.outcome {
                     Ok(outcome) => outcome_failure(&outcome),
                     Err(error) => Some(format!("runtime error: {error:?}")),
@@ -192,6 +177,31 @@ pub fn run_interpreted(
             }
         })
         .collect()
+}
+
+/// Retain the complete observation for conformance's checked-execution witness.
+pub fn execute(
+    program: &mut LoadedProgram,
+    test: &Test,
+    checked: bool,
+    hash_seed: u64,
+) -> Result<hirsel_engine::ObservedExecution, ToolError> {
+    let config = hirsel_tir::RunConfiguration {
+        entry: test.entry.clone(),
+        hash_seed,
+        inputs: vec![],
+    };
+    let simulation = SimulationConfig {
+        grants: Default::default(),
+        test_seed: test.seed,
+        ..Default::default()
+    };
+    let run = if checked {
+        hirsel_engine::run_observed_checked
+    } else {
+        hirsel_engine::run_observed_snapshot
+    };
+    run(&mut program.engine, &config, simulation)
 }
 
 pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {

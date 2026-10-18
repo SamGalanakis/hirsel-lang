@@ -465,8 +465,9 @@ fn run_test_suite(
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
             std::fs::write(&fallback, source).map_err(|e| e.to_string())?;
         }
-        let mut program = hirsel_driver::load_program_source(path.unwrap_or(&fallback), Some(source))
-            .map_err(|e| e.to_string())?;
+        let mut program =
+            hirsel_driver::load_program_source(path.unwrap_or(&fallback), Some(source))
+                .map_err(|e| e.to_string())?;
         let tests =
             hirsel_driver::testing::discover(&mut program, &[], None).map_err(|e| e.to_string())?;
         if tests.is_empty() {

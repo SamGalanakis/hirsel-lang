@@ -76,21 +76,37 @@ fn evaluate_on_compiler_thread(
             }
             Err(error) => return (Status::Fail(format!("test check: {error}")), observation),
         };
-        let ordinary = hirsel_driver::testing::run_interpreted(&mut program, &tests, false);
-        let checked = hirsel_driver::testing::run_interpreted(&mut program, &tests, true);
-        if ordinary != checked {
-            observation.checked = Some(format!("ordinary {ordinary:?}; checked {checked:?}"));
+        for test in &tests {
+            let ordinary = hirsel_driver::testing::execute(&mut program, test, false, hash_seed);
+            let checked = hirsel_driver::testing::execute(&mut program, test, true, hash_seed);
+            match (ordinary, checked) {
+                (Ok(ordinary), Ok(checked)) => {
+                    observation.checked = checked_divergence(&ordinary, &checked);
+                    if !matches!(ordinary.outcome, Ok(hirsel_engine::RunOutcome::Exit(0)))
+                        || observation.checked.is_some()
+                    {
+                        return (
+                            Status::Fail(format!(
+                                "{}: {:?}; checked: {:?}",
+                                test.definition, ordinary.outcome, observation.checked
+                            )),
+                            observation,
+                        );
+                    }
+                }
+                (ordinary, checked) => {
+                    return (
+                        Status::Fail(format!(
+                            "{}: ordinary {ordinary:?}; checked {checked:?}",
+                            test.definition
+                        )),
+                        observation,
+                    );
+                }
+            }
         }
-        observation.actual = format!("{} tests", ordinary.len());
-        let failed: Vec<_> = ordinary.iter().filter(|r| r.failure.is_some()).collect();
-        return (
-            if failed.is_empty() && observation.checked.is_none() {
-                Status::Pass
-            } else {
-                Status::Fail(format!("test results: {ordinary:?}; checked: {checked:?}"))
-            },
-            observation,
-        );
+        observation.actual = format!("{} tests", tests.len());
+        return (Status::Pass, observation);
     }
     let text = fs::read_to_string(path).unwrap_or_default();
     let context = program

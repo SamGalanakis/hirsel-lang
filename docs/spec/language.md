@@ -285,8 +285,8 @@ affect selection. Other signatures are LANG-9. Tests remain callable as ordinary
 Each selected test runs in isolation with only Test authority: checks, an Error result,
 and runtime failures fail that test while ordinary cleanup runs and later tests continue.
 The default seed is the first eight SHA-256 bytes of the UTF-8 stable definition path,
-interpreted little endian; an explicit runner seed overrides it. Assertions are explicit (`test.check(t, cond)`); property tests are a
-library call over an explicit generator (`test.for_all(t, gen, law)`) whose seed comes
+interpreted little endian; an explicit runner seed overrides it. Assertions are explicit
+(`test.check(t, cond)`); property tests are a library call over an explicit generator (`test.for_all(t, gen, law)`) whose seed comes
 from `Test`. Fakes, such as a confined directory or a scripted network, are created from
 `Test`. A false check fails LANG-9.
 
