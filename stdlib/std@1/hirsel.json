@@ -279,6 +279,12 @@
       "module": [
         "base64"
       ]
+    },
+    {
+      "path": "utf8.hir",
+      "module": [
+        "utf8"
+      ]
     }
   ],
   "dependencies": []

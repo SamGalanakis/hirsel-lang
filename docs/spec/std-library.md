@@ -483,6 +483,20 @@ sequential listen/accept loop. A server maps malformed requests to a 400 respons
 invoking application handling. No routing, concurrency or persistent-connection framework
 is implied.
 
+## UTF-8 construction and lossy conversion
+
+`std@1/utf8.append_scalar(mut out: List[u8], scalar: u32) -> Result[(),
+utf8.EncodeError] uses {}` appends the scalar's UTF-8 encoding. `EncodeError =
+InvalidScalar(u32)` rejects surrogates and values above U+10FFFF before touching
+`out`. Existing bytes in the builder are preserved on this validation error.
+`utf8.decode_lossy(data: Bytes) -> String uses {}` borrows arbitrary bytes and
+returns owned UTF-8. It replaces each invalid sequence with U+FFFD using Rust's
+maximal valid-prefix/error-span policy: a valid but incomplete prefix is replaced
+once; an invalid next byte is reconsidered as the start of the next sequence.
+Overlong encodings, surrogate encodings and values above U+10FFFF are invalid.
+Both operations are ordinary pure source. Strict conversion remains the existing
+`string.from_bytes(take bytes) -> Result[String, Bytes]` operation.
+
 ## Base64 codec
 
 `std@1/base64` provides `Alphabet = Standard | UrlSafe`, `Padding = Required |

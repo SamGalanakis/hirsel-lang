@@ -1,0 +1,260 @@
+// rule: SEM-3
+// expect: run
+// Rust alloctests string::test_from_utf8_lossy and Zig utf8Encode boundaries.
+pub fn main() -> Result[(), ()] {
+  failure.check(std@1/utf8.decode_lossy(bytes.from_list([])) == "", TextInvariant())
+  failure.check(
+    std@1/utf8.decode_lossy(bytes.from_list([104, 101, 108, 108, 111])) == "hello",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(
+      bytes.from_list(
+        [
+          224,
+          184,
+          168,
+          224,
+          185,
+          132,
+          224,
+          184,
+          151,
+          224,
+          184,
+          162,
+          228,
+          184,
+          173,
+          229,
+          141,
+          142,
+          86,
+          105,
+          225,
+          187,
+          135,
+          116,
+          32,
+          78,
+          97,
+          109
+        ]
+      )
+    ) == "ศไทย中华Việt Nam",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(
+      bytes.from_list(
+        [
+          72,
+          101,
+          108,
+          108,
+          111,
+          194,
+          32,
+          84,
+          104,
+          101,
+          114,
+          101,
+          255,
+          32,
+          71,
+          111,
+          111,
+          100,
+          98,
+          121,
+          101
+        ]
+      )
+    ) == "Hello� There� Goodbye",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(
+      bytes.from_list(
+        [
+          72,
+          101,
+          108,
+          108,
+          111,
+          192,
+          128,
+          32,
+          84,
+          104,
+          101,
+          114,
+          101,
+          230,
+          131,
+          32,
+          71,
+          111,
+          111,
+          100,
+          98,
+          121,
+          101
+        ]
+      )
+    ) == "Hello�� There� Goodbye",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(
+      bytes.from_list([245, 102, 111, 111, 245, 128, 98, 97, 114])
+    ) == "�foo��bar",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(
+      bytes.from_list(
+        [241, 102, 111, 111, 241, 128, 98, 97, 114, 241, 128, 128, 98, 97, 122]
+      )
+    ) == "�foo�bar�baz",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(
+      bytes.from_list(
+        [244, 102, 111, 111, 244, 128, 98, 97, 114, 244, 191, 98, 97, 122]
+      )
+    ) == "�foo�bar��baz",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(
+      bytes.from_list(
+        [240, 128, 128, 128, 102, 111, 111, 240, 144, 128, 128, 98, 97, 114]
+      )
+    ) == "����foo𐀀bar",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(
+      bytes.from_list([237, 160, 128, 102, 111, 111, 237, 191, 191, 98, 97, 114])
+    ) == "���foo���bar",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(bytes.from_list([225, 128])) == "�",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(bytes.from_list([241, 128, 128])) == "�",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(bytes.from_list([224, 128])) == "��",
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.decode_lossy(bytes.from_list([244, 144, 128, 128])) == "����",
+    TextInvariant()
+  )
+  let mut out: List[u8] = []
+  failure.check(std@1/utf8.append_scalar(mut out, 0u32) == Ok(()), TextInvariant())
+  failure.check(std@1/utf8.append_scalar(mut out, 127u32) == Ok(()), TextInvariant())
+  failure.check(std@1/utf8.append_scalar(mut out, 128u32) == Ok(()), TextInvariant())
+  failure.check(std@1/utf8.append_scalar(mut out, 2047u32) == Ok(()), TextInvariant())
+  failure.check(std@1/utf8.append_scalar(mut out, 2048u32) == Ok(()), TextInvariant())
+  failure.check(std@1/utf8.append_scalar(mut out, 55295u32) == Ok(()), TextInvariant())
+  failure.check(std@1/utf8.append_scalar(mut out, 57344u32) == Ok(()), TextInvariant())
+  failure.check(std@1/utf8.append_scalar(mut out, 65535u32) == Ok(()), TextInvariant())
+  failure.check(std@1/utf8.append_scalar(mut out, 65536u32) == Ok(()), TextInvariant())
+  failure.check(
+    std@1/utf8.append_scalar(mut out, 1114111u32) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(
+    bytes.from_list(copy out) == bytes.from_list(
+      [
+        0,
+        127,
+        194,
+        128,
+        223,
+        191,
+        224,
+        160,
+        128,
+        237,
+        159,
+        191,
+        238,
+        128,
+        128,
+        239,
+        191,
+        191,
+        240,
+        144,
+        128,
+        128,
+        244,
+        143,
+        191,
+        191
+      ]
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.append_scalar(mut out, 55296u32) == Error(InvalidScalar(55296u32)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.append_scalar(mut out, 57343u32) == Error(InvalidScalar(57343u32)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.append_scalar(mut out, 1114112u32) == Error(InvalidScalar(1114112u32)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/utf8.append_scalar(mut out, 4294967295u32) == Error(
+      InvalidScalar(4294967295u32)
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    bytes.from_list(take out) == bytes.from_list(
+      [
+        0,
+        127,
+        194,
+        128,
+        223,
+        191,
+        224,
+        160,
+        128,
+        237,
+        159,
+        191,
+        238,
+        128,
+        128,
+        239,
+        191,
+        191,
+        240,
+        144,
+        128,
+        128,
+        244,
+        143,
+        191,
+        191
+      ]
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

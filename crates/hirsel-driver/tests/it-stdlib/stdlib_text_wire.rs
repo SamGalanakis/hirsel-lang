@@ -49,3 +49,8 @@ fn hex_is_ordinary_source() {
 fn base64_is_ordinary_source() {
     source_codec("base64", "base64", &["encode", "decode"]);
 }
+
+#[test]
+fn utf8_is_ordinary_source() {
+    source_codec("utf8", "utf8", &["append_scalar", "decode_lossy"]);
+}

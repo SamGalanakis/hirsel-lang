@@ -126,28 +126,6 @@ fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
   Ok(n)
 }
 
-// Adapted serde_json src/read.rs push_wtf8_codepoint,
-// commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
-// Only validated Unicode scalars reach this encoder; safe List operations.
-fn json_scalar_utf8(n: u64, mut output: List[u8]) -> () uses {} {
-  if n < 128 {
-    core@1/list.push(mut output, core@1/int.narrow(n))
-  } else {
-    if n < 2048 {
-      core@1/list.push(mut output, core@1/int.narrow(192u64 | n >> 6))
-    } else {
-      if n < 65536 {
-        core@1/list.push(mut output, core@1/int.narrow(224u64 | n >> 12))
-      } else {
-        core@1/list.push(mut output, core@1/int.narrow(240u64 | n >> 18))
-        core@1/list.push(mut output, core@1/int.narrow(128u64 | n >> 12 & 63))
-      }
-      core@1/list.push(mut output, core@1/int.narrow(128u64 | n >> 6 & 63))
-    }
-    core@1/list.push(mut output, core@1/int.narrow(128u64 | n & 63))
-  }
-}
-
 // Adapted serde_json src/read.rs parse_str_bytes/parse_escape/parse_unicode_escape,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. Strict UTF-8 mode only.
 fn json_quoted(data: Bytes, mut pos: u64) -> Result[String, JsonError] uses {} {
@@ -208,7 +186,10 @@ fn json_quoted(data: Bytes, mut pos: u64) -> Result[String, JsonError] uses {} {
           }
           n = 65536 + (n - 55296) * 1024 + low - 56320
         }
-        json_scalar_utf8(n, mut output)
+        match std@1/utf8.append_scalar(mut output, core@1/int.narrow(n)) {
+          Ok(()) => (),
+          Error(_) => core@1/failure.check(false, TextInvariant()),
+        }
       } else {
         return Error(Syntax(pos - 1))
       }

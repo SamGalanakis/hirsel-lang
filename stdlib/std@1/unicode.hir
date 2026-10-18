@@ -125,25 +125,6 @@ fn decompose(mut points: List[u32], cp: u32) -> () uses {} {
   }
 }
 
-fn encode(mut bytes: List[u8], cp: u32) -> () uses {} {
-  if cp < 0x80 {
-    core@1/list.push(mut bytes, core@1/int.narrow(cp))
-  } else {
-    if cp < 0x800 {
-      core@1/list.push(mut bytes, core@1/int.narrow(0xc0u32 | cp >> 6))
-    } else {
-      if cp < 0x10000 {
-        core@1/list.push(mut bytes, core@1/int.narrow(0xe0u32 | cp >> 12))
-      } else {
-        core@1/list.push(mut bytes, core@1/int.narrow(0xf0u32 | cp >> 18))
-        core@1/list.push(mut bytes, core@1/int.narrow(0x80u32 | cp >> 12 & 0x3f))
-      }
-      core@1/list.push(mut bytes, core@1/int.narrow(0x80u32 | cp >> 6 & 0x3f))
-    }
-    core@1/list.push(mut bytes, core@1/int.narrow(0x80u32 | cp & 0x3f))
-  }
-}
-
 // Explicit NFC: compatibility mappings never enter canonical_pair.
 pub fn normalize_nfc(s: String) -> String uses {} {
   let mut points: List[u32] = []
@@ -171,7 +152,10 @@ pub fn normalize_nfc(s: String) -> String uses {} {
   }
   let mut bytes: List[u8] = []
   for cp in composed {
-    encode(mut bytes, cp)
+    match std@1/utf8.append_scalar(mut bytes, cp) {
+      Ok(()) => (),
+      Error(_) => core@1/failure.check(false, TextInvariant()),
+    }
   }
   match core@1/string.from_bytes(core@1/bytes.from_list(take bytes)) {
     Ok(text) => take text,
