@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-641 exported definitions; 216 variants.
+646 exported definitions; 216 variants.
 
 
 ## Types and roots
@@ -862,6 +862,14 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc fn set.contains[T: key](s: Set[T], value: T) -> bool` <!-- core@1/set/contains -->
 - `fn set.empty[T: key]() -> Set[T]` <!-- core@1/set/empty -->
 - `fn set.insert[T: key](mut s: Set[T], take value: T) -> ()` <!-- core@1/set/insert -->
+
+## sha256
+
+- `pub opaque type sha256.State: plain + inert uses {}` — Zig crypto/sha2.zig portable SHA-256 rounds/update/final (MIT). <!-- std@1/sha256/State -->
+- `@noalloc pub fn sha256.digest(data: Bytes) -> Inline[u8, 32] uses {}` <!-- std@1/sha256/digest -->
+- `@noalloc pub fn sha256.finish(take state: State) -> Inline[u8, 32] uses {}` <!-- std@1/sha256/finish -->
+- `@noalloc pub fn sha256.new() -> State uses {}` <!-- std@1/sha256/new -->
+- `@noalloc pub fn sha256.update(mut state: State, data: Bytes) -> () uses {}` <!-- std@1/sha256/update -->
 
 ## shared
 
