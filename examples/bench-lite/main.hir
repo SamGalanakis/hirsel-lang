@@ -1,0 +1,221 @@
+// A deterministic workload, no timing: build a word corpus from a seeded
+// generator, then count word frequencies and collect the distinct words twice,
+// once on the heap and once inside a bounded arena. Both summaries must agree.
+//
+// usage: bench-lite [WORDS [SEED [ARENA_BYTES]]]: by default 2000 words, seed 1
+// and a 16 MiB arena.
+pub type Summary {
+  words: u64,
+  different: u64,
+  bytes: u64,
+  checksum: u64,
+  top: List[(String, u64)],
+}
+
+pub type Ranked {
+  word: String,
+  count: u64,
+}
+
+const SYLLABLES: List[String] = [
+  "ba",
+  "ce",
+  "di",
+  "fo",
+  "gu",
+  "ha",
+  "ji",
+  "ko",
+  "lu",
+  "ma",
+  "ne",
+  "pi",
+  "qo",
+  "ru",
+  "sa",
+  "te",
+  "vi",
+  "wo",
+  "xu",
+  "ze"
+]
+
+// One word of one to three syllables; the generator alone decides it.
+fn word(mut g: prng.Generator) -> String {
+  let mut out: List[u8] = []
+  let syllables = 1u64 + int.mod(prng.next_u64(mut g), 3u64)
+  for _ in 0u64..syllables {
+    text.append(mut out, SYLLABLES[int.mod(prng.next_u64(mut g), list.len(SYLLABLES))])
+  }
+  match text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => "",
+  }
+}
+
+fn corpus(count: u64, seed: u64) -> List[String] {
+  let mut g = prng.seed(seed)
+  let mut words: List[String] = []
+  for _ in 0u64..count {
+    list.push(mut words, word(mut g))
+  }
+  take words
+}
+
+@noalloc
+fn by_count(a: Ranked, b: Ranked) -> i32 uses {} {
+  if a.count != b.count {
+    return if a.count > b.count {
+      -1
+    } else {
+      1
+    }
+  }
+  string.compare(a.word, b.word)
+}
+
+// std@1's u64.wrapping_mul is a shift-and-add loop; one u128 product is cheaper.
+fn wrapping_mul(a: u64, b: u64) -> u64 {
+  let wide_a: u128 = int.widen(a)
+  let wide_b: u128 = int.widen(b)
+  int.truncate(wide_a * wide_b)
+}
+
+// FNV-1a over each distinct word and its count, in first-seen order.
+fn mix(hash: u64, data: Bytes) -> u64 {
+  let mut h = hash
+  for i in 0u64..bytes.len(data) {
+    h = wrapping_mul(h ^ int.widen(data[i]), 1099511628211u64)
+  }
+  h
+}
+
+// Count in maps and lists whose storage lives where `counts` and `order` do; the
+// summary is always on the heap.
+fn tally(words: List[String], mut counts: Map[String, u64], mut order: List[String]) -> Summary {
+  let mut bytes = 0u64
+  for w in words {
+    bytes += string.byte_len(w)
+    match map.get(counts, w) {
+      Some(n) => map.insert(mut counts, w, n + 1),
+      None() => {
+        map.insert(mut counts, w, 1)
+        list.push(mut order, unique w)
+      },
+    }
+  }
+  let mut checksum = 14695981039346656037u64
+  let mut ranked: List[Ranked] = []
+  for w in order {
+    let n = match map.get(counts, w) {
+      Some(n) => n,
+      None() => 0u64,
+    }
+    checksum = mix(checksum, string.as_bytes(w))
+    checksum = mix(checksum, string.as_bytes(u64.to_string(n)))
+    list.push(mut ranked, Ranked(word: unique w, count: n))
+  }
+  let mut sorted = unique take ranked
+  list.sort(mut sorted, by_count)
+  let mut top: List[(String, u64)] = []
+  for r in sorted {
+    if list.len(top) == 5 {
+      break
+    }
+    list.push(mut top, (unique r.word, r.count))
+  }
+  Summary(
+    words: list.len(words),
+    different: list.len(order),
+    bytes: bytes,
+    checksum: checksum,
+    top: take top
+  )
+}
+
+fn heap_summary(words: List[String]) -> Summary {
+  let mut counts: Map[String, u64] = map.empty()
+  let mut order: List[String] = []
+  tally(words, mut counts, mut order)
+}
+
+fn arena_summary(words: List[String], capacity: u64) -> Result[Summary, String] {
+  match arena.bounded(
+    capacity,
+    fn(a: Arena) -> Summary {
+      let mut counts: Map[String, u64] in a = map.empty()
+      let mut order: List[String] in a = []
+      tally(words, mut counts, mut order)
+    }
+  ) {
+    Ok(s) => Ok(take s),
+    Error(_) => Error("the arena ran out of space"),
+  }
+}
+
+fn report(s: Summary) -> String {
+  let mut out: List[u8] = []
+  text.append(mut out, "words ")
+  u64.format_into(s.words, mut out)
+  text.append(mut out, "\ndifferent ")
+  u64.format_into(s.different, mut out)
+  text.append(mut out, "\nbytes ")
+  u64.format_into(s.bytes, mut out)
+  text.append(mut out, "\nchecksum ")
+  u64.format_into(s.checksum, mut out)
+  text.append(mut out, "\n")
+  for (w, n) in s.top {
+    text.append(mut out, "  ")
+    text.append(mut out, w)
+    text.append(mut out, " ")
+    u64.format_into(n, mut out)
+    text.append(mut out, "\n")
+  }
+  match text.finish(take out) {
+    Ok(t) => take t,
+    Error(_) => "",
+  }
+}
+
+fn number(args: Args, index: u64, default: u64) -> Result[u64, String] {
+  if arg.count(args) <= index {
+    return Ok(default)
+  }
+  let text = match arg.text(args, index) {
+    Ok(t) => take t,
+    Error(_) => return Error("arguments must be UTF-8"),
+  }
+  match u64.parse(text) {
+    Ok(n) => Ok(n),
+    Error(_) => Error(string.concat("not a number: ", text)),
+  }
+}
+
+fn run(args: Args) -> Result[String, String] {
+  if arg.count(args) > 3 {
+    return Error("usage: bench-lite [WORDS [SEED [ARENA_BYTES]]]")
+  }
+  let words = corpus(number(args, 0, 2000)?, number(args, 1, 1)?)
+  let on_heap = heap_summary(words)
+  let in_arena = arena_summary(words, number(args, 2, 16777216)?)?
+  if on_heap != in_arena {
+    return Error("heap and arena summaries differ")
+  }
+  Ok(string.concat(report(on_heap), "heap and arena agree\n"))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  // The host reports a returned error as `error: <message>` and exits 1.
+  let text = match run(args) {
+    Ok(text) => take text,
+    Error(message) => return Error(take message),
+  }
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("no stdout"),
+  }
+  match out.print(output, text) {
+    Ok(()) => Ok(()),
+    Error(_) => Error("cannot write output"),
+  }
+}

@@ -60,6 +60,8 @@ selects an explicit bound.
 | [filesystem](filesystem/README.md) | Create nested directories, list typed entries and metadata, rename within a grant and remove files and empty directories. |
 | [sortuniq](sortuniq/main.hir) | Sort distinct UTF-8 lines by byte order; empty fields, including the final field after a newline, are retained. |
 | [logq](logq/main.hir) | Query a JSON-lines or plain log: `[--level L] [--match TEXT] [--field KEY=VALUE] [--top N] FILE` prints matches per level and the most frequent messages; bad input exits 1 with `error: ...` on stderr. Takes flags and the file, with no demo. |
+| [mdtoc](mdtoc/main.hir) | Print a nested Markdown table of contents for `FILE`: ATX headings outside code fences, GitHub-style anchors over NFC text with `-1`, `-2` for repeats; non-UTF-8 input exits 1 with `error: ...`. |
+| [bench-lite](bench-lite/main.hir) | `[WORDS [SEED [ARENA_BYTES]]]`: count the words of a seeded generated corpus in a `List`/`Map` on the heap and again in a bounded arena, print the summary and its checksum, and check the two agree. Deterministic, with no timing. |
 
 The E2E tests are in `crates/hirsel-cli/tests/examples.rs`. They check exact output
 through both CLI backends and additional supplied-file cases, including a

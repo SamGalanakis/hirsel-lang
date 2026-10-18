@@ -1264,3 +1264,95 @@ fn logq_filters_counts_and_ranks_mixed_logs() {
 fn full_gate_logq_aarch64() {
     logq(true);
 }
+
+
+fn mdtoc(aarch64: bool) {
+    let mut example = Example::new(
+        "mdtoc",
+        &[("main.hir", include_str!("../../../examples/mdtoc/main.hir"))],
+        include_str!("../../../examples/mdtoc/hirsel.json"),
+    );
+    example.data(
+        "guide.md",
+        concat!(
+            "# Hirsel Guide\n\nIntro.\n\n## Getting Started\n\n```sh\n# not a heading\n```\n\n",
+            "## Getting Started\n\n### Ünïcode & Café ✓ ##\n\n#hashtag is text\n\n~~~\n## fenced\n~~~\n\n",
+            "#### Deep_dive: 1-2-3 ###\n\n##   Spaced   Out   \r\n## Getting Started\n####### seven\n",
+        ),
+    );
+    // A decomposed é (e + U+0301) slugs as its NFC composition.
+    example.data("nfd.md", "## Cafe\u{301}\n");
+    example.data("empty.md", "no headings\n");
+    example.data("latin1.md", b"# caf\xe9\n");
+    check_cases(
+        &example,
+        "read",
+        aarch64,
+        &[
+            (
+                &["guide.md"],
+                (
+                    0,
+                    concat!(
+                        "- [Hirsel Guide](#hirsel-guide)\n",
+                        "  - [Getting Started](#getting-started)\n",
+                        "  - [Getting Started](#getting-started-1)\n",
+                        "    - [Ünïcode & Café ✓](#Ünïcode--café-✓)\n",
+                        "      - [Deep_dive: 1-2-3](#deep_dive-1-2-3)\n",
+                        "  - [Spaced   Out](#spaced---out)\n",
+                        "  - [Getting Started](#getting-started-2)\n",
+                    ),
+                    "",
+                ),
+            ),
+            (&["nfd.md"], (0, "- [Cafe\u{301}](#café)\n", "")),
+            (&["empty.md"], (0, "", "")),
+            (&["latin1.md"], (1, "", "error: latin1.md is not UTF-8\n")),
+            (&["missing.md"], (1, "", "error: no such file: missing.md\n")),
+            (&[], (1, "", "error: usage: mdtoc FILE\n")),
+        ],
+    );
+}
+
+#[test]
+fn mdtoc_slugs_unicode_headings_outside_fences() {
+    mdtoc(false);
+}
+
+#[test]
+#[ignore = "full gate"]
+fn full_gate_mdtoc_aarch64() {
+    mdtoc(true);
+}
+
+fn bench_lite(aarch64: bool) {
+    let example = Example::new(
+        "bench-lite",
+        &[("main.hir", include_str!("../../../examples/bench-lite/main.hir"))],
+        include_str!("../../../examples/bench-lite/hirsel.json"),
+    );
+    // Small enough for the interpreter's default step budget.
+    let small = "words 40\ndifferent 35\nbytes 152\nchecksum 3136792867699900722\n  fo 3\n  ce 2\n  di 2\n  xu 2\n  ba 1\nheap and arena agree\n";
+    check_cases(
+        &example,
+        "read",
+        aarch64,
+        &[
+            (&["40", "7"], (0, small, "")),
+            (&["0"], (0, "words 0\ndifferent 0\nbytes 0\nchecksum 14695981039346656037\nheap and arena agree\n", "")),
+            (&["x"], (1, "", "error: not a number: x\n")),
+            (&["1", "2", "3", "4"], (1, "", "error: usage: bench-lite [WORDS [SEED [ARENA_BYTES]]]\n")),
+        ],
+    );
+}
+
+#[test]
+fn bench_lite_heap_and_arena_summaries_agree() {
+    bench_lite(false);
+}
+
+#[test]
+#[ignore = "full gate"]
+fn full_gate_bench_lite_aarch64() {
+    bench_lite(true);
+}

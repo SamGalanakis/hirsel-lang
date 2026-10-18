@@ -1,0 +1,211 @@
+// Print a table of contents for a Markdown file: one nested list item per ATX
+// heading outside fenced code, linking to its GitHub-style anchor.
+//
+// usage: mdtoc FILE
+pub type Heading {
+  level: u64,
+  title: String,
+}
+
+// Append scalar `cp` to `out` as UTF-8.
+fn encode(mut out: List[u8], cp: u32) {
+  if cp < 0x80 {
+    list.push(mut out, int.truncate(cp))
+  } else if cp < 0x800 {
+    list.push(mut out, int.truncate(0xc0u32 | cp >> 6))
+    list.push(mut out, int.truncate(0x80u32 | cp & 0x3f))
+  } else if cp < 0x10000 {
+    list.push(mut out, int.truncate(0xe0u32 | cp >> 12))
+    list.push(mut out, int.truncate(0x80u32 | cp >> 6 & 0x3f))
+    list.push(mut out, int.truncate(0x80u32 | cp & 0x3f))
+  } else {
+    list.push(mut out, int.truncate(0xf0u32 | cp >> 18))
+    list.push(mut out, int.truncate(0x80u32 | cp >> 12 & 0x3f))
+    list.push(mut out, int.truncate(0x80u32 | cp >> 6 & 0x3f))
+    list.push(mut out, int.truncate(0x80u32 | cp & 0x3f))
+  }
+}
+
+// GitHub's anchor rule on the NFC text: ASCII letters lowercase, spaces become
+// `-`, `-` and `_` stay, other ASCII punctuation is dropped. Non-ASCII scalars
+// are kept as written: std@1 has no Unicode case mapping or letter classes yet.
+fn slug(title: String) -> String {
+  let mut out: List[u8] = []
+  for cp in string.scalars(unicode.normalize_nfc(title)) {
+    if cp >= 0x41 && cp <= 0x5a {
+      encode(mut out, cp + 0x20)
+    } else if cp >= 0x61 && cp <= 0x7a || cp >= 0x30 && cp <= 0x39 || cp == 0x2d || cp == 0x5f {
+      encode(mut out, cp)
+    } else if cp == 0x20 {
+      encode(mut out, 0x2d)
+    } else if cp >= 0x80 {
+      encode(mut out, cp)
+    }
+  }
+  match text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => "",
+  }
+}
+
+// `#` to `######`, then a space or the end of the line; the closing `#`
+// sequence and surrounding spaces are not part of the title.
+fn heading(line: String) -> Option[Heading] {
+  let bytes = string.as_bytes(line)
+  let mut level = 0u64
+  while level < bytes.len(bytes) && bytes[level] == 0x23 {
+    level += 1
+  }
+  if level == 0 || level > 6 {
+    return None()
+  }
+  if level < bytes.len(bytes) && bytes[level] != 0x20 && bytes[level] != 0x09 {
+    return None()
+  }
+  let mut end = bytes.len(bytes)
+  while end > level && (bytes[end - 1] == 0x20 || bytes[end - 1] == 0x09) {
+    end -= 1
+  }
+  let mut closing = end
+  while closing > level && bytes[closing - 1] == 0x23 {
+    closing -= 1
+  }
+  if closing == level || bytes[closing - 1] == 0x20 || bytes[closing - 1] == 0x09 {
+    end = closing
+  }
+  let raw = match string.from_bytes(bytes.from_list(slice_bytes(bytes, level, end))) {
+    Ok(s) => take s,
+    Error(_) => return None(),
+  }
+  Some(Heading(level: level, title: unique string.trim(raw)))
+}
+
+fn slice_bytes(data: Bytes, start: u64, end: u64) -> List[u8] {
+  let mut out: List[u8] = []
+  for i in start..end {
+    list.push(mut out, data[i])
+  }
+  take out
+}
+
+// A fence opens with three or more backticks or tildes and closes with the same.
+fn fence(line: String) -> Option[String] {
+  let trimmed = string.trim(line)
+  if string.starts_with(trimmed, "```") {
+    return Some("```")
+  }
+  if string.starts_with(trimmed, "~~~") {
+    return Some("~~~")
+  }
+  None()
+}
+
+fn headings(take text: String) -> List[Heading] {
+  let mut found: List[Heading] = []
+  let mut open: Option[String] = None()
+  for raw in string.split(take text, "\n") {
+    let line = match string.ends_with(raw, "\r") {
+      true => match string.split_once(raw, "\r") {
+        Some((content, _)) => unique content,
+        None() => unique raw,
+      },
+      false => unique raw,
+    }
+    match open {
+      Some(marker) => {
+        if string.starts_with(string.trim(line), marker) {
+          open = None()
+        }
+        continue
+      },
+      None() => (),
+    }
+    match fence(line) {
+      Some(marker) => {
+        open = Some(take marker)
+        continue
+      },
+      None() => (),
+    }
+    match heading(line) {
+      Some(h) => list.push(mut found, take h),
+      None() => (),
+    }
+  }
+  take found
+}
+
+fn toc(found: List[Heading]) -> String {
+  let mut top = 6u64
+  for h in found {
+    if h.level < top {
+      top = h.level
+    }
+  }
+  let mut seen: Map[String, u64] = map.empty()
+  let mut out: List[u8] = []
+  for h in found {
+    let base = slug(h.title)
+    let anchor = match map.get(seen, base) {
+      Some(n) => string.concat(base, string.concat("-", u64.to_string(n))),
+      None() => copy base,
+    }
+    let count = match map.get(seen, base) {
+      Some(n) => n + 1,
+      None() => 1u64,
+    }
+    map.insert(mut seen, base, count)
+    for _ in top..h.level {
+      text.append(mut out, "  ")
+    }
+    text.append(mut out, "- [")
+    text.append(mut out, h.title)
+    text.append(mut out, "](#")
+    text.append(mut out, anchor)
+    text.append(mut out, ")\n")
+  }
+  match text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => "",
+  }
+}
+
+fn run(rt: Io, args: Args) -> Result[String, String] {
+  if arg.count(args) != 1 {
+    return Error("usage: mdtoc FILE")
+  }
+  let name = match arg.text(args, 0) {
+    Ok(t) => take t,
+    Error(_) => return Error("usage: mdtoc FILE"),
+  }
+  let dir = match io.dir(rt, path.of("")) {
+    Ok(d) => d,
+    Error(_) => return Error("no file access granted"),
+  }
+  let data = match file.read_bytes(dir, path.of(name)) {
+    Ok(d) => copy d,
+    Error(NotFound()) => return Error(string.concat("no such file: ", name)),
+    Error(_) => return Error(string.concat("cannot read ", name)),
+  }
+  let text = match string.from_bytes(take data) {
+    Ok(s) => take s,
+    Error(_) => return Error(string.concat(name, " is not UTF-8")),
+  }
+  Ok(toc(headings(take text)))
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), String] {
+  // The host reports a returned error as `error: <message>` and exits 1.
+  let text = match run(rt, args) {
+    Ok(text) => take text,
+    Error(message) => return Error(take message),
+  }
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Error("no stdout"),
+  }
+  match out.print(output, text) {
+    Ok(()) => Ok(()),
+    Error(_) => Error("cannot write output"),
+  }
+}
