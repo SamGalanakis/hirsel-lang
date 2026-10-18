@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-651 exported definitions; 219 variants.
+659 exported definitions; 219 variants.
 
 
 ## Types and roots
@@ -385,10 +385,14 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## f32
 
 - `@noalloc fn f32.bits(value: f32) -> u32` <!-- core@1/f32/bits -->
+- `@noalloc pub fn f32.ceil(value: f32) -> f32 uses {}` <!-- std@1/f32/ceil -->
+- `@noalloc pub fn f32.floor(value: f32) -> f32 uses {}` <!-- std@1/f32/floor -->
 - `@noalloc pub fn f32.format[n: size](value: f32, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Floating text is an ordinary source algorithm over the four IEEE primitives. <!-- std@1/f32/format -->
 - `@preserves_unique(out) pub fn f32.format_into(value: f32, mut out: List[u8]) -> () uses {}` — Appends the shortest round-trip text of 'value' to 'out'; to_string is that text. <!-- std@1/f32/format_into -->
 - `@noalloc fn f32.from_bits(value: u32) -> f32` <!-- core@1/f32/from_bits -->
 - `@noalloc pub fn f32.parse(text: String) -> Result[f32, scalar.ParseError] uses {}` <!-- std@1/f32/parse -->
+- `@noalloc pub fn f32.round(value: f32) -> f32 uses {}` <!-- std@1/f32/round -->
+- `@noalloc pub fn f32.sqrt(value: f32) -> f32 uses {}` <!-- std@1/f32/sqrt -->
 - `@noalloc pub fn f32.sum(xs: Array[f32]) -> f32 uses {}` <!-- std@1/f32/sum -->
 - `pub fn f32.sum_exact(xs: Array[f32]) -> f32 uses {}` <!-- std@1/f32/sum_exact -->
 - `pub fn f32.to_string(value: f32) -> String uses {}` <!-- std@1/f32/to_string -->
@@ -396,10 +400,14 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## f64
 
 - `@noalloc fn f64.bits(value: f64) -> u64` <!-- core@1/f64/bits -->
+- `@noalloc pub fn f64.ceil(value: f64) -> f64 uses {}` <!-- std@1/f64/ceil -->
+- `@noalloc pub fn f64.floor(value: f64) -> f64 uses {}` <!-- std@1/f64/floor -->
 - `@noalloc pub fn f64.format[n: size](value: f64, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` — Floating text is an ordinary source algorithm over the four IEEE primitives. <!-- std@1/f64/format -->
 - `@preserves_unique(out) pub fn f64.format_into(value: f64, mut out: List[u8]) -> () uses {}` — Appends the shortest round-trip text of 'value' to 'out'; to_string is that text. <!-- std@1/f64/format_into -->
 - `@noalloc fn f64.from_bits(value: u64) -> f64` <!-- core@1/f64/from_bits -->
 - `@noalloc pub fn f64.parse(text: String) -> Result[f64, scalar.ParseError] uses {}` <!-- std@1/f64/parse -->
+- `@noalloc pub fn f64.round(value: f64) -> f64 uses {}` <!-- std@1/f64/round -->
+- `@noalloc pub fn f64.sqrt(value: f64) -> f64 uses {}` <!-- std@1/f64/sqrt -->
 - `@noalloc pub fn f64.sum(xs: Array[f64]) -> f64 uses {}` <!-- std@1/f64/sum -->
 - `pub fn f64.sum_exact(xs: Array[f64]) -> f64 uses {}` <!-- std@1/f64/sum_exact -->
 - `pub fn f64.to_string(value: f64) -> String uses {}` <!-- std@1/f64/to_string -->
@@ -749,7 +757,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## map
 
-- `fn map.empty[K: key, V]() -> Map[K, V]` <!-- core@1/map/empty -->
+- `fn map.empty[K: key, V]() -> unique Map[K, V]` <!-- core@1/map/empty -->
 - `@noalloc fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m` <!-- core@1/map/get -->
 - `fn map.insert[K: key, V](mut m: Map[K, V], k: K, take v: V) -> ()` <!-- core@1/map/insert -->
 - `@noalloc pub fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool` — Equality ignores insertion order and borrows all entries, including opaque data. <!-- std@1/map/same_entries -->
@@ -871,7 +879,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## set
 
 - `@noalloc fn set.contains[T: key](s: Set[T], value: T) -> bool` <!-- core@1/set/contains -->
-- `fn set.empty[T: key]() -> Set[T]` <!-- core@1/set/empty -->
+- `fn set.empty[T: key]() -> unique Set[T]` <!-- core@1/set/empty -->
 - `@preserves_unique(s) fn set.insert[T: key](mut s: Set[T], take value: T) -> ()` <!-- core@1/set/insert -->
 
 ## sha256
@@ -901,7 +909,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## sorted_map
 
-- `fn sorted_map.empty[K, V](by: Order[K]) -> SortedMap[K, V] of by` <!-- core@1/sorted_map/empty -->
+- `fn sorted_map.empty[K, V](by: Order[K]) -> unique SortedMap[K, V] of by` <!-- core@1/sorted_map/empty -->
 - `fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, k: K, take v: V) -> ()` <!-- core@1/sorted_map/insert -->
 
 ## stdin
