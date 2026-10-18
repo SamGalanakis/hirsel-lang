@@ -6,7 +6,9 @@ use std::collections::BTreeSet;
 /// Source-shaped spelling of `root` for diagnostics. Core definitions and
 /// those of `package` print by module path, others by versioned path. With
 /// `modes`, each row also shows its written `unique`, `once` and `sendable`
-/// modifiers, so types that differ only in a mode are told apart.
+/// modifiers, and a function type the relation of each parameter and its
+/// result (`fn() -> T in env`), so types that differ only in a mode are told
+/// apart.
 pub fn type_spelling(
     store: &TypeStore,
     root: TypeId,
@@ -18,6 +20,11 @@ pub fn type_spelling(
         Type(TypeId),
         Text(String),
         Leave(TypeId),
+        /// A function type's relation, spelled inside its own binder.
+        Relation(TypeId),
+        /// Enter or leave a function type's parameter binder.
+        Bind(Vec<Option<String>>),
+        Unbind,
     }
     fn arguments(parts: &mut Vec<Part>, args: &[GenericArgument], names: &GenericDeclarations) {
         if args.is_empty() {
@@ -41,6 +48,7 @@ pub fn type_spelling(
     }
     let mut output = String::new();
     let mut active = BTreeSet::new();
+    let mut binders: Vec<Vec<Option<String>>> = vec![];
     let mut pending = vec![Part::Type(root)];
     while let Some(part) = pending.pop() {
         let id = match part {
@@ -50,6 +58,20 @@ pub fn type_spelling(
             }
             Part::Leave(id) => {
                 active.remove(&id);
+                continue;
+            }
+            Part::Bind(names) => {
+                binders.push(names);
+                continue;
+            }
+            Part::Unbind => {
+                binders.pop();
+                continue;
+            }
+            Part::Relation(id) => {
+                if let Some(row) = store.get(id) {
+                    output.push_str(&relation_spelling(&row.modes.relation, &binders));
+                }
                 continue;
             }
             Part::Type(id) => id,
@@ -160,6 +182,33 @@ pub fn type_spelling(
                 }
             }
             TypeKind::Function(f) => {
+                // A parameter a relation of this header names is spelled with
+                // its name, so `in x` refers to something visible.
+                let named: BTreeSet<u32> = if modes {
+                    f.parameters
+                        .iter()
+                        .map(|p| p.ty)
+                        .chain([f.result])
+                        .filter_map(|ty| store.get(ty))
+                        .flat_map(|row| row.modes.relation.reaches().to_vec())
+                        .filter_map(|reach| match reach {
+                            Reach::Place(Origin {
+                                root:
+                                    OriginRoot::Parameter(ParameterRef::Bound {
+                                        depth: 0,
+                                        parameter,
+                                    }),
+                                ..
+                            }) => Some(parameter.0),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    BTreeSet::new()
+                };
+                parts.push(Part::Bind(
+                    f.parameters.iter().map(|p| p.name.clone()).collect(),
+                ));
                 parts.push(Part::Text("fn(".into()));
                 for (i, parameter) in f.parameters.iter().enumerate() {
                     if i != 0 {
@@ -171,14 +220,128 @@ pub fn type_spelling(
                         hirsel_syntax::PassingMode::Mut => "mut ",
                     };
                     parts.push(Part::Text(passing.into()));
+                    if let Some(name) = &parameter.name
+                        && named.contains(&(i as u32))
+                    {
+                        parts.push(Part::Text(format!("{name}: ")));
+                    }
                     parts.push(Part::Type(parameter.ty));
+                    if modes {
+                        parts.push(Part::Relation(parameter.ty));
+                    }
                 }
                 parts.push(Part::Text(") -> ".into()));
                 parts.push(Part::Type(f.result));
+                if modes {
+                    parts.push(Part::Relation(f.result));
+                }
+                parts.push(Part::Unbind);
             }
             TypeKind::Error => parts.push(Part::Text("<unknown>".into())),
         }
         pending.extend(parts.into_iter().rev());
     }
     output
+}
+
+/// ` in S` for a non-global relation inside function-type binders, innermost
+/// last: `env`, a parameter's name, or `{env, ..}` for several. A field path
+/// is not spelled, since field names live in declarations; a place this
+/// binder cannot name (a body local or region) is `_`.
+fn relation_spelling(relation: &Relation, binders: &[Vec<Option<String>>]) -> String {
+    let mut reaches = relation.reaches().to_vec();
+    reaches.sort_by_key(|reach| !matches!(reach, Reach::Environment));
+    let places: Vec<String> = reaches
+        .iter()
+        .map(|reach| match reach {
+            Reach::Environment => "env".into(),
+            Reach::Place(Origin {
+                root: OriginRoot::Parameter(ParameterRef::Bound { depth, parameter }),
+                ..
+            }) => binders
+                .len()
+                .checked_sub(*depth as usize + 1)
+                .and_then(|binder| binders[binder].get(parameter.0 as usize))
+                .cloned()
+                .flatten()
+                .unwrap_or_else(|| "_".into()),
+            Reach::Place(_) | Reach::Region(_) => "_".into(),
+        })
+        .collect();
+    match places.as_slice() {
+        [] => String::new(),
+        [place] => format!(" in {place}"),
+        _ => format!(" in {{{}}}", places.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_syntax::PassingMode;
+
+    fn function(store: &mut TypeStore, parameters: Vec<Parameter>, result: TypeId) -> TypeId {
+        store.push(Type::with_kind(TypeKind::Function(FunctionType {
+            state_promises: Default::default(),
+            generics: vec![].into(),
+            parameters: parameters.into(),
+            result,
+            error: None,
+            allocation: Allocation::MayAllocate,
+            authority: AuthoritySummary::Unknown,
+            uses: Uses::Unrestricted,
+            contracts: vec![].into(),
+            incomplete: false,
+            foreign: None,
+        })))
+    }
+    fn related(store: &mut TypeStore, relation: Relation) -> TypeId {
+        let mut row = Type::with_kind(TypeKind::Primitive(Primitive::String));
+        row.modes.relation = relation;
+        store.push(row)
+    }
+    fn spell(store: &TypeStore, root: TypeId) -> String {
+        let package = PackageId {
+            name: "fixture".into(),
+            version: "1".into(),
+        };
+        type_spelling(store, root, &Default::default(), &package, true)
+    }
+
+    /// Two headers that differ only in their result relation spell
+    /// differently.
+    #[test]
+    fn function_types_spell_their_relations() {
+        let mut store = TypeStore::default();
+        let global = related(&mut store, Relation::global());
+        let environment = related(&mut store, Relation::environment());
+        let plain = function(&mut store, vec![], global);
+        let local = function(&mut store, vec![], environment);
+        assert_eq!(spell(&store, plain), "fn() -> String");
+        assert_eq!(spell(&store, local), "fn() -> String in env");
+
+        let x = Reach::Place(Origin {
+            root: OriginRoot::Parameter(ParameterRef::bound(ParamId(1))),
+            fields: Default::default(),
+        });
+        let both = related(&mut store, Relation::new([Reach::Environment, x]));
+        let parameter = |name: &str, passing| Parameter {
+            name: Some(name.into()),
+            label: None,
+            passing,
+            ty: global,
+        };
+        let borrowing = function(
+            &mut store,
+            vec![
+                parameter("w", PassingMode::Take),
+                parameter("x", PassingMode::Mut),
+            ],
+            both,
+        );
+        assert_eq!(
+            spell(&store, borrowing),
+            "fn(take String, mut x: String) -> String in {env, x}"
+        );
+    }
 }
