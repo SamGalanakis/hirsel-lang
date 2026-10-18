@@ -61,12 +61,9 @@ pub fn below(mut generator: Generator, upper_exclusive: u64) -> Result[u64, Samp
   let mut value: u64 = 0
   let mut accepted = false
   while !accepted {
-    match internal.sample.below(next_u64(mut generator), upper_exclusive) {
-      Some(drawn) => {
-        value = drawn
-        accepted = true
-      },
-      None() => {},
+    if let Some(drawn) = internal.sample.below(next_u64(mut generator), upper_exclusive) {
+      value = drawn
+      accepted = true
     }
   }
   Ok(value)

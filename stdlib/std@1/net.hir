@@ -20,13 +20,13 @@ fn number(
   let mut cursor: u64 = copy pos
   let mut value: u64 = 0
   while cursor < end {
-    let next: u64 = match std@1/ascii.digit_value_radix(
+    let Some(digit) = std@1/ascii.digit_value_radix(
       data[cursor],
       core@1/int.narrow(radix)
-    ) {
-      Some(digit) => core@1/int.widen(digit),
-      None() => break,
+    ) else {
+      break
     }
+    let next: u64 = core@1/int.widen(digit)
     if cursor - start >= max_digits || value > (max - next) / radix {
       return None()
     }
@@ -59,9 +59,8 @@ fn read_v4(data: Bytes, mut pos: u64, end: u64) -> Option[Inline[u8, 4]] uses {}
     if i > 0 && !given(data, mut cursor, end, 46) {
       return None()
     }
-    let value = match number(data, mut cursor, end, 10, 3, 255, false) {
-      Some(v) => v,
-      None() => return None(),
+    let Some(value) = number(data, mut cursor, end, 10, 3, 255, false) else {
+      return None()
     }
     groups[i] = core@1/int.narrow(value)
     i += 1
@@ -87,23 +86,18 @@ fn read_groups(
     }
     if i + 1 < limit {
       let mut v4_cursor = cursor
-      match read_v4(data, mut v4_cursor, end) {
-        Some(v4) => {
-          groups[i] = core@1/int.widen(v4[0]) * 256u16 + core@1/int.widen(v4[1])
-          groups[i + 1] = core@1/int.widen(v4[2]) * 256u16 + core@1/int.widen(v4[3])
-          pos = v4_cursor
-          return (i + 2, true)
-        },
-        None() => (),
+      if let Some(v4) = read_v4(data, mut v4_cursor, end) {
+        groups[i] = core@1/int.widen(v4[0]) * 256u16 + core@1/int.widen(v4[1])
+        groups[i + 1] = core@1/int.widen(v4[2]) * 256u16 + core@1/int.widen(v4[3])
+        pos = v4_cursor
+        return (i + 2, true)
       }
     }
-    match number(data, mut cursor, end, 16, 4, 65535, true) {
-      Some(v) => {
-        groups[i] = core@1/int.narrow(v)
-        pos = cursor
-      },
-      None() => return (i, false),
+    let Some(v) = number(data, mut cursor, end, 16, 4, 65535, true) else {
+      return (i, false)
     }
+    groups[i] = core@1/int.narrow(v)
+    pos = cursor
     i += 1
   }
   (i, false)
@@ -176,26 +170,24 @@ pub fn parse_socket_addr(text: String) -> Result[SocketAddr, AddrParseError] use
   let end = core@1/bytes.len(data)
   let mut pos: u64 = 0
   let ip: IpAddr = if given(data, mut pos, end, 91) {
-    let octets = match read_v6(data, mut pos, end) {
-      Some(ip) => ip,
-      None() => return Error(Invalid()),
+    let Some(octets) = read_v6(data, mut pos, end) else {
+      return Error(Invalid())
     }
     if !given(data, mut pos, end, 93) {
       return Error(Invalid())
     }
     V6(octets)
   } else {
-    match read_v4(data, mut pos, end) {
-      Some(ip) => V4(ip),
-      None() => return Error(Invalid()),
+    let Some(ip) = read_v4(data, mut pos, end) else {
+      return Error(Invalid())
     }
+    V4(ip)
   }
   if !given(data, mut pos, end, 58) {
     return Error(Invalid())
   }
-  let value = match number(data, mut pos, end, 10, end, 65535, true) {
-    Some(v) => v,
-    None() => return Error(Invalid()),
+  let Some(value) = number(data, mut pos, end, 10, end, 65535, true) else {
+    return Error(Invalid())
   }
   if pos != end {
     return Error(Invalid())
@@ -358,10 +350,10 @@ pub fn validate_host(text: String) -> Result[(), HostError] uses {} {
     return Error(NameTooLong())
   }
   if ends_in_number(text) {
-    match parse_ipv4(text) {
-      Ok(_) => return Ok(()),
-      Error(_) => return Error(InvalidHostName()),
+    let Ok(_) = parse_ipv4(text) else {
+      return Error(InvalidHostName())
     }
+    return Ok(())
   }
   let mut label_len: u64 = 0
   let mut i: u64 = 0

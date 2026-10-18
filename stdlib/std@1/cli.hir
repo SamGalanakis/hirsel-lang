@@ -38,26 +38,20 @@ fn valid_specs(specs: List[Flag]) -> bool uses {} {
     if !valid_name(specs[i].name) {
       return false
     }
-    match specs[i].short {
-      Some(short) => {
-        if short <= b' ' || short >= 127 || short == b'-' || short == b'=' {
-          return false
-        }
-      },
-      None() => (),
+    if let Some(short) = specs[i].short {
+      if short <= b' ' || short >= 127 || short == b'-' || short == b'=' {
+        return false
+      }
     }
     let mut j: u64 = 0
     while j < i {
       if specs[i].name == specs[j].name {
         return false
       }
-      match specs[i].short {
-        Some(short) => {
-          if specs[j].short == Some(short) {
-            return false
-          }
-        },
-        None() => (),
+      if let Some(short) = specs[i].short {
+        if specs[j].short == Some(short) {
+          return false
+        }
       }
       j += 1
     }
@@ -113,9 +107,8 @@ pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, Parse
         }
         j += 1
       }
-      let which = match selected {
-        Some(which) => which,
-        None() => return Error(UnknownFlag(index)),
+      let Some(which) = selected else {
+        return Error(UnknownFlag(index))
       }
       let spec = specs[which]
       let mut value = ""
@@ -167,13 +160,10 @@ pub fn usage(program: String, specs: List[Flag]) -> String uses {} {
   let mut i: u64 = 0
   while i < core@1/list.len(specs) {
     text.append(mut out, "  ")
-    match specs[i].short {
-      Some(short) => {
-        text.append(mut out, "-")
-        core@1/list.push(mut out, short)
-        text.append(mut out, ", ")
-      },
-      None() => (),
+    if let Some(short) = specs[i].short {
+      text.append(mut out, "-")
+      core@1/list.push(mut out, short)
+      text.append(mut out, ", ")
     }
     text.append(mut out, "--")
     text.append(mut out, specs[i].name)

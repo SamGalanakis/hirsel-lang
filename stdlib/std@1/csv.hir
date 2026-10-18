@@ -58,9 +58,8 @@ pub fn reader(config: Config) -> Result[Reader, CsvError] uses {} {
 fn finish_field(mut r: Reader) -> Result[(), CsvError] uses {} {
   let field = unique r.field
   r.field = []
-  let value = match core@1/string.from_bytes(core@1/bytes.from_list(take field)) {
-    Ok(value) => take value,
-    Error(_) => return Error(InvalidUtf8()),
+  let Ok(value) = core@1/string.from_bytes(core@1/bytes.from_list(take field)) else {
+    return Error(InvalidUtf8())
   }
   core@1/list.push(mut r.row, take value)
   r.mode = 0
@@ -69,13 +68,10 @@ fn finish_field(mut r: Reader) -> Result[(), CsvError] uses {} {
 
 fn finish_row(mut r: Reader) -> Result[Option[List[String]], CsvError] uses {} {
   finish_field(mut r)?
-  match r.config.fields_per_record {
-    Some(width) => {
-      if core@1/list.len(r.row) != width {
-        return Error(UnequalFields(r.record_start))
-      }
-    },
-    None() => (),
+  if let Some(width) = r.config.fields_per_record {
+    if core@1/list.len(r.row) != width {
+      return Error(UnequalFields(r.record_start))
+    }
   }
   let row = unique r.row
   r.row = []

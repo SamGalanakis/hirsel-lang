@@ -103,10 +103,10 @@ fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
   let mut i: u64 = 0
   while i < 4 {
     let c = json_peek(data, pos)
-    let d: u64 = match std@1/ascii.digit_value_radix(c, 16) {
-      Some(digit) => core@1/int.widen(digit),
-      None() => return Error(Syntax(pos)),
+    let Some(digit) = std@1/ascii.digit_value_radix(c, 16) else {
+      return Error(Syntax(pos))
     }
+    let d: u64 = core@1/int.widen(digit)
     n = n * 16 + d
     pos += 1
     i += 1
@@ -271,9 +271,8 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
     json_whitespace(data, mut pos)
     let key_pos = pos
     let key = json_quoted(data, mut pos)?
-    match core@1/map.get(entries, key) {
-      Some(_) => return Error(DuplicateKey(key_pos)),
-      None() => (),
+    if let Some(_) = core@1/map.get(entries, key) {
+      return Error(DuplicateKey(key_pos))
     }
     json_whitespace(data, mut pos)
     if json_peek(data, pos) != 58 {
@@ -362,9 +361,8 @@ fn json_write_text(text: String, mut builder: List[u8]) -> () uses {} {
 fn json_write_number(text: String, mut builder: List[u8]) -> Result[(), JsonError] uses {} {
   let data = core@1/string.as_bytes(text)
   let mut pos: u64 = 0
-  match json_number_end(data, mut pos) {
-    Ok(_) => (),
-    Error(_) => return Error(InvalidNumber()),
+  if let Error(_) = json_number_end(data, mut pos) {
+    return Error(InvalidNumber())
   }
   if pos != core@1/bytes.len(data) {
     return Error(InvalidNumber())

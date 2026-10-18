@@ -4,11 +4,7 @@
 pub fn all[T, E](s: Scope, take set: TaskSet[Result[T, E]] of s) -> Result[List[T], E] {
   let mut members = take set
   let mut results: unique List[Option[T]] = unique []
-  while true {
-    let index = match core@1/task.await_any(s, members) {
-      Some(i) => i,
-      None => break,
-    }
+  while let Some(index) = core@1/task.await_any(s, members) {
     match core@1/task.await_at(s, mut members, index) {
       Ok(value) => {
         while core@1/list.len(results) <= index {
@@ -25,9 +21,8 @@ pub fn all[T, E](s: Scope, take set: TaskSet[Result[T, E]] of s) -> Result[List[
   core@1/task.cancel_all(s, take members)
   let mut out: List[T] = []
   for slot in take results {
-    match take slot {
-      Some(value) => core@1/list.push(mut out, take value),
-      None => {},
+    if let Some(value) = take slot {
+      core@1/list.push(mut out, take value)
     }
   }
   Ok(take out)

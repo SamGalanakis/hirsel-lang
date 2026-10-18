@@ -37,9 +37,8 @@ fn hex_pair(a: u8, b: u8) -> u16 uses {} {
   let first = std@1/ascii.digit_value_radix(a, 16)
   let second = std@1/ascii.digit_value_radix(b, 16)
   if a == b'+' {
-    match second {
-      Some(digit) => return core@1/int.widen(digit),
-      None() => (),
+    if let Some(digit) = second {
+      return core@1/int.widen(digit)
     }
   }
   if a == b'-' && b == b'0' {
@@ -69,10 +68,10 @@ fn parse_port(data: Bytes, start: u64, end: u64) -> Result[u16, UriError] uses {
   while i < end {
     let byte = data[i]
     if byte != 95 {
-      let next: u64 = match std@1/ascii.digit_value(byte) {
-        Some(digit) => core@1/int.widen(digit),
-        None() => return Error(InvalidPort()),
+      let Some(digit) = std@1/ascii.digit_value(byte) else {
+        return Error(InvalidPort())
       }
+      let next: u64 = core@1/int.widen(digit)
       if negative && next != 0 || value > (65535u64 - next) / 10 {
         return Error(InvalidPort())
       }
@@ -277,12 +276,10 @@ fn parse_after_scheme(take scheme: String, take text: String) -> Result[Uri, Uri
           }
         }
         if port_start < i || i > start && data[i - 1] == 58 {
-          match parse_port(data, port_start, i) {
-            Ok(p) => {
-              parsed_uri.port = Some(p)
-            },
-            Error(_) => return Error(InvalidPort()),
+          let Ok(p) = parse_port(data, port_start, i) else {
+            return Error(InvalidPort())
           }
+          parsed_uri.port = Some(p)
         }
         if start >= host_end {
           return Error(InvalidFormat())
@@ -294,14 +291,12 @@ fn parse_after_scheme(take scheme: String, take text: String) -> Result[Uri, Uri
         // The only URI host-grammar tightening: guard numeric hosts after decoding,
         // using the same WHATWG checker as grants and net.validate_host.
         if data[start] != 91 {
-          let decoded = match core@1/string.from_bytes(percent_decode(host)) {
-            Ok(s) => take s,
-            Error(_) => return Error(InvalidHostName()),
+          let Ok(decoded) = core@1/string.from_bytes(percent_decode(host)) else {
+            return Error(InvalidHostName())
           }
           if net.ends_in_number(decoded) {
-            match net.parse_ipv4(decoded) {
-              Ok(_) => (),
-              Error(_) => return Error(InvalidHostName()),
+            if let Error(_) = net.parse_ipv4(decoded) {
+              return Error(InvalidHostName())
             }
           }
         }
@@ -351,33 +346,21 @@ pub fn format(parsed_uri: Uri) -> unique String uses {} {
   let mut out: List[u8] = []
   text.append(mut out, parsed_uri.scheme)
   core@1/list.push(mut out, 58)
-  match parsed_uri.host {
-    Some(host) => {
-      text.append(mut out, "//")
-      match parsed_uri.user {
-        Some(user) => {
-          text.append(mut out, component_encoded(user, User()))
-          match parsed_uri.password {
-            Some(password) => {
-              core@1/list.push(mut out, 58)
-              text.append(mut out, component_encoded(password, Password()))
-            },
-            None() => (),
-          }
-          core@1/list.push(mut out, 64)
-        },
-        None() => (),
+  if let Some(host) = parsed_uri.host {
+    text.append(mut out, "//")
+    if let Some(user) = parsed_uri.user {
+      text.append(mut out, component_encoded(user, User()))
+      if let Some(password) = parsed_uri.password {
+        core@1/list.push(mut out, 58)
+        text.append(mut out, component_encoded(password, Password()))
       }
-      text.append(mut out, component_encoded(host, Host()))
-      match parsed_uri.port {
-        Some(port) => {
-          core@1/list.push(mut out, 58)
-          u16.format_into(port, mut out)
-        },
-        None() => (),
-      }
-    },
-    None() => (),
+      core@1/list.push(mut out, 64)
+    }
+    text.append(mut out, component_encoded(host, Host()))
+    if let Some(port) = parsed_uri.port {
+      core@1/list.push(mut out, 58)
+      u16.format_into(port, mut out)
+    }
   }
   let path = component_encoded(parsed_uri.path, Path())
   text.append(
@@ -388,19 +371,13 @@ pub fn format(parsed_uri: Uri) -> unique String uses {} {
       path
     }
   )
-  match parsed_uri.query {
-    Some(query) => {
-      core@1/list.push(mut out, 63)
-      text.append(mut out, component_encoded(query, Query()))
-    },
-    None() => (),
+  if let Some(query) = parsed_uri.query {
+    core@1/list.push(mut out, 63)
+    text.append(mut out, component_encoded(query, Query()))
   }
-  match parsed_uri.fragment {
-    Some(fragment) => {
-      core@1/list.push(mut out, 35)
-      text.append(mut out, component_encoded(fragment, Fragment()))
-    },
-    None() => (),
+  if let Some(fragment) = parsed_uri.fragment {
+    core@1/list.push(mut out, 35)
+    text.append(mut out, component_encoded(fragment, Fragment()))
   }
   text.finish_valid(take out)
 }
@@ -486,10 +463,10 @@ pub fn resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {} {
         return Error(original)
       }
       let remainder = piece(reference, 0, end)
-      match parse_after_scheme("", take remainder) {
-        Ok(parsed_uri) => take parsed_uri,
-        Error(_) => return Error(original),
+      let Ok(parsed_uri) = parse_after_scheme("", take remainder) else {
+        return Error(original)
       }
+      take parsed_uri
     },
   }
   let path = component_encoded(next.path, Path())
@@ -500,12 +477,9 @@ pub fn resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {} {
   // Borrowed component blocks stay caller-local; copy the base into owned storage.
   let owned_base = unique base
   next.scheme = copy owned_base.scheme
-  match next.host {
-    Some(_) => {
-      next.path = Encoded(remove_dot_segments(path))
-      return Ok(take next)
-    },
-    None() => (),
+  if let Some(_) = next.host {
+    next.path = Encoded(remove_dot_segments(path))
+    return Ok(take next)
   }
   next.user = copy owned_base.user
   next.password = copy owned_base.password
@@ -513,11 +487,8 @@ pub fn resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {} {
   next.port = owned_base.port
   if path == "" {
     next.path = copy owned_base.path
-    match next.query {
-      None() => {
-        next.query = copy owned_base.query
-      },
-      Some(_) => (),
+    if let None() = next.query {
+      next.query = copy owned_base.query
     }
   } else if string.starts_with(path, "/") {
     next.path = Encoded(remove_dot_segments(path))
@@ -555,13 +526,20 @@ fn query_piece(data: Bytes, start: u64, end: u64) -> Result[unique String, Query
       }
       let high = std@1/ascii.digit_value_radix(data[i + 1], 16)
       let low = std@1/ascii.digit_value_radix(data[i + 2], 16)
-      match (high, low) {
-        (Some(a), Some(b)) => core@1/list.push(mut out, a * 16 + b),
-        _ => return Error(InvalidEscape(i)),
+      let (Some(a), Some(b)) = (high, low) else {
+        return Error(InvalidEscape(i))
       }
+      core@1/list.push(mut out, a * 16 + b)
       i += 3
     } else {
-      core@1/list.push(mut out, if byte == 43 { 32u8 } else { byte })
+      core@1/list.push(
+        mut out,
+        if byte == 43 {
+          32u8
+        } else {
+          byte
+        }
+      )
       i += 1
     }
   }
@@ -574,7 +552,10 @@ fn query_piece(data: Bytes, start: u64, end: u64) -> Result[unique String, Query
 // The input is the query without '?', or an application/x-www-form-urlencoded body.
 // Like Go ParseQuery: empty fields are ignored, a missing '=' means an empty value,
 // and a literal semicolon is an error. Unlike Go, malformed input returns no pairs.
-pub fn query_pairs(query: String) -> Result[unique List[(unique String, unique String)], QueryError] uses {} {
+pub fn query_pairs(query: String) -> Result[
+  unique List[(unique String, unique String)],
+  QueryError
+] uses {} {
   let data = core@1/string.as_bytes(query)
   let end = core@1/bytes.len(data)
   let mut pairs: List[(unique String, unique String)] = []
@@ -592,8 +573,16 @@ pub fn query_pairs(query: String) -> Result[unique List[(unique String, unique S
       stop += 1
     }
     if stop > start {
-      let key_end = if equal < stop { equal } else { stop }
-      let value_start = if equal < stop { equal + 1 } else { stop }
+      let key_end = if equal < stop {
+        equal
+      } else {
+        stop
+      }
+      let value_start = if equal < stop {
+        equal + 1
+      } else {
+        stop
+      }
       let key = query_piece(data, start, key_end)?
       let value = query_piece(data, value_start, stop)?
       core@1/list.push(mut pairs, (take key, take value))

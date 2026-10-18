@@ -173,9 +173,8 @@ fn http_timeout(value: Option[time.Duration]) -> Result[NetTimeout, HttpError] u
 
 // Zig HostName.fromUri: decode, remove IPv6 brackets and canonicalize for Net.
 fn http_host(parsed_uri: uri.Uri) -> Result[unique String, HttpError] uses {} {
-  let component = match parsed_uri.host {
-    Some(c) => c,
-    None() => return Error(Url(InvalidHostName())),
+  let Some(component) = parsed_uri.host else {
+    return Error(Url(InvalidHostName()))
   }
   let raw = uri.component_raw(component)
   let len = core@1/bytes.len(raw)
@@ -197,9 +196,8 @@ fn http_host(parsed_uri: uri.Uri) -> Result[unique String, HttpError] uses {} {
     core@1/list.push(mut out, http_lower(raw[i]))
     i += 1
   }
-  let name = match text.finish(take out) {
-    Ok(s) => take s,
-    Error(_) => return Error(Url(InvalidHostName())),
+  let Ok(name) = text.finish(take out) else {
+    return Error(Url(InvalidHostName()))
   }
   match net.validate_host(name) {
     Ok(()) => Ok(take name),
@@ -294,9 +292,8 @@ pub fn request(
   let parsed_uri = uri.parse(url) ? Url
   let target = uri.component_encoded(parsed_uri.path, Path())
   http_validate_target(target)?
-  match parsed_uri.query {
-    Some(q) => http_validate_target(uri.component_encoded(q, Query()))?,
-    None() => (),
+  if let Some(q) = parsed_uri.query {
+    http_validate_target(uri.component_encoded(q, Query()))?
   }
   let s = http_open(n, config, parsed_uri)?
   Ok(
@@ -354,12 +351,9 @@ fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError]
       target_path
     }
   )
-  match r.uri.query {
-    Some(q) => {
-      text.append(mut out, "?")
-      text.append(mut out, uri.component_encoded(q, Query()))
-    },
-    None() => (),
+  if let Some(q) = r.uri.query {
+    text.append(mut out, "?")
+    text.append(mut out, uri.component_encoded(q, Query()))
   }
   text.append(mut out, " HTTP/1.1\r\nhost: ")
   let hostname = http_host(r.uri)?
@@ -379,12 +373,9 @@ fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError]
   if ipv6 {
     text.append(mut out, "]")
   }
-  match r.uri.port {
-    Some(p) => {
-      text.append(mut out, ":")
-      u16.format_into(p, mut out)
-    },
-    None() => (),
+  if let Some(p) = r.uri.port {
+    text.append(mut out, ":")
+    u16.format_into(p, mut out)
   }
   text.append(mut out, "\r\nuser-agent: ")
   text.append(mut out, r.config.user_agent)
@@ -433,10 +424,10 @@ pub fn send_body(mut r: Request, body: Bytes) -> Result[(), HttpError] {
   u64.format_into(core@1/bytes.len(body), mut line)
   text.append(mut line, "\r\n")
   let framing_line = text.finish(take line)
-  match framing_line {
-    Ok(s) => http_send_head(mut r, s)?,
-    Error(_) => return Error(Malformed(HeaderValue())),
+  let Ok(s) = framing_line else {
+    return Error(Malformed(HeaderValue()))
   }
+  http_send_head(mut r, s)?
   http_write(mut r, body)?
   r.sent_body = true
   r.state = 2
@@ -610,16 +601,14 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
       core@1/list.push(mut headers, Header(name: take name, value: take value))
       i += 1
     }
-    match frame.content_length {
-      Some(value) => match content_length {
-        Some(old) => if old != value {
+    if let Some(value) = frame.content_length {
+      if let Some(old) = content_length {
+        if old != value {
           return Error(Malformed(ContentLength()))
-        },
-        None() => {
-          content_length = Some(value)
-        },
-      },
-      None() => (),
+        }
+      } else {
+        content_length = Some(value)
+      }
     }
     if chunked && frame.chunked {
       return Error(UnsupportedTransferEncoding())
@@ -690,15 +679,12 @@ fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
 fn http_next_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   while true {
     let buf = bufio.contents(r.input)
-    match http_parse_head(buf, r.config)? {
-      Some((head, end)) => {
-        if end > r.config.max_head_bytes {
-          return Error(HeadTooLarge())
-        }
-        bufio.consume(mut r.input, end)
-        return Ok(take head)
-      },
-      None() => (),
+    if let Some((head, end)) = http_parse_head(buf, r.config)? {
+      if end > r.config.max_head_bytes {
+        return Error(HeadTooLarge())
+      }
+      bufio.consume(mut r.input, end)
+      return Ok(take head)
     }
     let have = bufio.buffered(r.input)
     if have >= r.config.max_head_bytes {
@@ -723,18 +709,15 @@ fn http_redirect(mut r: Request, head: ResponseHead) -> Result[(), HttpError] {
   if r.redirects == 0 {
     return Error(TooManyRedirects())
   }
-  let location = match head.location {
-    Some(s) => s,
-    None() => return Error(RedirectLocationInvalid()),
+  let Some(location) = head.location else {
+    return Error(RedirectLocationInvalid())
   }
-  let parsed_uri = match uri.resolve(r.uri, location) {
-    Ok(u) => take u,
-    Error(_) => return Error(RedirectLocationInvalid()),
+  let Ok(parsed_uri) = uri.resolve(r.uri, location) else {
+    return Error(RedirectLocationInvalid())
   }
   http_validate_target(uri.component_encoded(parsed_uri.path, Path()))?
-  match parsed_uri.query {
-    Some(q) => http_validate_target(uri.component_encoded(q, Query()))?,
-    None() => (),
+  if let Some(q) = parsed_uri.query {
+    http_validate_target(uri.component_encoded(q, Query()))?
   }
   let changed = !http_same(r.uri.scheme, parsed_uri.scheme) || http_host(r.uri)? != http_host(
     parsed_uri
@@ -878,15 +861,12 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
     }
     bufio.consume(mut r.input, count)
     let buf = core@1/bytes.from_list(copy collected)
-    match http_parse_head(buf, r.config)? {
-      Some((head, end)) => {
-        if end - 17 > r.config.max_head_bytes {
-          return Error(HeadTooLarge())
-        }
-        r.response_trailers = copy head.headers
-        return Ok(())
-      },
-      None() => (),
+    if let Some((head, end)) = http_parse_head(buf, r.config)? {
+      if end - 17 > r.config.max_head_bytes {
+        return Error(HeadTooLarge())
+      }
+      r.response_trailers = copy head.headers
+      return Ok(())
     }
     let have = core@1/list.len(collected) - 17
     if have >= r.config.max_head_bytes {
@@ -1079,9 +1059,8 @@ fn http_client_request(
     return Error(UnsupportedScheme())
   }
   http_validate_target(uri.component_encoded(parsed.path, Path()))?
-  match parsed.query {
-    Some(q) => http_validate_target(uri.component_encoded(q, Query()))?,
-    None() => (),
+  if let Some(q) = parsed.query {
+    http_validate_target(uri.component_encoded(q, Query()))?
   }
   let now = http_client_now(c)?
   let timeout = http_timeout(c.config.idle_timeout)?
@@ -1403,14 +1382,12 @@ fn http_server_body_step(
       pos += 2
       body.state = 1
     } else {
-      match http_server_trailers(buf, pos, head_limit)? {
-        None() => return Ok(pos),
-        Some((headers, consumed)) => {
-          body.trailers = copy headers
-          pos = consumed
-          body.state = 5
-        },
+      let Some((headers, consumed)) = http_server_trailers(buf, pos, head_limit)? else {
+        return Ok(pos)
       }
+      body.trailers = copy headers
+      pos = consumed
+      body.state = 5
     }
   }
   Ok(pos)
@@ -1517,9 +1494,8 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
   Option[(ServerRequest, u64)],
   HttpError
 ] uses {} {
-  let mut (incoming, frame, end) = match http_server_head(buf, max_head_bytes)? {
-    None() => return Ok(None()),
-    Some(parsed) => take parsed,
+  let mut Some((incoming, frame, end)) = http_server_head(buf, max_head_bytes)? else {
+    return Ok(None())
   }
   let mut body = http_server_body(frame, max_body_bytes)?
   let consumed = http_server_body_step(
@@ -1545,13 +1521,11 @@ fn http_server_deadline(clock: Option[MonotonicClock], timeout: Option[time.Dura
   Option[u64],
   HttpError
 ] {
-  let interval = match http_timeout(timeout)? {
-    Unbounded() => return Ok(None()),
-    Nanos(interval) => interval,
+  let Nanos(interval) = http_timeout(timeout)? else {
+    return Ok(None())
   }
-  let c = match clock {
-    Some(c) => c,
-    None() => return Error(http_net_error(InvalidInput())),
+  let Some(c) = clock else {
+    return Error(http_net_error(InvalidInput()))
   }
   let now = core@1/clock.monotonic(c) ? http_clock_error
   match core@1/instant.checked_add(c, now, interval) {
@@ -1564,13 +1538,11 @@ fn http_server_remaining(clock: Option[MonotonicClock], deadline: Option[u64]) -
   NetTimeout,
   HttpError
 ] {
-  let end = match deadline {
-    None() => return Ok(Unbounded()),
-    Some(end) => end,
+  let Some(end) = deadline else {
+    return Ok(Unbounded())
   }
-  let c = match clock {
-    Some(c) => c,
-    None() => return Error(http_net_error(InvalidInput())),
+  let Some(c) = clock else {
+    return Error(http_net_error(InvalidInput()))
   }
   let now = core@1/instant.ticks(core@1/clock.monotonic(c) ? http_clock_error)
   if now >= end {
@@ -1646,31 +1618,28 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
   }
   while true {
     let buf = bufio.contents(c.input)
-    match http_server_head(buf, c.config.max_head_bytes)? {
-      Some((parsed, frame, end)) => {
-        let mut incoming = take parsed
-        bufio.consume(mut c.input, end)
-        let mut body = http_server_body(frame, c.config.max_body_bytes)?
-        while body.state != 5 {
-          let unread = bufio.contents(c.input)
-          let consumed = http_server_body_step(
-            mut body,
-            unread,
-            c.config.max_head_bytes,
-            c.config.max_body_bytes
-          )?
-          bufio.consume(mut c.input, consumed)
-          if body.state != 5 && http_server_read_more(mut c, false, clock, deadline)? == 0 {
-            return Error(Truncated())
-          }
+    if let Some((parsed, frame, end)) = http_server_head(buf, c.config.max_head_bytes)? {
+      let mut incoming = take parsed
+      bufio.consume(mut c.input, end)
+      let mut body = http_server_body(frame, c.config.max_body_bytes)?
+      while body.state != 5 {
+        let unread = bufio.contents(c.input)
+        let consumed = http_server_body_step(
+          mut body,
+          unread,
+          c.config.max_head_bytes,
+          c.config.max_body_bytes
+        )?
+        bufio.consume(mut c.input, consumed)
+        if body.state != 5 && http_server_read_more(mut c, false, clock, deadline)? == 0 {
+          return Error(Truncated())
         }
-        incoming.body = core@1/bytes.from_list(copy body.output)
-        incoming.trailers = copy body.trailers
-        c.keep_alive = incoming.keep_alive
-        c.state = 1
-        return Ok(take incoming)
-      },
-      None() => (),
+      }
+      incoming.body = core@1/bytes.from_list(copy body.output)
+      incoming.trailers = copy body.trailers
+      c.keep_alive = incoming.keep_alive
+      c.state = 1
+      return Ok(take incoming)
     }
     let count = http_server_read_more(mut c, idle, clock, deadline)?
     if count == 0 {

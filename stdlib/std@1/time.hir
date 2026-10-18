@@ -262,9 +262,8 @@ pub fn deadline(clock: MonotonicClock, interval: Duration) -> Result[
     return Error(NegativeDuration())
   }
   let narrowed: Option[u64] = core@1/int.try_narrow(interval.nanoseconds)
-  let nanoseconds = match narrowed {
-    Some(n) => n,
-    None() => return Error(OutOfRange()),
+  let Some(nanoseconds) = narrowed else {
+    return Error(OutOfRange())
   }
   let now = match core@1/clock.monotonic(clock) {
     Ok(now) => now,

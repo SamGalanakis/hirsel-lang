@@ -6066,7 +6066,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 <a id="def-std_401_2furi_2fquery_5fpairs"></a>
 
-- `pub fn uri.query_pairs(query: String) -> Result[unique List[(unique String, unique String)], QueryError] uses {}`
+- `pub fn uri.query_pairs(query: String) -> Result[ unique List[(unique String, unique String)], QueryError ] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/uri/QueryError`](#def-std_401_2furi_2fQueryError)
 

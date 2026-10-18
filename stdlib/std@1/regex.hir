@@ -179,17 +179,14 @@ fn binary(mut tree: Tree, kind: u8, left: u64, right: u64) -> Result[u64, Compil
 }
 
 fn flush(mut tree: Tree, mut ctx: Context) -> Result[(), CompileError] uses {} {
-  match ctx.atom {
-    Some(atom) => {
-      ctx.sequence = Some(
-        match ctx.sequence {
-          Some(left) => binary(mut tree, 7, left, atom)?,
-          None() => atom,
-        }
-      )
-      ctx.atom = None()
-    },
-    None() => (),
+  if let Some(atom) = ctx.atom {
+    ctx.sequence = Some(
+      match ctx.sequence {
+        Some(left) => binary(mut tree, 7, left, atom)?,
+        None() => atom,
+      }
+    )
+    ctx.atom = None()
   }
   Ok(())
 }
@@ -223,9 +220,8 @@ fn class_ranges(c: char) -> unique List[(u32, u32)] uses {} {
 }
 
 fn escaped(mut cursor: Input, in_class: bool) -> Result[Node, CompileError] uses {} {
-  let c = match peek(cursor) {
-    Some(c) => c,
-    None() => return Error(syntax(cursor)),
+  let Some(c) = peek(cursor) else {
+    return Error(syntax(cursor))
   }
   cursor.at += 1
   let mut node = empty_node(1)
@@ -273,9 +269,8 @@ fn class_item(mut cursor: Input) -> Result[Node, CompileError] uses {} {
   if peek(cursor) == Some('[') && peek_second(cursor) == Some(':') {
     return Error(syntax(cursor))
   }
-  let c = match peek(cursor) {
-    Some(c) => c,
-    None() => return Error(syntax(cursor)),
+  let Some(c) = peek(cursor) else {
+    return Error(syntax(cursor))
   }
   cursor.at += 1
   if c == '\\' {
@@ -359,11 +354,8 @@ fn decimal(mut cursor: Input) -> Result[u64, CompileError] uses {} {
     return Error(syntax(cursor))
   }
   let mut value: u64 = 0
-  while true {
-    let digit: u64 = match peek_digit(cursor) {
-      Some(d) => core@1/int.widen(d),
-      None() => break,
-    }
+  while let Some(d) = peek_digit(cursor) {
+    let digit: u64 = core@1/int.widen(d)
     if value > (18446744073709551615u64 - digit) / 10 {
       return Error(ProgramTooLarge())
     }
@@ -485,9 +477,8 @@ fn parse(pattern: String, limit: u64) -> Result[(Tree, u64), CompileError] uses 
       if contexts[depth].repeated {
         return Error(Syntax(at))
       }
-      let atom = match contexts[depth].atom {
-        Some(n) => n,
-        None() => return Error(Syntax(at)),
+      let Some(atom) = contexts[depth].atom else {
+        return Error(Syntax(at))
       }
       let repeated = repetition(mut tree, mut cursor, atom, c)?
       contexts[depth].atom = Some(repeated)
@@ -688,16 +679,13 @@ pub fn compile(pattern: String, max_instructions: u64) -> Result[Regex, CompileE
         stack[top].phase = 2
       }
     }
-    match child {
-      Some(next) => {
-        if depth < core@1/list.len(stack) {
-          stack[depth] = take next
-        } else {
-          core@1/list.push(mut stack, take next)
-        }
-        depth += 1
-      },
-      None() => (),
+    if let Some(next) = child {
+      if depth < core@1/list.len(stack) {
+        stack[depth] = take next
+      } else {
+        core@1/list.push(mut stack, take next)
+      }
+      depth += 1
     }
   }
   Ok(Regex(code: take code, entry: entry))
@@ -854,9 +842,8 @@ fn step(re: Regex, next_scalar: Option[char], mut machine: Machine) -> Result[
       core@1/list.push(mut next, Thread(pc: inst.x, start: thread.start))
     }
   }
-  let c = match next_scalar {
-    Some(c) => c,
-    None() => return Ok(true),
+  let Some(c) = next_scalar else {
+    return Ok(true)
   }
   if core@1/list.len(next) == 0 && machine.matched != None() {
     return Ok(true)

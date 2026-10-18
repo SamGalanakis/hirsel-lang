@@ -27,12 +27,9 @@ pub fn below(r: Random, upper_exclusive: u64) -> Result[u64, SampleError] {
       Ok(draw) => draw,
       Error(e) => return Error(Source(e)),
     }
-    match internal.sample.below(draw, upper_exclusive) {
-      Some(drawn) => {
-        value = drawn
-        accepted = true
-      },
-      None() => {},
+    if let Some(drawn) = internal.sample.below(draw, upper_exclusive) {
+      value = drawn
+      accepted = true
     }
   }
   Ok(value)

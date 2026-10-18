@@ -29,9 +29,8 @@ fn balance[T](mut target: unique List[unique T], mut source: unique List[unique 
   list.reverse(mut source)
   let mut moved: u64 = 0
   while moved < transfer {
-    match take core@1/list.pop(mut source) {
-      Some(item) => core@1/list.push(mut target, take item),
-      None => {},
+    if let Some(item) = take core@1/list.pop(mut source) {
+      core@1/list.push(mut target, take item)
     }
     moved += 1
   }

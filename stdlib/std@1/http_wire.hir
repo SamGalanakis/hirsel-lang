@@ -390,20 +390,18 @@ pub fn framing[k: size](
         n = n * 10 + digit
         j += 1
       }
-      match length {
-        Some(previous) => if previous != n {
+      if let Some(previous) = length {
+        if previous != n {
           return Error(ContentLength())
-        },
-        None() => (),
+        }
       }
       length = Some(n)
     }
     i += 1
   }
   if chunked {
-    match length {
-      Some(_) => return Error(TransferEncoding()),
-      None() => (),
+    if let Some(_) = length {
+      return Error(TransferEncoding())
     }
   }
   Ok(Framing(content_length: length, chunked: chunked, keep_alive: keep_alive))
