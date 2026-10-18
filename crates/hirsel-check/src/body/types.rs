@@ -1426,7 +1426,7 @@ impl Checker<'_, '_> {
                         id
                     }
                 }
-                ast::TypeExprKind::Named { arguments, .. } => {
+                ast::TypeExprKind::Named { path, arguments } => {
                     let r = self
                         .input
                         .resolution
@@ -1543,6 +1543,28 @@ impl Checker<'_, '_> {
                                 }
                             } else {
                                 self.error()
+                            }
+                        }
+                        None if path.package.is_none()
+                            && path.segments.len() == 1
+                            && self.name(path.segments[0]) == "FnPtr" =>
+                        {
+                            // FnPtr is compiler-native and has no registry declaration.
+                            // Use the same type-argument rule as header normalization.
+                            if args.is_empty()
+                                || !args.iter().all(|a| matches!(a, GenericArgument::Type(_)))
+                            {
+                                self.report(
+                                    const { RuleId::of("GEN-1") },
+                                    node.origin.span,
+                                    "FnPtr requires type arguments",
+                                );
+                                self.error()
+                            } else {
+                                self.ty(TypeKind::Builtin {
+                                    kind: BuiltinType::FnPtr,
+                                    arguments: args.into(),
+                                })
                             }
                         }
                         _ => self.error(),

@@ -1,0 +1,13 @@
+// rule: PROG-4
+// expect: accept
+type State {
+  value: i32,
+}
+
+fn callback(mut state: State) -> i32 {
+  state.value
+}
+
+pub fn keep() -> () {
+  let callback_value: FnPtr[fn(mut state: unique State) -> i32] = callback
+}
