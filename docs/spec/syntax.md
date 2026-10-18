@@ -277,7 +277,7 @@ attribute    = "@", ( "test" | "noalloc" | "soa" | "packed" | "blocking" | "inco
              | "capability", "(", ("global" | "local"), ")"
              | "loop_source", "(", value-path, ",", value-path, ")"
              | "format", "(", value-path, ")"
-             | state-attribute ) ;      (* MEM-5/7, CONC-2, MODE-6, CAP-5, SER-1, SEM-3/4, CLO-2 *)
+             | state-attribute ) ;      (* LANG-9, MEM-5/7, CONC-2, MODE-6, CAP-5, SER-1, SEM-3/4, CLO-2 *)
 state-attribute = ("advance_only" | "preserves_captures" | "preserves_unique" | "captures"),
                   "(", nonempty(value-path), ")" ; (* CLO-2 *)
 type-state-attribute = ("advance_only" | "preserves_captures" | "captures"),

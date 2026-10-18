@@ -128,6 +128,15 @@ fn native_test_engines_match_interpreted_selection_failures_and_seeds() {
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
     };
     let expected = run(None);
+    assert_eq!(expected["summary"]["total"], 6);
+    assert_eq!(
+        expected["tests"][3]["status"], "failed",
+        "finalizer must run: {expected}"
+    );
+    assert_eq!(
+        expected["tests"][4]["status"], "passed",
+        "later test must run: {expected}"
+    );
     assert_eq!(run(Some("llvm")), expected);
     assert_eq!(run(Some("cranelift")), expected);
 }

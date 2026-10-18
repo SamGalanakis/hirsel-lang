@@ -124,7 +124,8 @@ hirsel test app/manifest.json --native
 hirsel test app/manifest.json --native --backend cranelift
 ```
 
-Test manifests may omit `entry`; no launch main is needed. Mark ordinary functions with `@test`. They may be private, take no parameters or
+Test manifests may omit `entry`; no launch main is needed. Mark ordinary functions
+with `@test`. They may be private, take no parameters or
 one borrowed `Test`, and return `()` or `Result[(), E]`. Generic functions, other
 parameters and other results are rejected. The command checks the whole package,
 then selects only marked functions in its manifest sources, never dependencies.

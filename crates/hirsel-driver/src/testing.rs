@@ -208,6 +208,7 @@ pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {
     match outcome {
         RunOutcome::Exit(0) => None,
         RunOutcome::Exit(1) => Some("returned Error".into()),
+        RunOutcome::Blocked(_) => Some("runtime failure: blocked".into()),
         RunOutcome::Failure { rule, site } => {
             Some(format!("runtime failure[{rule}] at line {}", site.line))
         }
