@@ -527,6 +527,42 @@ impl Value {
     }
 }
 
+/// The interpreter's memory model for `budgets.limits@1` (`memory_bytes`): every value
+/// node is 16 bytes, and a String's or Bytes' contents add their length. A frozen
+/// `Shared` root counts as its node only, so a value several roots share is never
+/// counted twice.
+pub(crate) const NODE_BYTES: u64 = 16;
+impl Value {
+    /// This value's logical bytes, over its whole tree.
+    pub(crate) fn logical_bytes(&self) -> u64 {
+        let mut total = 0u64;
+        let mut work = vec![self];
+        while let Some(value) = work.pop() {
+            total = total.saturating_add(match value {
+                Self::String(text) => NODE_BYTES.saturating_add(text.len() as u64),
+                Self::Bytes(bytes) => NODE_BYTES.saturating_add(bytes.len() as u64),
+                _ => NODE_BYTES,
+            });
+            if let Some(fields) = value.fields() {
+                work.extend(fields.iter().flatten());
+            }
+        }
+        total
+    }
+    /// An estimate, in constant time, of the logical bytes this value's own node and
+    /// its direct fields hold: what a construction or a library result is charged
+    /// before the model is next measured.
+    pub(crate) fn shallow_bytes(&self) -> u64 {
+        match self {
+            Self::String(text) => NODE_BYTES.saturating_add(text.len() as u64),
+            Self::Bytes(bytes) => NODE_BYTES.saturating_add(bytes.len() as u64),
+            _ => NODE_BYTES.saturating_add(
+                NODE_BYTES.saturating_mul(self.fields().map_or(0, |f| f.len()) as u64),
+            ),
+        }
+    }
+}
+
 impl Value {
     /// A sequence value outside any arena.
     pub fn sequence(kind: BuiltinType, elements: Vec<Option<Value>>) -> Self {

@@ -818,9 +818,10 @@ done:
  ret i8 %s
 }}"#
     );
-    // hirsel-rt's UNREPLAYABLE (PROG-4) and ESCAPES (CAP-6) bits beside the roots.
+    // hirsel-rt's UNREPLAYABLE (PROG-4), FUELED and ESCAPES (CAP-6) bits beside the roots.
     let mask = kind.mask()
         | if program.foreign_unreplayable { 32 } else { 0 }
+        | if program.fuel { 64 } else { 0 }
         | if program.escaping.contains(entry) {
             128
         } else {
@@ -1592,11 +1593,18 @@ pub fn observe(
     let mut failures = Vec::new();
     let mut audit = None;
     let mut blocked = false;
+    let mut budget = None;
     for line in lines {
         let words: Vec<&str> = line.split(' ').collect();
         match words.as_slice() {
             ["status", s] => status = s.parse::<u8>().ok(),
             ["blocked"] => blocked = true,
+            ["budget_exceeded", kind] => {
+                budget = Some(
+                    hirsel_run_config::BudgetKind::parse(kind)
+                        .ok_or_else(|| bad(format!("an unknown budget in `{line}`")))?,
+                )
+            }
             ["result", hex] => result = Some(*hex),
             ["failure", _kind, rule, site, operation] => {
                 let rule = rule
@@ -1639,8 +1647,24 @@ pub fn observe(
             _ => return Err(bad(format!("a malformed observation line `{line}`"))),
         }
     }
-    // A Blocked run (CONC-8) ends without cleanup, so it has no exit audit.
+    // A Blocked run (CONC-8) ends without cleanup, so it has no exit audit, and so does a
+    // run that spent a budget.
     let unaudited = audit == Some(("unavailable", "unavailable", "unavailable"));
+    if let Some(kind) = budget {
+        if blocked || status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
+            return Err(bad("an inconsistent budget observation record".into()));
+        }
+        if launched.exit != Some(hirsel_rt::launch::EXIT_BUDGET) {
+            return Err(bad("a budget-stopped process did not exit as one".into()));
+        }
+        return Ok(Observation {
+            exit_code: None,
+            blocked: false,
+            budget: Some(kind),
+            output: launched.stdout.clone(),
+            failures,
+        });
+    }
     if blocked {
         if status.is_some() || result.is_some() || !failures.is_empty() || !unaudited {
             return Err(bad("an inconsistent Blocked observation record".into()));
@@ -1651,6 +1675,7 @@ pub fn observe(
         return Ok(Observation {
             exit_code: None,
             blocked: true,
+            budget: None,
             output: launched.stdout.clone(),
             failures,
         });
@@ -1672,6 +1697,7 @@ pub fn observe(
     Ok(Observation {
         exit_code,
         blocked: false,
+        budget: None,
         output: launched.stdout.clone(),
         failures,
     })

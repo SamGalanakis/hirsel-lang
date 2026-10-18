@@ -17,11 +17,11 @@ use hirsel_types::logical::{
 use hirsel_types::{BuiltinType, Primitive, TypeId, TypeKind, TypeStore};
 use std::collections::BTreeMap;
 
-/// The open bounded arenas, by arena handle id.
-#[derive(Default)]
+/// The open bounded arenas, by arena handle id, and the run's own budgets.
 pub(crate) struct Budgets {
     issued: u64,
     open: BTreeMap<u64, Budget>,
+    pub run: crate::budget::Meter,
 }
 
 struct Budget {
@@ -39,6 +39,13 @@ pub(crate) struct Boundary {
 }
 
 impl Budgets {
+    pub fn new(run: crate::RunBudgets) -> Self {
+        Self {
+            issued: 0,
+            open: BTreeMap::new(),
+            run: crate::budget::Meter::new(run),
+        }
+    }
     /// A handle id for a bounded arena of unchecked execution; `arena.with` keeps 0.
     pub fn issue(&mut self) -> u64 {
         self.issued += 1;

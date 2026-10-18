@@ -152,6 +152,11 @@ impl RunCtx {
     pub unsafe fn bind_io_data(&mut self, data: *mut std::ffi::c_void) {
         self.io_data = data;
     }
+    /// Apply the run's budgets (`budgets.limits@1`) before its entry runs.
+    pub(crate) fn set_budgets(&mut self, fuel: Option<u64>, memory_bytes: Option<u64>) {
+        self.heap.compiled.fuel = fuel.map_or(i64::MAX, |f| i64::try_from(f).unwrap_or(i64::MAX));
+        self.heap.meter.set_limit(memory_bytes.unwrap_or(0));
+    }
     /// Retrieve the explicitly bound adapter; there is no ambient fallback.
     pub(crate) fn io_data(&self) -> *mut std::ffi::c_void {
         self.io_data
@@ -316,6 +321,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
     if !diagnostic && !cfg!(feature = "measurement") {
         heap.compiled.dup_max = count_max;
     }
+    let meter = heap.meter.clone();
     let ctx = Box::new(RunCtx {
         heap,
         work: ptr::null_mut(),
@@ -325,7 +331,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         immortalized: 0,
         failure: FailureState::default(),
         entry_result: None,
-        regions: RegionPool::new(),
+        regions: RegionPool::new(meter),
         close_handle: config.close_handle,
         hash_seed: config.hash_seed,
         io_data: ptr::null_mut(),

@@ -11,17 +11,20 @@ pub(crate) const ROOT_UNSAFE: u8 = 8;
 pub(crate) const ROOT_TEST: u8 = 16;
 /// Not a root: the program calls C outside a deterministic wrapper (PROG-4).
 pub(crate) const UNREPLAYABLE: u8 = 32;
+/// Not a root: the program was compiled with fuel checks, so it can enforce a fuel budget.
+pub(crate) const FUELED: u8 = 64;
 
 /// Not a root: the entry reaches an escape from capability checking (CAP-6).
 pub(crate) const ESCAPES: u8 = 128;
 
 /// Splits the compiled selection into its roots, whether recording or replaying
-/// is refused, and whether the entry reaches an escape.
-pub(crate) fn split(mask: u8) -> (u8, bool, bool) {
+/// is refused, whether the entry reaches an escape and whether the code charges fuel.
+pub(crate) fn split(mask: u8) -> (u8, bool, bool, bool) {
     (
-        mask & !(UNREPLAYABLE | ESCAPES),
+        mask & !(UNREPLAYABLE | ESCAPES | FUELED),
         mask & UNREPLAYABLE != 0,
         mask & ESCAPES != 0,
+        mask & FUELED != 0,
     )
 }
 
@@ -77,6 +80,7 @@ pub(crate) fn select(
     entry: &str,
     roots: u8,
     escapes: bool,
+    fueled: bool,
 ) -> Result<Selected, RunRefusal> {
     if arguments
         .first()
@@ -89,12 +93,19 @@ pub(crate) fn select(
             });
         };
         let (io, run) = crate::host_launch::replay(std::path::Path::new(path))?;
-        let run = run.bind(&facts(program, entry, roots, escapes)?)?;
+        let run = run.bind(&facts(program, entry, roots, escapes, fueled)?)?;
         return Ok(Selected::Replay { run, io });
     }
     let options = live_options(&arguments)?;
     Ok(Selected::Live {
-        run: select_run(options.input.to_vec(), program, entry, roots, escapes)?,
+        run: select_run(
+            options.input.to_vec(),
+            program,
+            entry,
+            roots,
+            escapes,
+            fueled,
+        )?,
         tape: options.tape,
         revocations: options.revocations,
     })
@@ -138,6 +149,7 @@ pub(crate) fn facts(
     entry: &str,
     roots: u8,
     escapes: bool,
+    fueled: bool,
 ) -> Result<ProgramFacts, RunRefusal> {
     Ok(ProgramFacts {
         program,
@@ -149,6 +161,7 @@ pub(crate) fn facts(
         } else {
             CodeReach::Safe
         },
+        fueled,
     })
 }
 
@@ -169,6 +182,7 @@ fn select_run(
     entry: &str,
     roots: u8,
     escapes: bool,
+    fueled: bool,
 ) -> Result<BoundRun, RunRefusal> {
     let launch = launch_kind(roots);
     let invalid = || {
@@ -206,7 +220,7 @@ fn select_run(
     // only changed field and contributes to the admitted run's identity.
     record
         .validated()?
-        .bind(&facts(program, entry, roots, escapes)?)
+        .bind(&facts(program, entry, roots, escapes, fueled)?)
 }
 
 #[cfg(test)]
@@ -242,6 +256,7 @@ mod tests {
                 entry,
                 0,
                 false,
+                false,
             )
         };
         assert!(matches!(replay([1; 32]), Ok(Selected::Replay { .. })));
@@ -256,13 +271,21 @@ mod tests {
                 [1; 32],
                 entry,
                 0,
-                false
+                false,
+                false,
             ),
             Err(RunRefusal::Invalid { .. })
         ));
         std::fs::remove_file(&tape).unwrap();
         assert!(matches!(
-            select(vec!["--hirsel-record".into()], [1; 32], entry, 0, false),
+            select(
+                vec!["--hirsel-record".into()],
+                [1; 32],
+                entry,
+                0,
+                false,
+                false
+            ),
             Err(RunRefusal::Invalid { .. })
         ));
         assert!(matches!(
@@ -271,7 +294,8 @@ mod tests {
                 [1; 32],
                 entry,
                 ROOT_ARGS,
-                false
+                false,
+                false,
             ),
             Ok(Selected::Live { tape: Some(_), run, .. }) if run.run().record().args.as_deref() == Some(["x".to_string()].as_slice())
         ));
@@ -279,9 +303,9 @@ mod tests {
     #[test]
     fn unconfigured_process_denies_roots_and_explicit_argv_grants_only_args() {
         let entry = "standalone@0/main";
-        assert!(select_run(vec![], [0; 32], entry, 0, false).is_ok());
+        assert!(select_run(vec![], [0; 32], entry, 0, false, false).is_ok());
         assert!(matches!(
-            select_run(vec![], [0; 32], entry, ROOT_ARGS, false),
+            select_run(vec![], [0; 32], entry, ROOT_ARGS, false, false),
             Err(RunRefusal::NotGranted { .. })
         ));
         let run = select_run(
@@ -289,6 +313,7 @@ mod tests {
             [0; 32],
             entry,
             ROOT_ARGS,
+            false,
             false,
         )
         .unwrap();
@@ -300,7 +325,7 @@ mod tests {
         assert!(run.record().io.is_none());
         assert!(run.record().env.is_none());
         assert!(matches!(
-            select_run(vec!["--".into()], [0; 32], entry, ROOT_IO, false),
+            select_run(vec!["--".into()], [0; 32], entry, ROOT_IO, false, false),
             Err(RunRefusal::NotGranted { .. })
         ));
     }

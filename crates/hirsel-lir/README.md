@@ -16,6 +16,10 @@ the validators derive their own normal and failure graph from the IR.
 implement: `EmitInputs`, failure codes, link names, site codes, descriptor names,
 the immortal prefix, the register-result rule, the receipt check and the object
 manifest; `object.rs` reads an emitted ELF object's symbol interface.
+`fuel.rs` names a unit's fuel points, its entry block and the targets of its control-flow
+graph's feedback edges, where code emitted with `EmitInputs::fuel` charges one unit of a
+run's fuel budget (`CTX_FUEL_OFFSET`); the mode changes no LIR and is part of the object's
+options.
 `profile.rs` shares immutable source ownership and source/cleanup anchor selection
 between native backends.
 `persistent.rs` is the structure-sharing vector that

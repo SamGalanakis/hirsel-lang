@@ -214,6 +214,7 @@ fn forget_suppresses_outer_finalizer_and_all_owned_fields() {
         forget: Some(path("forget")),
         checked: None,
         serialization: Default::default(),
+        budgets: Default::default(),
     };
     let e = run_runtime(vec![b.finish("main", result)], &runtime, vec![]);
     assert!(finalizers(&e).is_empty());

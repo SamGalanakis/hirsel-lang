@@ -1,6 +1,7 @@
 //! Deterministic reference execution of ownership-explicit TIR.
 pub mod aggregate;
 mod bounded;
+mod budget;
 pub mod checked;
 mod constants;
 pub mod conversion;
@@ -15,8 +16,10 @@ pub mod structural;
 pub mod type_arguments;
 pub mod value;
 
+pub use budget::RunBudgets;
 pub use eval::{run, run_with_operations, run_with_runtime};
 use hirsel_diag::RuleId;
+pub use hirsel_run_config::BudgetKind;
 use hirsel_span::{SourceMap, Span};
 use hirsel_syntax::DefPath;
 use hirsel_tir::{BlockId, CleanupAction, RunConfiguration};
@@ -78,6 +81,9 @@ impl std::fmt::Display for UndefinedBehavior {
 pub enum Outcome {
     /// CONC-8: stopped without exit, failure or speculative destruction.
     Blocked(Vec<BlockedWait>),
+    /// The run spent a host budget (`budgets.limits@1`) and stopped where it was, as a
+    /// Blocked run does: no cleanup, finalizer or further effect ran.
+    BudgetExceeded(BudgetKind),
     ToolingLimit(hirsel_tir::ToolingLimit),
     UndefinedBehavior(UndefinedBehavior),
     Returned {
@@ -169,6 +175,8 @@ impl From<Error> for ExecutionError {
 pub enum Error {
     /// Internal stop signal, converted to Outcome::Blocked before returning.
     Blocked(Vec<BlockedWait>),
+    /// Internal stop signal, converted to Outcome::BudgetExceeded before returning.
+    BudgetExceeded(BudgetKind),
     InvalidTir(String),
     Unavailable(String),
     Query(QueryError),
@@ -243,6 +251,9 @@ operation_boundary! {
     fn handles_failure(&self, _token: u64) -> bool {
         false
     }
+    /// The logical bytes of the values this layer holds for the run (channel buffers,
+    /// task results), measured with the evaluator's own (`budgets.limits@1`).
+    fn retained_bytes(&self) -> u64 { 0 }
     }
     mutable {
     /// At every poll, before the parked tasks: cancel the scopes whose deadline is due

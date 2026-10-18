@@ -6,6 +6,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     pub(super) fn emit_block(&mut self, b: BlockId) -> Emitted {
         let unit = self.unit;
         self.builder.position(self.blocks[b.index()]);
+        if self.fuel_points.get(b.index()).copied().unwrap_or(false) {
+            self.charge_fuel()?;
+        }
         for (i, inst) in self
             .pool(unit.blocks[b.index()].instructions, &unit.instructions)?
             .iter()
@@ -24,6 +27,39 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             &format!("{:?}", terminator.opcode()),
         )?;
         self.terminator(&terminator)
+    }
+
+    /// One unit of the run's fuel (`EmitInputs::fuel`): the context's fuel word loses one,
+    /// and a negative result ends the run in `hirsel_rt_v2_fuel_exhausted`.
+    fn charge_fuel(&mut self) -> Emitted {
+        use crate::context::{BinOp, IntPredicate};
+        let exhausted = self.runtime(RuntimeEntry::FuelExhausted)?;
+        let i64_ty = self.module.int_type(64);
+        let at = self.builder.offset(
+            self.context,
+            self.module
+                .const_int(i64_ty, hirsel_lir::runtime_abi::CTX_FUEL_OFFSET.into()),
+        );
+        let fuel = self.builder.load(i64_ty, at, 8);
+        let left = self
+            .builder
+            .binary(BinOp::Sub, fuel, self.module.const_int(i64_ty, 1));
+        self.builder.store(left, at, 8);
+        let (spent, go) = (
+            self.module.append_block(self.function),
+            self.module.append_block(self.function),
+        );
+        self.builder.cold_cond_br(
+            self.builder
+                .icmp(IntPredicate::Slt, left, self.module.const_zero(i64_ty)),
+            spent,
+            go,
+        );
+        self.builder.position(spent);
+        self.builder.call(exhausted, &[self.context]);
+        self.builder.unreachable();
+        self.builder.position(go);
+        Ok(())
     }
 
     pub(super) fn profile_location(&mut self, site: SiteRange, operation: &str) -> Emitted {

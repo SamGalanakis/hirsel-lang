@@ -57,6 +57,7 @@ fn runtime() -> aggregate::RuntimeTypes {
         forget: None,
         checked: None,
         serialization: Default::default(),
+        budgets: Default::default(),
     }
 }
 fn callback(name: &str, end: Ending, boolean: bool) -> Definition {

@@ -815,6 +815,8 @@ struct FnEmitter<'m, 'a> {
     regions: Vec<Value<'m>>,
     /// A register-result entry's one return block and its status and word phis.
     register_return: Option<(BasicBlock<'m>, Value<'m>, Value<'m>)>,
+    /// Per block, whether it charges fuel (`hirsel_lir::fuel`); empty without `inputs.fuel`.
+    fuel_points: Vec<bool>,
 }
 
 type Emitted<T = ()> = Result<T, CodegenError>;

@@ -591,7 +591,15 @@ the linked program's immutable descriptor registry and runs one compiled
 granted on `HIRSEL_RT_ROOT` (without it, the root Io grants no mount and no projection), and exits 0 for `Ok`, 1 for `Error`, 2 for a
 language failure, 3 for a refused launch and 4 for a Blocked run (CONC-8: every task waits
 and none can proceed; the run stops there without cleanup, and its record says `blocked` and
-`audit unavailable`). With `HIRSEL_RT_OBSERVATION` it
+`audit unavailable`), and 5 for a run that spent a budget (`budgets.limits@1`; it stops the
+same way, recording `budget_exceeded fuel` or `budget_exceeded memory`). `src/budget.rs`
+enforces both budgets. The memory meter (`budget::Meter`, shared by the heap and the region
+pool) charges backing storage before it is taken: slabs, large and bare blocks and region
+segments. It credits that storage when released, and returns idle slabs before stopping a
+run over budget. Fuel is the context word at `HIRSEL_RT_V2_CTX_FUEL_OFFSET`. Code compiled
+with fuel checks decrements it at each fuel point and calls `hirsel_rt_v2_fuel_exhausted`
+when it goes negative. Launch-mask bit 64 marks such code; an executable without it refuses
+a fuel budget when binding its run (`ProgramFacts::fueled`; `budgets.fuel`), and a memory budget needs no compiled checks. With `HIRSEL_RT_OBSERVATION` it
 writes the observation record (`hirsel-observation 1`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape

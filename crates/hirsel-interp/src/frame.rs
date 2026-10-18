@@ -101,6 +101,8 @@ pub(crate) struct Frame {
     pub check: Option<crate::checked::FrameCheck>,
     /// An `arena.bounded` callback's boundary (MEM-6).
     pub bounded: Option<crate::bounded::Boundary>,
+    /// The next block start charges fuel: the frame was entered or jumped back.
+    pub fuel_due: bool,
 }
 impl Frame {
     /// Replace value storage while retaining the lexical size environment and
@@ -126,6 +128,8 @@ impl Frame {
         }
         self.slots = slots;
         self.goto(entry);
+        // A self-tail call is a function entry, wherever its body begins.
+        self.fuel_due = true;
         Ok(())
     }
 
@@ -214,6 +218,7 @@ impl Frame {
             place_failure_site: None,
             check: None,
             bounded: None,
+            fuel_due: true,
         })
     }
     pub fn body(&self) -> &Body {
@@ -825,8 +830,39 @@ impl Frame {
         arena_of(self.body(), &self.slots, origin)
     }
     pub fn goto(&mut self, block: BlockId) {
+        // A jump to this block or an earlier one may close a loop: it charges fuel.
+        self.fuel_due |= block.0 <= self.block.0;
         self.block = block;
         self.instruction = 0;
+    }
+    /// The logical bytes this frame holds (`budgets.limits@1`): its slots, values its
+    /// loops carry, a suspended operation and its callbacks, and pending releases.
+    pub fn logical_bytes(&self) -> u64 {
+        use crate::resources::Work;
+        let mut total = self
+            .slots
+            .iter()
+            .flatten()
+            .chain(self.loop_owned.iter().map(|(v, _)| v))
+            .map(Value::logical_bytes)
+            .fold(0u64, u64::saturating_add);
+        if let Some((result, state)) = &self.operation {
+            total = total
+                .saturating_add(crate::resources::result_bytes(result))
+                .saturating_add(state.logical_bytes());
+        }
+        if let Some(callback) = &self.callback {
+            total = total.saturating_add(callback.state.logical_bytes());
+        }
+        for work in &self.work {
+            total = total.saturating_add(match work {
+                Work::Release(value, ..) => value.logical_bytes(),
+                Work::Resume(result, callback) => crate::resources::result_bytes(result)
+                    .saturating_add(callback.state.logical_bytes()),
+                Work::Action(..) | Work::Chain(..) => 0,
+            });
+        }
+        total
     }
 }
 impl Drop for Frame {

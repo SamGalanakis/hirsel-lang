@@ -81,6 +81,11 @@ pub struct EmitInputs<'a> {
     pub registry: crate::descriptor_registry::DescriptorRegistry,
     /// Instrument inline count edges. Set only when linking a measurement runtime archive.
     pub measurement: bool,
+    /// Charge the run's fuel at every fuel point (`crate::fuel::fuel_points`): the word at
+    /// `runtime_abi::CTX_FUEL_OFFSET` loses one, and a negative result calls
+    /// `hirsel_rt_v2_fuel_exhausted`. Without it no code reads the word, so a run without a
+    /// fuel budget pays nothing.
+    pub fuel: bool,
 }
 
 /// C library symbols for byte comparisons and those a backend's lowering may introduce for
@@ -435,6 +440,9 @@ pub fn artifact(
     if inputs.measurement {
         options.push_str(" measurement");
     }
+    if inputs.fuel {
+        options.push_str(" fuel");
+    }
     let mut debug: Vec<DebugSource> = units
         .iter()
         .map(|u| DebugSource {
@@ -605,6 +613,7 @@ mod tests {
             registry: crate::descriptor_registry::DescriptorRegistry::new(&layouts, &finalizers),
             opt: OptLevel::None,
             measurement: false,
+            fuel: false,
         };
         artifact(file, manifested, &[], &inputs, "fixture")
     }

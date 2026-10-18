@@ -76,6 +76,7 @@ from omitting the root. A requested but absent root is a launch refusal under
 | `env` | Absent or null, or exact key-to-value entries, with null for a granted key that is unset; denied keys are distinguishable from granted unset keys. |
 | `unsafe` | Boolean explicit root grant, false by default. |
 | `admission` | Optional launch-only constraints: not-before, expiry, an external revocation reference and the code policy `code`, `admit.any@1` (the default when absent) or `admit.safe@1` ([CAP-6](capabilities.md#cap-6-safe-code)). The resolved decision and its evidence are captured in the validated record. |
+| `budgets` | Absent (`budgets.none@1`), or the host's resource budgets for the run (**Budgets** below). |
 
 **Directory mounts** are sorted, unique, portable virtual paths (the empty path is the
 virtual root), each with an explicit absolute host root designator and `read` or
@@ -105,7 +106,7 @@ or set by a `Command`; `env` may be omitted for none. For example
 **Providers** name versioned observable contracts, identical for real hosts, simulation and
 replay: `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`, `clock.monotonic.ns@1`,
 `clock.wall.unix_ns@1`, `tasks.cooperative@1`, `net.stream@1`, `net.script@2`,
-`process.spawn@1` and `process.script@1`.
+`process.spawn@1`, `process.script@1`, `budgets.none@1` and `budgets.limits@1`.
 `tasks.cooperative@1` supplies structured tasks with cooperative scheduling at the
 suspension points of [CONC-1](concurrency.md#conc-1-runtime). Host readiness waits
 suspend only their task; the provider waits for external readiness only when no task
@@ -147,6 +148,35 @@ from them exactly as `test.process` does; both are invalid under any other provi
 `{"fault": code}`, `"timed_out"` or `"input_closed"`. A step is `{"print": [bytes]}`,
 `{"print_err": [bytes]}`, `{"expect": [bytes]}` or `{"exit": status}`. Script entries grant
 no authority beyond the explicit rules.
+
+**Budgets.** A host bounds the resources one run may use, for example to host untrusted
+code, by choosing a budget implementation in the record; budgets are host policy and grant
+nothing. `budgets.none@1`, the default, bounds nothing; its canonical spelling omits the `budgets`
+member, so a record without budgets has the bytes and identity it had before the member
+existed.
+`budgets.limits@1` takes `fuel` and `memory_bytes`, each a positive `u64` or null for
+unbounded, at least one present, for example
+`{"provider": "budgets.limits@1", "fuel": 100000000, "memory_bytes": null}`. **Fuel** is
+charged once at every function entry and at least once per iteration of every loop; each
+engine places its loop charges (the interpreter at every jump to the same or an earlier
+block, native code at the targets of the control-flow graph's feedback edges), so counts
+differ between engines. A run whose next charge would exceed `fuel` stops before it.
+Native code charges fuel only when compiled with fuel checks (`hirsel build --fuel`, or
+`hirsel run --native` with a fuel budget); an executable without them refuses a fuel budget
+and costs nothing when it has none. **Memory** is the storage the engine's allocator holds
+for the run: natively the heap's backing slabs, large blocks and region segments, with idle
+slabs returned before a stop; in the interpreter its value model, 16 bytes per value
+node plus the bytes of every `String` and `Bytes`, measured over every value the run
+holds at fuel charge points no less often than once per sixteenth of the budget it estimates
+was newly allocated. A run whose storage would exceed `memory_bytes` stops. A stopped run's outcome is
+**BudgetExceeded** with the budget's kind, `fuel` or `memory`: like Blocked, it runs no
+user code, cancellation or destruction after the stop, keeps the output it produced, and
+is a tooling outcome whose position is comparable only within one engine and compilation
+([the reference interpreter](implementation.md#the-reference-interpreter)). A native
+executable records `budget_exceeded <kind>` and exits with status 5. A budget
+changes no other outcome ([DET-3](#det-3-no-switches)). The budgets are part of the
+validated record, so a replay applies them again and stops where the recorded run
+stopped. An engine that cannot enforce a requested budget refuses the launch.
 
 **Canonical form.** The record has one strict canonical representation: schema-order object
 members; arrays ordered as specified (`args` order preserved, grant sets sorted by

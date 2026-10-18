@@ -93,6 +93,14 @@ pub(super) fn id(value: &Value, expected: &str) -> Result<u64, Error> {
     }
 }
 impl Tasks {
+    /// The logical bytes of every finished child's result not yet taken.
+    pub(super) fn retained_bytes(&self) -> u64 {
+        self.tasks
+            .values()
+            .filter_map(|child| child.result.as_ref())
+            .map(crate::resources::result_bytes)
+            .fold(0, u64::saturating_add)
+    }
     fn fresh(&mut self) -> u64 {
         self.next += 1;
         self.next

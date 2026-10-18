@@ -98,6 +98,7 @@ fn inputs<'a>(
         registry: DescriptorRegistry::new(&p.table.table, &p.finalizers),
         opt,
         measurement: false,
+        fuel: false,
     }
 }
 

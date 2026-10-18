@@ -1568,6 +1568,7 @@ fn observation(
     Ok(Observation {
         exit_code,
         blocked: o.blocked,
+        budget: None,
         output: output.to_vec(),
         failures: o
             .failures

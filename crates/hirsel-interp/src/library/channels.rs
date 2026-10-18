@@ -20,6 +20,15 @@ struct Channel {
     receivers: usize,
 }
 impl Channels {
+    /// The logical bytes of every queued payload and pending release.
+    pub(super) fn retained_bytes(&self) -> u64 {
+        self.channels
+            .values()
+            .flat_map(|c| &c.queue)
+            .chain(&self.released)
+            .map(Value::logical_bytes)
+            .fold(0, u64::saturating_add)
+    }
     fn endpoint(&mut self, channel: u64, sender: bool) -> Value {
         self.next += 1;
         let id = self.next;

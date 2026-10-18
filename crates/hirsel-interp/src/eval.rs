@@ -98,6 +98,10 @@ pub fn run_with_runtime(
             execution.outcome = Outcome::Blocked(waits);
             Ok(())
         }
+        (Err(Error::BudgetExceeded(kind)), _) => {
+            execution.outcome = Outcome::BudgetExceeded(kind);
+            Ok(())
+        }
         (Err(Error::Trapped(trap)), Some(_)) => {
             execution.outcome = Outcome::Trapped(*trap);
             Ok(())
@@ -167,7 +171,7 @@ fn execute_frames(
 ) -> Result<(), Error> {
     let mut returned_snapshot = None;
     let mut tooling = None;
-    let mut budgets = crate::bounded::Budgets::default();
+    let mut budgets = crate::bounded::Budgets::new(runtime.budgets);
     let mut task = 0;
     let mut runnable = std::collections::VecDeque::new();
     let mut parked: Vec<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)> = Vec::new();
@@ -727,6 +731,20 @@ fn execute_frames(
                     consumed,
                     released,
                 } => {
+                    if budgets.run.metered() {
+                        // What the result holds beyond the owners it took or updated.
+                        let held = std::iter::once(&value)
+                            .chain(arguments.iter().map(|(_, v)| v))
+                            .map(Value::shallow_bytes)
+                            .fold(0, u64::saturating_add);
+                        let given = consumed
+                            .iter()
+                            .chain(arguments.iter().map(|(i, _)| i))
+                            .filter_map(|&i| state.arguments.get(i))
+                            .map(Value::shallow_bytes)
+                            .fold(0, u64::saturating_add);
+                        budgets.run.charge(held.saturating_sub(given));
+                    }
                     if let Some(failure_start) = state.finishing {
                         if execution.failures.len() > failure_start {
                             frame.work.push_back(crate::resources::Work::Release(
@@ -1436,6 +1454,20 @@ fn execute_frames(
                 return Ok(());
             }
             continue;
+        }
+        // Fuel and the memory model are charged at function entries and back-edges.
+        if frames.last().is_some_and(|f| f.fuel_due) {
+            frames.last_mut().unwrap().fuel_due = false;
+            budgets.run.fuel().map_err(Error::BudgetExceeded)?;
+            if budgets.run.due() {
+                let live = frames
+                    .iter()
+                    .chain(runnable.iter().flat_map(|(_, stack, _)| stack))
+                    .chain(parked.iter().flat_map(|(_, stack, _)| stack))
+                    .map(Frame::logical_bytes)
+                    .fold(operations.retained_bytes(), u64::saturating_add);
+                budgets.run.measured(live).map_err(Error::BudgetExceeded)?;
+            }
         }
         let frame = frames.last_mut().unwrap();
         let block = frame
@@ -2473,6 +2505,9 @@ fn rvalue(
             }
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, true);
+            }
+            if budgets.run.metered() {
+                budgets.run.charge(value.shallow_bytes());
             }
             value
         }

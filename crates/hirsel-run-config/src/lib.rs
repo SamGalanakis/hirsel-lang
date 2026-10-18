@@ -99,9 +99,11 @@ pub enum ProviderContract {
     ProcessScript,
     AdmitAny,
     AdmitSafe,
+    BudgetsNone,
+    BudgetsLimits,
 }
 impl ProviderContract {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::TasksCooperative,
         Self::StdinBytes,
         Self::StderrBytes,
@@ -116,6 +118,8 @@ impl ProviderContract {
         Self::ProcessScript,
         Self::AdmitAny,
         Self::AdmitSafe,
+        Self::BudgetsNone,
+        Self::BudgetsLimits,
     ];
     pub const fn name(self) -> &'static str {
         match self {
@@ -133,6 +137,8 @@ impl ProviderContract {
             Self::ProcessScript => "process.script@1",
             Self::AdmitAny => "admit.any@1",
             Self::AdmitSafe => "admit.safe@1",
+            Self::BudgetsNone => "budgets.none@1",
+            Self::BudgetsLimits => "budgets.limits@1",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -212,6 +218,33 @@ pub enum CodeReach {
     /// spelling; empty where the launcher keeps only the verdict (an executable).
     Escapes(Vec<String>),
 }
+/// The run's resource budgets: host policy, never authority. `budgets.none@1`
+/// imposes none and normalizes to an absent entry; `budgets.limits@1` bounds the
+/// run's fuel (function entries and loop back-edges) and the bytes its engine's
+/// allocator holds for it, each null for unbounded and at least one present.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Budgets {
+    pub provider: String,
+    #[serde(default)]
+    pub fuel: Option<u64>,
+    #[serde(default)]
+    pub memory_bytes: Option<u64>,
+}
+impl BudgetKind {
+    /// The kind's name in an observation record and a diagnostic.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Fuel => "fuel",
+            Self::Memory => "memory",
+        }
+    }
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::Fuel, Self::Memory]
+            .into_iter()
+            .find(|kind| kind.name() == name)
+    }
+}
 
 /// Untrusted requested endowments. This is the only serialized run schema.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -229,6 +262,10 @@ pub struct RunConfig {
     #[serde(rename = "unsafe")]
     pub unsafe_root: bool,
     pub admission: Option<Admission>,
+    /// Omitted, not null, under `budgets.none@1`, so records without budgets keep the bytes
+    /// and identity they had before budgets existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budgets: Option<Budgets>,
 }
 
 /// Machine-readable refusal category and the exact offending input field.
@@ -335,6 +372,8 @@ impl RunConfig {
             #[serde(default, rename = "unsafe")]
             unsafe_root: bool,
             admission: Option<Admission>,
+            #[serde(default)]
+            budgets: Option<Budgets>,
         }
         integer_tokens(bytes)?;
         let mut grants: Grants =
@@ -363,6 +402,7 @@ impl RunConfig {
         record.env = grants.env;
         record.unsafe_root = grants.unsafe_root;
         record.admission = grants.admission;
+        record.budgets = grants.budgets;
         record.validated()
     }
 
@@ -428,6 +468,7 @@ impl RunConfig {
             env: None,
             unsafe_root: false,
             admission: None,
+            budgets: None,
         }
     }
     /// Parse human JSON, rejecting duplicates, unknown fields and noncanonical numbers.
@@ -527,6 +568,33 @@ impl RunConfig {
                 provider("admission.revocation", reference)?;
             }
         }
+        if let Some(budgets) = &record.budgets {
+            provider("budgets.provider", &budgets.provider)?;
+            match ProviderContract::parse(&budgets.provider) {
+                Some(ProviderContract::BudgetsNone) => {
+                    if budgets.fuel.is_some() || budgets.memory_bytes.is_some() {
+                        return Err(invalid("budgets", "budgets.none@1 takes no limits"));
+                    }
+                    record.budgets = None;
+                }
+                Some(ProviderContract::BudgetsLimits) => {
+                    if budgets.fuel.is_none() && budgets.memory_bytes.is_none() {
+                        return Err(invalid(
+                            "budgets",
+                            "budgets.limits@1 needs fuel or memory_bytes",
+                        ));
+                    }
+                    if budgets.fuel == Some(0) || budgets.memory_bytes == Some(0) {
+                        return Err(invalid("budgets", "a zero limit"));
+                    }
+                }
+                _ => {
+                    return Err(RunRefusal::Unsupported {
+                        field: "budgets.provider".into(),
+                    });
+                }
+            }
+        }
         supported_providers(&record)?;
         let canonical = canonical_bytes(&record);
         let identity = hash_parts(IDENTITY_DOMAIN, [&canonical[..]]);
@@ -575,6 +643,10 @@ impl ValidatedRun {
     /// Exact validated Net policy; peers supply data and never widen its rules.
     pub fn net_grant(&self) -> Option<&NetGrant> {
         self.record.io.as_ref()?.net.as_ref()
+    }
+    /// The run's `budgets.limits@1` entry, or None under `budgets.none@1`.
+    pub fn budgets(&self) -> Option<&Budgets> {
+        self.record.budgets.as_ref()
     }
     /// Exact validated process policy; scripted runs never widen its rules.
     pub fn process_grant(&self) -> Option<&ProcessGrant> {
@@ -660,6 +732,12 @@ impl ValidatedRun {
         {
             return Err(RunRefusal::UnsafeCode { path: path.clone() });
         }
+        // Budget enforceability: code without fuel checks cannot enforce a fuel budget.
+        if self.budgets().is_some_and(|b| b.fuel.is_some()) && !facts.fueled {
+            return Err(RunRefusal::Unsupported {
+                field: "budgets.fuel".into(),
+            });
+        }
         Ok(BoundRun { run: self })
     }
     /// Historical accepted admission replay. No HostAuthority is available on this path.
@@ -728,8 +806,8 @@ impl ValidatedRun {
     }
 }
 /// What binding needs to know about the compiled code a run would execute: its semantic
-/// program digest, entry, launch kind, the roots the entry declares and what the entry
-/// reaches (CAP-6).
+/// program digest, entry, launch kind, the roots the entry declares, what the entry
+/// reaches (CAP-6) and whether the code charges fuel, so that it can enforce a fuel budget.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProgramFacts {
     pub program: [u8; 32],
@@ -737,8 +815,11 @@ pub struct ProgramFacts {
     pub launch: LaunchKind,
     pub roots: Vec<Root>,
     pub code: CodeReach,
+    pub fueled: bool,
 }
 impl ProgramFacts {
+    /// The facts of code an engine interprets or compiles for this run, which charges fuel
+    /// whenever the run has a fuel budget.
     pub fn of(
         revision: &ProgramRevision,
         launch: LaunchKind,
@@ -751,6 +832,7 @@ impl ProgramFacts {
             launch,
             roots,
             code,
+            fueled: true,
         }
     }
 }

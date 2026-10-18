@@ -450,6 +450,7 @@ pub const CTX_DUP_MAX_OFFSET: usize = std::mem::offset_of!(Compiled, dup_max);
 pub const CTX_FREE_INLINE_OFFSET: usize = std::mem::offset_of!(Compiled, free_inline);
 pub const CTX_IDLE_SLABS_OFFSET: usize = std::mem::offset_of!(Compiled, idle_slabs);
 pub const CTX_PAGES_OFFSET: usize = std::mem::offset_of!(Compiled, pages);
+pub const CTX_FUEL_OFFSET: usize = std::mem::offset_of!(Compiled, fuel);
 pub const PAGE_FREE_OFFSET: usize = std::mem::offset_of!(Slab, free);
 pub const PAGE_LIVE_OFFSET: usize = std::mem::offset_of!(Slab, live);
 pub const PAGE_LOCAL_FREE_OFFSET: usize = std::mem::offset_of!(Slab, local_free);
@@ -521,6 +522,10 @@ pub(crate) struct Compiled {
     /// Per pool, the current allocation page, or null where compiled code calls
     /// `hirsel_rt_v2_alloc`. Mirrors [`Class::current`].
     pub(crate) pages: [*mut Slab; POOL_COUNT],
+    /// The fuel the run has left (`budgets.limits@1`), `i64::MAX` without a fuel budget. A
+    /// fuel build's code subtracts one at each fuel point and calls
+    /// `hirsel_rt_v2_fuel_exhausted` when the result is negative.
+    pub(crate) fuel: i64,
 }
 
 /// One task's heap domain.
@@ -554,6 +559,8 @@ pub(crate) struct Heap {
     pub(crate) backing_allocations: u64,
     #[cfg(feature = "measurement")]
     pub(crate) measurement: crate::measurement::Accounting,
+    /// The run's memory budget, shared with its region pool.
+    pub(crate) meter: std::rc::Rc<crate::budget::Meter>,
 }
 
 #[inline]
@@ -642,6 +649,7 @@ impl Heap {
                 free_inline: Self::inline(diagnostic) as u32,
                 idle_slabs: 0,
                 pages: [ptr::null_mut(); POOL_COUNT],
+                fuel: i64::MAX,
             },
             // SAFETY: the run context validated every descriptor.
             #[cfg(feature = "system-allocator")]
@@ -669,12 +677,25 @@ impl Heap {
             backing_allocations: 0,
             #[cfg(feature = "measurement")]
             measurement: Default::default(),
+            meter: Default::default(),
         }
     }
 
     /// The number of descriptors in this heap's registry.
     pub(crate) fn layout_count(&self) -> u32 {
         self.layouts.len() as u32
+    }
+
+    /// Charge `bytes` of backing storage to the run's memory budget before taking them. When
+    /// they do not fit, idle slabs go back first, as at a trim point with no idle cap.
+    #[inline]
+    fn hold(&mut self, bytes: u64) {
+        if !self.meter.fits(bytes) && self.compiled.idle_slabs > 0 {
+            let cap = std::mem::replace(&mut self.idle_cap, 0);
+            self.trim();
+            self.idle_cap = cap;
+        }
+        self.meter.hold(bytes);
     }
 
     #[inline]
@@ -903,6 +924,7 @@ impl Heap {
     #[cfg(feature = "system-allocator")]
     #[inline(always)]
     pub(crate) unsafe fn allocate_bare(&mut self, index: u32, capacity: u64) -> *mut Header {
+        self.hold(HEADER_SIZE as u64 + capacity);
         unsafe {
             let block = libc::malloc(HEADER_SIZE + capacity as usize).cast::<Header>();
             if block.is_null() {
@@ -1050,6 +1072,7 @@ impl Heap {
     }
 
     unsafe fn new_slab(&mut self, class: usize) {
+        self.hold(SLAB_SIZE as u64);
         // SAFETY: nonzero size.
         let base = unsafe { host_alloc(slab_layout()) };
         if base.is_null() {
@@ -1138,6 +1161,7 @@ impl Heap {
         let Some(total) = (offset + HEADER_SIZE as u64).checked_add(capacity) else {
             environmental("a large allocation's size overflows")
         };
+        self.hold(total);
         #[cfg(not(feature = "system-allocator"))]
         let Ok(host) = HostLayout::from_size_align(total as usize, align as usize) else {
             environmental("a large allocation exceeds the host address space")
@@ -1233,6 +1257,9 @@ impl Heap {
     #[inline(always)]
     pub(crate) unsafe fn free_small(&mut self, block: *mut Header) {
         unsafe {
+            if self.meter.metered() {
+                self.meter.give(HEADER_SIZE as u64 + self.capacity(block));
+            }
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             self.unlist_bare(block);
             libc::free(block.cast());
@@ -1303,6 +1330,7 @@ impl Heap {
             }
             #[cfg(feature = "measurement")]
             self.measurement.free((*prefix).capacity);
+            self.meter.give(total);
             release_large(prefix, total, align);
         }
     }
@@ -1369,6 +1397,7 @@ impl Heap {
                         record.state.set(STATE_FREE);
                     }
                     release_slab(slab);
+                    self.meter.give(SLAB_SIZE as u64);
                     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
                     {
                         self.slab_count -= 1;
@@ -1400,6 +1429,7 @@ impl Heap {
                 }
                 #[cfg(feature = "measurement")]
                 self.measurement.free(self.capacity(block));
+                self.meter.give(HEADER_SIZE as u64 + self.capacity(block));
                 libc::free(block.cast());
             }
         }
@@ -1420,6 +1450,7 @@ impl Heap {
                         record.state.set(STATE_FREE);
                     }
                     release_slab(slab);
+                    self.meter.give(SLAB_SIZE as u64);
                     slab = next;
                 }
             }
@@ -1440,6 +1471,7 @@ impl Heap {
                 }
                 #[cfg(feature = "measurement")]
                 self.measurement.free((*prefix).capacity);
+                self.meter.give((*prefix).total);
                 release_large(prefix, (*prefix).total, (*prefix).align);
                 prefix = next;
             }

@@ -462,6 +462,7 @@ fn native_c_fixture(
         native::BuildProfile::Default,
         backend,
         None,
+        false,
     )
     .unwrap();
     assert!(built.is_ok(), "{built:?}");

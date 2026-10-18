@@ -54,6 +54,9 @@ pub(crate) const EXIT_LAUNCH: i32 = 3;
 /// Process exit code of a Blocked run (CONC-8): every task waits on another and nothing
 /// outside the run can wake one. No user code, cancellation or destruction runs after it.
 pub const EXIT_BLOCKED: i32 = 4;
+/// Process exit code of a run that spent a budget (`budgets.limits@1`): as for a Blocked run,
+/// no user code, cancellation or destruction runs after the stop.
+pub const EXIT_BUDGET: i32 = hirsel_run_config::exit::BUDGET_EXCEEDED;
 
 /// What a launch does after its entry: the outputs' and tapes' last writes and the observation
 /// record. Taken by the entry's return, or by [`blocked`] when the run never returns.
@@ -72,6 +75,19 @@ pub(crate) fn blocked() -> ! {
     };
     let record = format!("hirsel-observation {OBSERVATION_VERSION}\nblocked\naudit unavailable\n");
     std::process::exit(finish(record, EXIT_BLOCKED))
+}
+/// End a run that spent a budget (`budgets.limits@1`) where it stands, as [`blocked`] ends a
+/// Blocked run: the launch records `budget_exceeded <kind>` and exits with [`EXIT_BUDGET`],
+/// with no exit audit. A harness that did not launch through here ends environmentally.
+pub(crate) fn budget_exceeded(kind: hirsel_run_config::BudgetKind) -> ! {
+    let Some(finish) = FINISH.with(|f| f.borrow_mut().take()) else {
+        crate::environmental("the run spent its budget");
+    };
+    let record = format!(
+        "hirsel-observation {OBSERVATION_VERSION}\nbudget_exceeded {}\naudit unavailable\n",
+        kind.name()
+    );
+    std::process::exit(finish(record, EXIT_BUDGET))
 }
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
@@ -106,6 +122,7 @@ impl Launch {
         &self,
         run: &hirsel_run_config::ValidatedRun,
         escapes: bool,
+        fueled: bool,
     ) -> Result<hirsel_run_config::ProgramFacts, hirsel_run_config::RunRefusal> {
         use crate::standalone::{ROOT_ARGS, ROOT_IO, ROOT_TEST};
         let mask = match self {
@@ -114,7 +131,7 @@ impl Launch {
             Self::Test(_) => ROOT_TEST,
             Self::Roots(_, mask) => *mask,
         };
-        crate::standalone::facts(run.program(), &run.record().entry, mask, escapes)
+        crate::standalone::facts(run.program(), &run.record().entry, mask, escapes, fueled)
     }
 }
 /// The largest inline result an entry may return.
@@ -1103,6 +1120,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_zero(
             config,
             false,
             false,
+            false,
         )
     }
 }
@@ -1130,6 +1148,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch(
             config,
             false,
             false,
+            false,
         )
     }
 }
@@ -1153,6 +1172,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_test(
             config,
             false,
             false,
+            false,
         )
     }
 }
@@ -1168,7 +1188,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_roots(
     config: *const Config,
     roots: u8,
 ) -> i32 {
-    let (roots, unreplayable, escapes) = crate::standalone::split(roots);
+    let (roots, unreplayable, escapes, fueled) = crate::standalone::split(roots);
     unsafe {
         launch(
             Launch::Roots(entry, roots),
@@ -1178,6 +1198,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_roots(
             config,
             unreplayable,
             escapes,
+            fueled,
         )
     }
 }
@@ -1197,7 +1218,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
     name_len: u64,
     roots: u8,
 ) -> i32 {
-    let (roots, unreplayable, escapes) = crate::standalone::split(roots);
+    let (roots, unreplayable, escapes, fueled) = crate::standalone::split(roots);
     let Some(program) = (unsafe { program.as_ref() }) else {
         return refuse("missing program binding");
     };
@@ -1217,6 +1238,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_launch_standalone(
         name,
         roots,
         escapes,
+        fueled,
     ) {
         Ok(selected) => selected,
         Err(error) => return refuse(&error.to_string()),
@@ -1251,6 +1273,7 @@ unsafe fn launch(
     launch_config: *const Config,
     unreplayable: bool,
     escapes: bool,
+    fueled: bool,
 ) -> i32 {
     let Some(launch_config) = (unsafe { launch_config.as_ref() }) else {
         return refuse("missing launch configuration");
@@ -1261,7 +1284,7 @@ unsafe fn launch(
         match arguments.as_slice() {
             [_, path] => crate::host_launch::replay(std::path::Path::new(path))
                 .and_then(|(io, run)| {
-                    let facts = entry.facts(&run, escapes)?;
+                    let facts = entry.facts(&run, escapes, fueled)?;
                     Ok(Some(crate::standalone::Selected::Replay {
                         run: run.bind(&facts)?,
                         io,
@@ -1278,7 +1301,7 @@ unsafe fn launch(
                 [flag, path] if flag == "--hirsel-run" => {
                     hirsel_run_config::RunConfig::read_path(std::path::Path::new(path))
                         .and_then(|run| {
-                            let facts = entry.facts(&run, escapes)?;
+                            let facts = entry.facts(&run, escapes, fueled)?;
                             run.bind(&facts)
                         })
                         .map(|run| {
@@ -1335,6 +1358,8 @@ unsafe fn execute(
     selected: Option<crate::standalone::Selected>,
 ) -> i32 {
     let requested = selected.as_ref().map(|selected| selected.run().clone());
+    // Binding refused a fuel budget this code cannot enforce (`ProgramFacts::fueled`).
+    let budgets = requested.as_ref().and_then(|run| run.budgets()).cloned();
     let mut production_io = None;
     let mut production_replay = None;
     if let Some(selected) = selected {
@@ -1673,6 +1698,9 @@ unsafe fn execute(
     let mut ctx = std::ptr::null_mut();
     if unsafe { hirsel_rt_v2_ctx_create(&config, &mut ctx) } != 0 {
         return refuse("the runtime configuration");
+    }
+    if let Some(budgets) = &budgets {
+        unsafe { &mut *ctx }.set_budgets(budgets.fuel, budgets.memory_bytes);
     }
     #[cfg(feature = "measurement")]
     if let Some(file) = measurement {

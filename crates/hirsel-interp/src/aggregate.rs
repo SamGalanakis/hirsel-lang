@@ -26,6 +26,8 @@ pub struct RuntimeTypes {
     pub forget: Option<DefPath>,
     /// Present for checked execution; absent runs normally.
     pub checked: Option<crate::checked::CheckedRuntime>,
+    /// The host's run budgets; the default bounds nothing.
+    pub budgets: crate::RunBudgets,
 }
 impl RuntimeTypes {
     pub fn get(&self, path: &DefPath) -> Option<&Nominal> {

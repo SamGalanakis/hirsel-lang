@@ -100,6 +100,10 @@ pub const CTX_FREE_INLINE_OFFSET: u64 = 4;
 pub const CTX_IDLE_SLABS_OFFSET: u64 = 8;
 pub const CTX_PAGES_OFFSET: u64 = 16;
 pub const POOL_COUNT: u64 = 64;
+/// After the pages, the `i64` fuel the run has left (`budgets.limits@1`): a fuel build's
+/// code subtracts one at each fuel point and calls `hirsel_rt_v2_fuel_exhausted` when the
+/// result is negative. A run without a fuel budget starts it at `i64::MAX`.
+pub const CTX_FUEL_OFFSET: u64 = CTX_PAGES_OFFSET + 8 * POOL_COUNT;
 pub const PAGE_FREE_OFFSET: u64 = 16;
 pub const PAGE_LIVE_OFFSET: u64 = 24;
 pub const PAGE_LOCAL_FREE_OFFSET: u64 = 72;
@@ -442,6 +446,8 @@ pub enum RuntimeEntry {
     /// A callback failed: the process ends (PROG-4).
     CallbackFailed,
     ExitReport,
+    /// A fuel point found the run's fuel spent: the run ends with BudgetExceeded.
+    FuelExhausted,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -513,7 +519,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 65] = [
+    pub const ALL: [RuntimeEntry; 66] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -579,6 +585,7 @@ impl RuntimeEntry {
         Self::CallbackContext,
         Self::CallbackFailed,
         Self::ExitReport,
+        Self::FuelExhausted,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1000,6 +1007,7 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::FuelExhausted => ("hirsel_rt_v2_fuel_exhausted", VOID, const { &[CTX] }),
         };
         RuntimeDeclaration {
             entry: self,
@@ -1115,4 +1123,5 @@ snapshot_enum!(RuntimeEntry {
     CallbackContext,
     CallbackFailed,
     ExitReport,
+    FuelExhausted,
 });

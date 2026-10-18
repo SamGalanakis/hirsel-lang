@@ -249,6 +249,7 @@ fn emit(program: &Program, opt: OptLevel) -> Vec<u8> {
         ),
         opt,
         measurement: false,
+        fuel: false,
     };
     emit_object(&program.units(), &inputs)
         .unwrap_or_else(|e| panic!("{}: {e}", program.table.target.triple))

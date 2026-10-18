@@ -61,6 +61,8 @@ impl std::error::Error for NotImplemented {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RunOutcome {
     Blocked(Vec<hirsel_interp::observation::ObservedWait>),
+    /// The run spent a host budget (`budgets.limits@1`) and stopped without cleanup.
+    BudgetExceeded(hirsel_interp::BudgetKind),
     ToolingLimit(hirsel_tir::ToolingLimit),
     UndefinedBehavior(hirsel_interp::UndefinedBehavior),
     /// Checked execution found the memory model broken.

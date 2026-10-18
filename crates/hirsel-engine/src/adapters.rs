@@ -219,6 +219,7 @@ impl InterpreterPhase for InterpreterAdapter {
                     .and_then(|o| o.blocked.clone())
                     .unwrap_or_default(),
             ),
+            hirsel_interp::Outcome::BudgetExceeded(kind) => RunOutcome::BudgetExceeded(kind),
             hirsel_interp::Outcome::ToolingLimit(limit) => RunOutcome::ToolingLimit(limit),
             hirsel_interp::Outcome::UndefinedBehavior(detected) => {
                 RunOutcome::UndefinedBehavior(detected)
@@ -293,6 +294,9 @@ fn core_error(error: hirsel_interp::Error) -> RuntimeError {
         hirsel_interp::Error::InvalidTir(e) => RuntimeError::Tool(format!("invalid TIR: {e}")),
         hirsel_interp::Error::Blocked(_) => {
             RuntimeError::Tool("unhandled Blocked stop signal".into())
+        }
+        hirsel_interp::Error::BudgetExceeded(_) => {
+            RuntimeError::Tool("unhandled budget stop signal".into())
         }
         hirsel_interp::Error::Trapped(trap) => RuntimeError::Tool(trap.to_string()),
     }

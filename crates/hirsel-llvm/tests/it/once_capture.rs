@@ -316,6 +316,7 @@ fn capture_masks_agree_on_both_native_targets() {
                     ),
                     opt,
                     measurement: false,
+                    fuel: false,
                 };
                 let object = hirsel_llvm::emit_object(&p.units(), &inputs).unwrap();
                 let dir = scratch(&format!(
@@ -527,6 +528,7 @@ fn initialization_masks_share_the_named_live_word_limit() {
             ),
             opt: hirsel_lir::emission::OptLevel::None,
             measurement: false,
+            fuel: false,
         };
         let result = hirsel_llvm::emit_object(&[&sealed], &inputs);
         if fields == 64 {

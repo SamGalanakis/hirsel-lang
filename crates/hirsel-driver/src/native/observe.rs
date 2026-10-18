@@ -32,6 +32,8 @@ pub struct Observation {
     pub exit_code: Option<i32>,
     /// The run is Blocked (CONC-8, schema 2): it neither returned nor failed.
     pub blocked: bool,
+    /// The run spent this budget (`budgets.limits@1`) and stopped as a Blocked run does.
+    pub budget: Option<hirsel_run_config::BudgetKind>,
     pub output: Vec<u8>,
     /// The primary failure, then cleanup failures in order.
     pub failures: Vec<Failure>,
@@ -43,6 +45,7 @@ impl Observation {
         Self {
             exit_code: observable.exit_code,
             blocked: observable.blocked.is_some(),
+            budget: None,
             output: observable.output.clone(),
             failures: observable
                 .failures

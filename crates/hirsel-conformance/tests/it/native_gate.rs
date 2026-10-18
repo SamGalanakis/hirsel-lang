@@ -172,6 +172,7 @@ fn wrong(output: &[u8]) -> Outcome {
     Outcome::Mismatch(Observation {
         exit_code: Some(0),
         blocked: false,
+        budget: None,
         output: output.to_vec(),
         failures: Vec::new(),
     })

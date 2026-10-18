@@ -123,6 +123,7 @@ pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeEr
             &program.finalizers,
         ),
         measurement: false,
+        fuel: program.fuel,
     };
     hirsel_llvm::emit_optimized_ir(&units, &inputs)
         .map_err(|e| NativeError::new(StageName::Emission, e.to_string()))
@@ -151,6 +152,7 @@ pub fn emit_clif(program: &ReadyProgram) -> Result<String, NativeError> {
             &program.finalizers,
         ),
         measurement: false,
+        fuel: program.fuel,
     };
     hirsel_cranelift::emit_clif(&units, &inputs)
         .map_err(|e| NativeError::new(StageName::Emission, e.to_string()))
@@ -188,6 +190,7 @@ pub(crate) fn emit_registered(
         opt,
         registry: registry.clone(),
         measurement,
+        fuel: program.fuel,
     };
     let emitted = match backend {
         Backend::Llvm => hirsel_llvm::emit_object_profile(&units, &inputs, sources).map_err(|e| {

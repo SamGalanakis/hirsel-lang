@@ -140,6 +140,7 @@ pub fn launch(
 pub fn core_runtime_types() -> crate::aggregate::RuntimeTypes {
     crate::aggregate::RuntimeTypes {
         trace_mode: Default::default(),
+        budgets: Default::default(),
         nominals: vec![crate::aggregate::Nominal {
             definition: hirsel_syntax::DefPath::core("Result"),
             resource: false,
@@ -222,6 +223,7 @@ fn runtime_error(e: Error) -> LaunchError {
         Error::Query(q) => LaunchError::Provider(q),
         // Checked execution reports traps as an outcome; this is unreachable.
         Error::Blocked(_) => LaunchError::Runtime("unhandled Blocked stop signal".into()),
+        Error::BudgetExceeded(_) => LaunchError::Runtime("unhandled budget stop signal".into()),
         Error::Trapped(trap) => LaunchError::Runtime(trap.to_string()),
     }
 }

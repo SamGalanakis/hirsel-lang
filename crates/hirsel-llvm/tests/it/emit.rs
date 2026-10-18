@@ -40,6 +40,7 @@ fn inputs<'a>(
         ),
         opt,
         measurement: false,
+        fuel: false,
     }
 }
 

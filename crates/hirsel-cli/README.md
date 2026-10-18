@@ -117,13 +117,17 @@ and cannot combine with `--run` or `--native`.
 with empty grants. A launcher can explicitly fill its Io projections and Args/Env
 snapshots before supplying that record; selecting the source grants no authority.
 
-`hirsel build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux]
+`hirsel build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux]
 <source|manifest.json> -o <exe>` writes a standalone executable linked with the
 production runtime. Default builds use LLVM O2, release O3, debug O0 with source
 line tables. `--backend cranelift` lowers the same LIR with Cranelift: `--debug`
 is its unoptimized level with DWARF 5 source line tables, the other profiles its `speed`
 level. Its parity gate covers x86-64 and AArch64. Launch it with `--hirsel-run /absolute/run.json [args...]`; omitted
-records deny external roots. `-- [args...]` explicitly supplies only Args.
+records deny external roots. `-- [args...]` explicitly supplies only Args. `--fuel` compiles fuel checks at function entries and loop heads, so the executable
+can enforce a fuel budget (`budgets.limits@1`); without it a fuel budget is refused, and
+`hirsel run --native` adds the checks only when its run has a fuel budget. A run that
+spends a budget prints `budget exceeded: <kind>` and exits 2 under `hirsel run`, 5 as a
+standalone executable.
 
 `build` and `run --native` accept `--proofs <sidecar>` with any number of
 `--trust <tool@version>`: current `proved` records from a trusted checker

@@ -438,6 +438,7 @@ fn every_target_executes_the_scalar_boundary_matrix() {
                     ),
                     opt,
                     measurement: false,
+                    fuel: false,
                 };
                 emit_object(&program.units(), &inputs).unwrap().bytes
             };
@@ -628,6 +629,7 @@ fn every_target_executes_the_abi_probes() {
                     ),
                     opt,
                     measurement: false,
+                    fuel: false,
                 };
                 // The harness's prototypes assume these hidden slots: only the nominal
                 // `@packed` result takes a caller destination, and only the closure shape
@@ -725,6 +727,7 @@ fn every_target_executes_the_heap_probes() {
                     ),
                     opt,
                     measurement: false,
+                    fuel: false,
                 };
                 (
                     emit_object(&program.units(), &inputs).unwrap().bytes,

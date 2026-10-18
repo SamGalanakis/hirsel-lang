@@ -103,6 +103,10 @@ extern "C" {
 #define HIRSEL_RT_V2_CTX_IDLE_SLABS_OFFSET 8
 #define HIRSEL_RT_V2_CTX_PAGES_OFFSET 16
 #define HIRSEL_RT_V2_POOL_COUNT 64
+/* Run budgets (budgets.limits@1): after the pages, the i64 fuel the run has left. A fuel
+ * build's code subtracts one at each fuel point and calls hirsel_rt_v2_fuel_exhausted when
+ * the result is negative; a run without a fuel budget starts it at INT64_MAX. */
+#define HIRSEL_RT_V2_CTX_FUEL_OFFSET 528
 #define HIRSEL_RT_V2_PAGE_FREE_OFFSET 16
 #define HIRSEL_RT_V2_PAGE_LIVE_OFFSET 24
 #define HIRSEL_RT_V2_PAGE_LOCAL_FREE_OFFSET 72
@@ -593,6 +597,10 @@ void hirsel_rt_v2_foreign_leave(const void *previous);
 void hirsel_rt_v2_foreign_violation(uint64_t site);
 hirsel_rt_v2_ctx *hirsel_rt_v2_callback_context(void);
 void hirsel_rt_v2_callback_failed(hirsel_rt_v2_ctx *ctx);
+
+/* A fuel point found the run's fuel spent: the run ends with BudgetExceeded (fuel), as a
+   Blocked run ends, and the call does not return. */
+void hirsel_rt_v2_fuel_exhausted(hirsel_rt_v2_ctx *ctx);
 
 #ifdef __cplusplus
 }

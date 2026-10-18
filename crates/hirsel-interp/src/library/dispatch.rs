@@ -1038,6 +1038,11 @@ impl Library {
     }
 }
 impl Operations for Library {
+    fn retained_bytes(&self) -> u64 {
+        self.tasks
+            .retained_bytes()
+            .saturating_add(self.channels.retained_bytes())
+    }
     fn entry_returned(
         &mut self,
         value: &Value,

@@ -465,6 +465,13 @@ pub fn run_path_on_host(
         .runtime_types()
         .map_err(|e| program.error(e))?;
     runtime.trace_mode = hirsel_interp::TraceMode::Effects;
+    // A replay re-applies the recorded budgets, so it stops where the run stopped.
+    if let Some(budgets) = run.budgets() {
+        runtime.budgets = hirsel_interp::RunBudgets {
+            fuel: budgets.fuel,
+            memory_bytes: budgets.memory_bytes,
+        };
+    }
     let mut operations = network::HostLibrary::new(&tir_run, &run, io)
         .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
     let args = operations
@@ -534,6 +541,7 @@ pub fn run_path_on_host(
             site: failure_site
                 .ok_or_else(|| ToolError::Runtime("failure has no source site".into()))?,
         },
+        Outcome::BudgetExceeded(kind) => RunOutcome::BudgetExceeded(kind),
         Outcome::ToolingLimit(l) => RunOutcome::ToolingLimit(l),
         Outcome::UndefinedBehavior(u) => RunOutcome::UndefinedBehavior(u),
         Outcome::Trapped(t) => RunOutcome::Trapped(t),

@@ -59,6 +59,53 @@ impl Drop for OperationState {
         }
     }
 }
+impl OperationState {
+    /// The logical bytes this suspended operation holds (`budgets.limits@1`).
+    pub(crate) fn logical_bytes(&self) -> u64 {
+        let mut total = self
+            .arguments
+            .iter()
+            .chain(&self.owned)
+            .map(Value::logical_bytes)
+            .fold(0u64, u64::saturating_add);
+        if let Some(callback) = &self.callback {
+            total = total.saturating_add(callback.state.logical_bytes());
+        }
+        total
+    }
+}
+/// The logical bytes an operation result not yet published holds.
+pub(crate) fn result_bytes(result: &crate::OperationResult) -> u64 {
+    use crate::OperationResult::*;
+    let sum = |values: &mut dyn Iterator<Item = &Value>| {
+        values
+            .map(Value::logical_bytes)
+            .fold(0u64, u64::saturating_add)
+    };
+    match result {
+        ArenaCharge { result, .. } => result_bytes(result),
+        Complete {
+            value,
+            arguments,
+            released,
+            ..
+        } => sum(&mut std::iter::once(value)
+            .chain(released)
+            .chain(arguments.iter().map(|(_, v)| v))),
+        Call {
+            callee,
+            arguments,
+            owned,
+            updates,
+            ..
+        } => sum(&mut std::iter::once(callee)
+            .chain(arguments)
+            .chain(owned)
+            .chain(updates.iter().map(|(_, v)| v))),
+        FailureChain { released, .. } => sum(&mut released.iter()),
+        Failed(_) | UndefinedBehavior(_) | Park { .. } => 0,
+    }
+}
 pub(crate) fn discard_result(result: crate::OperationResult) {
     match result {
         crate::OperationResult::ArenaCharge { result, .. } => discard_result(*result),

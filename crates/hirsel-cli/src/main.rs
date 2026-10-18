@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
 use execution_policy::{DEFAULT_BENCH_MILLISECONDS, DEFAULT_RUN_MAX_STEPS};
@@ -40,6 +40,7 @@ enum Command {
         profile: hirsel_driver::native::BuildProfile,
         backend: hirsel_driver::native::Backend,
         proofs: Proofs,
+        fuel: bool,
     },
     Export {
         run: bool,
@@ -237,12 +238,14 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             let (mut source, mut output, mut target, mut profile) = (None, None, None, None);
             let mut selected = None;
             let mut proofs = Proofs::default();
+            let mut fuel = false;
             while let Some(arg) = args.next()? {
                 match arg {
                     Long("proofs") if proofs.sidecar.is_none() => {
                         proofs.sidecar = Some(args.value()?)
                     }
                     Long("trust") => proofs.trust(args.value()?)?,
+                    Long("fuel") if !fuel => fuel = true,
                     Long("release") if profile.is_none() => profile = Some(BuildProfile::Release),
                     Long("debug") if profile.is_none() => profile = Some(BuildProfile::Debug),
                     Long("backend") if selected.is_none() => {
@@ -273,6 +276,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     proofs.check()?;
                     proofs
                 },
+                fuel,
             }
         }
         Some(Value(command)) if command == "precheck" => {
@@ -729,6 +733,7 @@ fn execute(mut args: Vec<OsString>) -> u8 {
             profile,
             backend,
             proofs,
+            fuel,
         } => {
             let evidence = match proofs.evidence() {
                 Ok(evidence) => evidence,
@@ -741,6 +746,7 @@ fn execute(mut args: Vec<OsString>) -> u8 {
                 profile,
                 backend,
                 evidence.as_ref(),
+                fuel,
             ) {
                 Ok(Ok(report)) => {
                     for line in report {
@@ -1184,6 +1190,10 @@ fn run_result(result: Result<RunOutcome, ToolError>, json: bool) -> u8 {
         }
         Ok(RunOutcome::Blocked(w)) => {
             eprintln!("Blocked: {w:?}");
+            2
+        }
+        Ok(RunOutcome::BudgetExceeded(kind)) => {
+            eprintln!("budget exceeded: {}", kind.name());
             2
         }
         Ok(RunOutcome::ToolingLimit(l)) => {

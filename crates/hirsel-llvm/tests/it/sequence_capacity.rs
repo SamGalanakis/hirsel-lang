@@ -98,6 +98,7 @@ fn object(program: &Program, opt: OptLevel) -> Vec<u8> {
         registry: DescriptorRegistry::new(&program.table.table, &program.finalizers),
         opt,
         measurement: false,
+        fuel: false,
     };
     let artifact = emit_object(&program.units(), &inputs).unwrap();
     assert!(

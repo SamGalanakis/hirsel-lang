@@ -218,6 +218,7 @@ fn object(target: &TargetSpec) -> (Vec<u8>, String) {
         registry: registry.clone(),
         opt: OptLevel::None,
         measurement: false,
+        fuel: false,
     };
     let mut em = Emitter::new(&inputs, false).unwrap();
     let abi = FnAbi {

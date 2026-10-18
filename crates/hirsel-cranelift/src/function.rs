@@ -145,6 +145,8 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     pub(crate) regions: Vec<Value>,
     funcs: HashMap<FuncId, FuncRef>,
     globals: HashMap<DataId, GlobalValue>,
+    /// Per block, whether it charges fuel (`hirsel_lir::fuel`); empty without `inputs.fuel`.
+    fuel_points: Vec<bool>,
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record.
@@ -196,6 +198,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let environment = sig
             .hidden_index(Hidden::Environment)
             .map(|index| entry_params[index]);
+        let fuel_points = if em.inputs.fuel {
+            hirsel_lir::fuel::fuel_points(unit)
+        } else {
+            Vec::new()
+        };
         Self {
             em,
             unit,
@@ -217,6 +224,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             regions: Vec::new(),
             funcs: HashMap::new(),
             globals: HashMap::new(),
+            fuel_points,
         }
     }
 
@@ -1109,6 +1117,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 }
             }
         }
+        if self.fuel_points.get(b.index()).copied().unwrap_or(false) {
+            self.charge_fuel()?;
+        }
         for inst in self.pool(unit.blocks[b.index()].instructions, &unit.instructions)? {
             self.source_location(hirsel_lir::profile::instruction_site(unit, b, inst));
             self.instruction(inst)?;
@@ -1116,6 +1127,27 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let terminator = &unit.terminators[b.index()];
         self.source_location(hirsel_lir::profile::terminator_site(unit, b));
         self.terminator(terminator)
+    }
+
+    /// One unit of the run's fuel (`EmitInputs::fuel`): the context's fuel word loses one,
+    /// and a negative result ends the run in `hirsel_rt_v2_fuel_exhausted`.
+    fn charge_fuel(&mut self) -> Emitted {
+        let offset = hirsel_lir::runtime_abi::CTX_FUEL_OFFSET;
+        let fuel = self.load_ty(types::I64, self.context, offset);
+        let left = self.b.ins().iadd_imm(fuel, -1);
+        self.b
+            .ins()
+            .store(flags(), left, self.context, offset as i32);
+        let spent = self.b.ins().icmp_imm(IntCC::SignedLessThan, left, 0);
+        let (cold, next) = (self.b.create_block(), self.b.create_block());
+        self.b.set_cold_block(cold);
+        self.b.ins().brif(spent, cold, &[], next, &[]);
+        self.b.switch_to_block(cold);
+        let context = self.context;
+        self.rt(RuntimeEntry::FuelExhausted, &[context])?;
+        self.b.ins().trap(TRAP);
+        self.b.switch_to_block(next);
+        Ok(())
     }
 
     fn source_location(&mut self, site: SiteRange) {

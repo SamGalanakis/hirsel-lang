@@ -564,6 +564,8 @@ pub(crate) struct RegionPool {
     pub(crate) backing_allocations: u64,
     /// The innermost entered region of the running task (the scheduler swaps it per task).
     pub(crate) active: *mut Region,
+    /// The run's memory budget, shared with its heap.
+    meter: std::rc::Rc<crate::budget::Meter>,
 }
 
 fn segment_layout(size: u64) -> HostLayout {
@@ -577,7 +579,7 @@ impl RegionPool {
     fn record_backing_allocation(&mut self) {
         self.backing_allocations += 1;
     }
-    pub(crate) fn new() -> RegionPool {
+    pub(crate) fn new(meter: std::rc::Rc<crate::budget::Meter>) -> RegionPool {
         RegionPool {
             idle: ptr::null_mut(),
             lent: ptr::null_mut(),
@@ -589,6 +591,7 @@ impl RegionPool {
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             backing_allocations: 0,
             active: ptr::null_mut(),
+            meter,
         }
     }
 
@@ -599,6 +602,7 @@ impl RegionPool {
         let mut found = self.unlink_idle(need);
         if found.is_null() {
             let size = need.max(SEGMENT_SIZE as u64).next_multiple_of(16);
+            self.meter.hold(size);
             // SAFETY: nonzero size.
             found = unsafe { host_alloc(segment_layout(size)) }.cast::<Segment>();
             if found.is_null() {
@@ -718,6 +722,7 @@ impl RegionPool {
             unsafe {
                 self.idle = (*segment).prev;
                 self.idle_bytes -= (*segment).size;
+                self.meter.give((*segment).size);
                 host_dealloc(segment.cast(), segment_layout((*segment).size));
             }
         }
@@ -738,6 +743,7 @@ impl RegionPool {
                 }
                 #[cfg(feature = "memcheck")]
                 memcheck::destroy_pool(segment.cast());
+                self.meter.give((*segment).size);
                 host_dealloc(segment.cast(), segment_layout((*segment).size));
                 segment = next;
             }

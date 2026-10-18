@@ -459,6 +459,10 @@ impl QueryEngine {
                 Err(QueryError::Diagnostics(vec![diagnostic]))
             }
             Outcome::Blocked(_) => Err(operational("compile-time evaluation is Blocked")),
+            Outcome::BudgetExceeded(kind) => Err(operational(format!(
+                "compile-time evaluation exceeded its {} budget",
+                kind.name()
+            ))),
             Outcome::ToolingLimit(limit) => Err(self.comptime_limit(limit)),
             Outcome::UndefinedBehavior(detected) => Err(operational(detected.to_string())),
             Outcome::Trapped(trap) => Err(operational(trap.to_string())),

@@ -472,6 +472,14 @@ The scheduler accepts the internal Blocked stop signal without executing pending
 cleanup or checked resource-exit audits. Its observation retains stdout, confirmed
 effects and stable wait rows (spawn path, source anchor, kind, logical targets).
 
+Run budgets (`RuntimeTypes.budgets`, `budgets.limits@1`; `budget.rs`) stop a run the
+same way, as `Outcome::BudgetExceeded(kind)`. Fuel is charged at each block start a frame
+reaches by entry, self-tail restart or a jump to the same or an earlier block. Memory is
+`Value::logical_bytes` over every frame of every task plus `Operations::retained_bytes`,
+measured at fuel points when constructions' and library results' shallow charges pass
+the headroom (at least a sixteenth of the budget) or enough fuel has passed; the decision
+uses only the exact measurement, so frees never cause a stop and replay stops alike.
+
 ## Structured concurrency implementation
 
 The reference runtime uses cooperative fibers: each task owns a frame stack and

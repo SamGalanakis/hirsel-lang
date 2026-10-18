@@ -10,6 +10,7 @@ pub mod descriptor_registry;
 pub mod discharge;
 pub mod effect;
 pub mod emission;
+pub mod fuel;
 pub mod ir;
 pub mod layout;
 pub mod layout_types;

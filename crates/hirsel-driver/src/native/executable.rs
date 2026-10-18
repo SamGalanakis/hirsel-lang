@@ -67,6 +67,7 @@ pub fn build_path_native(
         profile,
         super::Backend::Llvm,
         evidence,
+        false,
     )
 }
 
@@ -79,6 +80,7 @@ pub fn build_path_native_backend(
     profile: BuildProfile,
     backend: super::Backend,
     evidence: Option<&super::Evidence>,
+    fuel: bool,
 ) -> Result<Result<Vec<String>, NativeError>, ToolError> {
     let mut loaded = crate::load_program(source)?;
     loaded.check_for_execution()?;
@@ -108,7 +110,9 @@ pub fn build_path_native_backend(
         if let Some(proofs) = &proofs {
             options.discharge = proofs.discharge.clone();
         }
-        let program = super::build(&validated, &options)?;
+        let mut program = super::build(&validated, &options)?;
+        // Fuel checks let the executable accept a fuel budget (`budgets.limits@1`).
+        program.fuel = fuel;
         let scratch = Scratch::new()?;
         let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
             .map(PathBuf::from)

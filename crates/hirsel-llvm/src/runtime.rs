@@ -95,7 +95,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::DiagPanic
         | R::CallbackFailed
         | R::ForeignViolation
-        | R::ExitReport => (MemoryEffects::ReadWrite, false, &[]),
+        | R::ExitReport
+        | R::FuelExhausted => (MemoryEffects::ReadWrite, false, &[]),
         // The calling thread's foreign context cell: no block memory, no callbacks.
         R::ForeignEnter | R::ForeignLeave | R::CallbackContext => {
             (MemoryEffects::ReadWrite, true, &[])

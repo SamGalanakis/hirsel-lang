@@ -162,6 +162,9 @@ pub fn run_path_native_backend(
         for failure in &observation.failures {
             writeln!(stderr, "{}", sites.report(failure, json)?).map_err(io)?;
         }
+        if let Some(kind) = observation.budget {
+            return Ok(RunOutcome::BudgetExceeded(kind));
+        }
         Ok(
             match (observation.exit_code, observation.failures.first()) {
                 (Some(code), _) => RunOutcome::Exit(code),
@@ -199,7 +202,9 @@ fn run(
     if let Some(proofs) = proofs {
         options.discharge = proofs.discharge.clone();
     }
-    let program = build(validated, &options)?;
+    let mut program = build(validated, &options)?;
+    // A fuel budget needs fuel checks; without one the executable pays nothing.
+    program.fuel = run.budgets().is_some_and(|b| b.fuel.is_some());
     for line in proofs.map_or_else(Vec::new, |p| p.report(&program)) {
         writeln!(stderr, "hirsel: {line}")
             .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
