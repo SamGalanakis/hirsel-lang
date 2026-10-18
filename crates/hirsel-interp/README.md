@@ -312,7 +312,10 @@ arenas are instances that end at `EndScope`, frame exit, self-tail restart or th
 `arena.with`, and any later operand, write or `Drop` reaching an ended instance
 stops execution with `Outcome::Trapped(Trap)`. A resource count, the reverse
 declaration order of live resource owners across scopes and cleanup chains is
-checked too. Complete native signatures transfer result-position lifetimes,
+checked too. A place's shadow follows the same steps as its value: an element place
+reads that element's own subtree with its container's bound added, never the whole
+container's shadow, so a shadow stays proportional to the value it describes.
+Complete native signatures transfer result-position lifetimes,
 taken values and callback returns. Borrowed callable parameters and captures retain
 environment field shadows beneath a separate access view; invocation checks that
 view before selecting the fields, preserving the returned content's provenance.

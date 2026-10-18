@@ -702,27 +702,36 @@ impl Frame {
         }
         Ok(())
     }
-    /// The shadow subtree of a place: fields of inline aggregates descend,
-    /// an index or a block keeps the enclosing bound.
+    /// The shadow subtree of a place, along the same steps as its value: fields
+    /// of inline aggregates descend, and an element of a block or an index keeps
+    /// the enclosing bound. An element place yields the element's own subtree,
+    /// never its container's, so writing it back cannot nest the container's
+    /// shadow inside one of its elements (which grew it fourfold per level of a
+    /// recursive build into a shared list).
     pub fn shadow_of(&self, id: PlaceId) -> Result<crate::checked::Shadow, Error> {
         use crate::checked::Shadow;
         let Some(check) = &self.check else {
             return Ok(Shadow::default());
         };
         let place = self.place(id)?;
-        let mut node = check
+        let root = check
             .shadows
             .get(place.root.0 as usize)
-            .ok_or_else(|| invalid("local out of range"))?
-            .clone();
-        for step in place.projection.iter() {
-            let index = match step {
-                Projection::Field(i) | Projection::VariantField { field: i, .. } => *i as usize,
-                Projection::Index(_) => break,
+            .ok_or_else(|| invalid("local out of range"))?;
+        let mut node: Option<Shadow> = None;
+        for step in self.indices(place)? {
+            let current = node.as_ref().unwrap_or(root);
+            let part = match step {
+                AccessStep::Field(i) | AccessStep::VariantField { field: i, .. } => current.part(i),
+                AccessStep::Index(i) => {
+                    let mut part = current.part(i);
+                    part.add_bound(&current.total());
+                    part
+                }
             };
-            node = node.part(index);
+            node = Some(part);
         }
-        Ok(node)
+        Ok(node.unwrap_or_else(|| root.clone()))
     }
     /// Replace moves caller-owned content, excluding the callee's access root.
     /// Real region and arena bounds remain attached to the displaced owner.

@@ -3660,6 +3660,7 @@ conformance/OWN/OWN-3-mut-borrowed-part-ok.hir
 conformance/OWN/OWN-3-option-remove-run.hir
 conformance/OWN/OWN-3-parent-and-field-bad.hir
 conformance/OWN/OWN-3-parent-and-field-ok.hir
+conformance/OWN/OWN-3-recursive-element-field-writes-run.hir
 conformance/OWN/OWN-3-replace-relay-run.hir
 conformance/OWN/OWN-3-replace-run.hir
 conformance/OWN/OWN-3-replaced-callee-loop-run.hir

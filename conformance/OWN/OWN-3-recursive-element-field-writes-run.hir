@@ -1,0 +1,49 @@
+// rule: OWN-3
+// expect: run
+// stdout: ok
+// Each level of a 64-deep recursion appends a node to a list passed `mut` and then
+// writes into that node's own field through an index projection. Checked execution
+// keeps one bound per element, so its bookkeeping grows with the list, not
+// fourfold per level (a 20-deep run once needed more than 2 GiB).
+type Node {
+  items: List[u64],
+  depth: u64,
+}
+
+type Tree {
+  nodes: List[Node],
+}
+
+fn add(mut tree: Tree, parent: u64) -> u64 {
+  let depth: u64 = if parent == 1000 {
+    0
+  } else {
+    tree.nodes[parent].depth + 1
+  }
+  let id = list.len(tree.nodes)
+  list.push(mut tree.nodes, Node(items: [], depth: depth))
+  id
+}
+
+fn nest(mut tree: Tree, parent: u64, levels: u64) -> u64 {
+  let id = add(mut tree, parent)
+  if levels > 1 {
+    let child = nest(mut tree, id, levels - 1)
+    list.push(mut tree.nodes[id].items, child)
+  }
+  id
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let mut tree = Tree(nodes: [])
+  let _ = nest(mut tree, 1000, 64)
+  let mut linked: u64 = 0
+  for node in tree.nodes {
+    linked += list.len(node.items)
+  }
+  if list.len(tree.nodes) != 64 || linked != 63 {
+    return Ok(())
+  }
+  let _ = out.print(io.stdout(rt)?, "ok\n")
+  Ok(())
+}
