@@ -180,6 +180,10 @@ Branch lowering joins alternative loans instead of requiring identical loan list
 Post-join cleanup emits conditional ends for loans absent on a predecessor. Borrowed
 temporary transport retains its source loans and nonowning state; it never borrows
 the intermediate alias slot merely to transport the view across a join.
+A borrowed join (`transfer_to` with a lent scope) keeps every branch's owner in
+that scope: an owned branch value moves to a temporary there, and a view of an
+owner that ends first, such as an arm binding that took its payload from a
+copied or owned scrutinee, moves that owner there and re-projects from it.
 
 Lowering consumes shared CaptureMode rows directly; no driver-specific tuple or ordinal conversion is needed.
 

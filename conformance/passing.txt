@@ -1180,6 +1180,7 @@ conformance/LANG/LANG-13-if-let-irrefutable-ok.hir
 conformance/LANG/LANG-13-if-let-ok.hir
 conformance/LANG/LANG-13-if-let-run.hir
 conformance/LANG/LANG-13-irrefutable-patterns.hir
+conformance/LANG/LANG-13-lent-match-arm-binding-run.hir
 conformance/LANG/LANG-13-let-else-bad.hir
 conformance/LANG/LANG-13-let-else-grouped-run.hir
 conformance/LANG/LANG-13-let-else-initializer-bad.hir

@@ -653,6 +653,17 @@ impl Builder<'_, '_> {
     fn lent_join(&self, id: ExprId) -> Result<Option<ScopeId>> {
         Ok((self.decision(id)?.usage == UseKind::Borrow).then_some(self.scope))
     }
+    /// A borrowed view whose owning local this body owns, lives in a scope
+    /// nested in `home` (so it ends first) and lends to nothing else.
+    fn lends_ending_owner(&self, value: Value, home: ScopeId) -> bool {
+        let root = self.root(value.place);
+        value.usage == UseKind::Borrow
+            && self.owned[root.0 as usize]
+            && self.state.live.contains(&root.0)
+            && self.body.locals[root.0 as usize].scope != home
+            && self.within(self.body.locals[root.0 as usize].scope, home)
+            && !self.loan_supplies_root(root.0)
+    }
     /// `lent`: the join is a borrowed view. A branch that computed an owned
     /// value keeps it in a temporary of that scope and lends it, so the
     /// destination is a view on every path and the owner is dropped with the
@@ -670,6 +681,25 @@ impl Builder<'_, '_> {
             value.usage = UseKind::Borrow;
             let _ = self.loan(&mut value, span);
             self.scope = scope;
+        } else if let Some(home) = lent.filter(|home| self.lends_ending_owner(value, *home)) {
+            // The view borrows an owner that ends before the join's scope,
+            // such as an arm binding that took its payload from an owned
+            // scrutinee. The owner moves to that scope and the view
+            // re-projects from it, as an owned branch value is kept there.
+            let place = self.body.places[value.place.0 as usize].clone();
+            let scope = std::mem::replace(&mut self.scope, home);
+            let owner = self.transport(
+                Value {
+                    checked_ty: None,
+                    place: self.roots[place.root.0 as usize],
+                    usage: UseKind::Take,
+                },
+                Storage::Temporary,
+                span,
+            );
+            self.scope = scope;
+            let root = self.root(owner.place);
+            value.place = self.place(root, place.projection, place.ty);
         }
         let root = self.root(destination).0 as usize;
         self.receive_ownership(root, self.value_owned(value));

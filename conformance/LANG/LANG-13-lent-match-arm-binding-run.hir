@@ -1,0 +1,117 @@
+// rule: LANG-13
+// expect: run
+// stdout: 5 1
+// stdout: 4 1
+// stdout: 3
+// A borrowed match result may be an arm binding that owns its payload, taken
+// from a copied field or an owned call result. The binding's owner outlives
+// the arm until the call that borrows the result returns.
+type P {
+  label: Option[String],
+}
+
+type Entry {
+  name: String,
+  count: u64,
+}
+
+type Pair {
+  pair: Option[Entry],
+}
+
+fn show(s: String) -> u64 {
+  string.byte_len(s)
+}
+
+fn made(present: bool) -> Option[String] {
+  if present {
+    Some("lamb")
+  } else {
+    None()
+  }
+}
+
+fn labels(ps: List[P]) -> (u64, u64) {
+  let first = {
+    let p = ps[0]
+    show(
+      match p.label {
+        Some(label) => label,
+        None => "_",
+      }
+    )
+  }
+  let p = ps[1]
+  (
+    first,
+    show(
+      match p.label {
+        Some(label) => label,
+        None => "_",
+      }
+    )
+  )
+}
+
+fn owned() -> (u64, u64) {
+  (
+    show(
+      match made(true) {
+        Some(label) => label,
+        None => "_",
+      }
+    ),
+    show(
+      match made(false) {
+        Some(label) => label,
+        None => "_",
+      }
+    )
+  )
+}
+
+fn projected(ps: List[Pair]) -> u64 {
+  let p = ps[0]
+  show(
+    match p.pair {
+      Some(entry) => entry.name,
+      None => "_",
+    }
+  )
+}
+
+pub fn main(rt: Io) -> Result[(), OutputError] {
+  let output = match io.stdout(rt) {
+    Ok(o) => o,
+    Error(_) => return Ok(()),
+  }
+  let ps: List[P] = [P(label: Some("sheep")), P(label: None())]
+  let (a, b) = labels(ps)
+  out.print(
+    output,
+    if a == 5 && b == 1 {
+      "5 1\n"
+    } else {
+      "labels?\n"
+    }
+  )?
+  let (c, d) = owned()
+  out.print(
+    output,
+    if c == 4 && d == 1 {
+      "4 1\n"
+    } else {
+      "owned?\n"
+    }
+  )?
+  let pairs: List[Pair] = [Pair(pair: Some(Entry(name: "ewe", count: 2)))]
+  out.print(
+    output,
+    if projected(pairs) == 3 {
+      "3\n"
+    } else {
+      "projected?\n"
+    }
+  )?
+  Ok(())
+}
