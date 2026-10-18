@@ -69,7 +69,7 @@ $PARSE_VALUE
   }
 }
 
-pub fn format_radix(value: $T, radix: u8) -> Result[String, scalar.ParseError] uses {} {
+pub fn format_radix(value: $T, radix: u8) -> Result[unique String, scalar.ParseError] uses {} {
 $FORMAT_MAGNITUDE
   internal.integer.format_radix(magnitude, $NEGATIVE, radix)
 }

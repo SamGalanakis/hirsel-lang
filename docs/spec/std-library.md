@@ -59,7 +59,7 @@ N fn duration.from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {
 N fn duration.parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {}
 fn duration.format(value: time.Duration) -> unique String uses {}
 N fn time.parse(text: String) -> Result[time.Timestamp, scalar.ParseError] uses {}
-fn time.format(value: time.Timestamp) -> Result[String, time.TimeError] uses {}
+fn time.format(value: time.Timestamp) -> Result[unique String, time.TimeError] uses {}
 N fn time.elapsed(clock: MonotonicClock, start: Instant of clock) -> Result[time.Duration, ClockError]
 N fn time.between(clock: MonotonicClock, start: Instant of clock, end: Instant of clock) -> time.Duration
 N fn time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of clock) -> i32
@@ -192,7 +192,7 @@ N fn T.saturating_mul(a: T, b: T) -> T uses {}
 N fn T.wrapping_sub(a: T, b: T) -> T uses {}
 N fn T.wrapping_mul(a: T, b: T) -> T uses {}
 N fn T.parse_radix(text: String, radix: u8) -> Result[T, scalar.ParseError] uses {}
-fn T.format_radix(value: T, radix: u8) -> Result[String, scalar.ParseError] uses {}
+fn T.format_radix(value: T, radix: u8) -> Result[unique String, scalar.ParseError] uses {}
 ```
 
 Checked operations return `None` exactly when the mathematical result is outside
@@ -736,7 +736,7 @@ and return owned output:
 
 ```text
 fn base64.encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique String uses {}
-fn base64.decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[Bytes, DecodeError] uses {}
+fn base64.decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[unique Bytes, DecodeError] uses {}
 ```
 
 Encoding checks output-size arithmetic before building. Required padding emits
@@ -750,7 +750,7 @@ last data byte of a noncanonical final quantum. No partial output is returned.
 ## Hexadecimal codec
 
 `hex.encode(data: Bytes) -> unique String` emits lowercase hexadecimal.
-`hex.decode(text: String) -> Result[Bytes, hex.DecodeError]` accepts both ASCII
+`hex.decode(text: String) -> Result[unique Bytes, hex.DecodeError]` accepts both ASCII
 letter cases, with `DecodeError = InvalidDigit(u64) | OddLength`. Offsets are
 input byte offsets. Decoding checks digits in order; an invalid final byte
 precedes an odd-length error. No partial output is returned. Both functions
@@ -865,7 +865,7 @@ pub type glob.PatternError = Syntax(u64)
 pub type glob.ExpandError = InvalidPattern(glob.PatternError) | Files(FileError)
 fn glob.compile(pattern: String) -> Result[glob.Pattern, glob.PatternError] uses {}
 fn glob.matches(pattern: glob.Pattern, path: String) -> bool uses {}
-fn glob.files(d: Dir, pattern: String) -> Result[List[Path], glob.ExpandError]
+fn glob.files(d: Dir, pattern: String) -> Result[unique List[Path], glob.ExpandError]
 ```
 
 Matching covers the whole path, over Unicode scalars. `*` matches zero or more

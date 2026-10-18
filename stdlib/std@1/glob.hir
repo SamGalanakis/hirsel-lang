@@ -144,7 +144,7 @@ pub fn matches(pattern: Pattern, path: String) -> bool uses {} {
   row[count]
 }
 
-pub fn files(d: Dir, pattern: String) -> Result[List[Path], ExpandError] {
+pub fn files(d: Dir, pattern: String) -> Result[unique List[Path], ExpandError] {
   let compiled = match compile(pattern) {
     Ok(value) => take value,
     Error(e) => return Error(InvalidPattern(take e)),

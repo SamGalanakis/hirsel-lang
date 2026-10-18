@@ -71,7 +71,7 @@ pub fn parse_radix(text: String, radix: u8) -> Result[i64, scalar.ParseError] us
   }
 }
 
-pub fn format_radix(value: i64, radix: u8) -> Result[String, scalar.ParseError] uses {} {
+pub fn format_radix(value: i64, radix: u8) -> Result[unique String, scalar.ParseError] uses {} {
   let wide: i128 = core@1/int.widen(value)
   let raw: u128 = core@1/int.truncate(wide)
   let magnitude = if value < 0 { core@1/int.wrapping_add(~raw, 1) } else { raw }

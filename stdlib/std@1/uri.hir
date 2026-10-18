@@ -165,8 +165,11 @@ pub fn component_raw(component: Component) -> unique Bytes uses {} {
   }
 }
 
-pub fn component_text(component: Component) -> Result[String, Bytes] uses {} {
-  core@1/string.from_bytes(component_raw(component))
+pub fn component_text(component: Component) -> Result[unique String, unique Bytes] uses {} {
+  match core@1/string.from_bytes(component_raw(component)) {
+    Ok(text) => Ok(take text),
+    Error(bytes) => Error(take bytes),
+  }
 }
 
 pub fn component_encoded(component: Component, part: Part) -> unique String uses {} {

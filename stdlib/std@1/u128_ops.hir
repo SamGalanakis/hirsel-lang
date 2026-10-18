@@ -56,7 +56,7 @@ pub fn parse_radix(text: String, radix: u8) -> Result[u128, scalar.ParseError] u
   }
 }
 
-pub fn format_radix(value: u128, radix: u8) -> Result[String, scalar.ParseError] uses {} {
+pub fn format_radix(value: u128, radix: u8) -> Result[unique String, scalar.ParseError] uses {} {
   let magnitude: u128 = core@1/int.widen(value)
   internal.integer.format_radix(magnitude, false, radix)
 }

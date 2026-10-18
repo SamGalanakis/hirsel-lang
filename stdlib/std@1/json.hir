@@ -116,7 +116,7 @@ fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
 
 // Adapted serde_json src/read.rs parse_str_bytes/parse_escape/parse_unicode_escape,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. Strict UTF-8 mode only.
-fn json_quoted(data: Bytes, mut pos: u64) -> Result[String, JsonError] uses {} {
+fn json_quoted(data: Bytes, mut pos: u64) -> Result[unique String, JsonError] uses {} {
   if json_peek(data, pos) != 34 {
     return Error(Syntax(pos))
   }

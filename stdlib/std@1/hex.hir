@@ -17,7 +17,7 @@ pub fn encode(data: Bytes) -> unique String uses {} {
   text.finish_valid(take out)
 }
 
-pub fn decode(text: String) -> Result[Bytes, DecodeError] uses {} {
+pub fn decode(text: String) -> Result[unique Bytes, DecodeError] uses {} {
   let data = core@1/string.as_bytes(text)
   let len = core@1/bytes.len(data)
   let mut out: List[u8] = []

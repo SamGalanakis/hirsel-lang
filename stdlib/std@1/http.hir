@@ -121,7 +121,7 @@ pub fn header(headers: List[Header], name: String) -> Option[String] uses {} {
   None()
 }
 
-fn http_text(buf: Bytes, start: u64, end: u64) -> Result[String, HttpError] uses {} {
+fn http_text(buf: Bytes, start: u64, end: u64) -> Result[unique String, HttpError] uses {} {
   let mut out: List[u8] = []
   let mut i = start
   while i < end {
@@ -151,7 +151,7 @@ fn http_timeout(value: Option[time.Duration]) -> Result[NetTimeout, HttpError] u
 }
 
 // Zig HostName.fromUri: decode, remove IPv6 brackets and canonicalize for Net.
-fn http_host(parsed_uri: uri.Uri) -> Result[String, HttpError] uses {} {
+fn http_host(parsed_uri: uri.Uri) -> Result[unique String, HttpError] uses {} {
   let component = match parsed_uri.host {
     Some(c) => c,
     None() => return Error(Url(InvalidHostName())),

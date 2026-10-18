@@ -34,7 +34,7 @@ pub fn read_radix(text: String, radix: u8, signed: bool, positive_limit: u128, n
   if overflow { Error(OutOfRange) } else { Ok((value, negative)) }
 }
 
-pub fn format_radix(value: u128, negative: bool, radix: u8) -> Result[String, scalar.ParseError] uses {} {
+pub fn format_radix(value: u128, negative: bool, radix: u8) -> Result[unique String, scalar.ParseError] uses {} {
   if radix < 2 || radix > 36 { return Error(Invalid) }
   if radix == 10 {
     let mut decimal: List[u8] = []

@@ -94,7 +94,7 @@ fn sextet(byte: u8, alphabet: Alphabet) -> u32 uses {} {
 }
 
 pub fn decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[
-  Bytes,
+  unique Bytes,
   DecodeError
 ] uses {} {
   let data = core@1/string.as_bytes(text)
