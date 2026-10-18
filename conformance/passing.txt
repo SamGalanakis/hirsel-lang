@@ -622,6 +622,8 @@ conformance/DROP/DROP-2-std-iter-resource-run.hir
 conformance/DROP/DROP-2-std-iter-zip-run.hir
 conformance/DROP/DROP-2-std-map-remove-run.hir
 conformance/DROP/DROP-2-std-map-string-remove-run.hir
+conformance/DROP/DROP-2-std-sorted-map-key-remove-run.hir
+conformance/DROP/DROP-2-std-sorted-map-remove-run.hir
 conformance/DROP/DROP-2-testhelpers-expect-error-ok-drop-fail.hir
 conformance/DROP/DROP-2-testhelpers-for-all-law-resource-fail.hir
 conformance/DROP/DROP-2-testhelpers-for-all-resource-fail.hir
@@ -736,6 +738,10 @@ conformance/FAIL/FAIL-3-map-displaced-finalizer.hir
 conformance/FAIL/FAIL-3-mapped-iterator-callback-mut-state-bad.hir
 conformance/FAIL/FAIL-3-mapped-iterator-callback-mut-state-ok.hir
 conformance/FAIL/FAIL-3-sorted-insert-taken-callback.hir
+conformance/FAIL/FAIL-3-std-sorted-map-get-fail.hir
+conformance/FAIL/FAIL-3-std-sorted-map-get-run.hir
+conformance/FAIL/FAIL-3-std-sorted-map-remove-fail.hir
+conformance/FAIL/FAIL-3-std-sorted-map-remove-run.hir
 conformance/FAIL/FAIL-3-unwind-resources.hir
 conformance/FAIL/FAIL-4-mutex-body-failure.hir
 conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir
@@ -912,6 +918,8 @@ conformance/GEN/GEN-1-sortedmap-key-call-bad.hir
 conformance/GEN/GEN-1-sortedmap-key-call-ok.hir
 conformance/GEN/GEN-1-sortedmap-runtime-equality-bad.hir
 conformance/GEN/GEN-1-sortedmap-runtime-equality-ok.hir
+conformance/GEN/GEN-1-std-sorted-map-get-copyable-bad.hir
+conformance/GEN/GEN-1-std-sorted-map-get-copyable-ok.hir
 conformance/GEN/GEN-1-testhelpers-equal-accept.hir
 conformance/GEN/GEN-1-testhelpers-equal-reject.hir
 conformance/GEN/GEN-1-unbounded-borrow-drop.hir
@@ -1918,6 +1926,7 @@ conformance/MEM/MEM-6-list-push-fits-run.hir
 conformance/MEM/MEM-6-list-shared-copy-charge-run.hir
 conformance/MEM/MEM-6-outer-arena-exhaustion-run.hir
 conformance/MEM/MEM-6-soa-list-push-run.hir
+conformance/MEM/MEM-6-std-sorted-map-arena-get-run.hir
 conformance/MEM/MEM-7-align-8.hir
 conformance/MEM/MEM-7-box-read-binarytrees-run.hir
 conformance/MEM/MEM-7-box-read-borrowed-move-bad.hir
@@ -2465,6 +2474,11 @@ conformance/MODE/MODE-2-std-map-remove-bad.hir
 conformance/MODE/MODE-2-std-map-remove-ok.hir
 conformance/MODE/MODE-2-std-set-remove-bad.hir
 conformance/MODE/MODE-2-std-set-remove-ok.hir
+conformance/MODE/MODE-2-std-sorted-map-constructor-ok.hir
+conformance/MODE/MODE-2-std-sorted-map-cycle-bad.hir
+conformance/MODE/MODE-2-std-sorted-map-cycle-ok.hir
+conformance/MODE/MODE-2-std-sorted-map-remove-bad.hir
+conformance/MODE/MODE-2-std-sorted-map-remove-ok.hir
 conformance/MODE/MODE-2-unique-argument-bad.hir
 conformance/MODE/MODE-2-unique-argument-ok.hir
 conformance/MODE/MODE-2-unique-clause-borrow-copy-bad.hir
@@ -3366,6 +3380,12 @@ conformance/PROV/PROV-1-stale-alias-consuming-bad.hir
 conformance/PROV/PROV-1-stale-alias-indexed-bad.hir
 conformance/PROV/PROV-1-stale-alias-range-bad.hir
 conformance/PROV/PROV-1-stale-alias-while-bad.hir
+conformance/PROV/PROV-1-std-sorted-map-get-brand-bad.hir
+conformance/PROV/PROV-1-std-sorted-map-get-brand-ok.hir
+conformance/PROV/PROV-1-std-sorted-map-len-brand-bad.hir
+conformance/PROV/PROV-1-std-sorted-map-len-brand-ok.hir
+conformance/PROV/PROV-1-std-sorted-map-remove-brand-bad.hir
+conformance/PROV/PROV-1-std-sorted-map-remove-brand-ok.hir
 conformance/PROV/PROV-1-stored-brand-ended-bad.hir
 conformance/PROV/PROV-1-stored-brand-ended-ok.hir
 conformance/PROV/PROV-1-string-index-container-bad.hir
@@ -4081,6 +4101,9 @@ conformance/SEM/SEM-5-sorted-map-resource-modes-run.hir
 conformance/SEM/SEM-5-std-map-lifecycle-run.hir
 conformance/SEM/SEM-5-std-map-owned-cycle-run.hir
 conformance/SEM/SEM-5-std-set-string-remove-run.hir
+conformance/SEM/SEM-5-std-sorted-map-access-run.hir
+conformance/SEM/SEM-5-std-sorted-map-owned-cycle-run.hir
+conformance/SEM/SEM-5-std-sorted-map-string-get-run.hir
 conformance/SEM/SEM-5-tour-04-collections-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-counted-run.hir
 conformance/SEM/SEM-5-wave2-map-same-entries-empty-run.hir

@@ -1,0 +1,5 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 4
+fn remove(by: Order[u64], mut m: SortedMap[u64, String] of by) -> Option[String] {
+  sorted_map.remove(by, mut m, 1)
+}

@@ -1,0 +1,51 @@
+// rule: SEM-5
+// expect: run
+// Rust ordered-map lookup/removal vectors using the existing branded sequence.
+pub fn main(t: Test) -> Result[(), ()] {
+  let by = u64.order
+  let mut m: unique SortedMap[u64, u64] of by = sorted_map.empty(by)
+  failure.check(sorted_map.len(by, m) == 0, Bounds())
+  failure.check(
+    sorted_map.get(by, m, 4) == None && sorted_map.remove(by, mut m, 4) == None,
+    Bounds()
+  )
+  for i in 0u64..20u64 {
+    sorted_map.insert(by, mut m, 19 - i, (19 - i) * 10)
+  }
+  failure.check(sorted_map.len(by, m) == 20, Bounds())
+  for i in 0u64..20u64 {
+    failure.check(sorted_map.get(by, m, i) == Some(i * 10), Bounds())
+  }
+  failure.check(sorted_map.remove(by, mut m, 0) == Some(0u64), Bounds())
+  failure.check(sorted_map.remove(by, mut m, 7) == Some(70u64), Bounds())
+  failure.check(sorted_map.remove(by, mut m, 19) == Some(190u64), Bounds())
+  failure.check(
+    sorted_map.remove(by, mut m, 7) == None && sorted_map.len(by, m) == 17,
+    Bounds()
+  )
+  sorted_map.insert(by, mut m, 7, 77)
+  let mut expected: u64 = 1
+  for (key, value) in m {
+    failure.check(key == expected, Bounds())
+    failure.check(
+      value == if key == 7 {
+        77u64
+      } else {
+        key * 10
+      },
+      Bounds()
+    )
+    expected += 1
+  }
+  failure.check(expected == 19, Bounds())
+  for i in 0u64..20u64 {
+    let _ = sorted_map.remove(by, mut m, i)
+  }
+  failure.check(
+    sorted_map.len(by, m) == 0 && sorted_map.get(by, m, 4) == None,
+    Bounds()
+  )
+  sorted_map.insert(by, mut m, 42, 420)
+  failure.check(sorted_map.remove(by, mut m, 42) == Some(420u64), Bounds())
+  Ok(())
+}

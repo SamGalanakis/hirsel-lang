@@ -1,0 +1,61 @@
+// rule: DROP-2
+// expect: run
+// stdout: before
+// stdout: stored
+// stdout: owned
+// stdout: value
+// stdout: query
+// stdout: after
+// Ordered removal drops its stored resource key and moves its resource value.
+resource type Key {
+  id: u64,
+  output: Stdout,
+  label: String,
+}
+drop(x) {
+  let _ = out.print(x.output, x.label)
+}
+
+resource type Item {
+  output: Stdout,
+  label: String,
+}
+drop(x) {
+  let _ = out.print(x.output, x.label)
+}
+
+fn compare(a: Key, b: Key) -> i32 uses {} {
+  if a.id < b.id {
+    -1
+  } else if a.id > b.id {
+    1
+  } else {
+    0
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let by: Order[Key] = Order(compare: compare)
+  let mut m: unique SortedMap[Key, Item] of by = sorted_map.empty(by)
+  sorted_map.insert(
+    by,
+    mut m,
+    Key(id: 1, output: o, label: "stored\n"),
+    Item(output: o, label: "value\n")
+  )
+  {
+    let query = Key(id: 1, output: o, label: "query\n")
+    let _ = out.print(o, "before\n")
+    match sorted_map.remove(by, mut m, query) {
+      Some(item) => {
+        let _ = out.print(o, "owned\n")
+        let _ = take item
+      },
+      None => failure.check(false, Bounds()),
+    }
+    failure.check(sorted_map.len(by, m) == 0, Bounds())
+  }
+  let _ = out.print(o, "after\n")
+  Ok(())
+}

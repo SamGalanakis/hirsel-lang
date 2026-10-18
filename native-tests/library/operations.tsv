@@ -189,7 +189,10 @@ slots.get	e736f4a4cabd305f7e242a4a81ea5df5b5d4e5b30b5ed9fb949d3c5e6731681b	0:b:[
 slots.insert	765891119e4cb272c53b7c221620a14183708dbb750ad3c0abbf012af12f7d00	0:m:[0];1:t:[0]->n
 slots.remove	a6ebb86da2b26339f37e7ee762b52c1f1808e8657acb9a97eb3a1eb8d85424f3	0:m:[0];1:b:n->[0]
 sorted_map.empty	8620b5cc41e8b78bb3bc18f803d513c9a09353e9377369747a72a55a6b619570	0:b:a->a
-sorted_map.insert	18ee836b9a441986dc3b4de6f65b9c7fdedc145ab82183f35f06a2a37e888df3	0:b:a;1:m:a;2:t:[0];3:t:[1]->n
+sorted_map.get	aa741926fbb244e4f0c9b55c86b08ca241dc9026cdf4fc1fb0957cf0a0f29406	0:b:a;1:b:a;2:b:[0]->[1]
+sorted_map.insert	470432ec13a45ee22cc0de3435359d87cf639aacebf303aff1f2059e1ce9f8fa	0:b:a;1:m:a;2:t:[0];3:t:[1]->n
+sorted_map.len	4b2c34cc396eb80c634d65adb9d8f22b01417c290d5aea935b2bd3835c869599	0:b:a;1:b:a->n
+sorted_map.remove	1dd846227e355bd71f2e20bb2b9793c9a48436164d79ffbaa21beeab3ad08eae	0:b:a;1:m:a;2:b:[0]->[1]
 stdin.read	a070ca9a0a0ed8b043211ea5e651bc5d8739efce16fae032ae33c3b1e0a4914a	0:b:n;1:m:n;2:b:n->n
 stock.get	7de581cd92f300f6ebba423745f2e3351b2abb46b79af8ad51544a0d707dc020	0:b:n;1:b:n->n
 stock.put	f539818ff198d098e631f4780880a7222e544832226416aeb82d8dd018c44394	0:b:n;1:b:n;2:b:n->n

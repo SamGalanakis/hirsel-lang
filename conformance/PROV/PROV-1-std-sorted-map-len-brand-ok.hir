@@ -1,0 +1,5 @@
+// rule: PROV-1
+// expect: accept
+fn access(a: Order[u64], b: Order[u64], mut m: unique SortedMap[u64, u64] of a) {
+  let _ = sorted_map.len(a, m)
+}

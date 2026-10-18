@@ -1,4 +1,4 @@
-//! Sorted maps: comparison-before-write insertion and owned entry cursors.
+//! Sorted maps: shared comparison-before-write search and owned entry cursors.
 use super::builder::{Body, Cx};
 use super::{CallShape, InlineLowering, LibraryBody, R, native_path};
 use crate::PassError;
@@ -17,6 +17,18 @@ pub static EMPTY: InlineLowering = InlineLowering {
 pub static LEN: InlineLowering = InlineLowering {
     path: || hirsel_syntax::DefPath::core("$intrinsic.SortedMapOrder_len"),
     lower: len,
+};
+pub static PUBLIC_LEN: InlineLowering = InlineLowering {
+    path: || hirsel_syntax::DefPath::core("sorted_map.len"),
+    lower: public_len,
+};
+pub static GET: LibraryBody = LibraryBody {
+    path: || hirsel_syntax::DefPath::core("sorted_map.get"),
+    build: get,
+};
+pub static REMOVE: LibraryBody = LibraryBody {
+    path: || hirsel_syntax::DefPath::core("sorted_map.remove"),
+    build: remove,
 };
 pub static INSERT: LibraryBody = LibraryBody {
     path: || hirsel_syntax::DefPath::core("sorted_map.insert"),
@@ -332,78 +344,22 @@ fn replace_from(
 fn insert(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     let abi = comparator_abi(cx)?;
     let mut b = Body::new(cx)?;
-    let [by, map, key, value] = b.parameters[..] else {
+    let [_by, map, key, value] = b.parameters[..] else {
         unreachable!()
     };
-    let entries_layout = field_layout(&b, map.layout, 0);
-    let pair_layout = b.cx.element(entries_layout)?;
-    let entries = field(&mut b, map.address, map.layout, 0)?;
-    let compare = field(&mut b, by.address, by.layout, 0)?;
-    let (view, loan) = b.borrow(entries, false)?;
-    let len = b.seq_len(view)?;
-    b.end_loan(loan);
-    let zero = b.u64(0)?;
     let one = b.u64(1)?;
-    let two = b.u64(2)?;
     let u64_layout = b.u64_layout()?;
-    // Spec #94: all engines use these same observable binary-search probes.
-    let lo = b.value(u64_layout, Holding::Plain);
-    let hi = b.value(u64_layout, Holding::Plain);
-    let search = b.block(BlockKind::Body, &[lo, hi]);
-    let probe = b.block(BlockKind::Body, &[]);
-    let position = b.value(u64_layout, Holding::Plain);
-    let vacant_version = b.version(map.slot);
-    let vacant = b.block(BlockKind::Body, &[position, vacant_version]);
-    let equal_position = b.value(u64_layout, Holding::Plain);
-    let equal_version = b.version(map.slot);
-    let equal = b.block(BlockKind::Body, &[equal_position, equal_version]);
-    b.jump(search, &[zero, len]);
-    b.at(search);
-    let more = b.compare(BinaryOp::Lt, lo, hi)?;
-    let yes = b.edge(probe, &[]);
-    let no = b.edge(vacant, &[lo, map.value]);
-    b.terminate(Terminator::Branch {
-        condition: more,
-        yes,
-        no,
-    });
-    b.at(probe);
-    let width = arithmetic(&mut b, BinaryOp::Sub, hi, lo);
-    let half = arithmetic(&mut b, BinaryOp::Div, width, two);
-    let mid = b.add(ArithMode::Wrapping, lo, half);
-    let pair = b.slot_place(entries, mid)?;
-    let stored_key = field(&mut b, pair, pair_layout, 0)?;
-    let (callee, callee_loan) = b.borrow(compare, false)?;
-    let (incoming, key_loan) = b.borrow(key.address, false)?;
-    let (stored, stored_loan) = b.borrow(stored_key, false)?;
-    let order = callback(
-        &mut b,
-        callee,
-        abi,
-        &[incoming, stored],
-        &[callee_loan, key_loan, stored_loan],
-    );
-    let i32_layout = b.cx.primitive(Primitive::I32)?;
-    let zero_order = b.constant(i32_layout, ConstantValue::Integer(0));
-    let is_equal = b.compare(BinaryOp::Eq, order, zero_order)?;
-    let unequal = b.block(BlockKind::Body, &[]);
-    let yes = b.edge(equal, &[mid, map.value]);
-    let no = b.edge(unequal, &[]);
-    b.terminate(Terminator::Branch {
-        condition: is_equal,
-        yes,
-        no,
-    });
-    b.at(unequal);
-    let less = b.compare(BinaryOp::Lt, order, zero_order)?;
-    let above = b.add(ArithMode::Wrapping, mid, one);
-    let yes = b.edge(search, &[lo, mid]);
-    let no = b.edge(search, &[above, hi]);
-    b.terminate(Terminator::Branch {
-        condition: less,
-        yes,
-        no,
-    });
+    let Search {
+        entries,
+        pair_layout,
+        len,
+        equal,
+        equal_position,
+        equal_version,
+        vacant,
+        position,
+        vacant_version,
+    } = search(&mut b, abi)?;
     b.at(equal);
     b.set_reaching(map.slot, equal_version);
     let pair = b.slot_place(entries, equal_position)?;
@@ -701,4 +657,166 @@ fn replace_position(
         if_live: false,
     });
     Ok(())
+}
+
+struct Search {
+    entries: AddressId,
+    pair_layout: LayoutId,
+    len: ValueId,
+    equal: BlockId,
+    equal_position: ValueId,
+    equal_version: ValueId,
+    vacant: BlockId,
+    position: ValueId,
+    vacant_version: ValueId,
+}
+// All keyed operations use the same comparison-before-write probes (SEM-5).
+fn search(b: &mut Body<'_, '_>, abi: hirsel_lir::abi_types::FnAbiId) -> R<Search> {
+    let [by, map, key, ..] = b.parameters[..] else {
+        unreachable!()
+    };
+    let entries_layout = field_layout(b, map.layout, 0);
+    let pair_layout = b.cx.element(entries_layout)?;
+    let entries = field(b, map.address, map.layout, 0)?;
+    let compare = field(b, by.address, by.layout, 0)?;
+    let (view, loan) = b.borrow(entries, false)?;
+    let len = b.seq_len(view)?;
+    b.end_loan(loan);
+    let zero = b.u64(0)?;
+    let one = b.u64(1)?;
+    let two = b.u64(2)?;
+    let u64_layout = b.u64_layout()?;
+    // Spec #94: all engines use these same observable binary-search probes.
+    let lo = b.value(u64_layout, Holding::Plain);
+    let hi = b.value(u64_layout, Holding::Plain);
+    let search = b.block(BlockKind::Body, &[lo, hi]);
+    let probe = b.block(BlockKind::Body, &[]);
+    let position = b.value(u64_layout, Holding::Plain);
+    let vacant_version = b.version(map.slot);
+    let vacant = b.block(BlockKind::Body, &[position, vacant_version]);
+    let equal_position = b.value(u64_layout, Holding::Plain);
+    let equal_version = b.version(map.slot);
+    let equal = b.block(BlockKind::Body, &[equal_position, equal_version]);
+    b.jump(search, &[zero, len]);
+    b.at(search);
+    let more = b.compare(BinaryOp::Lt, lo, hi)?;
+    let yes = b.edge(probe, &[]);
+    let no = b.edge(vacant, &[lo, map.value]);
+    b.terminate(Terminator::Branch {
+        condition: more,
+        yes,
+        no,
+    });
+    b.at(probe);
+    let width = arithmetic(b, BinaryOp::Sub, hi, lo);
+    let half = arithmetic(b, BinaryOp::Div, width, two);
+    let mid = b.add(ArithMode::Wrapping, lo, half);
+    let pair = b.slot_place(entries, mid)?;
+    let stored_key = field(b, pair, pair_layout, 0)?;
+    let (callee, callee_loan) = b.borrow(compare, false)?;
+    let (incoming, key_loan) = b.borrow(key.address, false)?;
+    let (stored, stored_loan) = b.borrow(stored_key, false)?;
+    let order = callback(
+        b,
+        callee,
+        abi,
+        &[incoming, stored],
+        &[callee_loan, key_loan, stored_loan],
+    );
+    let i32_layout = b.cx.primitive(Primitive::I32)?;
+    let zero_order = b.constant(i32_layout, ConstantValue::Integer(0));
+    let is_equal = b.compare(BinaryOp::Eq, order, zero_order)?;
+    let unequal = b.block(BlockKind::Body, &[]);
+    let yes = b.edge(equal, &[mid, map.value]);
+    let no = b.edge(unequal, &[]);
+    b.terminate(Terminator::Branch {
+        condition: is_equal,
+        yes,
+        no,
+    });
+    b.at(unequal);
+    let less = b.compare(BinaryOp::Lt, order, zero_order)?;
+    let above = b.add(ArithMode::Wrapping, mid, one);
+    let yes = b.edge(search, &[lo, mid]);
+    let no = b.edge(search, &[above, hi]);
+    b.terminate(Terminator::Branch {
+        condition: less,
+        yes,
+        no,
+    });
+    Ok(Search {
+        entries,
+        pair_layout,
+        len,
+        equal,
+        equal_position,
+        equal_version,
+        vacant,
+        position,
+        vacant_version,
+    })
+}
+
+fn get(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    access(cx, false)
+}
+fn remove(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    access(cx, true)
+}
+fn access(cx: &mut Cx<'_>, remove: bool) -> R<LirUnit<Value>> {
+    let abi = comparator_abi(cx)?;
+    let mut b = Body::new(cx)?;
+    let map = b.parameters[1];
+    let Search {
+        entries,
+        pair_layout,
+        equal,
+        equal_position,
+        equal_version,
+        vacant,
+        vacant_version,
+        ..
+    } = search(&mut b, abi)?;
+    b.at(vacant);
+    b.set_reaching(map.slot, vacant_version);
+    let none = super::map::option(&mut b, None)?;
+    b.ret(Some(none));
+    b.at(equal);
+    b.set_reaching(map.slot, equal_version);
+    let value = if remove {
+        let (slot, owner) = super::map::remove_entry(&mut b, entries, equal_position, true)?
+            .expect("pair removal owns its value");
+        let value = b.take(owner)?;
+        b.push(Inst::StorageDead {
+            slot,
+            if_live: false,
+        });
+        value
+    } else {
+        let entry = b.slot_place(entries, equal_position)?;
+        let value = field(&mut b, entry, pair_layout, 1)?;
+        let failure = b.failure(None);
+        b.copy(value, failure)?
+    };
+    let some = super::map::option(&mut b, Some(value))?;
+    b.ret(Some(some));
+    Ok(b.finish())
+}
+fn public_len(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
+    let [by, map] = call.arguments else {
+        return Ok(false);
+    };
+    let by = cx.operand(&by.value)?;
+    cx.consumed(by);
+    let map = cx.operand(&map.value)?;
+    let entries = cx.read_field(map, 0)?;
+    let layout = cx.place_layout(call.destination)?;
+    let result = cx.value(layout, Holding::Plain);
+    cx.push(Inst::SeqLen {
+        result,
+        value: entries,
+    });
+    cx.consumed(map);
+    cx.finish(call, result)?;
+    Ok(true)
 }

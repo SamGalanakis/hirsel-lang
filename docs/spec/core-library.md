@@ -200,6 +200,9 @@ N fn set.len[T: key](s: Set[T]) -> u64
 fn set.remove[T: key](mut s: unique Set[T], value: T) -> bool
 fn sorted_map.empty[K, V](by: Order[K]) -> unique SortedMap[K, V] of by
 @preserves_unique(m) @unretained(by) fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, take k: K, take v: V) -> ()
+N fn sorted_map.len[K, V](by: Order[K], m: SortedMap[K, V] of by) -> u64
+fn sorted_map.get[K, V: copyable](by: Order[K], m: SortedMap[K, V] of by, key: K) -> Option[V] in m
+fn sorted_map.remove[K, V](by: Order[K], mut m: unique SortedMap[K, V] of by, key: K) -> unique Option[V]
 N fn simd.splat[A, n: size](value: A) -> Simd[A, n]
 N fn simd.add[I, n: size](a: Simd[I, n], b: Simd[I, n]) -> Simd[I, n]
 ```
@@ -740,7 +743,17 @@ leave missing keys unchanged (`None` or `false`). Map removal returns a unique o
 value with its deep uniqueness and drops its stored key exactly once; Set removal drops its removed value
 exactly once. Remaining Map entries keep insertion order, and reinserting a removed
 key appends a new position. Removal shifts dense entries and repairs only the
-private index, taking O(n + index capacity) time without copying payloads.
+private index, taking expected O(n + index capacity) time without copying payloads.
+
+## SortedMap access
+
+Length is O(1). Get requires copyable V and returns an owned copy `in m`.
+Removal requires a unique map and returns a unique option, transferring V with
+its deep uniqueness and dropping the stored K exactly once. Missing keys return `None`; remaining entries
+stay in comparator order. Lookup and removal use the same fixed binary-search probes
+as insertion, completing comparisons before mutation. Comparator failure leaves the
+map unchanged. The existing sequence representation gives O(log n) comparisons and
+O(n) movement on successful removal; no second ordered container is introduced.
 
 ## Example application definitions
 

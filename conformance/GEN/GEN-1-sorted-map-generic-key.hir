@@ -2,5 +2,5 @@
 // spec: #48
 // expect: reject GEN-1 at line 5
 fn add[K](by: Order[K], mut m: SortedMap[K, u8] of by, k: K) {
-  sorted_map.insert(by, mut m, k, 1)
+  sorted_map.insert(by, mut m, copy k, 1)
 }

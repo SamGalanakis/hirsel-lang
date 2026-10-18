@@ -1,0 +1,33 @@
+// rule: MEM-6
+// expect: run
+// Copy a looked-up List into an arena, share it, then grow the fresh copy.
+// Lookup and copy-to preserve the stored List; the exact copy budget is checked.
+fn lookup(cap: u64) -> Result[u64, OutOfSpace] {
+  let by = u64.order
+  let mut m: SortedMap[u64, List[u64]] of by = sorted_map.empty(by)
+  sorted_map.insert(by, mut m, 0u64, [1u64, 2u64])
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let source = match sorted_map.get(by, m, 0u64) {
+        Some(items) => take items,
+        None => [],
+      }
+      let mut values: List[u64] in a = copy_to(a, source)
+      let shared = copy values
+      list.push(mut values, 3u64)
+      list.push(mut values, 4u64)
+      let stored_len = match sorted_map.get(by, m, 0u64) {
+        Some(items) => list.len(items),
+        None => 0u64,
+      }
+      list.len(values) + list.len(shared) + stored_len
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(lookup(48u64) == Ok(8u64), Bounds())
+  failure.check(lookup(47u64) == Error(OutOfSpace()), Bounds())
+  Ok(())
+}

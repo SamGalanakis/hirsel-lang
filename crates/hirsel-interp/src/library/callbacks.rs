@@ -3,6 +3,12 @@ use super::{Library, collection, none, some};
 use crate::{CallbackWriteback, Error, OperationContext, OperationResult, Value, invalid};
 use hirsel_types::{BuiltinType, Primitive};
 
+pub(super) enum Comparison {
+    Insert(Value),
+    Get,
+    Remove,
+}
+
 pub(super) enum Pending {
     Pull {
         next: Value,
@@ -16,7 +22,7 @@ pub(super) enum Pending {
         by: Value,
         entries: Vec<Value>,
         key: Value,
-        value: Value,
+        action: Comparison,
         lo: usize,
         hi: usize,
         index: usize,
@@ -206,27 +212,53 @@ impl Library {
             return Err(invalid("sorted map comparator brand mismatch"));
         }
         let hi = entries.len();
-        self.compare_next(by.clone(), entries, key.clone(), value.clone(), 0, hi)
+        self.compare_next(
+            by.clone(),
+            entries,
+            key.clone(),
+            Comparison::Insert(value.clone()),
+            0,
+            hi,
+        )
+    }
+    pub(super) fn sorted_access(
+        &mut self,
+        args: &[Value],
+        remove: bool,
+    ) -> Result<OperationResult, Error> {
+        let [by, map, key] = args else {
+            return Err(invalid("sorted map access arguments"));
+        };
+        let mut fields = unpack(map.clone(), "SortedMap")?;
+        let entries = collection::elements(&fields.pop().unwrap(), BuiltinType::Array)?;
+        if fields[0] != *by {
+            return Err(invalid("sorted map comparator brand mismatch"));
+        }
+        let hi = entries.len();
+        self.compare_next(
+            by.clone(),
+            entries,
+            key.clone(),
+            if remove {
+                Comparison::Remove
+            } else {
+                Comparison::Get
+            },
+            0,
+            hi,
+        )
     }
     fn compare_next(
         &mut self,
         by: Value,
-        mut entries: Vec<Value>,
+        entries: Vec<Value>,
         key: Value,
-        value: Value,
+        action: Comparison,
         lo: usize,
         hi: usize,
     ) -> Result<OperationResult, Error> {
         if lo == hi {
-            // The borrowed key is copied into the map: a share of its arena Lists (MEM-6).
-            key.share_arena_storage();
-            entries.insert(lo, Value::Tuple(vec![Some(key), Some(value)]));
-            return Ok(OperationResult::Complete {
-                consumed: vec![2, 3],
-                released: vec![],
-                value: Value::Unit,
-                arguments: vec![(1, sorted(by, entries))],
-            });
+            return finish_comparison(by, entries, key, action, None, lo);
         }
         // SEM-5, spec #94: the fixed binary-search probes are observable through failure.
         let index = lo + (hi - lo) / 2;
@@ -244,7 +276,7 @@ impl Library {
                 by,
                 entries,
                 key: key.clone(),
-                value,
+                action,
                 lo,
                 hi,
                 index,
@@ -302,9 +334,9 @@ impl Library {
             }
             Pending::Compare {
                 by,
-                mut entries,
+                entries,
                 key,
-                value,
+                action,
                 lo,
                 hi,
                 index,
@@ -320,19 +352,108 @@ impl Library {
                     return Err(invalid("comparator width"));
                 }
                 if order.signed() > 0 {
-                    return self.compare_next(by, entries, key, value, index + 1, hi);
+                    return self.compare_next(by, entries, key, action, index + 1, hi);
                 }
                 if order.signed() < 0 {
-                    return self.compare_next(by, entries, key, value, lo, index);
+                    return self.compare_next(by, entries, key, action, lo, index);
                 }
-                let old = collection::replace_entry_value(&mut entries[index], value)?;
-                Ok(OperationResult::Complete {
-                    consumed: vec![2, 3],
-                    released: vec![old, key],
-                    value: Value::Unit,
-                    arguments: vec![(1, sorted(by, entries))],
-                })
+                finish_comparison(by, entries, key, action, Some(index), index)
             }
         }
     }
+}
+
+fn finish_comparison(
+    by: Value,
+    mut entries: Vec<Value>,
+    key: Value,
+    action: Comparison,
+    found: Option<usize>,
+    vacant: usize,
+) -> Result<OperationResult, Error> {
+    let mut consumed = vec![];
+    let mut released = vec![];
+    let update = !matches!(action, Comparison::Get);
+    let value = match action {
+        Comparison::Insert(value) => {
+            consumed.extend([2, 3]);
+            if let Some(index) = found {
+                released.push(collection::replace_entry_value(&mut entries[index], value)?);
+                released.push(key);
+            } else {
+                // Stored key payloads keep their arena sharing metadata (MEM-6).
+                key.share_arena_storage();
+                entries.insert(vacant, Value::Tuple(vec![Some(key), Some(value)]));
+            }
+            Value::Unit
+        }
+        Comparison::Get => {
+            if let Some(index) = found {
+                let Value::Tuple(pair) = &entries[index] else {
+                    return Err(invalid("invalid sorted map entry"));
+                };
+                let value = pair
+                    .get(1)
+                    .and_then(Option::as_ref)
+                    .ok_or_else(|| invalid("dead sorted map value"))?
+                    .clone();
+                // Lookup copies the stored value, including any arena Lists (MEM-6).
+                value.share_arena_storage();
+                some(value)
+            } else {
+                none()
+            }
+        }
+        Comparison::Remove => {
+            if let Some(index) = found {
+                let Value::Tuple(mut pair) = entries.remove(index) else {
+                    return Err(invalid("invalid sorted map entry"));
+                };
+                if pair.len() != 2 {
+                    return Err(invalid("invalid sorted map pair"));
+                }
+                released.push(
+                    pair[0]
+                        .take()
+                        .ok_or_else(|| invalid("dead sorted map key"))?,
+                );
+                some(
+                    pair[1]
+                        .take()
+                        .ok_or_else(|| invalid("dead sorted map value"))?,
+                )
+            } else {
+                none()
+            }
+        }
+    };
+    Ok(OperationResult::Complete {
+        value,
+        consumed,
+        released,
+        arguments: if update {
+            vec![(1, sorted(by, entries))]
+        } else {
+            vec![]
+        },
+    })
+}
+
+pub(super) fn sorted_len(args: &[Value]) -> Result<Value, Error> {
+    let [by, map] = args else {
+        return Err(invalid("sorted map length arguments"));
+    };
+    let Value::Record { definition, fields } = map else {
+        return Err(invalid("expected sorted map"));
+    };
+    if *definition != hirsel_syntax::DefPath::core("SortedMap")
+        || fields.len() != 2
+        || fields[0].as_ref() != Some(by)
+    {
+        return Err(invalid("sorted map comparator brand mismatch"));
+    }
+    let entries = fields[1]
+        .as_ref()
+        .ok_or_else(|| invalid("dead sorted map entries"))?;
+    Ok(super::u64_value(collection::len(entries)?))
 }

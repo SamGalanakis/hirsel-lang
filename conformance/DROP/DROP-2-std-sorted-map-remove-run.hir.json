@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sorted_map_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "DROP-2-std-sorted-map-remove-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

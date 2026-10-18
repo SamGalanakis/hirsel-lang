@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: accept
+fn cycle(by: Order[u64], mut m: unique SortedMap[u64, String] of by) -> () {
+  match take sorted_map.remove(by, mut m, 1) {
+    Some(item) => {
+      let kept = copy item
+      let restored = unique item
+      sorted_map.insert(by, mut m, 2, take restored)
+      let _ = sorted_map.remove(by, mut m, 2)
+      let _ = string.byte_len(kept)
+    },
+    None => {},
+  }
+}

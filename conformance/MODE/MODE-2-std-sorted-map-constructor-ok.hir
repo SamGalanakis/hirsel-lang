@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: accept
+fn fresh(by: Order[u64]) {
+  let mut a: unique SortedMap[u64, String] of by = sorted_map.empty(by)
+  let mut b: unique SortedMap[u64, String] of by = sorted_map.empty(by)
+  let _ = sorted_map.remove(by, mut a, 1)
+  let _ = sorted_map.remove(by, mut b, 1)
+}

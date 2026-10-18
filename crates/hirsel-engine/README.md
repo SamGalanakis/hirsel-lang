@@ -361,8 +361,8 @@ Registry schema constraints may require an existing language Bound at instantiat
 They name a TypeParameterRef from the exact declaration binder and carry the
 diagnostic rule; E/H reuse their ordinary proof with that actual type. Encoding
 and independent validation reject foreign Body/depth/ordinal references.
-SortedMap's retained borrowed key provisionally requires Copyable (spec #48);
-section 22 ledger signatures remain verbatim.
+SortedMap insertion takes its key and value, including resource keys; no
+Copyable constraint is added beyond its written signature.
 
 Execution API errors retain prior stdout in ExecutionError. Launch carries the
 original categorized cause plus output; ObservedExecution.outcome is an inner

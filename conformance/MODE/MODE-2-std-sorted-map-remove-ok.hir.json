@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sorted_map_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "MODE-2-std-sorted-map-remove-ok.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

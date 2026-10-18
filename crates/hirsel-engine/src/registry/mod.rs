@@ -123,15 +123,6 @@ fn publish(mut signature: Signature, signatures: &mut BTreeMap<DefPath, Signatur
 fn schema(name: &str) -> Vec<SchemaConstraint> {
     use ScalarDomain::*;
     use SchemaConstraint::*;
-    // #48: the published borrowed key cannot be retained when noncopyable.
-    // Keep the section-22 ledger verbatim until take-k versus copyable is ruled.
-    if name == "sorted_map.insert" {
-        return vec![Bound {
-            parameter: TypeParameterRef::bound(TypeParamId(0)),
-            bound: hirsel_types::Bound::Copyable,
-            rule: const { hirsel_diag::RuleId::of("GEN-1") },
-        }];
-    }
     let domains = match name {
         "int.widen" | "int.try_narrow" | "int.narrow" | "int.truncate" => {
             vec![

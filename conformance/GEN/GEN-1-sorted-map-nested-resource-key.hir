@@ -1,6 +1,6 @@
 // rule: GEN-1
 // spec: #48
-// expect: reject GEN-1 at line 20
+// expect: accept
 resource type Key {
   x: u32,
 }

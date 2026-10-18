@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sorted_map_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "MEM-6-std-sorted-map-arena-get-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

@@ -1611,6 +1611,9 @@ primary_operations! { self, call, context, name, a, value;
                 }
                 collection::sequence(BuiltinType::Simd, out)
             },
+    Primitive: "sorted_map.len" => super::callbacks::sorted_len(a)?,
+    Primitive: "sorted_map.get" => { return Ok(Some(self.sorted_access(a, false)?)); },
+    Primitive: "sorted_map.remove" => { return Ok(Some(self.sorted_access(a, true)?)); },
     Primitive: "sorted_map.empty" => super::callbacks::sorted(arg(a, 0)?.clone(), vec![]),
     Primitive: "sorted_map.insert" => return self.sorted_insert(a).map(Some),
     ; finish Ok(Some(OperationResult::returned(value)))

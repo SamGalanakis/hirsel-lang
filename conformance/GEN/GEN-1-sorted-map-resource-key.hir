@@ -1,6 +1,8 @@
 // rule: GEN-1
 // spec: #48
-// expect: reject GEN-1 at line 21
+// expect: run
+// stdout: inserted
+// stdout: key
 resource type Trace {
   stdout: Stdout,
   text: String,
@@ -18,7 +20,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let by: Order[Trace] = Order(compare: cmp)
   let mut m: SortedMap[Trace, u8] of by = sorted_map.empty(by)
   let k = Trace(stdout: o, text: "key\n")
-  sorted_map.insert(by, mut m, k, 1)
+  sorted_map.insert(by, mut m, take k, 1)
   let _ = out.print(o, "inserted\n")
   Ok(())
 }

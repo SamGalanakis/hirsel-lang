@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "sorted_map_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "SEM-5-std-sorted-map-owned-cycle-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

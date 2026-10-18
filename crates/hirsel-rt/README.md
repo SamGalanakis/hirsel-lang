@@ -484,7 +484,7 @@ reaches allocation. No seed is read from an environment variable. A tape records
 all four fields, and replay rejects any mismatch before entering the program.
  The ten `$intrinsic.OrderCompare_*` rows are compiled
 Body entries in `hirsel-rc`, with callable FunctionRef symbols and no raw C order
-exports. SortedMap empty/len are Instruction rows, insertion/open/next are Body
+exports. SortedMap empty/len are Instruction rows, insertion/get/remove/open/next are Body
 rows; its owned cursor finalizer is a private library body.
 
 `iter.from` and `iter.map` are Body rows whose inline constructions own compiled

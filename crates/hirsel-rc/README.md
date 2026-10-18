@@ -465,10 +465,12 @@ compiled early exits and ordinary source grapheme segmentation over all official
 Unicode16 vectors on both native targets. GraphemeView has an ordinary source
 representation and association; it uses no native view registration.
 
-`library/sorted` lowers empty and length inline, builds binary-search insertion,
-consuming SortedMap cursors and the ten integer Order comparators. Comparison
+`library/sorted` lowers empty and length inline, shares binary search across
+insertion, lookup and removal, and builds consuming SortedMap cursors and the ten
+integer Order comparators. Comparison
 probes match the interpreter (spec #94) and finish before mutation; equal insertion
-replaces only the value and drops its displaced owner. Cursor field 2 saves the
+replaces the value, drops its displaced owner and then drops the incoming key.
+Removal moves the value and drops the stored key. Cursor field 2 saves the
 conjunction of outer/entries uniqueness; shared sources copy, unique sources move
 and drain their remaining suffix in reverse. Integer `.order` constants lower to
 a FunctionRef and inline Order construction, with no callable static-data format.

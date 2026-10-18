@@ -82,6 +82,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "copy_to"
             | "failure.check"
             | "sorted_map.insert"
+            | "sorted_map.get"
+            | "sorted_map.remove"
             | "$intrinsic.SortedMapOrder_open"
             | "$intrinsic.SortedMapOrder_next"
             | "$intrinsic.OrderCompare_u8"
@@ -371,6 +373,7 @@ pub const INLINE_OPERATIONS: &[&str] = &[
     "set.len",
     "$intrinsic.MapInsertionOrder_len",
     "sorted_map.empty",
+    "sorted_map.len",
     "$intrinsic.SortedMapOrder_len",
     "array.len",
     "forget",
@@ -1429,7 +1432,10 @@ pub const NATIVE_PATHS: &[&str] = &[
     "slots.insert",
     "slots.remove",
     "sorted_map.empty",
+    "sorted_map.len",
     "sorted_map.insert",
+    "sorted_map.get",
+    "sorted_map.remove",
     "stock.get",
     "stock.put",
     "store.transact",

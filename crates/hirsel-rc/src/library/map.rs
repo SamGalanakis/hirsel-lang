@@ -178,7 +178,7 @@ fn nominal(b: &mut Body<'_, '_>, name: &str) -> SymbolId {
         instance: None,
     })
 }
-fn option(b: &mut Body<'_, '_>, value: Option<ValueId>) -> R<ValueId> {
+pub(super) fn option(b: &mut Body<'_, '_>, value: Option<ValueId>) -> R<ValueId> {
     let layout = b.cx.fn_abi().result.expect("Option result").layout;
     let definition = nominal(b, "Option");
     construct(
