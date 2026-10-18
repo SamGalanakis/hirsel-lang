@@ -1166,15 +1166,39 @@ fn node_anchors(body: &tir::Body) -> Vec<(u32, u32)> {
 /// a place under a loan (`_1 = use(Borrow _0@L0)`), never written, moved or
 /// lent mutably afterwards, and viewing no computed element (an index could
 /// change before a later read). Their reads go to the viewed place itself.
+/// A nested `match` on a pattern binding views a part of another view
+/// temporary (`_3 = use(Borrow _1.Ok)`): that part has no loan of its own but
+/// stays under its root's, and the enclosing match proved its variant, so it
+/// is a view too when its root is one.
 fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
     let (assigned, disqualified) = view_assignments(body);
     let n = body.locals.len();
+    let single = |l: usize| match assigned[l].as_slice() {
+        [Some(view)] if view_storage(body, l) && !disqualified[l] => Some(*view),
+        _ => None,
+    };
     let mut out: Vec<Option<tir::PlaceId>> = (0..n)
-        .map(|l| match assigned[l].as_slice() {
-            [Some(viewed)] if view_storage(body, l) && !disqualified[l] => Some(*viewed),
+        .map(|l| match single(l) {
+            Some(ViewSource::Loaned(viewed)) => Some(viewed),
             _ => None,
         })
         .collect();
+    // Nested views join once their root is a view; each pass adds at least
+    // one or stops, and a cycle never resolves to a loaned root.
+    loop {
+        let mut changed = false;
+        for l in 0..n {
+            if let (None, Some(ViewSource::Nested(viewed))) = (out[l], single(l))
+                && out[body.places[viewed.0 as usize].root.0 as usize].is_some()
+            {
+                out[l] = Some(viewed);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     // A view of a view is fine; a cycle is not possible in validated TIR, but
     // never follow one.
     for l in 0..n {
@@ -1198,7 +1222,9 @@ fn joined_views(body: &tir::Body) -> Vec<bool> {
     (0..body.locals.len())
         .map(|l| {
             assigned[l].len() > 1
-                && assigned[l].iter().all(Option::is_some)
+                && assigned[l]
+                    .iter()
+                    .all(|a| matches!(a, Some(ViewSource::Loaned(_))))
                 && view_storage(body, l)
                 && !disqualified[l]
         })
@@ -1320,13 +1346,23 @@ fn discarded_callable_reads(body: &tir::Body, types: &TypeStore) -> Vec<bool> {
         .collect()
 }
 
-/// Per local, the view each assignment gives it (None: not a view under a
-/// loan), and whether any other use rules a view temporary out.
+/// What a borrowed whole assignment views.
+#[derive(Clone, Copy)]
+enum ViewSource {
+    /// A place under its own loan, with no computed element.
+    Loaned(tir::PlaceId),
+    /// A loanless part of another local, with no index: a view only while
+    /// that local is one.
+    Nested(tir::PlaceId),
+}
+
+/// Per local, the view each assignment gives it (None: not a view), and
+/// whether any other use rules a view temporary out.
 #[allow(clippy::type_complexity)]
-fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<tir::PlaceId>>>, Vec<bool>) {
+fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool>) {
     use tir::InstructionKind as K;
     let n = body.locals.len();
-    let mut assigned: Vec<Vec<Option<tir::PlaceId>>> = vec![Vec::new(); n];
+    let mut assigned: Vec<Vec<Option<ViewSource>>> = vec![Vec::new(); n];
     let mut disqualified = vec![false; n];
     let root = |p: tir::PlaceId| body.places[p.0 as usize].root.0 as usize;
     let whole = |p: tir::PlaceId| body.places[p.0 as usize].projection.is_empty();
@@ -1345,15 +1381,23 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<tir::PlaceId>>>, Vec<bo
                             if o.usage == UseKind::Borrow && whole(*destination) =>
                         {
                             let viewed = &body.places[o.place.0 as usize];
-                            let computed = viewed.projection.iter().any(|p| {
-                                matches!(
-                                    p,
-                                    tir::Projection::Index(_)
-                                        | tir::Projection::VariantField { .. }
-                                )
+                            let indexed = viewed
+                                .projection
+                                .iter()
+                                .any(|p| matches!(p, tir::Projection::Index(_)));
+                            let variant = viewed
+                                .projection
+                                .iter()
+                                .any(|p| matches!(p, tir::Projection::VariantField { .. }));
+                            assigned[r].push(match viewed.loan {
+                                Some(_) if !indexed && !variant => {
+                                    Some(ViewSource::Loaned(o.place))
+                                }
+                                None if !indexed && !viewed.projection.is_empty() => {
+                                    Some(ViewSource::Nested(o.place))
+                                }
+                                _ => None,
                             });
-                            assigned[r]
-                                .push((viewed.loan.is_some() && !computed).then_some(o.place));
                         }
                         other => {
                             assigned[r].push(None);

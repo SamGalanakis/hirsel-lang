@@ -1,0 +1,48 @@
+// rule: LANG-13
+// expect: run
+// stdout: num
+// stdout: obj
+// stdout: some a
+// stdout: inner none
+// stdout: outer none
+// A match on a pattern binding views a part of the outer match's
+// temporary, borrowed or taken, and reads it in place.
+type V = Num(u64) | Obj(Map[String, u64])
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn kind(v: Result[V, u64]) -> String {
+  match v {
+    Ok(w) => match w {
+      Obj(_) => "obj\n",
+      _ => "num\n",
+    },
+    _ => "error\n",
+  }
+}
+
+fn inner(take v: Option[Option[String]]) -> String {
+  match v {
+    Some(w) => match w {
+      Some(s) => if s == "a" {
+        "some a\n"
+      } else {
+        "some other\n"
+      },
+      None() => "inner none\n",
+    },
+    None() => "outer none\n",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  out.print(output, kind(Ok(Num(1)))) ? Output
+  let mut m: Map[String, u64] = map.empty()
+  map.insert(mut m, "a", 1)
+  out.print(output, kind(Ok(Obj(take m)))) ? Output
+  out.print(output, inner(Some(Some("a")))) ? Output
+  out.print(output, inner(Some(None()))) ? Output
+  out.print(output, inner(None())) ? Output
+  Ok(())
+}

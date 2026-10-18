@@ -67,7 +67,7 @@ impl Importer<'_, '_> {
 /// written, moved or mutably lent after its one whole initialization.
 fn stable_owned_roots(
     body: &tir::Body,
-    assigned: &[Vec<Option<tir::PlaceId>>],
+    assigned: &[Vec<Option<ViewSource>>],
     disqualified: &[bool],
 ) -> Vec<bool> {
     let adjacent: Vec<Vec<usize>> = body

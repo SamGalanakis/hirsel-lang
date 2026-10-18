@@ -2675,7 +2675,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             let Some(ordinal) = parameters.iter().position(|p| *p == flag.value) else {
                 continue;
             };
-            let expected = self.flag_part(f, flag)?;
+            let Some(expected) = self.flag_part(f, flag)? else {
+                continue;
+            };
             if self.flag_bits(f, arguments[ordinal])? != u128::from(expected) {
                 return fail(
                     V::Malformed,
@@ -2759,13 +2761,13 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
     }
 
-    fn flag_part(&self, f: &Frame, flag: &hirsel_lir::ir::InitFlag) -> Checked<bool> {
+    fn flag_part(&self, f: &Frame, flag: &hirsel_lir::ir::InitFlag) -> Checked<Option<bool>> {
         let unit = self.unit(f.unit);
         let mut layout = self
             .lir_type(f.unit, unit.slots[flag.slot.index()].ty)?
             .layout;
         let mut ptr = match f.slots[flag.slot.index()] {
-            SlotStore::Dead => return Ok(false),
+            SlotStore::Dead => return Ok(Some(false)),
             SlotStore::Own(ptr) | SlotStore::Alias(ptr) => ptr,
         };
         for step in self.pool(flag.path, &unit.pools.projections)? {
@@ -2780,10 +2782,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                     let extent = &self.ledger.check(ptr)?.extent;
                     // A whole take leaves only ghosts; there is no live tag.
                     if !extent.any_init(ptr.offset, self.size(layout)?) {
-                        return Ok(false);
+                        return Ok(Some(false));
                     }
                     if self.active_variant(ptr.at(tag.offset), tag.form)? != variant {
-                        return Ok(false);
+                        return Ok(Some(false));
                     }
                     tag.variants
                         .iter()
@@ -2834,12 +2836,23 @@ impl<'p, S: Stage> Machine<'p, S> {
         let record = self.record(layout)?;
         if record.drop.is_empty() && record.finalizer.is_none() {
             // A plain part keeps initialized-byte semantics.
-            return Ok(self.initialized(extent, ptr.offset, layout)?.1
-                || extent.resources.contains_key(&path));
+            return Ok(Some(
+                self.initialized(extent, ptr.offset, layout)?.1
+                    || extent.resources.contains_key(&path),
+            ));
         }
         // Any other part holds content while an owner remains in its active
-        // storage.
-        self.owners(extent, ptr.offset, layout, path)
+        // storage. An initialized part with none left, such as an inner
+        // variant whose active case owns nothing, may carry either value: C
+        // cannot always know that case, and its drop releases nothing.
+        let initialized = extent.any_init(ptr.offset, self.size(layout)?);
+        Ok(if self.owners(extent, ptr.offset, layout, path)? {
+            Some(true)
+        } else if initialized {
+            None
+        } else {
+            Some(false)
+        })
     }
 
     /// Whether an owner remains in the active storage of a value of `layout`
