@@ -75,6 +75,10 @@ impl Fixture {
             "httpget" => {
                 serde_json::from_str(include_str!("../../../examples/httpget/hirsel.json")).unwrap()
             }
+            "udp-query" => {
+                serde_json::from_str(include_str!("../../../examples/udp-query/hirsel.json"))
+                    .unwrap()
+            }
             _ => {
                 serde_json::json!({"schema":1,"package":{"name":name,"version":"1"},"entry":{"module":[],"name":"main"},"sources":[{"path":"main.hir","module":[]},{"path":"common.hir","module":["common"]}],"dependencies":[{"manifest":stdlib,"package":{"name":"std","version":"1"},"expose":[]}]})
             }
@@ -1758,4 +1762,62 @@ fn fetchjson_reuses_one_scripted_connection() {
     let config =
         serde_json::from_str(include_str!("../../../examples/fetchjson/demo.json")).unwrap();
     fixture.run(false, Some(config), "0\n1\n", 0);
+}
+
+/// Production package admission and tapes cross both native backends, which corpus
+/// fixtures cannot check through the CLI's grants-template path.
+#[test]
+fn udp_query_records_and_replays_across_cli_backends() {
+    let fixture = Fixture::new(
+        "udp-query",
+        include_str!("../../../examples/udp-query/main.hir"),
+    );
+    let expected = "sent 5; received 5 from port 19001; truncated false\n";
+    fixture.run(
+        false,
+        Some(serde_json::from_str(include_str!("../../../examples/udp-query/demo.json")).unwrap()),
+        expected,
+        0,
+    );
+    let grants = fixture.0.join("grants.json");
+    std::fs::write(
+        &grants,
+        include_str!("../../../examples/udp-query/grants.json"),
+    )
+    .unwrap();
+    let tape = fixture.0.join("udp.tape");
+    let live = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(fixture.0.join("hirsel.json"))
+        .arg("--grants")
+        .arg(&grants)
+        .arg("--record")
+        .arg(&tape)
+        .output()
+        .unwrap();
+    assert!(
+        live.status.success(),
+        "{}",
+        String::from_utf8_lossy(&live.stderr)
+    );
+    assert_eq!(live.stdout, expected.as_bytes());
+    assert!(live.stderr.is_empty());
+    // The live world and grants are gone: only the tape remains.
+    std::fs::remove_file(grants).unwrap();
+    for backend in ["llvm", "cranelift"] {
+        let replay = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["run", "--native", "--backend", backend])
+            .arg(fixture.0.join("hirsel.json"))
+            .arg("--replay")
+            .arg(&tape)
+            .output()
+            .unwrap();
+        assert!(
+            replay.status.success(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&replay.stderr)
+        );
+        assert_eq!(replay.stdout, expected.as_bytes(), "{backend}");
+        assert!(replay.stderr.is_empty());
+    }
 }

@@ -201,7 +201,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "clock.sleep_until"
         | "instant.checked_add" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         // Streams and listeners use the same explicit Net policy.
-        "net.listen"
+        "net.udp_bind"
+        | "udp.send_to"
+        | "udp.recv_from"
+        | "udp.close"
+        | "net.listen"
         | "net.accept"
         | "net.local_addr"
         | "net.narrow"
@@ -357,6 +361,10 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
 /// `SeqLen`, and the `simd` operations legalization builds. No call remains.
 /// Network operations with a Hirsel-ABI runtime entry (`net_abi.rs`).
 pub const NET_EXPORTS: &[&str] = &[
+    "net.udp_bind",
+    "udp.send_to",
+    "udp.recv_from",
+    "udp.close",
     "net.listen",
     "net.accept",
     "net.local_addr",
@@ -846,6 +854,46 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_net_peer_addr",
         destination: true,
         result: Some((28, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_net_udp_bind",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_udp_send_to",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::Pointer,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_udp_recv_from",
+        destination: true,
+        result: Some((48, 8)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_udp_close",
+        destination: false,
+        result: None,
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
@@ -1526,6 +1574,10 @@ pub const NATIVE_PATHS: &[&str] = &[
     "net.close",
     "tls.connect",
     "tls.close",
+    "net.udp_bind",
+    "udp.send_to",
+    "udp.recv_from",
+    "udp.close",
     "net.listen",
     "net.accept",
     "net.local_addr",

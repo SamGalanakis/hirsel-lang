@@ -196,6 +196,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         ("AtomicFile", true),
         ("Stream", true),
         ("Listener", true),
+        ("UdpSocket", true),
         ("Child", true),
         ("TaskSet", true),
     ] {

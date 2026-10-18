@@ -224,6 +224,14 @@ pub(crate) fn render_request(request: &Request) -> String {
             hex(&hirsel_run_config::encode_net_peers(peers)),
             hex(&hirsel_run_config::encode_net_listeners(listeners))
         ),
+        R::UdpBind { net, addr } => format!("udp_bind {net} {}", address(addr)),
+        R::UdpSend {
+            net,
+            socket,
+            bytes,
+            addr,
+        } => format!("udp_send {net} {socket} {} {}", hex(bytes), address(addr)),
+        R::UdpRecv { net, socket, max } => format!("udp_recv {net} {socket} {max}"),
         R::NetNarrow { net, rules: r } => format!("net_narrow {net} {}", rules(r)),
         R::Resolve { net, host, port } => format!("resolve {net} {} {port}", hex(host.as_bytes())),
         R::Connect {
@@ -283,6 +291,15 @@ pub(crate) fn render_completion(completion: &Completion) -> String {
             "listened {}",
             outcome(v, |(id, local)| format!("{id} {}", address(local)))
         ),
+        C::Datagram(v) => format!(
+            "datagram {}",
+            outcome(v, |(bytes, peer, truncated)| format!(
+                "{} {} {}",
+                hex(bytes),
+                address(peer),
+                u8::from(*truncated)
+            ))
+        ),
         C::NetHandle(v) => format!("net_handle {}", outcome(v, u64::to_string)),
         C::Addresses(v) => format!("addresses {}", outcome(v, |a| addresses(a))),
         C::NetBytes(v) => format!("net_bytes {}", outcome(v, |b| hex(b))),
@@ -307,6 +324,21 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
                 .map_err(|e| e.to_string())?,
             listeners: hirsel_run_config::decode_net_listeners(&unhex(listeners)?)
                 .map_err(|e| e.to_string())?,
+        },
+        ["udp_bind", n, a] => R::UdpBind {
+            net: number(n)?,
+            addr: parse_address(a)?,
+        },
+        ["udp_send", n, s, b, a] => R::UdpSend {
+            net: number(n)?,
+            socket: number(s)?,
+            bytes: unhex(b)?,
+            addr: parse_address(a)?,
+        },
+        ["udp_recv", n, s, m] => R::UdpRecv {
+            net: number(n)?,
+            socket: number(s)?,
+            max: number(m)?,
         },
         ["net_narrow", n, r] => R::NetNarrow {
             net: number(n)?,
@@ -400,6 +432,18 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["listened", r @ ..] => C::Listened(parse_outcome(r, |w| match w {
             [id, local] => Ok((number(id)?, parse_address(local)?)),
             _ => Err("bad tape listened".into()),
+        })?),
+        ["datagram", r @ ..] => C::Datagram(parse_outcome(r, |w| match w {
+            [bytes, peer, truncated] => Ok((
+                unhex(bytes)?,
+                parse_address(peer)?,
+                match *truncated {
+                    "0" => false,
+                    "1" => true,
+                    _ => return Err("bad datagram truncation".into()),
+                },
+            )),
+            _ => Err("bad tape datagram".into()),
         })?),
         ["net_handle", r @ ..] => C::NetHandle(parse_outcome(r, |w| number(one(w)?))?),
         ["addresses", r @ ..] => C::Addresses(parse_outcome(r, |w| parse_addresses(one(w)?))?),

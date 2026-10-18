@@ -12,6 +12,8 @@ pub enum NetOperation {
     Connect,
     ConnectTls,
     Listen,
+    UdpBind,
+    UdpPeer,
 }
 impl NetOperation {
     pub fn name(self) -> &'static str {
@@ -19,6 +21,8 @@ impl NetOperation {
             Self::Connect => "connect",
             Self::ConnectTls => "connect_tls",
             Self::Listen => "listen",
+            Self::UdpBind => "udp_bind",
+            Self::UdpPeer => "udp_peer",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -26,6 +30,8 @@ impl NetOperation {
             "connect" => Self::Connect,
             "connect_tls" => Self::ConnectTls,
             "listen" => Self::Listen,
+            "udp_bind" => Self::UdpBind,
+            "udp_peer" => Self::UdpPeer,
             _ => return None,
         })
     }
@@ -187,6 +193,10 @@ pub trait NetProvider {
     /// Material for the next Pem handshake, supplied outside the recorded request.
     /// Scripted and replay providers need only the request's digest.
     fn tls_roots(&mut self, _pem: &[u8]) {}
+    fn udp_bind(&mut self, id: u64, addr: SocketAddr) -> Provided<()>;
+    fn udp_send(&mut self, socket: u64, bytes: &[u8], addr: SocketAddr) -> Provided<u64>;
+    /// Receive one entire datagram, including an empty one. Policy truncates after checking its peer.
+    fn udp_recv(&mut self, socket: u64) -> Provided<(Vec<u8>, SocketAddr)>;
     fn resolve(&mut self, host: &str, port: u16) -> Provided<Vec<SocketAddr>>;
     fn connect(&mut self, id: u64, host: &str, port: u16, timeout: NetTimeout) -> Provided<()>;
     fn connect_addr(&mut self, id: u64, addr: SocketAddr, timeout: NetTimeout) -> Provided<()>;
@@ -213,6 +223,15 @@ pub trait NetProvider {
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct NoNet;
 impl NetProvider for NoNet {
+    fn udp_bind(&mut self, _: u64, _: SocketAddr) -> Provided<()> {
+        Err(AdapterError::InvalidCompletion)
+    }
+    fn udp_send(&mut self, _: u64, _: &[u8], _: SocketAddr) -> Provided<u64> {
+        Err(AdapterError::InvalidCompletion)
+    }
+    fn udp_recv(&mut self, _: u64) -> Provided<(Vec<u8>, SocketAddr)> {
+        Err(AdapterError::InvalidCompletion)
+    }
     fn resolve(&mut self, _: &str, _: u16) -> Provided<Vec<SocketAddr>> {
         Err(AdapterError::InvalidCompletion)
     }
@@ -282,7 +301,9 @@ pub fn permits(
         .map(|rule| rule.operation)
         .filter(|op| match operation {
             None => true,
-            Some(NetOperation::Listen) => *op == NetOperation::Listen,
+            Some(NetOperation::Listen | NetOperation::UdpBind | NetOperation::UdpPeer) => {
+                Some(*op) == operation
+            }
             // Connect is the wider grant; prefer it so a stream is plaintext-capable.
             Some(_) => matches!(op, NetOperation::Connect | NetOperation::ConnectTls),
         })
@@ -319,6 +340,9 @@ pub(crate) fn is_net_request(request: &crate::io::Request) -> bool {
             | R::Listen { .. }
             | R::Accept { .. }
             | R::LocalAddr { .. }
+            | R::UdpBind { .. }
+            | R::UdpSend { .. }
+            | R::UdpRecv { .. }
     )
 }
 
@@ -429,6 +453,41 @@ impl crate::io::State {
         use crate::io::Request as R;
         let zero = |t: &NetTimeout| *t == NetTimeout::Nanos(0);
         Ok(match request {
+            R::UdpBind { net, addr } => {
+                let (rules, _) = self.net_grant(*net)?;
+                permits(
+                    &rules,
+                    &ip_literal(addr.ip),
+                    addr.port,
+                    Some(NetOperation::UdpBind),
+                )
+                .is_none()
+                .then_some(NetError::NotGranted)
+            }
+            R::UdpSend { net, socket, .. } | R::UdpRecv { net, socket, .. } => {
+                let (rules, _) = self.net_grant(*net)?;
+                if !matches!(self.handles.rows.get(socket), Some(crate::handles::Grant::UdpSocket { net: owner }) if owner == net)
+                {
+                    return Err(AdapterError::InvalidHandle(*socket));
+                }
+                match request {
+                    R::UdpSend { bytes, .. } if bytes.len() > 65507 => Some(NetError::InvalidInput),
+                    R::UdpRecv { max: 0, .. } => Some(NetError::InvalidInput),
+                    R::UdpSend { addr, .. }
+                        if permits(
+                            &rules,
+                            &ip_literal(addr.ip),
+                            addr.port,
+                            Some(NetOperation::UdpPeer),
+                        )
+                        .is_none() =>
+                    {
+                        Some(NetError::NotGranted)
+                    }
+                    _ => None,
+                }
+            }
+
             R::Resolve { net, host, port }
             | R::Connect {
                 net, host, port, ..
@@ -545,6 +604,51 @@ impl crate::io::State {
             return Ok(crate::io_checks::net_completion(request, error));
         }
         match request {
+            R::UdpBind { net, addr } => {
+                let (_, world) = self.net_grant(*net)?;
+                let id = self.handles.next();
+                let value = provided(self.world(world, host)?.udp_bind(id, *addr))?;
+                Ok(C::NetHandle(value.map(|()| {
+                    self.handles.insert(Grant::UdpSocket { net: *net })
+                })))
+            }
+            R::UdpSend {
+                net,
+                socket,
+                bytes,
+                addr,
+            } => {
+                let (_, world) = self.net_grant(*net)?;
+                let value = provided(self.world(world, host)?.udp_send(*socket, bytes, *addr))?;
+                if value.as_ref().is_ok_and(|n| *n != bytes.len() as u64) {
+                    return Err(AdapterError::InvalidCompletion);
+                }
+                Ok(C::Count(value))
+            }
+            R::UdpRecv { net, socket, max } => {
+                let (rules, world) = self.net_grant(*net)?;
+                loop {
+                    let value = provided(self.world(world, host)?.udp_recv(*socket))?;
+                    match value {
+                        Err(e) => return Ok(C::Datagram(Err(e))),
+                        Ok((mut bytes, peer)) => {
+                            if permits(
+                                &rules,
+                                &ip_literal(peer.ip),
+                                peer.port,
+                                Some(NetOperation::UdpPeer),
+                            )
+                            .is_none()
+                            {
+                                continue;
+                            }
+                            let truncated = bytes.len() as u64 > *max;
+                            bytes.truncate((*max).min(bytes.len() as u64) as usize);
+                            return Ok(C::Datagram(Ok((bytes, peer, truncated))));
+                        }
+                    }
+                }
+            }
             R::TestNet {
                 test,
                 peers,
@@ -570,6 +674,24 @@ impl crate::io::State {
                         address: listener.address.clone(),
                         port: listener.port,
                         operation: NetOperation::Listen,
+                    }))
+                    .chain(
+                        peers
+                            .iter()
+                            .filter(|p| {
+                                matches!(p.tls, hirsel_run_config::PeerTls::Plain)
+                                    && p.address.parse::<std::net::IpAddr>().is_ok()
+                            })
+                            .map(|p| NetRule {
+                                address: p.address.clone(),
+                                port: p.port,
+                                operation: NetOperation::UdpPeer,
+                            }),
+                    )
+                    .chain(listeners.iter().map(|l| NetRule {
+                        address: l.address.clone(),
+                        port: l.port,
+                        operation: NetOperation::UdpBind,
                     }))
                     .collect();
                 let id = self.handles.next();
@@ -767,9 +889,11 @@ impl crate::io::State {
             R::Close { handle } => {
                 self.pem_validity.remove(handle);
                 let world = match self.handles.rows.remove(handle) {
-                    Some(Grant::Stream { net, .. } | Grant::Listener { net }) => {
-                        self.net_grant(net)?.1
-                    }
+                    Some(
+                        Grant::Stream { net, .. }
+                        | Grant::Listener { net }
+                        | Grant::UdpSocket { net },
+                    ) => self.net_grant(net)?.1,
                     _ => return Err(AdapterError::InvalidHandle(*handle)),
                 };
                 let unmet = self.unmet(world, *handle);

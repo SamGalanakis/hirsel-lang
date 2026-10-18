@@ -115,6 +115,7 @@ pub struct ScriptNet {
     next_client: Vec<usize>,
     open_listeners: BTreeMap<u64, SocketAddr>,
     streams: BTreeMap<u64, Connection>,
+    udp: BTreeMap<u64, UdpScript>,
 }
 impl ScriptNet {
     pub fn new(peers: Vec<NetPeer>, listeners: Vec<NetListener>) -> Result<Self, AdapterError> {
@@ -145,6 +146,7 @@ impl ScriptNet {
             listeners,
             open_listeners: BTreeMap::new(),
             streams: BTreeMap::new(),
+            udp: BTreeMap::new(),
         })
     }
     /// The Test report of closing `handle` while a scripted client it leaves still
@@ -227,7 +229,105 @@ impl ScriptNet {
         }
     }
 }
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UdpScript {
+    local: SocketAddr,
+    peers: Vec<(SocketAddr, std::collections::VecDeque<NetStep>)>,
+    received: std::collections::VecDeque<(Vec<u8>, SocketAddr)>,
+}
 impl NetProvider for ScriptNet {
+    fn udp_bind(&mut self, id: u64, mut addr: SocketAddr) -> Provided<()> {
+        if addr.port == 0 {
+            while self.next_port <= u16::MAX as u32
+                && self.udp.values().any(|s| {
+                    s.local
+                        == SocketAddr {
+                            port: self.next_port as u16,
+                            ..addr
+                        }
+                })
+            {
+                self.next_port += 1;
+            }
+            if self.next_port > u16::MAX as u32 {
+                return Ok(Err(NetError::AddrNotAvailable));
+            }
+            addr.port = self.next_port as u16;
+            self.next_port += 1;
+        }
+        if self.udp.values().any(|s| s.local == addr) {
+            return Ok(Err(NetError::AddrInUse));
+        }
+        let peers = self
+            .peers
+            .iter()
+            .filter_map(|p| {
+                if !matches!(p.tls, PeerTls::Plain) {
+                    return None;
+                }
+                let ip = p.address.parse().ok()?;
+                let steps = match p.connections.first()? {
+                    NetConnection::Open(steps) => steps.clone(),
+                    NetConnection::Refused => vec![NetStep::Reset],
+                    NetConnection::Unanswered => vec![NetStep::Stall],
+                };
+                Some((SocketAddr { ip, port: p.port }, steps.into()))
+            })
+            .collect();
+        self.udp.insert(
+            id,
+            UdpScript {
+                local: addr,
+                peers,
+                received: Default::default(),
+            },
+        );
+        Ok(Ok(()))
+    }
+    fn udp_send(&mut self, socket: u64, bytes: &[u8], addr: SocketAddr) -> Provided<u64> {
+        let local = self.udp[&socket].local;
+        if let Some(target) = self.udp.values_mut().find(|s| s.local == addr) {
+            target.received.push_back((bytes.to_vec(), local));
+        } else if let Some((_, steps)) = self
+            .udp
+            .get_mut(&socket)
+            .unwrap()
+            .peers
+            .iter_mut()
+            .find(|(a, _)| *a == addr)
+        {
+            match steps.front() {
+                Some(NetStep::Expect(expected)) if expected == bytes => {
+                    steps.pop_front();
+                }
+                Some(NetStep::Expect(_) | NetStep::Reset) => {
+                    return Ok(Err(NetError::ConnectionReset));
+                }
+                _ => {}
+            }
+        }
+        Ok(Ok(bytes.len() as u64))
+    }
+    fn udp_recv(&mut self, socket: u64) -> Provided<(Vec<u8>, SocketAddr)> {
+        let socket = self.udp.get_mut(&socket).unwrap();
+        if let Some(datagram) = socket.received.pop_front() {
+            return Ok(Ok(datagram));
+        }
+        for (peer, steps) in &mut socket.peers {
+            match steps.front() {
+                Some(NetStep::Send(_)) => {
+                    let Some(NetStep::Send(bytes)) = steps.pop_front() else {
+                        unreachable!()
+                    };
+                    return Ok(Ok((bytes, *peer)));
+                }
+                Some(NetStep::Reset) => return Ok(Err(NetError::ConnectionReset)),
+                _ => {}
+            }
+        }
+        Err(AdapterError::Blocked)
+    }
+
     fn resolve(&mut self, host: &str, port: u16) -> Provided<Vec<SocketAddr>> {
         let Some(peer) = self
             .peers
@@ -457,6 +557,7 @@ impl NetProvider for ScriptNet {
             .ok_or(AdapterError::InvalidHandle(listener))
     }
     fn close(&mut self, id: u64) {
+        self.udp.remove(&id);
         self.streams.remove(&id);
         self.open_listeners.remove(&id);
     }

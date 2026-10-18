@@ -2642,6 +2642,7 @@ fn read_write(
         (1, 2)
     } else if *path == hirsel_syntax::DefPath::core("file.read")
         || *path == hirsel_syntax::DefPath::core("net.read")
+        || *path == hirsel_syntax::DefPath::core("udp.recv_from")
     {
         (2, 3)
     } else {

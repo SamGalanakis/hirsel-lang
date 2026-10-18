@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-820 exported definitions; 264 variants.
+826 exported definitions; 266 variants.
 
 ## Types and roots
 
@@ -734,7 +734,7 @@ Variant of NetError.
 
 <a id="def-core_401_2fNetOperation"></a>
 
-- `type NetOperation: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Connect() | ConnectTls() | Listen()`
+- `type NetOperation: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer()`
 
 <a id="def-core_401_2fNetOperation_23Connect"></a>
 
@@ -751,6 +751,18 @@ Variant of NetOperation.
 <a id="def-core_401_2fNetOperation_23Listen"></a>
 
 - `Listen() -> NetOperation`
+
+Variant of NetOperation.
+
+<a id="def-core_401_2fNetOperation_23UdpBind"></a>
+
+- `UdpBind() -> NetOperation`
+
+Variant of NetOperation.
+
+<a id="def-core_401_2fNetOperation_23UdpPeer"></a>
+
+- `UdpPeer() -> NetOperation`
 
 Variant of NetOperation.
 
@@ -1279,6 +1291,14 @@ Variant of TxFailure.
 - `Canceled(CancelCause) -> TxFailure[E]`
 
 Variant of TxFailure.
+
+<a id="def-core_401_2fUdpReceived"></a>
+
+- `type UdpReceived uses {} = { count: u64, peer: SocketAddr, truncated: bool }`
+
+<a id="def-core_401_2fUdpSocket"></a>
+
+- `opaque resource type UdpSocket: sendable + noalloc_drop uses {Net}`
 
 <a id="def-core_401_2fUnsafe"></a>
 
@@ -4322,6 +4342,12 @@ a rule naming `(host, port)`, any operation
 
 - `@noalloc fn net.shutdown(n: Net, mut s: Stream of n, how: Shutdown) -> Result[(), NetError]`
 
+<a id="def-core_401_2fnet_2fudp_5fbind"></a>
+
+- `fn net.udp_bind(n: Net, addr: SocketAddr) -> Result[unique UdpSocket of n, NetError]`
+
+`(literal, port, UdpBind())` for `addr`; port 0 permits an ephemeral port
+
 <a id="def-std_401_2fnet_2fvalidate_5fhost"></a>
 
 - `@noalloc pub fn net.validate_host(text: String) -> Result[(), HostError] uses {}`
@@ -5909,6 +5935,27 @@ References: [`core@1/u8`](#def-core_401_2fu8)
 - `@noalloc pub fn u8.wrapping_sub(a: u8, b: u8) -> u8 uses {}`
 
 References: [`core@1/u8`](#def-core_401_2fu8)
+
+
+## udp
+
+<a id="def-core_401_2fudp_2fclose"></a>
+
+- `@noalloc fn udp.close(n: Net, take s: UdpSocket of n) -> ()`
+
+the socket's originating `Net`
+
+<a id="def-core_401_2fudp_2frecv_5ffrom"></a>
+
+- `fn udp.recv_from(n: Net, mut s: UdpSocket of n, mut buffer: List[u8], max: u64) -> Result[UdpReceived, NetError]`
+
+the socket's originating `Net`; only peers with an exact `UdpPeer()` rule deliver input
+
+<a id="def-core_401_2fudp_2fsend_5fto"></a>
+
+- `@noalloc fn udp.send_to(n: Net, mut s: UdpSocket of n, data: Bytes, addr: SocketAddr) -> Result[u64, NetError]`
+
+the socket's originating `Net`, and `(literal, port, UdpPeer())` for `addr`
 
 
 ## unicode

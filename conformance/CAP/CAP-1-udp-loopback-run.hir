@@ -1,0 +1,44 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+fn address(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+
+fn peer(port: u16) -> NetPeer uses {} {
+  NetPeer(
+    address: "127.0.0.1",
+    port: port,
+    resolves_to: [],
+    tls: Plain(),
+    connections: []
+  )
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [peer(9000u16), peer(9001u16)],
+    [
+      NetListener(address: address(9000u16), clients: []),
+      NetListener(address: address(9001u16), clients: [])
+    ]
+  )
+  let mut client = net.udp_bind(n, address(9000u16))?
+  let mut server = net.udp_bind(n, address(9001u16))?
+  let _ = udp.send_to(n, mut client, b"echo", address(9001u16))?
+  let mut request: List[u8] = []
+  let incoming = udp.recv_from(n, mut server, mut request, 64u64)?
+  test.check(
+    t,
+    incoming.peer.port == 9000u16 && incoming.count == 4u64 && !incoming.truncated
+  )
+  let _ = udp.send_to(n, mut server, bytes.from_list(take request), incoming.peer)?
+  let mut response: List[u8] = []
+  let reply = udp.recv_from(n, mut client, mut response, 64u64)?
+  test.check(t, reply.peer.port == 9001u16 && response == [101u8, 99u8, 104u8, 111u8])
+  let closed: () = udp.close(n, take server)
+  test.check(t, closed == ())
+  udp.close(n, take client)
+  Ok(())
+}

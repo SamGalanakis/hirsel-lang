@@ -1,0 +1,41 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+fn address(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+
+fn peer(port: u16, take data: Bytes) -> NetPeer uses {} {
+  NetPeer(
+    address: "127.0.0.1",
+    port: port,
+    resolves_to: [],
+    tls: Plain(),
+    connections: [Open([Send(data)])]
+  )
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let all = test.net(
+    t,
+    [peer(9001u16, b"outside"), peer(9002u16, b"ok")],
+    [NetListener(address: address(9000u16), clients: [])]
+  )
+  let n = net.narrow(
+    all,
+    [
+      NetRule(address: "127.0.0.1", port: 9000u16, operation: UdpBind()),
+      NetRule(address: "127.0.0.1", port: 9002u16, operation: UdpPeer())
+    ]
+  )?
+  let mut s = net.udp_bind(n, address(9000u16))?
+  let mut buffer: List[u8] = []
+  let received = udp.recv_from(n, mut s, mut buffer, 64u64)?
+  test.check(
+    t,
+    received.peer.port == 9002u16 && received.count == 2u64 && !received.truncated
+  )
+  test.check(t, buffer == [111u8, 107u8])
+  udp.close(n, take s)
+  Ok(())
+}

@@ -367,7 +367,10 @@ pub fn replay_interpreter_with_fixture(
                     "file.commit",
                     vec![handle("Dir", *directory), handle("AtomicFile", *file)],
                 ),
-                Request::TestNet { .. }
+                Request::UdpBind { .. }
+                | Request::UdpSend { .. }
+                | Request::UdpRecv { .. }
+                | Request::TestNet { .. }
                 | Request::NetNarrow { .. }
                 | Request::Resolve { .. }
                 | Request::Connect { .. }
@@ -390,6 +393,7 @@ pub fn replay_interpreter_with_fixture(
                         ObservedGrant::AtomicFile { .. } => "AtomicFile",
                         ObservedGrant::Stream { .. } => "Stream",
                         ObservedGrant::Listener { .. } => "Listener",
+                        ObservedGrant::UdpSocket { .. } => "UdpSocket",
                         _ => panic!("unsupported closed handle: {grant:?}"),
                     };
                     library
@@ -517,7 +521,8 @@ pub fn replay_interpreter_with_fixture(
                 value
             };
             let decoded = match event.completion {
-                Completion::NetHandle(_)
+                Completion::Datagram(_)
+                | Completion::NetHandle(_)
                 | Completion::NetBytes(_)
                 | Completion::Count(_)
                 | Completion::NetUnit(_)
@@ -558,6 +563,9 @@ pub fn replay_interpreter_with_fixture(
                         },
                         hirsel_rt::handles::Grant::Stream { net, .. } => {
                             ObservedGrant::Stream { net: *net }
+                        }
+                        hirsel_rt::handles::Grant::UdpSocket { net } => {
+                            ObservedGrant::UdpSocket { net: *net }
                         }
                         hirsel_rt::handles::Grant::Listener { net } => {
                             ObservedGrant::Listener { net: *net }

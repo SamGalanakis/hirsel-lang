@@ -317,6 +317,21 @@ pub enum Request {
         port: u16,
         timeout: NetTimeout,
     },
+    UdpBind {
+        net: u64,
+        addr: SocketAddr,
+    },
+    UdpSend {
+        net: u64,
+        socket: u64,
+        bytes: Vec<u8>,
+        addr: SocketAddr,
+    },
+    UdpRecv {
+        net: u64,
+        socket: u64,
+        max: u64,
+    },
     ConnectAddr {
         net: u64,
         addr: SocketAddr,
@@ -474,6 +489,7 @@ pub enum Completion {
     Listened(Result<(u64, SocketAddr), NetError>),
     Addresses(Result<Vec<SocketAddr>, NetError>),
     NetBytes(Result<Vec<u8>, NetError>),
+    Datagram(Result<(Vec<u8>, SocketAddr, bool), NetError>),
     Count(Result<u64, NetError>),
     NetUnit(Result<(), NetError>),
     Address(Result<SocketAddr, NetError>),
@@ -861,7 +877,7 @@ impl State {
         if is_net_request(request)
             || matches!(request, Request::Close { handle } if matches!(
                 self.handles.rows.get(handle),
-                Some(Grant::Stream { .. } | Grant::Listener { .. })
+                Some(Grant::Stream { .. } | Grant::Listener { .. } | Grant::UdpSocket { .. })
             ))
         {
             // Network outcomes are provider inputs, never injected file faults.

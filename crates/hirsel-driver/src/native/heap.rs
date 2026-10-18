@@ -239,7 +239,7 @@ impl Operations for Io {
                     }),
                 }),
             },
-            (Some("net" | "tls" | "$intrinsic"), _, _) => {
+            (Some("net" | "udp" | "tls" | "$intrinsic"), _, _) => {
                 self.yielded = true;
                 let outcome = self.net(module, &path.name, args, Some(cause));
                 output.extend(self.network.take_report());

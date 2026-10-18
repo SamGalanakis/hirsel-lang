@@ -35,7 +35,7 @@ sorted unique address/service/operation triples, with no wildcard rule. Addresse
 are lowercase ASCII host names without a root dot, canonical dotted IPv4 or RFC
 5952 IPv6 without brackets or a zone. Hosts ending in an ASCII numeric or hexadecimal IPv4-number label must be
 canonical dotted-quad IPv4; short forms and leading zeros refuse. Services are decimal ports 0–65535
-without leading zeros, and operations are `connect`, `connect_tls` or `listen`.
+without leading zeros, and operations are `connect`, `connect_tls`, `listen`, `udp_bind` or `udp_peer`.
 
 `snapshot_args` and `snapshot_env` convert only explicitly supplied OS strings;
 byte-invalid inputs refuse with the argument index, key index or selected Env key.

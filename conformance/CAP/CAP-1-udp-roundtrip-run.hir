@@ -1,0 +1,52 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+// Rust std UDP echo, empty datagram and truncation vectors adapted to scripted peers.
+fn address(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "127.0.0.1",
+        port: 9001u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(b"hi"),
+              Send(b"hi"),
+              Expect(b""),
+              Send(b""),
+              Send(b"abcdef"),
+              Send(b"z")
+            ]
+          )
+        ]
+      )
+    ],
+    [NetListener(address: address(9000u16), clients: [])]
+  )
+  let mut s = net.udp_bind(n, address(9000u16))?
+  let sent = udp.send_to(n, mut s, b"hi", address(9001u16))?
+  test.check(t, sent == 2u64)
+  let mut buffer: List[u8] = [9u8]
+  let first = udp.recv_from(n, mut s, mut buffer, 8u64)?
+  test.check(t, first.count == 2u64 && first.peer.port == 9001u16 && !first.truncated)
+  test.check(t, buffer == [9u8, 104u8, 105u8])
+  let zero = udp.send_to(n, mut s, b"", address(9001u16))?
+  test.check(t, zero == 0u64)
+  let empty = udp.recv_from(n, mut s, mut buffer, 8u64)?
+  test.check(t, empty.count == 0u64 && !empty.truncated && list.len(buffer) == 3u64)
+  let short = udp.recv_from(n, mut s, mut buffer, 3u64)?
+  test.check(t, short.count == 3u64 && short.truncated)
+  let last = udp.recv_from(n, mut s, mut buffer, 3u64)?
+  test.check(t, last.count == 1u64 && !last.truncated)
+  test.check(t, buffer == [9u8, 104u8, 105u8, 97u8, 98u8, 99u8, 122u8])
+  udp.close(n, take s)
+  Ok(())
+}

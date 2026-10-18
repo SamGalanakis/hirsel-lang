@@ -277,6 +277,8 @@ fn rule_value(r: &NetRule) -> Value {
                     NetOperation::Connect => 0,
                     NetOperation::ConnectTls => 1,
                     NetOperation::Listen => 2,
+                    NetOperation::UdpBind => 3,
+                    NetOperation::UdpPeer => 4,
                 },
                 vec![],
             ),
@@ -340,6 +342,30 @@ pub fn arguments(event: &Event, pem_roots: &[&[u8]]) -> (&'static str, Vec<Value
     let n = |id| handle("Net", id);
     let s = |id| handle("Stream", id);
     match &event.request {
+        R::UdpBind { net, addr } => ("net.udp_bind", vec![n(*net), address(*addr)]),
+        R::UdpSend {
+            net,
+            socket,
+            bytes,
+            addr,
+        } => (
+            "udp.send_to",
+            vec![
+                n(*net),
+                handle("UdpSocket", *socket),
+                Value::Bytes(bytes.clone()),
+                address(*addr),
+            ],
+        ),
+        R::UdpRecv { net, socket, max } => (
+            "udp.recv_from",
+            vec![
+                n(*net),
+                handle("UdpSocket", *socket),
+                list([]),
+                number(Primitive::U64, (*max).into()),
+            ],
+        ),
         R::TestNet {
             test,
             peers,
@@ -561,6 +587,27 @@ fn addr(value: Value) -> SocketAddr {
 }
 pub fn decode(schema: &C, value: Value, updates: &[(usize, Value)]) -> C {
     match schema {
+        C::Datagram(_) => C::Datagram(result(value).map(|v| {
+            let Value::Record { mut fields, .. } = v else {
+                panic!("UDP receive record")
+            };
+            let count = uint(fields[0].take().unwrap());
+            let peer = addr(fields[1].take().unwrap());
+            let Value::Bool(truncated) = fields[2].take().unwrap() else {
+                panic!("UDP truncation")
+            };
+            let (_, buffer) = updates
+                .iter()
+                .find(|(n, _)| *n == 2)
+                .expect("UDP output buffer");
+            let bytes: Vec<_> = collection::elements(buffer, BuiltinType::List)
+                .unwrap()
+                .into_iter()
+                .map(|v| uint(v) as u8)
+                .collect();
+            assert_eq!(bytes.len() as u64, count);
+            (bytes, peer, truncated)
+        })),
         C::NetHandle(_) => C::NetHandle(result(value).map(id)),
         C::Count(_) => C::Count(result(value).map(uint)),
         C::NetUnit(_) => C::NetUnit(result(value).map(|v| match v {
@@ -597,7 +644,8 @@ pub fn decode(schema: &C, value: Value, updates: &[(usize, Value)]) -> C {
 
 pub fn fault(completion: &C) -> Option<hirsel_interp::library::simulation::Fault> {
     let error = match completion {
-        C::NetHandle(Err(e))
+        C::Datagram(Err(e))
+        | C::NetHandle(Err(e))
         | C::Addresses(Err(e))
         | C::NetBytes(Err(e))
         | C::Count(Err(e))

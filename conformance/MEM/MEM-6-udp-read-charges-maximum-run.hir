@@ -1,0 +1,41 @@
+// rule: MEM-6
+// expect: run
+// entry: main
+fn address(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+
+fn receive(n: Net, cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut s = match net.udp_bind(n, address(9000u16)) {
+        Ok(s) => take s,
+        Error(_) => return 0u64,
+      }
+      let mut buffer: List[u8] in a = [1u8, 2u8]
+      let _ = udp.recv_from(n, mut s, mut buffer, 16u64)
+      list.push(mut buffer, 3u8)
+      list.len(buffer)
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "127.0.0.1",
+        port: 9001u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([Send(b""), Send(b"x")])]
+      )
+    ],
+    [NetListener(address: address(9000u16), clients: [])]
+  )
+  test.check(t, receive(n, 19u64) == Ok(3u64))
+  test.check(t, receive(n, 17u64) == Error(OutOfSpace()))
+  Ok(())
+}

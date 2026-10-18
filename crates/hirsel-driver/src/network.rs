@@ -1194,6 +1194,8 @@ impl HostLibrary {
                                 0 => NetOperation::Connect,
                                 1 => NetOperation::ConnectTls,
                                 2 => NetOperation::Listen,
+                                3 => NetOperation::UdpBind,
+                                4 => NetOperation::UdpPeer,
                                 _ => return Err(invalid()),
                             },
                         })
@@ -1215,6 +1217,21 @@ impl HostLibrary {
                 net: self.id(&a[0])?,
                 addr: addr(&a[1])?,
                 timeout: timeout(&a[2])?,
+            },
+            "net.udp_bind" => R::UdpBind {
+                net: self.id(&a[0])?,
+                addr: addr(&a[1])?,
+            },
+            "udp.send_to" => R::UdpSend {
+                net: self.id(&a[0])?,
+                socket: self.id(&a[1])?,
+                bytes: bytes(&a[2])?,
+                addr: addr(&a[3])?,
+            },
+            "udp.recv_from" => R::UdpRecv {
+                net: self.id(&a[0])?,
+                socket: self.id(&a[1])?,
+                max: word(&a[3])?,
             },
             "net.listen" => R::Listen {
                 net: self.id(&a[0])?,
@@ -1271,7 +1288,7 @@ impl HostLibrary {
                     _ => return Err(invalid()),
                 },
             },
-            "net.close" => R::Close {
+            "net.close" | "udp.close" => R::Close {
                 handle: self.id(&a[1])?,
             },
             "tls.close" => R::TlsClose {
@@ -1314,13 +1331,38 @@ impl HostLibrary {
             C::NetHandle(r) => result(r, |id| {
                 self.handle(
                     id,
-                    if name == "net.narrow" {
+                    if name == "net.udp_bind" {
+                        "UdpSocket"
+                    } else if name == "net.narrow" {
                         "Net"
                     } else {
                         "Stream"
                     },
                 )
             }),
+            C::Datagram(r) => match r {
+                Err(e) => net_error(e),
+                Ok((b, peer, truncated)) => {
+                    let count = b.len() as u64;
+                    let mut buffer = bytes(&a[2])?;
+                    buffer.extend_from_slice(&b);
+                    updates.push((
+                        2,
+                        sequence(
+                            BuiltinType::List,
+                            buffer.into_iter().map(|b| int(Primitive::U8, b)),
+                        ),
+                    ));
+                    ok(Value::Record {
+                        definition: DefPath::core("UdpReceived"),
+                        fields: vec![
+                            Some(u64_value(count)),
+                            Some(address(peer)),
+                            Some(Value::Bool(truncated)),
+                        ],
+                    })
+                }
+            },
             C::Listened(r) => result(r, |(id, _)| self.handle(id, "Listener")),
             C::Accepted(r) => result(r, |(id, addr)| {
                 Value::Tuple(vec![Some(self.handle(id, "Stream")), Some(address(addr))])
@@ -1374,13 +1416,18 @@ impl HostLibrary {
             _ => return Err(invalid()),
         };
         if (name == "net.close"
+            || name == "udp.close"
             || name == "tls.close"
             || name == "tls.connect" && matches!(value, Value::Variant { variant: 1, .. }))
             && let Value::Handle { id, .. } = a[1]
         {
             self.handles.remove(&id);
         }
-        let consumed = if name == "net.close" || name == "tls.close" || name == "tls.connect" {
+        let consumed = if name == "net.close"
+            || name == "udp.close"
+            || name == "tls.close"
+            || name == "tls.connect"
+        {
             vec![1]
         } else {
             vec![]
@@ -1657,7 +1704,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 )?;
                 return self.host_network(&name, call.arguments, cx).map(Some);
             }
-            if (name.starts_with("net.") || name.starts_with("tls."))
+            if (name.starts_with("net.") || name.starts_with("tls.") || name.starts_with("udp."))
                 && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
             {
                 return self.host_network(&name, call.arguments, cx).map(Some);
@@ -1677,7 +1724,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
     ) -> Result<(), Error> {
         if matches!(
             kind,
-            "Stream" | "Listener" | "File" | "AtomicFile" | "Child"
+            "Stream" | "Listener" | "UdpSocket" | "File" | "AtomicFile" | "Child"
         ) && let Some(handle) = self.handles.remove(&id)
         {
             // Dropping a scripted child closes its input, which can leave an Expect unmet.

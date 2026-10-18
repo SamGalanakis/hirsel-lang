@@ -221,7 +221,7 @@ fn needs_drop(value: &Value) -> bool {
             Value::Handle { kind, .. }
                 if matches!(
                     kind.as_str(),
-                    "Sender" | "Receiver" | "File" | "AtomicFile" | "Stream"
+                    "Sender" | "Receiver" | "File" | "AtomicFile" | "Stream" | "UdpSocket"
                 ) =>
             {
                 return true;

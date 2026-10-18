@@ -208,6 +208,39 @@ impl CooperativeNet {
     }
 }
 impl NetProvider for CooperativeNet {
+    fn udp_bind(&mut self, id: u64, addr: SocketAddr) -> Provided<()> {
+        match self.host.udp_bind(id, addr)? {
+            Ok(()) => match set_nonblocking(self.host.socket(id).unwrap(), true) {
+                Ok(()) => Ok(Ok(())),
+                Err(e) => {
+                    self.host.close(id);
+                    Ok(Err(e))
+                }
+            },
+            Err(e) => Ok(Err(e)),
+        }
+    }
+    fn udp_send(&mut self, socket: u64, bytes: &[u8], addr: SocketAddr) -> Provided<u64> {
+        match self.host.udp_send(socket, bytes, addr)? {
+            Err(NetError::TimedOut) => self.blocked(
+                self.host.socket(socket).unwrap(),
+                libc::POLLOUT,
+                NetTimeout::Unbounded,
+            ),
+            result => Ok(result),
+        }
+    }
+    fn udp_recv(&mut self, socket: u64) -> Provided<(Vec<u8>, SocketAddr)> {
+        match self.host.udp_recv(socket)? {
+            Err(NetError::TimedOut) => self.blocked(
+                self.host.socket(socket).unwrap(),
+                libc::POLLIN,
+                NetTimeout::Unbounded,
+            ),
+            result => Ok(result),
+        }
+    }
+
     fn tls_roots(&mut self, pem: &[u8]) {
         self.host.tls_roots(pem);
     }

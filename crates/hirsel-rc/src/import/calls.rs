@@ -614,7 +614,10 @@ impl Importer<'_, '_> {
 fn read_room(path: &DefPath) -> Option<(u32, u32)> {
     if core_operation(path, "stdin", "read") {
         Some((1, 2))
-    } else if core_operation(path, "file", "read") || core_operation(path, "net", "read") {
+    } else if core_operation(path, "file", "read")
+        || core_operation(path, "net", "read")
+        || core_operation(path, "udp", "recv_from")
+    {
         Some((2, 3))
     } else {
         None

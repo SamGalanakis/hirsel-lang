@@ -264,6 +264,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_narrow(
             0 => NetOperation::Connect,
             1 => NetOperation::ConnectTls,
             2 => NetOperation::Listen,
+            3 => NetOperation::UdpBind,
+            4 => NetOperation::UdpPeer,
             _ => crate::fault("NetOperation tag out of range"),
         };
         list.push(NetRule {
@@ -700,4 +702,120 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_accept(
     }
     unsafe { out.write(result) };
     STATUS_OK
+}
+
+/// `net.udp_bind`: fresh unique socket, branded by the borrowed Net.
+/// # Safety
+/// Bound context, readable Net/address and writable result.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_net_udp_bind(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    addr: *const SocketAddrAbi,
+) -> u8 {
+    let request = Request::UdpBind {
+        net: unsafe { n.read() },
+        addr: unsafe { (*addr).get() },
+    };
+    let Some(Completion::NetHandle(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    unsafe { out.write(NetWordResult::of(value)) };
+    STATUS_OK
+}
+/// Send exactly one datagram, including an empty one.
+/// # Safety
+/// Bound context; readable Net, exclusive socket, bytes readable for len, writable result/address.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_udp_send_to(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    s: *mut u64,
+    owner: *mut Header,
+    start: u64,
+    len: u64,
+    addr: *const SocketAddrAbi,
+) -> u8 {
+    let request = Request::UdpSend {
+        net: unsafe { n.read() },
+        socket: unsafe { s.read() },
+        bytes: unsafe { crate::io::slice_bytes(owner, start, len) }.to_vec(),
+        addr: unsafe { (*addr).get() },
+    };
+    let Some(Completion::Count(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    unsafe { out.write(NetWordResult::of(value)) };
+    STATUS_OK
+}
+/// `Result[UdpReceived, NetError]`, payload aligned to eight at offset eight.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct UdpReceivedResult {
+    pub tag: u32,
+    pub padding: u32,
+    pub count: u64,
+    pub peer: SocketAddrAbi,
+    pub truncated: u8,
+    pub tail: [u8; 7],
+}
+/// Append the admitted prefix of one datagram; errors leave the buffer unchanged.
+/// # Safety
+/// Bound context; readable Net, exclusive socket/list and writable result.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_udp_recv_from(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut UdpReceivedResult,
+    n: *const u64,
+    s: *mut u64,
+    buffer: *mut *mut Header,
+    max: u64,
+) -> u8 {
+    let request = Request::UdpRecv {
+        net: unsafe { n.read() },
+        socket: unsafe { s.read() },
+        max,
+    };
+    let Some(Completion::Datagram(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    let mut result = UdpReceivedResult::default();
+    match value {
+        Ok((bytes, peer, truncated)) => {
+            unsafe { crate::io::append_byte_list(ctx, buffer, &bytes) };
+            result.count = bytes.len() as u64;
+            result.peer = SocketAddrAbi::of(peer);
+            result.truncated = u8::from(truncated);
+        }
+        Err(e) => {
+            result.tag = 1;
+            let e = NetErrorAbi::of(e);
+            // SAFETY: result's payload has room for the error's twelve bytes.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    (&raw const e).cast::<u8>(),
+                    (&raw mut result.count).cast::<u8>(),
+                    std::mem::size_of::<NetErrorAbi>(),
+                )
+            };
+        }
+    }
+    unsafe { out.write(result) };
+    STATUS_OK
+}
+/// Consume and close a UDP socket (DROP-3).
+/// # Safety
+/// Same context and handle requirements as net.close.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_udp_close(
+    ctx: *mut RunCtx,
+    n: *const u64,
+    s: *mut u64,
+) -> u8 {
+    unsafe { hirsel_rt_v2_net_close(ctx, n, s) }
 }

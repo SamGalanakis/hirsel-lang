@@ -27,7 +27,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
 it can only be narrowed.
 
 **Network.** `Net` is a network capability over a finite set of rules, each a triple
-`(address, port, operation)`, the operation being `Connect()`, `ConnectTls()` or `Listen()`.
+`(address, port, operation)`, the operation being `Connect()`, `ConnectTls()`, `Listen()`, `UdpBind()` or `UdpPeer()`.
 
 - An address is a canonical host name (lowercase ASCII, no trailing dot, a valid host
   name) or a canonical IP literal (dotted IPv4; RFC 5952 IPv6 without brackets). A host
@@ -35,7 +35,7 @@ it can only be narrowed.
   form), after ignoring one trailing root dot, must be canonical dotted-quad IPv4; this
   rejects bare numbers, short forms, leading zeros, out-of-range octets, `0x7f.0.0.1`,
   `example.123` and `1.2.3.4.5`, so a resolver cannot reinterpret a granted name.
-- A port is one exact port; `0` matters only for `Listen` (an ephemeral port).
+- A port is one exact port; `0` in `Listen` or `UdpBind` permits an ephemeral bind port.
 - There are no wildcard, subnet or range rules. No rule means no network, not "all", and
   an empty rule set is a `Net` that permits nothing.
 
@@ -46,6 +46,14 @@ sending. A host-name rule authorizes that name, never the addresses it resolves 
 narrowing of the `Connect` rule for the same address and port. A stream opened under a
 `ConnectTls` rule carries no plaintext until TLS is established with the rule's address as
 server name ([network operations](core-library.md#network)).
+
+UDP bind and peer authority are separate exact IP-address/port rules. A bound
+`UdpSocket of n` can only be operated through its originating `n`. Sending requires
+an exact `UdpPeer` destination rule. Receive silently discards ungranted sources
+and keeps waiting without changing the output buffer; outside senders cannot
+force `NotGranted` or another language error. TCP and UDP grants never imply one
+another. Argument and authority checks precede cancellation; admitted effects
+follow it (CONC-3).
 
 **Processes.** `Proc` is a process capability over a finite set of rules, each naming one
 canonical absolute executable path and the exact environment variable names passed through

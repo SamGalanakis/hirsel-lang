@@ -88,7 +88,7 @@ resource, and their effects are still recorded.
 **Network grants** name a provider and sorted, unique rules `{address, service,
 operation}`: `address` is a canonical host name or IP literal
 ([CAP-1](capabilities.md#cap-1-authority)), `service` a canonical decimal port `0`–`65535`
-without leading zeros, and `operation` one of `connect`, `connect_tls` and `listen`.
+without leading zeros, and `operation` one of `connect`, `connect_tls`, `listen`, `udp_bind` and `udp_peer`.
 
 **Process grants** name a provider and rules `{program, env}` sorted and unique by
 `program`: `program` is a canonical absolute path ([processes](core-library.md#processes)),
@@ -240,7 +240,7 @@ or continuation is refused.
 
 ### Network recording
 
-Network operations are recorded at the stream API: the request (operation, handles, host,
+Network operations are recorded at the core API: the request (operation, handles, host,
 port, timeout, `max` and every byte written) and the completion (handle, addresses, exactly
 the bytes a read delivered, accepted counts, or the error). Elapsed host time is never
 recorded: a timeout is the outcome `TimedOut()`, and a read's chunking is the exact count it
@@ -256,6 +256,16 @@ was last ready; polls that find nothing are not recorded. Replay parks a task wh
 request recorded `blocked`, finds a wait ready exactly at its recorded poll and never waits
 for the host, so a recorded schedule replays in either engine. Cancellation is derived from
 the schedule and is not recorded.
+
+UDP requests record the socket and Net identities, bind/destination address,
+every sent byte, and the receive limit. A receive completion records exactly one
+admitted datagram's delivered bytes, sender address and truncation flag, or its
+error. Empty datagrams are distinct from absent input; datagram boundaries never
+merge. Discarded bytes beyond `max` and datagrams from ungranted senders are not
+recorded. Replay re-derives peer authority and reproduces the admitted prefix and
+truncation flag without binding or sending on the host. A canceled UDP operation
+records no provider request or completion; its outcome follows the schedule after
+argument and authority checks. Scripted UDP uses the same recording protocol.
 
 TLS is recorded as plaintext and as the `tls.connect` outcome, never as TLS records. The
 request records the server name and the identity of the root set: `webpki:` and the

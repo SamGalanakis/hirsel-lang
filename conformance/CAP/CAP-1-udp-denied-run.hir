@@ -1,0 +1,38 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+fn address(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let n = test.net(t, [], [NetListener(address: address(9000u16), clients: [])])
+  let denied = match net.udp_bind(n, address(9002u16)) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  test.check(t, denied)
+  let tcp = net.narrow(
+    n,
+    [NetRule(address: "127.0.0.1", port: 9000u16, operation: Listen())]
+  )?
+  let tcp_cannot_bind = match net.udp_bind(tcp, address(9000u16)) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  test.check(t, tcp_cannot_bind)
+  let mut s = net.udp_bind(n, address(9000u16))?
+  let denied_peer = match udp.send_to(n, mut s, b"secret", address(9001u16)) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  test.check(t, denied_peer)
+  let mut buffer: List[u8] = [7u8]
+  let invalid = match udp.recv_from(n, mut s, mut buffer, 0u64) {
+    Error(InvalidInput()) => true,
+    _ => false,
+  }
+  test.check(t, invalid && buffer == [7u8])
+  udp.close(n, take s)
+  Ok(())
+}

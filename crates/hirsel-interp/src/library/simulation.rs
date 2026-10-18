@@ -117,6 +117,9 @@ pub(crate) enum Grant {
         process: u64,
         stdin_open: bool,
     },
+    UdpSocket {
+        net: u64,
+    },
     Listener {
         net: u64,
     },
@@ -150,6 +153,7 @@ pub struct Simulation {
     pub(super) process_children: BTreeMap<u64, super::process::Children>,
     /// Spawned scripted children, by Child handle.
     pub(super) script_children: BTreeMap<u64, hirsel_run_config::ScriptChild>,
+    pub(super) udp_sockets: BTreeMap<u64, super::net::ScriptUdp>,
     pub(super) net_listeners: BTreeMap<u64, super::net::ScriptListener>,
     pub config: SimulationConfig,
     pub events: Vec<CapabilityEvent>,
@@ -193,6 +197,9 @@ pub enum ObservedGrant {
     },
     Child {
         process: u64,
+    },
+    UdpSocket {
+        net: u64,
     },
     Listener {
         net: u64,
@@ -242,6 +249,7 @@ impl Simulation {
                             rules: rules.clone(),
                         },
                         Grant::Child { process, .. } => ObservedGrant::Child { process: *process },
+                        Grant::UdpSocket { net } => ObservedGrant::UdpSocket { net: *net },
                         Grant::Listener { net } => ObservedGrant::Listener { net: *net },
                         Grant::Root(kind) => ObservedGrant::Root(kind.clone()),
                         Grant::Dir { tree, root, access } => ObservedGrant::Directory {
@@ -349,6 +357,7 @@ impl Simulation {
             process_children,
             script_children: BTreeMap::new(),
             net_listeners: BTreeMap::new(),
+            udp_sockets: BTreeMap::new(),
             config,
             events: vec![],
             stderr: Vec::new(),
@@ -679,6 +688,7 @@ impl Simulation {
                 Some(Grant::Stream { .. }) => kind == "Stream",
                 Some(Grant::Proc { .. }) => kind == "Proc",
                 Some(Grant::Child { .. }) => kind == "Child",
+                Some(Grant::UdpSocket { .. }) => kind == "UdpSocket",
                 Some(Grant::Listener { .. }) => kind == "Listener",
                 Some(Grant::Root(name)) => name == kind,
                 Some(Grant::Dir { .. }) => kind == "Dir",

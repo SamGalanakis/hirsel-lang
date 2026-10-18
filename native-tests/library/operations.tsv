@@ -177,6 +177,7 @@ net.resolve	5209d365de88ace480d74b543cd493225b6413ec3711550ffd56856ee46928b0	0:b
 net.set_read_timeout	c3e41255379d62779165f37dfc05f797379a3e87df35a89fa70bc7fd7a10f8ce	0:b:n;1:m:n;2:b:n->n
 net.set_write_timeout	72702158b9874472dfbfb438b8d936c6d672671f1b639abdcfeaaa6409881891	0:b:n;1:m:n;2:b:n->n
 net.shutdown	faaea86753bd3c7edd0ad54c246a29fb77ae7f9a93dee1ba7a7be1f83917ba82	0:b:n;1:m:n;2:b:n->n
+net.udp_bind	9fba3644458faff3a6690142bdac5cae4d254fe01a5e8ef24e92f67eba171bc3	0:b:n;1:b:n->n
 net.write	942c94c0583d25d32d7fb728a562a01cdbecab3d6f56937f954c6bc5e3a1f3d9	0:b:n;1:m:n;2:b:n->n
 net.write_all	7c2636a14f43ffb6e5c415a9628ca36b80d3aac8c208b03e76c1cb235fbdbf4d	0:b:n;1:m:n;2:b:n->n
 out.print	952fa7c08199a4abfcad3d145470b6067b12cc4e9d271ce12085e7a5bb439c84	0:b:n;1:b:n->n
@@ -241,3 +242,6 @@ test.process	64c9273a4b8dcdfd9403d53cd48319c035c9540871bc3ae1428152a68f96d39f	0:
 tls.close	b91bec9b151f21cb6179ac696e180d61bd0f6bf56384ba2d2de2c26e9d87c549	0:b:n;1:t:n->n
 tls.connect	8925f1c7b909525196fed1ec27d35c086688cbb9d3fba43b9c4d1d66f521d5d1	0:b:n;1:t:n;2:b:n;3:b:n->n
 type_shape.info	e869ea58fde5757f63e855903e17fcf2c352e5957f5a8c0d0e0e3e90d3521154	0:b:n->n
+udp.close	6370332995222f709297cf3432444fa01bf806b0dacdbf2f4117d64d1a77654b	0:b:n;1:t:n->n
+udp.recv_from	ae5d975f40d324f194e8457f8edb91421fb012c9f5eccc2fef36302cc001d052	0:b:n;1:m:n;2:m:n;3:b:n->n
+udp.send_to	447d380d0c870f88f2c4257aa14ae8881cb8091f800b7fe855f7502f46386302	0:b:n;1:m:n;2:b:n;3:b:n->n

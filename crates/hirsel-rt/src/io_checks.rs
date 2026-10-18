@@ -10,10 +10,11 @@ use hirsel_run_config::Access;
 pub(crate) fn net_completion(request: &R, error: NetError) -> C {
     match request {
         R::Resolve { .. } => C::Addresses(Err(error)),
-        R::Connect { .. } | R::ConnectAddr { .. } => C::NetHandle(Err(error)),
+        R::UdpBind { .. } | R::Connect { .. } | R::ConnectAddr { .. } => C::NetHandle(Err(error)),
         R::Accept { .. } => C::Accepted(Err(error)),
         R::NetRead { .. } => C::NetBytes(Err(error)),
-        R::NetWrite { .. } => C::Count(Err(error)),
+        R::UdpRecv { .. } => C::Datagram(Err(error)),
+        R::UdpSend { .. } | R::NetWrite { .. } => C::Count(Err(error)),
         R::PeerAddr { .. } => C::Address(Err(error)),
         _ => C::NetUnit(Err(error)),
     }
@@ -169,7 +170,10 @@ pub fn cancel(
         R::ChildWrite { .. } => C::ChildUnit(Err(ProcessFailure::Canceled(cause))),
         R::ChildRead { .. } => C::ChildBytes(Err(ProcessFailure::Canceled(cause))),
         R::ChildWait { .. } => C::ChildExit(Err(ProcessFailure::Canceled(cause))),
-        R::Resolve { .. }
+        R::UdpBind { .. }
+        | R::UdpSend { .. }
+        | R::UdpRecv { .. }
+        | R::Resolve { .. }
         | R::Connect { .. }
         | R::ConnectAddr { .. }
         | R::Accept { .. }

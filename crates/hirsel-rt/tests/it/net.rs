@@ -263,6 +263,18 @@ impl Counting {
     }
 }
 impl NetProvider for Counting {
+    fn udp_bind(&mut self, id: u64, addr: SocketAddr) -> Provided<()> {
+        self.tick();
+        self.inner.udp_bind(id, addr)
+    }
+    fn udp_send(&mut self, id: u64, bytes: &[u8], addr: SocketAddr) -> Provided<u64> {
+        self.tick();
+        self.inner.udp_send(id, bytes, addr)
+    }
+    fn udp_recv(&mut self, id: u64) -> Provided<(Vec<u8>, SocketAddr)> {
+        self.tick();
+        self.inner.udp_recv(id)
+    }
     fn resolve(&mut self, host: &str, port: u16) -> Provided<Vec<SocketAddr>> {
         self.tick();
         self.inner.resolve(host, port)
@@ -1030,4 +1042,102 @@ fn cooperative_connect_retains_socket_across_handle_allocation() {
     peer.read_exact(&mut bytes).unwrap();
     assert_eq!(&bytes, b"ok");
     io.call(Request::Close { handle: stream }).unwrap();
+}
+
+/// Host UDP syscalls and tape validation cannot be exercised by a corpus script.
+#[test]
+fn udp_host_datagrams_discard_outside_senders_and_replay_without_sockets() {
+    use std::net::UdpSocket;
+    let peer = UdpSocket::bind("127.0.0.1:0").unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .unwrap();
+    let peer_addr = SocketAddr::of(peer.local_addr().unwrap());
+    let outside = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let rules = BTreeSet::from([
+        rule("127.0.0.1", 0, NetOperation::UdpBind),
+        rule("127.0.0.1", peer_addr.port, NetOperation::UdpPeer),
+    ]);
+    let mut io = real(rules.clone());
+    let n = net(&mut io);
+    let s = handle(io.call(Request::UdpBind {
+        net: n,
+        addr: loopback(0),
+    }));
+    assert_eq!(
+        io.call(Request::UdpSend {
+            net: n,
+            socket: s,
+            bytes: b"query".to_vec(),
+            addr: peer_addr
+        }),
+        Ok(Completion::Count(Ok(5)))
+    );
+    let mut received = [0; 32];
+    let (count, local) = peer.recv_from(&mut received).unwrap();
+    assert_eq!(&received[..count], b"query");
+    outside.send_to(b"discard me", local).unwrap();
+    peer.send_to(b"abcdef", local).unwrap();
+    peer.send_to(b"", local).unwrap();
+    peer.send_to(b"next", local).unwrap();
+    for (max, bytes, truncated) in [
+        (3, b"abc".as_slice(), true),
+        (8, b"".as_slice(), false),
+        (8, b"next".as_slice(), false),
+    ] {
+        assert_eq!(
+            io.call(Request::UdpRecv {
+                net: n,
+                socket: s,
+                max
+            }),
+            Ok(Completion::Datagram(Ok((
+                bytes.to_vec(),
+                peer_addr,
+                truncated
+            ))))
+        );
+    }
+    assert_eq!(
+        io.call(Request::Close { handle: s }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    let tape = io.tape().to_vec();
+    assert_eq!(
+        tape.iter()
+            .filter(|e| matches!(e.completion, Completion::Datagram(_)))
+            .count(),
+        3
+    );
+    let text = render_tape(&tape).unwrap();
+    assert!(!text.contains(&hirsel_run_config::hex(b"discard me")));
+    assert_eq!(parse_tape(&text).unwrap(), tape);
+    drop(io);
+    drop(peer);
+    drop(outside);
+    let mut sim = replay(&rules, parse_tape(&text).unwrap());
+    for event in &tape {
+        assert_eq!(
+            sim.call(event.request.clone()),
+            Ok(event.completion.clone())
+        );
+    }
+    sim.finish().unwrap();
+    // A tape cannot claim input from a source the bound Net does not authorize.
+    let mut forged = tape.clone();
+    let event = forged
+        .iter_mut()
+        .find(|e| matches!(e.completion, Completion::Datagram(_)))
+        .unwrap();
+    let Completion::Datagram(Ok((_, peer, _))) = &mut event.completion else {
+        unreachable!()
+    };
+    peer.port = if peer.port == 1 { 2 } else { 1 };
+    let mut sim = replay(&rules, forged);
+    for event in &tape[..3] {
+        sim.call(event.request.clone()).unwrap();
+    }
+    assert!(matches!(
+        sim.call(tape[3].request.clone()),
+        Err(AdapterError::InvalidCompletion)
+    ));
 }

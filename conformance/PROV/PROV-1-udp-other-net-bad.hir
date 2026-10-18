@@ -1,0 +1,5 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 4
+pub fn probe(a: Net, b: Net, mut s: UdpSocket of a, mut buffer: List[u8]) {
+  let _ = udp.recv_from(b, mut s, mut buffer, 1u64)
+}

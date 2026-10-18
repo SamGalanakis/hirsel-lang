@@ -1,0 +1,27 @@
+// rule: DET-1
+// expect: run
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"9000","operation":"udp_bind"},{"address":"127.0.0.1","service":"9001","operation":"udp_peer"}],"peers":[{"address":"127.0.0.1","port":9001,"resolves_to":[],"tls":"plain","connections":[{"open":[{"expect":[113]},{"send":[97,98,99]},{"send":[]}]}]}]}
+fn address(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), NetError] {
+  let n = match io.net(rt) {
+    Ok(n) => n,
+    Error(_) => return Ok(()),
+  }
+  let mut s = net.udp_bind(n, address(9000u16))?
+  let sent = udp.send_to(n, mut s, b"q", address(9001u16))?
+  let mut buffer: List[u8] = []
+  let answer = udp.recv_from(n, mut s, mut buffer, 2u64)?
+  let empty = udp.recv_from(n, mut s, mut buffer, 2u64)?
+  failure.check(
+    sent == 1u64 && answer.count == 2u64 && answer.peer.port == 9001u16 && answer.truncated && empty.count == 0u64 && !empty.truncated && buffer == [
+      97u8,
+      98u8
+    ],
+    Arithmetic()
+  )
+  udp.close(n, take s)
+  Ok(())
+}

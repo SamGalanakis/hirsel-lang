@@ -1,0 +1,58 @@
+// rule: CONC-3
+// expect: run
+// net: {"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"9000","operation":"udp_bind"},{"address":"127.0.0.1","service":"9001","operation":"udp_peer"}],"peers":[]}
+// A canceled receive leaves its buffer intact; invalid and denied requests win over cancellation.
+fn address(port: u16) -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let n = io.net(rt)?
+  task.scope(
+    tasks,
+    fn(scope: Scope) {
+      let h = task.async(
+        scope,
+        fn() -> bool {
+          let mut s = match net.udp_bind(n, address(9000u16)) {
+            Ok(s) => take s,
+            Error(_) => return false,
+          }
+          let mut buffer: List[u8] = [7u8]
+          let canceled = match udp.recv_from(n, mut s, mut buffer, 64u64) {
+            Error(Canceled(Requested())) => true,
+            _ => false,
+          }
+          let invalid = match udp.recv_from(n, mut s, mut buffer, 0u64) {
+            Error(InvalidInput()) => true,
+            _ => false,
+          }
+          let denied = match udp.send_to(n, mut s, b"no", address(9002u16)) {
+            Error(NotGranted()) => true,
+            _ => false,
+          }
+          let no_send = match udp.send_to(n, mut s, b"no", address(9001u16)) {
+            Error(Canceled(Requested())) => true,
+            _ => false,
+          }
+          let denied_bind = match net.udp_bind(n, address(9003u16)) {
+            Error(NotGranted()) => true,
+            _ => false,
+          }
+          let canceled_bind = match net.udp_bind(n, address(9000u16)) {
+            Error(Canceled(Requested())) => true,
+            _ => false,
+          }
+          udp.close(n, take s)
+          canceled && invalid && denied && no_send && denied_bind && canceled_bind && buffer == [
+            7u8
+          ]
+        }
+      )
+      task.cancel(scope, h)
+      failure.check(task.await(scope, take h), Arithmetic())
+    }
+  )
+  Ok(())
+}

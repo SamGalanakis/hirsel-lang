@@ -266,11 +266,11 @@ impl NetGrant {
             }
             if !matches!(
                 rule.operation.as_str(),
-                "connect" | "connect_tls" | "listen"
+                "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer"
             ) {
                 return Err(invalid(
                     "io.net.rules.operation",
-                    "expected connect, connect_tls or listen",
+                    "expected connect, connect_tls, listen, udp_bind or udp_peer",
                 ));
             }
         }

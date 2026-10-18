@@ -81,6 +81,10 @@ conformance/CAP/CAP-1-tasks-projection-ok.hir
 conformance/CAP/CAP-1-test-directory-example.hir
 conformance/CAP/CAP-1-tour-10-inputs-run.hir
 conformance/CAP/CAP-1-tour-16-processes-run.hir
+conformance/CAP/CAP-1-udp-denied-run.hir
+conformance/CAP/CAP-1-udp-discard-peer-run.hir
+conformance/CAP/CAP-1-udp-loopback-run.hir
+conformance/CAP/CAP-1-udp-roundtrip-run.hir
 conformance/CAP/CAP-1-unsafe-parameter.hir
 conformance/CAP/CAP-2-aggregate-summary-bad.hir
 conformance/CAP/CAP-2-aggregate-summary-ok.hir
@@ -515,6 +519,7 @@ conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
 conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
 conformance/CONC/CONC-3-tour-11-deadline-run.hir
+conformance/CONC/CONC-3-udp-canceled-recv-run.hir
 conformance/CONC/CONC-4-sequential-atomic-order.hir
 conformance/CONC/CONC-5-channel-in-body-bad.hir
 conformance/CONC/CONC-5-channel-in-body-ok.hir
@@ -671,6 +676,7 @@ conformance/DET/DET-1-file-stream-write-run.hir
 conformance/DET/DET-1-http-fetch-repeat-run.hir
 conformance/DET/DET-1-net-ephemeral-listeners-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
+conformance/DET/DET-1-udp-replay-run.hir
 conformance/DET/DET-2-first-failure-site.hir
 conformance/DET/DET-2-left-to-right-effects.hir
 conformance/DET/DET-2-resource-drop-order.hir
@@ -2258,6 +2264,7 @@ conformance/MEM/MEM-6-soa-list-push-run.hir
 conformance/MEM/MEM-6-sorted-map-arena-run.hir
 conformance/MEM/MEM-6-std-sorted-map-arena-get-run.hir
 conformance/MEM/MEM-6-stdin-read-charges-maximum-run.hir
+conformance/MEM/MEM-6-udp-read-charges-maximum-run.hir
 conformance/MEM/MEM-7-align-8.hir
 conformance/MEM/MEM-7-box-read-binarytrees-run.hir
 conformance/MEM/MEM-7-box-read-borrowed-move-bad.hir
@@ -3795,6 +3802,8 @@ conformance/PROV/PROV-1-taken-result-field-clause-bad.hir
 conformance/PROV/PROV-1-taken-result-root-clause-bad.hir
 conformance/PROV/PROV-1-top-level-identity-bad.hir
 conformance/PROV/PROV-1-top-level-identity-ok.hir
+conformance/PROV/PROV-1-udp-other-net-bad.hir
+conformance/PROV/PROV-1-udp-other-net-ok.hir
 conformance/PROV/PROV-1-uncaptured-outer-owner-bad.hir
 conformance/PROV/PROV-1-uncaptured-outer-owner-ok.hir
 conformance/PROV/PROV-1-wave1-byte_offset-bad.hir

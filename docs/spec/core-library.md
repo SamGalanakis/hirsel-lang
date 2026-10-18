@@ -121,6 +121,11 @@ fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
 N fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]
 
+fn net.udp_bind(n: Net, addr: SocketAddr) -> Result[unique UdpSocket of n, NetError]
+N fn udp.send_to(n: Net, mut s: UdpSocket of n, data: Bytes, addr: SocketAddr) -> Result[u64, NetError]
+fn udp.recv_from(n: Net, mut s: UdpSocket of n, mut buffer: List[u8], max: u64) -> Result[UdpReceived, NetError]
+N fn udp.close(n: Net, take s: UdpSocket of n) -> ()
+
 // CAP-1/2, PROV-1/3, DROP-2/3, CONC-1/3, DET-1
 fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
 fn proc.spawn(p: Proc, program: Path, args: List[String], dir: Option[Dir]) -> Result[Child of p, ProcessError]
@@ -320,15 +325,16 @@ the existing `FileError` contract. Successful operations do not promise durabili
 
 ## Network types
 
-`Stream` and `Listener` are noncopyable, sendable resources carrying `Net` authority,
-branded by the `Net` that produced them (`Stream of n`, `Listener of n`). Their finalizers
+`Stream`, `Listener` and `UdpSocket` are noncopyable, sendable resources carrying `Net` authority,
+branded by the `Net` that produced them (`Stream of n`, `Listener of n`, `UdpSocket of n`). Their finalizers
 are `@noalloc`, close the socket, discard close errors and send no TLS `close_notify`. The
 network data types are root core types, with variant ordinals in the order written:
 
 ```text
 IpAddr       = V4(Inline[u8, 4]) | V6(Inline[u8, 16])          // network byte order
 SocketAddr   = { ip: IpAddr, port: u16 }
-NetOperation = Connect() | ConnectTls() | Listen()
+NetOperation = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer()
+UdpReceived  = { count: u64, peer: SocketAddr, truncated: bool }
 NetRule      = { address: String, port: u16, operation: NetOperation }
 NetTimeout   = Unbounded() | Nanos(u64)
 Shutdown     = Read() | Write() | Both()
@@ -522,6 +528,10 @@ identity for human and JSON reports.
 | `tls.connect(n, take s, server_name, roots)` | on a `ConnectTls` stream, `server_name` equal to the rule's address |
 | `net.listen(n, addr)` | `(literal, port, Listen())` for `addr`; port 0 grants an ephemeral port |
 | `net.accept(n, mut l)` | the listener's grant; the peer is not checked |
+| `net.udp_bind(n, addr)` | `(literal, port, UdpBind())` for `addr`; port 0 permits an ephemeral port |
+| `udp.send_to(n, mut s, data, addr)` | the socket's originating `Net`, and `(literal, port, UdpPeer())` for `addr` |
+| `udp.recv_from(n, mut s, mut buffer, max)` | the socket's originating `Net`; only peers with an exact `UdpPeer()` rule deliver input |
+| `udp.close(n, take s)` | the socket's originating `Net` |
 
 `net.resolve` returns the provider's addresses in resolver order, each with `port`; a name
 that does not exist is `UnknownHost()`, and a resolver that cannot answer
@@ -564,6 +574,49 @@ write before any byte is accepted, a connect or handshake before any packet is s
 others never return `Canceled`. A canceled `tls.connect` or `tls.close` still consumes its
 stream and performs the same cleanup as dropping it in that world, including scripted-client
 `Expect` checks and their failure report.
+
+**Datagrams.** `net.udp_bind` creates a fresh unique UDP socket, without address
+reuse. `UdpBind` and `UdpPeer` are independent rules; neither implies TCP authority,
+and TCP rules imply neither. All socket operations require the exact originating
+`Net` (PROV-1), including narrowed Nets sharing a world. UDP uses IP literals;
+name rules do not authorize their resolved addresses. `udp.send_to` sends one
+datagram and returns its full byte count. Empty datagrams are valid. Payloads over
+65507 bytes are `InvalidInput()` before any effect; no partial datagram is sent.
+`udp.recv_from` appends at most `max` bytes from one datagram and returns
+`UdpReceived(count, peer, truncated)`. `max == 0` is `InvalidInput()`.
+`truncated` is true exactly when the received datagram was longer than `max`;
+the excess is discarded and never delivered by a later receive. A count of zero
+is an empty datagram, never EOF. A receive never combines datagrams. Datagrams
+from peers outside the `UdpPeer` rules are silently discarded, and receive keeps
+waiting; they neither cause an error nor change `buffer`. Errors and cancellation
+leave `buffer` unchanged. UDP provides no delivery, ordering or duplication guarantee.
+`udp.close` consumes the socket; implicit drop closes it with the same effect,
+discarding close errors (DROP-3).
+
+`net.udp_bind`, `udp.send_to` and `udp.recv_from` are cancellation points.
+Their order is argument and authority checks, then `Canceled(cause)`, then
+binding, sending or delivering an admitted datagram (CONC-3). A waiting receive
+remains cancelable after discarding outside input. `udp.close` and implicit drop
+are shielded from cancellation. Native schedulers park only the waiting task.
+
+**Scripted UDP.** `test.net` additionally grants `UdpBind` for each listener address
+and `UdpPeer` for each `Plain` peer whose address is an IP literal. Scripted bind
+addresses and peer data supply no authority in `net.script@2`: its explicit rules
+remain authoritative. Each bound socket receives independent copies of the first
+connection of each plain IP peer: `Open(steps)` supplies its steps, `Refused()`
+acts as `Reset()`, and `Unanswered()` as `Stall()`. Each `Expect` matches one
+complete outgoing datagram and each `Send` delivers one complete incoming datagram,
+including empty datagrams; bytes are never merged across steps. A contradicted
+`Expect` returns `ConnectionReset()`. Receive checks peers in declaration order;
+`Expect`, `Stall`, `Close` and exhausted scripts have no deliverable input, and
+`Reset` returns `ConnectionReset()`. `Truncate` likewise has no deliverable input;
+UDP truncation is determined by payload size and `max`. A send to another bound
+socket in the same world queues one datagram there; these queues precede scripted
+input, in send order. A send to an address with no scripted receiver succeeds
+without delivery. Narrowing away a peer's rule still leaves its scripted input,
+which receive discards before looking for allowed input. TCP and UDP have separate
+socket namespaces and script cursors. Port-zero UDP binds choose an unused UDP
+port from 49152 upward in world order; exhaustion is `AddrNotAvailable()`.
 
 **Scripted peers.** `test.net` returns a fake `Net` served by its peers, whose rules are
 `(address, port, ConnectTls())` for a `Certificate` or `Fails` peer and

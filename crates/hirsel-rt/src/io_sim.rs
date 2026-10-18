@@ -261,7 +261,7 @@ impl Adapter for SimIo {
             }
             state.sample(&request, event.completion.clone())
         } else {
-            let mut recorded = Recorded(&event.completion);
+            let mut recorded = Recorded(&event.completion, false);
             state.execute(&mut storage, &mut recorded, &request, event.fault.as_ref())
         };
         let completion = match &result {
@@ -1002,7 +1002,7 @@ impl Storage for LinkedTree<'_> {
 /// Host network replay: the recorded completion is the provider's only input. No socket,
 /// resolver or TLS runs; policy was already re-derived, and the completion it builds must
 /// equal the recorded one (handles included) or replay refuses.
-struct Recorded<'a>(&'a Completion);
+struct Recorded<'a>(&'a Completion, bool);
 impl Recorded<'_> {
     fn unit(&self) -> crate::net::Provided<()> {
         match self.0 {
@@ -1022,6 +1022,27 @@ impl Recorded<'_> {
     }
 }
 impl NetProvider for Recorded<'_> {
+    fn udp_bind(&mut self, _: u64, _: SocketAddr) -> crate::net::Provided<()> {
+        self.unit()
+    }
+    fn udp_send(&mut self, _: u64, bytes: &[u8], _: SocketAddr) -> crate::net::Provided<u64> {
+        self.write(0, bytes)
+    }
+    fn udp_recv(&mut self, _: u64) -> crate::net::Provided<(Vec<u8>, SocketAddr)> {
+        if std::mem::replace(&mut self.1, true) {
+            return Err(AdapterError::InvalidCompletion);
+        }
+        match self.0 {
+            Completion::Datagram(value) => Ok(value.clone().map(|(mut bytes, peer, truncated)| {
+                if truncated {
+                    bytes.push(0);
+                }
+                (bytes, peer)
+            })),
+            _ => Err(AdapterError::InvalidCompletion),
+        }
+    }
+
     fn resolve(&mut self, _: &str, _: u16) -> crate::net::Provided<Vec<SocketAddr>> {
         match self.0 {
             Completion::Addresses(value) => Ok(value.clone()),

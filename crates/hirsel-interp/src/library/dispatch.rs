@@ -1126,9 +1126,11 @@ impl Operations for Library {
             self.tasks.drop_set(id);
             return Ok(());
         }
-        if matches!(kind, "Stream" | "Listener") {
+        if matches!(kind, "Stream" | "Listener" | "UdpSocket") {
             let open = if kind == "Stream" {
                 self.simulation.net_streams.contains_key(&id)
+            } else if kind == "UdpSocket" {
+                self.simulation.udp_sockets.contains_key(&id)
             } else {
                 self.simulation.net_listeners.contains_key(&id)
             };
@@ -1309,7 +1311,7 @@ primary_operations! { self, call, context, name, a, value;
         if result.is_err() && let Some(saved) = saved { self.synchronizers = saved; }
         return result.map(Some); },
     Unavailable: "arena.seal" | "region.with" => { return Err(Error::Unavailable(format!("{name} requires M2 runtime"))); },
-    Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" | "net.listen" | "net.accept" | "net.local_addr" => {
+    Capability: "net.narrow" | "net.resolve" | "net.connect" | "net.connect_addr" | "net.read" | "net.read_into" | "net.write" | "net.write_all" | "net.shutdown" | "net.set_read_timeout" | "net.set_write_timeout" | "net.peer_addr" | "net.close" | "tls.connect" | "tls.close" | "test.net" | "net.listen" | "net.accept" | "net.local_addr" | "net.udp_bind" | "udp.send_to" | "udp.recv_from" | "udp.close" => {
         return self.network_call(name, &call, context).map(Some);
     },
     // A rejected replay never publishes effects or consumes script entries; a scripted

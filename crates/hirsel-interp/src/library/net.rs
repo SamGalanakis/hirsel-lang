@@ -41,6 +41,15 @@ impl World {
         }
     }
 }
+/// A bound datagram socket with independent scripted peers and queued packets.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct ScriptUdp {
+    pub net: u64,
+    world: u64,
+    local: SocketAddr,
+    peers: Vec<(SocketAddr, VecDeque<NetStep>)>,
+    received: VecDeque<(Vec<u8>, SocketAddr)>,
+}
 /// An open listener: its Net, world and address.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ScriptListener {
@@ -79,6 +88,7 @@ enum NetFault {
     TimedOut,
     ConnectionAborted,
     AddrInUse,
+    AddrNotAvailable,
     /// A scripted client's Expect failed: the Test report of the LANG-9 failure.
     Mismatch(String),
     /// An accepted stream closed before its client's Expect was met (LANG-9).
@@ -425,13 +435,15 @@ fn rules(v: &Value) -> Result<Vec<NetRule>, Error> {
         .map(|v| {
             let f = fields(v, "NetRule", 3)?;
             let (op, payload) = variant_fields(f[2])?;
-            if !payload.is_empty() || op > 2 {
+            if !payload.is_empty() || op > 4 {
                 return Err(invalid("NetOperation representation"));
             }
             Ok(NetRule {
                 address: text(f[0])?.into(),
                 service: port(f[1])?.to_string(),
-                operation: ["connect", "connect_tls", "listen"][op as usize].into(),
+                operation: ["connect", "connect_tls", "listen", "udp_bind", "udp_peer"]
+                    [op as usize]
+                    .into(),
             })
         })
         .collect()
@@ -454,6 +466,7 @@ fn result(value: NetResult<Value>) -> Result<Value, NetFault> {
         NetFault::ConnectionRefused => Ok(error(variant(5, vec![]))),
         NetFault::ConnectionReset => Ok(error(variant(6, vec![]))),
         NetFault::ConnectionAborted => Ok(error(variant(7, vec![]))),
+        NetFault::AddrNotAvailable => Ok(error(variant(10, vec![]))),
         NetFault::AddrInUse => Ok(error(variant(9, vec![]))),
         NetFault::BrokenPipe => Ok(error(variant(14, vec![]))),
         NetFault::TimedOut => Ok(error(variant(15, vec![]))),
@@ -465,6 +478,7 @@ impl Simulation {
     /// leaves still expects bytes (docs/spec/core-library.md, scripted peers).
     pub(super) fn close_net(&mut self, id: u64) -> Option<String> {
         self.grants.remove(&id);
+        self.udp_sockets.remove(&id);
         if let Some(mut stream) = self.net_streams.remove(&id) {
             return stream.unmet();
         }
@@ -547,6 +561,23 @@ impl Simulation {
                     service: l.port.to_string(),
                     operation: "listen".into(),
                 }))
+                .chain(
+                    peers
+                        .iter()
+                        .filter(|p| {
+                            matches!(p.tls, PeerTls::Plain) && p.address.parse::<IpAddr>().is_ok()
+                        })
+                        .map(|p| NetRule {
+                            address: p.address.clone(),
+                            service: p.port.to_string(),
+                            operation: "udp_peer".into(),
+                        }),
+                )
+                .chain(listeners.iter().map(|l| NetRule {
+                    address: l.address.clone(),
+                    service: l.port.to_string(),
+                    operation: "udp_bind".into(),
+                }))
                 .collect();
             let world = self.next_id;
             self.net_worlds.insert(world, World::new(peers, listeners));
@@ -559,6 +590,205 @@ impl Simulation {
         let mut recorded = None;
         let outcome = 'operation: {
             match name {
+                "net.udp_bind" => {
+                    let f = fields(arg(a, 1)?, "SocketAddr", 2)?;
+                    let mut local = SocketAddr::new(ip(f[0])?, port(f[1])?);
+                    if !ruleset.iter().any(|r| {
+                        r.operation == "udp_bind"
+                            && r.address == local.ip().to_string()
+                            && r.service == local.port().to_string()
+                    }) {
+                        Err(NetFault::NotGranted)
+                    } else if let Some(cause) = cancellation {
+                        Err(NetFault::Canceled(cause))
+                    } else {
+                        if local.port() == 0 {
+                            let w = self
+                                .net_worlds
+                                .get_mut(&world)
+                                .ok_or_else(|| invalid("UDP world"))?;
+                            while w.next_port <= u16::MAX as u32
+                                && self.udp_sockets.values().any(|s| {
+                                    s.world == world
+                                        && s.local
+                                            == SocketAddr::new(local.ip(), w.next_port as u16)
+                                })
+                            {
+                                w.next_port += 1;
+                            }
+                            if w.next_port > u16::MAX as u32 {
+                                break 'operation Err(NetFault::AddrNotAvailable);
+                            }
+                            local.set_port(w.next_port as u16);
+                            w.next_port += 1;
+                        }
+                        if self
+                            .udp_sockets
+                            .values()
+                            .any(|s| s.world == world && s.local == local)
+                        {
+                            Err(NetFault::AddrInUse)
+                        } else {
+                            let peers = self.net_worlds[&world]
+                                .peers
+                                .iter()
+                                .filter_map(|p| {
+                                    if !matches!(p.tls, PeerTls::Plain) {
+                                        return None;
+                                    }
+                                    let peer = SocketAddr::new(p.address.parse().ok()?, p.port);
+                                    let steps = match p.connections.first()? {
+                                        NetConnection::Open(s) => s.clone(),
+                                        NetConnection::Refused => vec![NetStep::Reset],
+                                        NetConnection::Unanswered => vec![NetStep::Stall],
+                                    };
+                                    Some((peer, steps.into()))
+                                })
+                                .collect();
+                            let socket = self.handle("UdpSocket", Grant::UdpSocket { net });
+                            let id = self.id(&socket, "UdpSocket")?;
+                            self.udp_sockets.insert(
+                                id,
+                                ScriptUdp {
+                                    net,
+                                    world,
+                                    local,
+                                    peers,
+                                    received: VecDeque::new(),
+                                },
+                            );
+                            Ok(socket)
+                        }
+                    }
+                }
+                "udp.send_to" | "udp.recv_from" | "udp.close" => {
+                    let id = self.id(arg(a, 1)?, "UdpSocket")?;
+                    if self.udp_sockets.get(&id).is_none_or(|s| s.net != net) {
+                        return Err(invalid("wrong UDP Net"));
+                    }
+                    if name == "udp.close" {
+                        self.close_net(id);
+                        self.record(
+                            "Net",
+                            name,
+                            encode_arguments(a),
+                            encode_value(&Value::Unit),
+                            cx,
+                        )?;
+                        return Ok(OperationResult::returned(Value::Unit).transferring([1]));
+                    } else if name == "udp.send_to" {
+                        let data = bytes(arg(a, 2)?)?;
+                        let f = fields(arg(a, 3)?, "SocketAddr", 2)?;
+                        let peer = SocketAddr::new(ip(f[0])?, port(f[1])?);
+                        if data.len() > 65507 {
+                            Err(NetFault::InvalidInput)
+                        } else if !ruleset.iter().any(|r| {
+                            r.operation == "udp_peer"
+                                && r.address == peer.ip().to_string()
+                                && r.service == peer.port().to_string()
+                        }) {
+                            Err(NetFault::NotGranted)
+                        } else if let Some(cause) = cancellation {
+                            Err(NetFault::Canceled(cause))
+                        } else {
+                            let local = self.udp_sockets[&id].local;
+                            if let Some(target) = self
+                                .udp_sockets
+                                .values_mut()
+                                .find(|s| s.world == world && s.local == peer)
+                            {
+                                target.received.push_back((data.to_vec(), local));
+                            } else if let Some((_, steps)) = self
+                                .udp_sockets
+                                .get_mut(&id)
+                                .unwrap()
+                                .peers
+                                .iter_mut()
+                                .find(|(p, _)| *p == peer)
+                            {
+                                match steps.front() {
+                                    Some(NetStep::Expect(expected)) if expected == data => {
+                                        steps.pop_front();
+                                    }
+                                    Some(NetStep::Expect(_) | NetStep::Reset) => {
+                                        break 'operation Err(NetFault::ConnectionReset);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            Ok(u64_value(data.len() as u64))
+                        }
+                    } else {
+                        collection::elements(arg(a, 2)?, BuiltinType::List)?;
+                        let max = index(arg(a, 3)?)?;
+                        if max == 0 {
+                            Err(NetFault::InvalidInput)
+                        } else if let Some(cause) = cancellation {
+                            Err(NetFault::Canceled(cause))
+                        } else {
+                            loop {
+                                let socket = self.udp_sockets.get_mut(&id).unwrap();
+                                let datagram = socket.received.pop_front().map(Ok).or_else(|| {
+                                    socket.peers.iter_mut().find_map(|(peer, steps)| {
+                                        match steps.front() {
+                                            Some(NetStep::Send(_)) => {
+                                                let Some(NetStep::Send(bytes)) = steps.pop_front()
+                                                else {
+                                                    unreachable!()
+                                                };
+                                                Some(Ok((bytes, *peer)))
+                                            }
+                                            Some(NetStep::Reset) => {
+                                                Some(Err(NetFault::ConnectionReset))
+                                            }
+                                            _ => None,
+                                        }
+                                    })
+                                });
+                                let Some(datagram) = datagram else {
+                                    break Err(NetFault::Blocked);
+                                };
+                                let (mut data, peer) = match datagram {
+                                    Ok(d) => d,
+                                    Err(e) => break Err(e),
+                                };
+                                if !ruleset.iter().any(|r| {
+                                    r.operation == "udp_peer"
+                                        && r.address == peer.ip().to_string()
+                                        && r.service == peer.port().to_string()
+                                }) {
+                                    continue;
+                                }
+                                let truncated = data.len() > max;
+                                data.truncate(max);
+                                let count = data.len() as u64;
+                                let mut buffer = arg(a, 2)?.clone();
+                                let Value::Sequence { elements, .. } = &mut buffer else {
+                                    return Err(invalid("UDP buffer"));
+                                };
+                                elements.extend(data.iter().map(|b| {
+                                    Some(Value::Integer(
+                                        Integer::new(Primitive::U8, *b as u128).unwrap(),
+                                    ))
+                                }));
+                                updates.push((2, buffer));
+                                let received = Value::Record {
+                                    definition: hirsel_syntax::DefPath::core("UdpReceived"),
+                                    fields: vec![
+                                        Some(u64_value(count)),
+                                        Some(addr_value(peer.ip(), peer.port())),
+                                        Some(Value::Bool(truncated)),
+                                    ],
+                                };
+                                recorded = Some(encode_arguments(&[
+                                    ok(received.clone()),
+                                    Value::Bytes(data),
+                                ]));
+                                break Ok(received);
+                            }
+                        }
+                    }
+                }
                 "net.narrow" => {
                     let rules = rules(arg(a, 1)?)?;
                     if rules.iter().any(|r| !canonical_address(&r.address)) {
@@ -598,7 +828,8 @@ impl Simulation {
                     } else if let Some(rule) = ruleset.iter().find(|r| {
                         r.address == host
                             && r.service == port.to_string()
-                            && (name == "net.resolve" || r.operation != "listen")
+                            && (name == "net.resolve"
+                                || matches!(r.operation.as_str(), "connect" | "connect_tls"))
                     }) {
                         if let Some(fault) = cancellation
                             .map(Fault::Canceled)
@@ -1060,6 +1291,8 @@ impl Simulation {
                 });
                 let target = if matches!(name, "net.connect" | "net.connect_addr") {
                     net
+                } else if name.starts_with("udp.") {
+                    self.id(arg(a, 1)?, "UdpSocket")?
                 } else {
                     self.stream_id(net, arg(a, 1)?)?
                 };
@@ -1082,8 +1315,8 @@ impl Simulation {
                 _ => return Err(invalid("TlsRoots representation")),
             };
             encode_arguments(&[a[0].clone(), a[1].clone(), a[2].clone(), digest])
-        } else if name == "net.read" || name == "net.read_into" {
-            let max = if name == "net.read" {
+        } else if name == "net.read" || name == "net.read_into" || name == "udp.recv_from" {
+            let max = if name == "net.read" || name == "udp.recv_from" {
                 arg(a, 3)?.clone()
             } else {
                 u64_value(collection::elements(arg(a, 2)?, BuiltinType::Inline)?.len() as u64)
@@ -1121,7 +1354,10 @@ impl Simulation {
         } = &mut result
         {
             *arguments = updates;
-            if matches!(name, "net.close" | "tls.connect" | "tls.close") {
+            if matches!(
+                name,
+                "net.close" | "udp.close" | "tls.connect" | "tls.close"
+            ) {
                 consumed.push(1);
             }
         }
@@ -1159,7 +1395,10 @@ pub(super) fn configured_world(grant: Option<&NetGrant>) -> Result<BTreeMap<u64,
                 || r.service
                     .parse::<u16>()
                     .is_ok_and(|p| p.to_string() != r.service)
-                || !matches!(r.operation.as_str(), "connect" | "connect_tls" | "listen")
+                || !matches!(
+                    r.operation.as_str(),
+                    "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer"
+                )
         }) {
             return Err(invalid("invalid simulation network rules"));
         }

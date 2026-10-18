@@ -1,0 +1,58 @@
+{
+  "grants": [
+    "Io",
+    "Args"
+  ],
+  "projections": [
+    "stdout",
+    "net"
+  ],
+  "args": [],
+  "net": {
+    "provider": "net.script@2",
+    "rules": [
+      {
+        "address": "127.0.0.1",
+        "service": "19000",
+        "operation": "udp_bind"
+      },
+      {
+        "address": "127.0.0.1",
+        "service": "19001",
+        "operation": "udp_peer"
+      }
+    ],
+    "peers": [
+      {
+        "address": "127.0.0.1",
+        "port": 19001,
+        "resolves_to": [],
+        "tls": "plain",
+        "connections": [
+          {
+            "open": [
+              {
+                "expect": [
+                  104,
+                  101,
+                  108,
+                  108,
+                  111
+                ]
+              },
+              {
+                "send": [
+                  104,
+                  101,
+                  108,
+                  108,
+                  111
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

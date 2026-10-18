@@ -181,6 +181,8 @@ fn rule(v: &OpValue) -> Option<NetRule> {
             0 => NetOperation::Connect,
             1 => NetOperation::ConnectTls,
             2 => NetOperation::Listen,
+            3 => NetOperation::UdpBind,
+            4 => NetOperation::UdpPeer,
             _ => return None,
         },
     })
@@ -371,6 +373,24 @@ impl Io {
                 net: self.network_id(n)?,
                 listener: self.network_id(l)?,
             },
+            (Some("net"), "udp_bind", [n, a]) => R::UdpBind {
+                net: self.network_id(n)?,
+                addr: addr(a)?,
+            },
+            (Some("udp"), "send_to", [n, s, b, a]) => R::UdpSend {
+                net: self.network_id(n)?,
+                socket: self.network_id(s)?,
+                bytes: bytes(b)?,
+                addr: addr(a)?,
+            },
+            (Some("udp"), "recv_from", [n, s, _, max]) => R::UdpRecv {
+                net: self.network_id(n)?,
+                socket: self.network_id(s)?,
+                max: word(max)?,
+            },
+            (Some("udp"), "close", [_, s]) => R::Close {
+                handle: self.network_id(s)?,
+            },
             (Some("net"), "listen", [n, a]) => R::Listen {
                 net: self.network_id(n)?,
                 addr: addr(a)?,
@@ -418,6 +438,28 @@ impl Io {
             }
             C::Listened(r) => result(r, |(id, _)| self.network_handle(id, true)),
             C::NetHandle(r) => result(r, |id| self.network_handle(id, name != "narrow")),
+            C::Datagram(r) => match r {
+                Err(e) => error(e),
+                Ok((b, peer, truncated)) => {
+                    let count = b.len() as u64;
+                    let mut buffer = bytes(&args[2])?;
+                    buffer.extend_from_slice(&b);
+                    return Some(OpOutcome::Updated {
+                        value: io_ok(OpValue::Aggregate(vec![
+                            bits(ScalarKind::U64, count),
+                            address(peer),
+                            bits(ScalarKind::Bool, u8::from(truncated)),
+                        ])),
+                        arguments: vec![(
+                            2,
+                            OpValue::Elements {
+                                scalar: ScalarKind::U8,
+                                bits: buffer.into_iter().map(u128::from).collect(),
+                            },
+                        )],
+                    });
+                }
+            },
             C::NetBytes(r) => match r {
                 Ok(b) => {
                     let count = b.len() as u64;
@@ -468,7 +510,7 @@ impl Io {
         };
         let consumed = module == Some("tls")
             && (name == "close" || matches!(value, OpValue::Variant { tag: 1, .. }))
-            || module == Some("net") && name == "close";
+            || matches!(module, Some("net" | "udp")) && name == "close";
         Some(if consumed {
             if let OpValue::Handle(h) = args[1] {
                 self.network_handles.remove(&h);

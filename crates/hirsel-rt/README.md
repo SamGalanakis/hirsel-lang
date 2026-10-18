@@ -383,7 +383,14 @@ plaintext. `tls.close` sends close_notify before closing on every outcome; impli
 drop only closes. PEM bytes pass through `Adapter::tls_roots` to the host provider
 for its next handshake, outside the tape request, whose SHA-256 must match. Replay
 and scripted providers ignore the bundle and use only the digest. Scripted worlds
-attach independently at the same provider seam. `net_abi.rs` exports the stream
+attach independently at the same provider seam. UDP uses `UdpBind` and `UdpPeer`
+rules and an originating-Net socket grant. `State::net_error` validates arguments
+and authority before host cancellation; `execute_net` discards outside senders,
+then truncates one admitted datagram with an explicit flag. `ScriptNet` keeps UDP
+queues separate from TCP cursors. Host sockets use sendto/recvfrom, with
+nonblocking readiness under cooperative admission. Tapes retain the admitted
+prefix, peer and truncation flag, and replay checks their authority without
+sockets. `net_abi.rs` exports the datagram and stream
 operations at the Hirsel ABI (`NET_EXPORTS`), plus `hirsel_rt_v2_net_read_into`, the
 entry of `$intrinsic.NetReadInto` that `net.read_into`'s compiled body calls with its
 buffer size. `net.resolve` allocates its `List[SocketAddr]` under descriptor 0, the

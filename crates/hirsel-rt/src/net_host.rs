@@ -148,13 +148,16 @@ fn name_of(
 }
 
 fn new_socket(ip: std::net::IpAddr) -> Result<OwnedFd, NetError> {
+    new_socket_kind(ip, libc::SOCK_STREAM)
+}
+fn new_socket_kind(ip: std::net::IpAddr, kind: libc::c_int) -> Result<OwnedFd, NetError> {
     let family = if ip.is_ipv4() {
         libc::AF_INET
     } else {
         libc::AF_INET6
     };
     // SAFETY: plain socket creation; the descriptor is owned immediately.
-    let fd = unsafe { libc::socket(family, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+    let fd = unsafe { libc::socket(family, kind | libc::SOCK_CLOEXEC, 0) };
     if fd == -1 {
         return Err(error(errno()));
     }
@@ -398,6 +401,72 @@ impl HostNet {
 }
 
 impl NetProvider for HostNet {
+    fn udp_bind(&mut self, id: u64, addr: SocketAddr) -> Provided<()> {
+        Ok((|| {
+            let socket = new_socket_kind(addr.ip, libc::SOCK_DGRAM)?;
+            let (storage, len) = to_c(addr);
+            // SAFETY: storage contains a valid sockaddr of len bytes.
+            if unsafe { libc::bind(socket.as_raw_fd(), (&raw const storage).cast(), len) } == -1 {
+                return Err(error(errno()));
+            }
+            self.sockets.insert(id, socket);
+            Ok(())
+        })())
+    }
+    fn udp_send(&mut self, socket: u64, bytes: &[u8], addr: SocketAddr) -> Provided<u64> {
+        Ok(self.socket(socket).and_then(|fd| {
+            let (storage, len) = to_c(addr);
+            loop {
+                // SAFETY: the byte slice and sockaddr are readable for their lengths.
+                let n = unsafe {
+                    libc::sendto(
+                        fd,
+                        bytes.as_ptr().cast(),
+                        bytes.len(),
+                        libc::MSG_NOSIGNAL,
+                        (&raw const storage).cast(),
+                        len,
+                    )
+                };
+                if n >= 0 {
+                    return Ok(n as u64);
+                }
+                if errno() != libc::EINTR {
+                    return Err(error(errno()));
+                }
+            }
+        }))
+    }
+    fn udp_recv(&mut self, socket: u64) -> Provided<(Vec<u8>, SocketAddr)> {
+        Ok(self.socket(socket).and_then(|fd| {
+            // A UDP payload fits in this buffer; never merge datagrams or confuse an
+            // empty datagram with EOF. Policy, rather than the syscall, truncates.
+            let mut bytes = vec![0; 65536];
+            loop {
+                // SAFETY: storage and bytes receive at most their declared lengths.
+                let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+                let mut len = std::mem::size_of_val(&storage) as libc::socklen_t;
+                let n = unsafe {
+                    libc::recvfrom(
+                        fd,
+                        bytes.as_mut_ptr().cast(),
+                        bytes.len(),
+                        0,
+                        (&raw mut storage).cast(),
+                        &mut len,
+                    )
+                };
+                if n >= 0 {
+                    bytes.truncate(n as usize);
+                    return Ok((bytes, from_c(&storage)?));
+                }
+                if errno() != libc::EINTR {
+                    return Err(error(errno()));
+                }
+            }
+        }))
+    }
+
     fn tls_roots(&mut self, pem: &[u8]) {
         self.pem = Some(pem.to_vec());
     }

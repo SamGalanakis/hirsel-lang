@@ -147,7 +147,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ),
         ("FileKind", "", "Regular()|Directory()|Symlink()|Other()"),
         ("IpAddr", "", "V4(Inline[u8, 4])|V6(Inline[u8, 16])"),
-        ("NetOperation", "", "Connect()|ConnectTls()|Listen()"),
+        (
+            "NetOperation",
+            "",
+            "Connect()|ConnectTls()|Listen()|UdpBind()|UdpPeer()",
+        ),
         ("NetTimeout", "", "Unbounded()|Nanos(u64)"),
         ("Shutdown", "", "Read()|Write()|Both()"),
         ("TlsRoots", "", "WebPki()|Pem(Bytes)"),
@@ -322,6 +326,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "clock: MonotonicClock,at: Instant of .clock",
         ),
+        (
+            "UdpReceived",
+            "",
+            "count: u64,peer: SocketAddr,truncated: bool",
+        ),
         ("NetClient", "", "from: SocketAddr,steps: List[NetStep]"),
         ("FieldShape", "", "name: String,ty: String"),
         ("PayloadShape", "", "label: Option[String],ty: String"),
@@ -390,7 +399,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
     }
     // Core library network and process resources have their capability's authority and a
     // noalloc close finalizer.
-    for (name, capability) in [("Stream", "Net"), ("Listener", "Net"), ("Child", "Proc")] {
+    for (name, capability) in [
+        ("Stream", "Net"),
+        ("Listener", "Net"),
+        ("UdpSocket", "Net"),
+        ("Child", "Proc"),
+    ] {
         let b = Builder::new("").with_declarations(&out);
         let mut t = type_definition(vec![], None);
         t.resource = true;

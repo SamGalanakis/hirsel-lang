@@ -24,6 +24,9 @@ pub enum Grant {
         operation: crate::net::NetOperation,
         tls: bool,
     },
+    UdpSocket {
+        net: u64,
+    },
     Listener {
         net: u64,
     },

@@ -77,3 +77,114 @@ fn mismatch_and_explicit_reset_persist() {
     assert_eq!(s.read(10), Err(NetFault::ConnectionReset));
     assert_eq!(s.write(b""), Err(NetFault::ConnectionReset));
 }
+
+/// A strict semantic tape must distinguish equal-length datagram payloads;
+/// a corpus program cannot supply or corrupt its own replay events.
+#[test]
+fn udp_semantic_replay_checks_payload_as_well_as_count_peer_and_truncation() {
+    use super::super::SimulationConfig;
+    use hirsel_tir::{CapabilityEvent, RunConfiguration};
+    use hirsel_types::{Type, TypeStore};
+    fn exchange(run: &RunConfiguration, byte: u8) -> Result<Vec<CapabilityEvent>, Error> {
+        let mut sim = Simulation::new(
+            run,
+            SimulationConfig {
+                net: Some(NetGrant {
+                    provider: "net.script@2".into(),
+                    rules: [(9000, "udp_bind"), (9001, "udp_peer")]
+                        .into_iter()
+                        .map(|(port, op)| NetRule {
+                            address: "127.0.0.1".into(),
+                            service: port.to_string(),
+                            operation: op.into(),
+                        })
+                        .collect(),
+                    peers: Some(vec![NetPeer {
+                        address: "127.0.0.1".into(),
+                        port: 9001,
+                        resolves_to: vec![],
+                        tls: PeerTls::Plain,
+                        connections: vec![NetConnection::Open(vec![NetStep::Send(vec![byte])])],
+                    }]),
+                    listeners: vec![],
+                }),
+                ..Default::default()
+            },
+        )?;
+        let mut types = TypeStore::default();
+        let result_type = types.push(Type::unit());
+        let invoke = |sim: &mut Simulation, name: &str, args: &[Value]| {
+            sim.net_call(
+                name,
+                &OperationCall {
+                    runtime: &Default::default(),
+                    path: &hirsel_syntax::DefPath::core(name),
+                    generics: &[],
+                    arguments: args,
+                    result_type,
+                    types: &types,
+                    site: Default::default(),
+                },
+                &mut OperationContext {
+                    configuration: run,
+                    sources: &Default::default(),
+                    stdout: &mut vec![],
+                    trace: &mut vec![],
+                    trace_mode: Default::default(),
+                    anchor: None,
+                },
+                None,
+            )
+        };
+        let n = sim.net_root();
+        let OperationResult::Complete {
+            value:
+                Value::Variant {
+                    variant: 0,
+                    mut fields,
+                },
+            ..
+        } = invoke(
+            &mut sim,
+            "net.udp_bind",
+            &[
+                n.clone(),
+                addr_value(std::net::Ipv4Addr::LOCALHOST.into(), 9000),
+            ],
+        )?
+        else {
+            panic!("UDP bind")
+        };
+        let s = fields.remove(0).unwrap();
+        invoke(
+            &mut sim,
+            "udp.recv_from",
+            &[
+                n.clone(),
+                s.clone(),
+                collection::sequence(BuiltinType::List, []),
+                u64_value(8),
+            ],
+        )?;
+        let OperationResult::Complete {
+            value, consumed, ..
+        } = invoke(&mut sim, "udp.close", &[n, s])?
+        else {
+            panic!("UDP close")
+        };
+        assert_eq!(value, Value::Unit);
+        assert_eq!(consumed, [1]);
+        sim.finish_replay()?;
+        Ok(sim.events)
+    }
+    let mut run = RunConfiguration {
+        entry: hirsel_syntax::DefPath::core("main"),
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    run.inputs = exchange(&run, b'a').unwrap();
+    exchange(&run, b'a').unwrap();
+    assert!(
+        matches!(exchange(&run, b'b'), Err(Error::InvalidTir(message)) if message.contains("capability replay mismatch"))
+    );
+}

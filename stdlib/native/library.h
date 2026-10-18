@@ -107,7 +107,7 @@ uint8_t hirsel_rt_v2_bytes_slice(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, 
 uint8_t hirsel_rt_v2_string_position(hirsel_rt_v2_ctx*, void*, void*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_string_byte_offset(hirsel_rt_v2_ctx*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const uint64_t*);
 uint8_t hirsel_rt_v2_path_text(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, const uint64_t*);
-/* Network streams (hirsel-rt src/net_abi.rs). NetError is a tag
+/* Network sockets (hirsel-rt src/net_abi.rs). NetError is a tag
    and a 12-byte payload at 4; SocketAddr is IpAddr (tag, octets at 4) then the port at 20. */
 typedef struct { uint32_t tag, word, extra; } hirsel_rt_v2_net_error;
 typedef struct { uint32_t tag, padding; uint64_t value, rest; } hirsel_rt_v2_net_word_result;
@@ -115,6 +115,7 @@ typedef struct { uint32_t tag; hirsel_rt_v2_net_error error; } hirsel_rt_v2_net_
 typedef struct { uint32_t ip_tag; uint8_t octets[16]; uint16_t port, padding; } hirsel_rt_v2_socket_addr;
 typedef struct { uint32_t tag; hirsel_rt_v2_socket_addr value; } hirsel_rt_v2_net_addr_result;
 typedef struct { uint32_t tag, padding; uint64_t stream; hirsel_rt_v2_socket_addr address; } hirsel_rt_v2_net_accepted_result;
+typedef struct { uint32_t tag, padding; uint64_t count; hirsel_rt_v2_socket_addr peer; uint8_t truncated, tail[7]; } hirsel_rt_v2_udp_received_result;
 typedef struct { uint32_t tag, padding; uint64_t nanos; } hirsel_rt_v2_net_timeout;
 uint8_t hirsel_rt_v2_net_narrow(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, hirsel_rt_v2_header*);
 uint8_t hirsel_rt_v2_net_resolve(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, uint16_t);
@@ -132,6 +133,10 @@ uint8_t hirsel_rt_v2_net_local_addr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_a
 uint8_t hirsel_rt_v2_net_accept(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_accepted_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_net_peer_addr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_addr_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_net_close(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
+uint8_t hirsel_rt_v2_net_udp_bind(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, const hirsel_rt_v2_socket_addr*);
+uint8_t hirsel_rt_v2_udp_send_to(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const hirsel_rt_v2_socket_addr*);
+uint8_t hirsel_rt_v2_udp_recv_from(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_udp_received_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);
+uint8_t hirsel_rt_v2_udp_close(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
 /* TLS roots use the ordinary WebPki/Pem sum; only the active Pem slice is read. */
 typedef struct { uint32_t tag, padding; hirsel_rt_v2_slice pem; } hirsel_rt_v2_tls_roots;
 uint8_t hirsel_rt_v2_tls_connect(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const hirsel_rt_v2_tls_roots*);
