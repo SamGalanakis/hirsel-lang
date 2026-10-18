@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1077 exported definitions; 308 variants.
+1116 exported definitions; 308 variants.
 
 ## Types and roots
 
@@ -1455,6 +1455,43 @@ Variant of WaitError.
 - `type u8: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}`
 
 
+## adler32
+
+<a id="def-std_401_2fadler32_2fState"></a>
+
+- `pub opaque type adler32.State: plain + inert uses {}`
+
+<a id="def-std_401_2fadler32_2fdigest"></a>
+
+- `@noalloc pub fn adler32.digest(data: Bytes) -> u32 uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u32`](#def-core_401_2fu32)
+
+<a id="def-std_401_2fadler32_2fdigest_5fhex"></a>
+
+- `pub fn adler32.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fadler32_2ffinish"></a>
+
+- `@noalloc pub fn adler32.finish(take state: State) -> u32 uses {}`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/adler32/State`](#def-std_401_2fadler32_2fState)
+
+<a id="def-std_401_2fadler32_2fnew"></a>
+
+- `@noalloc pub fn adler32.new() -> State uses {}`
+
+References: [`std@1/adler32/State`](#def-std_401_2fadler32_2fState)
+
+<a id="def-std_401_2fadler32_2fupdate"></a>
+
+- `@noalloc pub fn adler32.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/adler32/State`](#def-std_401_2fadler32_2fState)
+
+
 ## arena
 
 <a id="def-core_401_2farena_2fbounded"></a>
@@ -1993,6 +2030,92 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u8`](#def-core_4
 Zero.
 
 References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+
+## blake2b
+
+<a id="def-std_401_2fblake2b_2fState"></a>
+
+- `pub opaque type blake2b.State: plain + inert uses {}`
+
+<a id="def-std_401_2fblake2b_2fdigest"></a>
+
+- `@noalloc pub fn blake2b.digest(data: Bytes) -> Inline[u8, 64] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fblake2b_2fdigest_5fhex"></a>
+
+- `pub fn blake2b.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fblake2b_2ffinish"></a>
+
+- `@noalloc pub fn blake2b.finish(take state: State) -> Inline[u8, 64] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/blake2b/State`](#def-std_401_2fblake2b_2fState)
+
+<a id="def-std_401_2fblake2b_2fnew"></a>
+
+- `@noalloc pub fn blake2b.new() -> State uses {}`
+
+References: [`std@1/blake2b/State`](#def-std_401_2fblake2b_2fState)
+
+<a id="def-std_401_2fblake2b_2fnew_5fkeyed"></a>
+
+- `@noalloc pub fn blake2b.new_keyed(key: Bytes) -> State uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/blake2b/State`](#def-std_401_2fblake2b_2fState)
+
+<a id="def-std_401_2fblake2b_2fupdate"></a>
+
+- `@noalloc pub fn blake2b.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/blake2b/State`](#def-std_401_2fblake2b_2fState)
+
+
+## blake2s
+
+<a id="def-std_401_2fblake2s_2fState"></a>
+
+- `pub opaque type blake2s.State: plain + inert uses {}`
+
+<a id="def-std_401_2fblake2s_2fdigest"></a>
+
+- `@noalloc pub fn blake2s.digest(data: Bytes) -> Inline[u8, 32] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fblake2s_2fdigest_5fhex"></a>
+
+- `pub fn blake2s.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fblake2s_2ffinish"></a>
+
+- `@noalloc pub fn blake2s.finish(take state: State) -> Inline[u8, 32] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/blake2s/State`](#def-std_401_2fblake2s_2fState)
+
+<a id="def-std_401_2fblake2s_2fnew"></a>
+
+- `@noalloc pub fn blake2s.new() -> State uses {}`
+
+References: [`std@1/blake2s/State`](#def-std_401_2fblake2s_2fState)
+
+<a id="def-std_401_2fblake2s_2fnew_5fkeyed"></a>
+
+- `@noalloc pub fn blake2s.new_keyed(key: Bytes) -> State uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/blake2s/State`](#def-std_401_2fblake2s_2fState)
+
+<a id="def-std_401_2fblake2s_2fupdate"></a>
+
+- `@noalloc pub fn blake2s.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/blake2s/State`](#def-std_401_2fblake2s_2fState)
 
 
 ## bool
@@ -2543,6 +2666,80 @@ trimmed; every pair needs `=`, a token name and a cookie-octet value, which
 may be enclosed in double quotes (removed). Errors return no pairs.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/cookie/CookieError`](#def-std_401_2fcookie_2fCookieError)
+
+
+## crc32
+
+<a id="def-std_401_2fcrc32_2fState"></a>
+
+- `pub opaque type crc32.State: plain + inert uses {}`
+
+<a id="def-std_401_2fcrc32_2fdigest"></a>
+
+- `@noalloc pub fn crc32.digest(data: Bytes) -> u32 uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u32`](#def-core_401_2fu32)
+
+<a id="def-std_401_2fcrc32_2fdigest_5fhex"></a>
+
+- `pub fn crc32.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fcrc32_2ffinish"></a>
+
+- `@noalloc pub fn crc32.finish(take state: State) -> u32 uses {}`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/crc32/State`](#def-std_401_2fcrc32_2fState)
+
+<a id="def-std_401_2fcrc32_2fnew"></a>
+
+- `@noalloc pub fn crc32.new() -> State uses {}`
+
+References: [`std@1/crc32/State`](#def-std_401_2fcrc32_2fState)
+
+<a id="def-std_401_2fcrc32_2fupdate"></a>
+
+- `@noalloc pub fn crc32.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/crc32/State`](#def-std_401_2fcrc32_2fState)
+
+
+## crc32c
+
+<a id="def-std_401_2fcrc32c_2fState"></a>
+
+- `pub opaque type crc32c.State: plain + inert uses {}`
+
+<a id="def-std_401_2fcrc32c_2fdigest"></a>
+
+- `@noalloc pub fn crc32c.digest(data: Bytes) -> u32 uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u32`](#def-core_401_2fu32)
+
+<a id="def-std_401_2fcrc32c_2fdigest_5fhex"></a>
+
+- `pub fn crc32c.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fcrc32c_2ffinish"></a>
+
+- `@noalloc pub fn crc32c.finish(take state: State) -> u32 uses {}`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/crc32c/State`](#def-std_401_2fcrc32c_2fState)
+
+<a id="def-std_401_2fcrc32c_2fnew"></a>
+
+- `@noalloc pub fn crc32c.new() -> State uses {}`
+
+References: [`std@1/crc32c/State`](#def-std_401_2fcrc32c_2fState)
+
+<a id="def-std_401_2fcrc32c_2fupdate"></a>
+
+- `@noalloc pub fn crc32c.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/crc32c/State`](#def-std_401_2fcrc32c_2fState)
 
 
 ## csv
@@ -8146,3 +8343,46 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-st
 - `pub fn utf8.decode_lossy(data: Bytes) -> unique String uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+
+## xxhash64
+
+<a id="def-std_401_2fxxhash64_2fState"></a>
+
+- `pub opaque type xxhash64.State: plain + inert uses {}`
+
+<a id="def-std_401_2fxxhash64_2fdigest"></a>
+
+- `@noalloc pub fn xxhash64.digest(data: Bytes) -> u64 uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fxxhash64_2fdigest_5fhex"></a>
+
+- `pub fn xxhash64.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fxxhash64_2ffinish"></a>
+
+- `@noalloc pub fn xxhash64.finish(take state: State) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/xxhash64/State`](#def-std_401_2fxxhash64_2fState)
+
+<a id="def-std_401_2fxxhash64_2fnew"></a>
+
+- `@noalloc pub fn xxhash64.new() -> State uses {}`
+
+References: [`std@1/xxhash64/State`](#def-std_401_2fxxhash64_2fState)
+
+<a id="def-std_401_2fxxhash64_2fnew_5fwith_5fseed"></a>
+
+- `@noalloc pub fn xxhash64.new_with_seed(seed: u64) -> State uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/xxhash64/State`](#def-std_401_2fxxhash64_2fState)
+
+<a id="def-std_401_2fxxhash64_2fupdate"></a>
+
+- `@noalloc pub fn xxhash64.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/xxhash64/State`](#def-std_401_2fxxhash64_2fState)
