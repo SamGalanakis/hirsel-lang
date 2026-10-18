@@ -1,5 +1,7 @@
 # Building Hirsel
 
+Browse the [full signature index](api.md) for every public core and std declaration.
+
 New to the language? Start with the [runnable language tour](tour.md), then
 try the [runnable tools](../examples/README.md).
 

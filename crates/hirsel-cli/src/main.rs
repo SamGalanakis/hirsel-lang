@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>]";
 
 const DEFAULT_RUN_MAX_STEPS: u64 = 1_000_000_000;
 
@@ -11,6 +11,9 @@ fn main() -> ExitCode {
 }
 enum Command {
     Help,
+    Doc {
+        root: OsString,
+    },
     Build {
         source: OsString,
         output: OsString,
@@ -150,6 +153,17 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     proofs
                 },
             }
+        }
+        Some(Value(command)) if command == "doc" => {
+            if !matches!(args.next()?, Some(Long("index"))) {
+                return Err("doc requires --index".into());
+            }
+            let root = match args.next()? {
+                Some(Long("root")) => args.value()?,
+                Some(arg) => return Err(arg.unexpected()),
+                None => OsString::from("."),
+            };
+            Command::Doc { root }
         }
         Some(Value(command)) if command == "export" => {
             let run = match args.next()? {
@@ -347,6 +361,15 @@ fn execute(args: Vec<OsString>) -> u8 {
         }
     };
     let (command, flag, file) = match command {
+        Command::Doc { root } => {
+            return match hirsel_driver::api_index::entries(Path::new(&root)) {
+                Ok(entries) => {
+                    print!("{}", hirsel_driver::api_index::render(&entries));
+                    0
+                }
+                Err(error) => tool_error(error, false),
+            };
+        }
         Command::Help => {
             println!("{USAGE}");
             return 0;

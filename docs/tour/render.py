@@ -27,4 +27,9 @@ def render(match):
 
 
 if __name__ == '__main__':
-    PAGE.write_text(PATTERN.sub(render, PAGE.read_text()))
+    text = PAGE.read_text()
+    title, body = text.split('\n\n', 1)
+    link = 'Browse the [full signature index](api.md) for every public core and std declaration.\n\n'
+    if not body.startswith(link):
+        body = link + body
+    PAGE.write_text(PATTERN.sub(render, title + '\n\n' + body))

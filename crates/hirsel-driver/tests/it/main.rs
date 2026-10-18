@@ -1,6 +1,7 @@
 //! The integration tests of this crate, linked as one binary, apart from the std
 //! suites (tests/it-stdlib) and scaling probes (tests/it-scaling).
 mod admission;
+mod api_index;
 mod agreement;
 mod alias_diagnostics;
 mod alloc_elision_ir;

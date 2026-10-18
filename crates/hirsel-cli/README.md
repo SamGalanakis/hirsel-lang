@@ -23,6 +23,9 @@ Commands (arguments use the shared lexopt parser):
   bytes. Exit 0 is success; any runtime failure/nonzero program exit becomes 1.
 - `hirsel fmt [--check] <file>` writes canonical source to the file, or compares
   without writing with `--check`. A difference exits 1, agreement exits 0.
+- `hirsel doc --index [--root <repo>]` prints the public core/std signature index
+  from the selected checkout (the current directory by default). Regenerate with
+  `hirsel doc --index > docs/api.md` from the repository root.
 - Invalid arguments exit 2. IO failures exit 1 and have no RuleId. Invalid UTF-8
   is a SEM-3 language diagnostic at the first invalid byte boundary, before parsing.
   Paths beginning with `-` must be written with a directory prefix (`./-name.hir`).

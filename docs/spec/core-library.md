@@ -1,5 +1,7 @@
 # Core library
 
+Browse the [full signature index](../api.md) for every public core and std declaration.
+
 The core library, `core@1`, is supplied by the compiler. It holds the capability types, the
 root data types and the operations that need the runtime, the host or a privileged
 representation. Its root types sit directly under `core@1`, and its operations are

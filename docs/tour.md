@@ -1,5 +1,7 @@
 # Hirsel in one page
 
+Browse the [full signature index](api.md) for every public core and std declaration.
+
 Start here when writing Hirsel. The [specification](spec/index.md) defines the
 rules; [building](building.md) covers toolchains and launch details. The programs
 below are small enough to copy and run from the repository root with

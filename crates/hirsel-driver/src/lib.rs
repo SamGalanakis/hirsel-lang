@@ -6,6 +6,7 @@ use hirsel_engine::{
     CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PackageCache,
     PhaseAdapters, RunOutcome, SimulationConfig, ToolError,
 };
+pub mod api_index;
 pub mod native;
 mod network;
 mod pipeline;

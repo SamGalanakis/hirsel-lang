@@ -134,3 +134,7 @@ polled at scheduling points; the scheduler waits only when no task is runnable. 
 `LaunchConfig::Grants` can supply an explicit Args snapshot override, validated
 and included in the completed record before admission. An absent override retains
 the template's snapshot; an empty override grants empty Args.
+
+`api_index` enumerates public core registry entries and std manifest declarations
+with the compiler parser, retaining source signatures and constructor payloads.
+`hirsel doc --index` renders the deterministic full signature index in `docs/api.md`.
