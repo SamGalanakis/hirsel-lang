@@ -796,3 +796,50 @@ fn path_selection_runs_only_matches_and_keeps_the_selected_ratchet() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 validated / 1 passing"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("not formatter-canonical"));
 }
+
+#[test]
+fn path_selection_requires_unratcheted_expected_outcomes() {
+    use hirsel_conformance::{Selection, run_suite_selected};
+    let root = Fixture::new();
+    fs::write(root.0.join("conformance/passing.txt"), "").unwrap();
+    let paths = ["conformance/OWN/accept.hir".to_owned()];
+    let selection = Selection {
+        shard: None,
+        paths: &paths,
+    };
+    let mut failing = fake();
+    failing
+        .diagnostics
+        .push(diagnostic(Some("OWN-6"), 3, Severity::Error));
+    let report = run_suite_selected(&root.0, &failing, false, selection).unwrap();
+    assert_eq!(report.counts.failing, 1);
+    assert!(
+        !report.success(),
+        "unlisted selected failures must fail the run"
+    );
+    let passed = run_suite_selected(&root.0, &fake(), false, selection).unwrap();
+    assert!(passed.success());
+    for (source, passes) in [
+        (
+            "// rule: OWN-6\n// expect: accept\nfn selected() { let x: bool = 1u64 }\n",
+            false,
+        ),
+        (
+            "// rule: OWN-6\n// expect: accept\nfn selected() { let x: bool = true }\n",
+            true,
+        ),
+    ] {
+        fs::write(root.0.join(&paths[0]), source).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel-conformance"))
+            .args(["--root", root.0.to_str().unwrap(), "--path", &paths[0]])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            passes,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 validated"));
+    }
+}

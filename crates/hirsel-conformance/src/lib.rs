@@ -659,7 +659,7 @@ pub fn run_suite_selected(
         .filter(|line| !line.starts_with('#') && !line.is_empty())
         .map(|line| line.split('\t').next().unwrap().to_owned())
         .collect();
-    // Validate the whole corpus before invoking any compiler entry point.
+    // Validate the selected corpus before invoking any compiler entry point.
     let mut headers = Vec::new();
     for file in files {
         let path = file.strip_prefix(root).map_err(|e| e.to_string())?;
@@ -701,6 +701,16 @@ pub fn run_suite_selected(
             prefix,
             status,
         });
+    }
+    if !selection.paths.is_empty()
+        && report
+            .tests
+            .iter()
+            .any(|test| !matches!(test.status, Status::Pass))
+    {
+        report
+            .errors
+            .push("--path requires every selected test to pass its expected outcome".into());
     }
     let passing = root.join("conformance/passing.txt");
     let existing =

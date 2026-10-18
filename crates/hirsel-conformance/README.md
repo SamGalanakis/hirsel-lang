@@ -20,7 +20,8 @@ argument errors print to stderr and exit 2. Paths retain OS bytes.
 
 `--path PREFIX` selects only matching repository-relative corpus files for both
 execution and `--check-format`. Prefixes may repeat; a selection matching zero
-files fails. It intersects `--shard`, and cannot update the ratchet.
+files fails. Every selected file must pass its expected outcome, including new files
+not yet in `passing.txt`. It intersects `--shard`, and cannot update the ratchet.
 
 The runner prints `whole corpus` and `in-gate corpus` counts. JSON retains
 `summary` for the whole corpus and adds `in_gate`, plus each test's `in_gate`,

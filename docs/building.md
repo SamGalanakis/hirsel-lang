@@ -238,8 +238,9 @@ canonical formatter check, on the pool:
 `--path` matches repository-relative prefixes, may repeat, and fails if no files
 match. A complete filename selects that program. The explicit `1/1` overrides
 the target's default shard so that a selected file always runs. The runner
-checks only matched files and their ratchet entries; filtered runs cannot update
-`passing.txt`.
+checks only matched files and their ratchet entries. Every match must meet its
+expected outcome, including new files absent from `passing.txt`; filtered runs
+cannot update that file.
 
 ## Gates
 
