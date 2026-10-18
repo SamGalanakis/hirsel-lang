@@ -398,6 +398,14 @@ impl QueryEngine {
 
 /// A prechecked definition's revision node.
 pub(crate) struct PrecheckedNodeRef(Arc<PrecheckedDefinition>);
+impl PrecheckedNodeRef {
+    pub(super) fn has_staged_reads(&self) -> bool {
+        self.0
+            .lowering
+            .as_ref()
+            .is_some_and(|lowering| crate::comptime::has_staged_reads(&lowering.definition))
+    }
+}
 impl std::ops::Deref for PrecheckedNodeRef {
     type Target = PrecheckedNode;
     fn deref(&self) -> &PrecheckedNode {

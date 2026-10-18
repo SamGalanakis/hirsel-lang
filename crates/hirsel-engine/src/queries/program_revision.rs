@@ -69,7 +69,15 @@ impl QueryEngine {
                 continue;
             }
             let (content, dependencies) = match self.prechecked_node(&path)? {
-                Some(node) => (node.content.clone(), node.dependencies.clone()),
+                Some(node) => {
+                    // Closed materializations are already in the precheck. Only
+                    // size-generic reads need declarations for client selection.
+                    if node.has_staged_reads() {
+                        let body = self.mode_query(&path)?;
+                        self.register_staged(&body.value)?;
+                    }
+                    (node.content.clone(), node.dependencies.clone())
+                }
                 None => self.semantic_node(&path)?,
             };
             pending.extend(dependencies.iter().cloned());

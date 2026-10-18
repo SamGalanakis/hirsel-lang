@@ -345,3 +345,44 @@ fn a_package_with_diagnostics_is_never_prechecked() {
         assert!(rejected.is_err());
     });
 }
+
+#[test]
+fn prechecked_generic_comptime_materializes_selected_client_sizes() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let source = "pub fn value[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime (n*n)}\n";
+        let client = "pub fn main()->Result[(),()]{let a:Inline[u8,2]=[1,2];let b:Inline[u8,3]=[1,2,3];failure.check(lib.value(a)==4u64,Arithmetic());failure.check(lib.value(b)==9u64,Arithmetic());Ok(())}\n";
+        let library = f.library(source);
+        let prechecker = f.program("prechecker", client, &library, "lib");
+        let bytes = load(&prechecker, &PackageCache::disabled())
+            .precheck(&package("lib"))
+            .unwrap();
+        let precheck = Arc::new(Precheck::decode(bytes).unwrap());
+        let client = f.program("client", client, &library, "lib");
+        let mut cached = load(&client, &PackageCache::prechecked(vec![precheck]));
+        let mut fresh = load(&client, &PackageCache::disabled());
+        assert!(cached.engine.prechecked(&package("lib")));
+        cached.check_for_execution().unwrap();
+        fresh.check_for_execution().unwrap();
+        let actual = cached.engine.export_native_input().unwrap();
+        let expected = fresh.engine.export_native_input().unwrap();
+        let selected = |input: &NativeInput| {
+            input
+                .constants
+                .iter()
+                .filter(|(path, _)| path.0.name.starts_with("$constant:$comptime:value:"))
+                .map(|(path, value)| (path.clone(), value.root.kind.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let values = selected(&actual);
+        assert_eq!(values, selected(&expected));
+        assert_eq!(
+            values.values().cloned().collect::<Vec<_>>(),
+            vec![
+                hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(4)),
+                hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(9)),
+            ]
+        );
+        cached.engine.import_native_input(actual).unwrap();
+    });
+}

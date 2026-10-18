@@ -1353,7 +1353,10 @@ impl DefinitionQueries for QueryEngine {
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         self.prepare_materialization_environment();
         if let Some(prechecked) = self.prechecked_lowering(definition)? {
-            self.prepare_staged_owner(definition)?;
+            if crate::comptime::has_staged_reads(&prechecked.value) {
+                let body = self.mode_query(definition)?;
+                self.register_staged(&body.value)?;
+            }
             return Ok(prechecked);
         }
         let modes = self.mode_query(definition)?;

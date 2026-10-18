@@ -31,6 +31,11 @@ pub(crate) struct StagedConstant {
     pub inputs: Vec<SizeParameterRef>,
     pub signature: hirsel_types::SignatureRef,
 }
+pub(crate) fn has_staged_reads(definition: &hirsel_tir::Definition) -> bool {
+    definition.bodies.iter().flat_map(|body| &body.rvalues).any(|value| {
+        matches!(value, hirsel_tir::Rvalue::ReadConstant { arguments, .. } if !arguments.is_empty())
+    })
+}
 struct Evaluation<'a> {
     root: DefinitionRef,
     engine: &'a mut QueryEngine,
@@ -496,19 +501,6 @@ impl QueryEngine {
             analyzed.staged.push((expression, shared));
         }
         Ok(())
-    }
-    pub(crate) fn prepare_staged_owner(&mut self, owner: &DefPath) -> Result<(), QueryError> {
-        let (file, item) = self.parse_definition(owner)?.value;
-        let region = file.tree.items[item.0 as usize].origin.span;
-        if !file.tree.expressions.iter().any(|expression| {
-            matches!(expression.kind, ExprKind::Comptime(_))
-                && expression.origin.span.start >= region.start
-                && expression.origin.span.end <= region.end
-        }) {
-            return Ok(());
-        }
-        let body = self.mode_query(owner)?;
-        self.register_staged(&body.value)
     }
     pub(crate) fn register_staged(&mut self, analyzed: &AnalyzedBody) -> Result<(), QueryError> {
         let typed = &analyzed.typed;
