@@ -87,21 +87,12 @@ fn hash_random_and_test_seeds_vary_independently() {
             panic!("configured Random grant must succeed")
         };
         let random = fields[0].clone().unwrap();
-        let number = h
-            .library
-            .simulation
-            .random_u64(
-                &random,
-                &mut OperationContext {
-                    trace_mode: Default::default(),
-                    anchor: None,
-                    configuration: &h.run,
-                    sources: &h.sources,
-                    stdout: &mut h.stdout,
-                    trace: &mut h.trace,
-                },
-            )
-            .unwrap();
+        let Value::Variant { variant: 0, fields } =
+            returned(h.call("random.bytes", &[random, u64_value(8)]))
+        else {
+            panic!("splitmix64 draws never fail")
+        };
+        let number = fields[0].clone().unwrap();
         let _ = h.call("test.check_case", &[test, Value::Bool(false), u64_value(7)]);
         (number, h.stdout)
     };

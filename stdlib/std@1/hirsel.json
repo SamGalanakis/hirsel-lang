@@ -79,6 +79,12 @@
       ]
     },
     {
+      "path": "random.hir",
+      "module": [
+        "random"
+      ]
+    },
+    {
       "path": "scalar.hir",
       "module": [
         "scalar"

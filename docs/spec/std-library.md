@@ -77,6 +77,8 @@ N fn prng.seed(value: u64) -> prng.Generator uses {}
 N fn prng.next_u64(mut generator: prng.Generator) -> u64 uses {}
 N fn prng.below(mut generator: prng.Generator, upper_exclusive: u64) -> Result[u64, prng.SampleError] uses {}
 fn prng.fill(mut generator: prng.Generator, mut out: List[u8], count: u64) -> () uses {}
+fn random.u64(r: Random) -> Result[u64, RandomError]
+fn random.below(r: Random, upper_exclusive: u64) -> Result[u64, random.SampleError]
 ```
 
 Modules beyond the catalogue (`list`, `string`, `text`, `net`, `uri`, `http_wire`, `http`, `bufio`
@@ -213,6 +215,15 @@ relative tolerance of the larger magnitude. `test.for_all` runs exactly 100 sequ
 generator and law calls using the run's Test grant, reporting each through
 `test.check_case`, without shrinking. `test.expect_error` returns the error of an `Error`,
 and destroys an unexpected `Ok` value before failing the test with `test.fail`.
+
+## Random draws
+
+`random.u64(r)` draws eight bytes with `random.bytes` and reads them little-endian.
+`random.below(r, upper)` returns `Error(EmptyRange())` for `upper == 0` before any draw;
+otherwise it draws with `random.u64` until the same Lemire acceptance as `prng.below` admits
+a value, so every value below `upper` is equally likely, and wraps a provider error as
+`Source(e)`. `random.SampleError` is `EmptyRange() | Source(RandomError)`. These functions
+add no authority or entropy of their own: their security is the launch provider's.
 
 ## Pseudorandom numbers
 

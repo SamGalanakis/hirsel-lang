@@ -104,7 +104,11 @@ replay: `stdout.bytes@1`, `random.splitmix64@1`, `clock.monotonic.ns@1`,
 suspension points of [CONC-1](concurrency.md#conc-1-runtime). Host readiness waits
 suspend only their task; the provider waits for external readiness only when no task
 is runnable. Cancellation is checked before blocking effects and when an effect-free
-wait resumes, with destruction shielded as required by CONC-3. `net.stream@1` is the host
+wait resumes, with destruction shielded as required by CONC-3. `random.splitmix64@1` is a deterministic simulation of randomness
+on every host: a draw of `n` bytes takes successive SplitMix64 outputs (state starting at
+`inputs.random_seed`, advanced by `0x9e3779b97f4a7c15` per output), each little-endian,
+concatenated and cut to `n`, consuming one output per started eight bytes. It is
+predictable from the seed and is never cryptographically secure. `net.stream@1` is the host
 network with the [network semantics of the core library](core-library.md#network).
 `net.script@2` additionally takes `peers`, an array of scripted peer records in schema
 order, and serves the program from them exactly as `test.net` does; `peers` is invalid under

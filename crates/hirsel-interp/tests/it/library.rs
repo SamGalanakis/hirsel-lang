@@ -508,6 +508,76 @@ fn capability_inputs_stdout_faults_test_directory_and_checks() {
     assert_eq!(failure.line, 7);
 }
 #[test]
+fn rejected_random_replay_publishes_no_draw_and_keeps_the_seed_state() {
+    let draw = |h: &mut Harness, random: &Value| {
+        h.try_call(
+            "random.bytes",
+            vec![random.clone(), u64_value(13)],
+            TypeKind::Tuple(vec![].into()),
+        )
+    };
+    let mut h = Harness::new(SimulationConfig {
+        random_seed: 42,
+        ..Default::default()
+    });
+    let io = h.root("Io");
+    let random = h.project(&io, "random");
+    draw(&mut h, &random).unwrap();
+    let recorded = h.library.simulation.events.clone();
+    let mut replay = |seed| {
+        let mut h = Harness::new(SimulationConfig {
+            random_seed: seed,
+            ..Default::default()
+        });
+        h.run.inputs = recorded.clone();
+        h.library = Library::new(
+            &h.run,
+            SimulationConfig {
+                random_seed: seed,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let io = h.root("Io");
+        let random = h.project(&io, "random");
+        let before = h.library.simulation.events.len();
+        // The draw a different seed derives contradicts the tape, twice over: the
+        // rejected attempt advanced neither the seed state nor the replay position.
+        for _ in 0..2 {
+            assert!(matches!(draw(&mut h, &random), Err(Error::InvalidTir(_))));
+            assert_eq!(h.library.simulation.events.len(), before);
+        }
+        h.library.simulation.finish_replay()
+    };
+    assert!(replay(43).is_err());
+    let mut h = Harness::new(SimulationConfig {
+        random_seed: 42,
+        ..Default::default()
+    });
+    h.run.inputs = recorded.clone();
+    h.library = Library::new(
+        &h.run,
+        SimulationConfig {
+            random_seed: 42,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let io = h.root("Io");
+    let random = h.project(&io, "random");
+    assert_eq!(
+        unok(h.value("random.bytes", vec![random, u64_value(13)])),
+        Value::Bytes(
+            [
+                &0xbdd732262feb6e95u64.to_le_bytes()[..],
+                &0x28efe333b266f103u64.to_le_bytes()[..5]
+            ]
+            .concat()
+        )
+    );
+    h.library.simulation.finish_replay().unwrap();
+}
+#[test]
 fn same_seed_configuration_events_replay_and_explicit_clock_env() {
     fn execute() -> (Vec<CapabilityEvent>, Vec<u8>, Vec<u64>) {
         let mut h = Harness::new(SimulationConfig {
@@ -543,21 +613,17 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
             h.value("env.get", vec![env, Value::String("NAME".into())]),
             ok(some(Value::String("value".into())))
         );
-        let mut context = OperationContext {
-            trace_mode: Default::default(),
-            anchor: None,
-            configuration: &h.run,
-            sources: &h.sources,
-            stdout: &mut h.stdout,
-            trace: &mut h.trace,
-        };
-
         let values = (0..10)
             .map(|_| {
-                h.library
-                    .simulation
-                    .random_u64(&random, &mut context)
-                    .unwrap()
+                let Value::Variant { variant: 0, fields } =
+                    h.value("random.bytes", vec![random.clone(), u64_value(8)])
+                else {
+                    panic!("splitmix64 draws never fail")
+                };
+                let Some(Some(Value::Bytes(bytes))) = fields.first() else {
+                    panic!("random.bytes returns Bytes")
+                };
+                u64::from_le_bytes(bytes.as_slice().try_into().unwrap())
             })
             .collect();
         (h.library.simulation.events, h.stdout, values)

@@ -1,0 +1,39 @@
+// Adapted from Zig lib/std/Random.zig int (little-endian draw) and uintLessThan,
+// commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors
+// (third-party/NOTICES.md). Authority comes only from the explicit Random.
+pub type SampleError = EmptyRange | Source(RandomError)
+
+pub fn u64(r: Random) -> Result[u64, RandomError] {
+  let bytes = core@1/random.bytes(r, 8)?
+  let mut value: u64 = 0
+  let mut i: u64 = 8
+  while i > 0 {
+    i -= 1
+    let byte: u64 = core@1/int.widen(bytes[i])
+    value = value << 8 | byte
+  }
+  Ok(value)
+}
+
+// Unbiased: rejected draws are discarded, never reduced by modulo. EmptyRange draws nothing.
+pub fn below(r: Random, upper_exclusive: u64) -> Result[u64, SampleError] {
+  if upper_exclusive == 0 {
+    return Error(EmptyRange())
+  }
+  let mut value: u64 = 0
+  let mut accepted = false
+  while !accepted {
+    let draw = match u64(r) {
+      Ok(draw) => draw,
+      Error(e) => return Error(Source(e)),
+    }
+    match internal.sample.below(draw, upper_exclusive) {
+      Some(drawn) => {
+        value = drawn
+        accepted = true
+      },
+      None() => {},
+    }
+  }
+  Ok(value)
+}

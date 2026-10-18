@@ -38,6 +38,7 @@ N fn clock.wall(clock: WallClock) -> Result[i64, ClockError]
 N fn instant.ticks(value: Instant) -> u64 uses {}
 N fn io.net(rt: Io) -> Result[Net, GrantError]
 N fn io.random(rt: Io) -> Result[Random, GrantError]
+fn random.bytes(r: Random, count: u64) -> Result[Bytes, RandomError]
 N fn io.process(rt: Io) -> Result[Proc, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
 fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
@@ -215,6 +216,7 @@ GrantError    = NotGranted()
 type FileError = FileFault(u32) | Canceled(CancelCause) | NotGranted() | NotFound() | PermissionDenied() | AlreadyExists() | IsDirectory() | NotDirectory() | DirectoryNotEmpty() | CrossDevice()
 InputError    = InputFault(u32) | Canceled(CancelCause) | InvalidInput() | InvalidUtf8()
 OutputError   = OutputFault(u32) | Canceled(CancelCause)
+RandomError   = Unavailable()
 EnvError      = NotGranted() | InvalidUtf8()
 ArgError      = MissingArgument() | InvalidUtf8()
 FloatIntError = NotFinite | OutOfRange
@@ -332,6 +334,15 @@ a string returns `Ok(Some(value))`. No enumeration or ambient process lookup is
 provided. Invalid UTF-8 from a host provider returns `InvalidUtf8()`; run-description
 admission may reject an invalid snapshot before entry. Io presence alone grants
 neither input nor output: stdin and stderr require their own configured projections.
+
+`random.bytes(r, count)` returns exactly `count` bytes from the run's Random provider,
+or `Unavailable()` with no bytes; it never publishes a partial draw. A zero count returns
+empty `Bytes` without consulting the provider. A draw is nonblocking, like clock sampling,
+so it is not a cancellation point ([CONC-3](concurrency.md#conc-3-cancellation)), and each
+draw is a recorded capability input. The provider is chosen at launch
+([providers](determinism.md#run-configuration)): `random.splitmix64@1` is a deterministic
+simulation, predictable from the run's Random seed, and never protects a secret.
+`std@1/random` builds integer and bounded draws on this one operation.
 
 `err.print` and `out.print` write exactly the supplied UTF-8 bytes, with no newline. `Canceled` means no
 output or effect happened; another output or file error may follow partial effects.

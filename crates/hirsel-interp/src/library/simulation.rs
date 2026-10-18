@@ -159,6 +159,7 @@ pub struct Simulation {
     pub(crate) file_contents: BTreeMap<u64, Vec<u8>>,
     pub(crate) next_id: u64,
     state: u64,
+    supplied_random: Option<Result<Vec<u8>, ()>>,
     replay: Vec<CapabilityEvent>,
     replay_index: usize,
     pub(crate) last_monotonic: Option<u64>,
@@ -350,6 +351,7 @@ impl Simulation {
             file_contents: BTreeMap::new(),
             next_id: 1,
             state: random_seed,
+            supplied_random: None,
             replay: run.inputs.clone(),
             replay_index: 0,
             last_monotonic: None,
@@ -772,28 +774,28 @@ impl Simulation {
             Ok(())
         }
     }
-    /// Typed random kernel remains unpublished until its ledger cutover.
-    pub fn random_u64(
-        &mut self,
-        random: &Value,
-        context: &mut OperationContext<'_>,
-    ) -> Result<u64, Error> {
-        self.id(random, "Random")?;
-        // SplitMix64: fixed wrapping integer algorithm, seed supplied by run.
-        let next_state = self.state.wrapping_add(0x9e3779b97f4a7c15);
-        let mut z = next_state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        let z = z ^ (z >> 31);
-        self.record(
-            "Random",
-            "random.u64",
-            vec![],
-            z.to_le_bytes().to_vec(),
-            context,
-        )?;
-        self.state = next_state;
-        Ok(z)
+    /// `random.splitmix64@1`: successive SplitMix64 words of the run's Random seed, each
+    /// little-endian, the last cut short; the state advances one word per started eight
+    /// bytes. A host adapter supplies its provider's draw instead (`supply_random`).
+    pub(crate) fn random_bytes(&mut self, count: u64) -> Result<Vec<u8>, ()> {
+        if let Some(draw) = self.supplied_random.take() {
+            return draw;
+        }
+        let mut bytes = Vec::new();
+        while (bytes.len() as u64) < count {
+            self.state = self.state.wrapping_add(0x9e3779b97f4a7c15);
+            let mut z = self.state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+            let word = (z ^ (z >> 31)).to_le_bytes();
+            let take = (count - bytes.len() as u64).min(8) as usize;
+            bytes.extend_from_slice(&word[..take]);
+        }
+        Ok(bytes)
+    }
+    /// The next `random.bytes` outcome, from a host provider; `Err` is `Unavailable()`.
+    pub fn supply_random(&mut self, draw: Result<Vec<u8>, ()>) {
+        self.supplied_random = Some(draw);
     }
     pub fn grant_test(&mut self) -> Value {
         self.handle("Test", Grant::Root("Test".into()))
@@ -825,73 +827,6 @@ pub(crate) fn relative(root: &str, path: &str) -> Option<String> {
         }
     }
     Some(parts.join("/"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn rejected_random_event_preserves_seed_and_replay_position() {
-        let mut run = RunConfiguration {
-            entry: hirsel_syntax::DefPath::core("main"),
-            hash_seed: 42,
-            inputs: vec![],
-        };
-        let sources = SourceMap::default();
-        let mut stdout = vec![];
-        let mut trace = vec![];
-        let mut sim = Simulation::new(
-            &run,
-            SimulationConfig {
-                random_seed: 42,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let random = sim.handle("Random", Grant::Root("Random".into()));
-        sim.random_u64(
-            &random,
-            &mut OperationContext {
-                configuration: &run,
-                sources: &sources,
-                stdout: &mut stdout,
-                trace: &mut trace,
-                trace_mode: Default::default(),
-                anchor: None,
-            },
-        )
-        .unwrap();
-        run.inputs = sim.events;
-        let mut sim = Simulation::new(
-            &run,
-            SimulationConfig {
-                random_seed: 43,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let random = sim.handle("Random", Grant::Root("Random".into()));
-        trace.clear();
-        assert!(matches!(
-            sim.random_u64(
-                &random,
-                &mut OperationContext {
-                    trace_mode: Default::default(),
-                    anchor: None,
-                    configuration: &run,
-                    sources: &sources,
-                    stdout: &mut stdout,
-                    trace: &mut trace
-                }
-            ),
-            Err(Error::InvalidTir(_))
-        ));
-        assert_eq!(sim.state, 43);
-        assert_eq!(sim.replay_index, 0);
-        assert!(sim.events.is_empty());
-        assert!(trace.is_empty());
-    }
-    use hirsel_span::SourceMap;
 }
 
 #[cfg(test)]

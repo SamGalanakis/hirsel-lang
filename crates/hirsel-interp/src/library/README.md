@@ -35,8 +35,10 @@ there is no core formatter, float reduction dispatcher or shared host accumulato
 String views preserve UTF-8 spelling. Grapheme segmentation and NFC normalization
 execute ordinary std@1 source over vendored Unicode16 tables. Their official
 oracles live in hirsel-driver/tests/stdlib_graphemes.rs and stdlib_nfc.rs.
-Clock sampling and Instant access execute the split core library contracts. Only
-random_u64/env_get remain unpublished typed simulation kernels.
+Clock sampling and Instant access execute the split core library contracts.
+`random.bytes` draws `random.splitmix64@1`: successive SplitMix64 words of the
+run's Random seed, little-endian, the last cut short; a zero count touches
+nothing. A host adapter supplies its own provider's draw through `supply_random`.
 
 Collections retain insertion/replacement order, semantic copies and IEEE data
 equality. Updates use OperationResult::Complete, so the scheduler publishes only to
