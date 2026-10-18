@@ -10,6 +10,7 @@ pub mod api_index;
 pub mod native;
 mod network;
 mod pipeline;
+pub mod testing;
 pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
 use std::{io::Write, path::Path};
 

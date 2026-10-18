@@ -1,0 +1,24 @@
+// rule: LANG-9
+// expect: test
+@test
+fn first(t: Test) {
+  let d = test.dir(t, [(path.of("same"), b"first")])
+  match file.read_bytes(d, path.of("same")) {
+    Ok(data) => test.check(t, data == b"first"),
+    Error(_) => test.fail(t),
+  }
+}
+
+@test
+fn second(t: Test) {
+  let d = test.dir(t, [(path.of("same"), b"second")])
+  match file.read_bytes(d, path.of("same")) {
+    Ok(data) => test.check(t, data == b"second"),
+    Error(_) => test.fail(t),
+  }
+}
+
+@test
+fn pure() -> Result[(), String] {
+  Ok(())
+}

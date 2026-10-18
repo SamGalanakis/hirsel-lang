@@ -1,0 +1,4 @@
+// rule: LANG-9
+// expect: reject LANG-7 at line 3
+@test
+type Example { value: u64 }

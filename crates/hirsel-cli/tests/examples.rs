@@ -1690,3 +1690,19 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
         }
     }
 }
+
+#[test]
+fn example_packages_run_their_declared_tests() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for name in ["calculator", "mdtoc"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["test", "--json"])
+            .arg(root.join(format!("examples/{name}/hirsel.json")))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(json["summary"]["total"], 2, "{name}: {json}");
+        assert_eq!(json["summary"]["failed"], 0, "{name}: {json}");
+    }
+}

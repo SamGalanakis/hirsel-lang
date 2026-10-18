@@ -664,6 +664,23 @@ pub fn launch_object(
     launcher: &str,
     arguments: &[LaunchArgument],
 ) -> Result<Vec<u8>, CodegenError> {
+    named_launch_object(
+        "main", target, entry, root_words, report, calls, launcher, arguments,
+    )
+}
+
+/// Emit a launch adapter with an explicit exported dispatcher symbol.
+#[allow(clippy::too_many_arguments)]
+pub fn named_launch_object(
+    main_symbol: &str,
+    target: &TargetSpec,
+    entry: &str,
+    root_words: &[u64],
+    report: &ExitReport,
+    calls: &[(&str, Vec<LaunchArgument>)],
+    launcher: &str,
+    arguments: &[LaunchArgument],
+) -> Result<Vec<u8>, CodegenError> {
     let isa = isa(target, OptLevel::None)?;
     let call_conv = isa.default_call_conv();
     let builder = ObjectBuilder::new(
@@ -814,7 +831,7 @@ pub fn launch_object(
     let mut main_sig = ir::Signature::new(call_conv);
     main_sig.returns.push(AbiParam::new(types::I32));
     let main_id = module
-        .declare_function("main", Linkage::Export, &main_sig)
+        .declare_function(main_symbol, Linkage::Export, &main_sig)
         .map_err(refuse("main"))?;
     context.func = Function::with_name_signature(ir::UserFuncName::default(), main_sig);
     {

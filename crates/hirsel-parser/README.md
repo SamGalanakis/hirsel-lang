@@ -68,3 +68,5 @@ alongside holes for formatting. `@format(path)` parses to
 as braces.
 
 Loop labels are retained on for/while statements and optional break/continue targets. Only loops may be labelled; lexical target validation belongs to body checking.
+
+`@test` is a zero-argument function-definition attribute; semantic LANG-9 signature validation belongs to signature normalization.

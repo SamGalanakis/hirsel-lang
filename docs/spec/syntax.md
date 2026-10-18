@@ -271,7 +271,7 @@ file         = { NL | item, END }, EOF ;                 (* LANG-6, PROG-1 *)
 visibility   = "pub", [ "opaque" ] ;                     (* PROG-2 *)
 item         = { attribute }, [ visibility ],
                ( function | const-def | type-def ) ;     (* LANG-6, PROG-2 *)
-attribute    = "@", ( "noalloc" | "soa" | "packed" | "blocking" | "incomplete" | "serializable"
+attribute    = "@", ( "test" | "noalloc" | "soa" | "packed" | "blocking" | "incomplete" | "serializable"
              | "layout", "(", "c", ")"
              | "align", "(", integer, ")"
              | "capability", "(", ("global" | "local"), ")"
@@ -339,7 +339,8 @@ zero-argument attribute on transparent records, variants, unconstrained distinct
 flat types; `[T: serializable]` is a generic schema bound
 ([SER-1](serialization.md#ser-1-serializable-schemas)). Neither is a prefix value
 modifier. Attributes have placement restrictions: layout attributes on types; `noalloc`
-on functions, function types and `drop`; `loop_source` and `format` on nominal types; state attributes
+on functions, function types and `drop`; `test` only on ordinary function definitions
+with the LANG-9 signature; `loop_source` and `format` on nominal types; state attributes
 on functions and callable types; `blocking` on externs; `incomplete` on functions. State
 selectors name only that callable's parameters and their explicit field paths; an omitted
 attribute promises nothing.

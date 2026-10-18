@@ -47,15 +47,14 @@ fn published_programs_and_outputs_match_the_corpus() {
             .position(|line| !line.starts_with("//"))
             .map(|i| source.split_inclusive('\n').skip(i).collect::<String>())
             .unwrap();
-        let Expect::Run { stdout, exit } = header.expect else {
-            panic!("tour program must have a checked run expectation: {path}")
-        };
-        let expected = if stdout.is_empty() && exit == 0 {
-            "No stdout; exit 0 (all checks pass).".into()
-        } else if stdout.is_empty() {
-            format!("No stdout; exit {exit}.")
-        } else {
-            format!("```text\n{stdout}```")
+        let expected = match header.expect {
+            Expect::Test => "All selected @test functions pass.".into(),
+            Expect::Run { stdout, exit } if stdout.is_empty() && exit == 0 => {
+                "No stdout; exit 0 (all checks pass).".into()
+            }
+            Expect::Run { stdout, exit } if stdout.is_empty() => format!("No stdout; exit {exit}."),
+            Expect::Run { stdout, .. } => format!("```text\n{stdout}```"),
+            _ => panic!("tour program must have a checked run or test expectation: {path}"),
         };
         assert_eq!(
             rendered,

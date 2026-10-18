@@ -128,6 +128,31 @@ fn normalize_inner(
                 ));
             }
             let mut f = n.function(signature, &attrs, false)?;
+            if item
+                .attributes
+                .iter()
+                .any(|a| input.symbols.resolve(a.name) == Some("test"))
+            {
+                let unit = |id| matches!(n.types.get(id).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty());
+                let result = unit(f.result)
+                    || matches!(n.types.get(f.result).map(|t| &t.kind), Some(TypeKind::Named { definition, arguments }) if definition.is_core("Result") && matches!(arguments.as_slice(), [GenericArgument::Type(ok), GenericArgument::Type(_)] if unit(*ok)));
+                let parameters = f.parameters.is_empty()
+                    || matches!(f.parameters.as_slice(), [p] if p.passing == ast::PassingMode::Borrow && matches!(n.types.get(p.ty).map(|t| &t.kind), Some(TypeKind::Named { definition, arguments }) if definition.is_core("Test") && arguments.is_empty()));
+                if !f.generics.is_empty()
+                    || !parameters
+                    || !result
+                    || f.incomplete
+                    || abi.is_some()
+                    || !matches!(item.kind, ast::ItemKind::Function { body: Some(_), .. })
+                {
+                    return Err(diagnostic(
+                        const { RuleId::of("LANG-9") },
+                        item.origin.span,
+                        "@test requires a complete monomorphic Hirsel function with no parameters or one borrowed Test, returning () or Result[(), E]",
+                    ));
+                }
+            }
+
             if let Some(abi) = abi {
                 let foreign = |message: &str| {
                     Err(diagnostic(
@@ -653,7 +678,7 @@ impl Normalizer<'_, '_> {
             let function = matches!(kind, ast::ItemKind::Function { .. });
             let type_ = matches!(kind, ast::ItemKind::Type { .. });
             let valid = match name.as_str() {
-                "noalloc" | "incomplete" | "advance_only" | "preserves_captures"
+                "test" | "noalloc" | "incomplete" | "advance_only" | "preserves_captures"
                 | "preserves_unique" | "captures" => function,
                 "blocking" => matches!(kind, ast::ItemKind::Function { abi: Some(_), .. }),
                 "layout" | "packed" | "align" | "soa" | "capability" | "loop_source" | "format"
@@ -699,7 +724,8 @@ impl Normalizer<'_, '_> {
                         ));
                     }
                 }
-                "noalloc" | "incomplete" | "blocking" | "packed" | "soa" | "serializable" => {
+                "test" | "noalloc" | "incomplete" | "blocking" | "packed" | "soa"
+                | "serializable" => {
                     if !a.arguments.is_empty() {
                         return Err(diagnostic(
                             const { RuleId::of("LANG-6") },
@@ -708,6 +734,7 @@ impl Normalizer<'_, '_> {
                         ));
                     }
                     match name.as_str() {
+                        "test" => (),
                         "noalloc" => result.noalloc = true,
                         "incomplete" => result.incomplete = true,
                         "blocking" => result.blocking = true,
@@ -911,6 +938,17 @@ impl Normalizer<'_, '_> {
             body: None,
             abi: None,
         };
+        if closure
+            && s.attributes
+                .iter()
+                .any(|a| self.input.symbols.resolve(a.name) == Some("test"))
+        {
+            return Err(diagnostic(
+                const { RuleId::of("LANG-9") },
+                self.span,
+                "@test selects only an ordinary function definition",
+            ));
+        }
         let attrs = self.attributes(&s.attributes, &dummy)?;
         let current = self.current_parameter;
         let mut parameters = s

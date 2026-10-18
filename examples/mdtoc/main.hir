@@ -186,3 +186,24 @@ pub fn main(rt: Io, args: Args) -> Result[(), String] {
     Error(_) => Error("cannot write output"),
   }
 }
+
+@test
+fn anchors_normalize_unicode_and_punctuation(t: Test) {
+  test.check(t, slug("Hello, World!") == "hello-world")
+  test.check(t, slug("CAFÉ") == "café")
+}
+
+@test
+fn headings_require_a_separator(t: Test) {
+  match heading("## title ##") {
+    Some(found) => {
+      test.check(t, found.level == 2)
+      test.check(t, found.title == "title")
+    },
+    None() => test.fail(t),
+  }
+  match heading("##not-a-heading") {
+    Some(_) => test.fail(t),
+    None() => (),
+  }
+}

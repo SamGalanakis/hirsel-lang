@@ -84,3 +84,5 @@ unused ones: `validate_loop_source` for `@loop_source(open, next)` (SEM-4) and
 the declaring type's own parameters and no error result. The association implies
 `@preserves_unique(out)`; source ownership and independent IR validation prove it.
 Both share the receiver inference in `specialize`.
+
+LANG-9 validates `@test` functions as complete monomorphic ordinary definitions, with zero parameters or one borrowed core Test, and unit or core Result[unit, E] results. Selection is tooling metadata and does not change a function's ordinary callable contract.

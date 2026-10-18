@@ -114,6 +114,37 @@ artifact with the pinned qemu and cross sysroot:
   --hirsel-run /absolute/path/run.json
 ```
 
+## Run a package's tests
+
+```sh
+hirsel test examples/calculator/hirsel.json
+hirsel test app/manifest.json parser decode      # match either substring of the stable path
+hirsel test app/manifest.json --seed 42 --json
+hirsel test app/manifest.json --native
+hirsel test app/manifest.json --native --backend cranelift
+```
+
+Mark ordinary functions with `@test`. They may be private, take no parameters or
+one borrowed `Test`, and return `()` or `Result[(), E]`. Generic functions, other
+parameters and other results are rejected. The command checks the whole package,
+then selects only marked functions in its manifest sources, never dependencies.
+Filters match substrings of versioned definition paths; multiple filters are ORed.
+An empty selection succeeds with zero tests. Tests run in stable path order.
+
+Every test gets a fresh Test context and fake providers, with no host grants.
+Its default seed depends only on its stable definition path, so filtering or
+moving the definition between files does not change it. `--seed` supplies the
+same u64 seed to every selected test. Failures (including Error results and
+runtime checks) run normal cleanup and do not prevent later tests from running.
+The runner prints each test's name, outcome and seed, then totals; exit 1 means
+at least one failed. Native mode builds one executable for the package and
+launches it separately for each selected test, with the same output and seeds.
+
+`--json` writes one schema-1 object with `tests` and `summary`. Each test has
+`name`, `seed`, `status` (`passed` or `failed`) and `failure` (null on success).
+The summary has `passed`, `failed` and `total`. Package checking errors use the
+ordinary check diagnostics and prevent execution.
+
 ## Record and replay a run
 
 A host run can stream every capability input it received (file, stdin and Env reads,

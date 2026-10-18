@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
 use execution_policy::DEFAULT_RUN_MAX_STEPS;
@@ -12,6 +12,14 @@ fn main() -> ExitCode {
 }
 enum Command {
     Help,
+    Test {
+        manifest: OsString,
+        filters: Vec<String>,
+        seed: Option<u64>,
+        json: bool,
+        native: bool,
+        backend: hirsel_driver::native::Backend,
+    },
     Precheck {
         manifest: OsString,
         output: OsString,
@@ -135,6 +143,45 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
     let command = match args.next()? {
         Some(Long("help")) => Command::Help,
         Some(Value(command)) if command == "help" => Command::Help,
+        Some(Value(command)) if command == "test" => {
+            let (mut manifest, mut filters, mut seed, mut json, mut native, mut selected) =
+                (None, Vec::new(), None, false, false, None);
+            while let Some(arg) = args.next()? {
+                match arg {
+                    Long("json") if !json => json = true,
+                    Long("native") if !native => native = true,
+                    Long("backend") if selected.is_none() => {
+                        selected = Some(backend(args.value()?)?)
+                    }
+                    Long("seed") if seed.is_none() => {
+                        seed = Some(
+                            args.value()?
+                                .to_str()
+                                .and_then(|v| v.parse::<u64>().ok())
+                                .ok_or("--seed requires a u64")?,
+                        );
+                    }
+                    Value(value) if manifest.is_none() => manifest = Some(value),
+                    Value(value) => filters.push(
+                        value
+                            .into_string()
+                            .map_err(|_| "test filters must be UTF-8")?,
+                    ),
+                    arg => return Err(arg.unexpected()),
+                }
+            }
+            if selected.is_some() && !native {
+                return Err("--backend requires --native".into());
+            }
+            Command::Test {
+                manifest: manifest.ok_or("test requires a package manifest")?,
+                filters,
+                seed,
+                json,
+                native,
+                backend: selected.unwrap_or_default(),
+            }
+        }
         Some(Value(command)) if command == "build" => {
             use hirsel_driver::native::{BuildProfile, TargetSpec};
             let (mut source, mut output, mut target, mut profile) = (None, None, None, None);
@@ -430,6 +477,61 @@ fn execute(mut args: Vec<OsString>) -> u8 {
         }
     };
     let (command, flag, file) = match command {
+        Command::Test {
+            manifest,
+            filters,
+            seed,
+            json,
+            native,
+            backend,
+        } => {
+            let results = if native {
+                hirsel_driver::native::test_path(Path::new(&manifest), &filters, seed, backend)
+            } else {
+                hirsel_driver::testing::run_path(Path::new(&manifest), &filters, seed)
+            };
+            return match results {
+                Ok(results) => {
+                    let failed = results.iter().filter(|r| r.failure.is_some()).count();
+                    if json {
+                        let tests: Vec<_> = results.iter().map(|r| serde_json::json!({
+                            "name": r.name, "seed": r.seed, "status": if r.failure.is_some() { "failed" } else { "passed" }, "failure": r.failure
+                        })).collect();
+                        println!(
+                            "{}",
+                            serde_json::json!({"schema":1,"tests":tests,"summary":{"passed":results.len()-failed,"failed":failed,"total":results.len()}})
+                        );
+                    } else {
+                        for result in &results {
+                            println!(
+                                "test {} ... {} (seed={}){}",
+                                result.name,
+                                if result.failure.is_some() {
+                                    "FAILED"
+                                } else {
+                                    "ok"
+                                },
+                                result.seed,
+                                result
+                                    .failure
+                                    .as_ref()
+                                    .map(|f| format!(": {f}"))
+                                    .unwrap_or_default()
+                            );
+                        }
+                        println!(
+                            "test result: {}. {} passed; {} failed; {} total",
+                            if failed == 0 { "ok" } else { "FAILED" },
+                            results.len() - failed,
+                            failed,
+                            results.len()
+                        );
+                    }
+                    u8::from(failed != 0)
+                }
+                Err(error) => tool_error(error, json),
+            };
+        }
         Command::Doc { root } => {
             return match hirsel_driver::api_index::entries(Path::new(&root)) {
                 Ok(entries) => {

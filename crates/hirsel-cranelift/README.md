@@ -68,3 +68,5 @@ Invariants:
 Debug line tables and profile sources are not emitted. Cranelift records source
 locations and machine-code ranges but does not write DWARF line sections; doing so
 requires a separate DWARF writer and object-section relocations.
+
+`named_launch_object` uses an explicit exported dispatcher symbol, allowing a package test executable to contain one launch adapter per test.

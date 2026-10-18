@@ -89,6 +89,7 @@ pub fn spec_rules(root: &Path) -> Result<Rules, String> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expect {
     Accept,
+    Test,
     Blocked {
         stdout: String,
     },
@@ -183,6 +184,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                     let words: Vec<_> = value_trimmed.split_whitespace().collect();
                     expect = Some(match words.as_slice() {
                         ["accept"] => Expect::Accept,
+                        ["test"] => Expect::Test,
                         ["blocked"] => Expect::Blocked {
                             stdout: String::new(),
                         },
@@ -323,10 +325,16 @@ pub trait Driver {
     }
     fn check(&self, path: &Path) -> Result<CheckOutput, NotImplemented>;
     fn run(&self, path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented>;
+    fn test(&self, _path: &Path) -> Status {
+        Status::NotImplemented
+    }
 }
 /// A corpus driver varying only placement; capability inputs keep their seeds.
 pub struct SeededCompiler(pub u64);
 impl Driver for SeededCompiler {
+    fn test(&self, path: &Path) -> Status {
+        compiler::evaluate_with_hash_seed(path, &Expect::Test, self.0).0
+    }
     fn evaluate(&self, path: &Path, expect: &Expect) -> (Status, Observation) {
         compiler::evaluate_with_hash_seed(path, expect, self.0)
     }
@@ -339,6 +347,9 @@ impl Driver for SeededCompiler {
 }
 pub struct Compiler;
 impl Driver for Compiler {
+    fn test(&self, path: &Path) -> Status {
+        compiler::evaluate(path, &Expect::Test).0
+    }
     fn evaluate(&self, path: &Path, expect: &Expect) -> (Status, Observation) {
         compiler::evaluate(path, expect)
     }
@@ -391,6 +402,9 @@ pub fn classify(driver: &(impl Driver + ?Sized), path: &Path, expect: &Expect) -
     }
     if matches!(expect, Expect::Accept) {
         return Status::Pass;
+    }
+    if matches!(expect, Expect::Test) {
+        return driver.test(path);
     }
     let mut stdout = Vec::new();
     let outcome = match driver.run(path, &mut stdout) {

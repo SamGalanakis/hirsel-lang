@@ -753,25 +753,24 @@ fn link_objects_impl(
     requested: Option<&hirsel_run_config::ValidatedRun>,
     standalone: bool,
 ) -> Result<PathBuf, NativeError> {
+    let main = launcher_object(program, entry, objects, dir, requested, standalone, "main")?;
+    link_launcher(program, entry, objects, toolchain, dir, standalone, &main)
+}
+
+fn launcher_object(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    dir: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+    standalone: bool,
+    main_symbol: &str,
+) -> Result<Vec<u8>, NativeError> {
     let (symbol, result_size) = entry_result(program, entry)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
         &program.finalizers,
     );
-    let library_symbols: std::collections::BTreeSet<String> = program
-        .units
-        .iter()
-        .filter(|u| {
-            u.unit().header.origin == hirsel_lir::ir::UnitOrigin::Library
-                || program.inline_instances.contains(&u.unit().header.instance)
-        })
-        .map(|u| {
-            hirsel_lir::emission::symbol_name(
-                &u.unit().header.definition,
-                Some(&u.unit().header.instance),
-            )
-        })
-        .collect();
     let target = &program.target;
     let kind = &program.launches[entry];
     let roots = kind.roots();
@@ -919,7 +918,7 @@ done:
             launch_config,
         )
     };
-    // A program that isolates registers its failure table before the launch.
+    // Every source program registers its failure table before the launch.
     let table = failure_table(program)?;
     // The launcher object comes from the backend that emitted the program's objects, so a
     // Cranelift build never runs LLVM.
@@ -994,20 +993,55 @@ done:
                 )
             })
             .collect();
-        hirsel_cranelift::launch_object(
-            target, &symbol, &words, &report, &calls, launcher, &arguments,
+        hirsel_cranelift::named_launch_object(
+            main_symbol,
+            target,
+            &symbol,
+            &words,
+            &report,
+            &calls,
+            launcher,
+            &arguments,
         )
         .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
     } else {
         let (table, register) = failure_table_ir(table.as_deref());
         let shim = format!(
-            "target triple = \"{}\"\n{registry_declaration}\n{binding}\n{declaration}\n{launcher}\n{table}declare ptr @signal(i32, ptr)\ndefine i32 @main() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n{register} %r = {call}\n ret i32 %r\n}}\n",
+            "target triple = \"{}\"\n{registry_declaration}\n{binding}\n{declaration}\n{launcher}\n{table}declare ptr @signal(i32, ptr)\ndefine i32 @{main_symbol}() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n{register} %r = {call}\n ret i32 %r\n}}\n",
             target.triple
         );
         hirsel_llvm::compile_ir(&shim, target, OptLevel::None)
             .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
             .bytes
     };
+    Ok(main)
+}
+
+fn link_launcher(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+    standalone: bool,
+    main: &[u8],
+) -> Result<PathBuf, NativeError> {
+    let (symbol, _) = entry_result(program, entry)?;
+    let target = &program.target;
+    let library_symbols: std::collections::BTreeSet<String> = program
+        .units
+        .iter()
+        .filter(|u| {
+            u.unit().header.origin == hirsel_lir::ir::UnitOrigin::Library
+                || program.inline_instances.contains(&u.unit().header.instance)
+        })
+        .map(|u| {
+            hirsel_lir::emission::symbol_name(
+                &u.unit().header.definition,
+                Some(&u.unit().header.instance),
+            )
+        })
+        .collect();
     // Link manifest: each definition instance has exactly one implementation
     // across the objects, the entry among them, and every import is another
     // object's export, a runtime entry or a toolchain routine.
@@ -1095,6 +1129,68 @@ done:
     command.arg("-o").arg(&executable);
     checked(StageName::Link, &mut command)?;
     Ok(executable)
+}
+
+/// Link one package test executable. Each child selects one adapter; the
+/// runtime starts fresh with Test as its only root and its own fixed seed.
+pub(crate) fn link_tests(
+    program: &mut ReadyProgram,
+    tests: &[crate::testing::Test],
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    toolchain: &Toolchain,
+    dir: &Path,
+) -> Result<PathBuf, NativeError> {
+    let mut declarations = String::new();
+    let mut cases = String::new();
+    let mut adapters = Vec::new();
+    for (index, test) in tests.iter().enumerate() {
+        program.launch.test_seed = test.seed;
+        let name = format!("hirsel_test_{index}");
+        let bytes = launcher_object(program, &test.entry, objects, dir, None, false, &name)?;
+        let path = dir.join(format!("test-{index}.o"));
+        std::fs::write(&path, bytes)
+            .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+        adapters.push(path);
+        declarations.push_str(&format!("extern int {name}(void);\n"));
+        cases.push_str(&format!("case {index}: return {name}();\n"));
+    }
+    let source = format!(
+        "#include <stdlib.h>\n{declarations}int main(int argc, char **argv) {{ if (argc != 2) return 3; char *end; unsigned long n = strtoul(argv[1], &end, 10); if (*end || !*argv[1]) return 3; switch(n) {{ {cases} default: return 3; }} }}\n"
+    );
+    let source_path = dir.join("tests.c");
+    let main_path = dir.join("tests.o");
+    std::fs::write(&source_path, source)
+        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    checked(
+        StageName::Link,
+        Command::new(&toolchain.clang)
+            .arg("-c")
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&main_path),
+    )?;
+    // A relocatable link collects the dispatch and entry adapters into the
+    // single launcher object consumed by the ordinary checked linker.
+    let launcher = dir.join("tests-launcher.o");
+    let mut command = Command::new(&toolchain.clang);
+    command
+        .arg("-r")
+        .arg(&main_path)
+        .args(&adapters)
+        .arg("-o")
+        .arg(&launcher);
+    checked(StageName::Link, &mut command)?;
+    let bytes =
+        std::fs::read(launcher).map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    link_launcher(
+        program,
+        &tests[0].entry,
+        objects,
+        toolchain,
+        dir,
+        false,
+        &bytes,
+    )
 }
 
 /// The encoded failure table every source program registers before its entry runs.

@@ -1096,7 +1096,9 @@ kept
 
 ## Testing with `test.*`
 
-Tests are ordinary functions with an explicit `Test`, not a special syntax.
+Tests are ordinary functions marked `@test`, optionally taking an explicit `Test`.
+Run this suite with `hirsel test conformance/LANG/LANG-9-tour-13-testing-run.hir.json`.
+Each selected function runs independently, so a failed check does not skip later tests.
 Core `test.check`, `test.dir` and `test.net` provide assertions and confined
 fakes. `std@1/test` adds structural equality, approximate floats, error extraction
 and property checks. `for_all` runs exactly 100 cases from the explicit generator
@@ -1114,7 +1116,8 @@ fn law(n: u64) -> bool uses {} {
   n + 0 == n
 }
 
-pub fn main(t: Test) -> Result[(), ()] {
+@test
+fn assertions(t: Test) {
   test.check(t, 2u64 + 2 == 4)
   let xs: List[u64] = [1, 2]
   test.equal(t, xs, [1, 2])
@@ -1123,13 +1126,12 @@ pub fn main(t: Test) -> Result[(), ()] {
   let rejected: Result[u64, String] = Error("bad input")
   let error = test.expect_error(t, take rejected)
   test.check(t, error == "bad input")
-  Ok(())
 }
 ```
 
 Expected:
 
-No stdout; exit 0 (all checks pass).
+All selected @test functions pass.
 <!-- /tour -->
 
 ## CSV and byte codecs

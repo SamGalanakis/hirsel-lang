@@ -90,3 +90,7 @@ collide with a header. Output is one JSON array, so the converted output itself
 remains proportional to the input row count. Errors return exit 1 after an
 explicit escaped JSON-lines log record when stderr is granted. The launcher
 then reports the returned `Invalid` error, as specified by PROG-3.
+
+Calculator and mdtoc include `@test` suites for their private parsing helpers. Run
+`hirsel test examples/calculator/hirsel.json` or
+`hirsel test examples/mdtoc/hirsel.json`; no host grants are needed.

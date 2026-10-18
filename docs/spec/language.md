@@ -278,13 +278,21 @@ fn run(text: String) -> Result[u64, AppError] {
 ### LANG-9: Tests
 
 Tests are ordinary functions, pure or taking the `Test` capability, which the test runner
-selects and calls. Assertions are explicit (`test.check(t, cond)`); property tests are a
+selects and calls. The zero-argument `@test` attribute selects an ordinary, complete,
+monomorphic Hirsel function declared in the manifest's own sources. It has no parameters
+or one borrowed `Test` parameter and returns `()` or `Result[(), E]`; visibility does not
+affect selection. Other signatures are LANG-9. Tests remain callable as ordinary functions.
+Each selected test runs in isolation with only Test authority: checks, an Error result,
+and runtime failures fail that test while ordinary cleanup runs and later tests continue.
+The default seed is the first eight SHA-256 bytes of the UTF-8 stable definition path,
+interpreted little endian; an explicit runner seed overrides it. Assertions are explicit (`test.check(t, cond)`); property tests are a
 library call over an explicit generator (`test.for_all(t, gen, law)`) whose seed comes
 from `Test`. Fakes, such as a confined directory or a scripted network, are created from
 `Test`. A false check fails LANG-9.
 
 ```hirsel
-pub fn test_sum(t: Test) {
+@test
+fn test_sum(t: Test) {
   test.check(t, 2u64 + 2 == 4)
 }
 ```

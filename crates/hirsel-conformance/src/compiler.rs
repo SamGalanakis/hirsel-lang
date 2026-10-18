@@ -61,6 +61,37 @@ fn evaluate_on_compiler_thread(
             );
         }
     };
+    if matches!(expect, Expect::Test) {
+        let mut observation = Observation {
+            phase: "test execution".into(),
+            ..Default::default()
+        };
+        let tests = match hirsel_driver::testing::discover(&mut program, &[], None) {
+            Ok(tests) if !tests.is_empty() => tests,
+            Ok(_) => {
+                return (
+                    Status::Fail("expect: test selected no @test functions".into()),
+                    observation,
+                );
+            }
+            Err(error) => return (Status::Fail(format!("test check: {error}")), observation),
+        };
+        let ordinary = hirsel_driver::testing::run_interpreted(&mut program, &tests, false);
+        let checked = hirsel_driver::testing::run_interpreted(&mut program, &tests, true);
+        if ordinary != checked {
+            observation.checked = Some(format!("ordinary {ordinary:?}; checked {checked:?}"));
+        }
+        observation.actual = format!("{} tests", ordinary.len());
+        let failed: Vec<_> = ordinary.iter().filter(|r| r.failure.is_some()).collect();
+        return (
+            if failed.is_empty() && observation.checked.is_none() {
+                Status::Pass
+            } else {
+                Status::Fail(format!("test results: {ordinary:?}; checked: {checked:?}"))
+            },
+            observation,
+        );
+    }
     let text = fs::read_to_string(path).unwrap_or_default();
     let context = program
         .files

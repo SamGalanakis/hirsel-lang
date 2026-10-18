@@ -22,9 +22,9 @@ impl BuildProfile {
     }
 }
 
-struct Scratch(PathBuf);
+pub(crate) struct Scratch(pub(crate) PathBuf);
 impl Scratch {
-    fn new() -> Result<Self, NativeError> {
+    pub(crate) fn new() -> Result<Self, NativeError> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         loop {
             let path = std::env::temp_dir().join(format!(

@@ -17,7 +17,9 @@ mod pairwise;
 mod proofs;
 mod runtime_cache;
 mod stages;
+mod testing;
 mod tool;
+pub use testing::test_path;
 
 pub use adapt::{input_identity, manifest, program};
 pub use coverage::backend_features;

@@ -60,7 +60,10 @@ pub fn baseline(root: &Path) -> Result<Vec<Case>, String> {
         let header = crate::parse_header(Path::new(id), &source, &rules)?;
         if matches!(
             header.expect,
-            crate::Expect::Run { .. } | crate::Expect::Fail { .. } | crate::Expect::Blocked { .. }
+            crate::Expect::Test
+                | crate::Expect::Run { .. }
+                | crate::Expect::Fail { .. }
+                | crate::Expect::Blocked { .. }
         ) {
             cases.push(Case {
                 id: id.to_string(),
@@ -407,6 +410,9 @@ fn run_source_path(
     toolchain: &Toolchain,
     dir: &Path,
 ) -> CaseResult {
+    if source.lines().any(|line| line.trim() == "// expect: test") {
+        return run_test_suite(id, source, path, matrix, toolchain, dir);
+    }
     let mut engine = hirsel_engine::QueryEngine::new(
         hirsel_engine::default_environment(),
         hirsel_driver::compiler_adapters(),
@@ -442,6 +448,102 @@ fn run_source_path(
             }
         }
     }
+}
+
+/// A test corpus case exercises every selected function in every configuration.
+fn run_test_suite(
+    id: &str,
+    source: &str,
+    path: Option<&Path>,
+    matrix: &[Configuration],
+    toolchain: &Toolchain,
+    dir: &Path,
+) -> CaseResult {
+    let run = || -> Result<CaseResult, String> {
+        let fallback = dir.join("test-suite.hir");
+        if path.is_none() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            std::fs::write(&fallback, source).map_err(|e| e.to_string())?;
+        }
+        let mut program = hirsel_driver::load_program_source(path.unwrap_or(&fallback), Some(source))
+            .map_err(|e| e.to_string())?;
+        let tests =
+            hirsel_driver::testing::discover(&mut program, &[], None).map_err(|e| e.to_string())?;
+        if tests.is_empty() {
+            return Err("expect: test selected no @test functions".into());
+        }
+        let input = program
+            .engine
+            .export_native_input()
+            .map_err(|e| format!("export: {e:?}"))?;
+        let validated = program
+            .engine
+            .import_native_input(input)
+            .map_err(|e| format!("import: {e:?}"))?;
+        let mut outcomes: Vec<_> = matrix
+            .iter()
+            .map(|c| (c.name(), Class::of(c), Outcome::Agree))
+            .collect();
+        let mut first_reference = None;
+        for (index, test) in tests.iter().enumerate() {
+            let config = hirsel_engine::RunConfiguration {
+                entry: test.entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let simulation = hirsel_engine::SimulationConfig {
+                grants: Default::default(),
+                test_seed: test.seed,
+                ..Default::default()
+            };
+            let execution =
+                hirsel_engine::run_observed_snapshot(&mut program.engine, &config, simulation)
+                    .map_err(|e| e.to_string())?;
+            let reference = execution
+                .observation
+                .as_ref()
+                .map(Observation::of_reference)
+                .ok_or("test reference has no observation")?;
+            if reference.exit_code != Some(0) {
+                return Err(format!("{} failed: {reference:?}", test.definition));
+            }
+            let mut configurations = matrix.to_vec();
+            for c in &mut configurations {
+                c.options.launch.test_seed = test.seed;
+            }
+            let test_dir = dir.join(format!("test-{index}"));
+            std::fs::create_dir_all(&test_dir).map_err(|e| e.to_string())?;
+            for ((_, _, current), (_, result)) in outcomes.iter_mut().zip(differential(
+                &validated,
+                &test.entry,
+                &reference,
+                &configurations,
+                toolchain,
+                &test_dir,
+            )) {
+                if matches!(current, Outcome::Agree) {
+                    *current = result;
+                }
+            }
+            if first_reference.is_none() {
+                first_reference = Some(reference);
+            }
+        }
+        Ok(CaseResult {
+            id: id.into(),
+            snapshot: None,
+            outcomes,
+            reference: first_reference,
+            wall: Default::default(),
+        })
+    };
+    run().unwrap_or_else(|reason| CaseResult {
+        id: id.into(),
+        snapshot: Some(reason),
+        outcomes: vec![],
+        reference: None,
+        wall: Default::default(),
+    })
 }
 
 /// Run one source's real-Io record and replay (`real_io_replay`). Must be

@@ -1,0 +1,4 @@
+// rule: LANG-9
+// expect: test
+@test
+fn example() -> Result[(), String] { Ok(()) }

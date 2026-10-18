@@ -160,3 +160,5 @@ tokens first, by deadline with ties in entry order, and a ready one's reissued w
 expires its scope; a scope that exited first has its token finished, recording nothing.
 The compiled runtime (`hirsel-rt/src/host_waits.rs`) arms and polls the same requests, so
 tapes replay in either engine.
+
+`testing` selects checked root-package `@test` functions, generates ordinary in-memory Test/Result launch adapters in each defining module, and runs independent interpreter contexts. `native::test_path` emits one executable with all selected adapters and starts one process per test; LLVM and Cranelift share selection, seeds and results.

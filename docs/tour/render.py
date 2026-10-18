@@ -21,6 +21,8 @@ def render(match):
     expected = (f'```text\n{output}```' if output else
                 'No stdout; exit 0 (all checks pass).' if exit_code == '0' else
                 f'No stdout; exit {exit_code}.')
+    if any(line.strip() == '// expect: test' for line in lines[:split]):
+        expected = 'All selected @test functions pass.'
     return (f'<!-- tour: {path} -->\n'
             f'[Runnable source](../{path})\n\n'
             f'```hirsel\n{body}```\n\nExpected:\n\n{expected}\n<!-- /tour -->')

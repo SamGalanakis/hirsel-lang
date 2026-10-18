@@ -74,3 +74,19 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   }
   common.print(rt, common.finish(take builder)?)
 }
+
+@test
+fn evaluates_left_to_right(t: Test) {
+  match evaluate("2 + 3 * 4") {
+    Ok(value) => test.check(t, value == 20),
+    Error(_) => test.fail(t),
+  }
+}
+
+@test
+fn rejects_zero_division(t: Test) {
+  match evaluate("4 / 0") {
+    Ok(_) => test.fail(t),
+    Error(_) => (),
+  }
+}
