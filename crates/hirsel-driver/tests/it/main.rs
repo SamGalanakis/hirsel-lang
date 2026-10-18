@@ -46,6 +46,7 @@ mod package_cache;
 mod packages;
 mod packed_walk;
 mod pipeline;
+mod precheck;
 mod program_revision;
 mod proof_export;
 mod proof_limits;

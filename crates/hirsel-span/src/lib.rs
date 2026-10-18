@@ -2,11 +2,25 @@
 use std::path::{Path, PathBuf};
 
 /// Session-local index into a source map, never a definition identity (PROG-1).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct FileId(pub u32);
 
 /// Half-open UTF-8 byte range in one file (FAIL-1). Empty ranges mark insertions.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Span {
     pub file: FileId,
     pub start: u32,

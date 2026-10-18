@@ -6,7 +6,19 @@ use sha2::{Digest, Sha256};
 mod origins;
 
 /// Stable SHA-256 digest of domain-separated, length-framed inputs (PROG-5).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize,
+    serde::Deserialize,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+)]
 pub struct ContentHash(pub [u8; 32]);
 impl ContentHash {
     pub fn of_bytes(bytes: &[u8]) -> Self {
@@ -22,7 +34,9 @@ impl ContentHash {
     }
 }
 /// Package identity includes version; package names alone do not identify types (PROG-1).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub struct PackageId {
     pub name: String,
     pub version: String,
@@ -39,14 +53,18 @@ impl PackageId {
     }
 }
 /// Canonical name; module components come from the definition manifest, not files (PROG-1).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub struct ItemPath {
     pub package: PackageId,
     pub modules: Vec<String>,
     pub name: String,
 }
 /// Stable definition identity, unaffected by source positions, hashes or intern order (PROG-5).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub struct DefPath(pub ItemPath);
 impl DefPath {
     /// The reserved core@1 identity, with dot-separated module and item names.
@@ -99,7 +117,7 @@ impl std::fmt::Display for DefPath {
 }
 macro_rules! ids { ($($name:ident),* $(,)?) => {$(
     /// Arena-local u32 index; not a stable definition identity (LANG-1, PROG-5).
-    #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize)]
     pub struct $name(pub u32);
 )*}; }
 ids!(TokenId, ItemId, ExprId, PatternId, TypeExprId, StmtId);
@@ -263,14 +281,14 @@ pub struct Path {
     pub segments: Vec<Symbol>,
 }
 /// Parameter passing mode; copy/unique are expressions, not parameter conventions (OWN-1/2/3).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PassingMode {
     Borrow,
     Take,
     Mut,
 }
 /// Unary operations including explicit ownership requests (LANG-14, SEM-1).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnaryOp {
     Neg,
     Not,
@@ -282,7 +300,7 @@ pub enum UnaryOp {
     Box,
 }
 /// Binary operators, evaluated left-to-right except short-circuit booleans (LANG-3; #21).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BinaryOp {
     Add,
     Sub,
@@ -605,7 +623,9 @@ pub enum TypeExprKind {
     Error,
 }
 /// Structural bound names are contextual identifiers (GEN-1).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum Bound {
     Plain,
     Flat,
@@ -675,7 +695,7 @@ pub struct Attribute {
     pub origin: Origin,
 }
 /// Contract kind; before() snapshots are expressions (FACT-1).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ContractKind {
     Requires,
     Ensures,

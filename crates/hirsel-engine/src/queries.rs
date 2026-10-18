@@ -10,6 +10,8 @@ mod positions;
 mod program_revision;
 pub use program_revision::ForeignUse;
 pub(crate) use program_revision::SemanticProgram;
+mod precheck;
+pub use precheck::Precheck;
 mod signature_input;
 pub(crate) use dependencies::ExecutionReads;
 use hirsel_diag::Severity;
@@ -157,6 +159,8 @@ pub struct QueryEngine {
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
     reads: Layered<(DefPath, QueryKind), DependencyReads>,
+    /// Dependency packages whose checked products come from a precheck.
+    prechecks: BTreeMap<hirsel_syntax::PackageId, precheck::AdoptedPrecheck>,
     pub unavailable: Option<QueryKind>,
     pub last_phase: Option<QueryKind>,
 }
@@ -269,6 +273,7 @@ impl QueryEngine {
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
             reads: Layered::default(),
+            prechecks: BTreeMap::new(),
             unavailable: None,
             last_phase: None,
         }
@@ -579,7 +584,8 @@ impl QueryEngine {
     }
     /// Parsing a new snapshot updates definitions in that manifest module. Unchanged items
     /// retain their old owning AST, so body edits in siblings don't invalidate their queries.
-    fn index(&mut self, file: &SyntaxFile, _context: &FileContext) -> Result<(), QueryError> {
+    fn index(&mut self, file: &SyntaxFile, context: &FileContext) -> Result<(), QueryError> {
+        self.drop_precheck(&context.package);
         self.source_revision += 1;
         let source_path = &self.sources.file(file.file).unwrap().path;
         let from_source =
@@ -1037,7 +1043,15 @@ impl QueryEngine {
         &mut self,
     ) -> Result<Vec<(DefPath, Arc<QueryOutput<TypedBody>>)>, QueryError> {
         let mut bodies = vec![];
-        for path in self.items.keys().cloned().collect::<Vec<_>>() {
+        // A prechecked package reaches no definition outside its closure, so it closes no
+        // instantiation cycle through one, and its own verdict is in its precheck.
+        for path in self
+            .items
+            .keys()
+            .filter(|path| !self.prechecked(&path.0.package))
+            .cloned()
+            .collect::<Vec<_>>()
+        {
             let checked = self.check_query(&path)?;
             bodies.push((path, checked));
         }
@@ -1325,6 +1339,9 @@ impl DefinitionQueries for QueryEngine {
         definition: &DefPath,
     ) -> Result<QueryOutput<hirsel_tir::DefinitionRef>, QueryError> {
         self.prepare_materialization_environment();
+        if let Some(prechecked) = self.prechecked_lowering(definition)? {
+            return Ok(prechecked);
+        }
         let modes = self.mode_query(definition)?;
         let signature = self.signature_output(definition)?;
         let key = self.key(definition, QueryKind::Lower)?;

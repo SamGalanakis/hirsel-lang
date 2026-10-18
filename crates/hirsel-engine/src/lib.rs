@@ -27,7 +27,7 @@ mod facts;
 pub use adapters::*;
 mod package;
 mod package_cache;
-pub use package_cache::PackageCache;
+pub use package_cache::{PackageCache, report_prechecks};
 mod admission;
 mod proof_export;
 mod queries;

@@ -9,7 +9,9 @@ Wire tests use run-config's shared `hex` formatter as a dev dependency.
   existing rows with constant-time access; append detaches shared storage; independently appended rows have distinct IDs. Use
   `push`, `id`, `iter`, `len`, `is_empty`; `from_graph` constructs forward edges
   without mutable published rows. Provenance never enters fingerprints or IDs on
-  disk. An old ID must not be paired with a rebuilt graph. The shared
+  disk: an encoded TypeId (`encode_types`) carries its index and an alias class
+  numbered within the encoding session, and decoding (`decode_types`) gives each
+  class fresh provenance. An old ID must not be paired with a rebuilt graph. The shared
   `hirsel_intern::work` registry counts copied rows for deterministic scaling
   assertions.
 - `Signature` is self-contained. Fixed header defaults never come from bodies

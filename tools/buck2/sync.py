@@ -150,6 +150,11 @@ TEST_DATA = {
 NATIVE_TESTS = {"hirsel-cranelift", "hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-llvm", "hirsel-pipeline-tests", "hirsel-rc", "hirsel-rt"}
 RUNTIME_ARCHIVES = "//:hirsel-rt-archives"
 
+# The std precheck (docs/building.md, "The std precheck"): checked once by the built CLI,
+# then loaded by the tests and campaigns that run std programs (HIRSEL_PRECHECK).
+PRECHECK = "//:hirsel-std-precheck"
+PRECHECKED_TESTS = {"hirsel-cli", "hirsel-conformance", "hirsel-driver", "hirsel-pipeline-tests"}
+
 # Cases that call full_matrix (44 configurations) for toolchain or configuration
 # discovery: every run outside the full gate skips them by name, and
 # `-c hirsel.full=true` runs them (tools/buck2/defs.bzl).
@@ -558,14 +563,35 @@ def feature_deps(package: dict) -> dict[str, list[str]]:
     return result
 
 
+def compiler_identity_inputs(meta: dict) -> list[str]:
+    """What the driver's build script hashes into its compiler identity
+    (crates/hirsel-driver/build.rs): every workspace crate in its normal
+    dependency closure, the lockfile and the toolchain pin."""
+    packages = {p["name"]: p for p in meta["packages"] if p["id"] in set(meta["workspace_members"])}
+    closure, todo = set(), ["hirsel-driver"]
+    while todo:
+        name = todo.pop()
+        if name in closure:
+            continue
+        closure.add(name)
+        todo.extend(d["name"] for d in packages[name]["dependencies"]
+                    if d["kind"] is None and d.get("path") and d["name"] in packages)
+    inputs = []
+    for name in sorted(closure):
+        directory = relative(pathlib.Path(packages[name]["manifest_path"]).parent)
+        inputs += [f"{directory}/Cargo.toml", f"{directory}/build.rs", f"{directory}/src/**", f"{directory}/include/**"]
+    return inputs + ["Cargo.lock", "rust-toolchain.toml", "native-tests/library/operations.tsv"]
+
+
 def first_party(meta: dict) -> str:
     packages = {p["id"]: p for p in meta["packages"]}
     nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
     members = set(meta["workspace_members"])
+    BUILD_SCRIPT_INPUTS["hirsel-driver"] = compiler_identity_inputs(meta)
     opt_levels = dev_opt_levels()
     out = [
         HEADER,
-        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_test")\n',
+        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
@@ -591,6 +617,7 @@ def first_party(meta: dict) -> str:
 
         def test_attrs(binary: str, src: pathlib.Path) -> dict:
             return dict(data=test_data(binary, name, package_dir, src), runtime_archives=runtime_archives,
+                        precheck=PRECHECK if name in PRECHECKED_TESTS else None,
                         seeded=seeded(target_dir(package_dir, src), src) or None, skips=FULL_GATE_SKIPS.get(binary))
 
         lib = next((t for t in package["targets"] if set(t["kind"]) & {"lib", "rlib", "staticlib"}), None)
@@ -665,7 +692,10 @@ def first_party(meta: dict) -> str:
                                          **test_attrs(f"{name}-test-{target['name']}", src), **attrs))
     out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", data=Raw(f"glob({starlark(CORPUS, 4)})")))
     for gate in GATE_TESTS:
-        out.append("\n" + call("hirsel_command_test", **gate, data=Raw(f"glob({starlark(CORPUS, 4)})")))
+        out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(CORPUS, 4)})")))
+    out.append("\n" + call("hirsel_precheck", name="hirsel-std-precheck", hirsel="//:hirsel-cli-bin-hirsel",
+                            manifest="stdlib/std@1/hirsel.json", srcs=Raw('glob(["stdlib/std@1/**"])'),
+                            visibility=["PUBLIC"]))
     for name, script, data, archives in (
         ("gate-native-runtime-c", "crates/hirsel-rt/harness/run.sh", ["crates/hirsel-rt/harness/**", "crates/hirsel-rt/include/**"], RUNTIME_ARCHIVES),
         ("gate-native-library-c", "native-tests/library/run-c.sh", ["native-tests/library/**", "crates/hirsel-rt/include/**", "stdlib/native/**"], RUNTIME_ARCHIVES),

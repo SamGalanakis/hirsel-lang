@@ -19,9 +19,69 @@ impl std::fmt::Debug for TypeId {
         write!(f, "TypeId({})", self.index)
     }
 }
+/// Encoded TypeIds carry their row index and an alias class numbered within one
+/// encoding session, never this process's provenance: equal provenance encodes
+/// as one class, so decoded stores keep their aliasing.
+impl serde::Serialize for TypeId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let class = ENCODING
+            .with_borrow_mut(|session| {
+                session.as_mut().map(|session| {
+                    let next = session.0.len() as u64;
+                    *session.0.entry(self.provenance).or_insert(next)
+                })
+            })
+            .ok_or_else(|| serde::ser::Error::custom("TypeId encoded outside a type session"))?;
+        (self.index, class).serialize(serializer)
+    }
+}
+/// A decoded TypeId takes fresh provenance, the same one for every TypeId of
+/// one alias class, so decoded rows never alias rows created in this process.
+impl<'de> serde::Deserialize<'de> for TypeId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (index, class) = <(u32, u64)>::deserialize(deserializer)?;
+        let provenance = DECODING
+            .with_borrow_mut(|session| {
+                session.as_mut().map(|session| {
+                    *session
+                        .0
+                        .entry(class)
+                        .or_insert_with(|| TypeStore::fresh_id(0).provenance)
+                })
+            })
+            .ok_or_else(|| serde::de::Error::custom("TypeId decoded outside a type session"))?;
+        Ok(TypeId { index, provenance })
+    }
+}
+/// The alias classes of one encoded artifact.
+#[derive(Debug, Default)]
+pub struct EncodedTypes(std::collections::HashMap<u64, u64>);
+/// The provenance given to one decoded artifact's alias classes.
+#[derive(Debug, Default)]
+pub struct DecodedTypes(std::collections::HashMap<u64, u64>);
+thread_local! {
+    static ENCODING: std::cell::RefCell<Option<EncodedTypes>> =
+        const { std::cell::RefCell::new(None) };
+    static DECODING: std::cell::RefCell<Option<DecodedTypes>> =
+        const { std::cell::RefCell::new(None) };
+}
+/// Encode TypeIds in `encode` with `session`'s alias classes.
+pub fn encode_types<R>(session: &mut EncodedTypes, encode: impl FnOnce() -> R) -> R {
+    let outer = ENCODING.replace(Some(std::mem::take(session)));
+    let result = encode();
+    *session = ENCODING.replace(outer).expect("type encoding session");
+    result
+}
+/// Decode TypeIds in `decode` with `session`'s provenance assignments.
+pub fn decode_types<R>(session: &mut DecodedTypes, decode: impl FnOnce() -> R) -> R {
+    let outer = DECODING.replace(Some(std::mem::take(session)));
+    let result = decode();
+    *session = DECODING.replace(outer).expect("type decoding session");
+    result
+}
 /// Append-only immutable rows. Clones share existing rows; append detaches them. Every new row
 /// has fresh provenance, so independently extended clones cannot alias new indices.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TypeStore {
     rows: Arc<Vec<(TypeId, Type)>>,
 }

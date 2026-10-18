@@ -1,0 +1,242 @@
+//! Prechecked packages (docs/building.md, "The std precheck") change only how long checking
+//! takes: prechecked products equal freshly checked ones, and a precheck is used only for
+//! the exact compiler and sources it was checked under.
+use hirsel_driver::*;
+use hirsel_engine::*;
+use hirsel_syntax::PackageId;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+struct Fixture(PathBuf);
+impl Fixture {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "hirsel-precheck-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+    fn write(&self, name: &str, source: &str) {
+        std::fs::write(self.0.join(name), source).unwrap();
+    }
+    /// A root package `name` depending on the package at `manifest`.
+    fn program(&self, name: &str, source: &str, manifest: &Path, dependency: &str) -> PathBuf {
+        self.write(&format!("{name}.hir"), source);
+        let manifest = serde_json::json!({
+            "schema": 1,
+            "package": {"name": name, "version": "1"},
+            "sources": [{"path": format!("{name}.hir"), "module": []}],
+            "dependencies": [{
+                "manifest": manifest,
+                "package": {"name": dependency, "version": "1"},
+                "expose": [],
+            }],
+            "entry": {"module": [], "name": "main"},
+        });
+        let path = self.0.join(format!("{name}.json"));
+        std::fs::write(&path, manifest.to_string()).unwrap();
+        path
+    }
+    fn library(&self, source: &str) -> PathBuf {
+        self.write("lib.hir", source);
+        let manifest = serde_json::json!({
+            "schema": 1,
+            "package": {"name": "lib", "version": "1"},
+            "sources": [{"path": "lib.hir", "module": ["lib"]}],
+            "dependencies": [],
+        });
+        let path = self.0.join("lib.json");
+        std::fs::write(&path, manifest.to_string()).unwrap();
+        path
+    }
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+fn package(name: &str) -> PackageId {
+    PackageId {
+        name: name.into(),
+        version: "1".into(),
+    }
+}
+fn std_manifest() -> PathBuf {
+    // Manifests are written into a temporary directory: name std absolutely.
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../stdlib/std@1/hirsel.json")
+        .canonicalize()
+        .unwrap()
+}
+fn load(path: &Path, cache: &PackageCache) -> LoadedProgram {
+    load_program_source_with_cache(path, None, cache).unwrap()
+}
+
+const STD_PROGRAM: &str = "pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  out.print(output, string.trim(\" hello \")) ? Output
+  out.print(output, u64.to_string(42u64)) ? Output
+  Ok(())
+}
+";
+
+/// Every prechecked std definition lowers to the same TIR and has the same revision
+/// node as in a fresh check, in a program that places std's sources at other
+/// FileIds than the program the precheck was checked in.
+#[test]
+fn prechecked_std_products_equal_fresh_ones() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        // `zzz` places std's sources first, `aaa` after the program's own.
+        let checked = f.program("zzz", STD_PROGRAM, &std_manifest(), "std");
+        let mut fresh = load(&checked, &PackageCache::disabled());
+        let bytes = fresh.precheck(&package("std")).unwrap();
+        let precheck = Arc::new(Precheck::decode(bytes).unwrap());
+        let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
+        let mut prechecked = load(&client, &PackageCache::prechecked(vec![precheck.clone()]));
+        assert!(
+            prechecked.engine.prechecked(&package("std")),
+            "{:?}",
+            prechecked.precheck_notes
+        );
+        let mut reference = load(&client, &PackageCache::disabled());
+        let checked = |p: &mut LoadedProgram| {
+            let output = p.check().unwrap();
+            let rendered: Vec<_> = output
+                .diagnostics
+                .iter()
+                .map(|d| d.render_human(&output.sources))
+                .collect();
+            (output.completion, rendered)
+        };
+        assert_eq!(checked(&mut prechecked), checked(&mut reference));
+        let entry = prechecked.entry.clone();
+        assert_eq!(
+            prechecked.engine.semantic_program_revision(&entry).unwrap(),
+            reference.engine.semantic_program_revision(&entry).unwrap()
+        );
+        let mut lowered = 0;
+        for path in precheck.definitions() {
+            assert_eq!(
+                prechecked.engine.semantic_program_revision(path).unwrap(),
+                fresh.engine.semantic_program_revision(path).unwrap(),
+                "{path}"
+            );
+            let Ok(expected) = fresh.engine.lower_to_tir(path) else {
+                continue;
+            };
+            let actual = prechecked.engine.lower_to_tir(path).unwrap();
+            // Spans name this program's FileIds; TypeId's Debug omits provenance.
+            let rebased = reference.engine.lower_to_tir(path).unwrap();
+            assert_eq!(
+                format!("{:?}", actual.value),
+                format!("{:?}", rebased.value),
+                "{path}"
+            );
+            assert_eq!(actual.dependencies, expected.dependencies, "{path}");
+            lowered += 1;
+        }
+        assert!(lowered > 100, "{lowered}");
+    });
+}
+
+const LIBRARY: &str = "pub fn value(x: u64) -> u64 {
+  x + 1
+}
+";
+const CLIENT: &str = "pub fn main() -> Result[(), ()] {
+  failure.check(lib.value(1) == 2, Arithmetic())
+  Ok(())
+}
+";
+
+fn library_precheck(f: &Fixture, source: &str) -> Result<Arc<Precheck>, ToolError> {
+    let manifest = f.library(source);
+    let program = f.program("prechecker", CLIENT, &manifest, "lib");
+    let bytes = load(&program, &PackageCache::disabled()).precheck(&package("lib"))?;
+    Ok(Arc::new(Precheck::decode(bytes).unwrap()))
+}
+
+#[test]
+fn a_precheck_serves_only_the_compiler_and_sources_it_was_checked_under() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let precheck = library_precheck(&f, LIBRARY).unwrap();
+        let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
+        let cache = PackageCache::prechecked(vec![precheck.clone()]);
+        let mut program = load(&client, &cache);
+        assert!(program.engine.prechecked(&package("lib")));
+        assert!(program.precheck_notes.is_empty());
+        program.check_for_execution().unwrap();
+
+        // Another compiler identity.
+        let other = Compiler::new(FrontPhases::shared, [7; 32]);
+        let program = other
+            .load_program_source_with_cache(&client, None, &cache)
+            .unwrap();
+        assert!(!program.engine.prechecked(&package("lib")));
+        assert_eq!(
+            program.precheck_notes.len(),
+            1,
+            "{:?}",
+            program.precheck_notes
+        );
+
+        // Other sources: a comment changes the package's checked input.
+        f.library(&format!("{LIBRARY}// edited\n"));
+        let mut program = load(&client, &cache);
+        assert!(!program.engine.prechecked(&package("lib")));
+        assert_eq!(
+            program.precheck_notes.len(),
+            1,
+            "{:?}",
+            program.precheck_notes
+        );
+        program.check_for_execution().unwrap();
+    });
+}
+
+#[test]
+fn editing_a_prechecked_source_in_a_session_ends_its_precheck() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let precheck = library_precheck(&f, LIBRARY).unwrap();
+        let client = f.program("client", CLIENT, &f.0.join("lib.json"), "lib");
+        let mut program = load(&client, &PackageCache::prechecked(vec![precheck]));
+        assert!(program.engine.prechecked(&package("lib")));
+        let (file, context) = program
+            .files
+            .iter()
+            .find(|(_, c)| c.package == package("lib"))
+            .cloned()
+            .unwrap();
+        let path = program.engine.sources.file(file).unwrap().path.clone();
+        let edited = LIBRARY.replace("x + 1", "x + 2");
+        let file = program.engine.sources.add(&path, edited).unwrap();
+        program.engine.parse_file(file, &context).unwrap();
+        assert!(!program.engine.prechecked(&package("lib")));
+        // The edited body is checked and run from source.
+        assert!(program.check_for_execution().is_ok());
+    });
+}
+
+/// A precheck is written only for a package that checks clean; its accepted twin is
+/// `a_precheck_serves_only_the_compiler_and_sources_it_was_checked_under`.
+#[test]
+fn a_package_with_diagnostics_is_never_prechecked() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let rejected = library_precheck(&f, "pub fn value(x: u64) -> u64 {\n  x + true\n}\n");
+        assert!(rejected.is_err());
+    });
+}

@@ -395,7 +395,11 @@ impl QueryEngine {
     }
 
     /// No retained query of `package` reads outside its closure (or core).
-    fn package_closed(&self, package: &PackageId, closure: &BTreeSet<PackageId>) -> bool {
+    pub(super) fn package_closed(
+        &self,
+        package: &PackageId,
+        closure: &BTreeSet<PackageId>,
+    ) -> bool {
         let core = hirsel_syntax::DefPath::core("Result").0.package;
         let inside = |p: &PackageId| closure.contains(p) || *p == core;
         macro_rules! closed {

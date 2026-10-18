@@ -14,7 +14,8 @@ pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
 use std::{io::Write, path::Path};
 
 /// The complete compiler over the front phases in [`FrontPhases`].
-pub const COMPILER: Compiler = Compiler::new(FrontPhases::shared);
+include!(concat!(env!("OUT_DIR"), "/compiler_identity.rs"));
+pub const COMPILER: Compiler = Compiler::new(FrontPhases::shared, COMPILER_IDENTITY);
 
 pub fn compiler_adapters() -> PhaseAdapters {
     COMPILER.adapters()

@@ -5,6 +5,18 @@ use unicode_width::UnicodeWidthStr;
 /// A syntactically valid specification ID (FAIL-1); membership is checked against the spec.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct RuleId(Cow<'static, str>);
+impl serde::Serialize for RuleId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+/// Decoded IDs are validated like any other external data.
+impl<'de> serde::Deserialize<'de> for RuleId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(|_| serde::de::Error::custom("invalid rule ID"))
+    }
+}
 
 impl RuleId {
     /// A fixed compiler rule, validated during constant evaluation.

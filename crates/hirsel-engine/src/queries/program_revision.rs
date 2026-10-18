@@ -68,83 +68,10 @@ impl QueryEngine {
             if !visited.insert(path.clone()) {
                 continue;
             }
-            let signature = self.item_signature(&path)?;
-            if has_errors(&signature.diagnostics) {
-                return Err(QueryError::Diagnostics(signature.diagnostics));
-            }
-            let mut dependencies: BTreeSet<_> = signature
-                .dependencies
-                .iter()
-                .map(|d| d.definition.clone())
-                .collect();
-            let mut content = vec![
-                hirsel_types::encoding::canonical_encoding(
-                    &signature.value,
-                    &signature.dependencies,
-                )
-                .map_err(|e| operational(format!("signature encoding: {e:?}")))?,
-            ];
-            if self.items.contains_key(&path) {
-                let analyzed = self.mode_query(&path)?;
-                if has_errors(&analyzed.diagnostics) {
-                    return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
-                }
-                let file = &analyzed.value.typed.file;
-                let item = &file.tree.items[analyzed.value.typed.item.0 as usize];
-                content.extend(self.semantic_tokens(file, item)?);
-                if matches!(
-                    &item.kind,
-                    ItemKind::Function { body: Some(_), .. }
-                        | ItemKind::Const { .. }
-                        | ItemKind::Type { drop: Some(_), .. }
-                ) {
-                    let lowered = self.lower_to_tir(&path)?;
-                    if has_errors(&lowered.diagnostics) {
-                        return Err(QueryError::Diagnostics(lowered.diagnostics));
-                    }
-                }
-                for kind in [
-                    QueryKind::Signature,
-                    QueryKind::Resolve,
-                    QueryKind::Check,
-                    QueryKind::Modes,
-                    QueryKind::Lower,
-                ] {
-                    if let Some(reads) = self.dependency_reads(&path, kind) {
-                        dependencies.extend(reads.signatures.iter().map(|d| d.definition.clone()));
-                        for read in reads.resolver.iter().chain(&reads.manifest_lookups) {
-                            match read {
-                                DependencyRead::Signature { definition, .. } => {
-                                    dependencies.insert(definition.clone());
-                                }
-                                DependencyRead::Lookup {
-                                    result: Ok(definition),
-                                    ..
-                                } => {
-                                    dependencies.insert(definition.clone());
-                                }
-                                DependencyRead::ProviderLookup { output, .. } => {
-                                    if let Ok(definition) = &output.result {
-                                        dependencies.insert(definition.clone());
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                if let Some(cache) = self.modes.get(&path) {
-                    dependencies.extend(cache.representations.keys().cloned());
-                }
-                if let Some(cache) = self.lowered.get(&path) {
-                    dependencies.extend(cache.representations.keys().cloned());
-                    dependencies.extend(cache.executed.bodies.keys().cloned());
-                    dependencies.extend(cache.executed.signatures.keys().cloned());
-                }
-            }
-            if let SignatureKind::Type(declaration) = &signature.value.kind {
-                dependencies.extend(declaration.drop.iter().cloned());
-            }
+            let (content, dependencies) = match self.prechecked_node(&path)? {
+                Some(node) => (node.content.clone(), node.dependencies.clone()),
+                None => self.semantic_node(&path)?,
+            };
             pending.extend(dependencies.iter().cloned());
             uses.insert(path.clone(), dependencies.clone());
             let mut dependencies: Vec<_> = dependencies.iter().map(ToString::to_string).collect();
@@ -160,6 +87,89 @@ impl QueryEngine {
             definitions: visited,
             uses,
         })
+    }
+
+    /// One definition's revision content and direct semantic dependencies,
+    /// computed from its checked queries.
+    pub(crate) fn semantic_node(
+        &mut self,
+        path: &DefPath,
+    ) -> Result<(Vec<Vec<u8>>, BTreeSet<DefPath>), QueryError> {
+        let signature = self.item_signature(path)?;
+        if has_errors(&signature.diagnostics) {
+            return Err(QueryError::Diagnostics(signature.diagnostics));
+        }
+        let mut dependencies: BTreeSet<_> = signature
+            .dependencies
+            .iter()
+            .map(|d| d.definition.clone())
+            .collect();
+        let mut content = vec![
+            hirsel_types::encoding::canonical_encoding(&signature.value, &signature.dependencies)
+                .map_err(|e| operational(format!("signature encoding: {e:?}")))?,
+        ];
+        if self.items.contains_key(path) {
+            let analyzed = self.mode_query(path)?;
+            if has_errors(&analyzed.diagnostics) {
+                return Err(QueryError::Diagnostics(analyzed.diagnostics.clone()));
+            }
+            let file = &analyzed.value.typed.file;
+            let item = &file.tree.items[analyzed.value.typed.item.0 as usize];
+            content.extend(self.semantic_tokens(file, item)?);
+            if matches!(
+                &item.kind,
+                ItemKind::Function { body: Some(_), .. }
+                    | ItemKind::Const { .. }
+                    | ItemKind::Type { drop: Some(_), .. }
+            ) {
+                let lowered = self.lower_to_tir(path)?;
+                if has_errors(&lowered.diagnostics) {
+                    return Err(QueryError::Diagnostics(lowered.diagnostics));
+                }
+            }
+            for kind in [
+                QueryKind::Signature,
+                QueryKind::Resolve,
+                QueryKind::Check,
+                QueryKind::Modes,
+                QueryKind::Lower,
+            ] {
+                if let Some(reads) = self.dependency_reads(path, kind) {
+                    dependencies.extend(reads.signatures.iter().map(|d| d.definition.clone()));
+                    for read in reads.resolver.iter().chain(&reads.manifest_lookups) {
+                        match read {
+                            DependencyRead::Signature { definition, .. } => {
+                                dependencies.insert(definition.clone());
+                            }
+                            DependencyRead::Lookup {
+                                result: Ok(definition),
+                                ..
+                            } => {
+                                dependencies.insert(definition.clone());
+                            }
+                            DependencyRead::ProviderLookup { output, .. } => {
+                                if let Ok(definition) = &output.result {
+                                    dependencies.insert(definition.clone());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if let Some(cache) = self.modes.get(path) {
+                dependencies.extend(cache.representations.keys().cloned());
+            }
+            if let Some(cache) = self.lowered.get(path) {
+                dependencies.extend(cache.representations.keys().cloned());
+                dependencies.extend(cache.executed.bodies.keys().cloned());
+                dependencies.extend(cache.executed.signatures.keys().cloned());
+            }
+        }
+        if let SignatureKind::Type(declaration) = &signature.value.kind {
+            dependencies.extend(declaration.drop.iter().cloned());
+        }
+        Ok((content, dependencies))
     }
 
     /// The externs `entry` reaches and the definitions using them outside a

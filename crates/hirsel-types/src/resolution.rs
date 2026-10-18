@@ -46,7 +46,9 @@ pub enum ContextualName {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum NameSite {
     Expression(ExprId),
     Pattern(PatternId),

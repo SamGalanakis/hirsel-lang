@@ -145,6 +145,33 @@ never replays. The tape path must lie outside every granted directory. Tapes hol
 record, including granted Env values, every byte read or written and every
 `random.system@1` draw: treat them as secrets.
 
+## The std precheck
+
+std is part of the toolchain, so it is checked once, when the toolchain is built,
+rather than by every program that uses it. `hirsel precheck` checks a package
+completely, as the only dependency of an empty program, and writes its *precheck*:
+each definition's lowered, validated TIR and semantic-revision node.
+
+```sh
+hirsel precheck stdlib/std@1/hirsel.json -o "$(dirname "$(command -v hirsel)")/hirsel-std.precheck"
+.buck2/bin/buck2 build //:hirsel-std-precheck --show-output   # the same file, as tests use it
+```
+
+`hirsel` loads `$HIRSEL_PRECHECK`, or else `hirsel-std.precheck` beside its own
+executable. A program whose std matches the precheck skips checking std: with a
+release CLI, a hello world that uses std reaches `main` in about 0.5 s instead of
+4 s. A precheck is keyed by the compiler's identity (a digest of the sources of
+every crate the compiler is built from, `crates/hirsel-driver/build.rs`), std's
+sources and manifest, and the compile-time limits. Any difference means it is
+not used and std is checked from source as before, so a stale precheck only costs
+time; rebuild it after rebuilding `hirsel` or editing std. `--verbose` (any
+command) says on stderr why a dependency was checked from source. `hirsel
+precheck` refuses a package with any diagnostic. Diagnostics, semantic program
+revisions and replay identity are the same with and without a precheck. Buck2
+test targets that run std programs get `HIRSEL_PRECHECK` from
+`//:hirsel-std-precheck`, which rebuilds whenever std or the compiler changes;
+`HIRSEL_PACKAGE_CACHE=off` checks everything fresh.
+
 ## Layout
 
 - `docs/spec/` is the specification, starting at `docs/spec/index.md`. Rule IDs

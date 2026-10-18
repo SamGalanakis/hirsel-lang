@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>]";
+const USAGE: &str = "usage: hirsel [--verbose] check [--json] <source|manifest.json> | run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
 use execution_policy::DEFAULT_RUN_MAX_STEPS;
@@ -12,6 +12,10 @@ fn main() -> ExitCode {
 }
 enum Command {
     Help,
+    Precheck {
+        manifest: OsString,
+        output: OsString,
+    },
     Doc {
         root: OsString,
     },
@@ -170,6 +174,16 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     proofs.check()?;
                     proofs
                 },
+            }
+        }
+        Some(Value(command)) if command == "precheck" => {
+            let manifest = args.value()?;
+            if !matches!(args.next()?, Some(Short('o'))) {
+                return Err("precheck requires -o".into());
+            }
+            Command::Precheck {
+                manifest,
+                output: args.value()?,
             }
         }
         Some(Value(command)) if command == "doc" => {
@@ -387,7 +401,21 @@ fn source_arg(args: &mut Parser) -> Result<OsString, lexopt::Error> {
     }
 }
 
-fn execute(args: Vec<OsString>) -> u8 {
+/// `--verbose`, anywhere before a `--` separator, reports how dependency
+/// packages were checked (a missing or mismatched precheck) on stderr.
+fn take_verbose(args: &mut Vec<OsString>) -> bool {
+    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    let before = args.len();
+    let mut index = 0;
+    args.retain(|arg| {
+        index += 1;
+        index > end || arg != "--verbose"
+    });
+    args.len() != before
+}
+
+fn execute(mut args: Vec<OsString>) -> u8 {
+    hirsel_engine::report_prechecks(take_verbose(&mut args));
     let command = match parse_command(args) {
         Ok(command) => command,
         Err(error) => {
@@ -408,6 +436,20 @@ fn execute(args: Vec<OsString>) -> u8 {
         Command::Help => {
             println!("{USAGE}");
             return 0;
+        }
+        Command::Precheck { manifest, output } => {
+            let bytes = match hirsel_driver::COMPILER.precheck_package(Path::new(&manifest)) {
+                Ok(bytes) => bytes,
+                Err(error) => return tool_error(error, false),
+            };
+            // Readers never see a partial precheck.
+            let temporary = Path::new(&output).with_extension("precheck.partial");
+            return match std::fs::write(&temporary, bytes)
+                .and_then(|()| std::fs::rename(&temporary, &output))
+            {
+                Ok(()) => 0,
+                Err(error) => tool_error(ToolError::Io(error), false),
+            };
         }
         Command::Build {
             source,

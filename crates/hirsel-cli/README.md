@@ -26,6 +26,11 @@ Commands (arguments use the shared lexopt parser):
 - `hirsel doc --index [--root <repo>]` prints the public core/std signature index
   from the selected checkout (the current directory by default). Regenerate with
   `hirsel doc --index > docs/api.md` from the repository root.
+- `hirsel precheck <package manifest.json> -o <file>` checks the package as the only
+  dependency of an empty program and writes its precheck (docs/building.md, "The std
+  precheck"); a package with any diagnostic is refused.
+- `--verbose`, anywhere before `--`, writes one `hirsel: ...` line on stderr for each
+  dependency checked from source because no precheck matched. Nothing else changes.
 - Invalid arguments exit 2. IO failures exit 1 and have no RuleId. Invalid UTF-8
   is a SEM-3 language diagnostic at the first invalid byte boundary, before parsing.
   Paths beginning with `-` must be written with a directory prefix (`./-name.hir`).

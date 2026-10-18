@@ -9,6 +9,11 @@ through hirsel-lir, hirsel-rc, hirsel-heapcheck, hirsel-llvm and hirsel-rt.
 
 Source launch boundaries flush stdout before writing the interpreter's PROG-3 return-payload report. Ready programs retain a checked, layout-derived diagnostic view for the native entry wrapper. Host reports are separate from semantic observations and Io tapes. Native CLI launches inherit the OS output streams, preserving the host report and finalizer order; custom-writer launches retain per-stream forwarding.
 
+`COMPILER` carries the compiler identity `build.rs` computes: a digest of the
+sources and manifests of this crate and of every workspace crate it depends on,
+with Cargo.lock and the toolchain pin. Prechecks are keyed by it, so any edit to
+the compiler retires every precheck written before it.
+
 This crate exports only that wiring. Callers import queries, sessions and their
 data from hirsel-engine directly, so each caller's dependency on the backends
 and front phases is explicit.

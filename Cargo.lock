@@ -27,6 +27,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -500,6 +509,7 @@ name = "hirsel-diag"
 version = "0.1.0"
 dependencies = [
  "hirsel-span",
+ "serde",
  "serde_json",
  "unicode-width",
 ]
@@ -545,6 +555,7 @@ dependencies = [
 name = "hirsel-engine"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "hirsel-check-protocol",
  "hirsel-diag",
  "hirsel-fmt",
@@ -840,6 +851,9 @@ dependencies = [
 [[package]]
 name = "hirsel-span"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "hirsel-syntax"
@@ -847,6 +861,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-intern",
  "hirsel-span",
+ "serde",
  "sha2",
 ]
 
@@ -858,6 +873,7 @@ dependencies = [
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-types",
+ "serde",
 ]
 
 [[package]]
@@ -870,6 +886,7 @@ dependencies = [
  "hirsel-run-config",
  "hirsel-span",
  "hirsel-syntax",
+ "serde",
  "serde_json",
 ]
 

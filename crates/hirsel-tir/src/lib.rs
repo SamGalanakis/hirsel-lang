@@ -15,7 +15,7 @@ pub use representation::RepresentationRecord;
 
 macro_rules! ids { ($($name:ident),* $(,)?) => {$(
     /// Vec-arena index local to its owning TIR body/program (LANG-3, PROG-5).
-    #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+    #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
     pub struct $name(pub u32);
 )*}; }
 ids!(
@@ -33,7 +33,7 @@ ids!(
     MatchPatternId
 );
 /// Logical storage class; evaluated temporaries unwind before named locals (LANG-3).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Storage {
     Parameter,
     Local,
@@ -42,7 +42,7 @@ pub enum Storage {
     ReturnSlot,
 }
 /// A declared storage slot with the order needed for resource scope exit (DROP-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Local {
     pub ty: TypeId,
     pub storage: Storage,
@@ -50,14 +50,14 @@ pub struct Local {
     pub span: Span,
 }
 /// Addressable path components; indices have already been evaluated into a local (OWN-3).
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Projection {
     Field(u32),
     Index(LocalId),
     VariantField { variant: u32, field: u32 },
 }
 /// Root and projections form a place; never a user-visible reference (LANG-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Place {
     /// Access through this active loan; projections preserve it and reborrows name their parent.
     pub loan: Option<LoanId>,
@@ -69,13 +69,13 @@ pub struct Place {
     pub ty: TypeId,
 }
 /// Every operand states ownership explicitly; borrow/mut require an enclosing loan (OWN-1/2/3/4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Operand {
     pub place: PlaceId,
     pub usage: UseKind,
 }
 /// Typed literal bits; floats retain bit patterns rather than host arithmetic (SEM-1/2/3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Constant {
     Unit,
     Bool(bool),
@@ -86,7 +86,7 @@ pub enum Constant {
     Bytes(Vec<u8>),
 }
 /// Static constructor identity; every field operand is already in source evaluation order (LANG-3/12).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Constructor {
     Tuple,
     Record(DefPath),
@@ -102,19 +102,19 @@ pub enum Constructor {
     Box,
 }
 /// A constructor input maps source evaluation order to declaration layout (LANG-3/12).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ConstructField {
     pub field: u32,
     pub value: Operand,
 }
 /// A call input maps source order to the declared parameter ordinal (LANG-3/12).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CallArgument {
     pub parameter: hirsel_types::ParamId,
     pub value: Operand,
 }
 /// No nested effectful expressions: instructions evaluate in Vec order (LANG-3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Rvalue {
     Constant(Constant),
     /// Read the program-lifetime value of a named constant (CT-2).
@@ -152,7 +152,7 @@ pub enum Rvalue {
     Shape(TypeId),
 }
 /// Binding introduction is distinct from moving storage between compiler slots.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OriginBindingKind {
     /// A copied/borrowed name retains the source value identity.
     Alias,
@@ -160,7 +160,7 @@ pub enum OriginBindingKind {
     Fresh,
 }
 /// Borrow boundaries are emitted by mode checking/lowering, not rederived by the interpreter (OWN-3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum InstructionKind {
     /// Commit a whole resource destructure in its defining module (#97).
     /// Suppress its finalizer; ordinary field transfers and drops follow.
@@ -235,14 +235,14 @@ pub enum InstructionKind {
     },
 }
 /// Failure edge is explicit even for checked arithmetic/constructors (FAIL-1/3, DET-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Instruction {
     pub kind: InstructionKind,
     pub span: Span,
     pub on_failure: CleanupId,
 }
 /// Calls name a definition or an already-evaluated closure operand (LANG-3, CLO-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Callee {
     Definition {
         path: DefPath,
@@ -254,13 +254,13 @@ pub enum Callee {
     },
 }
 /// A returning call's result slot, initialized only on its normal successor.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CallReturn {
     pub destination: PlaceId,
     pub next: BlockId,
 }
 /// Control edges preserve source evaluation, contracts, short circuiting and cleanup (LANG-3/8/11).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Terminator {
     Goto(BlockId),
     /// Select the first matching arm from this index without consuming storage.
@@ -300,20 +300,20 @@ pub enum Terminator {
     Unreachable,
 }
 /// An ordered instruction stream followed by exactly one terminator (LANG-3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Block {
     pub instructions: Vec<Instruction>,
     pub terminator: Terminator,
     pub span: Span,
 }
 /// Scope nesting only; cleanup order is stored, not inferred from nesting (DROP-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Scope {
     pub parent: Option<ScopeId>,
     pub span: Span,
 }
 /// Compiler-emitted cleanup action on all exits, including cancellation and failed drops (FAIL-3, DROP-2/3).
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum CleanupAction {
     Drop {
         place: PlaceId,
@@ -334,12 +334,12 @@ pub enum CleanupAction {
 }
 /// Actions are executed in listed order, temporaries before reverse-declaration locals (LANG-3, DROP-2).
 /// Drop failures continue remaining cleanup; user finalizers run shielded (FAIL-3, DROP-3).
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Cleanup {
     pub head: Option<CleanupNodeId>,
 }
 /// One immutable step; following parents executes the remainder of the cleanup.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CleanupNode {
     pub action: CleanupAction,
     pub parent: Option<CleanupNodeId>,
@@ -402,13 +402,13 @@ impl Body {
     }
 }
 /// Source-authored normalization input; the IR checker independently checks it.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum TailKind {
     SelfTail,
     /// Reserved for the settled source contexts of spec question #46.
     ConstructorHole(Vec<u32>),
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct TailSite {
     pub owner_body: BodyId,
     pub call_block: BlockId,
@@ -417,7 +417,7 @@ pub struct TailSite {
     pub owned_loop_arguments: Vec<(hirsel_types::ParamId, PlaceId)>,
 }
 /// A monomorphic or generic body whose TypeIds refer to Definition.types (GEN-4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Body {
     /// Declaring source scope for value-parameter references, separate from storage scopes.
     pub parameter_scope: hirsel_types::NameSite,
@@ -435,13 +435,13 @@ pub struct Body {
     pub matches: Vec<MatchTable>,
 }
 /// Ordered source arms. Patterns are an acyclic arena owned by this table.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct MatchTable {
     pub scrutinee: PlaceId,
     pub patterns: Vec<MatchPattern>,
     pub arms: Vec<MatchArm>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct MatchArm {
     pub pattern: MatchPatternId,
     /// Non-consuming binding views are established here before the guard.
@@ -449,13 +449,13 @@ pub struct MatchArm {
     /// Ordinary explicit binding instructions commit only after guard success.
     pub target: BlockId,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct MatchPattern {
     /// The projection this pattern observes or binds, rooted at the scrutinee.
     pub place: PlaceId,
     pub kind: MatchPatternKind,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum MatchPatternKind {
     Wildcard,
     Binding {
@@ -486,7 +486,7 @@ impl MatchPatternKind {
     }
 }
 /// One definition's lowered bodies, including closures and contract bodies (FACT-1, CT-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolAssociationReceipt {
     pub association: hirsel_types::ProtocolAssociation,
     pub body: BodyId,
@@ -494,7 +494,7 @@ pub struct ProtocolAssociationReceipt {
     pub next: BlockId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Definition {
     pub protocol_associations: Vec<ProtocolAssociationReceipt>,
     /// The sole published type graph for all entry, closure and contract bodies.
@@ -506,7 +506,7 @@ pub struct Definition {
     pub contracts: Vec<(u32, BodyId)>,
 }
 /// Observable fail-stop data uses an indexed cause chain (FAIL-2); no Rc trees.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Failure {
     pub kind: String,
     pub rule: RuleId,
@@ -582,17 +582,17 @@ mod tests {
 pub type DefinitionRef = std::sync::Arc<Definition>;
 
 /// Evaluated data and its producer-owned type graph. No evaluator is linked here.
-#[derive(Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct Materialized {
     pub types: TypeStore,
     pub root: ValueNode,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ValueNode {
     pub ty: TypeId,
     pub kind: ValueKind,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ValueKind {
     Constant(Constant),
     FunctionReference(DefPath),
@@ -613,7 +613,7 @@ pub trait TirProvider {
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError>;
 }
 /// Simulation input events are ordered and explicit; real external effects are not ambient (DET-1, CAP-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct CapabilityEvent {
     pub capability: DefPath,
     pub operation: String,
@@ -621,7 +621,7 @@ pub struct CapabilityEvent {
     pub output: Vec<u8>,
 }
 /// Explicit deterministic execution configuration (DET-1, PROG-3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct RunConfiguration {
     pub entry: DefPath,
     pub hash_seed: u64,
@@ -630,12 +630,12 @@ pub struct RunConfiguration {
 
 /// Artificial evaluator guard, not a language failure or an execution observation.
 /// Accounting, site selection and cleanup policy remain issue #34.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToolingLimitKind {
     Steps,
     CallDepth,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ToolingLimit {
     pub kind: ToolingLimitKind,
     pub limit: u64,

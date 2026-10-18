@@ -9,6 +9,55 @@ use std::{
 #[derive(Clone)]
 pub struct PackageCache {
     entries: Option<Arc<Mutex<Storage>>>,
+    /// The shared cache uses the toolchain's prechecks; `prechecked` names others.
+    prechecks: Option<Arc<ToolchainPrechecks>>,
+}
+/// The toolchain's prechecks: `$HIRSEL_PRECHECK`, or `hirsel-std.precheck` beside the
+/// executable. A missing or unreadable precheck only means checking from source.
+pub(crate) struct ToolchainPrechecks {
+    pub prechecks: Vec<Arc<crate::Precheck>>,
+    /// Why there is no precheck, for `--verbose`.
+    pub missing: Option<String>,
+}
+static REPORT_PRECHECKS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Write each later load's precheck notes (`LoadedProgram::precheck_notes`) to stderr.
+pub fn report_prechecks(on: bool) {
+    REPORT_PRECHECKS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+pub(crate) fn reporting_prechecks() -> bool {
+    REPORT_PRECHECKS.load(std::sync::atomic::Ordering::Relaxed)
+}
+fn toolchain_prechecks() -> Arc<ToolchainPrechecks> {
+    static PRECHECKS: OnceLock<Arc<ToolchainPrechecks>> = OnceLock::new();
+    PRECHECKS
+        .get_or_init(|| Arc::new(read_toolchain_prechecks()))
+        .clone()
+}
+fn read_toolchain_prechecks() -> ToolchainPrechecks {
+    let path = match std::env::var_os("HIRSEL_PRECHECK") {
+        Some(path) => std::path::PathBuf::from(path),
+        None => match std::env::current_exe() {
+            Ok(exe) => exe.with_file_name("hirsel-std.precheck"),
+            Err(e) => {
+                return ToolchainPrechecks {
+                    prechecks: vec![],
+                    missing: Some(format!(
+                        "no precheck: the executable's path is unknown ({e})"
+                    )),
+                };
+            }
+        },
+    };
+    match crate::Precheck::read(&path) {
+        Ok(precheck) => ToolchainPrechecks {
+            prechecks: vec![Arc::new(precheck)],
+            missing: None,
+        },
+        Err(e) => ToolchainPrechecks {
+            prechecks: vec![],
+            missing: Some(format!("no precheck: {e}")),
+        },
+    }
 }
 #[derive(Default)]
 struct Storage {
@@ -54,18 +103,40 @@ impl PackageCache {
     pub fn new() -> Self {
         Self {
             entries: Some(Arc::new(Mutex::new(Storage::default()))),
+            prechecks: None,
         }
     }
     /// A fresh-check oracle. It neither reads nor publishes checked packages.
     pub fn disabled() -> Self {
-        Self { entries: None }
+        Self {
+            entries: None,
+            prechecks: None,
+        }
     }
     pub(crate) fn shared() -> Self {
         if std::env::var_os("HIRSEL_PACKAGE_CACHE").is_some_and(|value| value == "off") {
             return Self::disabled();
         }
         static CACHE: OnceLock<PackageCache> = OnceLock::new();
-        CACHE.get_or_init(Self::new).clone()
+        CACHE
+            .get_or_init(|| Self {
+                prechecks: Some(toolchain_prechecks()),
+                ..Self::new()
+            })
+            .clone()
+    }
+    /// An independent cache whose programs adopt the matching `prechecks`.
+    pub fn prechecked(prechecks: Vec<Arc<crate::Precheck>>) -> Self {
+        Self {
+            prechecks: Some(Arc::new(ToolchainPrechecks {
+                prechecks,
+                missing: None,
+            })),
+            ..Self::new()
+        }
+    }
+    pub(crate) fn prechecks(&self) -> Option<&ToolchainPrechecks> {
+        self.prechecks.as_deref()
     }
     fn key(revision: ContentHash, limits: hirsel_interp::Limits) -> ContentHash {
         ContentHash::of_parts(

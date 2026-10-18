@@ -17,8 +17,12 @@ pub struct LoadedProgram {
     pub primary: FileId,
     /// The selected packages marked `unsafe ffi`, in package order (PROG-4).
     pub unsafe_ffi: Vec<UnsafeFfiPackage>,
+    /// Why a dependency package is checked from source rather than prechecked,
+    /// for `--verbose`; a precheck changes only how long checking takes.
+    pub precheck_notes: Vec<String>,
     packages: Vec<crate::package_cache::PackageRevision>,
     cache: PackageCache,
+    identity: ContentHash,
     indexed_revision: u64,
 }
 impl LoadedProgram {
@@ -48,6 +52,10 @@ impl LoadedProgram {
         }
         let mut preflight = BTreeMap::new();
         for (file, context) in &self.files {
+            // A prechecked package checked complete and clean (`Precheck`).
+            if self.engine.prechecked(&context.package) {
+                continue;
+            }
             if let Some(package) = self
                 .packages
                 .iter()
@@ -85,6 +93,9 @@ impl LoadedProgram {
             }
         };
         for (file, context) in &self.files {
+            if self.engine.prechecked(&context.package) {
+                continue;
+            }
             if let Some(package) = self.packages.iter().find(|p| {
                 p.reused
                     && p.package == context.package
@@ -247,6 +258,36 @@ impl LoadedProgram {
         }
         Ok(())
     }
+    /// The precheck of `package`, a dependency of this program, which must check
+    /// complete with no diagnostics at all (`Precheck`).
+    pub fn precheck(&mut self, package: &PackageId) -> Result<Vec<u8>, ToolError> {
+        let name = format!("{}@{}", package.name, package.version);
+        let output = self.check().map_err(|error| self.error(error))?;
+        if !output.diagnostics.is_empty() {
+            return Err(self.error(QueryError::Diagnostics(output.diagnostics)));
+        }
+        if output.completion != CheckCompletion::Complete {
+            return Err(ToolError::Runtime(format!(
+                "precheck: {name} does not check completely"
+            )));
+        }
+        if self.unsafe_ffi.iter().any(|p| &p.package == package) {
+            return Err(ToolError::Runtime(format!(
+                "precheck: {name} is an unsafe ffi package"
+            )));
+        }
+        let Some(revision) = self.packages.iter().find(|p| &p.package == package) else {
+            return Err(ToolError::Runtime(format!(
+                "precheck: {name} is not a dependency"
+            )));
+        };
+        let key = crate::Precheck::key(self.identity, revision.key, self.engine.comptime_limits);
+        let closure = revision.closure.clone();
+        let files: Vec<_> = revision.files.iter().map(|(f, _)| *f).collect();
+        self.engine
+            .precheck(key, package, &closure, &files)
+            .map_err(|error| self.error(error))
+    }
     /// The reference interpreter calls no C: a program whose entry reaches an
     /// extern refuses before entry (PROG-4).
     pub fn refuse_foreign_interpretation(&mut self) -> Result<(), ToolError> {
@@ -377,8 +418,10 @@ pub(crate) fn load_program_source_with_cache(
                 entry: entry_path(&default_context()),
                 primary: file,
                 unsafe_ffi: vec![],
+                precheck_notes: vec![],
                 packages: vec![],
                 cache: cache.clone(),
+                identity: compiler.identity(),
                 indexed_revision: 0,
             });
         }
@@ -388,8 +431,10 @@ pub(crate) fn load_program_source_with_cache(
             entry: entry_path(&default_context()),
             primary: file,
             unsafe_ffi: vec![],
+            precheck_notes: vec![],
             packages: vec![],
             cache: cache.clone(),
+            identity: compiler.identity(),
             indexed_revision: 0,
         });
     };
@@ -576,8 +621,10 @@ pub(crate) fn load_program_source_with_cache(
         entry,
         primary: primary.ok_or_else(|| invalid("missing primary source"))?,
         unsafe_ffi,
+        precheck_notes: vec![],
         packages: vec![],
         cache: cache.clone(),
+        identity: compiler.identity(),
         indexed_revision: 0,
     };
     // Dependency files come parsed from the image. One that failed there is
@@ -618,6 +665,36 @@ pub(crate) fn load_program_source_with_cache(
             .cloned()
             .collect();
         program.packages.push(revision);
+    }
+    if let Some(toolchain) = cache.prechecks() {
+        for revision in &program.packages {
+            let key = crate::Precheck::key(program.identity, revision.key, limits);
+            let candidates: Vec<_> = toolchain
+                .prechecks
+                .iter()
+                .filter(|s| s.package() == &revision.package)
+                .collect();
+            let name = format!("{}@{}", revision.package.name, revision.package.version);
+            match candidates.iter().find(|s| s.matches(key)) {
+                Some(precheck) if graph.packages[&revision.package].unsafe_ffi.is_none() => {
+                    let files = revision.files.iter().map(|(f, _)| *f).collect();
+                    program.engine.adopt_precheck((*precheck).clone(), files);
+                }
+                _ if !candidates.is_empty() => program.precheck_notes.push(format!(
+                    "the precheck for {name} was checked under another compiler or other sources; checking {name}"
+                )),
+                _ => {
+                    if let Some(missing) = &toolchain.missing {
+                        program.precheck_notes.push(format!("{missing}; checking {name}"));
+                    }
+                }
+            }
+        }
+    }
+    if crate::package_cache::reporting_prechecks() {
+        for note in &program.precheck_notes {
+            eprintln!("hirsel: {note}");
+        }
     }
     let sites: BTreeMap<_, _> = graph
         .packages

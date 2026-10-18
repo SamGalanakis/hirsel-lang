@@ -193,12 +193,13 @@ def native_tool_inputs():
         for name in ["arm", "qemu", "valgrind"]
     }
 
-def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
+def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, precheck = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
     """A libtest harness (`rustc --test`) and the test that runs it.
 
     `bin_exes` are the package's binaries, as Cargo's CARGO_BIN_EXE_<name>.
     `data` are the files the test reads at run time; `runtime_archives` the
-    native runtime archives it links programs with. `shards` splits
+    native runtime archives it links programs with; `precheck` the std precheck its
+    programs load (HIRSEL_PRECHECK). `shards` splits
     the cases over that many test targets `<name>-shard-<i>`, run in parallel,
     balanced by the measured seconds per case in the `costs` table.
     `seeded` binaries draw random cases and run under `TEST_SEED`.
@@ -228,6 +229,7 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         bin_exes = bin_exes,
         bin_exe_dir = bin_exe_dir,
         runtime_archives = runtime_archives,
+        precheck = precheck,
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         cwd = manifest_dir,
@@ -291,6 +293,10 @@ def _rust_test_impl(ctx):
         archives = ctx.attrs.runtime_archives[DefaultInfo].default_outputs[0]
         inputs.append(archives)
         env["HIRSEL_RUNTIME_ARCHIVES"] = cmd_args(archives)
+    if ctx.attrs.precheck:
+        precheck = ctx.attrs.precheck[DefaultInfo].default_outputs[0]
+        inputs.append(precheck)
+        env["HIRSEL_PRECHECK"] = cmd_args(precheck)
     if ctx.attrs.native_selection:
         selection = ctx.attrs.native_selection[DefaultInfo].default_outputs[0]
         inputs.append(selection)
@@ -333,6 +339,7 @@ _rust_test = rule(
         # A pool run's `[cpu, memory_kb, cpu_class]`, for its executor (platforms.bzl).
         "request": attrs.list(attrs.string(), default = []),
         "runtime_archives": attrs.option(attrs.dep(), default = None),
+        "precheck": attrs.option(attrs.dep(), default = None),
         "seed": attrs.string(default = ""),
         "shard_index": attrs.int(default = 0),
         "shards": attrs.int(default = 0),
@@ -352,7 +359,7 @@ def _stage(name):
     stage, sep, shard = name.rpartition("-shard-")
     return stage if sep and shard.isdigit() else name
 
-def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, release = False, full = False, native_selection = None, changed_native = False):
+def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, precheck = None, release = False, full = False, native_selection = None, changed_native = False):
     """A gate stage as a test: `binary args...` run from its package directory `cwd`.
 
     On the pool its result is cached by its inputs, so an unchanged corpus and
@@ -383,6 +390,7 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives,
+        precheck = precheck,
         labels = ["gate"],
         exec_compatible_with = _test_platform(_stage(name)),
         pool = not TESTS_ON_HOST,
@@ -413,6 +421,44 @@ def hirsel_script_test(name, script, data, runtime_archives = None):
         request = _request(name),
         visibility = ["PUBLIC"],
     )
+
+def _precheck_impl(ctx):
+    # The package's sources at their repository paths, as its manifest names them.
+    tree = ctx.actions.symlinked_dir("package", {f.short_path: f for f in ctx.attrs.srcs})
+    precheck = ctx.actions.declare_output(ctx.label.name + ".precheck")
+    scratch = ctx.actions.declare_output("scratch", dir = True)
+    script = ctx.actions.write(
+        "precheck.sh",
+        [
+            "set -eu",
+            'mkdir -p "$3"; TMPDIR="$(cd "$3" && pwd)" "$1" precheck "$2" -o "$4"',
+        ],
+    )
+    ctx.actions.run(
+        cmd_args(
+            "/bin/sh",
+            script,
+            ctx.attrs.hirsel[RunInfo],
+            cmd_args(tree, format = "{}/" + ctx.attrs.manifest),
+            scratch.as_output(),
+            precheck.as_output(),
+            hidden = ctx.attrs._llvm_libraries[DefaultInfo].default_outputs,
+        ),
+        category = "precheck",
+    )
+    return [DefaultInfo(default_output = precheck)]
+
+# `hirsel precheck <manifest>`: the package checked once, for every test and tool
+# run that selects it (docs/building.md, "The std precheck").
+hirsel_precheck = rule(
+    impl = _precheck_impl,
+    attrs = {
+        "hirsel": attrs.exec_dep(providers = [RunInfo]),
+        "manifest": attrs.string(),
+        "srcs": attrs.list(attrs.source()),
+        "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
+    },
+)
 
 def _workspace_build_script_run_impl(ctx):
     # Lay the declared workspace files out at their repository paths, so the

@@ -11,7 +11,9 @@ use crate::{
 };
 
 /// One place that bounds a value (MODE-1). Field paths are meaningful (#77).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum Reach {
     /// A parameter or local (arenas included), with its field path.
     Place(Origin),
@@ -27,7 +29,7 @@ pub enum Reach {
 /// The places bounding a value. Empty is global (no relation, or `in heap`).
 /// Canonical: sorted and deduplicated, with a place absorbing its extensions
 /// (`p` absorbs `p.a`); Plain types normalise to empty.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq, Hash)]
 pub struct Relation(SharedSlice<Reach>);
 
 impl Relation {
@@ -231,7 +233,7 @@ pub fn arena_parameter(
 
 /// Where a construction places fresh blocks (PROV-4, MEM-10). It is derived from
 /// the expected relation, never stored on a type edge.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Destination {
     Heap,
     Arena(Origin),

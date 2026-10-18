@@ -253,20 +253,7 @@ impl QueryEngine {
         }
         for c in self.lowered.values_mut() {
             r.cached(Arc::make_mut(c), |r, v| {
-                for body in &mut std::sync::Arc::make_mut(v).bodies {
-                    for local in &mut body.locals {
-                        r.tir_span(&mut local.span);
-                    }
-                    for scope in &mut body.scopes {
-                        r.tir_span(&mut scope.span);
-                    }
-                    for block in &mut body.blocks {
-                        r.tir_span(&mut block.span);
-                        for instruction in &mut block.instructions {
-                            r.tir_span(&mut instruction.span);
-                        }
-                    }
-                }
+                super::precheck::tir_spans(Arc::make_mut(v), |span| r.tir_span(span));
             });
         }
         for reads in self.reads.values_mut() {

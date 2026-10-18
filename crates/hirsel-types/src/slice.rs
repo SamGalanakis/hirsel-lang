@@ -36,6 +36,16 @@ impl<T: Clone> DerefMut for SharedSlice<T> {
         Arc::make_mut(&mut self.0)
     }
 }
+impl<T: serde::Serialize> serde::Serialize for SharedSlice<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter())
+    }
+}
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for SharedSlice<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<T>::deserialize(deserializer).map(Self::from)
+    }
+}
 impl<T> From<Vec<T>> for SharedSlice<T> {
     fn from(v: Vec<T>) -> Self {
         Self(v.into())

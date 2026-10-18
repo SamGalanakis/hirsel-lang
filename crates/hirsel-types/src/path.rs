@@ -134,6 +134,16 @@ impl<T> Extend<T> for SharedPath<T> {
         }
     }
 }
+impl<T: serde::Serialize> serde::Serialize for SharedPath<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.iter())
+    }
+}
+impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for SharedPath<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<T>::deserialize(deserializer).map(Self::from)
+    }
+}
 impl<T> FromIterator<T> for SharedPath<T> {
     fn from_iter<I: IntoIterator<Item = T>>(values: I) -> Self {
         let mut path = Self::new();

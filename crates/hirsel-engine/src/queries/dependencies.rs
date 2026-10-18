@@ -4,7 +4,7 @@ use hirsel_resolve::{ManifestIndex, Namespace};
 use hirsel_syntax::{PackageId, Path};
 use hirsel_types::{DependencyRead, LookupError};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ExecutionReads {
     pub bodies: BTreeMap<DefPath, ContentHash>,
     pub signatures: BTreeMap<DefPath, ContentHash>,

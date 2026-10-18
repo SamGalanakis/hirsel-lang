@@ -12,7 +12,7 @@ pub struct LoopSourceDeclaration {
 }
 
 /// The nominal signature which selected an implicit protocol call pair.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolAssociation {
     pub source: DefPath,
     pub fingerprint: hirsel_syntax::ContentHash,

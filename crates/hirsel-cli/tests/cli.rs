@@ -21,10 +21,46 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel check [--json] <source|manifest.json> | run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>]\n",
+            b"usage: hirsel [--verbose] check [--json] <source|manifest.json> | run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>] | precheck <package manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
+    }
+}
+
+/// A missing or mismatched precheck costs only time: the run's output is
+/// unchanged, and only `--verbose` says why a dependency was checked from source.
+#[test]
+fn a_missing_precheck_is_reported_only_under_verbose() {
+    let lib = file("pub fn value() -> u64 {\n  1\n}\n");
+    let lib_manifest = lib.with_extension("json");
+    std::fs::write(&lib_manifest, serde_json::json!({"schema":1,"package":{"name":"lib","version":"1"},"sources":[{"path":lib.file_name().unwrap().to_str().unwrap(),"module":["lib"]}],"dependencies":[]}).to_string()).unwrap();
+    let path = file(
+        "pub fn main() -> Result[(), ()] {\n  failure.check(lib.value() == 1, Arithmetic())\n  Ok(())\n}\n",
+    );
+    std::fs::write(path.with_extension("hir.json"), serde_json::json!({"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":path.file_name().unwrap().to_str().unwrap(),"module":[]}],"dependencies":[{"manifest":lib_manifest,"package":{"name":"lib","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+    for (verbose, expected) in [(false, 0), (true, 1)] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        if verbose {
+            command.arg("--verbose");
+        }
+        let output = command
+            .arg("run")
+            .arg(&path)
+            .env("HIRSEL_PRECHECK", "/nonexistent/hirsel-std.precheck")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(stderr.lines().count(), expected, "{stderr}");
+        assert!(
+            stderr
+                .lines()
+                .all(|line| line.starts_with("hirsel: no precheck: ")
+                    && line.ends_with("; checking lib@1")),
+            "{stderr}"
+        );
     }
 }
 

@@ -32,7 +32,7 @@ pub use properties::*;
 
 macro_rules! ids { ($($name:ident),* $(,)?) => {$(
     /// Index in its owning semantic arena, never a cross-query identity (LANG-6).
-    #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize)]
     pub struct $name(pub u32);
 )*}; }
 ids!(
@@ -45,7 +45,7 @@ ids!(
     VariantId
 );
 /// Sized scalar set; literals without expected types never default (LANG-2, SEM-1/2).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Primitive {
     Bool,
     U8,
@@ -65,13 +65,13 @@ pub enum Primitive {
     Never,
 }
 /// Equality-only generic sizes (LANG-7); arithmetic sizes are not a type language.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Size {
     Constant(u64),
     Parameter(SizeParameterRef),
 }
 /// Type or size instantiation argument (GEN-4/5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum GenericArgument {
     Type(TypeId),
     Size(Size),
@@ -79,7 +79,9 @@ pub enum GenericArgument {
 /// A parameter reference names its declaring binder, independently of storage.
 /// Every callable introduces a binder, including nongeneric callables. Signature
 /// depth zero is the nearest binder; checked free references name a source scope.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum BinderRef<P> {
     Bound { depth: u32, parameter: P },
     Body { scope: NameSite, parameter: P },
@@ -117,7 +119,9 @@ pub enum GenericBinder {
     Body(NameSite),
 }
 /// Origin root; parameter references survive separate checking (PROV-1/2).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum OriginRoot {
     /// A declared operation selects the retained brand of this argument, rather
     /// than the identity of the wrapper value itself (for example PositionView).
@@ -130,37 +134,39 @@ pub enum OriginRoot {
     Sibling(FieldId),
 }
 /// Identity path; projecting fields preserves the named origin (PROV-1/5).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub struct Origin {
     pub root: OriginRoot,
     pub fields: SharedPath<FieldId>,
 }
 /// Canonical sorted, deduplicated union; >1 alternative fails at branded use (PROV-2).
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Brand {
     pub alternatives: SharedSlice<Origin>,
 }
 /// Fully deep uniqueness, bounded by Shared roots (MODE-2).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Uniqueness {
     Aliased,
     Unique,
 }
 /// Call multiplicity (MODE-3).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Multiplicity {
     Many,
     Once,
 }
 /// Explicit sendability proof state, including generic obligations (MODE-4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Sendability {
     Sendable,
     NotSendable,
     DependsOn(SharedSlice<TypeParameterRef>),
 }
 /// Orthogonal value modes; defaults are resolved by parameter/result position (MODE-7).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Modes {
     pub relation: Relation,
     pub uniqueness: Uniqueness,
@@ -178,19 +184,19 @@ impl Modes {
     }
 }
 /// A receiving crossing contract; it never supplies current value evidence.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum SendabilityRequirement {
     #[default]
     None,
     Sendable,
 }
 /// A known ambient allocator value (MEM-4). Ordinary Arena values leave this absent.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AllocationTarget {
     Heap,
 }
 /// A type edge carries modes (its relation included) and brands, including nested generic arguments (LANG-6).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Type {
     /// Fixed crossing requirement of this receiving occurrence, independent of current evidence.
     pub sendability_requirement: SendabilityRequirement,
@@ -241,7 +247,7 @@ impl Type {
 /// Erased iterator environments retain their complete authority. A declaration
 /// can select its captured value parameters; calls resolve this against actual
 /// authority and sendability before publishing the resulting value type.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum ErasedCaptures {
     FromArguments(SharedSlice<RelationPlace>),
     Known(AuthoritySummary),
@@ -288,7 +294,7 @@ impl CaptureProperties {
     }
 }
 /// Semantic layouts are inline unless a block is explicitly required (MEM-7, GEN-4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum TypeKind {
     Primitive(Primitive),
     Tuple(SharedSlice<TypeId>),
@@ -309,7 +315,7 @@ pub enum TypeKind {
     Error,
 }
 /// Standard type constructors with special checker/runtime rules (MEM-4/7/8/11/13/14, CONC-2/6/7).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinType {
     Array,
     List,
@@ -334,26 +340,26 @@ pub enum BuiltinType {
     TypeShape,
 }
 /// Semantic field; dependent sibling brands refer to its index (PROV-5).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Field {
     pub growable: bool,
     pub name: String,
     pub ty: TypeId,
 }
 /// Positional payloads have None names; records use Some (LANG-12).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Variant {
     pub name: String,
     pub fields: SharedSlice<(Option<String>, TypeId)>,
 }
 /// Declared invocation or resource-finalizer allocation promise (MEM-5).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Allocation {
     MayAllocate,
     NoAlloc,
 }
 /// Cleanup conjunction; an unknown/erased proof conservatively permits allocation.
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Default)]
 pub enum DropAllocation {
     NoAlloc,
     #[default]
@@ -383,14 +389,16 @@ impl DropAllocation {
     }
 }
 /// Summary terms can refer to parameters and type arguments without inspecting bodies (CAP-2, CLO-4).
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub enum AuthorityTerm {
     Capability(DefPath),
     Parameter(ParameterRef),
     TypeParameter(TypeParameterRef),
 }
 /// Sorted, deduplicated terms; Unknown is allowed only for transparent scoped calls (CLO-2, CAP-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum AuthoritySummary {
     Known(SharedSlice<AuthorityTerm>),
     Unknown,
@@ -425,7 +433,7 @@ impl AuthoritySummary {
     }
 }
 /// An omitted uses clause is not an empty restriction (CAP-3, CLO-2).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum Uses {
     Unrestricted,
     Only(AuthoritySummary),
@@ -437,7 +445,7 @@ pub enum CapabilityKind {
     Scoped,
 }
 /// Generic declaration with stable ordinal IDs, not symbols from another session (GEN-1).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum GenericParameter {
     Type {
         name: String,
@@ -448,7 +456,7 @@ pub enum GenericParameter {
     },
 }
 /// Public parameter convention, label and type (LANG-6/12, OWN-1/2/3).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Parameter {
     pub name: Option<String>,
     pub label: Option<String>,
@@ -457,14 +465,14 @@ pub struct Parameter {
 }
 /// Signature-owned code identity. Contract code is queried with its owner and ordinal (FACT-1, CT-2).
 /// Hash includes resolved names and referenced signatures, excludes locations and arena IDs.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Contract {
     pub kind: ContractKind,
     pub ordinal: u32,
     pub code_hash: ContentHash,
 }
 /// FFI declarations are trusted but explicit and monomorphic (PROG-4).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct ForeignContract {
     pub abi: String,
     pub blocking: bool,
@@ -489,7 +497,7 @@ pub enum WrapperKind {
     Effect,
 }
 /// Complete callable signature. Error is None for non-Result results, otherwise matches Result's E (LANG-6/8).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct FunctionType {
     /// Mutable state promises are declared on this callable, including indirect calls.
     pub state_promises: SharedSlice<StatePromise>,
@@ -505,7 +513,9 @@ pub struct FunctionType {
     pub foreign: Option<ForeignContract>,
 }
 /// A field-scoped selector inside a callable's own parameter binder.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(
+    serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd,
+)]
 pub struct RelationPlace {
     pub parameter: ParameterRef,
     pub fields: SharedPath<FieldId>,
@@ -518,7 +528,7 @@ impl From<ParameterRef> for RelationPlace {
         }
     }
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct StatePromise {
     pub selector: RelationPlace,
     pub advance_only: bool,
@@ -674,7 +684,7 @@ pub struct Resolution {
     pub dependencies: Vec<DefPath>,
 }
 /// Checker elaboration of one use, consumed by modes and lowering (OWN-1/2/3/4/8).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UseKind {
     Borrow,
     Take,
@@ -990,7 +1000,7 @@ pub struct QueryOutput<T> {
     pub dependencies: Vec<SignatureDependency>,
 }
 /// A used signature, even for a rejected body; sorted by DefPath in cache keys (LANG-6).
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SignatureDependency {
     pub definition: DefPath,
     pub fingerprint: ContentHash,

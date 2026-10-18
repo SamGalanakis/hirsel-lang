@@ -81,6 +81,7 @@ the license named in its row; the license texts follow once each.
 | The Computer Language Benchmarks Game | binarytrees C gcc #2 and #3 | `bench/native/c/binarytrees-arena.h` | benchmarksgame-team.pages.debian.net | BSD-3-Clause |
 | Valgrind | `include/valgrind.h`, `memcheck/memcheck.h`, vendored unchanged | `third-party/valgrind/`; their amd64 client request sequence and request codes transcribed in `crates/hirsel-rt/src/memcheck.rs` | Valgrind 3.22.0 (Ubuntu `1:3.22.0-0ubuntu3`) | Valgrind header licence (BSD-style, these two files only) |
 | postcard | `de::test_alloc::{vec,zst_vec}`, `de::tests::{de_str,enums}` vectors adapted to SER-2 lengths/tags | `conformance/SER/SER-2-*` | jamesmunns/postcard `872b9082589ebd1384a1b95ca232b1727bcddd29` | MIT |
+| bincode | binary serde format dependency for the std precheck file | `crates/hirsel-engine/src/queries/precheck.rs` | bincode 1.3.3 crate release | MIT |
 | bincode | `tests/{basic_types,derive}.rs` scalar, UTF-8 and enum-boundary controls adapted to SER-2 | `conformance/SER/SER-2-*` | bincode 2.0.1 crate release | MIT |
 | RFC 8949 | Appendix A data examples and sections 4.2, 5.3.1, 5.6 deterministic/validity cases adapted to SER-2 | `conformance/SER/SER-2-*` | RFC 8949 (December 2020) | Simplified BSD (IETF Trust) |
 | Go standard library | `src/internal/strconv/{atoi,itoa}.go` cutoff radix loops and radix vectors | `stdlib/std@1/integer.hir`, integer radix conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
