@@ -129,10 +129,11 @@ RUNTIME_DATA = {
 # invalidate another binary's passing verdicts. A source change still reruns
 # every test whose harness it changes.
 TEST_DATA = {
+    "hirsel-cli-test-cli": ["docs/spec/core-library.md", "docs/spec/std-library.md"],
     "hirsel-conformance-test-it": ["crates/hirsel-conformance/tests/fixtures/**"],
     # Every rule ID any crate cites must resolve in docs/spec.
-    # Relative spec links reach the generated tour outside docs/spec.
-    "hirsel-conformance-test-spec_links": ["crates/**", "docs/tour.md"],
+    # Relative spec links reach generated documentation outside docs/spec.
+    "hirsel-conformance-test-spec_links": ["crates/**", "docs/tour.md", "docs/api.md"],
     # memcheck:: compiles a C program against the runtime header.
     "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/include/**"],
     "hirsel-driver-test-it-stdlib": ["crates/hirsel-driver/tests/fixtures/**"],
