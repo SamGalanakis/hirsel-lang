@@ -47,7 +47,11 @@ fn run(source: &str, config: SimulationConfig) -> RunObservation {
     // H's model injects no clock fault.
     if config.faults.is_empty() {
         let expected = native::Observation::of_reference(execution.observation.as_ref().unwrap());
-        heap_clock::check(&mut engine, &expected, config.monotonic);
+        let world = native::HeapWorld {
+            monotonic: Some(config.monotonic),
+            process: None,
+        };
+        heap_clock::check(&mut engine, &expected, &world);
     }
     RunObservation {
         operations: events.iter().map(|e| e.operation.clone()).collect(),

@@ -1,7 +1,7 @@
 //! Driver-only conversion between H semantic values and the runtime's process model.
 //! All policy and scripted runs live in hirsel-rt; the model never spawns a program.
 use super::{Io, IoGrant, io_ok};
-use hirsel_heapcheck::{OpOutcome, OpValue};
+use hirsel_heapcheck::{OpOutcome, OpValue, Operations};
 use hirsel_lir::layout_types::ScalarKind;
 use hirsel_rt::io::{Completion as C, Request as R};
 use hirsel_rt::process::{
@@ -187,10 +187,27 @@ impl Io {
             }
             (Some("io"), "process", [OpValue::Handle(1)]) => R::Process { io: 1 },
             (Some("proc"), "run", [p, OpValue::Handle(path), argv, stdin, dir, max, deadline]) => {
-                // The model grants no clock, so a deadline cannot name one.
-                if variant(deadline)?.0 != 0 {
-                    return Some(OpOutcome::Unsupported);
-                }
+                // The runtime's policy checks a deadline against the clock's reading, which
+                // H owns; a run that starts before it is reached races it.
+                let deadline = match variant(deadline)? {
+                    (0, _) => None,
+                    (1, OpValue::Aggregate(fields)) => match fields.as_slice() {
+                        [OpValue::Handle(clock), OpValue::Handle(at)] => {
+                            let Some(now) = self.monotonic(*clock) else {
+                                return Some(OpOutcome::Fail("CAP-2".into()));
+                            };
+                            self.network.observe_monotonic(now);
+                            let network = &mut self.network;
+                            let script = *self
+                                .script_clocks
+                                .entry(*clock)
+                                .or_insert_with(|| network.monotonic_clock());
+                            Some((*clock, *at, now, script))
+                        }
+                        _ => return None,
+                    },
+                    _ => return None,
+                };
                 // The model's Dir handles are H's own; check one here. A scripted world
                 // does not consult it, and the model has no host world to start one in.
                 match variant(dir)? {
@@ -199,15 +216,39 @@ impl Io {
                         if matches!(self.grants.get(d), Some(IoGrant::Dir { .. })) => {}
                     _ => return Some(OpOutcome::Fail("CAP-2".into())),
                 }
-                R::ProcessRun {
+                let request = R::ProcessRun {
                     process: self.network_id(p)?,
                     program: self.paths.get(path.checked_sub(1)? as usize)?.clone(),
                     args: strings(argv)?,
                     stdin: bytes(stdin)?,
                     directory: None,
                     max_output: word(max)?,
-                    deadline: None,
-                }
+                    deadline: deadline
+                        .map(|(_, at, _, clock)| hirsel_rt::process::Deadline { clock, ticks: at }),
+                };
+                return Some(match self.process_completion(module, request) {
+                    // A run that started (its checks passed and it found its entry) before
+                    // its deadline races it.
+                    OpOutcome::Value(value)
+                        if deadline.is_some_and(|(_, at, now, _)| at > now)
+                            && !matches!(
+                                variant(&value),
+                                Some((1, OpValue::Variant { tag: 0..=2, .. }))
+                            ) =>
+                    {
+                        let (clock, at, ..) = deadline.unwrap();
+                        OpOutcome::Deadline {
+                            clock,
+                            at,
+                            completed: Box::new(OpOutcome::Value(value)),
+                            timed_out: Box::new(OpOutcome::Value(v(
+                                1,
+                                failure(ProcessFailure::TimedOut),
+                            ))),
+                        }
+                    }
+                    outcome => outcome,
+                });
             }
             (Some("proc"), "spawn", [p, OpValue::Handle(path), argv, dir]) => {
                 match variant(dir)? {
@@ -250,17 +291,21 @@ impl Io {
             }
             _ => return None,
         };
+        Some(self.process_completion(module, request))
+    }
+    /// A process request's outcome from the runtime's process model.
+    fn process_completion(&mut self, module: Option<&str>, request: R) -> OpOutcome {
         let completion = match self.network.call(request) {
             Ok(c) => c,
-            Err(_) => return Some(OpOutcome::Unsupported),
+            Err(_) => return OpOutcome::Unsupported,
         };
         if let C::Spawned(spawned) = completion {
-            return Some(OpOutcome::Value(match spawned {
+            return OpOutcome::Value(match spawned {
                 Ok(child) => io_ok(self.network_handle(child, true)),
                 Err(f) => v(1, failure(f)),
-            }));
+            });
         }
-        Some(OpOutcome::Value(match completion {
+        OpOutcome::Value(match completion {
             C::Handle(Ok(id)) if module == Some("test") => self.network_handle(id, false),
             C::Handle(Ok(id)) => io_ok(self.network_handle(id, false)),
             C::Handle(Err(_)) => v(1, v(0, OpValue::Unit)),
@@ -286,8 +331,8 @@ impl Io {
                 ]))
             }
             C::Process(ProcessOutcome::Error(f)) => v(1, failure(f)),
-            _ => return Some(OpOutcome::Unsupported),
-        }))
+            _ => return OpOutcome::Unsupported,
+        })
     }
     /// A child operation's outcome; `child.wait` consumes its Child on every outcome.
     fn child(&mut self, name: &str, args: &[OpValue], request: R) -> OpOutcome {

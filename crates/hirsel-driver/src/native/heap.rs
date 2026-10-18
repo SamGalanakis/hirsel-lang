@@ -38,6 +38,8 @@ struct Io {
     /// The virtual monotonic reading when the launch grants a monotonic clock. H owns what
     /// waits for it and when it advances (`hirsel-heapcheck/src/exec/clock.rs`).
     monotonic: Option<u64>,
+    /// The network model's handle for each monotonic clock a `proc.run` deadline named.
+    script_clocks: BTreeMap<u64, u64>,
     detached_directories: BTreeSet<u64>,
     resolved_directories: BTreeMap<u64, String>,
     /// Each failure site's line and column, for a program that isolates (FAIL-2).
@@ -79,6 +81,9 @@ impl Io {
         io.network = hirsel_rt::io_net_script::ScriptIo::new(
             matches!(kind, super::link::LaunchKind::Test).then_some(test_seed),
         );
+        if let Some(grant) = &world.process {
+            io.network.set_process_grant(grant);
+        }
         match kind {
             super::link::LaunchKind::Zero => io.grants.clear(),
             super::link::LaunchKind::Test => {
@@ -103,6 +108,7 @@ impl Io {
             random: hirsel_rt::io::RandomSource::SplitMix64(0),
             yielded: false,
             monotonic: None,
+            script_clocks: BTreeMap::new(),
             detached_directories: BTreeSet::new(),
             resolved_directories: BTreeMap::new(),
             positions: Positions::default(),
@@ -1504,11 +1510,13 @@ fn observation(
 }
 
 /// What a launch grants H's model beyond its entry's handles.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct HeapWorld {
     /// A monotonic clock (`io.monotonic_clock`), whose virtual reading starts here, as the
     /// deterministic simulation's does.
     pub monotonic: Option<u64>,
+    /// A Main launch's `io.process` grant; only a scripted one (process.script@1) runs.
+    pub process: Option<hirsel_run_config::ProcessGrant>,
 }
 
 /// Run `entry` once and audit it.

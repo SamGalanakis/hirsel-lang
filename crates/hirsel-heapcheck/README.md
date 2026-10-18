@@ -400,10 +400,14 @@ controls whose leak lies only where the deadline fires first (a scope deadline c
 sleep, a run timing out): the clean run and every injected failure pass, the fired run finds
 the leak, and each fixed twin passes every run.
 
-The driver's model grants a monotonic clock only when its launch says so
-(`hirsel_driver::native::HeapWorld`); a wall clock is never granted. A host (non-scripted)
-process child, and a Main launch's scripted network or process world, remain outside H's
-model: their operations are Unsupported.
+The driver's model grants a monotonic clock, and a Main launch's scripted process world
+(process.script@1), only when its launch says so (`hirsel_driver::native::HeapWorld`); a wall
+clock is never granted. Its `proc.run` goes through the runtime's scripted policy
+(`hirsel_rt::io_net_script::ScriptIo`) with the deadline's reading, so a deadline already
+reached times the run out before it takes an entry, and a run that took one before its
+deadline is an `OpOutcome::Deadline` race. A host (non-scripted) process child, a Main
+launch's scripted network world, and a wait on a stalled scripted peer or child remain
+outside H's model: those operations are Unsupported.
 
 `exec/channels.rs` is the runtime's channel table (CONC-6). Each queued message is a harness
 root, a send and a receive move it out of and into the bodies' `Option` slots, and the last

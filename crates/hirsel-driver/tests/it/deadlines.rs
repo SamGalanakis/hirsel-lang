@@ -10,8 +10,18 @@ use hirsel_engine::*;
 use hirsel_interp::observation::Effect;
 
 /// The run's stdout and its recorded operations, after checking that the recorded events
-/// replay the same observation.
+/// replay the same observation and that H checks the program.
 fn run(program: &str, config: SimulationConfig) -> (String, Vec<String>) {
+    run_in(program, config, true)
+}
+
+/// [`run`] for a program that waits on a stalled scripted peer or child: H's model cannot
+/// wait on either, so only the interpreter runs it.
+fn run_interpreted(program: &str, config: SimulationConfig) -> (String, Vec<String>) {
+    run_in(program, config, false)
+}
+
+fn run_in(program: &str, config: SimulationConfig, heap: bool) -> (String, Vec<String>) {
     let source = format!("{PRELUDE}{program}");
     let mut engine = source_std::engine();
     let file = engine.sources.add("deadlines.hir", source).unwrap();
@@ -50,10 +60,13 @@ fn run(program: &str, config: SimulationConfig) -> (String, Vec<String>) {
     )
     .unwrap();
     assert_eq!(replay.observation, execution.observation);
-    // H's model has no scripted network or process world for a Main launch.
-    if config.net.is_none() && config.process.is_none() {
+    if heap {
         let expected = native::Observation::of_reference(execution.observation.as_ref().unwrap());
-        heap_clock::check(&mut engine, &expected, config.monotonic);
+        let world = native::HeapWorld {
+            monotonic: Some(config.monotonic),
+            process: config.process.clone(),
+        };
+        heap_clock::check(&mut engine, &expected, &world);
     }
     (
         String::from_utf8(execution.observation.unwrap().output).unwrap(),
@@ -267,7 +280,7 @@ fn a_deadline_cancels_a_stalled_network_read() {
             }))
             .unwrap(),
         );
-        let (stdout, operations) = run(NET, config);
+        let (stdout, operations) = run_interpreted(NET, config);
         assert_eq!(stdout, "expired read 2, deadline\nat 1000\n");
         assert_eq!(expiries(&operations), 1);
     });
@@ -334,7 +347,7 @@ fn a_deadline_cancels_a_streaming_childs_read() {
             }))
             .unwrap(),
         );
-        let (stdout, operations) = run(CHILD, config);
+        let (stdout, operations) = run_interpreted(CHILD, config);
         assert_eq!(stdout, "expired a\ndeadline\nat 1000\n");
         assert_eq!(expiries(&operations), 1);
     });
@@ -550,5 +563,58 @@ fn a_deadline_cancels_the_children_of_scopes_nested_in_its_body() {
         let (stdout, operations) = run(NESTED_CHILD, clocked());
         assert_eq!(stdout, "expired parent\nat 1000\n");
         assert_eq!(expiries(&operations), 1);
+    });
+}
+
+// A scripted run takes no time: one whose deadline is still ahead completes, and H also runs
+// it timing out at its deadline. A deadline already reached times the run out before it takes
+// a script entry, so the third run takes the second entry and the fourth finds none.
+const RUNS: &str = r#"
+fn outcome(r: Result[ProcessOutput, ProcessError]) -> String {
+  match r {
+    Ok(ran) => f"ran {bytes.len(ran.stdout)}\n",
+    Error(TimedOut()) => "timed out\n",
+    Error(NotFound()) => "not found\n",
+    Error(_) => "failed\n",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let p = io.process(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let test = path.of("/bin/test")
+  let _ = out.print(output, outcome(proc.run(p, test, [], b"", None(), 64u64, Some(after(c, start, 1000u64)))))
+  let _ = out.print(output, outcome(proc.run(p, test, [], b"", None(), 64u64, Some(Deadline(clock: c, at: start)))))
+  let _ = out.print(output, outcome(proc.run(p, test, [], b"", None(), 64u64, None())))
+  let _ = out.print(output, outcome(proc.run(p, test, [], b"", None(), 64u64, None())))
+  let _ = out.print(output, elapsed(c, start))
+  Ok(())
+}
+"#;
+
+#[test]
+fn a_scripted_run_races_its_deadline_and_a_reached_one_takes_no_entry() {
+    with_compiler_stack(|| {
+        let mut config = clocked();
+        let output = serde_json::json!({"output": {"status": {"exited": 0}, "stdout": [104, 105], "stderr": []}});
+        config.process = Some(
+            serde_json::from_value(serde_json::json!({
+                "provider": "process.script@1",
+                "rules": [{"program": "/bin/test"}],
+                "runs": [
+                    {"program": "/bin/test", "args": [], "outcome": output},
+                    {"program": "/bin/test", "args": [], "outcome": output}
+                ],
+                "children": []
+            }))
+            .unwrap(),
+        );
+        let (stdout, _) = run(RUNS, config);
+        assert_eq!(stdout, "ran 2\ntimed out\nran 2\nnot found\nat 0\n");
     });
 }

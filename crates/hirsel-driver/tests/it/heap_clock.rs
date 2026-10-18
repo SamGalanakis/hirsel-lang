@@ -6,9 +6,9 @@ use hirsel_driver::native::{
 };
 use hirsel_engine::*;
 
-/// The timer choice points of the clean run, after checking `engine`'s program with a
-/// monotonic clock that starts at `monotonic` against the interpreter's `expected`.
-pub fn check(engine: &mut QueryEngine, expected: &Observation, monotonic: u64) -> u64 {
+/// The timer choice points of the clean run, after checking `engine`'s program in `world`
+/// against the interpreter's `expected`.
+pub fn check(engine: &mut QueryEngine, expected: &Observation, world: &HeapWorld) -> u64 {
     let entry = entry_path(&default_context());
     let input = engine.export_native_input().unwrap();
     let validated = engine.import_native_input(input).unwrap();
@@ -17,10 +17,7 @@ pub fn check(engine: &mut QueryEngine, expected: &Observation, monotonic: u64) -
         &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
     )
     .unwrap();
-    let world = HeapWorld {
-        monotonic: Some(monotonic),
-    };
-    let run = heap_campaign_in(&program, &entry, &Sites::new(validated.snapshot()), &world)
+    let run = heap_campaign_in(&program, &entry, &Sites::new(validated.snapshot()), world)
         .unwrap_or_else(|e| panic!("{}", e.message));
     assert_eq!(run.observation, *expected);
     run.choices

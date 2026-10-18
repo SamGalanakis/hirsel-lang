@@ -489,7 +489,9 @@ impl ScriptIo {
     /// A monotonic clock handle for a `proc.run` deadline to name. Its caller owns the
     /// clock's reading and reports it with [`Self::observe_monotonic`] before each request.
     pub fn monotonic_clock(&mut self) -> u64 {
-        self.state.handles.insert(crate::handles::Grant::MonotonicClock)
+        self.state
+            .handles
+            .insert(crate::handles::Grant::MonotonicClock)
     }
     /// The monotonic clock's reading now, which a scripted run's deadline is checked against.
     pub fn observe_monotonic(&mut self, now: u64) {
