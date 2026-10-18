@@ -1169,6 +1169,8 @@ conformance/LANG/LANG-13-or-choices-bad.hir
 conformance/LANG/LANG-13-or-choices-ok.hir
 conformance/LANG/LANG-13-or-let-borrow-bad.hir
 conformance/LANG/LANG-13-or-let-borrow-ok.hir
+conformance/LANG/LANG-13-or-let-else-borrow-bad.hir
+conformance/LANG/LANG-13-or-let-else-borrow-ok.hir
 conformance/LANG/LANG-13-or-let-refutable-bad.hir
 conformance/LANG/LANG-13-or-let-refutable-ok.hir
 conformance/LANG/LANG-13-or-names-bad.hir

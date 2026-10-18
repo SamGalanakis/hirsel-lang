@@ -388,8 +388,9 @@ impl Checker<'_, '_> {
         }
         Ok(())
     }
-    /// LANG-13: outside match, every way a pattern's alternatives match moves
-    /// or copies its bindings into one slot per name, so no binding is a view.
+    /// LANG-13: in let and for, every way a pattern's alternatives match moves
+    /// or copies its bindings into one slot per name, so no binding is a view:
+    /// a view names one place, and the alternatives' places differ.
     pub(super) fn joined_bindings_own(&mut self, root: ast::PatternId) {
         if self
             .input
@@ -411,8 +412,9 @@ impl Checker<'_, '_> {
                 self.report(
                     const { RuleId::of("LANG-13") },
                     self.input.tree.patterns[id.0 as usize].origin.span,
-                    "an or-pattern outside match binds plain values or takes its payloads, \
-                     but this binding borrows; take the value or use match",
+                    "an or-pattern in let or for binds plain values or takes its payloads, \
+                     but this binding borrows one of several places; take the value, or \
+                     bind it with if let or match",
                 );
             }
             // Alternatives agree, so the first one's bindings stand for all.

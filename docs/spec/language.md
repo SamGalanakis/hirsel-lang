@@ -411,10 +411,16 @@ each with the same type and modes; alternatives normalize into the exhaustivenes
 judgment, so `let Ok(v) | Error(v) = r` is irrefutable. An alternative no value reaches,
 because earlier arms or earlier alternatives match every value it matches, is rejected,
 and a pattern may match in at most 256 ways through its alternatives. A match arm's
-bindings follow `match` exactly, borrowed or taken. Outside `match`, the matching
-alternative moves or copies each binding into the one binding its name declares, so a
-`let` or `for` or-pattern binds plain values or takes its payloads: a binding that would
-borrow is rejected.
+bindings follow `match` exactly, borrowed or taken, and so do those of `if let` and
+`while let`. In `let`, let-else and `for`, the matching alternative moves or copies each
+binding into the one binding its name declares, so their or-patterns bind plain values or
+take their payloads: a binding that would borrow is rejected. A borrowed binding is a view
+of one place of its source, a fixed path of fields and variant payloads, and alternatives
+bind a name at different places (`A(x) | B(x)` views `t`'s `A` payload or its `B`
+payload). A match arm's block is the scope of one way to match, so each view stays one
+place; a `let` binding's scope continues past the choice, where one view would stand for
+a place chosen at run time, and there are no references (LANG-5). Bind such a view with
+`if let` or `match`, or take the value.
 
 Destructuring a value of a type that declares `drop` is allowed only in that type's
 defining module. A committed whole destructure consumes the resource without running its

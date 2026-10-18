@@ -1,0 +1,13 @@
+// rule: LANG-13
+// expect: accept
+// A let-else or-pattern binds plain values or takes its payloads; an if-let
+// block is the scope of one way to match, so it may borrow.
+type Token = Plus | Name(String) | Label(String)
+
+fn label(t: Token) -> u64 {
+  if let Name(s) | Label(s) = t {
+    string.byte_len(s)
+  } else {
+    0
+  }
+}
