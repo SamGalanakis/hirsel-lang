@@ -440,3 +440,47 @@ fn concurrent_runs_get_disjoint_scratch_roots() {
     drop((second, third, fourth));
     std::fs::remove_dir_all(&parent).unwrap();
 }
+
+#[test]
+fn clock_fixture_recordings_replay_timer_and_script_waits() {
+    // Corpus execution checks results; this control checks the launcher's fixture
+    // forwarding and the completion tape's park/ready protocol independently.
+    on_compiler(|| {
+        let matrix = hirsel_driver::native::smoke_matrix();
+        let toolchain = hirsel_driver::native::Toolchain::for_matrix(
+            &native::runtime_cache().unwrap(),
+            &matrix,
+        )
+        .unwrap();
+        let scratch = native::scratch::RunRoot::create_in(
+            &std::env::temp_dir().join("hirsel-clock-fixture-replay"),
+        )
+        .unwrap();
+        for name in [
+            "tied-timers",
+            "deadline-net",
+            "deadline-child",
+            "process-races",
+        ] {
+            let id = format!("conformance/CONC/CONC-3-clock-{name}-run.hir");
+            let path = root().join(&id);
+            let source = std::fs::read_to_string(&path).unwrap();
+            let dir = scratch.join(name).unwrap();
+            let result = native::replay_source_with_config(
+                &id,
+                &source,
+                Some(&path),
+                &toolchain,
+                &dir,
+                Default::default(),
+            );
+            assert!(result.snapshot.is_none(), "{id}: {:?}", result.snapshot);
+            assert_eq!(result.outcomes.len(), 1, "{id}");
+            assert!(
+                matches!(result.outcomes[0].2, Outcome::Agree),
+                "{id}: {:?}",
+                result.outcomes
+            );
+        }
+    });
+}

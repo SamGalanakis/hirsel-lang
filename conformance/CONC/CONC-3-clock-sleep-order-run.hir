@@ -1,0 +1,69 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// Native promotion waits on native-catchup: LLVM refuses a value used before its definition.
+fn require(value: bool) -> () {
+  failure.check(value, Arithmetic())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = match io.monotonic_clock(rt) {
+    Ok(c) => c,
+    Error(e) => return Error(e),
+  }
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let late_tx = sender.dup(tasks, sender)
+      let late = task.async(
+        s,
+        fn() -> bool {
+          let slept = match time.sleep(c, duration.from_parts(30, 0)) {
+            Ok(()) => true,
+            Error(_) => false,
+          }
+          let mut tx = take late_tx
+          let sent = match channel.send(tasks, mut tx, 30u64) {
+            Ok(()) => true,
+            Error(_) => false,
+          }
+          slept && sent
+        }
+      )
+      let early = task.async(
+        s,
+        fn() -> bool {
+          let slept = match time.sleep(c, duration.from_parts(10, 0)) {
+            Ok(()) => true,
+            Error(_) => false,
+          }
+          let mut tx = take sender
+          let sent = match channel.send(tasks, mut tx, 10u64) {
+            Ok(()) => true,
+            Error(_) => false,
+          }
+          slept && sent
+        }
+      )
+      require(task.await(s, take late))
+      require(task.await(s, take early))
+    }
+  )
+  let mut rx = take receiver
+  let first: bool = match channel.receive(tasks, mut rx) {
+    Ok(n) => n == 10,
+    Error(_) => false,
+  }
+  let second: bool = match channel.receive(tasks, mut rx) {
+    Ok(n) => n == 30,
+    Error(_) => false,
+  }
+  require(first && second)
+  match clock.monotonic(c) {
+    Ok(t) => require(instant.ticks(t) == 30000000000),
+    Error(_) => require(false),
+  }
+  Ok(())
+}

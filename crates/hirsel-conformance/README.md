@@ -12,7 +12,7 @@ Invariants and boundary:
 - Header validation applies even while the compiler is unimplemented.
 - Updating the ratchet only adds passing cases, never removes regressions; corpus files are not rewritten.
 
-Only rule, expect, stdout, exit, entry and spec are header directive names. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
+Only rule, expect, stdout, exit, entry, spec, grant, net and process are header directive names. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
 
 The binaries use `hirsel-cli-args` and pinned lexopt for argument parsing.
 Common `--root`, `--hash-seed` and `--shard` values share validation and
@@ -42,6 +42,23 @@ gh issue list -R SamGalanakis/hirsel-lang --label spec --state open --limit 1000
 
 The runner intersects these numbers with each source's `// spec: #N` comments.
 The passing ratchet includes every listed test regardless of gate membership.
+
+## Deterministic run fixtures
+
+`// grant: clock` grants `io.monotonic_clock` in executable corpus cases. Its
+virtual nanosecond reading starts at zero, stays fixed while runnable work remains,
+and advances to the earliest live timer when every task waits. Expired or cancelled
+timers leave no future jump. Without the directive the clock projection is denied.
+Normal interpretation, checked execution, agreement mutations, H's timer campaign,
+and LLVM/Cranelift differential launches use the same fixture. Native record/replay
+uses the ordinary completion tape and never sleeps on the host clock.
+
+`// net: <JSON>` and `// process: <JSON>` select validated `net.script@2` and
+`process.script@1` grants. They use the RunConfig grant schemas, including exact
+rules and peer/run/child scripts; script data does not widen those rules. Host
+providers, malformed grants, duplicates and directives after source code are errors.
+These headers select test inputs, not production launch authority. A corpus file
+can combine either script with `// grant: clock` to exercise deadline cancellation.
 
 ## Front end and IR checker agreement
 

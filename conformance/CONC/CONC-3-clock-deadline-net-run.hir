@@ -1,0 +1,72 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"example.com","service":"80","operation":"connect"}],"peers":[{"address":"example.com","port":80,"resolves_to":["127.0.0.1"],"tls":"plain","connections":[{"open":[{"send":[104,105]},"stall"]}]}]}
+// stdout: expired read 2, deadline
+// stdout: at 1000
+fn cause(e: CancelCause) -> String {
+  match e {
+    Requested() => "requested",
+    Parent() => "parent",
+    ChildFailed() => "child failed",
+    DeadlineExceeded() => "deadline",
+  }
+}
+
+fn report(b: Bounded[String]) -> String {
+  match b {
+    Finished(text) => f"finished {text}\n",
+    Expired(text) => f"expired {text}\n",
+  }
+}
+
+fn after(c: MonotonicClock, start: Instant of c, ns: u64) -> Deadline {
+  match instant.checked_add(c, start, ns) {
+    Some(at) => Deadline(clock: c, at: at),
+    None() => Deadline(clock: c, at: start),
+  }
+}
+
+fn elapsed(c: MonotonicClock, start: Instant of c) -> String {
+  match clock.monotonic(c) {
+    Ok(now) => f"at {instant.ticks(now) - instant.ticks(start)}\n",
+    Error(_) => "no clock\n",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let n = io.net(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let bounded = task.scope_until(
+    tasks,
+    after(c, start, 1000u64),
+    fn(s: Scope) -> String {
+      match net.connect(n, "example.com", 80u16, Unbounded()) {
+        Ok(stream) => {
+          let mut st = take stream
+          let mut buffer: List[u8] = []
+          let first = match net.read(n, mut st, mut buffer, 16u64) {
+            Ok(count) => f"read {count}",
+            Error(_) => "failed",
+          }
+          let second = match net.read(n, mut st, mut buffer, 16u64) {
+            Ok(count) => f"read {count}",
+            Error(Canceled(e)) => cause(e),
+            Error(_) => "failed",
+          }
+          f"{first}, {second}"
+        },
+        Error(_) => "unconnected",
+      }
+    }
+  )
+  let _ = out.print(output, report(bounded))
+  let _ = out.print(output, elapsed(c, start))
+  Ok(())
+}

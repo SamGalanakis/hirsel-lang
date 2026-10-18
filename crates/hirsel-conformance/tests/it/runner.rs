@@ -871,3 +871,34 @@ fn path_selection_requires_unratcheted_expected_outcomes() {
         assert!(String::from_utf8_lossy(&output.stdout).contains("1 validated"));
     }
 }
+
+#[test]
+fn fixture_headers_are_explicit_validated_and_header_only() {
+    let accepted = "// rule: OWN-6\n// expect: run\n// grant: clock\n// net: {\"provider\":\"net.script@2\",\"rules\":[],\"peers\":[]}\n// process: {\"provider\":\"process.script@1\",\"rules\":[],\"runs\":[]}\npub fn main() {}\n";
+    assert!(header(accepted).is_ok());
+    let fixture = hirsel_conformance::fixture(accepted).unwrap();
+    assert_eq!(fixture.monotonic, Some(0));
+    assert!(fixture.net.is_some());
+    assert!(fixture.process.is_some());
+    assert!(
+        hirsel_conformance::fixture("// ordinary comment\npub fn main() {}\n")
+            .unwrap()
+            .monotonic
+            .is_none()
+    );
+    for source in [
+        accepted.replace("expect: run", "expect: test"),
+        accepted.replace("grant: clock", "grant: host"),
+        accepted.replace("grant: clock", "grant clock"),
+        accepted.replace("// grant: clock", "// grant: clock\n// grant: clock"),
+        accepted.replace("pub fn main() {}", "pub fn main() {}\n// grant: clock"),
+        accepted.replace("net.script@2", "net.host@1"),
+        accepted.replace("process.script@1", "process.spawn@1"),
+        accepted.replace("\"rules\":[],\"peers\":[]", "\"rules\":[]"),
+        accepted.replace("\"runs\":[]", "\"runs\":[],\"unknown\":0"),
+        accepted.replace("// process:", "// process: {}\n// process:"),
+        accepted.replace("// net:", "// net: {}\n// net:"),
+    ] {
+        assert!(header(&source).is_err(), "{source}");
+    }
+}

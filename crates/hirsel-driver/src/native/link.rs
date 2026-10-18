@@ -1275,7 +1275,30 @@ pub fn launch_with(
     diagnostic: bool,
     tape: Tape<'_>,
 ) -> Result<Launched, NativeError> {
-    launch_impl(executable, target, toolchain, dir, diagnostic, tape, None)
+    launch_impl(
+        executable,
+        target,
+        toolchain,
+        dir,
+        diagnostic,
+        tape,
+        None,
+        &Default::default(),
+    )
+}
+
+pub(crate) fn launch_fixture(
+    executable: &Path,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+    dir: &Path,
+    diagnostic: bool,
+    tape: Tape<'_>,
+    fixture: &super::Fixture,
+) -> Result<Launched, NativeError> {
+    launch_impl(
+        executable, target, toolchain, dir, diagnostic, tape, None, fixture,
+    )
 }
 
 /// Harness execution or a user launch with an explicit admitted run record.
@@ -1287,6 +1310,7 @@ fn launch_impl(
     diagnostic: bool,
     tape: Tape<'_>,
     live: Option<LiveRun<'_>>,
+    fixture: &super::Fixture,
 ) -> Result<Launched, NativeError> {
     let root = dir.join("root");
     let record = dir.join("observation");
@@ -1312,6 +1336,15 @@ fn launch_impl(
         .env_clear()
         .env("HIRSEL_RT_ROOT", &root)
         .env("HIRSEL_RT_OBSERVATION", &record);
+    if let Some(ticks) = fixture.monotonic {
+        command.env("HIRSEL_RT_VIRTUAL_CLOCK", ticks.to_string());
+    }
+    if let Some(net) = &fixture.net {
+        command.env("HIRSEL_RT_NET", serde_json::to_string(net).unwrap());
+    }
+    if let Some(process) = &fixture.process {
+        command.env("HIRSEL_RT_PROCESS", serde_json::to_string(process).unwrap());
+    }
     // A live launch selects record and replay by flag; harness launches by environment.
     match tape {
         Tape::Replay(path) => {
@@ -1391,7 +1424,16 @@ pub(crate) fn launch_live(
     tape: Tape<'_>,
     live: LiveRun<'_>,
 ) -> Result<Launched, NativeError> {
-    launch_impl(executable, target, toolchain, dir, false, tape, Some(live))
+    launch_impl(
+        executable,
+        target,
+        toolchain,
+        dir,
+        false,
+        tape,
+        Some(live),
+        &Default::default(),
+    )
 }
 fn run_live(
     command: &mut Command,

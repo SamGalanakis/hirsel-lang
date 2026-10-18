@@ -1,0 +1,10 @@
+// rule: CONC-3
+// expect: run
+pub fn main(rt: Io) -> Result[(), ()] {
+  let denied = match io.monotonic_clock(rt) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  failure.check(denied, Arithmetic())
+  Ok(())
+}

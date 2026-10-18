@@ -1,0 +1,52 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+fn require(value: bool) -> () {
+  failure.check(value, Arithmetic())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = match io.monotonic_clock(rt) {
+    Ok(c) => c,
+    Error(e) => return Error(e),
+  }
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let sleeper = task.async(
+        s,
+        fn() -> bool {
+          match clock.monotonic(c) {
+            Ok(start) => match instant.checked_add(c, start, 3600000000000) {
+              Some(until) => match clock.sleep_until(c, until) {
+                Error(Canceled(Requested())) => true,
+                _ => false,
+              },
+              None() => false,
+            },
+            Error(_) => false,
+          }
+        }
+      )
+      let short = task.async(
+        s,
+        fn() -> bool {
+          match time.sleep(c, duration.from_parts(1, 0)) {
+            Ok(()) => true,
+            Error(_) => false,
+          }
+        }
+      )
+      require(task.await(s, take short))
+      task.cancel(s, sleeper)
+      require(task.await(s, take sleeper))
+    // A cancelled scope fails a later wait before it starts, deadline or not.
+    }
+  )
+  match clock.monotonic(c) {
+    Ok(t) => require(instant.ticks(t) == 1000000000),
+    Error(_) => require(false),
+  }
+  Ok(())
+}

@@ -122,9 +122,75 @@ fn known_rule(value: &str, rules: &Rules) -> Result<RuleId, String> {
     Ok(id)
 }
 
+/// Explicit harness providers. Script data never grants host authority.
+pub fn fixture(source: &str) -> Result<hirsel_driver::native::Fixture, String> {
+    let mut fixture = hirsel_driver::native::Fixture::default();
+    for line in source.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some(comment) = line.strip_prefix("//") else {
+            break;
+        };
+        let Some((key, value)) = comment.trim_start().split_once(':') else {
+            continue;
+        };
+        match key {
+            "grant" => {
+                if value.trim() != "clock" {
+                    return Err("grant must be clock".into());
+                }
+                if fixture.monotonic.replace(0).is_some() {
+                    return Err("duplicate grant directive".into());
+                }
+            }
+            "net" => {
+                if fixture.net.is_some() {
+                    return Err("duplicate net directive".into());
+                }
+                let grant = hirsel_run_config::validate_net_grant(value.trim().as_bytes())
+                    .map_err(|e| e.to_string())?;
+                if grant.provider != "net.script@2" {
+                    return Err("net fixture must use net.script@2".into());
+                }
+                fixture.net = Some(grant);
+            }
+            "process" => {
+                if fixture.process.is_some() {
+                    return Err("duplicate process directive".into());
+                }
+                let grant = hirsel_run_config::validate_process_grant(value.trim().as_bytes())
+                    .map_err(|e| e.to_string())?;
+                if grant.provider != "process.script@1" {
+                    return Err("process fixture must use process.script@1".into());
+                }
+                fixture.process = Some(grant);
+            }
+            _ => {}
+        }
+    }
+    Ok(fixture)
+}
+
+pub(crate) fn simulation(source: &str) -> Result<hirsel_engine::SimulationConfig, String> {
+    let fixture = fixture(source)?;
+    let mut simulation = hirsel_engine::SimulationConfig {
+        net: fixture.net,
+        process: fixture.process,
+        ..Default::default()
+    };
+    if let Some(ticks) = fixture.monotonic {
+        simulation.monotonic = ticks;
+        simulation.grants.insert("MonotonicClock".into());
+    }
+    Ok(simulation)
+}
+
 /// Parse the leading comment block. Stdout directives each represent a literal line.
 pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, String> {
     let parse = || -> Result<Header, String> {
+        let fixture = fixture(source)?;
         let mut rule = None;
         let mut expect = None;
         let mut stdout = String::new();
@@ -145,9 +211,12 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
             let comment = comment.trim_start();
             let Some((key, value)) = comment.split_once(':') else {
                 if in_header
-                    && ["rule", "expect", "stdout", "exit", "entry", "spec"]
-                        .iter()
-                        .any(|k| comment.split_whitespace().next() == Some(k))
+                    && [
+                        "rule", "expect", "stdout", "exit", "entry", "spec", "grant", "net",
+                        "process",
+                    ]
+                    .iter()
+                    .any(|k| comment.split_whitespace().next() == Some(k))
                 {
                     return Err(format!(
                         "line {}: malformed directive (missing ':')",
@@ -158,7 +227,15 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
             };
             let directive = matches!(
                 key,
-                "rule" | "expect" | "stdout" | "exit" | "entry" | "spec"
+                "rule"
+                    | "expect"
+                    | "stdout"
+                    | "exit"
+                    | "entry"
+                    | "spec"
+                    | "grant"
+                    | "net"
+                    | "process"
             );
             if !directive {
                 continue;
@@ -257,6 +334,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                             .map_err(|_| "exit must be an integer")?,
                     );
                 }
+                "grant" | "net" | "process" => {}
                 "spec"
                     if value_trimmed.strip_prefix('#').is_some_and(|n| {
                         !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
@@ -267,6 +345,13 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
         }
         let rule = rule.ok_or("missing rule directive")?;
         let mut expect = expect.ok_or("missing expect directive")?;
+        if !matches!(
+            expect,
+            Expect::Run { .. } | Expect::Fail { .. } | Expect::Blocked { .. }
+        ) && (fixture.monotonic.is_some() || fixture.net.is_some() || fixture.process.is_some())
+        {
+            return Err("fixture directives require expect: run, fail or blocked".into());
+        }
         let prefix_dir = path
             .components()
             .nth(1)

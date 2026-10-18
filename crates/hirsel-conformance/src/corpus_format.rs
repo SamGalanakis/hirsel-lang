@@ -469,7 +469,18 @@ fn directives(source: &str) -> Vec<&str> {
                 .trim_start()
                 .split_once(':')
                 .is_some_and(|(key, _)| {
-                    matches!(key, "rule" | "expect" | "stdout" | "exit" | "spec")
+                    matches!(
+                        key,
+                        "rule"
+                            | "expect"
+                            | "stdout"
+                            | "exit"
+                            | "entry"
+                            | "spec"
+                            | "grant"
+                            | "net"
+                            | "process"
+                    )
                 })
         })
         .collect()

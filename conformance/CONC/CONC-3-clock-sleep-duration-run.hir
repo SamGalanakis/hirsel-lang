@@ -1,0 +1,64 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+fn require(value: bool) -> () {
+  failure.check(value, Arithmetic())
+}
+
+fn sample(c: MonotonicClock) -> Result[Instant of c, time.SleepError] {
+  match clock.monotonic(c) {
+    Ok(t) => Ok(t),
+    Error(e) => Error(Wait(Clock(e))),
+  }
+}
+
+fn exercise(c: MonotonicClock) -> Result[(), time.SleepError] {
+  let start = sample(c)?
+  time.sleep(c, duration.from_parts(1, 500000000))?
+  let after = sample(c)?
+  require(time.between(c, start, after).nanoseconds == 1500000000)
+  // An elapsed deadline returns at once and leaves the virtual clock alone.
+  match clock.sleep_until(c, start) {
+    Ok(()) => {},
+    Error(_) => require(false),
+  }
+  let same = sample(c)?
+  require(instant.ticks(same) == instant.ticks(after))
+  time.sleep(c, duration.from_parts(0, 0))?
+  match time.sleep(c, duration.from_parts(0, -1)) {
+    Error(NegativeDuration()) => {},
+    _ => require(false),
+  }
+  match time.deadline(c, duration.from_parts(18446744074, 0)) {
+    Error(OutOfRange()) => {},
+    _ => require(false),
+  }
+  match instant.checked_add(c, after, 18446744073709551615) {
+    None() => {},
+    Some(_) => require(false),
+  }
+  match instant.checked_add(c, start, 7) {
+    Some(t) => require(instant.ticks(t) == instant.ticks(start) + 7),
+    None() => require(false),
+  }
+  let until = time.deadline(c, duration.from_parts(2, 0))?
+  require(instant.ticks(until) == instant.ticks(after) + 2000000000)
+  match clock.sleep_until(c, until) {
+    Ok(()) => {},
+    Error(_) => require(false),
+  }
+  let last = sample(c)?
+  require(instant.ticks(last) == instant.ticks(until))
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  match io.monotonic_clock(rt) {
+    Ok(c) => match exercise(c) {
+      Ok(()) => {},
+      Error(_) => require(false),
+    },
+    Error(_) => require(false),
+  }
+  Ok(())
+}

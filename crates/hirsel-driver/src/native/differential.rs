@@ -4,9 +4,8 @@
 //! optimization level and build topology, so a report row is reproducible
 //! from its name alone.
 use super::emit::Backend;
-use super::heap::{heap_campaign, run_heap};
 use super::link::{
-    Partition, RuntimeBuild, Toolchain, emit_backend_objects, launch, link, link_objects, observe,
+    Partition, RuntimeBuild, Toolchain, emit_backend_objects, link, link_objects, observe,
 };
 use super::observe::{Observation, Sites};
 use super::stages::{NativeError, Options, ReadyProgram, StageName, build};
@@ -306,6 +305,14 @@ fn same_options(a: &Options, b: &Options) -> bool {
         && a.flat_walk == b.flat_walk
 }
 
+/// Deterministic providers selected explicitly by a semantic fixture, never a host grant.
+#[derive(Clone, Debug, Default)]
+pub struct Fixture {
+    pub monotonic: Option<u64>,
+    pub net: Option<hirsel_run_config::NetGrant>,
+    pub process: Option<hirsel_run_config::ProcessGrant>,
+}
+
 /// Run `entry` under each configuration and compare with `reference`.
 /// Configurations that share pass options share one Ready program, and native
 /// configurations that differ only by runtime archive share its objects.
@@ -317,6 +324,32 @@ pub fn differential(
     toolchain: &Toolchain,
     dir: &Path,
 ) -> Vec<(String, Outcome)> {
+    differential_in(
+        validated,
+        entry,
+        reference,
+        configurations,
+        toolchain,
+        dir,
+        &Fixture::default(),
+    )
+}
+
+/// Run the matrix in an explicitly selected deterministic fixture world.
+pub fn differential_in(
+    validated: &ValidatedNativeInput,
+    entry: &DefPath,
+    reference: &Observation,
+    configurations: &[Configuration],
+    toolchain: &Toolchain,
+    dir: &Path,
+    fixture: &Fixture,
+) -> Vec<(String, Outcome)> {
+    let world = super::HeapWorld {
+        monotonic: fixture.monotonic,
+        process: fixture.process.clone(),
+        ..Default::default()
+    };
     let sites = Sites::new(validated.snapshot());
     let mut built: Vec<(&Options, Result<ReadyProgram, NativeError>)> = Vec::new();
     type Objects = Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError>;
@@ -345,7 +378,18 @@ pub fn differential(
         let executable = link_objects(program, entry, objects, toolchain, dir)?;
         let target = &program.target;
         let diagnostic = runtime == Runtime::Diagnostic;
-        let launched = launch(&executable, target, toolchain, dir, diagnostic)?;
+        let launched = super::link::launch_fixture(
+            &executable,
+            target,
+            toolchain,
+            dir,
+            diagnostic,
+            super::link::Tape::Live {
+                record: None,
+                revocations: None,
+            },
+            fixture,
+        )?;
         observe(&launched, program, &sites)
     };
     for configuration in configurations {
@@ -368,10 +412,11 @@ pub fn differential(
             .map_err(Clone::clone)
             .and_then(|program| match configuration.engine {
                 Engine::Heap { campaign: true } => {
-                    heap_campaign(program, entry, &sites).map(|run| run.observation)
+                    super::heap_campaign_in(program, entry, &sites, &world)
+                        .map(|run| run.observation)
                 }
                 Engine::Heap { campaign: false } => {
-                    run_heap(program, entry, &sites).map(|run| run.observation)
+                    super::run_heap_in(program, entry, &sites, &world).map(|run| run.observation)
                 }
                 Engine::Native {
                     opt,
@@ -427,6 +472,27 @@ pub fn real_io_replay_with_config(
     dir: &Path,
     launch_config: super::LaunchInputs,
 ) -> Outcome {
+    real_io_replay_in(
+        validated,
+        entry,
+        reference,
+        toolchain,
+        dir,
+        launch_config,
+        &Fixture::default(),
+    )
+}
+
+/// Record and replay with the fixture's virtual clock and scripted providers.
+pub fn real_io_replay_in(
+    validated: &ValidatedNativeInput,
+    entry: &DefPath,
+    reference: &Observation,
+    toolchain: &Toolchain,
+    dir: &Path,
+    launch_config: super::LaunchInputs,
+    fixture: &Fixture,
+) -> Outcome {
     // Replay checks the tape against the diagnostic archive's audited run.
     let toolchain = &toolchain.with_runtime(Runtime::Diagnostic.build());
     let run = || {
@@ -445,7 +511,7 @@ pub fn real_io_replay_with_config(
         )?;
         let tape = dir.join("io-tape");
         let _ = std::fs::remove_file(&tape);
-        let recorded = super::link::launch_with(
+        let recorded = super::link::launch_fixture(
             &executable,
             &target,
             toolchain,
@@ -455,6 +521,7 @@ pub fn real_io_replay_with_config(
                 record: Some(&tape),
                 revocations: None,
             },
+            fixture,
         )?;
         let real = observe(&recorded, &program, &sites)?;
         if real != *reference {
@@ -482,13 +549,14 @@ pub fn real_io_replay_with_config(
                 "the recorded prints are not the reference output",
             ));
         }
-        let replayed = super::link::launch_with(
+        let replayed = super::link::launch_fixture(
             &executable,
             &target,
             toolchain,
             dir,
             true,
             super::link::Tape::Replay(&tape),
+            fixture,
         )?;
         observe(&replayed, &program, &sites)
     };

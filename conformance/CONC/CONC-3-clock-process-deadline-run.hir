@@ -1,0 +1,56 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// process: {"provider":"process.script@1","rules":[{"program":"/bin/sleep"}],"runs":[{"program":"/bin/sleep","args":[],"outcome":{"output":{"status":{"exited":0},"stdout":[100,111,110,101],"stderr":[]}}}]}
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let p = io.process(rt)?
+  let c = io.monotonic_clock(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Error(NotGranted()),
+  }
+  let future = match instant.checked_add(c, start, 1u64) {
+    Some(t) => t,
+    None() => return Error(NotGranted()),
+  }
+  let reached = match proc.run(
+    p,
+    path.of("/bin/sleep"),
+    [],
+    b"",
+    None(),
+    64u64,
+    Some(Deadline(clock: c, at: start))
+  ) {
+    Error(TimedOut()) => true,
+    _ => false,
+  }
+  failure.check(reached, Arithmetic())
+  let served = match proc.run(
+    p,
+    path.of("/bin/sleep"),
+    [],
+    b"",
+    None(),
+    64u64,
+    Some(Deadline(clock: c, at: future))
+  ) {
+    Ok(ran) => ran.stdout == b"done",
+    _ => false,
+  }
+  failure.check(served, Arithmetic())
+  let spent = match proc.run(
+    p,
+    path.of("/bin/sleep"),
+    [],
+    b"",
+    None(),
+    64u64,
+    Some(Deadline(clock: c, at: future))
+  ) {
+    Error(NotFound()) => true,
+    _ => false,
+  }
+  failure.check(spent, Arithmetic())
+  Ok(())
+}

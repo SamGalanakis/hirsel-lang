@@ -168,3 +168,8 @@ tapes replay in either engine.
 
 Failure observations retain and compare the original operation site independently
 of the primary attribution. Tooling reports render both complete locations.
+
+Conformance `native::Fixture` supplies a virtual monotonic start and validated scripted
+network/process grants to `differential_in` and `real_io_replay_in`. H receives its
+model world; LLVM and Cranelift use the same harness adapter. Production launch
+records and capability seeds remain independent of semantic fixtures.

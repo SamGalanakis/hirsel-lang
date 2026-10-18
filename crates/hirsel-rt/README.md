@@ -901,3 +901,10 @@ Failure records retain an optional original operation site independently of the
 primary attribution. Semantic observations compare both locations. Runtime ABI 17
 passes both site codes to failure_begin and failure_reanchor; a reanchor fills an
 unknown attribution or operation once, preserving already anchored causes.
+
+The semantic conformance harness can explicitly select `HIRSEL_RT_VIRTUAL_CLOCK`
+with a u64 nanosecond start. Its RealIo samples and cooperative timer readiness share
+one virtual reading: runnable work never advances it, and an idle wait advances it
+to the earliest remaining timer. The ordinary park/ready tape protocol records and
+replays those waits. This setting is consumed only by the harness launch branch;
+production admission uses the selected RunConfig's clock grants.

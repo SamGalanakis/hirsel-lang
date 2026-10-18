@@ -181,34 +181,32 @@ fn evaluate_on_compiler_thread(
         hash_seed,
         inputs: vec![],
     };
+    let simulation = match crate::simulation(&text) {
+        Ok(simulation) => simulation,
+        Err(error) => return (Status::Fail(error), observation),
+    };
     observation.phase = "interpretation".into();
-    let execution = match hirsel_engine::run_observed_snapshot(
-        &mut engine,
-        &config,
-        hirsel_engine::SimulationConfig::default(),
-    ) {
-        Ok(outcome) => outcome,
-        Err(ToolError::Query {
-            error: QueryError::NotImplemented,
-            ..
-        }) => {
-            observation.actual = "not implemented".into();
-            return (Status::NotImplemented, observation);
-        }
-        Err(error) => {
-            observation.actual = format!("tool error: {error}");
-            return (Status::Fail(observation.actual.clone()), observation);
-        }
-    };
+    let execution =
+        match hirsel_engine::run_observed_snapshot(&mut engine, &config, simulation.clone()) {
+            Ok(outcome) => outcome,
+            Err(ToolError::Query {
+                error: QueryError::NotImplemented,
+                ..
+            }) => {
+                observation.actual = "not implemented".into();
+                return (Status::NotImplemented, observation);
+            }
+            Err(error) => {
+                observation.actual = format!("tool error: {error}");
+                return (Status::Fail(observation.actual.clone()), observation);
+            }
+        };
     // Third witness: the same IR under checked execution must observe the same.
-    observation.checked = match hirsel_engine::run_observed_checked(
-        &mut engine,
-        &config,
-        hirsel_engine::SimulationConfig::default(),
-    ) {
-        Ok(checked) => checked_divergence(&execution, &checked),
-        Err(error) => Some(format!("checked execution: tool error: {error}")),
-    };
+    observation.checked =
+        match hirsel_engine::run_observed_checked(&mut engine, &config, simulation.clone()) {
+            Ok(checked) => checked_divergence(&execution, &checked),
+            Err(error) => Some(format!("checked execution: tool error: {error}")),
+        };
     let stdout = execution
         .observation
         .as_ref()

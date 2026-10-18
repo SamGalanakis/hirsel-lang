@@ -163,6 +163,7 @@ impl Native {
         matrix: &[hirsel_driver::native::Configuration],
         reference: &hirsel_driver::native::Observation,
         entry: &hirsel_engine::DefPath,
+        fixture: &hirsel_driver::native::Fixture,
     ) -> Option<Classification> {
         use hirsel_driver::native::Outcome;
         let unavailable = |reason: String| {
@@ -194,13 +195,14 @@ impl Native {
         if needs_files {
             std::fs::create_dir_all(&dir).expect("scratch directory");
         }
-        let outcomes = hirsel_driver::native::differential(
+        let outcomes = hirsel_driver::native::differential_in(
             &validated,
             entry,
             reference,
             matrix,
             &self.toolchain,
             &dir,
+            fixture,
         );
         if needs_files {
             let _ = std::fs::remove_dir_all(&dir);
@@ -316,6 +318,10 @@ fn classify_package_native(
             }
         }
         if run {
+            let simulation = match crate::simulation(source) {
+                Ok(simulation) => simulation,
+                Err(error) => return violation("fixture", &error),
+            };
             let config = hirsel_engine::RunConfiguration {
                 entry,
                 hash_seed,
@@ -324,7 +330,7 @@ fn classify_package_native(
             let normal = match hirsel_engine::run_observed_snapshot(
                 &mut engine,
                 &config,
-                hirsel_engine::SimulationConfig::default(),
+                simulation.clone(),
             ) {
                 Ok(observed) => observed,
                 Err(e) => return tool_error(e),
@@ -339,14 +345,12 @@ fn classify_package_native(
                 }
                 Err(e) => return violation("interpretation", &format!("{e:?}")),
             }
-            let checked = match hirsel_engine::run_observed_checked(
-                &mut engine,
-                &config,
-                hirsel_engine::SimulationConfig::default(),
-            ) {
-                Ok(observed) => observed,
-                Err(e) => return tool_error(e),
-            };
+            let checked =
+                match hirsel_engine::run_observed_checked(&mut engine, &config, simulation.clone())
+                {
+                    Ok(observed) => observed,
+                    Err(e) => return tool_error(e),
+                };
             if let Some(detail) = crate::compiler::checked_divergence(&normal, &checked) {
                 let kind = match &checked.outcome {
                     Ok(hirsel_engine::RunOutcome::Trapped(trap)) => {
@@ -358,7 +362,13 @@ fn classify_package_native(
             }
             if let (Some((native, matrix)), Some(observation)) = (native, &normal.observation) {
                 let reference = hirsel_driver::native::Observation::of_reference(observation);
-                if let Some(bug) = native.compare(&mut engine, matrix, &reference, &config.entry) {
+                if let Some(bug) = native.compare(
+                    &mut engine,
+                    matrix,
+                    &reference,
+                    &config.entry,
+                    &crate::fixture(source).unwrap(),
+                ) {
                     return bug;
                 }
             }

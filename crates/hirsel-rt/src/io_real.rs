@@ -74,6 +74,11 @@ impl RealIo {
     pub fn set_cooperative(&mut self, readiness: crate::readiness::Readiness) {
         self.cooperative = Some((readiness, Default::default()));
     }
+    /// Semantic harness clock, with the ordinary cooperative park/ready tape protocol.
+    pub(crate) fn virtual_clock(&mut self, ticks: u64) {
+        self.clock_grants(true, false);
+        self.set_cooperative(crate::readiness::Readiness::virtual_clock(ticks));
+    }
     /// Replace the host network provider, e.g. to count provider calls in tests.
     pub fn set_net_provider(&mut self, provider: impl NetProvider + 'static) {
         self.net = Box::new(provider);
@@ -551,7 +556,14 @@ impl RealIo {
                 }
             }
             Request::Monotonic { .. } | Request::Wall { .. } => {
-                let input = clock_input(&request, fault.as_ref());
+                let input = match (&request, fault.as_ref(), &self.cooperative) {
+                    (Request::Monotonic { .. }, None, Some((readiness, _)))
+                        if readiness.virtual_time().is_some() =>
+                    {
+                        Completion::Monotonic(Ok(readiness.virtual_time().unwrap()))
+                    }
+                    _ => clock_input(&request, fault.as_ref()),
+                };
                 self.state.sample(&request, input)
             }
             Request::RandomBytes { random, count } => {

@@ -18,6 +18,7 @@ pub struct Readiness(Rc<RefCell<ReadyState>>);
 #[derive(Default)]
 struct ReadyState {
     current: u64,
+    virtual_time: Option<u64>,
     pending: BTreeMap<u64, Pending>,
 }
 /// One parked operation's interest plus the progress a retried network
@@ -26,6 +27,7 @@ struct ReadyState {
 pub(crate) struct Pending {
     pub(crate) interest: Option<(libc::c_int, libc::c_short)>,
     pub(crate) deadline: Option<Instant>,
+    virtual_deadline: Option<u64>,
     pub(crate) resolver: Option<(Receiver<Result<Vec<SocketAddr>, NetError>>, UnixStream)>,
     pub(crate) addresses: Option<VecDeque<SocketAddr>>,
     pub(crate) connecting: Option<OwnedFd>,
@@ -36,6 +38,15 @@ pub(crate) struct Pending {
     pub(crate) process: Option<crate::process::HostJob>,
 }
 impl Readiness {
+    /// Harness-only virtual time: samples are stable while runnable work remains.
+    pub(crate) fn virtual_clock(ticks: u64) -> Self {
+        let readiness = Self::default();
+        readiness.0.borrow_mut().virtual_time = Some(ticks);
+        readiness
+    }
+    pub(crate) fn virtual_time(&self) -> Option<u64> {
+        self.0.borrow().virtual_time
+    }
     pub(crate) fn pending(&self) -> std::cell::RefMut<'_, Pending> {
         std::cell::RefMut::map(self.0.borrow_mut(), |state| {
             state.pending.entry(state.current).or_default()
@@ -63,6 +74,9 @@ impl Readiness {
         let Some(pending) = state.pending.get(&token) else {
             return Ok(true);
         };
+        if let Some(deadline) = pending.virtual_deadline {
+            return Ok(state.virtual_time.is_some_and(|now| now >= deadline));
+        }
         if pending.deadline.is_some_and(|d| Instant::now() >= d) {
             return Ok(true);
         }
@@ -90,6 +104,15 @@ impl Readiness {
     /// true once it has passed (the token's interest is then finished), otherwise the
     /// deadline is recorded as the token's interest and the caller parks.
     pub(crate) fn timer(&self, deadline: u64) -> Result<bool, AdapterError> {
+        if let Some(now) = self.virtual_time() {
+            let token = self.0.borrow().current;
+            if now >= deadline {
+                self.finish(token);
+                return Ok(true);
+            }
+            self.pending().virtual_deadline = Some(deadline);
+            return Ok(false);
+        }
         let mut now = libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,
@@ -111,6 +134,21 @@ impl Readiness {
     /// Called only with no runnable task. A false result means this provider has
     /// no external readiness source (e.g. the remaining waits are scripted).
     pub fn wait(&self) -> Result<bool, AdapterError> {
+        {
+            let mut state = self.0.borrow_mut();
+            if let Some(now) = state.virtual_time {
+                let next = state
+                    .pending
+                    .values()
+                    .filter_map(|p| p.virtual_deadline)
+                    .min();
+                if let Some(next) = next {
+                    state.virtual_time = Some(now.max(next));
+                    return Ok(true);
+                }
+                return Ok(false);
+            }
+        }
         let state = self.0.borrow();
         let mut rows: Vec<_> = state
             .pending

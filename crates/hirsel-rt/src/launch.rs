@@ -1386,6 +1386,7 @@ unsafe fn execute(
                 arguments = tape.arguments;
                 let mut io = SimIo::new(tape.tree, tape.events);
                 io.set_net_rules(net_rules.clone());
+                io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
                 if let Some(grant) = &process {
                     io.set_process_grant(grant);
                 }
@@ -1435,7 +1436,14 @@ unsafe fn execute(
                 RawStdout,
             ) {
                 Ok(mut io) => {
+                    if let Some(ticks) = std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK") {
+                        let Some(ticks) = ticks.to_str().and_then(|s| s.parse::<u64>().ok()) else {
+                            return refuse("invalid harness virtual clock");
+                        };
+                        io.virtual_clock(ticks);
+                    }
                     io.set_net_rules(net_rules.clone());
+                    io.clock_grants(std::env::var_os("HIRSEL_RT_VIRTUAL_CLOCK").is_some(), false);
                     // The harness launch draws the reference's seeded simulation.
                     io.set_random(
                         hirsel_run_config::ProviderContract::RandomSplitMix64,

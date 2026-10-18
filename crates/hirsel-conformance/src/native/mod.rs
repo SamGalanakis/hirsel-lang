@@ -19,7 +19,7 @@ pub use scratch::{runtime_cache, scratch};
 
 use hirsel_driver::native::{
     Configuration, Engine, MATRIX_VERSION, NativeError, OBSERVATION_SCHEMA, Observation, Outcome,
-    StageName, Toolchain, differential,
+    StageName, Toolchain, differential, differential_in,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -365,7 +365,7 @@ fn checked_with_config(
         hirsel_engine::SimulationConfig {
             random_seed: launch.random_seed,
             test_seed: launch.test_seed,
-            ..Default::default()
+            ..crate::simulation(source)?
         },
     )
     .map_err(|e| format!("reference: {e}"))?;
@@ -434,11 +434,19 @@ fn run_source_path(
             wall: Default::default(),
         },
         Ok((validated, entry, reference)) => {
-            let outcomes = differential(&validated, &entry, &reference, matrix, toolchain, dir)
-                .into_iter()
-                .zip(matrix)
-                .map(|((name, outcome), configuration)| (name, Class::of(configuration), outcome))
-                .collect();
+            let outcomes = differential_in(
+                &validated,
+                &entry,
+                &reference,
+                matrix,
+                toolchain,
+                dir,
+                &crate::fixture(source).unwrap(),
+            )
+            .into_iter()
+            .zip(matrix)
+            .map(|((name, outcome), configuration)| (name, Class::of(configuration), outcome))
+            .collect();
             CaseResult {
                 id: id.to_string(),
                 snapshot: None,
@@ -641,8 +649,14 @@ pub fn replay_source_with_config(
             outcomes: vec![(
                 "x86_64/real-io-record-and-replay".into(),
                 Class::Llvm,
-                hirsel_driver::native::real_io_replay_with_config(
-                    &validated, &entry, &reference, toolchain, dir, launch,
+                hirsel_driver::native::real_io_replay_in(
+                    &validated,
+                    &entry,
+                    &reference,
+                    toolchain,
+                    dir,
+                    launch,
+                    &crate::fixture(source).unwrap(),
                 ),
             )],
             reference: Some(reference),

@@ -1,0 +1,81 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// stdout: expired parent
+// stdout: at 1000
+fn cause(e: CancelCause) -> String {
+  match e {
+    Requested() => "requested",
+    Parent() => "parent",
+    ChildFailed() => "child failed",
+    DeadlineExceeded() => "deadline",
+  }
+}
+
+fn report(b: Bounded[String]) -> String {
+  match b {
+    Finished(text) => f"finished {text}\n",
+    Expired(text) => f"expired {text}\n",
+  }
+}
+
+fn after(c: MonotonicClock, start: Instant of c, ns: u64) -> Deadline {
+  match instant.checked_add(c, start, ns) {
+    Some(at) => Deadline(clock: c, at: at),
+    None() => Deadline(clock: c, at: start),
+  }
+}
+
+fn elapsed(c: MonotonicClock, start: Instant of c) -> String {
+  match clock.monotonic(c) {
+    Ok(now) => f"at {instant.ticks(now) - instant.ticks(start)}\n",
+    Error(_) => "no clock\n",
+  }
+}
+
+// A task's result must be sendable, so a child reports its cancellation, not text.
+fn canceled_sleep(c: MonotonicClock, start: Instant of c, ns: u64) -> Option[
+  CancelCause
+] {
+  match instant.checked_add(c, start, ns) {
+    Some(at) => match clock.sleep_until(c, at) {
+      Error(Canceled(e)) => Some(e),
+      _ => None(),
+    },
+    None() => None(),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let bounded = task.scope_until(
+    tasks,
+    after(c, start, 1000u64),
+    fn(s: Scope) -> String {
+      task.scope(
+        tasks,
+        fn(inner: Scope) -> String {
+          let child = task.async(
+            inner,
+            fn() -> Option[CancelCause] {
+              canceled_sleep(c, start, 5000u64)
+            }
+          )
+          match task.await(inner, take child) {
+            Some(e) => cause(e),
+            None() => "slept",
+          }
+        }
+      )
+    }
+  )
+  let _ = out.print(output, report(bounded))
+  let _ = out.print(output, elapsed(c, start))
+  Ok(())
+}

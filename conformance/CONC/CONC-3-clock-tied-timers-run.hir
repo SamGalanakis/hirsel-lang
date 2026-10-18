@@ -1,0 +1,63 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// stdout: early
+// stdout: tied
+// stdout: late
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Error(NotGranted()),
+  }
+  let early = match instant.checked_add(c, start, 10u64) {
+    Some(t) => t,
+    None() => return Error(NotGranted()),
+  }
+  let late = match instant.checked_add(c, start, 30u64) {
+    Some(t) => t,
+    None() => return Error(NotGranted()),
+  }
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let a = task.async(
+        s,
+        fn() {
+          let _ = clock.sleep_until(c, late)
+          let _ = out.print(output, "late\n")
+        }
+      )
+      let b = task.async(
+        s,
+        fn() {
+          let _ = clock.sleep_until(c, early)
+          let _ = out.print(output, "early\n")
+        }
+      )
+      let d = task.async(
+        s,
+        fn() {
+          let _ = clock.sleep_until(c, early)
+          let _ = out.print(output, "tied\n")
+        }
+      )
+      let now = match clock.monotonic(c) {
+        Ok(t) => instant.ticks(t),
+        Error(_) => 1u64,
+      }
+      failure.check(now == 0u64, Arithmetic())
+      task.await(s, take a)
+      task.await(s, take b)
+      task.await(s, take d)
+    }
+  )
+  let now = match clock.monotonic(c) {
+    Ok(t) => instant.ticks(t),
+    Error(_) => 1u64,
+  }
+  failure.check(now == 30u64, Arithmetic())
+  Ok(())
+}

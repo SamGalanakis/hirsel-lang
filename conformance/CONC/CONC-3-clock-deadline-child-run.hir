@@ -1,0 +1,77 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// process: {"provider":"process.script@1","rules":[{"program":"/bin/test"}],"runs":[],"children":[{"program":"/bin/test","args":[],"steps":[{"print":[97,10]},{"expect":[103,111]},{"exit":{"exited":0}}]}]}
+// stdout: expired a
+// stdout: deadline
+// stdout: at 1000
+fn cause(e: CancelCause) -> String {
+  match e {
+    Requested() => "requested",
+    Parent() => "parent",
+    ChildFailed() => "child failed",
+    DeadlineExceeded() => "deadline",
+  }
+}
+
+fn report(b: Bounded[String]) -> String {
+  match b {
+    Finished(text) => f"finished {text}\n",
+    Expired(text) => f"expired {text}\n",
+  }
+}
+
+fn after(c: MonotonicClock, start: Instant of c, ns: u64) -> Deadline {
+  match instant.checked_add(c, start, ns) {
+    Some(at) => Deadline(clock: c, at: at),
+    None() => Deadline(clock: c, at: start),
+  }
+}
+
+fn elapsed(c: MonotonicClock, start: Instant of c) -> String {
+  match clock.monotonic(c) {
+    Ok(now) => f"at {instant.ticks(now) - instant.ticks(start)}\n",
+    Error(_) => "no clock\n",
+  }
+}
+
+fn utf8(take bytes: List[u8]) -> String {
+  match text.finish(take bytes) {
+    Ok(s) => s,
+    Error(_) => "(not UTF-8)",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let c = io.monotonic_clock(rt)?
+  let p = io.process(rt)?
+  let start = match clock.monotonic(c) {
+    Ok(t) => t,
+    Error(_) => return Ok(()),
+  }
+  let bounded = task.scope_until(
+    tasks,
+    after(c, start, 1000u64),
+    fn(s: Scope) -> String {
+      let mut test = match proc.spawn(p, path.of("/bin/test"), [], None()) {
+        Ok(child) => take child,
+        Error(_) => return "not spawned",
+      }
+      let mut first: List[u8] = []
+      let _ = child.read_stdout(p, mut test, mut first, 16u64)
+      let mut second: List[u8] = []
+      let outcome = match child.read_stdout(p, mut test, mut second, 16u64) {
+        Ok(count) => f"read {count}",
+        Error(Canceled(e)) => cause(e),
+        Error(_) => "failed",
+      }
+      child.kill(p, mut test)
+      f"{utf8(take first)}{outcome}"
+    }
+  )
+  let _ = out.print(output, report(bounded))
+  let _ = out.print(output, elapsed(c, start))
+  Ok(())
+}

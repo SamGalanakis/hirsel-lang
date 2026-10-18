@@ -24,8 +24,9 @@ pub use testing::test_path;
 pub use adapt::{input_identity, manifest, program};
 pub use coverage::backend_features;
 pub use differential::{
-    Configuration, Engine, MATRIX_VERSION, Outcome, Runtime, differential, full_matrix,
-    real_io_replay, real_io_replay_with_config, runtime_builds, smoke_matrix, topology_matrix,
+    Configuration, Engine, Fixture, MATRIX_VERSION, Outcome, Runtime, differential,
+    differential_in, full_matrix, real_io_replay, real_io_replay_in, real_io_replay_with_config,
+    runtime_builds, smoke_matrix, topology_matrix,
 };
 pub use emit::{
     Backend, KIND_BUG, check_runtime_calls, emit, emit_clif, emit_ir, failure_codes, failure_rules,
