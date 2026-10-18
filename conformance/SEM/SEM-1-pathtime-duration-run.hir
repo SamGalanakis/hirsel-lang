@@ -4,7 +4,7 @@ fn check_value(text: String, expected: i128) -> () uses {} {
   match duration.parse(text) {
     Ok(value) => {
       failure.check(value.nanoseconds == expected, Arithmetic())
-      match duration.parse(duration.format(value)) {
+      match duration.parse(duration.to_string(value)) {
         Ok(again) => failure.check(again.nanoseconds == expected, Arithmetic()),
         Error(_) => failure.check(false, Arithmetic()),
       }
@@ -33,7 +33,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Arithmetic()
   )
   failure.check(
-    duration.format(time.Duration(nanoseconds: -1)) == "-0.000000001s",
+    duration.to_string(time.Duration(nanoseconds: -1)) == "-0.000000001s",
     Arithmetic()
   )
   check_value("+001.200s", 1200000000)

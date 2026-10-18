@@ -63,9 +63,9 @@ fn path.extension(p: Path) -> unique String uses {}
 fn path.components(p: Path) -> unique List[String] uses {}
 N fn duration.from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {}
 N fn duration.parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {}
-fn duration.format(value: time.Duration) -> unique String uses {}
+fn duration.to_string(value: time.Duration) -> unique String uses {}
 N fn time.parse(text: String) -> Result[time.Timestamp, scalar.ParseError] uses {}
-fn time.format(value: time.Timestamp) -> Result[unique String, time.TimeError] uses {}
+fn time.to_string(value: time.Timestamp) -> Result[unique String, time.TimeError] uses {}
 N fn time.elapsed(clock: MonotonicClock, start: Instant of clock) -> Result[time.Duration, ClockError]
 N fn time.between(clock: MonotonicClock, start: Instant of clock, end: Instant of clock) -> time.Duration
 N fn time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of clock) -> i32
@@ -137,7 +137,7 @@ host, resolve no links and establish no confinement.
 fractional part. `duration.parse` accepts an optional sign, integer decimal seconds, an
 optional dot followed by one to nine fraction digits, and a final `s`, with no whitespace.
 Invalid grammar is `scalar.ParseError.Invalid`; a value not representable as signed
-`i128` nanoseconds is `OutOfRange`. `duration.format` covers the whole signed `i128` range
+`i128` nanoseconds is `OutOfRange`. `duration.to_string` covers the whole signed `i128` range
 and emits canonical seconds with a final `s` and trimmed fractional zeros; zero is `0s`.
 
 `time.Timestamp` holds signed `i128` `unix_nanoseconds`; `TimeError` is `OutOfRange`.
@@ -146,7 +146,7 @@ and emits canonical seconds with a final `s` and trimmed fractional zeros; zero 
 to nine digits, validating dates and 00–23/00–59/00–59 times. Space separators, a leap
 second 60, a missing offset and trailing data are invalid. Numeric offsets normalize to UTC,
 `-00:00` included; an offset may move the UTC result outside the formatting range.
-`time.format` returns UTC with a four-digit year, uppercase `T` and `Z` and trimmed
+`time.to_string` returns UTC with a four-digit year, uppercase `T` and `Z` and trimmed
 fractional zeros, or `TimeError.OutOfRange` outside years 0000–9999. These are ordinary
 algorithms with no clock authority, locale or time-zone database.
 

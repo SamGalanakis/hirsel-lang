@@ -10,9 +10,9 @@ pub type AppError = PathError(path.PathError) | Parse(scalar.ParseError) | Time(
 pub fn main(rt: Io) -> Result[(), AppError] {
   let p = path.normalize(path.of("notes/./draft/../tour.txt")) ? PathError
   let stamp = time.parse("1970-01-01T01:00:00+01:00") ? Parse
-  let text = time.format(stamp) ? Time
+  let text = time.to_string(stamp) ? Time
   let duration = duration.parse("1.500s") ? Parse
   let output = io.stdout(rt) ? Grant
-  out.print(output, f"{path.text(p)}\n{text}\n{duration.format(duration)}\n") ? Output
+  out.print(output, f"{path.text(p)}\n{text}\n{duration.to_string(duration)}\n") ? Output
   Ok(())
 }

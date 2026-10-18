@@ -4,7 +4,7 @@ fn check_value(text: String, expected: i128, canonical: String) -> () uses {} {
   match time.parse(text) {
     Ok(value) => {
       failure.check(value.unix_nanoseconds == expected, Arithmetic())
-      match time.format(value) {
+      match time.to_string(value) {
         Ok(formatted) => failure.check(formatted == canonical, TextInvariant()),
         Error(_) => failure.check(false, Arithmetic()),
       }

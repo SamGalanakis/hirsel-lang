@@ -60,7 +60,7 @@ fn duration_text_matches_independent_unsigned_integer_vectors() {
         for nanos in values {
             let text = duration_text(nanos);
             source += &format!(
-                "core@1/test.check(t, std@1/duration.format(std@1/time.Duration(nanoseconds: {nanos}i128)) == \"{text}\")\n"
+                "core@1/test.check(t, std@1/duration.to_string(std@1/time.Duration(nanoseconds: {nanos}i128)) == \"{text}\")\n"
             );
             source += &format!(
                 "match std@1/duration.parse(\"{text}\") {{ Ok(value) => core@1/test.check(t, value.nanoseconds == {nanos}i128), Error(_) => core@1/test.check(t, false) }}\n"
@@ -120,7 +120,7 @@ fn rfc3339_matches_independent_gregorian_and_offset_vectors() {
                     "match std@1/time.parse(\"{text}\") {{ Ok(value) => core@1/test.check(t, value.unix_nanoseconds == {nanos}i128), Error(_) => core@1/test.check(t, false) }}\n"
                 );
                 source += &format!(
-                    "match std@1/time.format(std@1/time.Timestamp(unix_nanoseconds: {nanos}i128)) {{ Ok(text) => core@1/test.check(t, text == \"{text}\"), Error(_) => core@1/test.check(t, false) }}\n"
+                    "match std@1/time.to_string(std@1/time.Timestamp(unix_nanoseconds: {nanos}i128)) {{ Ok(text) => core@1/test.check(t, text == \"{text}\"), Error(_) => core@1/test.check(t, false) }}\n"
                 );
             }
         }
@@ -146,7 +146,7 @@ fn rfc3339_matches_independent_gregorian_and_offset_vectors() {
         );
         for nanos in [i128::MIN, i128::MAX] {
             source += &format!(
-                "match std@1/time.format(std@1/time.Timestamp(unix_nanoseconds: {nanos}i128)) {{ Error(OutOfRange()) => (), Ok(_) => core@1/test.check(t, false) }}\n"
+                "match std@1/time.to_string(std@1/time.Timestamp(unix_nanoseconds: {nanos}i128)) {{ Error(OutOfRange()) => (), Ok(_) => core@1/test.check(t, false) }}\n"
             );
         }
         source += "Ok(())\n}\n";
@@ -197,8 +197,8 @@ fn full_gate_path_and_time_public_functions_compile_as_source_units() {
                     "components",
                 ],
             ),
-            ("duration", vec!["from_parts", "parse", "format"]),
-            ("time", vec!["parse", "format"]),
+            ("duration", vec!["from_parts", "parse", "to_string"]),
+            ("time", vec!["parse", "to_string"]),
         ] {
             for name in names {
                 assert!(
@@ -234,7 +234,7 @@ fn full_gate_every_four_digit_year_matches_a_chrono_free_calendar_checksum() {
       Ok(value) => {{
         test.check(t, value.unix_nanoseconds == expected)
         checksum += value.unix_nanoseconds
-        match std@1/time.format(value) {{ Ok(formatted) => test.check(t, formatted == text), Error(_) => test.check(t, false) }}
+        match std@1/time.to_string(value) {{ Ok(formatted) => test.check(t, formatted == text), Error(_) => test.check(t, false) }}
       }},
       Error(_) => test.check(t, false),
     }}

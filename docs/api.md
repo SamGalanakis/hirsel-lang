@@ -2204,12 +2204,6 @@ References: [`std@1/deque/Deque`](#def-std_401_2fdeque_2fDeque)
 
 ## duration
 
-<a id="def-std_401_2fduration_2fformat"></a>
-
-- `pub fn duration.format(value: time.Duration) -> unique String uses {}`
-
-References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
-
 <a id="def-std_401_2fduration_2ffrom_5fparts"></a>
 
 - `@noalloc pub fn duration.from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {}`
@@ -2221,6 +2215,12 @@ References: [`core@1/i32`](#def-core_401_2fi32), [`core@1/i64`](#def-core_401_2f
 - `@noalloc pub fn duration.parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
+
+<a id="def-std_401_2fduration_2fto_5fstring"></a>
+
+- `pub fn duration.to_string(value: time.Duration) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
 
 ## env
@@ -5426,12 +5426,6 @@ References: [`core@1/Instant`](#def-core_401_2fInstant), [`core@1/MonotonicClock
 
 References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/Instant`](#def-core_401_2fInstant), [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Result`](#def-core_401_2fResult), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
-<a id="def-std_401_2ftime_2fformat"></a>
-
-- `pub fn time.format(value: Timestamp) -> Result[unique String, TimeError] uses {}`
-
-References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
-
 <a id="def-std_401_2ftime_2fparse"></a>
 
 - `@noalloc pub fn time.parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {}`
@@ -5443,6 +5437,12 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `@noalloc pub fn time.sleep(clock: MonotonicClock, interval: Duration) -> Result[(), SleepError]`
 
 References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Result`](#def-core_401_2fResult), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration), [`std@1/time/SleepError`](#def-std_401_2ftime_2fSleepError)
+
+<a id="def-std_401_2ftime_2fto_5fstring"></a>
+
+- `pub fn time.to_string(value: Timestamp) -> Result[unique String, TimeError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
 
 
 ## tls

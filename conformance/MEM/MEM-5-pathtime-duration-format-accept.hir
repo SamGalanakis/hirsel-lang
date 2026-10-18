@@ -2,6 +2,6 @@
 // expect: accept
 // Allocating formatter permitted.
 fn example(value: time.Duration) {
-  duration.format(value)
+  duration.to_string(value)
   ()
 }

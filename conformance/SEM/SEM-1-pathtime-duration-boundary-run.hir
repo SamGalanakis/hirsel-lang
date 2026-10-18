@@ -10,9 +10,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     duration.from_parts(9223372036854775807i64, 2147483647i32).nanoseconds == 9223372036854775809147483647i128,
     Arithmetic()
   )
-  failure.check(duration.format(time.Duration(nanoseconds: 0)) == "0s", Arithmetic())
+  failure.check(duration.to_string(time.Duration(nanoseconds: 0)) == "0s", Arithmetic())
   failure.check(
-    duration.format(time.Duration(nanoseconds: 1000000000)) == "1s",
+    duration.to_string(time.Duration(nanoseconds: 1000000000)) == "1s",
     Arithmetic()
   )
   match duration.parse("") {

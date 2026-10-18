@@ -17,7 +17,7 @@ fn check_parent(input: String, expected: String) -> () uses {} {
 }
 
 fn check_epoch(seconds: i128, expected: String) -> () uses {} {
-  match time.format(time.Timestamp(unix_nanoseconds: seconds * 1000000000)) {
+  match time.to_string(time.Timestamp(unix_nanoseconds: seconds * 1000000000)) {
     Ok(text) => failure.check(text == expected, TextInvariant()),
     Error(_) => failure.check(false, Arithmetic()),
   }
@@ -39,7 +39,7 @@ fn check_leap(text: String, valid: bool) -> () uses {} {
 
 fn check_fraction(nanos: i32, expected: String) -> () uses {} {
   let value = duration.from_parts(0, nanos)
-  failure.check(duration.format(value) == expected, TextInvariant())
+  failure.check(duration.to_string(value) == expected, TextInvariant())
   match duration.parse(expected) {
     Ok(parsed) => failure.check(parsed.nanoseconds == value.nanoseconds, Arithmetic()),
     Error(_) => failure.check(false, Arithmetic()),
@@ -95,7 +95,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Arithmetic()
   )
   failure.check(
-    duration.format(duration.from_parts(1, 123456789)) == "1.123456789s",
+    duration.to_string(duration.from_parts(1, 123456789)) == "1.123456789s",
     TextInvariant()
   )
   match duration.parse("1.123456789s") {

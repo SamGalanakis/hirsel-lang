@@ -183,7 +183,7 @@ fn write_digits(mut builder: List[u8], value: i128, width: u64) -> () uses {} {
 // Adapted from Zig lib/std/time/epoch.zig EpochDay.calculateYearDay,
 // YearAndDay.calculateMonthDay and DaySeconds, commit bff490a23889750de7096d9057c0a432efc929a8.
 // Offset from year zero and skip whole Gregorian cycles for signed bounded UTC.
-pub fn format(value: Timestamp) -> Result[unique String, TimeError] uses {} {
+pub fn to_string(value: Timestamp) -> Result[unique String, TimeError] uses {} {
   // Range before division keeps all arithmetic bounded even at i128 MIN/MAX.
   if value.unix_nanoseconds < -62167219200000000000i128 || value.unix_nanoseconds > 253402300799999999999i128 {
     return Error(OutOfRange())
