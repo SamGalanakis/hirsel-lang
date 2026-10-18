@@ -467,6 +467,30 @@ impl NetProvider for CooperativeNet {
         }
         Ok(Ok(()))
     }
+    fn unix_connect(&mut self, id: u64, path: &str) -> Provided<()> {
+        // A Unix connect completes at once unless the backlog is full; it runs blocking.
+        match self.host.unix_connect(id, path)? {
+            Ok(()) => match set_nonblocking(self.host.socket(id).unwrap(), true) {
+                Ok(()) => Ok(Ok(())),
+                Err(e) => {
+                    self.host.close(id);
+                    Ok(Err(e))
+                }
+            },
+            Err(e) => Ok(Err(e)),
+        }
+    }
+    fn unix_listen(&mut self, id: u64, path: &str, remove_stale: bool) -> Provided<()> {
+        match self.host.unix_listen(id, path, remove_stale)? {
+            Ok(()) => {}
+            Err(e) => return Ok(Err(e)),
+        }
+        if let Err(e) = set_nonblocking(self.host.socket(id).unwrap(), true) {
+            self.host.close(id);
+            return Ok(Err(e));
+        }
+        Ok(Ok(()))
+    }
     fn accept(&mut self, listener: u64, id: u64) -> Provided<SocketAddr> {
         // The listener is nonblocking. accept4 itself never waits.
         match self.host.accept(listener, id)? {

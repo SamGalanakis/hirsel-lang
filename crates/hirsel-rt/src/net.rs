@@ -15,6 +15,9 @@ pub enum NetOperation {
     UdpBind,
     UdpPeer,
     ListenTls,
+    UnixConnect,
+    UnixListen,
+    UnixListenRemoveStale,
 }
 impl NetOperation {
     pub fn name(self) -> &'static str {
@@ -25,6 +28,9 @@ impl NetOperation {
             Self::UdpBind => "udp_bind",
             Self::UdpPeer => "udp_peer",
             Self::ListenTls => "listen_tls",
+            Self::UnixConnect => "unix_connect",
+            Self::UnixListen => "unix_listen",
+            Self::UnixListenRemoveStale => "unix_listen_remove_stale",
         }
     }
     pub fn parse(name: &str) -> Option<Self> {
@@ -35,6 +41,9 @@ impl NetOperation {
             "udp_bind" => Self::UdpBind,
             "udp_peer" => Self::UdpPeer,
             "listen_tls" => Self::ListenTls,
+            "unix_connect" => Self::UnixConnect,
+            "unix_listen" => Self::UnixListen,
+            "unix_listen_remove_stale" => Self::UnixListenRemoveStale,
             _ => return None,
         })
     }
@@ -86,6 +95,12 @@ pub struct SocketAddr {
     pub port: u16,
 }
 impl SocketAddr {
+    /// The address of an unnamed Unix peer, and of every Unix stream or listener:
+    /// `0.0.0.0` with port 0 (docs/spec/core-library.md, Unix domain sockets).
+    pub const UNNAMED: Self = Self {
+        ip: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+        port: 0,
+    };
     pub fn std(self) -> std::net::SocketAddr {
         std::net::SocketAddr::new(self.ip, self.port)
     }
@@ -254,6 +269,11 @@ pub trait NetProvider {
     /// as it does after a failed `tls_connect`.
     fn tls_close(&mut self, stream: u64) -> Provided<()>;
     fn listen(&mut self, id: u64, addr: SocketAddr) -> Provided<()>;
+    /// Connect a stream to the socket at a canonical `path`.
+    fn unix_connect(&mut self, id: u64, path: &str) -> Provided<()>;
+    /// Bind and listen at `path`, first removing a stale socket file there when
+    /// `remove_stale`. Closing the listener removes the file it created.
+    fn unix_listen(&mut self, id: u64, path: &str, remove_stale: bool) -> Provided<()>;
     fn accept(&mut self, listener: u64, id: u64) -> Provided<SocketAddr>;
     fn local_addr(&mut self, listener: u64) -> Provided<SocketAddr>;
     /// Drop or `net.close`: infallible, close errors are discarded (DROP-3).
@@ -317,6 +337,12 @@ impl NetProvider for NoNet {
     fn listen(&mut self, _: u64, _: SocketAddr) -> Provided<()> {
         Err(AdapterError::InvalidCompletion)
     }
+    fn unix_connect(&mut self, _: u64, _: &str) -> Provided<()> {
+        Err(AdapterError::InvalidCompletion)
+    }
+    fn unix_listen(&mut self, _: u64, _: &str, _: bool) -> Provided<()> {
+        Err(AdapterError::InvalidCompletion)
+    }
     fn accept(&mut self, _: u64, _: u64) -> Provided<SocketAddr> {
         Err(AdapterError::InvalidCompletion)
     }
@@ -350,28 +376,43 @@ pub fn permits(
         .map(|rule| rule.operation)
         .filter(|op| match operation {
             None => true,
-            Some(NetOperation::UdpBind | NetOperation::UdpPeer) => Some(*op) == operation,
+            Some(
+                NetOperation::UdpBind
+                | NetOperation::UdpPeer
+                | NetOperation::UnixConnect
+                | NetOperation::UnixListenRemoveStale,
+            ) => Some(*op) == operation,
             // Listen and Connect are the wider grants; `min` prefers them so a stream is
             // plaintext-capable.
             Some(NetOperation::Listen) => {
                 matches!(op, NetOperation::Listen | NetOperation::ListenTls)
             }
+            // Either Unix listen rule; prefer the one that may remove a stale socket.
+            Some(NetOperation::UnixListen) => matches!(
+                op,
+                NetOperation::UnixListen | NetOperation::UnixListenRemoveStale
+            ),
             Some(_) => matches!(op, NetOperation::Connect | NetOperation::ConnectTls),
         })
-        .min()
+        .reduce(|a, b| match (a, b) {
+            (NetOperation::UnixListen, NetOperation::UnixListenRemoveStale) => b,
+            _ => a.min(b),
+        })
 }
 
-/// `net.narrow` coverage: equality, or a TLS-only rule under its plaintext rule:
-/// `(a, p, ConnectTls)` under `(a, p, Connect)`, `(a, p, ListenTls)` under `(a, p, Listen)`.
+/// `net.narrow` coverage: equality, or a narrower rule under its wider one:
+/// `(a, p, ConnectTls)` under `(a, p, Connect)`, `(a, p, ListenTls)` under `(a, p, Listen)`
+/// and `(a, p, UnixListen)` under `(a, p, UnixListenRemoveStale)`.
 pub fn covers(rules: &BTreeSet<NetRule>, requested: &NetRule) -> bool {
-    let plaintext = match requested.operation {
+    let wider = match requested.operation {
         NetOperation::ConnectTls => NetOperation::Connect,
         NetOperation::ListenTls => NetOperation::Listen,
+        NetOperation::UnixListen => NetOperation::UnixListenRemoveStale,
         _ => return rules.contains(requested),
     };
     rules.contains(requested)
         || rules.contains(&NetRule {
-            operation: plaintext,
+            operation: wider,
             ..requested.clone()
         })
 }
@@ -400,6 +441,8 @@ pub(crate) fn is_net_request(request: &crate::io::Request) -> bool {
             | R::UdpBind { .. }
             | R::UdpSend { .. }
             | R::UdpRecv { .. }
+            | R::UnixConnect { .. }
+            | R::UnixListen { .. }
     )
 }
 
@@ -558,6 +601,21 @@ impl crate::io::State {
                 }
             }
 
+            R::UnixConnect { net, path } | R::UnixListen { net, path } => {
+                let (rules, _) = self.net_grant(*net)?;
+                let operation = if matches!(request, R::UnixConnect { .. }) {
+                    NetOperation::UnixConnect
+                } else {
+                    NetOperation::UnixListen
+                };
+                if !hirsel_run_config::canonical_unix_path(path) {
+                    Some(NetError::InvalidInput)
+                } else {
+                    permits(&rules, path, 0, Some(operation))
+                        .is_none()
+                        .then_some(NetError::NotGranted)
+                }
+            }
             R::Resolve { net, host, port }
             | R::Connect {
                 net, host, port, ..
@@ -650,11 +708,17 @@ impl crate::io::State {
                     NetOperation::Connect
                     | NetOperation::Listen
                     | NetOperation::UdpBind
-                    | NetOperation::UdpPeer => false,
+                    | NetOperation::UdpPeer
+                    | NetOperation::UnixConnect
+                    | NetOperation::UnixListen
+                    | NetOperation::UnixListenRemoveStale => false,
                 } || matches!(request, R::TlsAccept { .. })
                     && !matches!(
                         grant.operation,
-                        NetOperation::Listen | NetOperation::ListenTls
+                        NetOperation::Listen
+                            | NetOperation::ListenTls
+                            | NetOperation::UnixListen
+                            | NetOperation::UnixListenRemoveStale
                     );
                 if invalid_tls
                     || matches!(request, R::NetRead { max: 0, .. })
@@ -755,6 +819,9 @@ impl crate::io::State {
                         address: peer.address.clone(),
                         port: peer.port,
                         operation: match &peer.tls {
+                            _ if hirsel_run_config::canonical_unix_path(&peer.address) => {
+                                NetOperation::UnixConnect
+                            }
                             hirsel_run_config::PeerTls::Plain => NetOperation::Connect,
                             hirsel_run_config::PeerTls::Certificate(_)
                             | hirsel_run_config::PeerTls::Fails(_) => NetOperation::ConnectTls,
@@ -763,7 +830,11 @@ impl crate::io::State {
                     .chain(listeners.iter().map(|listener| NetRule {
                         address: listener.address.clone(),
                         port: listener.port,
-                        operation: NetOperation::Listen,
+                        operation: if hirsel_run_config::canonical_unix_path(&listener.address) {
+                            NetOperation::UnixListen
+                        } else {
+                            NetOperation::Listen
+                        },
                     }))
                     .chain(
                         peers
@@ -778,11 +849,16 @@ impl crate::io::State {
                                 operation: NetOperation::UdpPeer,
                             }),
                     )
-                    .chain(listeners.iter().map(|l| NetRule {
-                        address: l.address.clone(),
-                        port: l.port,
-                        operation: NetOperation::UdpBind,
-                    }))
+                    .chain(
+                        listeners
+                            .iter()
+                            .filter(|l| l.address.parse::<std::net::IpAddr>().is_ok())
+                            .map(|l| NetRule {
+                                address: l.address.clone(),
+                                port: l.port,
+                                operation: NetOperation::UdpBind,
+                            }),
+                    )
                     .collect();
                 let id = self.handles.next();
                 self.handles.insert(Grant::Net {
@@ -834,6 +910,34 @@ impl crate::io::State {
                         operation,
                         tls: false,
                     })
+                })))
+            }
+            R::UnixConnect { net, path } => {
+                let (_, world) = self.net_grant(*net)?;
+                let id = self.handles.next();
+                let value = provided(self.world(world, host)?.unix_connect(id, path))?;
+                Ok(C::NetHandle(value.map(|()| {
+                    self.handles.insert(Grant::Stream {
+                        net: *net,
+                        address: path.clone(),
+                        port: 0,
+                        operation: NetOperation::UnixConnect,
+                        tls: false,
+                    })
+                })))
+            }
+            R::UnixListen { net, path } => {
+                let (rules, world) = self.net_grant(*net)?;
+                let operation = permits(&rules, path, 0, Some(NetOperation::UnixListen)).unwrap();
+                let remove_stale = operation == NetOperation::UnixListenRemoveStale;
+                let id = self.handles.next();
+                let value = provided(self.world(world, host)?.unix_listen(id, path, remove_stale))?;
+                Ok(C::Listened(value.map(|()| {
+                    let id = self.handles.insert(Grant::Listener {
+                        net: *net,
+                        operation,
+                    });
+                    (id, SocketAddr::UNNAMED)
                 })))
             }
             R::ConnectAddr { net, addr, timeout } => {

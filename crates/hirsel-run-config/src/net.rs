@@ -63,8 +63,17 @@ pub struct NetClient {
     pub steps: Vec<NetStep>,
 }
 
-/// Scripted listeners name canonical IP literals, each address/port once.
-/// Port zero binds its clients to the first ephemeral listen on that IP.
+/// How Test reports name a listen address: `ip:port`, or a Unix listener's socket path.
+pub fn listener_name(address: &str, port: u16) -> String {
+    match address.parse::<IpAddr>() {
+        Ok(ip) => std::net::SocketAddr::new(ip, port).to_string(),
+        Err(_) => address.to_owned(),
+    }
+}
+
+/// Scripted listeners name canonical IP literals or socket paths, each address/port once.
+/// Port zero binds its clients to the first ephemeral listen on that IP. A Unix listener
+/// has port 0 and its clients, being unnamed, come from `0.0.0.0` with port 0.
 pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
     let mut seen = std::collections::BTreeMap::new();
     for (index, listener) in listeners.iter().enumerate() {
@@ -73,7 +82,18 @@ pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
                 "duplicate listener address at entries {first} and {index}"
             ));
         }
-        if !canonical_ip(&listener.address)
+        if canonical_unix_path(&listener.address) {
+            if listener.port != 0
+                || !listener
+                    .clients
+                    .iter()
+                    .all(|c| c.address == "0.0.0.0" && c.port == 0)
+            {
+                return Err(format!(
+                    "Unix listener {index} needs port 0 and clients from 0.0.0.0 port 0"
+                ));
+            }
+        } else if !canonical_ip(&listener.address)
             || !listener.clients.iter().all(|c| canonical_ip(&c.address))
         {
             return Err(format!("listener {index} has a noncanonical IP literal"));
@@ -84,12 +104,7 @@ pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
 
 /// The Test report of a scripted client whose `Expect` the program's writes contradict
 /// (docs/spec/core-library.md, scripted peers), with its trailing newline.
-pub fn net_client_mismatch(
-    client: usize,
-    listener: std::net::SocketAddr,
-    expected: &[u8],
-    wrote: &[u8],
-) -> String {
+pub fn net_client_mismatch(client: usize, listener: &str, expected: &[u8], wrote: &[u8]) -> String {
     format!(
         "test failure: net client {client} of {listener} expected {} but the program wrote {}\n",
         byte_literal(expected),
@@ -98,12 +113,7 @@ pub fn net_client_mismatch(
 }
 
 /// The Test report of an accepted stream closed before its client's `Expect` was met.
-pub fn net_client_unmet(
-    client: usize,
-    listener: std::net::SocketAddr,
-    expected: &[u8],
-    wrote: &[u8],
-) -> String {
+pub fn net_client_unmet(client: usize, listener: &str, expected: &[u8], wrote: &[u8]) -> String {
     format!(
         "test failure: net client {client} of {listener} expected {} but the program closed after writing {}\n",
         byte_literal(expected),
@@ -112,7 +122,7 @@ pub fn net_client_unmet(
 }
 
 /// The Test report of a listener closed before a client with an `Expect` connected.
-pub fn net_client_unaccepted(client: usize, listener: std::net::SocketAddr) -> String {
+pub fn net_client_unaccepted(client: usize, listener: &str) -> String {
     format!("test failure: net client {client} of {listener} was never accepted\n")
 }
 
@@ -252,7 +262,20 @@ impl NetGrant {
         check_net_listeners(&self.listeners).map_err(|e| invalid("io.net.listeners", &e))?;
         self.rules.sort();
         for rule in &self.rules {
-            if !canonical_address(&rule.address) {
+            let unix = UNIX_OPERATIONS.contains(&rule.operation.as_str());
+            if unix && !canonical_unix_path(&rule.address) {
+                return Err(invalid(
+                    "io.net.rules.address",
+                    "expected a canonical absolute socket path",
+                ));
+            }
+            if unix && rule.service != "0" {
+                return Err(invalid(
+                    "io.net.rules.service",
+                    "a Unix socket rule has service 0",
+                ));
+            }
+            if !unix && !canonical_address(&rule.address) {
                 return Err(invalid(
                     "io.net.rules.address",
                     "expected a canonical host name or IP literal",
@@ -268,13 +291,15 @@ impl NetGrant {
                     "expected a canonical decimal port 0–65535",
                 ));
             }
-            if !matches!(
-                rule.operation.as_str(),
-                "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer" | "listen_tls"
-            ) {
+            if !unix
+                && !matches!(
+                    rule.operation.as_str(),
+                    "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer" | "listen_tls"
+                )
+            {
                 return Err(invalid(
                     "io.net.rules.operation",
-                    "expected connect, connect_tls, listen, udp_bind, udp_peer or listen_tls",
+                    "expected connect, connect_tls, listen, udp_bind, udp_peer, listen_tls, unix_connect, unix_listen or unix_listen_remove_stale",
                 ));
             }
         }
@@ -290,12 +315,7 @@ impl NetGrant {
                         &format!("duplicate address/port at entries {first} and {index}"),
                     ));
                 }
-                if !canonical_address(&peer.address) {
-                    return Err(invalid(
-                        "io.net.peers.address",
-                        "expected a canonical host name or IP literal",
-                    ));
-                }
+                check_peer_address(peer).map_err(|e| invalid("io.net.peers.address", &e))?;
                 if !peer.resolves_to.iter().all(|address| canonical_ip(address)) {
                     return Err(invalid(
                         "io.net.peers.resolves_to",
@@ -306,6 +326,33 @@ impl NetGrant {
         }
         Ok(())
     }
+}
+
+/// The RunConfig operations whose rule address is a socket path.
+pub const UNIX_OPERATIONS: [&str; 3] = ["unix_connect", "unix_listen", "unix_listen_remove_stale"];
+
+/// The longest socket path: Linux `sun_path` holds 108 bytes, its terminating NUL included.
+pub const UNIX_PATH_MAX: usize = 107;
+
+/// A canonical Unix socket path: a canonical absolute path (as process grants name programs)
+/// of at most `UNIX_PATH_MAX` bytes. It never names the abstract namespace.
+pub fn canonical_unix_path(path: &str) -> bool {
+    path.len() <= UNIX_PATH_MAX && crate::process::canonical_program(path)
+}
+
+/// A scripted peer names a host or IP literal, or a socket path: a Unix peer, which is
+/// plain, has port 0 and resolves to nothing.
+pub fn check_peer_address(peer: &NetPeer) -> Result<(), String> {
+    if canonical_unix_path(&peer.address) {
+        if peer.port != 0 || !peer.resolves_to.is_empty() || peer.tls != PeerTls::Plain {
+            return Err("a Unix peer is plain, with port 0 and no resolves_to".into());
+        }
+        return Ok(());
+    }
+    if !canonical_address(&peer.address) {
+        return Err("expected a canonical host name, IP literal or socket path".into());
+    }
+    Ok(())
 }
 
 // Use Rust's mature parser and Display directly (library/core/src/net/{parser,

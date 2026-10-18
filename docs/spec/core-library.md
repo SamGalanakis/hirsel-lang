@@ -124,6 +124,8 @@ N fn tls.close(n: Net, take s: Stream of n) -> Result[(), NetError]
 fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
 N fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]
+fn net.unix_connect(n: Net, path: Path) -> Result[Stream of n, NetError]
+fn net.unix_listen(n: Net, path: Path) -> Result[Listener of n, NetError]
 
 fn net.udp_bind(n: Net, addr: SocketAddr) -> Result[unique UdpSocket of n, NetError]
 N fn udp.send_to(n: Net, mut s: UdpSocket of n, data: Bytes, addr: SocketAddr) -> Result[u64, NetError]
@@ -363,6 +365,7 @@ network data types are root core types, with variant ordinals in the order writt
 IpAddr       = V4(Inline[u8, 4]) | V6(Inline[u8, 16])          // network byte order
 SocketAddr   = { ip: IpAddr, port: u16 }
 NetOperation = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer() | ListenTls()
+             | UnixConnect() | UnixListen() | UnixListenRemoveStale()
 UdpReceived  = { count: u64, peer: SocketAddr, truncated: bool }
 NetRule      = { address: String, port: u16, operation: NetOperation }
 NetTimeout   = Unbounded() | Nanos(u64)
@@ -548,7 +551,8 @@ identity for human and JSON reports.
 `net.narrow` returns a `Net` with exactly the requested rules when each equals a rule of
 `n`, or is `(a, p, ConnectTls())` under `(a, p, Connect())`; otherwise it returns
 `NotGranted()` and mints no `Net`; `(a, p, ListenTls())` is likewise covered by
-`(a, p, Listen())`. An empty rule list is allowed and permits nothing.
+`(a, p, Listen())`, and `(a, p, UnixListen())` by `(a, p, UnixListenRemoveStale())`. An
+empty rule list is allowed and permits nothing.
 
 | Operation | Rule required in the `Net` passed |
 |---|---|
@@ -564,6 +568,8 @@ identity for human and JSON reports.
 | `udp.send_to(n, mut s, data, addr)` | the socket's originating `Net`, and `(literal, port, UdpPeer())` for `addr` |
 | `udp.recv_from(n, mut s, mut buffer, max)` | the socket's originating `Net`; only peers with an exact `UdpPeer()` rule deliver input |
 | `udp.close(n, take s)` | the socket's originating `Net` |
+| `net.unix_connect(n, path)` | `(path, 0, UnixConnect())` |
+| `net.unix_listen(n, path)` | `(path, 0, UnixListen())` or `(path, 0, UnixListenRemoveStale())` |
 
 `net.resolve` returns the provider's addresses in resolver order, each with `port`; a name
 that does not exist is `UnknownHost()`, and a resolver that cannot answer
@@ -614,8 +620,9 @@ shutdown and `tls.connect` return `NotGranted()` with no effect, while timeout s
 `net.listen` binds and listens with a backlog of 128 and no address reuse; `net.accept`
 returns a connected stream and its peer address.
 
-The blocking network operations are `resolve`, `connect`, `connect_addr`, `read`,
-`read_into`, `write`, `write_all`, `accept`, `tls.connect`, `tls.accept` and `tls.close`. Each is a
+The blocking network operations are `resolve`, `connect`, `connect_addr`, `unix_connect`,
+`read`, `read_into`, `write`, `write_all`, `accept`, `tls.connect`, `tls.accept` and
+`tls.close`. Each is a
 cancellation point only before it has an effect: a read before any byte is received, a
 write before any byte is accepted, a connect or handshake before any packet is sent. The
 others never return `Canceled`. A canceled `tls.connect`, `tls.accept` or `tls.close` still consumes its
@@ -646,6 +653,33 @@ binding, sending or delivering an admitted datagram (CONC-3). A waiting receive
 remains cancelable after discarding outside input. `udp.close` and implicit drop
 are shielded from cancellation. Native schedulers park only the waiting task.
 
+**Unix domain sockets.** `net.unix_connect` connects a stream socket to the socket at
+`path`, and `net.unix_listen` creates a socket file at `path`, binds and listens with a
+backlog of 128. They return the same `Stream` and `Listener` a TCP connect or listen does, so
+every stream operation, `net.accept`, `tls.connect` and `tls.close` apply unchanged; the
+listener's grant authorizes accepting, and accepted streams carry its authority. `path` must
+be canonical as a Unix rule's address ([CAP-1](capabilities.md#cap-1-authority)), otherwise
+`InvalidInput()` before the grant check. Unix peers are unnamed and have no IP address: the
+address `net.accept` returns, and `net.peer_addr` and `net.local_addr` of a Unix stream or
+listener, are `0.0.0.0` with port 0.
+
+A connect to a path with no socket accepting on it, including a missing path, is
+`ConnectionRefused()`. `net.unix_connect` has no timeout: it waits only while the
+listener's backlog is full. A listen on a path that already exists is `AddrInUse()`, except
+under a `UnixListenRemoveStale()` rule when the existing file is a socket on which a connect
+is refused: the listen then removes that file and binds once more. A file other than a socket
+is never removed. A listen whose directory does not exist is `AddrNotAvailable()`; other
+host permission failures are `Fault` inputs. Closing or dropping a Unix listener, on every
+path including cancellation cleanup, removes its socket file when the path still names the
+socket it created (the same device and inode) and otherwise leaves the path alone; closing a
+stream removes nothing.
+
+`net.unix_connect` is a cancellation point before it connects: its order is the path check,
+the grant check, then `Canceled(cause)`, then the connect (CONC-3). `net.unix_listen`, like
+`net.listen`, never returns `Canceled`. A canceled operation on a Unix stream or listener
+behaves as on a TCP one, and the cleanup of a stream or listener a cancellation abandons is
+its drop.
+
 **Scripted UDP.** `test.net` additionally grants `UdpBind` for each listener address
 and `UdpPeer` for each `Plain` peer whose address is an IP literal. Scripted bind
 addresses and peer data supply no authority in `net.script@2`: its explicit rules
@@ -673,6 +707,11 @@ are invalid input. A `NetListener` with port 0 binds its clients to the first po
 listen on that IP; clients target that listener's assigned address. Later port-0
 listens on that IP have no scripted clients.
 
+- A peer whose address is a canonical socket path is a Unix peer: it must be `Plain()`,
+  with port 0 and no `resolves_to`, and `test.net` grants `(path, 0, UnixConnect())` for it
+  in place of `Connect` and `UdpPeer` rules. Each `net.unix_connect` to it takes its next
+  connection entry as a connect does; `Unanswered()` never completes. Its streams' `peer_addr`
+  is `0.0.0.0` with port 0. A Unix peer is reached only by `net.unix_connect`.
 - Resolving a peer's address returns `resolves_to` with the peer's port; other names are
   `UnknownHost()`. `peer_addr` is a literal-address peer's literal, or a host-name peer's
   first `resolves_to` address; with an empty list it is `UnknownHost()`.

@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1075 exported definitions; 305 variants.
+1077 exported definitions; 308 variants.
 
 ## Types and roots
 
@@ -742,7 +742,7 @@ Variant of NetError.
 
 <a id="def-core_401_2fNetOperation"></a>
 
-- `type NetOperation: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer() | ListenTls()`
+- `type NetOperation: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer() | ListenTls() | UnixConnect() | UnixListen() | UnixListenRemoveStale()`
 
 <a id="def-core_401_2fNetOperation_23Connect"></a>
 
@@ -777,6 +777,24 @@ Variant of NetOperation.
 <a id="def-core_401_2fNetOperation_23UdpPeer"></a>
 
 - `UdpPeer() -> NetOperation`
+
+Variant of NetOperation.
+
+<a id="def-core_401_2fNetOperation_23UnixConnect"></a>
+
+- `UnixConnect() -> NetOperation`
+
+Variant of NetOperation.
+
+<a id="def-core_401_2fNetOperation_23UnixListen"></a>
+
+- `UnixListen() -> NetOperation`
+
+Variant of NetOperation.
+
+<a id="def-core_401_2fNetOperation_23UnixListenRemoveStale"></a>
+
+- `UnixListenRemoveStale() -> NetOperation`
 
 Variant of NetOperation.
 
@@ -5800,6 +5818,18 @@ References: [`core@1/SocketAddr`](#def-core_401_2fSocketAddr), [`core@1/String`]
 - `fn net.udp_bind(n: Net, addr: SocketAddr) -> Result[unique UdpSocket of n, NetError]`
 
 `(literal, port, UdpBind())` for `addr`; port 0 permits an ephemeral port
+
+<a id="def-core_401_2fnet_2funix_5fconnect"></a>
+
+- `fn net.unix_connect(n: Net, path: Path) -> Result[Stream of n, NetError]`
+
+`(path, 0, UnixConnect())`
+
+<a id="def-core_401_2fnet_2funix_5flisten"></a>
+
+- `fn net.unix_listen(n: Net, path: Path) -> Result[Listener of n, NetError]`
+
+`(path, 0, UnixListen())` or `(path, 0, UnixListenRemoveStale())`
 
 <a id="def-std_401_2fnet_2fvalidate_5fhost"></a>
 

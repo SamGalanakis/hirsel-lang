@@ -1,0 +1,31 @@
+// rule: DET-1
+// expect: run
+// net: {"provider":"net.script@2","rules":[{"address":"/run/db.sock","service":"0","operation":"unix_connect"}],"peers":[{"address":"/run/db.sock","port":0,"resolves_to":[],"tls":"plain","connections":["refused",{"open":[{"expect":[113]},{"send":[97,98,99]},"close"]}]}]}
+// A Unix connect records its path and stream like a TCP connect: the refused attempt,
+// the stream's exact chunks and its end replay without a socket file.
+pub fn main(rt: Io, args: Args) -> Result[(), NetError] {
+  let n = match io.net(rt) {
+    Ok(n) => n,
+    Error(_) => return Ok(()),
+  }
+  let refused = match net.unix_connect(n, path.of("/run/db.sock")) {
+    Error(ConnectionRefused()) => true,
+    _ => false,
+  }
+  let mut s = net.unix_connect(n, path.of("/run/db.sock"))?
+  net.write_all(n, mut s, b"q")?
+  let mut buffer: List[u8] = []
+  let first = net.read(n, mut s, mut buffer, 2u64)?
+  let second = net.read(n, mut s, mut buffer, 2u64)?
+  let end = net.read(n, mut s, mut buffer, 2u64)?
+  failure.check(
+    refused && first == 2u64 && second == 1u64 && end == 0u64 && buffer == [
+      97u8,
+      98u8,
+      99u8
+    ],
+    Arithmetic()
+  )
+  net.close(n, take s)
+  Ok(())
+}

@@ -403,6 +403,15 @@ pub enum Request {
         net: u64,
         listener: u64,
     },
+    /// `net.unix_connect`: the socket path as the program spelled it.
+    UnixConnect {
+        net: u64,
+        path: String,
+    },
+    UnixListen {
+        net: u64,
+        path: String,
+    },
     /// A scheduling input of cooperative runs, never a capability request: the parked
     /// request of wait `wait` (creation ordinal) became ready after `polls` failed polls.
     Ready {

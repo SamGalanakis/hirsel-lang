@@ -50,14 +50,27 @@ pub(super) struct ScriptUdp {
     peers: Vec<(SocketAddr, VecDeque<NetStep>)>,
     received: VecDeque<(Vec<u8>, SocketAddr)>,
 }
-/// An open listener: its Net, world and address.
+/// An open listener: its Net, world and address, an IP literal and port or a socket
+/// path with port 0.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ScriptListener {
     pub net: u64,
     world: u64,
-    address: SocketAddr,
+    address: (String, u16),
     /// Opened under a ListenTls rule alone: its streams carry no plaintext before tls.accept.
     tls_only: bool,
+}
+impl ScriptListener {
+    /// `net.local_addr`: a Unix listener's is `0.0.0.0` with port 0.
+    fn local(&self) -> SocketAddr {
+        self.address.0.parse().map_or(
+            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0),
+            |ip| SocketAddr::new(ip, self.address.1),
+        )
+    }
+    fn name(&self) -> String {
+        hirsel_run_config::listener_name(&self.address.0, self.address.1)
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ScriptStream {
@@ -76,7 +89,7 @@ pub(super) struct ScriptStream {
     write_closed: bool,
     /// An accepted stream's client index and listen address: its `Expect`
     /// mismatches fail the test instead of resetting. Its `peer` is the client's TLS.
-    client: Option<(usize, SocketAddr)>,
+    client: Option<(usize, String)>,
     mismatch: Option<String>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,11 +151,11 @@ impl ScriptStream {
                 Some(NetStep::Expect(b)) if self.written.len() >= b.len() => {
                     let matches = self.written.iter().take(b.len()).eq(b.iter());
                     if !matches {
-                        if let Some((client, listener)) = self.client {
+                        if let Some((client, listener)) = &self.client {
                             let wrote: Vec<u8> =
                                 self.written.iter().take(b.len()).copied().collect();
                             self.mismatch = Some(hirsel_run_config::net_client_mismatch(
-                                client, listener, b, &wrote,
+                                *client, listener, b, &wrote,
                             ));
                         }
                         self.steps.clear();
@@ -159,7 +172,7 @@ impl ScriptStream {
     /// The Test report of closing an accepted stream whose client still expects
     /// bytes before any Reset step.
     fn unmet(&mut self) -> Option<String> {
-        let (client, listener) = self.client?;
+        let (client, listener) = self.client.clone()?;
         self.advance();
         let expected = self
             .steps
@@ -171,7 +184,7 @@ impl ScriptStream {
             })?;
         let wrote: Vec<u8> = self.written.iter().copied().collect();
         Some(hirsel_run_config::net_client_unmet(
-            client, listener, expected, &wrote,
+            client, &listener, expected, &wrote,
         ))
     }
     fn check(&mut self) -> NetResult<()> {
@@ -381,12 +394,8 @@ fn peer(v: &Value) -> Result<NetPeer, Error> {
             _ => return Err(invalid("NetConnection representation")),
         });
     }
-    let address = text(f[0])?.to_owned();
-    if !canonical_address(&address) {
-        return Err(invalid("test.net noncanonical peer address"));
-    }
-    Ok(NetPeer {
-        address,
+    let peer = NetPeer {
+        address: text(f[0])?.to_owned(),
         port: port(f[1])?,
         resolves_to: collection::elements(f[2], BuiltinType::List)?
             .iter()
@@ -394,7 +403,10 @@ fn peer(v: &Value) -> Result<NetPeer, Error> {
             .collect::<Result<_, _>>()?,
         tls,
         connections,
-    })
+    };
+    hirsel_run_config::check_peer_address(&peer)
+        .map_err(|e| invalid(format!("test.net peer: {e}")))?;
+    Ok(peer)
 }
 const TLS_FAILURES: [TlsFailure; 10] = [
     TlsFailure::UnknownIssuer,
@@ -435,27 +447,31 @@ fn tls_failure_value(failure: TlsFailure) -> Value {
         ),
     }
 }
+/// RunConfig operation names, in `NetOperation` variant order.
+const OPERATIONS: [&str; 9] = [
+    "connect",
+    "connect_tls",
+    "listen",
+    "udp_bind",
+    "udp_peer",
+    "listen_tls",
+    "unix_connect",
+    "unix_listen",
+    "unix_listen_remove_stale",
+];
 fn rules(v: &Value) -> Result<Vec<NetRule>, Error> {
     collection::elements(v, BuiltinType::List)?
         .iter()
         .map(|v| {
             let f = fields(v, "NetRule", 3)?;
             let (op, payload) = variant_fields(f[2])?;
-            if !payload.is_empty() || op > 5 {
+            if !payload.is_empty() || op as usize >= OPERATIONS.len() {
                 return Err(invalid("NetOperation representation"));
             }
             Ok(NetRule {
                 address: text(f[0])?.into(),
                 service: port(f[1])?.to_string(),
-                operation: [
-                    "connect",
-                    "connect_tls",
-                    "listen",
-                    "udp_bind",
-                    "udp_peer",
-                    "listen_tls",
-                ][op as usize]
-                    .into(),
+                operation: OPERATIONS[op as usize].into(),
             })
         })
         .collect()
@@ -496,14 +512,15 @@ impl Simulation {
         }
         let listener = self.net_listeners.remove(&id)?;
         let world = &self.net_worlds[&listener.world];
-        let i = world.listeners.iter().position(|l| {
-            l.address == listener.address.ip().to_string() && l.port == listener.address.port()
-        })?;
+        let i = world
+            .listeners
+            .iter()
+            .position(|l| (&l.address, l.port) == (&listener.address.0, listener.address.1))?;
         let client =
             hirsel_run_config::first_expecting_client(&world.listeners[i], world.accepted[i])?;
         Some(hirsel_run_config::net_client_unaccepted(
             client,
-            listener.address,
+            &listener.name(),
         ))
     }
     pub(super) fn net_root(&mut self) -> Value {
@@ -536,6 +553,54 @@ impl Simulation {
         }
         Ok(id)
     }
+    /// Take a scripted peer's next connection entry for a connect to `host`/`port`.
+    fn open_peer(
+        &mut self,
+        net: u64,
+        world: u64,
+        host: String,
+        port: u16,
+        timeout: Option<u64>,
+        requires_tls: bool,
+    ) -> NetResult<Value> {
+        let Some(w) = self.net_worlds.get_mut(&world) else {
+            return Err(NetFault::ConnectionRefused);
+        };
+        let Some(i) = w
+            .peers
+            .iter()
+            .position(|p| p.address == host && p.port == port)
+        else {
+            return Err(NetFault::ConnectionRefused);
+        };
+        let p = &w.peers[i];
+        let entry = p
+            .connections
+            .get(w.next[i])
+            .cloned()
+            .unwrap_or(NetConnection::Refused);
+        let tls = p.tls.clone();
+        w.next[i] += 1;
+        match entry {
+            NetConnection::Refused => Err(NetFault::ConnectionRefused),
+            NetConnection::Unanswered => Err(if timeout.is_some() {
+                NetFault::TimedOut
+            } else {
+                NetFault::Blocked
+            }),
+            NetConnection::Open(steps) => {
+                let stream = self.handle("Stream", Grant::Stream { net });
+                let Value::Handle { id, .. } = &stream else {
+                    unreachable!()
+                };
+                self.net_streams.insert(
+                    *id,
+                    ScriptStream::new(net, host, port, tls, requires_tls, steps),
+                );
+                Ok(stream)
+            }
+        }
+    }
     pub(super) fn net_call(
         &mut self,
         name: &str,
@@ -561,17 +626,26 @@ impl Simulation {
                 .map(|p| NetRule {
                     address: p.address.clone(),
                     service: p.port.to_string(),
-                    operation: if matches!(p.tls, PeerTls::Plain) {
+                    operation: if hirsel_run_config::canonical_unix_path(&p.address) {
+                        "unix_connect"
+                    } else if matches!(p.tls, PeerTls::Plain) {
                         "connect"
                     } else {
                         "connect_tls"
                     }
                     .into(),
                 })
-                .chain(listeners.iter().map(|l| NetRule {
-                    address: l.address.clone(),
-                    service: l.port.to_string(),
-                    operation: "listen".into(),
+                .chain(listeners.iter().map(|l| {
+                    NetRule {
+                        address: l.address.clone(),
+                        service: l.port.to_string(),
+                        operation: if hirsel_run_config::canonical_unix_path(&l.address) {
+                            "unix_listen"
+                        } else {
+                            "listen"
+                        }
+                        .into(),
+                    }
                 }))
                 .chain(
                     peers
@@ -585,11 +659,16 @@ impl Simulation {
                             operation: "udp_peer".into(),
                         }),
                 )
-                .chain(listeners.iter().map(|l| NetRule {
-                    address: l.address.clone(),
-                    service: l.port.to_string(),
-                    operation: "udp_bind".into(),
-                }))
+                .chain(
+                    listeners
+                        .iter()
+                        .filter(|l| l.address.parse::<IpAddr>().is_ok())
+                        .map(|l| NetRule {
+                            address: l.address.clone(),
+                            service: l.port.to_string(),
+                            operation: "udp_bind".into(),
+                        }),
+                )
                 .collect();
             let world = self.next_id;
             self.net_worlds.insert(world, World::new(peers, listeners));
@@ -803,7 +882,10 @@ impl Simulation {
                 }
                 "net.narrow" => {
                     let rules = rules(arg(a, 1)?)?;
-                    if rules.iter().any(|r| !canonical_address(&r.address)) {
+                    if rules.iter().any(|r| {
+                        !canonical_address(&r.address)
+                            && !hirsel_run_config::canonical_unix_path(&r.address)
+                    }) {
                         Err(NetFault::InvalidInput)
                     } else if !rules.iter().all(|r| {
                         ruleset.iter().any(|p| {
@@ -811,7 +893,9 @@ impl Simulation {
                                 && p.service == r.service
                                 && (p.operation == r.operation
                                     || p.operation == "connect" && r.operation == "connect_tls"
-                                    || p.operation == "listen" && r.operation == "listen_tls")
+                                    || p.operation == "listen" && r.operation == "listen_tls"
+                                    || p.operation == "unix_listen_remove_stale"
+                                        && r.operation == "unix_listen")
                         })
                     }) {
                         Err(NetFault::NotGranted)
@@ -850,68 +934,84 @@ impl Simulation {
                         {
                             break 'operation Err(injected(fault)?);
                         }
-                        let peer_idx = self.net_worlds.get(&world).and_then(|w| {
-                            w.peers
-                                .iter()
-                                .position(|p| p.address == host && p.port == port)
-                        });
-                        if let Some(i) = peer_idx {
-                            let w = self.net_worlds.get_mut(&world).unwrap();
-                            let p = &w.peers[i];
-                            if name == "net.resolve" {
-                                Ok(collection::sequence(
-                                    BuiltinType::List,
-                                    p.resolves_to
-                                        .iter()
-                                        .map(|a| addr_value(a.parse().unwrap(), port)),
-                                ))
-                            } else {
-                                let entry = p
-                                    .connections
-                                    .get(w.next[i])
-                                    .cloned()
-                                    .unwrap_or(NetConnection::Refused);
-                                w.next[i] += 1;
-                                match entry {
-                                    NetConnection::Refused => Err(NetFault::ConnectionRefused),
-                                    NetConnection::Unanswered => {
-                                        Err(if timeout.unwrap().is_some() {
-                                            NetFault::TimedOut
-                                        } else {
-                                            NetFault::Blocked
-                                        })
-                                    }
-                                    NetConnection::Open(steps) => {
-                                        let tls = p.tls.clone();
-                                        let stream = self.handle("Stream", Grant::Stream { net });
-                                        let Value::Handle { id, .. } = &stream else {
-                                            unreachable!()
-                                        };
-                                        self.net_streams.insert(
-                                            *id,
-                                            ScriptStream::new(
-                                                net,
-                                                host,
-                                                port,
-                                                tls,
-                                                rule.operation == "connect_tls",
-                                                steps,
-                                            ),
-                                        );
-                                        Ok(stream)
-                                    }
-                                }
-                            }
-                        } else {
-                            Err(if name == "net.resolve" {
-                                NetFault::UnknownHost
-                            } else {
-                                NetFault::ConnectionRefused
-                            })
+                        if name != "net.resolve" {
+                            let requires_tls = rule.operation == "connect_tls";
+                            break 'operation self.open_peer(
+                                net,
+                                world,
+                                host,
+                                port,
+                                timeout.unwrap(),
+                                requires_tls,
+                            );
+                        }
+                        match self.net_worlds.get(&world).and_then(|w| {
+                            w.peers.iter().find(|p| p.address == host && p.port == port)
+                        }) {
+                            Some(p) => Ok(collection::sequence(
+                                BuiltinType::List,
+                                p.resolves_to
+                                    .iter()
+                                    .map(|a| addr_value(a.parse().unwrap(), port)),
+                            )),
+                            None => Err(NetFault::UnknownHost),
                         }
                     } else {
                         Err(NetFault::NotGranted)
                     }
+                }
+                "net.unix_connect" | "net.unix_listen" => {
+                    let path = super::dispatch::path_text(arg(a, 1)?)?.to_owned();
+                    let listen = name == "net.unix_listen";
+                    if !hirsel_run_config::canonical_unix_path(&path) {
+                        break 'operation Err(NetFault::InvalidInput);
+                    }
+                    if !ruleset.iter().any(|r| {
+                        r.address == path
+                            && r.service == "0"
+                            && if listen {
+                                matches!(
+                                    r.operation.as_str(),
+                                    "unix_listen" | "unix_listen_remove_stale"
+                                )
+                            } else {
+                                r.operation == "unix_connect"
+                            }
+                    }) {
+                        break 'operation Err(NetFault::NotGranted);
+                    }
+                    if !listen {
+                        if let Some(fault) = cancellation
+                            .map(Fault::Canceled)
+                            .or_else(|| self.fault(name))
+                        {
+                            break 'operation Err(injected(fault)?);
+                        }
+                        break 'operation self.open_peer(net, world, path, 0, None, false);
+                    }
+                    // A scripted world has no socket files, so none is ever stale.
+                    let address = (path, 0);
+                    if self
+                        .net_listeners
+                        .values()
+                        .any(|l| l.world == world && l.address == address)
+                    {
+                        break 'operation Err(NetFault::AddrInUse);
+                    }
+                    let listener = self.handle("Listener", Grant::Listener { net });
+                    let Value::Handle { id, .. } = &listener else {
+                        unreachable!()
+                    };
+                    self.net_listeners.insert(
+                        *id,
+                        ScriptListener {
+                            net,
+                            world,
+                            address,
+                            tls_only: false,
+                        },
+                    );
+                    Ok(listener)
                 }
                 "net.listen" => {
                     let mut address = socket_addr(arg(a, 1)?)?;
@@ -933,8 +1033,7 @@ impl Simulation {
                                 && (w.listeners.iter().any(|l| u32::from(l.port) == w.next_port)
                                     || w.peers.iter().any(|p| u32::from(p.port) == w.next_port)
                                     || self.net_listeners.values().any(|l| {
-                                        l.world == world
-                                            && u32::from(l.address.port()) == w.next_port
+                                        l.world == world && u32::from(l.address.1) == w.next_port
                                     }))
                             {
                                 w.next_port += 1;
@@ -952,6 +1051,7 @@ impl Simulation {
                                 template.port = port;
                             }
                         }
+                        let address = (address.ip().to_string(), address.port());
                         if self
                             .net_listeners
                             .values()
@@ -978,7 +1078,7 @@ impl Simulation {
                 }
                 "net.local_addr" => {
                     let id = self.listener_id(net, arg(a, 1)?)?;
-                    let address = self.net_listeners[&id].address;
+                    let address = self.net_listeners[&id].local();
                     Ok(addr_value(address.ip(), address.port()))
                 }
                 "net.accept" => {
@@ -989,16 +1089,17 @@ impl Simulation {
                     {
                         break 'operation Err(injected(fault)?);
                     }
-                    let ScriptListener {
-                        address, tls_only, ..
-                    } = self.net_listeners[&id];
+                    let listening = &self.net_listeners[&id];
+                    let (address, name, tls_only) = (
+                        listening.address.clone(),
+                        listening.name(),
+                        listening.tls_only,
+                    );
                     let w = self.net_worlds.get_mut(&world).unwrap();
                     let next = w
                         .listeners
                         .iter()
-                        .position(|l| {
-                            l.address == address.ip().to_string() && l.port == address.port()
-                        })
+                        .position(|l| (&l.address, l.port) == (&address.0, address.1))
                         .and_then(|i| {
                             let index = w.accepted[i];
                             let client = w.listeners[i].clients.get(index)?.clone();
@@ -1024,7 +1125,7 @@ impl Simulation {
                         tls_only,
                         client.steps,
                     );
-                    script.client = Some((index, address));
+                    script.client = Some((index, name));
                     self.net_streams.insert(*stream_id, script);
                     Ok(Value::Tuple(vec![
                         Some(stream),
@@ -1312,6 +1413,9 @@ impl Simulation {
                                 Value::Unit
                             })
                         }
+                        "net.peer_addr" if hirsel_run_config::canonical_unix_path(&s.host) => {
+                            Ok(addr_value(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0))
+                        }
                         "net.peer_addr" => {
                             let ip = s
                                 .host
@@ -1356,7 +1460,10 @@ impl Simulation {
                     cleanup: None,
                     site: call.site,
                 });
-                let target = if matches!(name, "net.connect" | "net.connect_addr") {
+                let target = if matches!(
+                    name,
+                    "net.connect" | "net.connect_addr" | "net.unix_connect"
+                ) {
                     net
                 } else if name.starts_with("udp.") {
                     self.id(arg(a, 1)?, "UdpSocket")?
@@ -1400,11 +1507,11 @@ impl Simulation {
         } else {
             encode_arguments(a)
         };
-        if name == "net.listen"
+        if matches!(name, "net.listen" | "net.unix_listen")
             && let Value::Variant { variant: 0, fields } = &value
             && let Some(Some(Value::Handle { id, .. })) = fields.first()
         {
-            let address = self.net_listeners[id].address;
+            let address = self.net_listeners[id].local();
             recorded = Some(encode_arguments(&[
                 value.clone(),
                 addr_value(address.ip(), address.port()),
@@ -1452,7 +1559,7 @@ fn validate_peers(peers: &[NetPeer]) -> Result<(), Error> {
                 "duplicate address/port at entries {first} and {index}"
             )));
         }
-        if !canonical_address(&peer.address)
+        if hirsel_run_config::check_peer_address(peer).is_err()
             || peer.resolves_to.iter().any(|a| {
                 a.parse::<IpAddr>().is_err()
                     || a.parse::<IpAddr>().is_ok_and(|ip| ip.to_string() != *a)
@@ -1470,15 +1577,23 @@ pub(super) fn configured_world(grant: Option<&NetGrant>) -> Result<BTreeMap<u64,
         }
         hirsel_run_config::check_net_listeners(&grant.listeners).map_err(invalid)?;
         if grant.rules.iter().any(|r| {
-            !canonical_address(&r.address)
+            let unix = hirsel_run_config::UNIX_OPERATIONS.contains(&r.operation.as_str());
+            unix && (!hirsel_run_config::canonical_unix_path(&r.address) || r.service != "0")
+                || !unix && !canonical_address(&r.address)
                 || r.service.parse::<u16>().is_err()
                 || r.service
                     .parse::<u16>()
                     .is_ok_and(|p| p.to_string() != r.service)
-                || !matches!(
-                    r.operation.as_str(),
-                    "connect" | "connect_tls" | "listen" | "udp_bind" | "udp_peer" | "listen_tls"
-                )
+                || !unix
+                    && !matches!(
+                        r.operation.as_str(),
+                        "connect"
+                            | "connect_tls"
+                            | "listen"
+                            | "udp_bind"
+                            | "udp_peer"
+                            | "listen_tls"
+                    )
         }) {
             return Err(invalid("invalid simulation network rules"));
         }
@@ -1565,8 +1680,10 @@ impl super::Library {
         let wait = &self.network_waits[&token];
         // An Unanswered scripted connection has no readiness source. Polling
         // must not issue a new connect and consume the next scripted attempt.
-        if matches!(wait.name.as_str(), "net.connect" | "net.connect_addr")
-            && self.tasks.canceled().is_none()
+        if matches!(
+            wait.name.as_str(),
+            "net.connect" | "net.connect_addr" | "net.unix_connect"
+        ) && self.tasks.canceled().is_none()
         {
             return Ok(None);
         }

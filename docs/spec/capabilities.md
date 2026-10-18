@@ -28,7 +28,8 @@ it can only be narrowed.
 
 **Network.** `Net` is a network capability over a finite set of rules, each a triple
 `(address, port, operation)`, the operation being `Connect()`, `ConnectTls()`, `Listen()`,
-`UdpBind()`, `UdpPeer()` or `ListenTls()`.
+`UdpBind()`, `UdpPeer()`, `ListenTls()`, `UnixConnect()`, `UnixListen()` or
+`UnixListenRemoveStale()`.
 
 - An address is a canonical host name (lowercase ASCII, no trailing dot, a valid host
   name) or a canonical IP literal (dotted IPv4; RFC 5952 IPv6 without brackets). A host
@@ -37,6 +38,9 @@ it can only be narrowed.
   rejects bare numbers, short forms, leading zeros, out-of-range octets, `0x7f.0.0.1`,
   `example.123` and `1.2.3.4.5`, so a resolver cannot reinterpret a granted name.
 - A port is one exact port; `0` in `Listen` or `UdpBind` permits an ephemeral bind port.
+- A Unix rule's address is one canonical absolute socket path: `/`, then nonempty
+  components other than `.` and `..`, with no trailing `/`, backslash or NUL, at most 107
+  bytes; its port is `0`. Abstract-namespace sockets cannot be named.
 - There are no wildcard, subnet or range rules. No rule means no network, not "all", and
   an empty rule set is a `Net` that permits nothing.
 
@@ -57,6 +61,12 @@ and keeps waiting without changing the output buffer; outside senders cannot
 force `NotGranted` or another language error. TCP and UDP grants never imply one
 another. Argument and authority checks precede cancellation; admitted effects
 follow it (CONC-3).
+
+Unix-domain stream authority is a rule per exact socket path. `UnixConnect` connects to
+the path and `UnixListen` binds and listens on it; `UnixListenRemoveStale` also lets the
+listen remove a stale socket file left at the path, and `UnixListen` is its narrowing.
+A path rule authorizes that spelling only, never a link to it or another path naming the
+same socket. TCP, UDP and Unix rules never imply one another.
 
 **Processes.** `Proc` is a process capability over a finite set of rules, each naming one
 canonical absolute executable path and the exact environment variable names passed through

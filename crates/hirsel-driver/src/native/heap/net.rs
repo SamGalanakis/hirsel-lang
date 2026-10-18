@@ -188,6 +188,9 @@ fn rule(v: &OpValue) -> Option<NetRule> {
             3 => NetOperation::UdpBind,
             4 => NetOperation::UdpPeer,
             5 => NetOperation::ListenTls,
+            6 => NetOperation::UnixConnect,
+            7 => NetOperation::UnixListen,
+            8 => NetOperation::UnixListenRemoveStale,
             _ => return None,
         },
     })
@@ -399,6 +402,14 @@ impl Io {
             (Some("net"), "listen", [n, a]) => R::Listen {
                 net: self.network_id(n)?,
                 addr: addr(a)?,
+            },
+            (Some("net"), "unix_connect", [n, OpValue::Handle(path)]) => R::UnixConnect {
+                net: self.network_id(n)?,
+                path: self.paths.get(path.checked_sub(1)? as usize)?.clone(),
+            },
+            (Some("net"), "unix_listen", [n, OpValue::Handle(path)]) => R::UnixListen {
+                net: self.network_id(n)?,
+                path: self.paths.get(path.checked_sub(1)? as usize)?.clone(),
             },
             (Some("net"), "accept", [n, l]) => R::Accept {
                 net: self.network_id(n)?,

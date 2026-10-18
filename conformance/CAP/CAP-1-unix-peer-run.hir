@@ -1,0 +1,73 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// A Unix peer is a NetPeer named by its socket path. test.net grants it UnixConnect only:
+// its stream moves bytes as a TCP one does and reports the unnamed peer address, while
+// another path, a noncanonical path, a TCP connect and a Unix listen are refused.
+fn unix_path() -> Path uses {} {
+  path.of("/run/app.sock")
+}
+
+fn rule(take operation: NetOperation) -> NetRule uses {} {
+  NetRule(address: "/run/app.sock", port: 0u16, operation: operation)
+}
+
+fn refused(n: Net, p: Path) -> NetError {
+  match net.unix_connect(n, p) {
+    Ok(_) => Fault(0u32),
+    Error(e) => e,
+  }
+}
+
+pub fn exercise(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "/run/app.sock",
+        port: 0u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([Expect(b"ping"), Send(b"pong"), Close()]), Refused()]
+      )
+    ],
+    []
+  )
+  let mut s = net.unix_connect(n, unix_path())?
+  net.write_all(n, mut s, b"ping")?
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut s, mut buf, 16u64)? == 4u64)
+  test.check(t, net.read(n, mut s, mut buf, 16u64)? == 0u64)
+  test.check(t, bytes.from_list(take buf) == b"pong")
+  test.check(
+    t,
+    net.peer_addr(n, s)? == SocketAddr(ip: V4([0u8, 0u8, 0u8, 0u8]), port: 0u16)
+  )
+  net.close(n, take s)
+  test.check(t, refused(n, unix_path()) == ConnectionRefused())
+  test.check(t, refused(n, path.of("/run/other.sock")) == NotGranted())
+  test.check(t, refused(n, path.of("run/app.sock")) == InvalidInput())
+  test.check(t, refused(n, path.of("/run//app.sock")) == InvalidInput())
+  let tcp = match net.connect(n, "/run/app.sock", 0u16, Unbounded()) {
+    Error(InvalidInput()) => true,
+    _ => false,
+  }
+  test.check(t, tcp)
+  let listen = match net.unix_listen(n, unix_path()) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  test.check(t, listen)
+  let narrowed = net.narrow(n, [rule(UnixConnect())])?
+  test.check(t, refused(narrowed, unix_path()) == ConnectionRefused())
+  let wider = match net.narrow(n, [rule(UnixListen())]) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  let tcp_rule = match net.narrow(n, [rule(Connect())]) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  test.check(t, wider && tcp_rule)
+  Ok(())
+}

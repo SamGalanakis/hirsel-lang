@@ -1,0 +1,55 @@
+// rule: CAP-1
+// expect: run
+// net: {"provider":"net.script@2","rules":[{"address":"/tmp/hirsel-app.sock","service":"0","operation":"unix_listen_remove_stale"}],"peers":[],"listeners":[{"address":"/tmp/hirsel-app.sock","port":0,"clients":[{"address":"0.0.0.0","port":0,"tls":"plain","steps":[{"send":[71,69,84,32,47,32,72,84,84,80,47,49,46,49,13,10,13,10]},{"expect":[72,84,84,80,47,49,46,49,32,50,48,48,32,13,10,67,111,110,116,101,110,116,45,76,101,110,103,116,104,58,32,50,13,10,67,111,110,110,101,99,116,105,111,110,58,32,99,108,111,115,101,13,10,13,10,111,107]},"close"]}]}]}
+// An HTTP server on a Unix listener: UnixListen is the narrowing of
+// UnixListenRemoveStale, the listener and its accepted peer are unnamed, a second listen on
+// the path is AddrInUse, and the scripted client is served as a TCP client would be.
+pub type ServerError = Network(NetError) | Http(http.HttpError)
+
+fn unnamed() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([0u8, 0u8, 0u8, 0u8]), port: 0u16)
+}
+
+fn rule(take operation: NetOperation) -> NetRule uses {} {
+  NetRule(address: "/tmp/hirsel-app.sock", port: 0u16, operation: operation)
+}
+
+fn serve(n: Net) -> Result[(), ServerError] {
+  let socket = path.of("/tmp/hirsel-app.sock")
+  let mut listener = net.unix_listen(n, socket) ? Network
+  failure.check(net.local_addr(n, listener) == Ok(unnamed()), Arithmetic())
+  let again = match net.unix_listen(n, path.of("/tmp/hirsel-app.sock")) {
+    Error(AddrInUse()) => true,
+    _ => false,
+  }
+  failure.check(again, Arithmetic())
+  let mut (stream, from) = net.accept(n, mut listener) ? Network
+  failure.check(
+    from == unnamed() && net.peer_addr(n, stream) == Ok(unnamed()),
+    Arithmetic()
+  )
+  let mut connection = http.server_connection(n, take stream, http.default_config())
+  let request = http.receive_request(mut connection, None()) ? Http
+  failure.check(request.target == "/", Arithmetic())
+  http.respond(mut connection, 200u16, [], b"ok", true) ? Http
+  let done = match net.accept(n, mut listener) {
+    Error(ConnectionAborted()) => true,
+    _ => false,
+  }
+  failure.check(done, Arithmetic())
+  Ok(())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
+  let n = match io.net(rt) {
+    Ok(n) => n,
+    Error(_) => return Ok(()),
+  }
+  let connect = match net.narrow(n, [rule(UnixConnect())]) {
+    Error(NotGranted()) => true,
+    _ => false,
+  }
+  failure.check(connect, Arithmetic())
+  let narrowed = net.narrow(n, [rule(UnixListen())]) ? Network
+  serve(narrowed)
+}

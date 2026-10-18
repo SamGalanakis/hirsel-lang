@@ -208,6 +208,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "udp.recv_from"
         | "udp.close"
         | "net.listen"
+        | "net.unix_connect"
+        | "net.unix_listen"
         | "net.accept"
         | "net.local_addr"
         | "net.narrow"
@@ -372,6 +374,8 @@ pub const NET_EXPORTS: &[&str] = &[
     "udp.recv_from",
     "udp.close",
     "net.listen",
+    "net.unix_connect",
+    "net.unix_listen",
     "net.accept",
     "net.local_addr",
     "net.narrow",
@@ -913,6 +917,20 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     AbiExport {
         caller_site: false,
         symbol: "hirsel_rt_v2_net_listen",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_net_unix_connect",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_net_unix_listen",
         destination: true,
         result: Some((24, 8)),
         parameters: &[Physical::Pointer, Physical::Pointer],
@@ -1603,6 +1621,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "udp.recv_from",
     "udp.close",
     "net.listen",
+    "net.unix_connect",
+    "net.unix_listen",
     "net.accept",
     "net.local_addr",
     "test.net",

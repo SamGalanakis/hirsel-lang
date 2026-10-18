@@ -411,6 +411,8 @@ pub fn replay_interpreter_with_fixture(
                 | Request::TlsAccept { .. }
                 | Request::TlsClose { .. }
                 | Request::Listen { .. }
+                | Request::UnixConnect { .. }
+                | Request::UnixListen { .. }
                 | Request::Accept { .. }
                 | Request::LocalAddr { .. } => network::arguments(event, fixture),
                 Request::Close { handle: id } => {

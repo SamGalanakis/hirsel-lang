@@ -10,9 +10,10 @@ pub use program::{ProgramNode, ProgramRevision, RevisionError};
 mod net;
 pub use net::{
     NetClient, NetConnection, NetGrant, NetListener, NetPeer, NetRule, NetStep, PeerTls,
-    TlsFailure, canonical_address as canonical_net_address, check_net_listeners,
-    decode_net_listeners, decode_net_peers, encode_net_listeners, encode_net_peers,
-    first_expecting_client, net_client_mismatch, net_client_unaccepted, net_client_unmet,
+    TlsFailure, UNIX_OPERATIONS, UNIX_PATH_MAX, canonical_address as canonical_net_address,
+    canonical_unix_path, check_net_listeners, check_peer_address, decode_net_listeners,
+    decode_net_peers, encode_net_listeners, encode_net_peers, first_expecting_client,
+    listener_name, net_client_mismatch, net_client_unaccepted, net_client_unmet,
     validate_net_grant,
 };
 mod child;

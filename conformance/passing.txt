@@ -99,6 +99,8 @@ conformance/CAP/CAP-1-udp-denied-run.hir
 conformance/CAP/CAP-1-udp-discard-peer-run.hir
 conformance/CAP/CAP-1-udp-loopback-run.hir
 conformance/CAP/CAP-1-udp-roundtrip-run.hir
+conformance/CAP/CAP-1-unix-listen-run.hir
+conformance/CAP/CAP-1-unix-peer-run.hir
 conformance/CAP/CAP-1-unsafe-parameter.hir
 conformance/CAP/CAP-2-aggregate-summary-bad.hir
 conformance/CAP/CAP-2-aggregate-summary-ok.hir
@@ -543,6 +545,7 @@ conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
 conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
 conformance/CONC/CONC-3-tour-11-deadline-run.hir
 conformance/CONC/CONC-3-udp-canceled-recv-run.hir
+conformance/CONC/CONC-3-unix-cancel-order-run.hir
 conformance/CONC/CONC-4-sequential-atomic-order.hir
 conformance/CONC/CONC-5-channel-in-body-bad.hir
 conformance/CONC/CONC-5-channel-in-body-ok.hir
@@ -725,6 +728,7 @@ conformance/DET/DET-1-http-fetch-repeat-run.hir
 conformance/DET/DET-1-net-ephemeral-listeners-run.hir
 conformance/DET/DET-1-net-script-repeat-run.hir
 conformance/DET/DET-1-udp-replay-run.hir
+conformance/DET/DET-1-unix-replay-run.hir
 conformance/DET/DET-2-first-failure-site.hir
 conformance/DET/DET-2-left-to-right-effects.hir
 conformance/DET/DET-2-resource-drop-order.hir

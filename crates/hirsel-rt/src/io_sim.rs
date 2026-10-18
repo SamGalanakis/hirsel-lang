@@ -1124,6 +1124,12 @@ impl Recorded<'_> {
     }
 }
 impl NetProvider for Recorded<'_> {
+    fn unix_connect(&mut self, _: u64, _: &str) -> crate::net::Provided<()> {
+        self.unit()
+    }
+    fn unix_listen(&mut self, _: u64, _: &str, _: bool) -> crate::net::Provided<()> {
+        self.unit()
+    }
     fn udp_bind(&mut self, _: u64, _: SocketAddr) -> crate::net::Provided<()> {
         self.unit()
     }

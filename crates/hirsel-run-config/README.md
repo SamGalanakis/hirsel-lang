@@ -40,6 +40,9 @@ are lowercase ASCII host names without a root dot, canonical dotted IPv4 or RFC
 canonical dotted-quad IPv4; short forms and leading zeros refuse. Services are decimal ports 0–65535
 without leading zeros, and operations are `connect`, `connect_tls`, `listen`, `udp_bind`,
 `udp_peer` or `listen_tls`.
+The Unix operations `unix_connect`, `unix_listen` and `unix_listen_remove_stale` name a
+canonical absolute socket path of at most 107 bytes with service `0`; scripted peers may
+name such a path (plain, port 0, no `resolves_to`).
 
 `snapshot_args` and `snapshot_env` convert only explicitly supplied OS strings;
 byte-invalid inputs refuse with the argument index, key index or selected Env key.

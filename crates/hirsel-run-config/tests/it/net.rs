@@ -645,3 +645,70 @@ fn scripted_listeners_are_script_only_canonical_and_round_trip() {
         listeners
     );
 }
+
+#[test]
+fn unix_rules_name_canonical_socket_paths_with_service_zero() {
+    let unix = |address: &str, service: &str, operation: &str| {
+        json!({"provider": "net.stream@1", "rules": [
+            {"address": address, "service": service, "operation": operation}
+        ]})
+    };
+    let longest = format!("/{}", "s".repeat(UNIX_PATH_MAX - 1));
+    for operation in UNIX_OPERATIONS {
+        for path in ["/run/docker.sock", "/tmp/a b.sock", longest.as_str()] {
+            validate(unix(path, "0", operation)).unwrap();
+        }
+        for path in [
+            "",
+            "/",
+            "relative.sock",
+            "/run/",
+            "/run//docker.sock",
+            "/run/./docker.sock",
+            "/run/../docker.sock",
+            "/run\\docker.sock",
+            "/run/\0docker",
+            "example.com",
+            "127.0.0.1",
+            &format!("{longest}s"),
+        ] {
+            invalid(unix(path, "0", operation), "io.net.rules.address");
+        }
+        invalid(
+            unix("/run/docker.sock", "80", operation),
+            "io.net.rules.service",
+        );
+    }
+    // A path never names a TCP or UDP rule, nor a host a Unix one.
+    for operation in ["connect", "connect_tls", "listen", "udp_bind", "udp_peer"] {
+        invalid(
+            unix("/run/docker.sock", "0", operation),
+            "io.net.rules.address",
+        );
+    }
+}
+
+#[test]
+fn unix_script_peers_are_plain_port_zero_paths() {
+    let script = |peer: Value| json!({"provider": "net.script@2", "rules": [], "peers": [peer]});
+    let peer = |port: u16, resolves_to: Value, tls: Value| {
+        json!({"address": "/run/app.sock", "port": port, "resolves_to": resolves_to,
+               "tls": tls, "connections": []})
+    };
+    validate(script(peer(0, json!([]), json!("plain")))).unwrap();
+    invalid(
+        script(peer(80, json!([]), json!("plain"))),
+        "io.net.peers.address",
+    );
+    invalid(
+        script(peer(0, json!(["127.0.0.1"]), json!("plain"))),
+        "io.net.peers.address",
+    );
+    invalid(
+        script(peer(0, json!([]), json!({"certificate": ["a"]}))),
+        "io.net.peers.address",
+    );
+    let mut relative = peer(0, json!([]), json!("plain"));
+    relative["address"] = "run/app.sock".into();
+    invalid(script(relative), "io.net.peers.address");
+}

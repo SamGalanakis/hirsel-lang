@@ -86,6 +86,8 @@ N fn tls.close(n: Net, take s: Stream of n) -> Result[(), NetError]
 fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
 N fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]
+fn net.unix_connect(n: Net, path: Path) -> Result[Stream of n, NetError]
+fn net.unix_listen(n: Net, path: Path) -> Result[Listener of n, NetError]
 
 fn net.udp_bind(n: Net, addr: SocketAddr) -> Result[unique UdpSocket of n, NetError]
 N fn udp.send_to(n: Net, mut s: UdpSocket of n, data: Bytes, addr: SocketAddr) -> Result[u64, NetError]

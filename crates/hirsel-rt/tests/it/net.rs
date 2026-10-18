@@ -324,6 +324,14 @@ impl NetProvider for Counting {
         self.tick();
         self.inner.tls_accept(s, identity)
     }
+    fn unix_connect(&mut self, id: u64, path: &str) -> Provided<()> {
+        self.tick();
+        self.inner.unix_connect(id, path)
+    }
+    fn unix_listen(&mut self, id: u64, path: &str, remove_stale: bool) -> Provided<()> {
+        self.tick();
+        self.inner.unix_listen(id, path, remove_stale)
+    }
     fn tls_close(&mut self, s: u64) -> Provided<()> {
         self.tick();
         self.inner.tls_close(s)
@@ -1150,4 +1158,217 @@ fn udp_host_datagrams_discard_outside_senders_and_replay_without_sockets() {
         sim.call(tape[3].request.clone()),
         Err(AdapterError::InvalidCompletion)
     ));
+}
+
+/// A fresh directory for socket files, short enough for `sun_path`.
+fn socket_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(format!("/tmp/hirsel-unix-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir(&dir).unwrap();
+    dir
+}
+
+/// Connect, write, accept and read over a real Unix socket through the host provider (Rust
+/// std os/unix/net/tests.rs `basic`): the listener and its peers are unnamed, and closing
+/// the listener removes its socket file.
+fn unix_exchange(io: &mut impl Adapter, path: &str) -> Vec<u8> {
+    let n = net(io);
+    let (l, local) = match io.call(Request::UnixListen {
+        net: n,
+        path: path.into(),
+    }) {
+        Ok(Completion::Listened(Ok(listened))) => listened,
+        other => panic!("unix listen: {other:?}"),
+    };
+    assert_eq!(local, SocketAddr::UNNAMED);
+    let c = handle(io.call(Request::UnixConnect {
+        net: n,
+        path: path.into(),
+    }));
+    let (s, peer) = match io.call(Request::Accept {
+        net: n,
+        listener: l,
+    }) {
+        Ok(Completion::Accepted(Ok(accepted))) => accepted,
+        other => panic!("accept: {other:?}"),
+    };
+    assert_eq!(peer, SocketAddr::UNNAMED);
+    assert_eq!(
+        io.call(Request::PeerAddr { net: n, stream: c }),
+        Ok(Completion::Address(Ok(SocketAddr::UNNAMED)))
+    );
+    // Rust std os/unix/net/tests.rs test_read_timeout: an idle Unix stream times out
+    // and stays usable.
+    assert_eq!(
+        io.call(Request::SetTimeout {
+            net: n,
+            stream: c,
+            which: TimeoutKind::Read,
+            timeout: NetTimeout::Nanos(1_000_000),
+        }),
+        Ok(Completion::NetUnit(Ok(())))
+    );
+    assert_eq!(
+        io.call(Request::NetRead {
+            net: n,
+            stream: c,
+            max: 10,
+        }),
+        Ok(Completion::NetBytes(Err(NetError::TimedOut)))
+    );
+    assert_eq!(
+        io.call(Request::NetWriteAll {
+            net: n,
+            stream: c,
+            bytes: b"over a socket file".to_vec(),
+        }),
+        Ok(Completion::NetUnit(Ok(())))
+    );
+    for handle in [c, l] {
+        assert_eq!(
+            io.call(Request::Close { handle }),
+            Ok(Completion::Unit(Ok(())))
+        );
+    }
+    let chunks = read_to_end(io, n, s, 64);
+    assert_eq!(
+        io.call(Request::Close { handle: s }),
+        Ok(Completion::Unit(Ok(())))
+    );
+    chunks.concat()
+}
+
+#[test]
+fn unix_streams_connect_accept_and_replay_without_socket_files() {
+    let dir = socket_dir("exchange");
+    let path = dir.join("app.sock").to_str().unwrap().to_owned();
+    let rules = BTreeSet::from([
+        rule(&path, 0, NetOperation::UnixConnect),
+        rule(&path, 0, NetOperation::UnixListen),
+    ]);
+    let mut io = real(rules.clone());
+    assert_eq!(unix_exchange(&mut io, &path), b"over a socket file");
+    // The listener's close removed the file it bound.
+    assert!(!std::path::Path::new(&path).exists());
+    let tape = io.tape().to_vec();
+    let parsed = parse_tape(&render_tape(&tape).unwrap()).unwrap();
+    assert_eq!(parsed, tape);
+    let mut sim = replay(&rules, parsed);
+    assert_eq!(unix_exchange(&mut sim, &path), b"over a socket file");
+    sim.finish().unwrap();
+    // Replay binds nothing.
+    assert!(!std::path::Path::new(&path).exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn unix_listen_removes_only_a_stale_socket_and_only_under_its_rule() {
+    let dir = socket_dir("stale");
+    let at = |name: &str| dir.join(name).to_str().unwrap().to_owned();
+    let (stale, kept, live, file, moved, missing) = (
+        at("stale.sock"),
+        at("kept.sock"),
+        at("live.sock"),
+        at("file.sock"),
+        at("moved.sock"),
+        at("none/x.sock"),
+    );
+    let mut rules = BTreeSet::from([
+        rule(&kept, 0, NetOperation::UnixListen),
+        rule(&moved, 0, NetOperation::UnixListen),
+        rule(&missing, 0, NetOperation::UnixConnect),
+    ]);
+    for path in [&stale, &live, &file, &missing] {
+        rules.insert(rule(path, 0, NetOperation::UnixListenRemoveStale));
+    }
+    // Rust std leaves a dropped listener's socket file behind: a stale socket.
+    for path in [&stale, &kept] {
+        drop(std::os::unix::net::UnixListener::bind(path).unwrap());
+    }
+    let alive = std::os::unix::net::UnixListener::bind(&live).unwrap();
+    std::fs::write(&file, b"not a socket").unwrap();
+    let mut io = real(rules);
+    let n = net(&mut io);
+    let listen = |io: &mut RealIo, path: &str| match io.call(Request::UnixListen {
+        net: n,
+        path: path.into(),
+    }) {
+        Ok(Completion::Listened(result)) => result.map(|(id, _)| id),
+        other => panic!("unix listen: {other:?}"),
+    };
+    let reclaimed = listen(&mut io, &stale).unwrap();
+    assert_eq!(listen(&mut io, &kept), Err(NetError::AddrInUse));
+    assert_eq!(listen(&mut io, &live), Err(NetError::AddrInUse));
+    assert_eq!(listen(&mut io, &file), Err(NetError::AddrInUse));
+    assert_eq!(std::fs::read(&file).unwrap(), b"not a socket");
+    assert_eq!(listen(&mut io, &missing), Err(NetError::AddrNotAvailable));
+    assert_eq!(
+        io.call(Request::UnixConnect {
+            net: n,
+            path: missing.clone(),
+        }),
+        Ok(Completion::NetHandle(Err(NetError::ConnectionRefused)))
+    );
+    // A listener whose path now names another file leaves that file alone.
+    std::fs::remove_file(&kept).unwrap();
+    let replaced = listen(&mut io, &moved).unwrap();
+    std::fs::rename(&moved, dir.join("elsewhere.sock")).unwrap();
+    std::fs::write(&moved, b"newcomer").unwrap();
+    for handle in [reclaimed, replaced] {
+        assert_eq!(
+            io.call(Request::Close { handle }),
+            Ok(Completion::Unit(Ok(())))
+        );
+    }
+    assert!(!std::path::Path::new(&stale).exists());
+    assert_eq!(std::fs::read(&moved).unwrap(), b"newcomer");
+    assert!(std::path::Path::new(&live).exists());
+    drop(alive);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn unix_paths_are_checked_before_grants_and_grants_before_any_effect() {
+    let calls = Rc::new(Cell::new(0));
+    let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+    io.set_net_rules(BTreeSet::from([
+        rule("/run/granted.sock", 0, NetOperation::UnixConnect),
+        rule("127.0.0.1", 0, NetOperation::Listen),
+    ]));
+    io.set_net_provider(Counting {
+        inner: HostNet::new(),
+        calls: calls.clone(),
+    });
+    let n = net(&mut io);
+    let error = |c: Result<Completion, AdapterError>| match c {
+        Ok(Completion::NetHandle(Err(e)) | Completion::Listened(Err(e))) => e,
+        other => panic!("expected an error: {other:?}"),
+    };
+    for path in [
+        "run/granted.sock",
+        "/run//granted.sock",
+        "/run/./granted.sock",
+        "",
+    ] {
+        let c = io.call(Request::UnixConnect {
+            net: n,
+            path: path.into(),
+        });
+        assert_eq!(error(c), NetError::InvalidInput, "{path:?}");
+    }
+    let long = format!("/{}", "s".repeat(107));
+    let c = io.call(Request::UnixListen { net: n, path: long });
+    assert_eq!(error(c), NetError::InvalidInput);
+    // A UnixConnect rule never authorizes listening, nor a TCP rule a socket path.
+    let c = io.call(Request::UnixListen {
+        net: n,
+        path: "/run/granted.sock".into(),
+    });
+    assert_eq!(error(c), NetError::NotGranted);
+    let c = io.call(Request::UnixConnect {
+        net: n,
+        path: "/run/other.sock".into(),
+    });
+    assert_eq!(error(c), NetError::NotGranted);
+    assert_eq!(calls.get(), 0);
 }

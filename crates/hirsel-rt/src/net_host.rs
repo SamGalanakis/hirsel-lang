@@ -9,6 +9,11 @@
 //! order with one deadline for the whole call (Rust `each_addr`, not Zig's concurrent
 //! `connectMany`); every socket is created close-on-exec and writes pass
 //! `MSG_NOSIGNAL` as Rust std does on Linux; reads deliver at most `READ_CHUNK` bytes.
+//!
+//! Unix stream sockets follow Rust std `library/std/src/os/unix/net/{addr,listener,stream}.rs`
+//! (`sockaddr_un`, `bind`, `connect`; f6c1107f). A listener removes the socket file it bound
+//! when it closes, as Go's `net.UnixListener` does (`unixsock_posix.go`, ebe2feef), but only
+//! while the path still names that socket's device and inode.
 use crate::net::{
     NetError, NetProvider, NetTimeout, Provided, RootsDigest, ShutdownHow, SocketAddr, TimeoutKind,
 };
@@ -27,6 +32,8 @@ pub struct HostNet {
     sockets: BTreeMap<u64, OwnedFd>,
     tls: BTreeMap<u64, rustls::Connection>,
     pem: Option<Vec<u8>>,
+    /// Each Unix listener's socket path and the identity of the file it bound.
+    unix_files: BTreeMap<u64, (std::ffi::CString, libc::dev_t, libc::ino_t)>,
 }
 impl HostNet {
     pub fn new() -> Self {
@@ -130,8 +137,79 @@ fn from_c(storage: &libc::sockaddr_storage) -> Result<SocketAddr, NetError> {
                 port: u16::from_be(sin6.sin6_port),
             })
         }
+        // Unix peers are unnamed (docs/spec/core-library.md, Unix domain sockets).
+        libc::AF_UNIX => Ok(SocketAddr::UNNAMED),
         _ => Err(NetError::InvalidInput),
     }
+}
+
+/// Rust `sockaddr_un`: the path and its terminating NUL, never the abstract namespace.
+fn unix_address(path: &str) -> Result<(libc::sockaddr_un, libc::socklen_t), NetError> {
+    // SAFETY: an all-zero sockaddr_un is valid.
+    let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    let bytes = path.as_bytes();
+    if bytes.is_empty()
+        || bytes[0] != b'/'
+        || bytes.contains(&0)
+        || bytes.len() >= addr.sun_path.len()
+    {
+        return Err(NetError::InvalidInput);
+    }
+    for (slot, byte) in addr.sun_path.iter_mut().zip(bytes) {
+        *slot = *byte as libc::c_char;
+    }
+    let len = std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1;
+    Ok((addr, len as libc::socklen_t))
+}
+
+fn unix_socket() -> Result<OwnedFd, NetError> {
+    // SAFETY: plain socket creation; the descriptor is owned immediately.
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+    if fd == -1 {
+        return Err(error(errno()));
+    }
+    // SAFETY: fd is a fresh descriptor owned by nobody else.
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+}
+
+/// A blocking connect: a Unix connect waits only while the listener's backlog is full.
+/// A path that names no accepting socket, a missing one included, refuses.
+fn unix_connect_one(path: &str) -> Result<OwnedFd, NetError> {
+    let (addr, len) = unix_address(path)?;
+    let socket = unix_socket()?;
+    loop {
+        // SAFETY: addr holds a sockaddr_un of len bytes.
+        if unsafe { libc::connect(socket.as_raw_fd(), (&raw const addr).cast(), len) } == 0 {
+            return Ok(socket);
+        }
+        match errno() {
+            libc::EINTR => {}
+            // An interrupted connect may have completed in the meantime.
+            libc::EISCONN => return Ok(socket),
+            libc::ENOENT | libc::ENOTDIR | libc::ECONNREFUSED => {
+                return Err(NetError::ConnectionRefused);
+            }
+            code => return Err(error(code)),
+        }
+    }
+}
+
+/// The device and inode `path` names, without following a final link.
+fn file_identity(path: &std::ffi::CStr) -> Option<(libc::dev_t, libc::ino_t, libc::mode_t)> {
+    // SAFETY: zeroed stat is valid storage; path is a C string.
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    (unsafe { libc::lstat(path.as_ptr(), &mut stat) } == 0).then_some((
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_mode,
+    ))
+}
+
+/// A stale socket: a socket file on which a connect is refused, so nobody accepts there.
+fn stale_socket(path: &str, name: &std::ffi::CStr) -> bool {
+    file_identity(name).is_some_and(|(_, _, mode)| mode & libc::S_IFMT == libc::S_IFSOCK)
+        && matches!(unix_connect_one(path), Err(NetError::ConnectionRefused))
 }
 
 fn name_of(
@@ -626,6 +704,51 @@ impl NetProvider for HostNet {
             Ok(())
         })())
     }
+    fn unix_connect(&mut self, id: u64, path: &str) -> Provided<()> {
+        Ok(unix_connect_one(path).map(|socket| {
+            assert!(self.sockets.insert(id, socket).is_none());
+        }))
+    }
+    fn unix_listen(&mut self, id: u64, path: &str, remove_stale: bool) -> Provided<()> {
+        Ok((|| {
+            let (addr, len) = unix_address(path)?;
+            let name = std::ffi::CString::new(path).map_err(|_| NetError::InvalidInput)?;
+            let socket = unix_socket()?;
+            let bind = || {
+                // SAFETY: addr holds a sockaddr_un of len bytes.
+                match unsafe { libc::bind(socket.as_raw_fd(), (&raw const addr).cast(), len) } {
+                    0 => Ok(()),
+                    _ => Err(errno()),
+                }
+            };
+            let mut bound = bind();
+            if bound == Err(libc::EADDRINUSE) && remove_stale && stale_socket(path, &name) {
+                // SAFETY: name is a C string.
+                unsafe { libc::unlink(name.as_ptr()) };
+                bound = bind();
+            }
+            match bound {
+                Ok(()) => {}
+                Err(libc::ENOENT | libc::ENOTDIR) => return Err(NetError::AddrNotAvailable),
+                Err(code) => return Err(error(code)),
+            }
+            let identity = file_identity(&name);
+            // SAFETY: plain socket call.
+            if unsafe { libc::listen(socket.as_raw_fd(), BACKLOG) } == -1 {
+                let code = errno();
+                if identity.is_some() {
+                    // SAFETY: name is a C string; the file is the one this call bound.
+                    unsafe { libc::unlink(name.as_ptr()) };
+                }
+                return Err(error(code));
+            }
+            if let Some((dev, ino, _)) = identity {
+                self.unix_files.insert(id, (name, dev, ino));
+            }
+            assert!(self.sockets.insert(id, socket).is_none());
+            Ok(())
+        })())
+    }
     fn accept(&mut self, listener: u64, id: u64) -> Provided<SocketAddr> {
         Ok(self.socket(listener).and_then(|fd| {
             loop {
@@ -659,6 +782,12 @@ impl NetProvider for HostNet {
         self.tls.remove(&handle);
         // OwnedFd's drop discards the close error (DROP-3).
         self.sockets.remove(&handle);
+        if let Some((name, dev, ino)) = self.unix_files.remove(&handle)
+            && file_identity(&name).is_some_and(|(d, i, _)| (d, i) == (dev, ino))
+        {
+            // SAFETY: name is a C string. A failed removal is discarded like a close error.
+            unsafe { libc::unlink(name.as_ptr()) };
+        }
     }
 }
 

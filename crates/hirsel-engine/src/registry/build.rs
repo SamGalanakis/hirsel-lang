@@ -156,7 +156,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "NetOperation",
             "",
-            "Connect()|ConnectTls()|Listen()|UdpBind()|UdpPeer()|ListenTls()",
+            "Connect()|ConnectTls()|Listen()|UdpBind()|UdpPeer()|ListenTls()|UnixConnect()|UnixListen()|UnixListenRemoveStale()",
         ),
         ("NetTimeout", "", "Unbounded()|Nanos(u64)"),
         ("Shutdown", "", "Read()|Write()|Both()"),

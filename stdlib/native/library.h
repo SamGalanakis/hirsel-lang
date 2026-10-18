@@ -135,6 +135,8 @@ uint8_t hirsel_rt_v2_net_local_addr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_a
 uint8_t hirsel_rt_v2_net_accept(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_accepted_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_net_peer_addr(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_addr_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_net_close(hirsel_rt_v2_ctx*, const uint64_t*, uint64_t*);
+uint8_t hirsel_rt_v2_net_unix_connect(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_net_unix_listen(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_net_udp_bind(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, const hirsel_rt_v2_socket_addr*);
 uint8_t hirsel_rt_v2_udp_send_to(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_net_word_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const hirsel_rt_v2_socket_addr*);
 uint8_t hirsel_rt_v2_udp_recv_from(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_udp_received_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header**, uint64_t);

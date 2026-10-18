@@ -9,20 +9,21 @@ use super::{
         TimeoutKind, TlsFailure,
     },
 };
-use hirsel_run_config::{
-    NetConnection, NetListener, NetPeer, NetStep, PeerTls,
-    canonical_net_address as canonical_address,
-};
+use hirsel_run_config::{NetConnection, NetListener, NetPeer, NetStep, PeerTls};
 use std::{collections::BTreeMap, net::IpAddr};
+
+/// A listen address as scripted listeners name it: an IP literal and port, or a
+/// socket path with port 0.
+type Endpoint = (String, u16);
 
 /// Who is at the other end: a scripted peer the program connected to, or the
 /// scripted client a listener accepted.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum Remote {
     Peer(usize),
     Client {
         index: usize,
-        listener: SocketAddr,
+        listener: Endpoint,
         from: SocketAddr,
     },
 }
@@ -70,11 +71,11 @@ impl Connection {
                     if wrote != *expected {
                         if let Remote::Client {
                             index, listener, ..
-                        } = self.remote
+                        } = &self.remote
                         {
                             self.mismatch = Some(hirsel_run_config::net_client_mismatch(
-                                index,
-                                listener.std(),
+                                *index,
+                                &hirsel_run_config::listener_name(&listener.0, listener.1),
                                 expected,
                                 wrote,
                             ));
@@ -113,7 +114,7 @@ pub struct ScriptNet {
     listeners: Vec<NetListener>,
     /// The next client of each scripted listener address.
     next_client: Vec<usize>,
-    open_listeners: BTreeMap<u64, SocketAddr>,
+    open_listeners: BTreeMap<u64, Endpoint>,
     streams: BTreeMap<u64, Connection>,
     udp: BTreeMap<u64, UdpScript>,
 }
@@ -127,7 +128,7 @@ impl ScriptNet {
                     "duplicate address/port at entries {first} and {index}"
                 )));
             }
-            if !canonical_address(&p.address)
+            if hirsel_run_config::check_peer_address(p).is_err()
                 || p.resolves_to.iter().any(|a| {
                     a.parse::<IpAddr>().is_err()
                         || a.parse::<IpAddr>().is_ok_and(|ip| ip.to_string() != *a)
@@ -156,7 +157,7 @@ impl ScriptNet {
         if let Some(s) = self.streams.get_mut(&handle) {
             let Remote::Client {
                 index, listener, ..
-            } = s.remote
+            } = s.remote.clone()
             else {
                 return None;
             };
@@ -173,19 +174,22 @@ impl ScriptNet {
                 })?;
             return Some(hirsel_run_config::net_client_unmet(
                 index,
-                listener.std(),
+                &hirsel_run_config::listener_name(&listener.0, listener.1),
                 expected,
                 &s.written[s.consumed..],
             ));
         }
-        let addr = *self.open_listeners.get(&handle)?;
+        let (address, port) = self.open_listeners.get(&handle)?;
         let i = self
             .listeners
             .iter()
-            .position(|l| l.address == addr.ip.to_string() && l.port == addr.port)?;
+            .position(|l| l.address == *address && l.port == *port)?;
         let client =
             hirsel_run_config::first_expecting_client(&self.listeners[i], self.next_client[i])?;
-        Some(hirsel_run_config::net_client_unaccepted(client, addr.std()))
+        Some(hirsel_run_config::net_client_unaccepted(
+            client,
+            &hirsel_run_config::listener_name(address, *port),
+        ))
     }
     /// The Test report of the write that just contradicted a scripted client's Expect.
     pub(crate) fn take_mismatch(&mut self, stream: u64) -> Option<String> {
@@ -227,6 +231,16 @@ impl ScriptNet {
             }
             Some(NetConnection::Refused) | None => Ok(Err(NetError::ConnectionRefused)),
         }
+    }
+}
+impl ScriptNet {
+    /// A second listen on an open listener's address is `AddrInUse()`.
+    fn bind_listener(&mut self, id: u64, endpoint: Endpoint) -> Provided<()> {
+        if self.open_listeners.values().any(|open| *open == endpoint) {
+            return Ok(Err(NetError::AddrInUse));
+        }
+        self.open_listeners.insert(id, endpoint);
+        Ok(Ok(()))
     }
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -429,6 +443,9 @@ impl NetProvider for ScriptNet {
             Remote::Client { from, .. } => return Ok(Ok(from)),
         };
         let peer = &self.peers[peer_index];
+        if hirsel_run_config::canonical_unix_path(&peer.address) {
+            return Ok(Ok(SocketAddr::UNNAMED));
+        }
         let ip = peer
             .address
             .parse::<IpAddr>()
@@ -495,14 +512,14 @@ impl NetProvider for ScriptNet {
         // Policy admits only accepted streams.
         let Remote::Client {
             index, listener, ..
-        } = s.remote
+        } = s.remote.clone()
         else {
             return Err(AdapterError::InvalidCompletion);
         };
         let client = self
             .listeners
             .iter()
-            .find(|l| l.address == listener.ip.to_string() && l.port == listener.port)
+            .find(|l| l.address == listener.0 && l.port == listener.1)
             .and_then(|l| l.clients.get(index))
             .ok_or(AdapterError::InvalidCompletion)?;
         Ok(match &client.tls {
@@ -541,7 +558,7 @@ impl NetProvider for ScriptNet {
                     || self
                         .open_listeners
                         .values()
-                        .any(|a| u32::from(a.port) == self.next_port))
+                        .any(|a| u32::from(a.1) == self.next_port))
             {
                 self.next_port += 1;
             }
@@ -558,16 +575,23 @@ impl NetProvider for ScriptNet {
                 template.port = port;
             }
         }
-        if self.open_listeners.values().any(|open| *open == addr) {
-            return Ok(Err(NetError::AddrInUse));
+        self.bind_listener(id, (addr.ip.to_string(), addr.port))
+    }
+    fn unix_connect(&mut self, id: u64, path: &str) -> Provided<()> {
+        self.open(id, path, 0, NetTimeout::Unbounded)
+    }
+    fn unix_listen(&mut self, id: u64, path: &str, _remove_stale: bool) -> Provided<()> {
+        // A scripted world has no socket files, so there is never a stale one to remove.
+        if self.open_listeners.contains_key(&id) || self.streams.contains_key(&id) {
+            return Err(AdapterError::InvalidHandle(id));
         }
-        self.open_listeners.insert(id, addr);
-        Ok(Ok(()))
+        self.bind_listener(id, (path.to_owned(), 0))
     }
     fn accept(&mut self, listener: u64, id: u64) -> Provided<SocketAddr> {
-        let addr = *self
+        let addr = self
             .open_listeners
             .get(&listener)
+            .cloned()
             .ok_or(AdapterError::InvalidHandle(listener))?;
         if self.streams.contains_key(&id) {
             return Err(AdapterError::InvalidHandle(id));
@@ -575,7 +599,7 @@ impl NetProvider for ScriptNet {
         let Some(i) = self
             .listeners
             .iter()
-            .position(|l| l.address == addr.ip.to_string() && l.port == addr.port)
+            .position(|l| l.address == addr.0 && l.port == addr.1)
         else {
             return Ok(Err(NetError::ConnectionAborted));
         };
@@ -598,10 +622,13 @@ impl NetProvider for ScriptNet {
         Ok(Ok(from))
     }
     fn local_addr(&mut self, listener: u64) -> Provided<SocketAddr> {
-        self.open_listeners
+        let (address, port) = self
+            .open_listeners
             .get(&listener)
-            .map(|addr| Ok(*addr))
-            .ok_or(AdapterError::InvalidHandle(listener))
+            .ok_or(AdapterError::InvalidHandle(listener))?;
+        Ok(Ok(address.parse().map_or(SocketAddr::UNNAMED, |ip| {
+            SocketAddr { ip, port: *port }
+        })))
     }
     fn close(&mut self, id: u64) {
         self.udp.remove(&id);

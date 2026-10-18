@@ -90,6 +90,10 @@ operation}`: `address` is a canonical host name or IP literal
 ([CAP-1](capabilities.md#cap-1-authority)), `service` a canonical decimal port `0`–`65535`
 without leading zeros, and `operation` one of `connect`, `connect_tls`, `listen`, `udp_bind`,
 `udp_peer` and `listen_tls`.
+The Unix operations `unix_connect`, `unix_listen` and `unix_listen_remove_stale` take a
+canonical socket path as `address` and service `0`; a path never names a TCP or UDP rule.
+`net.script@2` peers may name a socket path, as `test.net` peers do, and so may its
+listeners, with port 0 and clients from `0.0.0.0` port 0, since Unix peers are unnamed.
 
 **Process grants** name a provider and rules `{program, env}` sorted and unique by
 `program`: `program` is a canonical absolute path ([processes](core-library.md#processes)),
@@ -268,6 +272,12 @@ recorded. Replay re-derives peer authority and reproduces the admitted prefix an
 truncation flag without binding or sending on the host. A canceled UDP operation
 records no provider request or completion; its outcome follows the schedule after
 argument and authority checks. Scripted UDP uses the same recording protocol.
+
+Unix requests record the Net handle and the socket path, and their completions the stream or
+listener handle (with the listener's `0.0.0.0:0` local address) or the error, exactly as a
+TCP connect or listen. Removing a stale socket file and removing a listener's socket file at
+close are host effects of those operations, never separate events; replay neither binds nor
+removes anything. Scripted Unix peers use the same recording protocol.
 
 TLS is recorded as plaintext and as the `tls.connect` outcome, never as TLS records. The
 request records the server name and the identity of the root set: `webpki:` and the

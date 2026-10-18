@@ -280,6 +280,9 @@ fn rule_value(r: &NetRule) -> Value {
                     NetOperation::UdpBind => 3,
                     NetOperation::UdpPeer => 4,
                     NetOperation::ListenTls => 5,
+                    NetOperation::UnixConnect => 6,
+                    NetOperation::UnixListen => 7,
+                    NetOperation::UnixListenRemoveStale => 8,
                 },
                 vec![],
             ),
@@ -521,6 +524,14 @@ pub fn arguments(event: &Event, fixture: super::ReplayFixture<'_>) -> (&'static 
         }
         R::TlsClose { net, stream } => ("tls.close", vec![n(*net), s(*stream)]),
         R::Listen { net, addr } => ("net.listen", vec![n(*net), address(*addr)]),
+        R::UnixConnect { net, path } => (
+            "net.unix_connect",
+            vec![n(*net), hirsel_interp::library::path(path)],
+        ),
+        R::UnixListen { net, path } => (
+            "net.unix_listen",
+            vec![n(*net), hirsel_interp::library::path(path)],
+        ),
         R::Accept { net, listener } => ("net.accept", vec![n(*net), handle("Listener", *listener)]),
         R::LocalAddr { net, listener } => (
             "net.local_addr",

@@ -267,6 +267,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_narrow(
             3 => NetOperation::UdpBind,
             4 => NetOperation::UdpPeer,
             5 => NetOperation::ListenTls,
+            6 => NetOperation::UnixConnect,
+            7 => NetOperation::UnixListen,
+            8 => NetOperation::UnixListenRemoveStale,
             _ => crate::fault("NetOperation tag out of range"),
         };
         list.push(NetRule {
@@ -628,6 +631,49 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_listen(
     let request = Request::Listen {
         net: unsafe { n.read() },
         addr: unsafe { (*addr).get() },
+    };
+    let Some(Completion::Listened(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    unsafe { out.write(NetWordResult::of(value.map(|(id, _)| id))) };
+    STATUS_OK
+}
+/// `net.unix_connect(n, path: Path) -> Result[Stream of n, NetError]`.
+/// # Safety
+/// Context bound; n and the Path handle readable; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_net_unix_connect(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    path: *const u64,
+) -> u8 {
+    let request = Request::UnixConnect {
+        net: unsafe { n.read() },
+        path: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { path.read() }),
+    };
+    let Some(Completion::NetHandle(value)) = (unsafe { call(ctx, request) }) else {
+        return STATUS_FAILURE;
+    };
+    unsafe { out.write(NetWordResult::of(value)) };
+    STATUS_OK
+}
+
+/// `net.unix_listen(n, path: Path) -> Result[Listener of n, NetError]`.
+/// # Safety
+/// Context bound; n and the Path handle readable; out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_net_unix_listen(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut NetWordResult,
+    n: *const u64,
+    path: *const u64,
+) -> u8 {
+    let request = Request::UnixListen {
+        net: unsafe { n.read() },
+        path: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { path.read() }),
     };
     let Some(Completion::Listened(value)) = (unsafe { call(ctx, request) }) else {
         return STATUS_FAILURE;

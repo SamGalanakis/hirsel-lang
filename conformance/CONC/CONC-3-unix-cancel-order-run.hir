@@ -1,0 +1,52 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"/run/app.sock","service":"0","operation":"unix_connect"},{"address":"/run/app.sock","service":"0","operation":"unix_listen"}],"peers":[{"address":"/run/app.sock","port":0,"resolves_to":[],"tls":"plain","connections":[{"open":[]}]}]}
+// In a canceled scope net.unix_connect checks its path, then its grant, and only then
+// returns Canceled without taking the peer's connection; net.unix_listen, like
+// net.listen, is no cancellation point. After the scope the connection is still there.
+fn connect_error(n: Net, take p: Path) -> NetError {
+  match net.unix_connect(n, p) {
+    Ok(_) => Fault(0u32),
+    Error(e) => e,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let n = io.net(rt)?
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) {
+      failure.check(
+        connect_error(n, path.of("/run/./app.sock")) == InvalidInput(),
+        Arithmetic()
+      )
+      failure.check(
+        connect_error(n, path.of("/run/other.sock")) == NotGranted(),
+        Arithmetic()
+      )
+      failure.check(
+        connect_error(n, path.of("/run/app.sock")) == Canceled(DeadlineExceeded()),
+        Arithmetic()
+      )
+      let listened = match net.unix_listen(n, path.of("/run/app.sock")) {
+        Ok(_) => true,
+        Error(_) => false,
+      }
+      failure.check(listened, Arithmetic())
+    }
+  )
+  let connected = match net.unix_connect(n, path.of("/run/app.sock")) {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+  failure.check(connected, Arithmetic())
+  Ok(())
+}

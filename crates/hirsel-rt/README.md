@@ -404,7 +404,13 @@ then truncates one admitted datagram with an explicit flag. `ScriptNet` keeps UD
 queues separate from TCP cursors. Host sockets use sendto/recvfrom, with
 nonblocking readiness under cooperative admission. Tapes retain the admitted
 prefix, peer and truncation flag, and replay checks their authority without
-sockets. `net_abi.rs` exports the datagram and stream
+sockets. Unix stream sockets use exact-path `UnixConnect`/`UnixListen` rules (port 0) and
+return ordinary Stream and Listener handles whose addresses are the unnamed `0.0.0.0:0`;
+`net_host.rs` binds and connects `sockaddr_un` blocking (cooperative runs make the result
+nonblocking), removes a stale socket only under `UnixListenRemoveStale`, and unlinks a
+listener's file at close while its device and inode still match. `ScriptNet` keys
+listeners by address string and port, so a socket path is one more scripted endpoint.
+`net_abi.rs` exports the datagram and stream
 operations at the Hirsel ABI (`NET_EXPORTS`), plus `hirsel_rt_v2_net_read_into`, the
 entry of `$intrinsic.NetReadInto` that `net.read_into`'s compiled body calls with its
 buffer size. `net.resolve` allocates its `List[SocketAddr]` under descriptor 0, the

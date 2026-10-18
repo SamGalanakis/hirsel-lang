@@ -10,7 +10,10 @@ use hirsel_run_config::Access;
 pub(crate) fn net_completion(request: &R, error: NetError) -> C {
     match request {
         R::Resolve { .. } => C::Addresses(Err(error)),
-        R::UdpBind { .. } | R::Connect { .. } | R::ConnectAddr { .. } => C::NetHandle(Err(error)),
+        R::UdpBind { .. } | R::Connect { .. } | R::ConnectAddr { .. } | R::UnixConnect { .. } => {
+            C::NetHandle(Err(error))
+        }
+        R::UnixListen { .. } => C::Listened(Err(error)),
         R::Accept { .. } => C::Accepted(Err(error)),
         R::NetRead { .. } => C::NetBytes(Err(error)),
         R::UdpRecv { .. } => C::Datagram(Err(error)),
@@ -184,6 +187,7 @@ pub fn cancel(
         | R::Resolve { .. }
         | R::Connect { .. }
         | R::ConnectAddr { .. }
+        | R::UnixConnect { .. }
         | R::Accept { .. }
         | R::NetRead { .. }
         | R::NetWrite { .. }

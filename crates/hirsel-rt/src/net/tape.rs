@@ -285,6 +285,8 @@ pub(crate) fn render_request(request: &Request) -> String {
         R::Listen { net, addr } => format!("listen {net} {}", address(addr)),
         R::Accept { net, listener } => format!("accept {net} {listener}"),
         R::LocalAddr { net, listener } => format!("local_addr {net} {listener}"),
+        R::UnixConnect { net, path } => format!("unix_connect {net} {}", hex(path.as_bytes())),
+        R::UnixListen { net, path } => format!("unix_listen {net} {}", hex(path.as_bytes())),
         _ => unreachable!("a file or grant request has its own tape form"),
     }
 }
@@ -435,6 +437,14 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
         ["local_addr", n, l] => R::LocalAddr {
             net: number(n)?,
             listener: number(l)?,
+        },
+        ["unix_connect", n, p] => R::UnixConnect {
+            net: number(n)?,
+            path: text(p)?,
+        },
+        ["unix_listen", n, p] => R::UnixListen {
+            net: number(n)?,
+            path: text(p)?,
         },
         _ => return Ok(None),
     }))

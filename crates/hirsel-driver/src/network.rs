@@ -1228,6 +1228,9 @@ impl HostLibrary {
                                 3 => NetOperation::UdpBind,
                                 4 => NetOperation::UdpPeer,
                                 5 => NetOperation::ListenTls,
+                                6 => NetOperation::UnixConnect,
+                                7 => NetOperation::UnixListen,
+                                8 => NetOperation::UnixListenRemoveStale,
                                 _ => return Err(invalid()),
                             },
                         })
@@ -1268,6 +1271,14 @@ impl HostLibrary {
             "net.listen" => R::Listen {
                 net: self.id(&a[0])?,
                 addr: addr(&a[1])?,
+            },
+            "net.unix_connect" => R::UnixConnect {
+                net: self.id(&a[0])?,
+                path: text(fields(&a[1])?[0])?,
+            },
+            "net.unix_listen" => R::UnixListen {
+                net: self.id(&a[0])?,
+                path: text(fields(&a[1])?[0])?,
             },
             "net.accept" => R::Accept {
                 net: self.id(&a[0])?,

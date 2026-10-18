@@ -183,6 +183,8 @@ net.set_read_timeout	c3e41255379d62779165f37dfc05f797379a3e87df35a89fa70bc7fd7a1
 net.set_write_timeout	72702158b9874472dfbfb438b8d936c6d672671f1b639abdcfeaaa6409881891	0:b:n;1:m:n;2:b:n->n
 net.shutdown	faaea86753bd3c7edd0ad54c246a29fb77ae7f9a93dee1ba7a7be1f83917ba82	0:b:n;1:m:n;2:b:n->n
 net.udp_bind	9fba3644458faff3a6690142bdac5cae4d254fe01a5e8ef24e92f67eba171bc3	0:b:n;1:b:n->n
+net.unix_connect	e5c19d97a8a1e1463260c9864f62aee79aa5ea30ea4888fb82de6ad78497efbe	0:b:n;1:b:n->n
+net.unix_listen	4ff2f6272fb907c76d18591d15eb4c7966853e071396a2a44e1f619a9ed9eebe	0:b:n;1:b:n->n
 net.write	942c94c0583d25d32d7fb728a562a01cdbecab3d6f56937f954c6bc5e3a1f3d9	0:b:n;1:m:n;2:b:n->n
 net.write_all	7c2636a14f43ffb6e5c415a9628ca36b80d3aac8c208b03e76c1cb235fbdbf4d	0:b:n;1:m:n;2:b:n->n
 out.print	952fa7c08199a4abfcad3d145470b6067b12cc4e9d271ce12085e7a5bb439c84	0:b:n;1:b:n->n
