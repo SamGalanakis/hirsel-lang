@@ -1,4 +1,4 @@
-// Unicode 16.0.0 canonical normalization (UAX #15). Input is valid UTF-8.
+// Unicode 16.0.0 normalization (UAX #15). Input is valid UTF-8.
 // Tables are ordinary immutable source constants, not runtime kernels.
 @noalloc
 fn scalar_at(table: Bytes, offset: u64) -> u32 uses {} {
@@ -106,7 +106,29 @@ fn ordered(mut points: List[u32], cp: u32) -> () uses {} {
 }
 
 @preserves_unique(points)
-fn decompose(mut points: List[u32], cp: u32) -> () uses {} {
+fn decompose(mut points: List[u32], cp: u32, compatibility: bool) -> () uses {} {
+  if compatibility {
+    let mut lo: u64 = 0
+    let mut hi = core@1/bytes.len(COMPATIBILITY) / 7
+    while lo < hi {
+      let mid = lo + (hi - lo) / 2
+      if scalar_at(COMPATIBILITY, mid * 7) < cp {
+        lo = mid + 1
+      } else {
+        hi = mid
+      }
+    }
+    if lo < core@1/bytes.len(COMPATIBILITY) / 7 && scalar_at(COMPATIBILITY, lo * 7) == cp {
+      let offset: u64 = core@1/int.widen(scalar_at(COMPATIBILITY, lo * 7 + 3))
+      let count: u64 = core@1/int.widen(COMPATIBILITY[lo * 7 + 6])
+      let mut i: u64 = 0
+      while i < count {
+        decompose(mut points, scalar_at(COMPATIBILITY_DATA, offset + i * 3), true)
+        i += 1
+      }
+      return
+    }
+  }
   if cp >= 0xac00 && cp < 0xd7a4 {
     let syllable = cp - 0xac00
     ordered(mut points, 0x1100 + syllable / 588)
@@ -119,19 +141,18 @@ fn decompose(mut points: List[u32], cp: u32) -> () uses {} {
     if a == cp {
       ordered(mut points, cp)
     } else {
-      decompose(mut points, a)
+      decompose(mut points, a, compatibility)
       if b != 0 {
-        decompose(mut points, b)
+        decompose(mut points, b, compatibility)
       }
     }
   }
 }
 
-// Explicit NFC: compatibility mappings never enter canonical_pair.
-pub fn normalize_nfc(s: String) -> unique String uses {} {
+fn normalize(s: String, compatibility: bool, compose: bool) -> unique String uses {} {
   let mut points: List[u32] = []
   for c in core@1/string.scalars(s) {
-    decompose(mut points, core@1/char.to_u32(c))
+    decompose(mut points, core@1/char.to_u32(c), compatibility)
   }
   let mut composed: List[u32] = []
   let mut starter: u64 = 0
@@ -139,7 +160,7 @@ pub fn normalize_nfc(s: String) -> unique String uses {} {
   for cp in points {
     let cc = combining_class(cp)
     let mut joined: u32 = 0
-    if core@1/list.len(composed) > 0 && (last_class == 0 || last_class < cc) {
+    if compose && core@1/list.len(composed) > 0 && (last_class == 0 || last_class < cc) {
       joined = composite(composed[starter], cp)
     }
     if joined != 0 {
@@ -161,4 +182,24 @@ pub fn normalize_nfc(s: String) -> unique String uses {} {
     }
   }
   text.finish_valid(take bytes)
+}
+
+/// Unicode 16.0.0 canonical composition; returns independently owned text.
+pub fn normalize_nfc(s: String) -> unique String uses {} {
+  normalize(s, false, true)
+}
+
+/// Unicode 16.0.0 canonical decomposition; returns independently owned text.
+pub fn normalize_nfd(s: String) -> unique String uses {} {
+  normalize(s, false, false)
+}
+
+/// Unicode 16.0.0 compatibility decomposition followed by canonical composition; returns independently owned text.
+pub fn normalize_nfkc(s: String) -> unique String uses {} {
+  normalize(s, true, true)
+}
+
+/// Unicode 16.0.0 compatibility decomposition; returns independently owned text.
+pub fn normalize_nfkd(s: String) -> unique String uses {} {
+  normalize(s, true, false)
 }

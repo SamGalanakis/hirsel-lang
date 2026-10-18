@@ -1,0 +1,31 @@
+// rule: SEM-3
+// expect: run
+// stdout: unicode-text-slices
+fn clipped(s: String, low: u64, high: u64) -> String in s uses {} {
+  match string.position(s, low) {
+    Some(a) => match string.position(s, high) {
+      Some(b) => string.slice(s, a, b),
+      None() => s,
+    },
+    None() => s,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  let source = "AΣA"
+  let slice = clipped(source, 1, 3)
+  failure.check(string.to_lower(slice) == "σ", TextInvariant())
+  failure.check(string.to_upper(slice) == "Σ", TextInvariant())
+  failure.check(string.casefold(slice) == "σ", TextInvariant())
+  let hostile_prefix = "AΣ!"
+  failure.check(string.to_lower(clipped(hostile_prefix, 1, 3)) == "σ", TextInvariant())
+  let hostile_suffix = "!AΣA"
+  failure.check(string.to_lower(clipped(hostile_suffix, 1, 4)) == "aς", TextInvariant())
+  let marked = "xﬃéy"
+  let part = clipped(marked, 1, 6)
+  failure.check(unicode.normalize_nfkd(part) == "ffie\u{301}", TextInvariant())
+  out.print(io.stdout(rt) ? Grant, "unicode-text-slices\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

@@ -1,0 +1,51 @@
+// rule: SEM-3
+// expect: run
+// stdout: unicode-casefold
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  failure.check(string.casefold("Stra\u{df}e") == "strasse", TextInvariant())
+  failure.check(string.casefold("\u{1e9e}") == "ss", TextInvariant())
+  failure.check(string.casefold("\u{fb03}") == "ffi", TextInvariant())
+  failure.check(
+    string.casefold("\u{3c2}\u{3a3}\u{3c3}") == "\u{3c3}\u{3c3}\u{3c3}",
+    TextInvariant()
+  )
+  failure.check(
+    string.casefold("\u{130}I\u{131}") == "i\u{307}i\u{131}",
+    TextInvariant()
+  )
+  failure.check(string.casefold("\u{212a}\u{17f}") == "ks", TextInvariant())
+  failure.check(
+    string.casefold("\u{13a0}\u{ab70}") == "\u{13a0}\u{13a0}",
+    TextInvariant()
+  )
+  failure.check(
+    string.casefold(
+      "\u{abbf}\u{fb01}\u{1ff2}\u{1f7c}\u{345}\u{df}\u{1e9e}\u{3a3}\u{3c2}"
+    ) == "\u{13ef}fi\u{1f7c}\u{3b9}\u{1f7c}\u{3b9}ssss\u{3c3}\u{3c3}",
+    TextInvariant()
+  )
+  failure.check(string.casefold("") == "", TextInvariant())
+  failure.check(
+    string.casefold("\u{4e2d}\u{6587}\u{1f642}") == "\u{4e2d}\u{6587}\u{1f642}",
+    TextInvariant()
+  )
+  failure.check(string.eq_ignore_case("Stra\u{df}e", "STRASSE"), TextInvariant())
+  failure.check(
+    string.eq_ignore_case("\u{39f}\u{3a3}", "\u{3bf}\u{3c2}"),
+    TextInvariant()
+  )
+  failure.check(string.eq_ignore_case("\u{130}", "i\u{307}"), TextInvariant())
+  failure.check(string.eq_ignore_case("\u{fb03}", "FFI"), TextInvariant())
+  failure.check(!string.eq_ignore_case("\u{130}", "i"), TextInvariant())
+  failure.check(!string.eq_ignore_case("\u{131}", "I"), TextInvariant())
+  failure.check(!string.eq_ignore_case("\u{e9}", "e\u{301}"), TextInvariant())
+  failure.check(!string.eq_ignore_case("\u{ff21}", "A"), TextInvariant())
+  failure.check(
+    string.casefold(string.casefold("ẞΣİ")) == string.casefold("ẞΣİ"),
+    TextInvariant()
+  )
+  out.print(io.stdout(rt) ? Grant, "unicode-casefold\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

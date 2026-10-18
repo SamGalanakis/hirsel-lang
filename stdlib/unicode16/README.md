@@ -1,16 +1,18 @@
-# Unicode 16.0.0 source normalization and segmentation data
+# Unicode 16.0.0 source text data
 
-`../std@1/unicode.hir` implements `STD-OP-unicode.normalize_nfc` as ordinary
+`../std@1/unicode.hir` implements `unicode.normalize_nfc`, `normalize_nfd`,
+`normalize_nfkc` and `normalize_nfkd` as ordinary
 Hirsel source with no authority. It borrows valid UTF-8 and returns independently
-owned NFC text. Equality, ordering and hashing remain bytewise. Compatibility
-mappings are excluded. The source implements recursive canonical decomposition,
+owned normalized text. Equality, ordering and hashing remain bytewise.
+Compatibility mappings enter only NFKC/NFKD. The source implements recursive
+canonical decomposition,
 stable canonical ordering, composition blocking and algorithmic Hangul.
 
 Vendored primary inputs (https://www.unicode.org/Public/16.0.0/ucd/):
 
-- `UnicodeData.txt`: canonical mappings and canonical combining classes.
+- `UnicodeData.txt`: canonical/compatibility mappings, canonical combining classes and simple casing.
 - `DerivedNormalizationProps.txt`: `Full_Composition_Exclusion`.
-- `NormalizationTest.txt`: all 19,965 official vectors, five NFC invariants each.
+- `NormalizationTest.txt`: all 19,965 official vectors, five invariants for each of four forms.
 
 The unmodified inputs include their provenance and copyright notices;
 `LICENSE.txt` is the Unicode license. Generated table comments pin the input
@@ -18,7 +20,7 @@ SHA-256 digests. The oracle file SHA-256 is
 `d811971453e7075e1ad56fb1b301eece5aa80757b81f6156e74a1bfb3ae5ceb1`.
 
 Run `python3 stdlib/unicode16/generate.py` from the repository root to regenerate
-`stdlib/std@1/unicode_tables.hir`; `--check` verifies byte-identical regeneration.
+`stdlib/std@1/{unicode_tables,unicode_property_tables,unicode_compatibility_tables,string_case_tables}.hir`; `--check` verifies byte-identical regeneration.
 There are 934 nonzero combining-class rows, 2,081 canonical mapping rows and
 961 nonexcluded composition pairs. Each scalar is three big-endian bytes; the
 combining class is one byte. Sorted, fixed-width immutable Bytes constants avoid
@@ -26,23 +28,38 @@ runtime table construction and permit ordinary allocation-free binary searches.
 Zero denotes a missing second decomposition scalar or no composition; no
 canonical mapping contains U+0000. Hangul is represented algorithmically.
 
-Both source files belong to the ordinary `std@1/unicode` module. Later source
+The normalization source files belong to the ordinary `std@1/unicode` module. Later source
 Unicode algorithms can reuse the private combining-class lookup by joining that
 module; no compiler registry or runtime normalization hook is added.
 
-`hirsel-driver/tests/stdlib_nfc.rs` executes all 99,825 official NFC comparisons and 275,446 unlisted assigned-scalar identities
-through the shipped source, using official expected columns rather than a shared
-Rust normalization kernel. Its batching adapter only transports Strings and
-retains validated TIR/constants. A second test proves Source origin and heap
-agreement.
+`hirsel-driver/tests/it-stdlib/stdlib_nfc.rs` executes all 399,300 official
+four-form comparisons and 1,101,784 unlisted assigned-scalar identities through
+the shipped source. Expected results are official columns, not a shared Rust
+normalization kernel. Sixteen-input batches bound retained traces; 64 deterministic catalogue
+partitions and exact counts preserve every comparison within the pool timeout. The exhaustive oracle is release-only;
+directed conformance and regeneration remain in the fast gate.
 
-The complete oracle runs under `cargo test --release -p hirsel-driver --test
-it stdlib_nfc::`; its debug build is explicitly ignored, while the source-origin/heap
-control and directed conformance remain in the fast gate.
+Compatibility decompositions use 3,832 seven-byte index rows (scalar, three-byte
+payload byte offset, one-byte scalar count), with a packed scalar payload.
+Recursive compatibility and canonical decomposition share stable ordering,
+algorithmic Hangul, and NFC's composition/exclusion tables. NFD/NFKD skip
+composition; all forms use the same UTF-8 builder.
 
-The exhaustive source oracle reads `HIRSEL_JOBS` and runs at most four independent
-interpreters. Sixteen-case batches bound retained traces; exact checked-count
-assertions prevent dropping a shard. Total coverage is 375,271 comparisons.
+Full case data adds the unmodified official `SpecialCasing.txt` and
+`CaseFolding.txt` from the Unicode16 UCD, under `LICENSE.txt`. The generator pins
+their SHA-256 digests and emits bounded seven-byte indices and packed scalar
+payloads in the `string` module. Upper/lower combine UnicodeData simple mappings
+with unconditional SpecialCasing overrides. Lowercase also applies Final_Sigma,
+using Unicode16 `Cased` and `Case_Ignorable` from DerivedCoreProperties on the
+original slice, as Rust does. Case folding selects precisely C+F (not S or T),
+without normalization or locale tailoring. `eq_ignore_case` compares full folds.
+The scalar simple-case and ASCII-only functions retain their existing behavior.
+The same release oracle harness tests 2,981 scalars against official full
+upper/lower/fold mappings (8,943 comparisons), plus six long-string checks
+adapted from Rust, for 8,949 comparisons. Long inputs run separately under the
+same step limit. Directed conformance ports Rust's complete Final_Sigma vectors
+and checks folding without normalization, default non-Turkic behavior, Cherokee,
+expansions and nonzero-origin slices.
 
 `../std@1/graphemes.hir` implements `STD-OP-unicode.graphemes` as an ordinary
 `@loop_source` view. The public opaque GraphemeView and GraphemeCursor retain

@@ -1,0 +1,27 @@
+// rule: SEM-3
+// expect: run
+// stdout: unicode-full-case-4
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  failure.check(string.to_lower("\u{130}I") == "i\u{307}i", TextInvariant())
+  failure.check(
+    string.to_lower("A\u{3a3}\u{345}") == "a\u{3c2}\u{345}",
+    TextInvariant()
+  )
+  failure.check(string.to_lower("\u{3a3}\u{345}") == "\u{3c3}\u{345}", TextInvariant())
+  failure.check(
+    string.to_lower("A\u{3a3}\u{345}A") == "a\u{3c3}\u{345}a",
+    TextInvariant()
+  )
+  failure.check(
+    string.to_lower("A\u{3a3}\u{200d}") == "a\u{3c2}\u{200d}",
+    TextInvariant()
+  )
+  failure.check(string.to_lower("A\u{3a3}1") == "a\u{3c2}1", TextInvariant())
+  failure.check(unicode.simple_upper('\u{df}') == '\u{df}', TextInvariant())
+  failure.check(unicode.simple_lower('\u{130}') == 'i', TextInvariant())
+  failure.check(string.ascii_upper("ßa") == "ßA", TextInvariant())
+  out.print(io.stdout(rt) ? Grant, "unicode-full-case-4\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

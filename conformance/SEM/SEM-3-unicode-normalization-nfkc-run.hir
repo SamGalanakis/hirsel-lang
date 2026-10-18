@@ -1,0 +1,38 @@
+// rule: SEM-3
+// expect: run
+// stdout: unicode-normalization-nfkc
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  failure.check(unicode.normalize_nfkc("") == "", TextInvariant())
+  failure.check(unicode.normalize_nfkc("\u{e9}") == "\u{e9}", TextInvariant())
+  failure.check(unicode.normalize_nfkc("\u{212b}") == "\u{c5}", TextInvariant())
+  failure.check(
+    unicode.normalize_nfkc("\u{fb03}\u{ff21}\u{2460}") == "ffiA1",
+    TextInvariant()
+  )
+  failure.check(unicode.normalize_nfkc("\u{ac01}") == "\u{ac01}", TextInvariant())
+  failure.check(
+    unicode.normalize_nfkc("\u{1e0a}\u{323}") == "\u{1e0c}\u{307}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkc("A\u{305}\u{30a}") == "A\u{305}\u{30a}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkc("\u{308}\u{301}") == "\u{308}\u{301}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkc("\u{fdfa}") == "\u{635}\u{644}\u{649} \u{627}\u{644}\u{644}\u{647} \u{639}\u{644}\u{64a}\u{647} \u{648}\u{633}\u{644}\u{645}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkc("\u{1d538}\u{b2}\u{a0}") == "A2 ",
+    TextInvariant()
+  )
+  failure.check(unicode.normalize_nfkc("\u{f73}") == "\u{f71}\u{f72}", TextInvariant())
+  out.print(io.stdout(rt) ? Grant, "unicode-normalization-nfkc\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

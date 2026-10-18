@@ -486,6 +486,24 @@
       "module": [
         "task"
       ]
+    },
+    {
+      "path": "unicode_compatibility_tables.hir",
+      "module": [
+        "unicode"
+      ]
+    },
+    {
+      "path": "string_case.hir",
+      "module": [
+        "string"
+      ]
+    },
+    {
+      "path": "string_case_tables.hir",
+      "module": [
+        "string"
+      ]
     }
   ],
   "dependencies": []

@@ -1,0 +1,19 @@
+// rule: SEM-3
+// expect: run
+// stdout: unicode-full-case-2
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  failure.check(string.to_lower("Α'Σ' Α") == "α'ς' α", TextInvariant())
+  failure.check(string.to_lower("Α''Σ'' Α") == "α''ς'' α", TextInvariant())
+  failure.check(string.to_lower("Α Σ") == "α σ", TextInvariant())
+  failure.check(string.to_lower("Α 'Σ") == "α 'σ", TextInvariant())
+  failure.check(string.to_lower("Α ''Σ") == "α ''σ", TextInvariant())
+  failure.check(string.to_lower("Σ") == "σ", TextInvariant())
+  failure.check(string.to_lower("'Σ") == "'σ", TextInvariant())
+  failure.check(string.to_lower("''Σ") == "''σ", TextInvariant())
+  failure.check(string.to_lower("ΑΣΑ") == "ασα", TextInvariant())
+  failure.check(string.to_lower("ΑΣ'Α") == "ασ'α", TextInvariant())
+  out.print(io.stdout(rt) ? Grant, "unicode-full-case-2\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

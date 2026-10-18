@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-796 exported definitions; 257 variants.
+803 exported definitions; 257 variants.
 
 ## Types and roots
 
@@ -4829,6 +4829,15 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 - `@noalloc fn string.byte_offset(s: String, pos: StrPos of s) -> u64`
 
+<a id="def-std_401_2fstring_2fcasefold"></a>
+
+- `pub fn string.casefold(s: String) -> unique String uses {}`
+
+Full default Unicode16 case folding (CaseFolding C+F). Locale independent;
+does not normalize text. Turkic-specific mappings are excluded.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
 <a id="def-std_401_2fstring_2fcompare"></a>
 
 - `@noalloc pub fn string.compare(a: String, b: String) -> i32 uses {}`
@@ -4850,6 +4859,15 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core
 <a id="def-std_401_2fstring_2fends_5fwith"></a>
 
 - `@noalloc pub fn string.ends_with(s: String, pattern: String) -> bool uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fstring_2feq_5fignore_5fcase"></a>
+
+- `pub fn string.eq_ignore_case(a: String, b: String) -> bool uses {}`
+
+Compare full default case folds. Normalize explicitly when canonical or
+compatibility equivalence is also wanted.
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
 
@@ -4920,6 +4938,23 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-co
 - `@noalloc pub fn string.starts_with(s: String, pattern: String) -> bool uses {}`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fstring_2fto_5flower"></a>
+
+- `pub fn string.to_lower(s: String) -> unique String uses {}`
+
+Full Unicode16 lowercase, including expansions and context-sensitive final
+sigma. Uses the original slice as context; locale independent.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fstring_2fto_5fupper"></a>
+
+- `pub fn string.to_upper(s: String) -> unique String uses {}`
+
+Full Unicode16 uppercase, including expansions; locale independent.
+
+References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fstring_2ftrim"></a>
 
@@ -5769,6 +5804,32 @@ References: [`core@1/bool`](#def-core_401_2fbool), [`core@1/char`](#def-core_401
 <a id="def-std_401_2funicode_2fnormalize_5fnfc"></a>
 
 - `pub fn unicode.normalize_nfc(s: String) -> unique String uses {}`
+
+Unicode 16.0.0 canonical composition; returns independently owned text.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2funicode_2fnormalize_5fnfd"></a>
+
+- `pub fn unicode.normalize_nfd(s: String) -> unique String uses {}`
+
+Unicode 16.0.0 canonical decomposition; returns independently owned text.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2funicode_2fnormalize_5fnfkc"></a>
+
+- `pub fn unicode.normalize_nfkc(s: String) -> unique String uses {}`
+
+Unicode 16.0.0 compatibility decomposition followed by canonical composition; returns independently owned text.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2funicode_2fnormalize_5fnfkd"></a>
+
+- `pub fn unicode.normalize_nfkd(s: String) -> unique String uses {}`
+
+Unicode 16.0.0 compatibility decomposition; returns independently owned text.
 
 References: [`core@1/String`](#def-core_401_2fString)
 

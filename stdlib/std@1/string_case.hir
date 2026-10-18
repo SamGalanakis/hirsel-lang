@@ -1,0 +1,124 @@
+// Full default Unicode16 mappings. Rust str's Final_Sigma rule examines the
+// original text, skipping Case_Ignorable and then testing Cased on each side.
+@noalloc
+fn case_scalar(table: Bytes, offset: u64) -> u32 uses {} {
+  let a: u32 = core@1/int.widen(table[offset])
+  let b: u32 = core@1/int.widen(table[offset + 1])
+  let c: u32 = core@1/int.widen(table[offset + 2])
+  a << 16 | b << 8 | c
+}
+
+@noalloc
+fn case_property(table: Bytes, cp: u32) -> bool uses {} {
+  let mut lo: u64 = 0
+  let mut hi = core@1/bytes.len(table) / 6
+  while lo < hi {
+    let mid = lo + (hi - lo) / 2
+    if cp < case_scalar(table, mid * 6) {
+      hi = mid
+    } else if cp > case_scalar(table, mid * 6 + 3) {
+      lo = mid + 1
+    } else {
+      return true
+    }
+  }
+  false
+}
+
+@preserves_unique(bytes)
+fn append_case(mut bytes: List[u8], table: Bytes, data: Bytes, c: char) -> () uses {} {
+  let cp = core@1/char.to_u32(c)
+  let mut lo: u64 = 0
+  let mut hi = core@1/bytes.len(table) / 7
+  while lo < hi {
+    let mid = lo + (hi - lo) / 2
+    if case_scalar(table, mid * 7) < cp {
+      lo = mid + 1
+    } else {
+      hi = mid
+    }
+  }
+  if lo < core@1/bytes.len(table) / 7 && case_scalar(table, lo * 7) == cp {
+    let offset: u64 = core@1/int.widen(case_scalar(table, lo * 7 + 3))
+    let count: u64 = core@1/int.widen(table[lo * 7 + 6])
+    let mut i: u64 = 0
+    while i < count {
+      match core@1/char.from_u32(case_scalar(data, offset + i * 3)) {
+        Some(mapped) => char.format_into(mapped, mut bytes),
+        None() => core@1/failure.check(false, TextInvariant()),
+      }
+      i += 1
+    }
+  } else {
+    char.format_into(c, mut bytes)
+  }
+}
+
+fn mapped_case(s: String, table: Bytes, data: Bytes) -> unique String uses {} {
+  let mut bytes: List[u8] = []
+  for c in core@1/string.scalars(s) {
+    append_case(mut bytes, table, data, c)
+  }
+  text.finish_valid(take bytes)
+}
+
+/// Full Unicode16 uppercase, including expansions; locale independent.
+pub fn to_upper(s: String) -> unique String uses {} {
+  mapped_case(s, FULL_UPPER, FULL_UPPER_DATA)
+}
+
+/// Full Unicode16 lowercase, including expansions and context-sensitive final
+/// sigma. Uses the original slice as context; locale independent.
+pub fn to_lower(s: String) -> unique String uses {} {
+  let mut chars: List[char] = []
+  for c in core@1/string.scalars(s) {
+    core@1/list.push(mut chars, c)
+  }
+  let mut bytes: List[u8] = []
+  let mut preceding = false
+  let mut i: u64 = 0
+  while i < core@1/list.len(chars) {
+    let c = chars[i]
+    let cp = core@1/char.to_u32(c)
+    if c == '\u{3a3}' && preceding {
+      let mut j = i + 1
+      while j < core@1/list.len(chars) && case_property(
+        CASE_IGNORABLE,
+        core@1/char.to_u32(chars[j])
+      ) {
+        j += 1
+      }
+      let after = j < core@1/list.len(chars) && case_property(
+        CASED,
+        core@1/char.to_u32(chars[j])
+      )
+      char.format_into(
+        if after {
+          '\u{3c3}'
+        } else {
+          '\u{3c2}'
+        },
+        mut bytes
+      )
+    } else {
+      append_case(mut bytes, FULL_LOWER, FULL_LOWER_DATA, c)
+    }
+    if !case_property(CASE_IGNORABLE, cp) {
+      preceding = case_property(CASED, cp)
+    }
+    i += 1
+  }
+  text.finish_valid(take bytes)
+}
+
+/// Full default Unicode16 case folding (CaseFolding C+F). Locale independent;
+/// does not normalize text. Turkic-specific mappings are excluded.
+pub fn casefold(s: String) -> unique String uses {} {
+  mapped_case(s, CASEFOLD, CASEFOLD_DATA)
+}
+
+/// Compare full default case folds. Normalize explicitly when canonical or
+/// compatibility equivalence is also wanted.
+pub fn eq_ignore_case(a: String, b: String) -> bool uses {} {
+  casefold(a) == casefold(b)
+}

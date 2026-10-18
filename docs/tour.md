@@ -628,6 +628,13 @@ Expected:
 ```
 <!-- /tour -->
 
+Text lookup: `string.to_upper` / `to_lower` perform full Unicode16 casing
+(including expansions and final sigma); `string.casefold` / `eq_ignore_case`
+use full default case folding. `unicode.normalize_nfc` / `normalize_nfd` /
+`normalize_nfkc` / `normalize_nfkd` normalize explicitly. These return owned
+text; folding alone does not normalize. The `ascii_lower` / `ascii_upper`
+variants and scalar `unicode.simple_lower` / `simple_upper` keep their meanings.
+
 ## Characters
 
 `char` is one Unicode scalar value: 0 through 0x10FFFF without the surrogates.

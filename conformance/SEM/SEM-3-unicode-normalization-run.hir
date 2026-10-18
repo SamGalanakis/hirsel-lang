@@ -1,0 +1,35 @@
+// rule: SEM-3
+// expect: run
+// stdout: unicode-normalization
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  failure.check(unicode.normalize_nfc("") == "", TextInvariant())
+  failure.check(unicode.normalize_nfc("\u{e9}") == "\u{e9}", TextInvariant())
+  failure.check(unicode.normalize_nfc("\u{212b}") == "\u{c5}", TextInvariant())
+  failure.check(
+    unicode.normalize_nfc("\u{fb03}\u{ff21}\u{2460}") == "\u{fb03}\u{ff21}\u{2460}",
+    TextInvariant()
+  )
+  failure.check(unicode.normalize_nfc("\u{ac01}") == "\u{ac01}", TextInvariant())
+  failure.check(
+    unicode.normalize_nfc("\u{1e0a}\u{323}") == "\u{1e0c}\u{307}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfc("A\u{305}\u{30a}") == "A\u{305}\u{30a}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfc("\u{308}\u{301}") == "\u{308}\u{301}",
+    TextInvariant()
+  )
+  failure.check(unicode.normalize_nfc("\u{fdfa}") == "\u{fdfa}", TextInvariant())
+  failure.check(
+    unicode.normalize_nfc("\u{1d538}\u{b2}\u{a0}") == "\u{1d538}\u{b2}\u{a0}",
+    TextInvariant()
+  )
+  failure.check(unicode.normalize_nfc("\u{f73}") == "\u{f71}\u{f72}", TextInvariant())
+  out.print(io.stdout(rt) ? Grant, "unicode-normalization\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

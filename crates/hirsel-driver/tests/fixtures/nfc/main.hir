@@ -1,6 +1,48 @@
 pub fn batch(xs: List[String]) -> List[String] uses {} {
   let mut ys: List[String] = []
-  for s in xs { core@1/list.push(mut ys, std@1/unicode.normalize_nfc(s)) }
+  for s in xs {
+    core@1/list.push(mut ys, std@1/unicode.normalize_nfc(s))
+    core@1/list.push(mut ys, std@1/unicode.normalize_nfd(s))
+    core@1/list.push(mut ys, std@1/unicode.normalize_nfkc(s))
+    core@1/list.push(mut ys, std@1/unicode.normalize_nfkd(s))
+  }
   take ys
 }
-pub fn main(rt: Io, args: Args) -> Result[(), OutputError] { Ok(()) }
+
+pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
+  Ok(())
+}
+
+pub fn batch_case(xs: List[String]) -> List[String] uses {} {
+  let mut ys: List[String] = []
+  for s in xs {
+    core@1/list.push(mut ys, std@1/string.to_upper(s))
+    core@1/list.push(mut ys, std@1/string.to_lower(s))
+    core@1/list.push(mut ys, std@1/string.casefold(s))
+  }
+  take ys
+}
+
+pub fn batch_upper(xs: List[String]) -> List[String] uses {} {
+  let mut ys: List[String] = []
+  for s in xs {
+    core@1/list.push(mut ys, std@1/string.to_upper(s))
+  }
+  take ys
+}
+
+pub fn batch_lower(xs: List[String]) -> List[String] uses {} {
+  let mut ys: List[String] = []
+  for s in xs {
+    core@1/list.push(mut ys, std@1/string.to_lower(s))
+  }
+  take ys
+}
+
+pub fn batch_fold(xs: List[String]) -> List[String] uses {} {
+  let mut ys: List[String] = []
+  for s in xs {
+    core@1/list.push(mut ys, std@1/string.casefold(s))
+  }
+  take ys
+}

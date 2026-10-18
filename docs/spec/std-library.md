@@ -437,8 +437,44 @@ Grapheme boundaries and normalization use the
 [Unicode 16.0.0](https://www.unicode.org/versions/Unicode16.0.0/) tables and default extended
 grapheme clusters, without locale tailoring. `GraphemeView` and `GraphemeCursor` are ordinary
 opaque types of `std@1/unicode`; `unicode.graphemes(s)` is a borrowed loop source yielding
-each cluster as a `String` related to `s`. `unicode.normalize_nfc(s)` returns the canonical
-composition of `s`; compatibility mappings never apply.
+each cluster as a `String` related to `s`.
+
+The pure normalization functions borrow a `String` and return `unique String`:
+
+```text
+fn unicode.normalize_nfc(s: String) -> unique String uses {}
+fn unicode.normalize_nfd(s: String) -> unique String uses {}
+fn unicode.normalize_nfkc(s: String) -> unique String uses {}
+fn unicode.normalize_nfkd(s: String) -> unique String uses {}
+```
+
+NFD recursively applies canonical decomposition and canonical ordering; NFC
+also applies canonical composition with composition exclusions and blocking.
+NFKD includes compatibility decomposition, and NFKC composes its result.
+All four implement algorithmic Hangul decomposition/composition. Normalization
+is explicit; equality, ordering and hashing remain bytewise.
+
+Full default Unicode16 string casing and folding are ordinary pure std source:
+
+```text
+fn string.to_upper(s: String) -> unique String uses {}
+fn string.to_lower(s: String) -> unique String uses {}
+fn string.casefold(s: String) -> unique String uses {}
+fn string.eq_ignore_case(a: String, b: String) -> bool uses {}
+```
+
+Upper/lower combine UnicodeData simple mappings with all unconditional
+SpecialCasing mappings, including one-to-many expansions. Lowercase also
+applies Final_Sigma: U+03A3 maps to U+03C2 when preceded by a Cased character
+and not followed by a Cased character, ignoring Case_Ignorable characters on
+both sides; otherwise it maps to U+03C3. Context comes from the original input
+slice. These functions have no locale tailoring.
+
+`casefold` applies the full default CaseFolding C+F mappings, excluding simple-only
+and Turkic mappings. `eq_ignore_case(a, b)` is `casefold(a) == casefold(b)`.
+Neither operation normalizes: `Straße` and `STRASSE` compare equal, while
+precomposed `é` and decomposed `e\u{301}` require explicit normalization.
+Scalar simple-case helpers and ASCII-only string helpers retain their meanings.
 
 ## Bytes, maps, lists and strings
 
@@ -822,7 +858,7 @@ unchanged. Simple case
 maps one scalar to one scalar, without full string casing, casefold or locale
 rules. Generated immutable ranges and mapping rows come from the vendored
 UnicodeData.txt and PropList.txt; `stdlib/unicode16/generate.py --check` verifies
-byte-identical NFC and property table regeneration.
+byte-identical normalization, property and full case table regeneration.
 
 ## Bounded CSV
 

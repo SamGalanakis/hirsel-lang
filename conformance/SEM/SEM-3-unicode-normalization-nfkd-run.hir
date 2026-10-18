@@ -1,0 +1,41 @@
+// rule: SEM-3
+// expect: run
+// stdout: unicode-normalization-nfkd
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  failure.check(unicode.normalize_nfkd("") == "", TextInvariant())
+  failure.check(unicode.normalize_nfkd("\u{e9}") == "e\u{301}", TextInvariant())
+  failure.check(unicode.normalize_nfkd("\u{212b}") == "A\u{30a}", TextInvariant())
+  failure.check(
+    unicode.normalize_nfkd("\u{fb03}\u{ff21}\u{2460}") == "ffiA1",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkd("\u{ac01}") == "\u{1100}\u{1161}\u{11a8}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkd("\u{1e0a}\u{323}") == "D\u{323}\u{307}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkd("A\u{305}\u{30a}") == "A\u{305}\u{30a}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkd("\u{308}\u{301}") == "\u{308}\u{301}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkd("\u{fdfa}") == "\u{635}\u{644}\u{649} \u{627}\u{644}\u{644}\u{647} \u{639}\u{644}\u{64a}\u{647} \u{648}\u{633}\u{644}\u{645}",
+    TextInvariant()
+  )
+  failure.check(
+    unicode.normalize_nfkd("\u{1d538}\u{b2}\u{a0}") == "A2 ",
+    TextInvariant()
+  )
+  failure.check(unicode.normalize_nfkd("\u{f73}") == "\u{f71}\u{f72}", TextInvariant())
+  out.print(io.stdout(rt) ? Grant, "unicode-normalization-nfkd\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

@@ -46,14 +46,13 @@ fn text(column: &str) -> String {
         .collect()
 }
 
-#[test]
-#[cfg_attr(
-    debug_assertions,
-    ignore = "full Unicode oracle runs in the scheduled release suite"
-)]
-fn every_official_unicode16_nfc_normalization_invariant_executes_std_source() {
+const NORMALIZATION_SHARDS: usize = 64;
+
+fn normalization_invariants(shard: usize) {
     with_compiler_stack(|| {
+        assert!(shard < NORMALIZATION_SHARDS);
         let mut vectors = vec![];
+        let mut catalogue = 0;
         let mut rows = 0;
         let mut part1 = false;
         let mut listed = BTreeSet::new();
@@ -74,21 +73,29 @@ fn every_official_unicode16_nfc_normalization_invariant_executes_std_source() {
             if part1 {
                 listed.extend(columns[0].chars().map(u32::from));
             }
-            // UAX #15: NFC(c1)=NFC(c2)=NFC(c3)=c2; NFC(c4)=NFC(c5)=c4.
+            // UAX #15 conformance table, in NFC/NFD/NFKC/NFKD order.
             for i in 0..5 {
-                vectors.push((
-                    line_no + 1,
-                    i + 1,
-                    columns[i].clone(),
-                    columns[if i < 3 { 1 } else { 3 }].clone(),
-                ));
+                if catalogue % NORMALIZATION_SHARDS == shard {
+                    vectors.push((
+                        line_no + 1,
+                        i + 1,
+                        columns[i].clone(),
+                        vec![
+                            columns[if i < 3 { 1 } else { 3 }].clone(),
+                            columns[if i < 3 { 2 } else { 4 }].clone(),
+                            columns[3].clone(),
+                            columns[4].clone(),
+                        ],
+                    ));
+                }
+                catalogue += 1;
             }
             rows += 1;
         }
         assert_eq!(rows, 19965);
-        assert_eq!(vectors.len(), 99825);
+        assert_eq!(catalogue, 99825);
         // NormalizationTest conformance clause 2: every assigned scalar not
-        // listed in Part 1 remains itself under NFC. Expand UCD range rows.
+        // listed in Part 1 remains itself under all four forms. Expand UCD range rows.
         let mut range_start = None;
         let mut identities = 0;
         for line in include_str!("../../../../stdlib/unicode16/UnicodeData.txt").lines() {
@@ -107,16 +114,30 @@ fn every_official_unicode16_nfc_normalization_invariant_executes_std_source() {
                 if let Some(ch) = char::from_u32(value)
                     && !listed.contains(&value)
                 {
-                    let text = ch.to_string();
-                    vectors.push((value as usize, 0, text.clone(), text));
+                    if catalogue % NORMALIZATION_SHARDS == shard {
+                        let text = ch.to_string();
+                        vectors.push((
+                            value as usize,
+                            0,
+                            text.clone(),
+                            vec![text.clone(), text.clone(), text.clone(), text],
+                        ));
+                    }
+                    catalogue += 1;
                     identities += 1;
                 }
             }
         }
         assert_eq!(identities, 275446);
         eprintln!(
-            "Unicode16: {rows} rows / 99,825 NFC comparisons + {identities} unlisted assigned scalar identities"
+            "Unicode16: {rows} rows / 399,300 four-form comparisons + {identities} unlisted assigned scalar identities"
         );
+        // The deterministic catalogue includes every official column and
+        // every unlisted assigned scalar, once across all bounded actions.
+        assert_eq!(catalogue, 375271);
+        let expected =
+            375271 / NORMALIZATION_SHARDS + usize::from(shard < 375271 % NORMALIZATION_SHARDS);
+        assert_eq!(vectors.len(), expected);
         let jobs = std::env::var("HIRSEL_JOBS")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -126,7 +147,9 @@ fn every_official_unicode16_nfc_normalization_invariant_executes_std_source() {
             let handles: Vec<_> = (0..jobs)
                 .map(|worker| {
                     let vectors = &vectors;
-                    scope.spawn(move || with_compiler_stack(|| run_vectors(vectors, worker, jobs)))
+                    scope.spawn(move || {
+                        with_compiler_stack(|| run_vectors(vectors, worker, jobs, "batch"))
+                    })
                 })
                 .collect();
             handles
@@ -134,18 +157,99 @@ fn every_official_unicode16_nfc_normalization_invariant_executes_std_source() {
                 .map(|handle| handle.join().unwrap())
                 .sum()
         });
-        assert_eq!(checked, 375271);
+        assert_eq!(checked, expected);
+        eprintln!(
+            "Unicode16 shard {shard}: {} comparisons across all four forms",
+            checked * 4
+        );
     });
 }
 
-type OracleVector = (usize, usize, String, String);
-fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize) -> usize {
+macro_rules! normalization_shards {
+    ($($name:ident: $index:literal),* $(,)?) => {$(
+        #[test]
+        #[cfg_attr(debug_assertions, ignore = "full Unicode oracle runs in release")]
+        fn $name() {
+            normalization_invariants($index);
+        }
+    )*};
+}
+
+normalization_shards! {
+    every_official_unicode16_normalization_shard_0: 0,
+    every_official_unicode16_normalization_shard_1: 1,
+    every_official_unicode16_normalization_shard_2: 2,
+    every_official_unicode16_normalization_shard_3: 3,
+    every_official_unicode16_normalization_shard_4: 4,
+    every_official_unicode16_normalization_shard_5: 5,
+    every_official_unicode16_normalization_shard_6: 6,
+    every_official_unicode16_normalization_shard_7: 7,
+    every_official_unicode16_normalization_shard_8: 8,
+    every_official_unicode16_normalization_shard_9: 9,
+    every_official_unicode16_normalization_shard_10: 10,
+    every_official_unicode16_normalization_shard_11: 11,
+    every_official_unicode16_normalization_shard_12: 12,
+    every_official_unicode16_normalization_shard_13: 13,
+    every_official_unicode16_normalization_shard_14: 14,
+    every_official_unicode16_normalization_shard_15: 15,
+    every_official_unicode16_normalization_shard_16: 16,
+    every_official_unicode16_normalization_shard_17: 17,
+    every_official_unicode16_normalization_shard_18: 18,
+    every_official_unicode16_normalization_shard_19: 19,
+    every_official_unicode16_normalization_shard_20: 20,
+    every_official_unicode16_normalization_shard_21: 21,
+    every_official_unicode16_normalization_shard_22: 22,
+    every_official_unicode16_normalization_shard_23: 23,
+    every_official_unicode16_normalization_shard_24: 24,
+    every_official_unicode16_normalization_shard_25: 25,
+    every_official_unicode16_normalization_shard_26: 26,
+    every_official_unicode16_normalization_shard_27: 27,
+    every_official_unicode16_normalization_shard_28: 28,
+    every_official_unicode16_normalization_shard_29: 29,
+    every_official_unicode16_normalization_shard_30: 30,
+    every_official_unicode16_normalization_shard_31: 31,
+    every_official_unicode16_normalization_shard_32: 32,
+    every_official_unicode16_normalization_shard_33: 33,
+    every_official_unicode16_normalization_shard_34: 34,
+    every_official_unicode16_normalization_shard_35: 35,
+    every_official_unicode16_normalization_shard_36: 36,
+    every_official_unicode16_normalization_shard_37: 37,
+    every_official_unicode16_normalization_shard_38: 38,
+    every_official_unicode16_normalization_shard_39: 39,
+    every_official_unicode16_normalization_shard_40: 40,
+    every_official_unicode16_normalization_shard_41: 41,
+    every_official_unicode16_normalization_shard_42: 42,
+    every_official_unicode16_normalization_shard_43: 43,
+    every_official_unicode16_normalization_shard_44: 44,
+    every_official_unicode16_normalization_shard_45: 45,
+    every_official_unicode16_normalization_shard_46: 46,
+    every_official_unicode16_normalization_shard_47: 47,
+    every_official_unicode16_normalization_shard_48: 48,
+    every_official_unicode16_normalization_shard_49: 49,
+    every_official_unicode16_normalization_shard_50: 50,
+    every_official_unicode16_normalization_shard_51: 51,
+    every_official_unicode16_normalization_shard_52: 52,
+    every_official_unicode16_normalization_shard_53: 53,
+    every_official_unicode16_normalization_shard_54: 54,
+    every_official_unicode16_normalization_shard_55: 55,
+    every_official_unicode16_normalization_shard_56: 56,
+    every_official_unicode16_normalization_shard_57: 57,
+    every_official_unicode16_normalization_shard_58: 58,
+    every_official_unicode16_normalization_shard_59: 59,
+    every_official_unicode16_normalization_shard_60: 60,
+    every_official_unicode16_normalization_shard_61: 61,
+    every_official_unicode16_normalization_shard_62: 62,
+    every_official_unicode16_normalization_shard_63: 63,
+}
+
+type OracleVector = (usize, usize, String, Vec<String>);
+fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize, entry_name: &str) -> usize {
     let mut loaded = load_program(&fixture()).unwrap();
     loaded.check_for_execution().unwrap();
     let runtime = loaded.engine.runtime_types().unwrap();
     let sources = loaded.engine.sources.clone();
     let mut entry = loaded.entry;
-    entry.0.name = "batch".into();
+    entry.0.name = entry_name.into();
     let configuration = RunConfiguration {
         entry,
         hash_seed: 0,
@@ -193,18 +297,125 @@ fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize) -> usize {
                 batch[0].0, execution.outcome
             );
         };
-        assert_eq!(elements.len(), batch.len());
+        let width = batch[0].3.len();
+        assert_eq!(elements.len(), batch.len() * width);
         checked += batch.len();
         if checked % 16384 == 0 {
             eprintln!("Unicode16 worker {worker}: {checked} comparisons");
         }
-        for (actual, (line, column, _, expected)) in elements.into_iter().zip(batch) {
-            assert_eq!(
-                actual,
-                Some(Value::String(expected.clone())),
-                "NormalizationTest.txt line {line}, c{column}"
-            );
+        for (actual, (line, column, _, expected)) in elements.chunks_exact(width).zip(batch) {
+            for (form, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+                assert_eq!(
+                    actual,
+                    &Some(Value::String(expected.clone())),
+                    "NormalizationTest.txt line {line}, c{column}, form {form}"
+                );
+            }
         }
     }
     checked
+}
+
+// The official pinned mapping files are the oracle; Rust's host Unicode version
+// is deliberately not involved. Context cases belong in conformance instead.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "full Unicode mapping oracle runs in release"
+)]
+fn every_official_unicode16_full_case_mapping_executes_std_source() {
+    with_compiler_stack(|| {
+        let mut lower = BTreeMap::new();
+        let mut upper = BTreeMap::new();
+        let mut fold = BTreeMap::new();
+        for line in include_str!("../../../../stdlib/unicode16/UnicodeData.txt").lines() {
+            let f: Vec<_> = line.split(';').collect();
+            let cp = u32::from_str_radix(f[0], 16).unwrap();
+            if !f[13].is_empty() {
+                lower.insert(cp, text(f[13]));
+            }
+            if !f[12].is_empty() {
+                upper.insert(cp, text(f[12]));
+            }
+        }
+        let mut special = 0;
+        for line in include_str!("../../../../stdlib/unicode16/SpecialCasing.txt").lines() {
+            let f: Vec<_> = line
+                .split('#')
+                .next()
+                .unwrap()
+                .split(';')
+                .map(str::trim)
+                .collect();
+            if f.len() >= 5 && f[4].is_empty() {
+                let cp = u32::from_str_radix(f[0], 16).unwrap();
+                lower.insert(cp, text(f[1]));
+                upper.insert(cp, text(f[3]));
+                special += 1;
+            }
+        }
+        assert_eq!(special, 103);
+        for line in include_str!("../../../../stdlib/unicode16/CaseFolding.txt").lines() {
+            let f: Vec<_> = line
+                .split('#')
+                .next()
+                .unwrap()
+                .split(';')
+                .map(str::trim)
+                .collect();
+            if f.len() >= 3 && matches!(f[1], "C" | "F") {
+                let cp = u32::from_str_radix(f[0], 16).unwrap();
+                assert!(fold.insert(cp, text(f[2])).is_none());
+            }
+        }
+        assert_eq!(fold.len(), 1557);
+        let scalars: BTreeSet<_> = lower
+            .keys()
+            .chain(upper.keys())
+            .chain(fold.keys())
+            .copied()
+            .collect();
+        let vectors: Vec<_> = scalars
+            .into_iter()
+            .map(|cp| {
+                let input = char::from_u32(cp).unwrap().to_string();
+                let expected = [&upper, &lower, &fold]
+                    .map(|m| m.get(&cp).unwrap_or(&input).clone())
+                    .to_vec();
+                (cp as usize, 0, input, expected)
+            })
+            .collect();
+        assert_eq!(vectors.len(), 2981);
+        let checked = run_vectors(&vectors, 0, 1, "batch_case");
+        assert_eq!(checked, vectors.len());
+        // Rust's long growth/ASCII vectors each get a separate invocation,
+        // retaining the same step limit as the short mapping batches.
+        let mut long_checked = 0;
+        for (input, expected) in [
+            (
+                "İ".repeat(512),
+                [
+                    "İ".repeat(512),
+                    "i\u{0307}".repeat(512),
+                    "i\u{0307}".repeat(512),
+                ],
+            ),
+            (
+                "A".repeat(511),
+                ["A".repeat(511), "a".repeat(511), "a".repeat(511)],
+            ),
+        ] {
+            for (entry, expected) in ["batch_upper", "batch_lower", "batch_fold"]
+                .into_iter()
+                .zip(expected)
+            {
+                long_checked += run_vectors(&[(0, 0, input.clone(), vec![expected])], 0, 1, entry);
+            }
+        }
+        assert_eq!(long_checked, 6);
+        eprintln!(
+            "Unicode16: {} full upper/lower/fold comparisons",
+            checked * 3 + long_checked
+        );
+    });
 }

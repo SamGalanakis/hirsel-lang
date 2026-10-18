@@ -1,0 +1,31 @@
+// rule: SEM-3
+// expect: run
+// stdout: unicode-full-case-3
+pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
+  failure.check(string.to_lower("ΑΣ''Α") == "ασ''α", TextInvariant())
+  failure.check(
+    string.to_lower("abcdefghijklmnoΣ") == "abcdefghijklmnoς",
+    TextInvariant()
+  )
+  failure.check(
+    string.to_lower("abcdefghijklmnopΣ") == "abcdefghijklmnopς",
+    TextInvariant()
+  )
+  failure.check(
+    string.to_lower("abcdefghijklmnopqΣ") == "abcdefghijklmnopqς",
+    TextInvariant()
+  )
+  failure.check(string.to_upper("") == "", TextInvariant())
+  failure.check(string.to_upper("aéǅßẞﬁᾀ") == "AÉǄSSẞFIἈΙ", TextInvariant())
+  failure.check(string.casefold("") == "", TextInvariant())
+  failure.check(string.casefold("ꮿﬁῲὼ\u{0345}ßẞΣς") == "Ꮿfiὼιὼιssssσσ", TextInvariant())
+  failure.check(
+    string.to_upper("\u{df}\u{fb03}\u{390}\u{587}") == "SSFFI\u{399}\u{308}\u{301}\u{535}\u{552}",
+    TextInvariant()
+  )
+  failure.check(string.to_upper("a\u{e9}\u{1c6}") == "A\u{c9}\u{1c4}", TextInvariant())
+  out.print(io.stdout(rt) ? Grant, "unicode-full-case-3\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)
