@@ -110,6 +110,24 @@ fn flate_large_vectors_execute_std_source() {
     });
 }
 
+// zlib's output at window, block-split and stored-fallback scale runs only as
+// a built executable; the corpus covers every level on short inputs.
+#[test]
+#[ignore = "full gate: native deflate reference"]
+fn full_gate_deflate_matches_zlib_native() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/deflate-zlib-native.hir");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let outcome = native::run_path_native(&path, &mut stdout, &mut stderr)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    });
+}
+
 #[test]
 fn cookie_is_ordinary_source() {
     source_codec("cookie", "cookie", &["new", "parse", "format"]);

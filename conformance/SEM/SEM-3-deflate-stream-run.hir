@@ -1,0 +1,21 @@
+// rule: SEM-3
+// expect: run
+// An Encoder fed in pieces, including an empty one, writes the bytes of one
+// whole call; finish leaves it ready to write the same stream again.
+pub fn main(t: Test) -> Result[(), ()] {
+  let data = b"one sheep, two sheep, three sheep, four"
+  let mut e = flate.encoder(Gzip(), 6)
+  let mut out: List[u8] = []
+  flate.encode(mut e, core@1/bytes.slice(data, 0, 7), mut out)
+  flate.encode(mut e, b"", mut out)
+  flate.encode(mut e, core@1/bytes.slice(data, 7, 39), mut out)
+  flate.finish(mut e, mut out)
+  let first = core@1/bytes.from_list(take out)
+  test.check(t, first == flate.gzip_encode(data, 6))
+  test.check(t, flate.gzip_decode(first, 39) == Ok(copy data))
+  let mut again: List[u8] = []
+  flate.encode(mut e, data, mut again)
+  flate.finish(mut e, mut again)
+  test.check(t, core@1/bytes.from_list(take again) == first)
+  Ok(())
+}

@@ -1,0 +1,37 @@
+// rule: SEM-3
+// expect: run
+// Levels 1 to 3 (deflate_fast) match zlib 1.3 output (madler/zlib 09155ea); the first input gives six distinct outputs over levels 1 to 9.
+fn check(t: Test, actual: Bytes, expected: Bytes) -> () {
+  test.check(t, actual == expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // two letters, level 1
+  check(
+    t,
+    flate.deflate(
+      b"baaaaaaaaabaaababbabbabaabaaaabaabbbabbaaaabbaaaaabbabbaaaabaaab",
+      1
+    ),
+    b"KJ\x84\x81$ #)1\x09\x82@L0\x1f(\x00\x16\x01q\xc0BP\x15\x10\xc9\xc4$\x00"
+  )
+  // two letters, level 2
+  check(
+    t,
+    flate.deflate(
+      b"baaaaaaaaabaaababbabbabaabaaaabaabbbabbaaaabbaaaaabbabbaaaabaaab",
+      2
+    ),
+    b"KJ\x84\x81$ #)1\x09\x82@L0\x1f(\x00\x16\x01q\xc0$T\x05D21\x09\x00"
+  )
+  // two letters, level 3
+  check(
+    t,
+    flate.deflate(
+      b"baaaaaaaaabaaababbabbabaabaaaabaabbbabbaaaabbaaaaabbabbaaaabaaab",
+      3
+    ),
+    b"KJ\x84\x81$ #)1\x09\x82@L0\x1f\xc8\x03\x8b\x808`\x12\xaa\x02\x22\x99\x98\x04\x00"
+  )
+  Ok(())
+}

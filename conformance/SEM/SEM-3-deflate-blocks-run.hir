@@ -1,0 +1,31 @@
+// rule: SEM-3
+// expect: run
+// Fixed, dynamic and stored block choices match zlib 1.3 output (madler/zlib 09155ea), on huffman-zero.in (golang/go ebe2feef) and noise.
+fn check(t: Test, actual: Bytes, expected: Bytes) -> () {
+  test.check(t, actual == expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // huffman-zero.in, level 6
+  check(
+    t,
+    flate.deflate(
+      b"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      6
+    ),
+    b"30\x18\x05\xa4\x02\x00"
+  )
+  // noise, level 6
+  check(
+    t,
+    flate.deflate(b"DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD", 6),
+    b"sq!\x0e\x00\x00"
+  )
+  // short text, level 6
+  check(t, flate.deflate(b"hello", 6), b"\xcbH\xcd\xc9\xc9\x07\x00")
+  // empty, level 6
+  check(t, flate.deflate(b"", 6), b"\x03\x00")
+  // empty, level 0
+  check(t, flate.deflate(b"", 0), b"\x01\x00\x00\xff\xff")
+  Ok(())
+}

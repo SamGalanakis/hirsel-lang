@@ -2052,6 +2052,8 @@ conformance/MEM/MEM-14-contract6-local-callable-run.hir
 conformance/MEM/MEM-14-contract6-preserving-exit-fail.hir
 conformance/MEM/MEM-14-contract6-preserving-exit-run.hir
 conformance/MEM/MEM-14-contract6-preserving-loop-run.hir
+conformance/MEM/MEM-14-deflate-level-fail.hir
+conformance/MEM/MEM-14-deflate-level-run.hir
 conformance/MEM/MEM-14-dynamic-array-read-fail.hir
 conformance/MEM/MEM-14-dynamic-inline-read-fail.hir
 conformance/MEM/MEM-14-dynamic-list-read-fail.hir
@@ -4492,6 +4494,13 @@ conformance/SEM/SEM-3-combining-graphemes.hir
 conformance/SEM/SEM-3-combining-scalars.hir
 conformance/SEM/SEM-3-cookie-run.hir
 conformance/SEM/SEM-3-decimal-text-run.hir
+conformance/SEM/SEM-3-deflate-best-run.hir
+conformance/SEM/SEM-3-deflate-blocks-run.hir
+conformance/SEM/SEM-3-deflate-fast-run.hir
+conformance/SEM/SEM-3-deflate-gzip-run.hir
+conformance/SEM/SEM-3-deflate-lazy-run.hir
+conformance/SEM/SEM-3-deflate-stream-run.hir
+conformance/SEM/SEM-3-deflate-zlib-run.hir
 conformance/SEM/SEM-3-empty-graphemes.hir
 conformance/SEM/SEM-3-empty-scalars.hir
 conformance/SEM/SEM-3-flate-cpython-run.hir

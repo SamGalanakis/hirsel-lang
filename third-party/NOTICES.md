@@ -44,6 +44,7 @@ the license named in its row; the license texts follow once each.
 | Go standard library | `src/encoding/csv/{reader,writer}.go` quoted-field transitions/fieldNeedsQuotes and `reader_test.go`, `writer_test.go`, `fuzz_test.go` record/quote/error/boundary ideas (Hirsel preserves its existing CSV example dialect) | `stdlib/std@1/csv.hir`, CSV conformance; `examples/csvjson` uses std and its private parser is removed | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/crypto/internal/fips140/sha256/{sha256.go,sha256block.go}` cross-check of constants, scalar schedule/rounds and big-endian padding/output | `stdlib/std@1/sha256.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/compress/flate/{inflate.go,flate_test.go}`, `src/compress/gzip/{gunzip.go,gunzip_test.go}`, `src/compress/zlib/{reader.go,reader_test.go}` block decoding, code completeness rule, member and header checks, TestStreams, TestTruncatedStreams, gunzipTests and zlibTests | `stdlib/std@1/flate.hir`, `conformance/SEM/SEM-3-flate-*`, `crates/hirsel-driver/tests/fixtures/flate-large.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| zlib | `deflate.c` fill_window, longest_match, deflate_fast, deflate_slow, the configuration table and stored-block sizing, and `trees.c` tree construction, length limiting, tree sending and block choice; byte-exact outputs of zlib 1.3 as golden vectors | `stdlib/std@1/flate.hir`, `conformance/SEM/SEM-3-deflate-*`, `crates/hirsel-driver/tests/fixtures/deflate-zlib-native.hir` | madler/zlib `09155eaa2f9270dc4ed1fa13e2b4b2613e6e4851` (v1.3) | Zlib |
 | Go standard library | `src/net/http/{cookie.go,cookie_test.go}` ParseCookie, Cookie.String, token and cookie-octet checks, TestParseCookie, writeSetCookiesTests and sanitize vectors | `stdlib/std@1/cookie.hir`, `conformance/SEM/SEM-3-cookie-run.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | cookie | `src/lib.rs` `format` test vectors | `conformance/SEM/SEM-3-cookie-run.hir` | cookie 0.18.2 crate release | MIT |
 | Go standard library | `src/encoding/base64/{base64.go,base64_test.go}` quanta, strict unused-bit checks and four-mode reference pairs | `stdlib/std@1/base64.hir`, base64 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
@@ -162,6 +163,27 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - num-bigint: Copyright (c) 2014 The Rust Project Developers
 - rust_decimal: Copyright (c) 2016 Paul Mason
 - cespare/xxhash: Copyright (c) 2016 Caleb Spare
+- zlib: Copyright (C) 1995-2023 Jean-loup Gailly and Mark Adler
+
+## Zlib License (zlib)
+
+```text
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
+```
 
 ## MIT License
 

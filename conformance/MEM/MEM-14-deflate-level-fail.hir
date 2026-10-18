@@ -1,0 +1,8 @@
+// rule: MEM-14
+// expect: fail MEM-14 at line 6
+// Compression levels run from 0 to 9; the failure is reported at the call.
+pub fn main(t: Test) -> Result[(), ()] {
+  let data = b"x"
+  test.check(t, core@1/bytes.len(flate.deflate(data, 10)) > 0)
+  Ok(())
+}

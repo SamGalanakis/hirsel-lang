@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// zlib (RFC 1950) encoding matches zlib 1.3 output (madler/zlib 09155ea): header level flags, stream and Adler-32 trailer.
+fn check(t: Test, actual: Bytes, expected: Bytes) -> () {
+  test.check(t, actual == expected)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // repeated words, level 0
+  check(
+    t,
+    flate.zlib_encode(b"hello hello hello hello world", 0),
+    b"x\x01\x01\x1d\x00\xe2\xffhello hello hello hello world\xa3\x8a\x0a\xf9"
+  )
+  // repeated words, level 1
+  check(
+    t,
+    flate.zlib_encode(b"hello hello hello hello world", 1),
+    b"x\x01\xcbH\xcd\xc9\xc9W\xc8\xc0 \xcb\xf3\x8brR\x00\xa3\x8a\x0a\xf9"
+  )
+  // repeated words, level 6
+  check(
+    t,
+    flate.zlib_encode(b"hello hello hello hello world", 6),
+    b"x\x9c\xcbH\xcd\xc9\xc9W\xc8\xc0 \xcb\xf3\x8brR\x00\xa3\x8a\x0a\xf9"
+  )
+  // repeated words, level 9
+  check(
+    t,
+    flate.zlib_encode(b"hello hello hello hello world", 9),
+    b"x\xda\xcbH\xcd\xc9\xc9W\xc8\xc0 \xcb\xf3\x8brR\x00\xa3\x8a\x0a\xf9"
+  )
+  // empty, level 6
+  check(t, flate.zlib_encode(b"", 6), b"x\x9c\x03\x00\x00\x00\x00\x01")
+  Ok(())
+}

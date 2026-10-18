@@ -665,3 +665,1336 @@ pub fn zlib_decode(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] 
   }
   Ok(core@1/bytes.from_list(take out))
 }
+
+// Encoding: a port of zlib 1.3 deflate.c (fill_window, longest_match,
+// deflate_fast, deflate_slow) and trees.c, madler/zlib 09155ea (zlib license;
+// third-party/NOTICES.md), at windowBits 15, memLevel 8 and the default
+// strategy, so each level writes zlib's bytes. Level 0 writes stored blocks of
+// 65535 bytes, as one zlib deflate call with ample output does. The hash heads
+// are a map, so an encoder costs nothing before its input arrives.
+/// The container around a DEFLATE stream: none (RFC 1951), zlib (RFC 1950)
+/// or gzip (RFC 1952).
+pub type Format = Raw | Zlib | Gzip
+
+const WSIZE: u64 = 32768
+
+const WMASK: u64 = 32767
+
+const WINDOW_SIZE: u64 = 65536
+
+const MIN_MATCH: u64 = 3
+
+const MAX_MATCH: u64 = 258
+
+const MIN_LOOKAHEAD: u64 = 262
+
+const MAX_DIST: u64 = 32506
+
+const HASH_MASK: u64 = 32767
+
+const TOO_FAR: u64 = 4096
+
+// lit_bufsize - 1 symbols end a block at memLevel 8.
+const SYMBOLS: u64 = 16383
+
+const MAX_STORED: u64 = 65535
+
+const HEAP_SIZE: u64 = 573
+
+// zlib configuration_table: good, lazy, nice and chain lengths by level.
+const GOOD: Inline[u64, 10] = [0, 4, 4, 4, 4, 8, 8, 8, 32, 32]
+
+const LAZY: Inline[u64, 10] = [0, 4, 5, 6, 4, 16, 16, 32, 128, 258]
+
+const NICE: Inline[u64, 10] = [0, 8, 16, 32, 16, 32, 128, 128, 258, 258]
+
+const CHAIN: Inline[u64, 10] = [0, 4, 8, 32, 16, 32, 128, 256, 1024, 4096]
+
+const EXTRA_LBITS: Inline[u64, 29] = [
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  1,
+  1,
+  1,
+  1,
+  2,
+  2,
+  2,
+  2,
+  3,
+  3,
+  3,
+  3,
+  4,
+  4,
+  4,
+  4,
+  5,
+  5,
+  5,
+  5,
+  0
+]
+
+const EXTRA_DBITS: Inline[u64, 30] = [
+  0,
+  0,
+  0,
+  0,
+  1,
+  1,
+  2,
+  2,
+  3,
+  3,
+  4,
+  4,
+  5,
+  5,
+  6,
+  6,
+  7,
+  7,
+  8,
+  8,
+  9,
+  9,
+  10,
+  10,
+  11,
+  11,
+  12,
+  12,
+  13,
+  13
+]
+
+// A Huffman tree over `elems` leaves and their internal nodes: frequencies,
+// code lengths, codes (bit-reversed for LSB-first output) and parents.
+type Tree {
+  freq: List[u64],
+  len: List[u64],
+  code: List[u64],
+  dad: List[u64],
+  max_code: u64,
+}
+
+// The heap of tree nodes, their depths and per-length counts, shared by the
+// three trees, and
+// the block's dynamic and static bit lengths.
+type Work {
+  nodes: List[u64],
+  depth: List[u64],
+  bl_count: List[u64],
+  opt_len: u64,
+  static_len: u64,
+}
+
+// zlib tr_static_init: the length and distance code maps, their bases, and
+// the fixed literal/length and distance trees (RFC 1951 section 3.2.6).
+type Tables {
+  length_code: List[u64],
+  dist_code: List[u64],
+  base_length: List[u64],
+  base_dist: List[u64],
+  literal: Tree,
+  distance: Tree,
+}
+
+// Output bits not yet forming a whole byte, least significant first.
+type Writer {
+  bits: u64,
+  nbits: u64,
+}
+
+fn new_tree(elems: u64) -> unique Tree uses {} {
+  let size = 2 * elems + 1
+  Tree(
+    freq: zeros(size),
+    len: zeros(size),
+    code: zeros(size),
+    dad: zeros(size),
+    max_code: 0
+  )
+}
+
+// zlib bi_reverse: the low `length` bits of `code` reversed.
+@noalloc
+fn bit_reverse(code: u64, length: u64) -> u64 uses {} {
+  let mut value = code
+  let mut reversed: u64 = 0
+  let mut i: u64 = 0
+  while i < length {
+    reversed = reversed << 1 | value & 1
+    value = value >> 1
+    i += 1
+  }
+  reversed
+}
+
+// zlib gen_codes: canonical codes from the lengths and their counts.
+@preserves_unique(t)
+fn gen_codes(mut t: Tree, bl_count: List[u64]) -> () uses {} {
+  let mut next = zeros(16)
+  let mut code: u64 = 0
+  let mut width: u64 = 1
+  while width <= 15 {
+    code = code + bl_count[width - 1] << 1
+    next[width] = code
+    width += 1
+  }
+  let mut n: u64 = 0
+  while n <= t.max_code {
+    let length = t.len[n]
+    if length != 0 {
+      t.code[n] = bit_reverse(next[length], length)
+      next[length] += 1
+    }
+    n += 1
+  }
+}
+
+fn tables() -> unique Tables uses {} {
+  let mut length_code = zeros(256)
+  let mut base_length = zeros(29)
+  let mut length: u64 = 0
+  let mut code: u64 = 0
+  while code < 28 {
+    base_length[code] = length
+    let mut n: u64 = 0
+    while n < 1u64 << EXTRA_LBITS[code] {
+      length_code[length] = code
+      length += 1
+      n += 1
+    }
+    code += 1
+  }
+  // Length 258 has two spellings; code 285 is the shorter.
+  length_code[255] = 28
+  let mut dist_code = zeros(512)
+  let mut base_dist = zeros(30)
+  let mut dist: u64 = 0
+  code = 0
+  while code < 16 {
+    base_dist[code] = dist
+    let mut n: u64 = 0
+    while n < 1u64 << EXTRA_DBITS[code] {
+      dist_code[dist] = code
+      dist += 1
+      n += 1
+    }
+    code += 1
+  }
+  dist = dist >> 7
+  while code < 30 {
+    base_dist[code] = dist << 7
+    let mut n: u64 = 0
+    while n < 1u64 << EXTRA_DBITS[code] - 7 {
+      dist_code[256 + dist] = code
+      dist += 1
+      n += 1
+    }
+    code += 1
+  }
+  let mut literal = new_tree(288)
+  let mut bl_count = zeros(16)
+  let mut n: u64 = 0
+  while n < 288 {
+    let width = if n <= 143 {
+      8u64
+    } else if n <= 255 {
+      9u64
+    } else if n <= 279 {
+      7u64
+    } else {
+      8u64
+    }
+    literal.len[n] = width
+    bl_count[width] += 1
+    n += 1
+  }
+  literal.max_code = 287
+  gen_codes(mut literal, bl_count)
+  let mut distance = new_tree(30)
+  n = 0
+  while n < 30 {
+    distance.len[n] = 5
+    distance.code[n] = bit_reverse(n, 5)
+    n += 1
+  }
+  distance.max_code = 29
+  Tables(
+    length_code: take length_code,
+    dist_code: take dist_code,
+    base_length: take base_length,
+    base_dist: take base_dist,
+    literal: take literal,
+    distance: take distance
+  )
+}
+
+const LENGTH_CODE: List[u64] = comptime tables().length_code
+
+const DIST_CODE: List[u64] = comptime tables().dist_code
+
+const BASE_LENGTH: List[u64] = comptime tables().base_length
+
+const BASE_DIST: List[u64] = comptime tables().base_dist
+
+const STATIC_LITERAL: Tree = comptime tables().literal
+
+const STATIC_DISTANCE: Tree = comptime tables().distance
+
+const STATIC_LITERAL_LEN: List[u64] = comptime tables().literal.len
+
+const LITERAL_TREE: Tree = comptime new_tree(286)
+
+const DISTANCE_TREE: Tree = comptime new_tree(30)
+
+const LENGTHS_TREE: Tree = comptime new_tree(19)
+
+const ZEROS_573: List[u64] = comptime zeros(573)
+
+const ZEROS_61: List[u64] = comptime zeros(61)
+
+const ZEROS_39: List[u64] = comptime zeros(39)
+
+/// Streaming DEFLATE compression state for one stream: `encode` appends the
+/// output its input completes, and `finish` the rest.
+pub opaque type Encoder: copyable + inert + noalloc_drop uses {} {
+  format: Format,
+  level: u64,
+  started: bool,
+  window: List[u8],
+  head: Map[u64, u64],
+  prev: List[u64],
+  ins_h: u64,
+  strstart: u64,
+  lookahead: u64,
+  block_start: u64,
+  block_valid: bool,
+  match_length: u64,
+  match_start: u64,
+  prev_length: u64,
+  prev_match: u64,
+  match_available: bool,
+  literal: Tree,
+  distance: Tree,
+  lengths: Tree,
+  work: Work,
+  symbols: List[u64],
+  writer: Writer,
+  stored: List[u8],
+  crc: crc32.State,
+  adler: adler32.State,
+  size: u64,
+}
+
+/// A compressor at `level` 0 (stored) through 9 (smallest), writing `format`.
+@track_caller
+pub fn encoder(format: Format, level: u64) -> unique Encoder uses {} {
+  failure.check(level <= 9, Bounds())
+  let mut literal = unique LITERAL_TREE
+  literal.freq[256] = 1
+  Encoder(
+    format: format,
+    level: level,
+    started: false,
+    window: [],
+    head: core@1/map.empty(),
+    prev: [],
+    ins_h: 0,
+    strstart: 0,
+    lookahead: 0,
+    block_start: 0,
+    block_valid: true,
+    match_length: MIN_MATCH - 1,
+    match_start: 0,
+    prev_length: MIN_MATCH - 1,
+    prev_match: 0,
+    match_available: false,
+    literal: take literal,
+    distance: unique DISTANCE_TREE,
+    lengths: unique LENGTHS_TREE,
+    work: Work(
+      nodes: unique ZEROS_573,
+      depth: unique ZEROS_573,
+      bl_count: zeros(16),
+      opt_len: 0,
+      static_len: 0
+    ),
+    symbols: [],
+    writer: Writer(bits: 0, nbits: 0),
+    stored: [],
+    crc: crc32.new(),
+    adler: adler32.new(),
+    size: 0
+  )
+}
+
+@preserves_unique(out)
+fn send_bits(mut w: Writer, mut out: List[u8], value: u64, length: u64) -> () uses {} {
+  w.bits = w.bits | value << w.nbits
+  w.nbits += length
+  while w.nbits >= 8 {
+    core@1/list.push(mut out, core@1/int.truncate(w.bits & 255))
+    w.bits = w.bits >> 8
+    w.nbits -= 8
+  }
+}
+
+// zlib bi_windup: pads the last byte with zero bits.
+@preserves_unique(out)
+fn windup(mut w: Writer, mut out: List[u8]) -> () uses {} {
+  if w.nbits > 0 {
+    core@1/list.push(mut out, core@1/int.truncate(w.bits & 255))
+  }
+  w.bits = 0
+  w.nbits = 0
+}
+
+@noalloc
+fn smaller(t: Tree, depth: List[u64], n: u64, m: u64) -> bool uses {} {
+  t.freq[n] < t.freq[m] || t.freq[n] == t.freq[m] && depth[n] <= depth[m]
+}
+
+// zlib pqdownheap.
+fn down_heap(t: Tree, mut work: Work, length: u64, start: u64) -> () uses {} {
+  let v = work.nodes[start]
+  let mut k = start
+  let mut j = k << 1
+  while j <= length {
+    if j < length && smaller(t, work.depth, work.nodes[j + 1], work.nodes[j]) {
+      j += 1
+    }
+    if smaller(t, work.depth, v, work.nodes[j]) {
+      break
+    }
+    work.nodes[k] = work.nodes[j]
+    k = j
+    j = j << 1
+  }
+  work.nodes[k] = v
+}
+
+// The trees' extra bits per code: literal/length codes from 257, distance
+// codes and bit length codes 16, 17 and 18.
+@noalloc
+fn extra_bits(kind: u64, n: u64) -> u64 uses {} {
+  if kind == 0 {
+    if n >= 257 {
+      EXTRA_LBITS[n - 257]
+    } else {
+      0
+    }
+  } else if kind == 1 {
+    EXTRA_DBITS[n]
+  } else if n == 16 {
+    2
+  } else if n == 17 {
+    3
+  } else if n == 18 {
+    7
+  } else {
+    0
+  }
+}
+
+@noalloc
+fn static_length(kind: u64, n: u64) -> u64 uses {} {
+  if kind == 0 {
+    STATIC_LITERAL_LEN[n]
+  } else {
+    5
+  }
+}
+
+// zlib gen_bitlen. `opt_debt` and `static_debt` are build_tree's charges for
+// the codes it forced, settled once the leaves are counted.
+fn gen_bitlen(
+  mut t: Tree,
+  mut work: Work,
+  kind: u64,
+  heap_max: u64,
+  opt_debt: u64,
+  static_debt: u64
+) -> () uses {} {
+  let max_length: u64 = if kind == 2 {
+    7
+  } else {
+    15
+  }
+  let mut width: u64 = 0
+  while width <= 15 {
+    work.bl_count[width] = 0
+    width += 1
+  }
+  t.len[work.nodes[heap_max]] = 0
+  let mut overflow: u64 = 0
+  let mut h = heap_max + 1
+  while h < HEAP_SIZE {
+    let n = work.nodes[h]
+    let mut length = t.len[t.dad[n]] + 1
+    if length > max_length {
+      length = max_length
+      overflow += 1
+    }
+    t.len[n] = length
+    if n <= t.max_code {
+      work.bl_count[length] += 1
+      let extra = extra_bits(kind, n)
+      let f = t.freq[n]
+      work.opt_len += f * (length + extra)
+      if kind != 2 {
+        work.static_len += f * (static_length(kind, n) + extra)
+      }
+    }
+    h += 1
+  }
+  work.opt_len -= opt_debt
+  work.static_len -= static_debt
+  if overflow == 0 {
+    return
+  }
+  while overflow > 0 {
+    width = max_length - 1
+    while work.bl_count[width] == 0 {
+      width -= 1
+    }
+    work.bl_count[width] -= 1
+    work.bl_count[width + 1] += 2
+    work.bl_count[max_length] -= 1
+    overflow = if overflow > 2 {
+      overflow - 2
+    } else {
+      0
+    }
+  }
+  width = max_length
+  while width != 0 {
+    let mut n = work.bl_count[width]
+    while n != 0 {
+      h -= 1
+      let m = work.nodes[h]
+      if m > t.max_code {
+        continue
+      }
+      let old = t.len[m]
+      if old != width {
+        if width > old {
+          work.opt_len += (width - old) * t.freq[m]
+        } else {
+          work.opt_len -= (old - width) * t.freq[m]
+        }
+        t.len[m] = width
+      }
+      n -= 1
+    }
+    width -= 1
+  }
+}
+
+// zlib build_tree; `kind` 0, 1 and 2 are the literal/length, distance and
+// bit length trees.
+fn build_tree(mut t: Tree, mut work: Work, kind: u64) -> () uses {} {
+  let elems: u64 = if kind == 0 {
+    286
+  } else if kind == 1 {
+    30
+  } else {
+    19
+  }
+  let mut length: u64 = 0
+  // One past the largest code with a nonzero frequency.
+  let mut top: u64 = 0
+  let mut n: u64 = 0
+  while n < elems {
+    if t.freq[n] != 0 {
+      length += 1
+      work.nodes[length] = n
+      top = n + 1
+      work.depth[n] = 0
+    } else {
+      t.len[n] = 0
+    }
+    n += 1
+  }
+  // At least two codes, so one bit is always sent.
+  let mut opt_debt: u64 = 0
+  let mut static_debt: u64 = 0
+  while length < 2 {
+    let node = if top < 3 {
+      top += 1
+      top - 1
+    } else {
+      0
+    }
+    length += 1
+    work.nodes[length] = node
+    t.freq[node] = 1
+    work.depth[node] = 0
+    opt_debt += 1
+    if kind != 2 {
+      static_debt += static_length(kind, node)
+    }
+  }
+  t.max_code = top - 1
+  let mut k = length / 2
+  while k >= 1 {
+    down_heap(t, mut work, length, k)
+    k -= 1
+  }
+  let mut node = elems
+  let mut heap_max = HEAP_SIZE
+  while length >= 2 {
+    let least = work.nodes[1]
+    work.nodes[1] = work.nodes[length]
+    length -= 1
+    down_heap(t, mut work, length, 1)
+    let next = work.nodes[1]
+    heap_max -= 1
+    work.nodes[heap_max] = least
+    heap_max -= 1
+    work.nodes[heap_max] = next
+    t.freq[node] = t.freq[least] + t.freq[next]
+    let deeper = if work.depth[least] >= work.depth[next] {
+      work.depth[least]
+    } else {
+      work.depth[next]
+    }
+    work.depth[node] = deeper + 1
+    t.dad[least] = node
+    t.dad[next] = node
+    work.nodes[1] = node
+    node += 1
+    down_heap(t, mut work, length, 1)
+  }
+  heap_max -= 1
+  work.nodes[heap_max] = work.nodes[1]
+  gen_bitlen(mut t, mut work, kind, heap_max, opt_debt, static_debt)
+  gen_codes(mut t, work.bl_count)
+}
+
+// zlib scan_tree: counts the bit length codes that send_tree will write.
+fn scan_tree(mut t: Tree, mut lengths: Tree) -> () uses {} {
+  let max_code = t.max_code
+  let mut previous: u64 = 0xFFFF
+  let mut next = t.len[0]
+  let mut count: u64 = 0
+  let mut max_count: u64 = 7
+  let mut min_count: u64 = 4
+  if next == 0 {
+    max_count = 138
+    min_count = 3
+  }
+  t.len[max_code + 1] = 0xFFFF
+  let mut n: u64 = 0
+  while n <= max_code {
+    let current = next
+    next = t.len[n + 1]
+    count += 1
+    n += 1
+    if count < max_count && current == next {
+      continue
+    }
+    if count < min_count {
+      lengths.freq[current] += count
+    } else if current != 0 {
+      if current != previous {
+        lengths.freq[current] += 1
+      }
+      lengths.freq[16] += 1
+    } else if count <= 10 {
+      lengths.freq[17] += 1
+    } else {
+      lengths.freq[18] += 1
+    }
+    count = 0
+    previous = current
+    if next == 0 {
+      max_count = 138
+      min_count = 3
+    } else if current == next {
+      max_count = 6
+      min_count = 3
+    } else {
+      max_count = 7
+      min_count = 4
+    }
+  }
+}
+
+@preserves_unique(out)
+fn send_code(mut w: Writer, mut out: List[u8], t: Tree, c: u64) -> () uses {} {
+  send_bits(mut w, mut out, t.code[c], t.len[c])
+}
+
+// zlib send_tree.
+@preserves_unique(out)
+fn send_tree(mut w: Writer, mut out: List[u8], t: Tree, max_code: u64, lengths: Tree) -> () uses {} {
+  let mut previous: u64 = 0xFFFF
+  let mut next = t.len[0]
+  let mut count: u64 = 0
+  let mut max_count: u64 = 7
+  let mut min_count: u64 = 4
+  if next == 0 {
+    max_count = 138
+    min_count = 3
+  }
+  let mut n: u64 = 0
+  while n <= max_code {
+    let current = next
+    next = t.len[n + 1]
+    count += 1
+    n += 1
+    if count < max_count && current == next {
+      continue
+    }
+    if count < min_count {
+      while count != 0 {
+        send_code(mut w, mut out, lengths, current)
+        count -= 1
+      }
+    } else if current != 0 {
+      if current != previous {
+        send_code(mut w, mut out, lengths, current)
+        count -= 1
+      }
+      send_code(mut w, mut out, lengths, 16)
+      send_bits(mut w, mut out, count - 3, 2)
+    } else if count <= 10 {
+      send_code(mut w, mut out, lengths, 17)
+      send_bits(mut w, mut out, count - 3, 3)
+    } else {
+      send_code(mut w, mut out, lengths, 18)
+      send_bits(mut w, mut out, count - 11, 7)
+    }
+    count = 0
+    previous = current
+    if next == 0 {
+      max_count = 138
+      min_count = 3
+    } else if current == next {
+      max_count = 6
+      min_count = 3
+    } else {
+      max_count = 7
+      min_count = 4
+    }
+  }
+}
+
+@noalloc
+fn dcode_of(dist: u64) -> u64 uses {} {
+  if dist < 256 {
+    DIST_CODE[dist]
+  } else {
+    DIST_CODE[256 + (dist >> 7)]
+  }
+}
+
+// zlib compress_block: each symbol is `distance << 8 | length - 3`, or a
+// literal byte with distance 0.
+@preserves_unique(out)
+fn compress_block(
+  mut w: Writer,
+  mut out: List[u8],
+  symbols: List[u64],
+  literal: Tree,
+  distance: Tree
+) -> () uses {} {
+  for symbol in symbols {
+    let dist = symbol >> 8
+    let lc = symbol & 255
+    if dist == 0 {
+      send_code(mut w, mut out, literal, lc)
+    } else {
+      let code = LENGTH_CODE[lc]
+      send_code(mut w, mut out, literal, code + 257)
+      let extra = EXTRA_LBITS[code]
+      if extra != 0 {
+        send_bits(mut w, mut out, lc - BASE_LENGTH[code], extra)
+      }
+      let d = dist - 1
+      let dcode = dcode_of(d)
+      send_code(mut w, mut out, distance, dcode)
+      let dextra = EXTRA_DBITS[dcode]
+      if dextra != 0 {
+        send_bits(mut w, mut out, d - BASE_DIST[dcode], dextra)
+      }
+    }
+  }
+  send_code(mut w, mut out, literal, 256)
+}
+
+// zlib _tr_stored_block.
+@preserves_unique(out)
+fn stored_out(
+  mut w: Writer,
+  mut out: List[u8],
+  data: List[u8],
+  start: u64,
+  length: u64,
+  last: bool
+) -> () uses {} {
+  send_bits(
+    mut w,
+    mut out,
+    if last {
+      1
+    } else {
+      0
+    },
+    3
+  )
+  windup(mut w, mut out)
+  core@1/list.push(mut out, core@1/int.truncate(length & 255))
+  core@1/list.push(mut out, core@1/int.truncate(length >> 8))
+  core@1/list.push(mut out, core@1/int.truncate(~length & 255))
+  core@1/list.push(mut out, core@1/int.truncate(~length >> 8 & 255))
+  let mut i: u64 = 0
+  while i < length {
+    core@1/list.push(mut out, data[start + i])
+    i += 1
+  }
+}
+
+// zlib _tr_flush_block and init_block: the block's symbols as a stored, fixed
+// or dynamic block, whichever is smallest; stored only while its bytes are in
+// the window.
+@preserves_unique(out)
+fn flush_block(mut e: Encoder, mut out: List[u8], last: bool) -> () uses {} {
+  build_tree(mut e.literal, mut e.work, 0)
+  build_tree(mut e.distance, mut e.work, 1)
+  scan_tree(mut e.literal, mut e.lengths)
+  scan_tree(mut e.distance, mut e.lengths)
+  build_tree(mut e.lengths, mut e.work, 2)
+  let mut max_blindex: u64 = 18
+  while max_blindex >= 3 && e.lengths.len[ORDER[max_blindex]] == 0 {
+    max_blindex -= 1
+  }
+  e.work.opt_len += 3 * (max_blindex + 1) + 14
+  let mut opt_lenb = e.work.opt_len + 10 >> 3
+  let static_lenb = e.work.static_len + 10 >> 3
+  if static_lenb <= opt_lenb {
+    opt_lenb = static_lenb
+  }
+  let stored_len = if e.block_valid {
+    e.strstart - e.block_start
+  } else {
+    0
+  }
+  let last_bit: u64 = if last {
+    1
+  } else {
+    0
+  }
+  if e.block_valid && stored_len + 4 <= opt_lenb {
+    stored_out(mut e.writer, mut out, e.window, e.block_start, stored_len, last)
+  } else if static_lenb == opt_lenb {
+    send_bits(mut e.writer, mut out, 2 + last_bit, 3)
+    compress_block(mut e.writer, mut out, e.symbols, STATIC_LITERAL, STATIC_DISTANCE)
+  } else {
+    send_bits(mut e.writer, mut out, 4 + last_bit, 3)
+    let lcodes = e.literal.max_code + 1
+    let dcodes = e.distance.max_code + 1
+    send_bits(mut e.writer, mut out, lcodes - 257, 5)
+    send_bits(mut e.writer, mut out, dcodes - 1, 5)
+    send_bits(mut e.writer, mut out, max_blindex - 3, 4)
+    let mut rank: u64 = 0
+    while rank <= max_blindex {
+      send_bits(mut e.writer, mut out, e.lengths.len[ORDER[rank]], 3)
+      rank += 1
+    }
+    send_tree(mut e.writer, mut out, e.literal, lcodes - 1, e.lengths)
+    send_tree(mut e.writer, mut out, e.distance, dcodes - 1, e.lengths)
+    compress_block(mut e.writer, mut out, e.symbols, e.literal, e.distance)
+  }
+  let mut freq = unique ZEROS_573
+  freq[256] = 1
+  e.literal.freq = take freq
+  e.distance.freq = unique ZEROS_61
+  e.lengths.freq = unique ZEROS_39
+  e.work.opt_len = 0
+  e.work.static_len = 0
+  e.symbols = []
+  if last {
+    windup(mut e.writer, mut out)
+  }
+  e.block_start = e.strstart
+  e.block_valid = true
+}
+
+fn tally_literal(mut e: Encoder, c: u8) -> bool uses {} {
+  let value: u64 = core@1/int.widen(c)
+  core@1/list.push(mut e.symbols, value)
+  e.literal.freq[value] += 1
+  core@1/list.len(e.symbols) == SYMBOLS
+}
+
+fn tally_match(mut e: Encoder, dist: u64, lc: u64) -> bool uses {} {
+  core@1/list.push(mut e.symbols, dist << 8 | lc)
+  e.literal.freq[LENGTH_CODE[lc] + 257] += 1
+  e.distance.freq[dcode_of(dist - 1)] += 1
+  core@1/list.len(e.symbols) == SYMBOLS
+}
+
+// zlib INSERT_STRING: hashes the three bytes at `at`, chains the string after
+// the previous one with that hash, and returns that one (0 for none).
+fn insert_string(mut e: Encoder, at: u64) -> u64 uses {} {
+  let c: u64 = core@1/int.widen(e.window[at + 2])
+  e.ins_h = (e.ins_h << 5 ^ c) & HASH_MASK
+  let previous = match core@1/map.get(e.head, e.ins_h) {
+    Some(position) => position,
+    None() => 0,
+  }
+  let slot = at & WMASK
+  while core@1/list.len(e.prev) <= slot {
+    core@1/list.push(mut e.prev, 0)
+  }
+  e.prev[slot] = previous
+  core@1/map.insert(mut e.head, e.ins_h, at)
+  previous
+}
+
+// zlib UPDATE_HASH over the two bytes at `at`.
+fn reset_hash(mut e: Encoder, at: u64) -> () uses {} {
+  let first: u64 = core@1/int.widen(e.window[at])
+  let second: u64 = core@1/int.widen(e.window[at + 1])
+  e.ins_h = (first << 5 ^ second) & HASH_MASK
+}
+
+// zlib slide_hash.
+fn slide_hash(mut e: Encoder) -> () uses {} {
+  let mut head: Map[u64, u64] = core@1/map.empty()
+  for (hash, position) in e.head {
+    if position > WSIZE {
+      core@1/map.insert(mut head, hash, position - WSIZE)
+    }
+  }
+  e.head = take head
+  for position in mut e.prev {
+    position = if position >= WSIZE {
+      position - WSIZE
+    } else {
+      0
+    }
+  }
+}
+
+// zlib fill_window: slides the window when the string start nears its end and
+// reads input from `data` at `at` while lookahead is short. Bytes up to
+// MAX_MATCH past the input are zero until written, as zlib's high water mark
+// keeps them.
+fn fill_window(mut e: Encoder, data: Bytes, mut at: u64) -> () uses {} {
+  let size = core@1/bytes.len(data)
+  while true {
+    let mut more = WINDOW_SIZE - e.lookahead - e.strstart
+    if e.strstart >= WSIZE + MAX_DIST {
+      let mut i: u64 = 0
+      while i < WSIZE - more {
+        e.window[i] = e.window[WSIZE + i]
+        i += 1
+      }
+      e.match_start = if e.match_start >= WSIZE {
+        e.match_start - WSIZE
+      } else {
+        0
+      }
+      e.strstart -= WSIZE
+      if e.block_start >= WSIZE {
+        e.block_start -= WSIZE
+      } else {
+        e.block_valid = false
+      }
+      slide_hash(mut e)
+      more += WSIZE
+    }
+    if at >= size {
+      break
+    }
+    let n = if size - at < more {
+      size - at
+    } else {
+      more
+    }
+    let mut p = e.strstart + e.lookahead
+    let end = at + n
+    while at < end {
+      if p < core@1/list.len(e.window) {
+        e.window[p] = data[at]
+      } else {
+        core@1/list.push(mut e.window, data[at])
+      }
+      p += 1
+      at += 1
+    }
+    e.lookahead += n
+    if e.lookahead >= MIN_MATCH {
+      let start = e.strstart
+      reset_hash(mut e, start)
+    }
+    if e.lookahead >= MIN_LOOKAHEAD || at >= size {
+      break
+    }
+  }
+  let mut high = e.strstart + e.lookahead + MAX_MATCH
+  if high > WINDOW_SIZE {
+    high = WINDOW_SIZE
+  }
+  while core@1/list.len(e.window) < high {
+    core@1/list.push(mut e.window, 0)
+  }
+}
+
+// zlib longest_match: the longest match at the string start among at most
+// the level's chain of earlier strings with its hash, at least `prev_length`.
+fn longest_match(mut e: Encoder, start: u64) -> u64 uses {} {
+  let level = e.level
+  let mut chain = CHAIN[level]
+  let scan = e.strstart
+  let mut best = e.prev_length
+  let mut nice = NICE[level]
+  let limit = if scan > MAX_DIST {
+    scan - MAX_DIST
+  } else {
+    0
+  }
+  let strend = scan + MAX_MATCH
+  let mut scan_end1 = e.window[scan + best - 1]
+  let mut scan_end = e.window[scan + best]
+  if e.prev_length >= GOOD[level] {
+    chain = chain >> 2
+  }
+  if nice > e.lookahead {
+    nice = e.lookahead
+  }
+  let mut candidate = start
+  while true {
+    let m = candidate
+    if e.window[m + best] == scan_end && e.window[m + best - 1] == scan_end1 && e.window[m] == e.window[scan] && e.window[m + 1] == e.window[scan + 1] {
+      let mut q = scan + 3
+      let mut r = m + 3
+      while q < strend && e.window[q] == e.window[r] {
+        q += 1
+        r += 1
+      }
+      let length = q - scan
+      if length > best {
+        e.match_start = m
+        best = length
+        if length >= nice {
+          break
+        }
+        scan_end1 = e.window[scan + best - 1]
+        scan_end = e.window[scan + best]
+      }
+    }
+    candidate = e.prev[candidate & WMASK]
+    if candidate <= limit {
+      break
+    }
+    chain -= 1
+    if chain == 0 {
+      break
+    }
+  }
+  if best <= e.lookahead {
+    best
+  } else {
+    e.lookahead
+  }
+}
+
+// zlib deflate_fast for levels 1 to 3: no lazy matching.
+@preserves_unique(out)
+fn deflate_fast(
+  mut e: Encoder,
+  data: Bytes,
+  mut at: u64,
+  last_input: bool,
+  mut out: List[u8]
+) -> () uses {} {
+  while true {
+    if e.lookahead < MIN_LOOKAHEAD {
+      fill_window(mut e, data, mut at)
+      if e.lookahead < MIN_LOOKAHEAD && !last_input {
+        return
+      }
+      if e.lookahead == 0 {
+        break
+      }
+    }
+    let here = e.strstart
+    let mut hash_head: u64 = 0
+    if e.lookahead >= MIN_MATCH {
+      hash_head = insert_string(mut e, here)
+    }
+    if hash_head != 0 && here - hash_head <= MAX_DIST {
+      e.match_length = longest_match(mut e, hash_head)
+    }
+    let mut flush = false
+    if e.match_length >= MIN_MATCH {
+      flush = tally_match(mut e, here - e.match_start, e.match_length - MIN_MATCH)
+      e.lookahead -= e.match_length
+      if e.match_length <= LAZY[e.level] && e.lookahead >= MIN_MATCH {
+        e.match_length -= 1
+        while e.match_length != 0 {
+          e.strstart += 1
+          let next = e.strstart
+          let _ = insert_string(mut e, next)
+          e.match_length -= 1
+        }
+        e.strstart += 1
+      } else {
+        e.strstart += e.match_length
+        e.match_length = 0
+        let next = e.strstart
+        reset_hash(mut e, next)
+      }
+    } else {
+      let c = e.window[here]
+      flush = tally_literal(mut e, c)
+      e.lookahead -= 1
+      e.strstart += 1
+    }
+    if flush {
+      flush_block(mut e, mut out, false)
+    }
+  }
+  flush_block(mut e, mut out, true)
+}
+
+// zlib deflate_slow for levels 4 to 9: a match is taken only if the next
+// string has no longer one.
+@preserves_unique(out)
+fn deflate_slow(
+  mut e: Encoder,
+  data: Bytes,
+  mut at: u64,
+  last_input: bool,
+  mut out: List[u8]
+) -> () uses {} {
+  while true {
+    if e.lookahead < MIN_LOOKAHEAD {
+      fill_window(mut e, data, mut at)
+      if e.lookahead < MIN_LOOKAHEAD && !last_input {
+        return
+      }
+      if e.lookahead == 0 {
+        break
+      }
+    }
+    let here = e.strstart
+    let mut hash_head: u64 = 0
+    if e.lookahead >= MIN_MATCH {
+      hash_head = insert_string(mut e, here)
+    }
+    e.prev_length = e.match_length
+    e.prev_match = e.match_start
+    e.match_length = MIN_MATCH - 1
+    if hash_head != 0 && e.prev_length < LAZY[e.level] && here - hash_head <= MAX_DIST {
+      e.match_length = longest_match(mut e, hash_head)
+      if e.match_length == MIN_MATCH && here - e.match_start > TOO_FAR {
+        e.match_length = MIN_MATCH - 1
+      }
+    }
+    if e.prev_length >= MIN_MATCH && e.match_length <= e.prev_length {
+      let max_insert = here + e.lookahead - MIN_MATCH
+      let flush = tally_match(mut e, here - 1 - e.prev_match, e.prev_length - MIN_MATCH)
+      e.lookahead -= e.prev_length - 1
+      e.prev_length -= 2
+      while e.prev_length != 0 {
+        e.strstart += 1
+        let next = e.strstart
+        if next <= max_insert {
+          let _ = insert_string(mut e, next)
+        }
+        e.prev_length -= 1
+      }
+      e.match_available = false
+      e.match_length = MIN_MATCH - 1
+      e.strstart += 1
+      if flush {
+        flush_block(mut e, mut out, false)
+      }
+    } else if e.match_available {
+      let c = e.window[here - 1]
+      if tally_literal(mut e, c) {
+        flush_block(mut e, mut out, false)
+      }
+      e.strstart += 1
+      e.lookahead -= 1
+    } else {
+      e.match_available = true
+      e.strstart += 1
+      e.lookahead -= 1
+    }
+  }
+  if e.match_available {
+    let c = e.window[e.strstart - 1]
+    let _ = tally_literal(mut e, c)
+    e.match_available = false
+  }
+  flush_block(mut e, mut out, true)
+}
+
+@preserves_unique(out)
+fn write_header(mut e: Encoder, mut out: List[u8]) -> () uses {} {
+  if e.started {
+    return
+  }
+  e.started = true
+  let format = e.format
+  match format {
+    Raw() => (),
+    Zlib() => {
+      // RFC 1950: CM 8, CINFO 7, FLEVEL as zlib assigns it, FCHECK.
+      let flags: u64 = if e.level < 2 {
+        0
+      } else if e.level < 6 {
+        1
+      } else if e.level == 6 {
+        2
+      } else {
+        3
+      }
+      let base: u64 = 0x7800 | flags << 6
+      let check = base + 31 - base % 31
+      core@1/list.push(mut out, 0x78)
+      core@1/list.push(mut out, core@1/int.truncate(check & 255))
+    },
+    Gzip() => {
+      // RFC 1952: no name, comment or time; XFL as zlib sets it; OS unknown.
+      let xfl: u8 = if e.level == 9 {
+        2
+      } else if e.level < 2 {
+        4
+      } else {
+        0
+      }
+      core@1/list.push(mut out, 0x1F)
+      core@1/list.push(mut out, 0x8B)
+      core@1/list.push(mut out, 8)
+      let mut i: u64 = 0
+      while i < 5 {
+        core@1/list.push(mut out, 0)
+        i += 1
+      }
+      core@1/list.push(mut out, xfl)
+      core@1/list.push(mut out, 0xFF)
+    },
+  }
+}
+
+@preserves_unique(out)
+fn run(mut e: Encoder, data: Bytes, last_input: bool, mut out: List[u8]) -> () uses {} {
+  write_header(mut e, mut out)
+  let format = e.format
+  match format {
+    Raw() => (),
+    Zlib() => adler32.update(mut e.adler, data),
+    Gzip() => crc32.update(mut e.crc, data),
+  }
+  e.size += core@1/bytes.len(data)
+  if e.level == 0 {
+    for byte in data {
+      core@1/list.push(mut e.stored, byte)
+      if core@1/list.len(e.stored) > MAX_STORED {
+        stored_out(mut e.writer, mut out, e.stored, 0, MAX_STORED, false)
+        let rest = e.stored[MAX_STORED]
+        e.stored = [rest]
+      }
+    }
+    if last_input {
+      let length = core@1/list.len(e.stored)
+      stored_out(mut e.writer, mut out, e.stored, 0, length, true)
+    }
+  } else if e.level <= 3 {
+    let mut at: u64 = 0
+    deflate_fast(mut e, data, mut at, last_input, mut out)
+  } else {
+    let mut at: u64 = 0
+    deflate_slow(mut e, data, mut at, last_input, mut out)
+  }
+}
+
+/// Compresses `data` as the next input of the stream, appending to `out`
+/// every byte this input completes.
+@preserves_unique(out)
+pub fn encode(mut e: Encoder, data: Bytes, mut out: List[u8]) -> () uses {} {
+  run(mut e, data, false, mut out)
+}
+
+@preserves_unique(out)
+fn push_be(mut out: List[u8], value: u64) -> () uses {} {
+  let mut shift: u64 = 32
+  while shift > 0 {
+    shift -= 8
+    core@1/list.push(mut out, core@1/int.truncate(value >> shift & 255))
+  }
+}
+
+@preserves_unique(out)
+fn push_le(mut out: List[u8], value: u64) -> () uses {} {
+  let mut shift: u64 = 0
+  while shift < 32 {
+    core@1/list.push(mut out, core@1/int.truncate(value >> shift & 255))
+    shift += 8
+  }
+}
+
+/// Ends the stream: appends the rest of the compressed data and the format's
+/// trailer to `out`, and leaves `e` ready for a new stream of the same format
+/// and level.
+@preserves_unique(out)
+pub fn finish(mut e: Encoder, mut out: List[u8]) -> () uses {} {
+  run(mut e, b"", true, mut out)
+  let format = e.format
+  match format {
+    Raw() => (),
+    Zlib() => {
+      let checksum = e.adler
+      push_be(mut out, core@1/int.widen(adler32.finish(take checksum)))
+    },
+    Gzip() => {
+      let checksum = e.crc
+      push_le(mut out, core@1/int.widen(crc32.finish(take checksum)))
+      push_le(mut out, e.size & 0xFFFFFFFF)
+    },
+  }
+  e = encoder(format, e.level)
+}
+
+@track_caller
+fn encode_all(format: Format, data: Bytes, level: u64) -> unique Bytes uses {} {
+  let mut e = encoder(format, level)
+  let mut out: List[u8] = []
+  encode(mut e, data, mut out)
+  finish(mut e, mut out)
+  core@1/bytes.from_list(take out)
+}
+
+/// Compresses `data` to a raw DEFLATE stream (RFC 1951) at `level` 0 to 9.
+@track_caller
+pub fn deflate(data: Bytes, level: u64) -> unique Bytes uses {} {
+  encode_all(Raw(), data, level)
+}
+
+/// Compresses `data` to zlib data (RFC 1950) at `level` 0 to 9.
+@track_caller
+pub fn zlib_encode(data: Bytes, level: u64) -> unique Bytes uses {} {
+  encode_all(Zlib(), data, level)
+}
+
+/// Compresses `data` to one gzip member (RFC 1952) at `level` 0 to 9.
+@track_caller
+pub fn gzip_encode(data: Bytes, level: u64) -> unique Bytes uses {} {
+  encode_all(Gzip(), data, level)
+}

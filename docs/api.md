@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1166 exported definitions; 315 variants.
+1172 exported definitions; 318 variants.
 
 ## Types and roots
 
@@ -941,10 +941,6 @@ Variant of PeerTls.
 - `Plain() -> PeerTls`
 
 Variant of PeerTls.
-
-<a id="def-core_401_2fPipelineOutput"></a>
-
-- `type PipelineOutput uses {} = { statuses: List[ExitStatus], stdout: Bytes, stderr: Bytes }`
 
 <a id="def-core_401_2fPositionView"></a>
 
@@ -4030,6 +4026,13 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 
 ## flate
 
+<a id="def-std_401_2fflate_2fEncoder"></a>
+
+- `pub opaque type flate.Encoder: copyable + inert + noalloc_drop uses {}`
+
+Streaming DEFLATE compression state for one stream: `encode` appends the
+output its input completes, and `finish` the rest.
+
 <a id="def-std_401_2fflate_2fFlateError"></a>
 
 - `pub type flate.FlateError = Truncated | Corrupt(u64) | Header | Checksum | TooLarge | TrailingData( u64 )`
@@ -4076,6 +4079,66 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 Variant of flate.FlateError.
 
+<a id="def-std_401_2fflate_2fFormat"></a>
+
+- `pub type flate.Format = Raw | Zlib | Gzip`
+
+The container around a DEFLATE stream: none (RFC 1951), zlib (RFC 1950)
+or gzip (RFC 1952).
+
+<a id="def-std_401_2fflate_2fFormat_23Gzip"></a>
+
+- `Gzip -> flate.Format`
+
+Variant of flate.Format.
+
+<a id="def-std_401_2fflate_2fFormat_23Raw"></a>
+
+- `Raw -> flate.Format`
+
+Variant of flate.Format.
+
+<a id="def-std_401_2fflate_2fFormat_23Zlib"></a>
+
+- `Zlib -> flate.Format`
+
+Variant of flate.Format.
+
+<a id="def-std_401_2fflate_2fdeflate"></a>
+
+- `@track_caller pub fn flate.deflate(data: Bytes, level: u64) -> unique Bytes uses {}`
+
+Compresses `data` to a raw DEFLATE stream (RFC 1951) at `level` 0 to 9.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fflate_2fencode"></a>
+
+- `@preserves_unique(out) pub fn flate.encode(mut e: Encoder, data: Bytes, mut out: List[u8]) -> () uses {}`
+
+Compresses `data` as the next input of the stream, appending to `out`
+every byte this input completes.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/flate/Encoder`](#def-std_401_2fflate_2fEncoder)
+
+<a id="def-std_401_2fflate_2fencoder"></a>
+
+- `@track_caller pub fn flate.encoder(format: Format, level: u64) -> unique Encoder uses {}`
+
+A compressor at `level` 0 (stored) through 9 (smallest), writing `format`.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/Encoder`](#def-std_401_2fflate_2fEncoder), [`std@1/flate/Format`](#def-std_401_2fflate_2fFormat)
+
+<a id="def-std_401_2fflate_2ffinish"></a>
+
+- `@preserves_unique(out) pub fn flate.finish(mut e: Encoder, mut out: List[u8]) -> () uses {}`
+
+Ends the stream: appends the rest of the compressed data and the format's
+trailer to `out`, and leaves `e` ready for a new stream of the same format
+and level.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/flate/Encoder`](#def-std_401_2fflate_2fEncoder)
+
 <a id="def-std_401_2fflate_2fgzip_5fdecode"></a>
 
 - `pub fn flate.gzip_decode(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {}`
@@ -4084,6 +4147,14 @@ Decodes gzip data (RFC 1952): one or more members, concatenated, producing
 at most `limit` bytes in total. Bytes after a member must begin another.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fflate_2fgzip_5fencode"></a>
+
+- `@track_caller pub fn flate.gzip_encode(data: Bytes, level: u64) -> unique Bytes uses {}`
+
+Compresses `data` to one gzip member (RFC 1952) at `level` 0 to 9.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fflate_2finflate"></a>
 
@@ -4102,6 +4173,14 @@ Decodes zlib data (RFC 1950) without a preset dictionary, producing at most
 `limit` bytes. The stream must end exactly at the end of `data`.
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fflate_2fzlib_5fencode"></a>
+
+- `@track_caller pub fn flate.zlib_encode(data: Bytes, level: u64) -> unique Bytes uses {}`
+
+Compresses `data` to zlib data (RFC 1950) at `level` 0 to 9.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_401_2fu64)
 
 
 ## float
@@ -6414,10 +6493,6 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 ## proc
 
-<a id="def-core_401_2fproc_2fpipeline"></a>
-
-- `fn proc.pipeline(p: Proc, stages: List[Command], stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[PipelineOutput, ProcessError]`
-
 <a id="def-core_401_2fproc_2frun"></a>
 
 - `fn proc.run(p: Proc, cmd: Command, stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]`
@@ -6433,7 +6508,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 - `@noalloc pub fn process.pipefail(pipeline: PipelineOutput) -> ExitStatus uses {}`
 
-References: [`core@1/ExitStatus`](#def-core_401_2fExitStatus), [`core@1/PipelineOutput`](#def-core_401_2fPipelineOutput)
+References: [`core@1/ExitStatus`](#def-core_401_2fExitStatus)
 
 
 ## random

@@ -1867,6 +1867,34 @@ bit (RFC 1952 section 2.3.1.2; Go ignores them) or a header CRC mismatch is
 `Header()`. Extra fields, names and comments are skipped. A CRC-32 or size
 mismatch is `Checksum()`. No partial output is returned.
 
+Encoding ports zlib 1.3's `deflate.c` and `trees.c` at a 32 KiB window, memory level 8
+and the default strategy, so every level writes exactly zlib's bytes:
+
+```text
+Format = Raw | Zlib | Gzip
+fn flate.deflate(data: Bytes, level: u64) -> unique Bytes uses {}
+fn flate.zlib_encode(data: Bytes, level: u64) -> unique Bytes uses {}
+fn flate.gzip_encode(data: Bytes, level: u64) -> unique Bytes uses {}
+fn flate.encoder(format: Format, level: u64) -> unique Encoder uses {}
+@preserves_unique(out) fn flate.encode(mut e: Encoder, data: Bytes, mut out: List[u8]) -> () uses {}
+@preserves_unique(out) fn flate.finish(mut e: Encoder, mut out: List[u8]) -> () uses {}
+```
+
+`level` runs from 0 to 9; a larger level fails MEM-14 at the call. Levels 1 to 3 use
+zlib's greedy matcher and 4 to 9 its lazy one, with zlib's good, lazy, nice and chain
+lengths; a block ends after 16383 symbols or at the end of input and is written stored,
+fixed or dynamic, whichever is smallest. Level 0 writes stored blocks of 65535 bytes
+and a final block holding the rest, possibly empty, as one zlib `deflate` call with
+ample output does. The output for a level depends only on the input bytes: an
+`Encoder` fed through any sequence of `encode` calls appends, by `finish`, the bytes
+the one-call form returns. `encode` appends the output its input completes and keeps
+at most a 64 KiB window, the hash chains and one block's symbols; `finish` appends the
+rest and the trailer and leaves the encoder ready for a new stream of the same format
+and level. The zlib header carries zlib's level flags and an Adler-32 trailer; the gzip
+header has no name, comment or time, zlib's extra flags (2 at level 9, 4 below level 2)
+and operating system 255 (unknown), with a CRC-32 and the input size modulo 2^32 after
+the stream.
+
 ## Cookies
 
 `std@1/cookie` parses Cookie request headers and formats Set-Cookie response

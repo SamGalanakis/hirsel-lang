@@ -1,0 +1,8 @@
+// rule: MEM-14
+// expect: run
+// Level 9 is the highest compression level.
+pub fn main(t: Test) -> Result[(), ()] {
+  let data = b"x"
+  test.check(t, flate.deflate(data, 9) == b"\xab\x00\x00")
+  Ok(())
+}
