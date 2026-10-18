@@ -584,25 +584,27 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "mut r: Receiver[T], mut message: Option[List[T]]",
             "u32",
         ),
-        // A Mutex or Atomic holds its pointer-free payload as the `Some` image of an
-        // `Option` of `size` bytes, which the runtime copies (CONC-4, CONC-5, FAIL-4).
+        // A Mutex holds its payload as the block of a one-element list, which a create or
+        // put takes from `Some` and a take moves into `None`; an Atomic holds its scalar
+        // payload as the `Some` image of an `Option` of `size` bytes, which the runtime
+        // copies (CONC-4, CONC-5, FAIL-4).
         (
             "T",
             "$intrinsic.MutexCreate",
-            "value: Option[T], size: u64",
+            "mut payload: Option[List[T]]",
             "Mutex[T]",
         ),
-        // 0: the payload moved into `slot`; 1: the mutex is dead.
+        // 0: the payload moved into `payload`; 1: the mutex is dead.
         (
             "T",
             "$intrinsic.MutexTake",
-            "m: Mutex[T], mut slot: Option[T], size: u64",
+            "m: Mutex[T], mut payload: Option[List[T]]",
             "u32",
         ),
         (
             "T",
             "$intrinsic.MutexPut",
-            "m: Mutex[T], value: Option[T], size: u64",
+            "m: Mutex[T], mut payload: Option[List[T]]",
             "()",
         ),
         ("T", "$intrinsic.MutexKill", "m: Mutex[T]", "()"),

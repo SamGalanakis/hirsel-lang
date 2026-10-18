@@ -1,0 +1,50 @@
+// rule: FAIL-4
+// expect: run
+// stdout: dead
+// A failure inside a mutex.with body kills the mutex and releases its heap payload unseen; a
+// later acquisition fails.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let items0: unique List[u64] = unique [1, 2]
+  let items = mutex.create(tasks, take items0)
+  let first: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() -> () {
+      mutex.with(
+        tasks,
+        items,
+        fn(mut xs: unique List[u64]) -> () uses {} {
+          list.push(mut xs, 3)
+          let n: u8 = 255
+          let broken = n + 1
+        }
+      )
+    }
+  )
+  let second: Result[u64, Failure] = task.isolate(
+    tasks,
+    fn() -> u64 {
+      mutex.with(
+        tasks,
+        items,
+        fn(mut xs: unique List[u64]) -> u64 uses {} {
+          list.len(xs)
+        }
+      )
+    }
+  )
+  let dead: bool = match (first, second) {
+    (Error(a), Error(b)) => true,
+    _ => false,
+  }
+  let _ = out.print(
+    stdout,
+    if dead {
+      "dead\n"
+    } else {
+      "alive\n"
+    }
+  )
+  Ok(())
+}

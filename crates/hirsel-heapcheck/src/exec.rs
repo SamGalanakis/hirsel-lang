@@ -8795,6 +8795,15 @@ impl<'p, S: Stage> Machine<'p, S> {
             blocked: false,
         };
         self.terminal = Some(observation);
+        // The run's end releases what the mutexes still hold (`exec/sync.rs`), after the
+        // returned value's drain below.
+        let mutexes = self.end_mutexes()?;
+        if !mutexes.is_empty() {
+            self.stack.push(Activity::Drain(Drain {
+                work: mutexes,
+                failed: false,
+            }));
+        }
         if let Finished::Returned(Some((held, layout, _))) = finished
             && held.credits > 0
             && self.carries(&held.val)

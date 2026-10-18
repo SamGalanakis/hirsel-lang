@@ -2681,14 +2681,15 @@ impl<'o> LayoutBuilder<'o> {
             BuiltinType::Task => Ok(self.handle_record(key, false)),
             // A run-local channel endpoint word (CONC-6), closed when dropped.
             BuiltinType::Sender | BuiltinType::Receiver => Ok(self.handle_record(key, true)),
-            // Run-local handle words (CONC-4, CONC-5): the runtime holds the payload's
-            // image, so a Mutex's payload must be pointer-free with no drop.
+            // Run-local handle words (CONC-4, CONC-5): the runtime holds an atomic's scalar
+            // image and a mutex's payload block, which it releases when the run ends. That is
+            // unobservable only for a copyable payload, whose Mutex is copyable too; a mutex
+            // over a resource must release its payload with its last handle.
             BuiltinType::Atomic => Ok(self.handle_record(key, false)),
             BuiltinType::Mutex => {
                 let payload = self.memory(walk, ty_at(0)?, f, false)?;
-                let payload = self.record(payload);
-                if !payload.scan.is_empty() || !payload.drop.is_empty() {
-                    return unavailable(None, "a Mutex of a payload with pointers or a drop is M2");
+                if self.record(payload).copy == CopyRecipe::NotCopyable {
+                    return unavailable(None, "a Mutex of a noncopyable payload is M2");
                 }
                 Ok(self.handle_record(key, false))
             }

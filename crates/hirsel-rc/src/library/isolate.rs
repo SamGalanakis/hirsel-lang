@@ -53,8 +53,8 @@ struct Shape {
 }
 
 /// A temporary holding `value`. Its place is prepared at entry, where a
-/// failure releases what the body held there: the `take` callable.
-fn local(
+/// failure releases what the body held there (`entry`): a `take` parameter.
+pub(super) fn local(
     b: &mut Body<'_, '_>,
     entry: &[(SlotId, AddressId)],
     value: ValueId,

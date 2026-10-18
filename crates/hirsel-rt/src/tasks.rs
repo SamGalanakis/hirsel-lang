@@ -1122,38 +1122,48 @@ pub(crate) unsafe fn close_endpoint(ctx: *mut RunCtx, word: u64, anchor: u64) ->
     status
 }
 
-/// `$intrinsic.MutexCreate[T](value, size)` (CONC-5): a mutex holding the `Some` image `value`.
+/// Move the payload block out of the `Some` carrier at `payload`, leaving `None`.
 ///
 /// # Safety
-/// `ctx` is live, `out` writable and `value` readable for `size` bytes.
+/// `payload` is a readable and writable `Option[List[T]]` holding `Some`.
+unsafe fn carried(payload: *mut *mut Header) -> NonNull<Header> {
+    // SAFETY: caller contract.
+    let block = unsafe { payload.replace(std::ptr::null_mut()) };
+    NonNull::new(block).unwrap_or_else(|| fault("a mutex payload carrier holding None"))
+}
+
+/// `$intrinsic.MutexCreate[T](mut payload)` (CONC-5): a mutex owning the payload block, taken
+/// from the `Some` carrier, which is left `None`.
+///
+/// # Safety
+/// `ctx` is live, `out` writable and `payload` a `Some` carrier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
     ctx: *mut RunCtx,
     _destination: *mut u8,
     out: *mut u64,
-    value: *const u8,
-    size: u64,
+    payload: *mut *mut Header,
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
-        out.write(scheduler(ctx).sync.create(value, size));
+        let block = carried(payload);
+        out.write(scheduler(ctx).sync.create_block(block));
         yield_now(ctx);
     }
     STATUS_OK
 }
 
-/// `$intrinsic.MutexTake[T](m, mut slot, size)`: move the payload's image into the `None` slot
+/// `$intrinsic.MutexTake[T](m, mut payload)`: move the payload block into the `None` carrier
 /// (status 0), or report the mutex dead (status 1). Acquiring is not a yield.
 ///
 /// # Safety
-/// `ctx` is live, `out` writable, `m` a Mutex word and `slot` writable for `size` bytes.
+/// `ctx` is live, `out` writable, `m` a Mutex word and `payload` a writable `None` carrier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     ctx: *mut RunCtx,
     out: *mut u32,
     m: *const u64,
-    slot: *mut u8,
-    size: u64,
+    payload: *mut *mut Header,
 ) -> u8 {
     let sync = &mut scheduler(ctx).sync;
     // SAFETY: caller contract.
@@ -1162,7 +1172,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
         1
     } else {
         // SAFETY: caller contract.
-        unsafe { sync.read(word, slot, size, true) };
+        unsafe { payload.write(sync.take(word).as_ptr()) };
         0
     };
     // SAFETY: caller contract.
@@ -1170,24 +1180,40 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     STATUS_OK
 }
 
-/// `$intrinsic.MutexPut[T](m, value, size)`: the body returned; its payload's image goes back,
-/// and the operation yields.
+/// `$intrinsic.MutexPut[T](m, mut payload)`: the body returned; its payload's block goes back
+/// from the `Some` carrier, which is left `None`, and the operation yields.
 ///
 /// # Safety
-/// `ctx` is live, `m` a Mutex word and `value` readable for `size` bytes.
+/// `ctx` is live, `m` a Mutex word and `payload` a `Some` carrier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     ctx: *mut RunCtx,
     m: *const u64,
-    value: *const u8,
-    size: u64,
+    payload: *mut *mut Header,
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
-        scheduler(ctx).sync.write(m.read(), value, size);
+        let block = carried(payload);
+        scheduler(ctx).sync.put(m.read(), block);
         yield_now(ctx);
     }
     STATUS_OK
+}
+
+/// The run ended: release the payload blocks its mutexes still hold. Their payloads are
+/// copyable, so the release runs no user code and cannot fail.
+pub(crate) fn end_run(ctx: &mut RunCtx) {
+    let Some(s) = ctx.tasks.as_deref_mut() else {
+        return;
+    };
+    for block in s.sync.end() {
+        // SAFETY: the cell owned the block's credit.
+        if unsafe { crate::release::release_block(ctx, block.as_ptr(), std::ptr::null(), 0) }
+            != STATUS_OK
+        {
+            fault("a mutex payload's release failed");
+        }
+    }
 }
 
 /// `$intrinsic.MutexKill[T](m)` (FAIL-4): the body failed; the mutex keeps the failure chain,
@@ -1242,7 +1268,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
-        out.write(scheduler(ctx).sync.create(value, size));
+        out.write(scheduler(ctx).sync.create_image(value, size));
         yield_now(ctx);
     }
     STATUS_OK
@@ -1261,7 +1287,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
-        scheduler(ctx).sync.read(a.read(), slot, size, false);
+        scheduler(ctx).sync.read(a.read(), slot, size);
         yield_now(ctx);
     }
     STATUS_OK

@@ -34,7 +34,7 @@ pub static RECEIVE: LibraryBody = LibraryBody {
 
 /// The message carrier `List[T]` of `channel.<op>[T]`: its layout and the
 /// layout of its `Option`.
-fn carrier(cx: &mut Cx<'_>) -> R<(LayoutId, LayoutId)> {
+pub(super) fn carrier(cx: &mut Cx<'_>) -> R<(LayoutId, LayoutId)> {
     let element = cx.type_actual(0)?;
     let list = cx.store.push(Type::with_kind(TypeKind::Builtin {
         kind: BuiltinType::List,
@@ -99,7 +99,7 @@ fn branch_done(b: &mut Body<'_, '_>, status: ValueId) -> R<(BlockId, BlockId)> {
 
 /// Move the value out of the `Some([v])` message in `slot`, whose storage then ends,
 /// and drop the empty list. The value is left in a local the body holds.
-fn unbox(
+pub(super) fn unbox(
     b: &mut Body<'_, '_>,
     slot: SlotId,
     address: AddressId,

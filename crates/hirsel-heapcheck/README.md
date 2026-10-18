@@ -358,8 +358,10 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
 root, a send and a receive move it out of and into the bodies' `Option` slots, and the last
 receiver's close drops the messages nobody received, oldest first.
 
-`exec/sync.rs` is the runtime's mutex and atomic cells: each holds its payload's `Some` image,
-and a dead mutex keeps the failure chain of the body that killed it.
+`exec/sync.rs` is the runtime's mutex and atomic cells. An atomic holds its payload's `Some`
+image; a mutex's payload carrier is a harness root while no body holds it, and the run's finish
+drops what the mutexes still hold, as the runtime releases it at the run's end. A dead mutex
+keeps the failure chain of the body that killed it.
 
 `exec/isolate.rs` is `task.isolate` (FAIL-2): the `Isolate` terminator moves the running task's
 failures since the body's record count into the caught chain, and the `$intrinsic.Isolate*`

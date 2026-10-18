@@ -474,19 +474,19 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_mutex_create",
         destination: true,
         result: Some((8, 8)),
-        parameters: &[Physical::Pointer, Physical::I64],
+        parameters: &[Physical::Pointer],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_mutex_take",
         destination: false,
         result: Some((4, 4)),
-        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+        parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_mutex_put",
         destination: false,
         result: None,
-        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+        parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_mutex_kill",

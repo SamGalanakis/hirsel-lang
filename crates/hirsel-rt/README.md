@@ -417,9 +417,12 @@ it completes, or at the detach if it already has; only live children keep scope 
   messages nobody received, oldest first.
 
 `sync.rs` is the run's mutex and atomic cells (CONC-4, CONC-5, FAIL-4), behind the compiled
-bodies of `mutex.create`, `mutex.with` and `atomic.*`. A cell holds its payload as the `Some`
-image of an `Option`, which the runtime copies: the layout of `Mutex[T]` requires a pointer-free
-payload with no drop (others stay M2), and an atomic's payload is a scalar. A mutex body may not
+bodies of `mutex.create`, `mutex.with` and `atomic.*`. A mutex's cell holds its payload as the
+block of a one-element list, moved out of and into `Option[List[T]]` carriers as a channel
+message is, so a Map, String or List payload needs no layout knowledge here; the run's end
+releases the blocks the mutexes still hold. The layout of `Mutex[T]` requires a copyable payload,
+whose release is unobservable (a mutex over a resource stays M2). An atomic's cell holds its
+scalar payload as the `Some` image of an `Option`, which the runtime copies. A mutex body may not
 yield, so no task observes a mutex another holds. A failing body kills its mutex, which keeps the
 failure chain; a later `mutex.with` fails FAIL-4 continued by that chain.
 

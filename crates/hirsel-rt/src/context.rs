@@ -207,6 +207,7 @@ impl RunCtx {
         if !self.work.is_null() {
             fault("task exit with release work pending");
         }
+        crate::tasks::end_run(self);
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         let audit = self.exit_audit();
         #[cfg(not(any(feature = "diagnostic", feature = "measurement")))]

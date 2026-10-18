@@ -435,6 +435,7 @@ conformance/CONC/CONC-5-match-unique-payload-bad.hir
 conformance/CONC/CONC-5-match-unique-payload-ok.hir
 conformance/CONC/CONC-5-nested-lock-in-body-bad.hir
 conformance/CONC/CONC-5-nested-lock-in-body-ok.hir
+conformance/CONC/CONC-5-owned-payload-mutexes-run.hir
 conformance/CONC/CONC-5-payload-unique-bad.hir
 conformance/CONC/CONC-5-payload-unique-ok.hir
 conformance/CONC/CONC-5-result-local-unique-payload-ok.hir
@@ -732,6 +733,7 @@ conformance/FAIL/FAIL-3-sorted-insert-taken-callback.hir
 conformance/FAIL/FAIL-3-unwind-resources.hir
 conformance/FAIL/FAIL-4-mutex-body-failure.hir
 conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir
+conformance/FAIL/FAIL-4-owned-payload-dead-run.hir
 conformance/GEN/GEN-1-borrowed-root-comparison-bad.hir
 conformance/GEN/GEN-1-borrowed-root-comparison-ok.hir
 conformance/GEN/GEN-1-borrowed-root-comparison-run.hir

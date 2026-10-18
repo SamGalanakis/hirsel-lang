@@ -1,0 +1,98 @@
+// rule: CONC-5
+// expect: run
+// stdout: ok
+// Mutex payloads with heap storage (a Map, a List and a String) move into their mutexes and
+// through each body; children update them through copied handles, and the run releases them.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let stdout = io.stdout(rt)?
+  let counts0: unique Map[u64, u64] = map.empty()
+  let counts = mutex.create(tasks, take counts0)
+  let items0: unique List[u64] = unique [1]
+  let items = mutex.create(tasks, take items0)
+  let name0: String = "a"
+  let name = mutex.create(tasks, take name0)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let a = task.async(
+        s,
+        fn() {
+          mutex.with(
+            tasks,
+            counts,
+            fn(mut m: unique Map[u64, u64]) -> () uses {} {
+              map.insert(mut m, 1, 10)
+            }
+          )
+          mutex.with(
+            tasks,
+            items,
+            fn(mut xs: unique List[u64]) -> () uses {} {
+              list.push(mut xs, 2)
+            }
+          )
+        }
+      )
+      let b = task.async(
+        s,
+        fn() {
+          mutex.with(
+            tasks,
+            counts,
+            fn(mut m: unique Map[u64, u64]) -> () uses {} {
+              map.insert(mut m, 2, 20)
+            }
+          )
+          mutex.with(
+            tasks,
+            name,
+            fn(mut text: unique String) -> () uses {} {
+              text = "ab"
+            }
+          )
+        }
+      )
+      task.await(s, take a)
+      task.await(s, take b)
+    }
+  )
+  let total: u64 = mutex.with(
+    tasks,
+    counts,
+    fn(mut m: unique Map[u64, u64]) -> u64 uses {} {
+      let one: u64 = match map.get(m, 1) {
+        Some(v) => v,
+        None => 0,
+      }
+      let two: u64 = match map.get(m, 2) {
+        Some(v) => v,
+        None => 0,
+      }
+      one + two
+    }
+  )
+  let length: u64 = mutex.with(
+    tasks,
+    items,
+    fn(mut xs: unique List[u64]) -> u64 uses {} {
+      list.len(xs)
+    }
+  )
+  let named: bool = mutex.with(
+    tasks,
+    name,
+    fn(mut text: unique String) -> bool uses {} {
+      text == "ab"
+    }
+  )
+  let _ = out.print(
+    stdout,
+    if total == 30 && length == 2 && named {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}
