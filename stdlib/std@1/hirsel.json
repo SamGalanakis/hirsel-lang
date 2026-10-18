@@ -476,6 +476,42 @@
       ]
     },
     {
+      "path": "sha224.hir",
+      "module": [
+        "sha224"
+      ]
+    },
+    {
+      "path": "sha512.hir",
+      "module": [
+        "sha512"
+      ]
+    },
+    {
+      "path": "sha384.hir",
+      "module": [
+        "sha384"
+      ]
+    },
+    {
+      "path": "sha512_256.hir",
+      "module": [
+        "sha512_256"
+      ]
+    },
+    {
+      "path": "sha1.hir",
+      "module": [
+        "sha1"
+      ]
+    },
+    {
+      "path": "md5.hir",
+      "module": [
+        "md5"
+      ]
+    },
+    {
       "path": "unicode_properties.hir",
       "module": [
         "unicode"

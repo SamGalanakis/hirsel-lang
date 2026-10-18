@@ -1,0 +1,29 @@
+// rule: SEM-3
+// expect: run
+// Padding boundaries around the length field and the 64-byte block, checked
+// against Python hashlib, one-shot and split around an empty update.
+fn check(input: String, expected: String) -> () {
+  let data = string.as_bytes(input)
+  failure.check(std@1/sha224.digest_hex(data) == expected, TextInvariant())
+  let half = bytes.len(data) / 2
+  let mut state = std@1/sha224.new()
+  std@1/sha224.update(mut state, bytes.slice(data, 0, half))
+  std@1/sha224.update(mut state, b"")
+  std@1/sha224.update(mut state, bytes.slice(data, half, bytes.len(data)))
+  failure.check(
+    std@1/hex.encode(std@1/bytes.from_inline(std@1/sha224.finish(take state))) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrs",
+    "62e4bea09191320c28931f805818b222a622e85ac862443ddc59d79b"
+  )
+  check(
+    "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijk",
+    "5dd3b58e5ff8bc6ea331e9f12394f46e2ca41f9cb522848d2e8d83f0"
+  )
+  Ok(())
+}

@@ -1,0 +1,85 @@
+// FIPS 180-4 SHA-512/256: the SHA-512 rounds and padding from SHA-512/256's
+// initial words, truncated to 32 bytes, as in Go crypto/internal/fips140/sha512 (BSD-3-Clause).
+pub opaque type State: plain + inert uses {} {
+  inner: std@1/sha512.State,
+}
+
+@noalloc
+pub fn new() -> State uses {} {
+  State(
+    inner: std@1/sha512.with_words(
+      [
+        0x22312194fc2bf72cu64,
+        0x9f555fa3c84c64c2u64,
+        0x2393b86b6f53b151u64,
+        0x963877195940eabdu64,
+        0x96283ee2a88effe3u64,
+        0xbe5e1e2553863992u64,
+        0x2b0199fc2c85b8aau64,
+        0x0eb72ddc81c52ca2u64
+      ]
+    )
+  )
+}
+
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  std@1/sha512.update(mut state.inner, data)
+}
+
+@noalloc
+pub fn finish(take state: State) -> Inline[u8, 32] uses {} {
+  let State(inner: inner) = take state
+  let full = std@1/sha512.finish(take inner)
+  let mut out: Inline[u8, 32] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let mut i: u64 = 0
+  while i < 32 {
+    out[i] = full[i]
+    i += 1
+  }
+  take out
+}
+
+@noalloc
+pub fn digest(data: Bytes) -> Inline[u8, 32] uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state)
+}
+
+pub fn digest_hex(data: Bytes) -> unique String uses {} {
+  std@1/hex.encode(std@1/bytes.from_inline(digest(data)))
+}

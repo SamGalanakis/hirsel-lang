@@ -1,0 +1,528 @@
+// Go crypto/internal/fips140/sha512 sha512block.go generic block and sha512.go
+// padding (BSD-3-Clause). SHA-384 and SHA-512/256 share these rounds.
+pub opaque type State: plain + inert uses {} {
+  words: Inline[u64, 8],
+  block: Inline[u8, 128],
+  used: u64,
+  count: u64,
+}
+
+const K: Inline[u64, 80] = [
+  0x428a2f98d728ae22,
+  0x7137449123ef65cd,
+  0xb5c0fbcfec4d3b2f,
+  0xe9b5dba58189dbbc,
+  0x3956c25bf348b538,
+  0x59f111f1b605d019,
+  0x923f82a4af194f9b,
+  0xab1c5ed5da6d8118,
+  0xd807aa98a3030242,
+  0x12835b0145706fbe,
+  0x243185be4ee4b28c,
+  0x550c7dc3d5ffb4e2,
+  0x72be5d74f27b896f,
+  0x80deb1fe3b1696b1,
+  0x9bdc06a725c71235,
+  0xc19bf174cf692694,
+  0xe49b69c19ef14ad2,
+  0xefbe4786384f25e3,
+  0x0fc19dc68b8cd5b5,
+  0x240ca1cc77ac9c65,
+  0x2de92c6f592b0275,
+  0x4a7484aa6ea6e483,
+  0x5cb0a9dcbd41fbd4,
+  0x76f988da831153b5,
+  0x983e5152ee66dfab,
+  0xa831c66d2db43210,
+  0xb00327c898fb213f,
+  0xbf597fc7beef0ee4,
+  0xc6e00bf33da88fc2,
+  0xd5a79147930aa725,
+  0x06ca6351e003826f,
+  0x142929670a0e6e70,
+  0x27b70a8546d22ffc,
+  0x2e1b21385c26c926,
+  0x4d2c6dfc5ac42aed,
+  0x53380d139d95b3df,
+  0x650a73548baf63de,
+  0x766a0abb3c77b2a8,
+  0x81c2c92e47edaee6,
+  0x92722c851482353b,
+  0xa2bfe8a14cf10364,
+  0xa81a664bbc423001,
+  0xc24b8b70d0f89791,
+  0xc76c51a30654be30,
+  0xd192e819d6ef5218,
+  0xd69906245565a910,
+  0xf40e35855771202a,
+  0x106aa07032bbd1b8,
+  0x19a4c116b8d2d0c8,
+  0x1e376c085141ab53,
+  0x2748774cdf8eeb99,
+  0x34b0bcb5e19b48a8,
+  0x391c0cb3c5c95a63,
+  0x4ed8aa4ae3418acb,
+  0x5b9cca4f7763e373,
+  0x682e6ff3d6b2b8a3,
+  0x748f82ee5defb2fc,
+  0x78a5636f43172f60,
+  0x84c87814a1f0ab72,
+  0x8cc702081a6439ec,
+  0x90befffa23631e28,
+  0xa4506cebde82bde9,
+  0xbef9a3f7b2c67915,
+  0xc67178f2e372532b,
+  0xca273eceea26619c,
+  0xd186b8c721c0c207,
+  0xeada7dd6cde0eb1e,
+  0xf57d4f7fee6ed178,
+  0x06f067aa72176fba,
+  0x0a637dc5a2c898a6,
+  0x113f9804bef90dae,
+  0x1b710b35131c471b,
+  0x28db77f523047d84,
+  0x32caab7b40c72493,
+  0x3c9ebe0a15c9bebc,
+  0x431d67c49c100d4c,
+  0x4cc5d4becb3e42b6,
+  0x597f299cfc657e2a,
+  0x5fcb6fab3ad6faec,
+  0x6c44198c4a475817
+]
+
+@noalloc
+pub fn new() -> State uses {} {
+  with_words(
+    [
+      0x6a09e667f3bcc908u64,
+      0xbb67ae8584caa73bu64,
+      0x3c6ef372fe94f82bu64,
+      0xa54ff53a5f1d36f1u64,
+      0x510e527fade682d1u64,
+      0x9b05688c2b3e6c1fu64,
+      0x1f83d9abfb41bd6bu64,
+      0x5be0cd19137e2179u64
+    ]
+  )
+}
+
+// SHA-384 and SHA-512/256 share these rounds and padding from their own initial words.
+@noalloc
+fn with_words(words: Inline[u64, 8]) -> State uses {} {
+  State(
+    words: words,
+    block: [
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8
+    ],
+    used: 0,
+    count: 0
+  )
+}
+
+@noalloc
+fn rotate(value: u64, bits: u64) -> u64 uses {} {
+  value >> bits | value << 64u64 - bits
+}
+
+@noalloc
+fn add(a: u64, b: u64) -> u64 uses {} {
+  core@1/int.wrapping_add(a, b)
+}
+
+@noalloc
+fn compress(mut state: State) -> () uses {} {
+  let mut schedule: Inline[u64, 80] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  let mut i: u64 = 0
+  while i < 16 {
+    let at = i * 8
+    let mut word: u64 = 0
+    let mut j: u64 = 0
+    while j < 8 {
+      let byte: u64 = core@1/int.widen(state.block[at + j])
+      word = word << 8 | byte
+      j += 1
+    }
+    schedule[i] = word
+    i += 1
+  }
+  while i < 80 {
+    let a = schedule[i - 15]
+    let b = schedule[i - 2]
+    let s0 = rotate(a, 1) ^ rotate(a, 8) ^ a >> 7
+    let s1 = rotate(b, 19) ^ rotate(b, 61) ^ b >> 6
+    schedule[i] = add(add(schedule[i - 16], s0), add(schedule[i - 7], s1))
+    i += 1
+  }
+  let mut a = state.words[0]
+  let mut b = state.words[1]
+  let mut c = state.words[2]
+  let mut d = state.words[3]
+  let mut e = state.words[4]
+  let mut f = state.words[5]
+  let mut g = state.words[6]
+  let mut h = state.words[7]
+  i = 0
+  while i < 80 {
+    let upper = rotate(e, 14) ^ rotate(e, 18) ^ rotate(e, 41)
+    let choice = e & f ^ ~e & g
+    let t1 = add(add(add(h, upper), choice), add(K[i], schedule[i]))
+    let lower = rotate(a, 28) ^ rotate(a, 34) ^ rotate(a, 39)
+    let majority = a & b ^ a & c ^ b & c
+    let t2 = add(lower, majority)
+    h = g
+    g = f
+    f = e
+    e = add(d, t1)
+    d = c
+    c = b
+    b = a
+    a = add(t1, t2)
+    i += 1
+  }
+  state.words[0] = add(state.words[0], a)
+  state.words[1] = add(state.words[1], b)
+  state.words[2] = add(state.words[2], c)
+  state.words[3] = add(state.words[3], d)
+  state.words[4] = add(state.words[4], e)
+  state.words[5] = add(state.words[5], f)
+  state.words[6] = add(state.words[6], g)
+  state.words[7] = add(state.words[7], h)
+}
+
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  let len = core@1/bytes.len(data)
+  core@1/failure.check(len <= 18446744073709551615u64 - state.count, Arithmetic())
+  state.count += len
+  let mut i: u64 = 0
+  while i < len {
+    state.block[state.used] = data[i]
+    state.used += 1
+    if state.used == 128 {
+      compress(mut state)
+      state.used = 0
+    }
+    i += 1
+  }
+}
+
+@noalloc
+pub fn finish(take state: State) -> Inline[u8, 64] uses {} {
+  let mut final_state = take state
+  final_state.block[final_state.used] = 128
+  final_state.used += 1
+  if final_state.used > 112 {
+    while final_state.used < 128 {
+      final_state.block[final_state.used] = 0
+      final_state.used += 1
+    }
+    compress(mut final_state)
+    final_state.used = 0
+  }
+  while final_state.used < 128 {
+    final_state.block[final_state.used] = 0
+    final_state.used += 1
+  }
+  // The 128-bit big-endian bit length: the byte count's top three bits end the high word.
+  final_state.block[119] = core@1/int.narrow(final_state.count >> 61)
+  let mut bits = final_state.count << 3
+  let mut i: u64 = 0
+  while i < 8 {
+    final_state.block[127 - i] = core@1/int.truncate(bits)
+    bits >>= 8
+    i += 1
+  }
+  compress(mut final_state)
+  let mut out: Inline[u8, 64] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  i = 0
+  while i < 64 {
+    let value = final_state.words[i >> 3]
+    out[i] = core@1/int.truncate(value >> 56 - (i & 7) * 8)
+    i += 1
+  }
+  take out
+}
+
+@noalloc
+pub fn digest(data: Bytes) -> Inline[u8, 64] uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state)
+}
+
+pub fn digest_hex(data: Bytes) -> unique String uses {} {
+  std@1/hex.encode(std@1/bytes.from_inline(digest(data)))
+}

@@ -1,0 +1,33 @@
+// rule: SEM-3
+// expect: run
+// A selection of Go crypto/md5 golden vectors and the RFC 1321 A.5 suite tail.
+fn check(input: String, expected: String) -> () {
+  failure.check(
+    std@1/md5.digest_hex(string.as_bytes(input)) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", "d41d8cd98f00b204e9800998ecf8427e")
+  check("a", "0cc175b9c0f1b6a831c399e269772661")
+  check("ab", "187ef4436122d1cc2f40dc2b92f0eba0")
+  check("abc", "900150983cd24fb0d6963f7d28e17f72")
+  check("abcd", "e2fc714c4727ee9395f324cd2e7f331f")
+  check("abcde", "ab56b4d92b40713acc5af89985d4b786")
+  check("abcdef", "e80b5017098950fc58aad83c8c14978e")
+  check("abcdefg", "7ac66c0f148de9519b8bd264312c4d64")
+  check("abcdefgh", "e8dc4081b13434b45189a720b77b6818")
+  check("abcdefghi", "8aa99b1f439ff71293e95357bac6fd94")
+  check("abcdefghij", "a925576942e94b2ef57a066101b48876")
+  check(
+    "The fugacity of a constituent in a mixture of gases at a given temperature is proportional to its mole fraction.  Lewis-Randall Rule",
+    "72c2ed7592debca1c90fc0100f931a2f"
+  )
+  check(
+    "12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+    "57edf4a22be3c955ac49da2e2107b67a"
+  )
+  check("abcdefghijklmnopqrstuvwxyz", "c3fcd3d76192e4007dfb496cca67e13b")
+  Ok(())
+}

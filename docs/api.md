@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-973 exported definitions; 299 variants.
+1009 exported definitions; 299 variants.
 
 ## Types and roots
 
@@ -5080,6 +5080,43 @@ References: [`core@1/OutputError`](#def-core_401_2fOutputError), [`core@1/Result
 References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/bool`](#def-core_401_2fbool)
 
 
+## md5
+
+<a id="def-std_401_2fmd5_2fState"></a>
+
+- `pub opaque type md5.State: plain + inert uses {}`
+
+<a id="def-std_401_2fmd5_2fdigest"></a>
+
+- `@noalloc pub fn md5.digest(data: Bytes) -> Inline[u8, 16] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fmd5_2fdigest_5fhex"></a>
+
+- `pub fn md5.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmd5_2ffinish"></a>
+
+- `@noalloc pub fn md5.finish(take state: State) -> Inline[u8, 16] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/md5/State`](#def-std_401_2fmd5_2fState)
+
+<a id="def-std_401_2fmd5_2fnew"></a>
+
+- `@noalloc pub fn md5.new() -> State uses {}`
+
+References: [`std@1/md5/State`](#def-std_401_2fmd5_2fState)
+
+<a id="def-std_401_2fmd5_2fupdate"></a>
+
+- `@noalloc pub fn md5.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/md5/State`](#def-std_401_2fmd5_2fState)
+
+
 ## mutex
 
 <a id="def-core_401_2fmutex_2fcreate"></a>
@@ -5731,6 +5768,80 @@ Variant of scalar.ParseError.
 - `fn set.remove[T: key](mut s: unique Set[T], value: T) -> bool`
 
 
+## sha1
+
+<a id="def-std_401_2fsha1_2fState"></a>
+
+- `pub opaque type sha1.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha1_2fdigest"></a>
+
+- `@noalloc pub fn sha1.digest(data: Bytes) -> Inline[u8, 20] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha1_2fdigest_5fhex"></a>
+
+- `pub fn sha1.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha1_2ffinish"></a>
+
+- `@noalloc pub fn sha1.finish(take state: State) -> Inline[u8, 20] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha1/State`](#def-std_401_2fsha1_2fState)
+
+<a id="def-std_401_2fsha1_2fnew"></a>
+
+- `@noalloc pub fn sha1.new() -> State uses {}`
+
+References: [`std@1/sha1/State`](#def-std_401_2fsha1_2fState)
+
+<a id="def-std_401_2fsha1_2fupdate"></a>
+
+- `@noalloc pub fn sha1.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha1/State`](#def-std_401_2fsha1_2fState)
+
+
+## sha224
+
+<a id="def-std_401_2fsha224_2fState"></a>
+
+- `pub opaque type sha224.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha224_2fdigest"></a>
+
+- `@noalloc pub fn sha224.digest(data: Bytes) -> Inline[u8, 28] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha224_2fdigest_5fhex"></a>
+
+- `pub fn sha224.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha224_2ffinish"></a>
+
+- `@noalloc pub fn sha224.finish(take state: State) -> Inline[u8, 28] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha224/State`](#def-std_401_2fsha224_2fState)
+
+<a id="def-std_401_2fsha224_2fnew"></a>
+
+- `@noalloc pub fn sha224.new() -> State uses {}`
+
+References: [`std@1/sha224/State`](#def-std_401_2fsha224_2fState)
+
+<a id="def-std_401_2fsha224_2fupdate"></a>
+
+- `@noalloc pub fn sha224.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha224/State`](#def-std_401_2fsha224_2fState)
+
+
 ## sha256
 
 <a id="def-std_401_2fsha256_2fState"></a>
@@ -5766,6 +5877,117 @@ References: [`std@1/sha256/State`](#def-std_401_2fsha256_2fState)
 - `@noalloc pub fn sha256.update(mut state: State, data: Bytes) -> () uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha256/State`](#def-std_401_2fsha256_2fState)
+
+
+## sha384
+
+<a id="def-std_401_2fsha384_2fState"></a>
+
+- `pub opaque type sha384.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha384_2fdigest"></a>
+
+- `@noalloc pub fn sha384.digest(data: Bytes) -> Inline[u8, 48] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha384_2fdigest_5fhex"></a>
+
+- `pub fn sha384.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha384_2ffinish"></a>
+
+- `@noalloc pub fn sha384.finish(take state: State) -> Inline[u8, 48] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha384/State`](#def-std_401_2fsha384_2fState)
+
+<a id="def-std_401_2fsha384_2fnew"></a>
+
+- `@noalloc pub fn sha384.new() -> State uses {}`
+
+References: [`std@1/sha384/State`](#def-std_401_2fsha384_2fState)
+
+<a id="def-std_401_2fsha384_2fupdate"></a>
+
+- `@noalloc pub fn sha384.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha384/State`](#def-std_401_2fsha384_2fState)
+
+
+## sha512
+
+<a id="def-std_401_2fsha512_2fState"></a>
+
+- `pub opaque type sha512.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha512_2fdigest"></a>
+
+- `@noalloc pub fn sha512.digest(data: Bytes) -> Inline[u8, 64] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha512_2fdigest_5fhex"></a>
+
+- `pub fn sha512.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha512_2ffinish"></a>
+
+- `@noalloc pub fn sha512.finish(take state: State) -> Inline[u8, 64] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha512/State`](#def-std_401_2fsha512_2fState)
+
+<a id="def-std_401_2fsha512_2fnew"></a>
+
+- `@noalloc pub fn sha512.new() -> State uses {}`
+
+References: [`std@1/sha512/State`](#def-std_401_2fsha512_2fState)
+
+<a id="def-std_401_2fsha512_2fupdate"></a>
+
+- `@noalloc pub fn sha512.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha512/State`](#def-std_401_2fsha512_2fState)
+
+
+## sha512_256
+
+<a id="def-std_401_2fsha512_5f256_2fState"></a>
+
+- `pub opaque type sha512_256.State: plain + inert uses {}`
+
+<a id="def-std_401_2fsha512_5f256_2fdigest"></a>
+
+- `@noalloc pub fn sha512_256.digest(data: Bytes) -> Inline[u8, 32] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fsha512_5f256_2fdigest_5fhex"></a>
+
+- `pub fn sha512_256.digest_hex(data: Bytes) -> unique String uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fsha512_5f256_2ffinish"></a>
+
+- `@noalloc pub fn sha512_256.finish(take state: State) -> Inline[u8, 32] uses {}`
+
+References: [`core@1/Inline`](#def-core_401_2fInline), [`core@1/u8`](#def-core_401_2fu8), [`std@1/sha512_256/State`](#def-std_401_2fsha512_5f256_2fState)
+
+<a id="def-std_401_2fsha512_5f256_2fnew"></a>
+
+- `@noalloc pub fn sha512_256.new() -> State uses {}`
+
+References: [`std@1/sha512_256/State`](#def-std_401_2fsha512_5f256_2fState)
+
+<a id="def-std_401_2fsha512_5f256_2fupdate"></a>
+
+- `@noalloc pub fn sha512_256.update(mut state: State, data: Bytes) -> () uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha512_256/State`](#def-std_401_2fsha512_5f256_2fState)
 
 
 ## shared

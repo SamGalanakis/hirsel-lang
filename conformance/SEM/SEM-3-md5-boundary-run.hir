@@ -1,0 +1,41 @@
+// rule: SEM-3
+// expect: run
+// Padding boundaries around the length field and the 64-byte block, checked
+// against Python hashlib, one-shot and split around an empty update.
+fn check(input: String, expected: String) -> () {
+  let data = string.as_bytes(input)
+  failure.check(std@1/md5.digest_hex(data) == expected, TextInvariant())
+  let half = bytes.len(data) / 2
+  let mut state = std@1/md5.new()
+  std@1/md5.update(mut state, bytes.slice(data, 0, half))
+  std@1/md5.update(mut state, b"")
+  std@1/md5.update(mut state, bytes.slice(data, half, bytes.len(data)))
+  failure.check(
+    std@1/hex.encode(std@1/bytes.from_inline(std@1/md5.finish(take state))) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrs",
+    "a49d85aaac8495cbb53b120f3b987478"
+  )
+  check(
+    "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrst",
+    "0b74570ac5c5b441888f67619534aa88"
+  )
+  check(
+    "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0",
+    "87d2cdc81ca700a7259acd6bc75abf0b"
+  )
+  check(
+    "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz01",
+    "bbd17cbd1784152cd93cca62dee11b5b"
+  )
+  check(
+    "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijk",
+    "539c092f3bbaf473ca84216060a5c8a0"
+  )
+  Ok(())
+}

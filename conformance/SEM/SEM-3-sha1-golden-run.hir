@@ -1,0 +1,26 @@
+// rule: SEM-3
+// expect: run
+// A selection of Go crypto/sha1 golden vectors and the FIPS 180-2 two-block message.
+fn check(input: String, expected: String) -> () {
+  failure.check(
+    std@1/sha1.digest_hex(string.as_bytes(input)) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    "76245dbf96f661bd221046197ab8b9f063f11bad"
+  )
+  check("", "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+  check("a", "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8")
+  check("ab", "da23614e02469a0d7c7bd1bdab5c9c474b1904dc")
+  check("abc", "a9993e364706816aba3e25717850c26c9cd0d89d")
+  check("abcd", "81fe8bfe87576c3ecb22426f8e57847382917acf")
+  check(
+    "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+    "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+  )
+  Ok(())
+}

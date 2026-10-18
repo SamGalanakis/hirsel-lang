@@ -1,0 +1,33 @@
+// rule: SEM-3
+// expect: run
+// A selection of Go crypto/sha512 golden384 vectors and the FIPS 180-2 two-block message.
+fn check(input: String, expected: String) -> () {
+  failure.check(
+    std@1/sha384.digest_hex(string.as_bytes(input)) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "",
+    "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"
+  )
+  check(
+    "a",
+    "54a59b9f22b0b80880d8427e548b7c23abd873486e1f035dce9cd697e85175033caa88e6d57bc35efae0b5afd3145f31"
+  )
+  check(
+    "ab",
+    "c7be03ba5bcaa384727076db0018e99248e1a6e8bd1b9ef58a9ec9dd4eeebb3f48b836201221175befa74ddc3d35afdd"
+  )
+  check(
+    "abc",
+    "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7"
+  )
+  check(
+    "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+    "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712fcc7c71a557e2db966c3e9fa91746039"
+  )
+  Ok(())
+}

@@ -1,0 +1,252 @@
+// Go crypto/sha1 sha1block.go generic block and sha1.go padding (BSD-3-Clause).
+// SHA-1 is not collision resistant: use it only to interoperate with legacy formats.
+pub opaque type State: plain + inert uses {} {
+  words: Inline[u32, 5],
+  block: Inline[u8, 64],
+  used: u64,
+  count: u64,
+}
+
+@noalloc
+pub fn new() -> State uses {} {
+  State(
+    words: [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32, 0xC3D2E1F0u32],
+    block: [
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8
+    ],
+    used: 0,
+    count: 0
+  )
+}
+
+@noalloc
+fn rotl(value: u32, bits: u32) -> u32 uses {} {
+  value << bits | value >> 32u32 - bits
+}
+
+@noalloc
+fn add(a: u32, b: u32) -> u32 uses {} {
+  core@1/int.wrapping_add(a, b)
+}
+
+@noalloc
+fn compress(mut state: State) -> () uses {} {
+  let mut w: Inline[u32, 16] = [
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32,
+    0u32
+  ]
+  let mut i: u64 = 0
+  while i < 16 {
+    let at = i * 4
+    let b0: u32 = core@1/int.widen(state.block[at])
+    let b1: u32 = core@1/int.widen(state.block[at + 1])
+    let b2: u32 = core@1/int.widen(state.block[at + 2])
+    let b3: u32 = core@1/int.widen(state.block[at + 3])
+    w[i] = b0 << 24 | b1 << 16 | b2 << 8 | b3
+    i += 1
+  }
+  let mut a = state.words[0]
+  let mut b = state.words[1]
+  let mut c = state.words[2]
+  let mut d = state.words[3]
+  let mut e = state.words[4]
+  i = 0
+  while i < 80 {
+    let slot = i & 15
+    if i >= 16 {
+      let mixed = w[i - 3 & 15] ^ w[i - 8 & 15] ^ w[i - 14 & 15] ^ w[slot]
+      w[slot] = rotl(mixed, 1)
+    }
+    let mut f: u32 = 0
+    let mut k: u32 = 0
+    if i < 20 {
+      f = b & c | ~b & d
+      k = 0x5A827999
+    } else if i < 40 {
+      f = b ^ c ^ d
+      k = 0x6ED9EBA1
+    } else if i < 60 {
+      f = (b | c) & d | b & c
+      k = 0x8F1BBCDC
+    } else {
+      f = b ^ c ^ d
+      k = 0xCA62C1D6
+    }
+    let t = add(add(add(rotl(a, 5), f), add(e, w[slot])), k)
+    e = d
+    d = c
+    c = rotl(b, 30)
+    b = a
+    a = t
+    i += 1
+  }
+  state.words[0] = add(state.words[0], a)
+  state.words[1] = add(state.words[1], b)
+  state.words[2] = add(state.words[2], c)
+  state.words[3] = add(state.words[3], d)
+  state.words[4] = add(state.words[4], e)
+}
+
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  let len = core@1/bytes.len(data)
+  core@1/failure.check(len <= 2305843009213693951u64 - state.count, Arithmetic())
+  state.count += len
+  let mut i: u64 = 0
+  while i < len {
+    state.block[state.used] = data[i]
+    state.used += 1
+    if state.used == 64 {
+      compress(mut state)
+      state.used = 0
+    }
+    i += 1
+  }
+}
+
+@noalloc
+pub fn finish(take state: State) -> Inline[u8, 20] uses {} {
+  let mut final_state = take state
+  final_state.block[final_state.used] = 128
+  final_state.used += 1
+  if final_state.used > 56 {
+    while final_state.used < 64 {
+      final_state.block[final_state.used] = 0
+      final_state.used += 1
+    }
+    compress(mut final_state)
+    final_state.used = 0
+  }
+  while final_state.used < 56 {
+    final_state.block[final_state.used] = 0
+    final_state.used += 1
+  }
+  let mut bits = final_state.count * 8u64
+  let mut i: u64 = 0
+  while i < 8 {
+    final_state.block[63 - i] = core@1/int.narrow(bits & 255u64)
+    bits >>= 8
+    i += 1
+  }
+  compress(mut final_state)
+  let mut out: Inline[u8, 20] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  i = 0
+  while i < 5 {
+    let value = final_state.words[i]
+    out[i * 4] = core@1/int.narrow(value >> 24)
+    out[i * 4 + 1] = core@1/int.narrow(value >> 16 & 255u32)
+    out[i * 4 + 2] = core@1/int.narrow(value >> 8 & 255u32)
+    out[i * 4 + 3] = core@1/int.narrow(value & 255u32)
+    i += 1
+  }
+  take out
+}
+
+@noalloc
+pub fn digest(data: Bytes) -> Inline[u8, 20] uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state)
+}
+
+pub fn digest_hex(data: Bytes) -> unique String uses {} {
+  std@1/hex.encode(std@1/bytes.from_inline(digest(data)))
+}

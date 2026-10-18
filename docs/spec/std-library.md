@@ -1245,6 +1245,41 @@ form over the same kernel. Hexadecimal rendering is a separate codec;
 `digest_hex` is `hex.encode(bytes.from_inline(digest(data)))`. This is a
 digest, without password-hashing or signature operations.
 
+## SHA-1, SHA-2 family and MD5
+
+`sha1`, `sha224`, `sha384`, `sha512`, `sha512_256` and `md5` follow the `sha256`
+shape exactly, each with its own opaque `plain + inert` `State` and digest size `n`
+(20, 28, 48, 64, 32 and 16 bytes):
+
+```text
+fn <hash>.new() -> State uses {}
+fn <hash>.update(mut state: State, data: Bytes) -> () uses {}
+fn <hash>.finish(take state: State) -> Inline[u8, n] uses {}
+fn <hash>.digest(data: Bytes) -> Inline[u8, n] uses {}
+fn <hash>.digest_hex(data: Bytes) -> unique String uses {}
+```
+
+All but `digest_hex` allocate nothing. SHA-1 and MD5 use SHA-256's 64-byte block,
+64-bit bit-length field and 2^61-1-byte input limit; MD5 writes its length field and
+output words little-endian, the others big-endian. SHA-384, SHA-512 and SHA-512/256
+(FIPS 180-4) share the SHA-512 kernel with a 128-byte block and a 128-bit length
+field; their byte count is a `u64`, so update fails SEM-1 once total input would
+exceed 2^64-1 bytes. SHA-224 is the SHA-256 kernel and SHA-384 and SHA-512/256 the
+SHA-512 kernel from their own FIPS 180-4 initial words, truncated to the leading
+digest bytes; the shared kernel is one source definition, not a copy.
+
+SHA-1 is not collision resistant (SHAttered, 2017) and MD5 is broken outright:
+both exist only to read and write formats and protocols that name them (Git object
+ids, legacy TLS/PGP data, `Content-MD5`, archive checksums). Neither may
+authenticate data against an adversary; use SHA-256 or another SHA-2 digest.
+
+Throughput: every hash buffers input a byte at a time into its block, then runs
+one compression per full block: SHA-1 80 rounds and MD5 64 rounds over 32-bit
+words, the SHA-256 kernel 64 rounds, the SHA-512 kernel 80 rounds over 64-bit
+words on twice the block: 0.625 rounds per byte against SHA-256's 1.0, so on a
+64-bit target SHA-512 is usually the faster kernel. Truncated variants cost exactly their
+kernel. There is no bench gate.
+
 ## FNV-1a hashing
 
 `std@1/fnv` implements 64-bit FNV-1a in ordinary, allocation-free source, with the

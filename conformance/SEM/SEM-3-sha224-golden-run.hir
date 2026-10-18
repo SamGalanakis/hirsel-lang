@@ -1,0 +1,25 @@
+// rule: SEM-3
+// expect: run
+// A selection of Go crypto/sha256 golden224 vectors and the FIPS 180-2 two-block message.
+fn check(input: String, expected: String) -> () {
+  failure.check(
+    std@1/sha224.digest_hex(string.as_bytes(input)) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f")
+  check("a", "abd37534c7d9a2efb9465de931cd7055ffdb8879563ae98078d6d6d5")
+  check("ab", "db3cda86d4429a1d39c148989566b38f7bda0156296bd364ba2f878b")
+  check("abc", "23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7")
+  check(
+    "The fugacity of a constituent in a mixture of gases at a given temperature is proportional to its mole fraction.  Lewis-Randall Rule",
+    "ec18e66e93afc4fb1604bc2baedbfd20b44c43d76e65c0996d7851c6"
+  )
+  check(
+    "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+    "75388b16512776cc5dba5da1fd890150b0c6455cb4f58b1952522525"
+  )
+  Ok(())
+}

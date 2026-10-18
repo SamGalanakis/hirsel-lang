@@ -75,8 +75,8 @@ const K: Inline[u32, 64] = [
 
 @noalloc
 pub fn new() -> State uses {} {
-  State(
-    words: [
+  with_words(
+    [
       0x6a09e667u32,
       0xbb67ae85u32,
       0x3c6ef372u32,
@@ -85,7 +85,15 @@ pub fn new() -> State uses {} {
       0x9b05688cu32,
       0x1f83d9abu32,
       0x5be0cd19u32
-    ],
+    ]
+  )
+}
+
+// SHA-224 shares these rounds and padding from its own initial words.
+@noalloc
+fn with_words(words: Inline[u32, 8]) -> State uses {} {
+  State(
+    words: words,
     block: [
       0u8,
       0u8,
