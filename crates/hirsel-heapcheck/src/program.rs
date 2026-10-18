@@ -76,8 +76,9 @@ impl<S: Stage> Program<S> {
 
     /// The unit to start from.
     /// The entry unit of a definition. A closure body shares its enclosing
-    /// definition's path, so units some closure site names as its code are
-    /// not entry candidates.
+    /// definition's path. Source anchors identify the TIR body, including
+    /// contract bodies whose closure construction was eliminated. Units without
+    /// source anchors retain the symbol-based convention used by IR fixtures.
     pub(crate) fn entry(&self, definition: &DefPath) -> Checked<usize> {
         let closures: Vec<(&DefPath, Option<ContentHash>)> = self
             .units
@@ -102,6 +103,10 @@ impl<S: Stage> Program<S> {
             .collect();
         let mut found = self.units.iter().enumerate().filter(|(_, u)| {
             u.header.definition == *definition
+                && u.tables.source_anchors.iter().all(|anchor| {
+                    // Cleanup-generated anchors complement the source body ID.
+                    anchor.body == 0 || anchor.body == u32::MAX
+                })
                 && !closures.iter().any(|(d, i)| {
                     **d == u.header.definition && i.is_none_or(|i| i == u.header.instance)
                 })

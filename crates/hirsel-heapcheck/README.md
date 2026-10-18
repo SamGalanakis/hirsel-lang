@@ -622,3 +622,8 @@ of their byte extent and index at zero stride past both header words.
 
 Failure observations retain and compare the original operation site independently
 of the primary attribution. Tooling reports render both complete locations.
+
+Entry selection uses source-anchor body identities to distinguish the named entry
+from nested contract and closure units sharing its definition path. This also
+covers contract constructions eliminated by lowering. Units without source anchors
+retain the closure/bound-symbol convention used by hand-built IR fixtures.
