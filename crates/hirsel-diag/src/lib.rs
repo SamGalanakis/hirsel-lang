@@ -172,13 +172,29 @@ impl Diagnostic {
         self.obligations.push(obligation);
         self
     }
+    /// Prefer repairs proved by the producer; otherwise show the rule's typical
+    /// repair. Human and JSON output consume exactly the same notes.
+    fn rendered_notes(&self) -> impl Iterator<Item = &str> {
+        let typical = (self.fix.is_none()
+            && !self.notes.iter().any(|note| note.starts_with("help: ")))
+        .then(|| {
+            include_str!("guidance.tsv").lines().find_map(|line| {
+                let mut fields = line.splitn(4, '\t');
+                (fields.next()? == self.rule.as_str())
+                    .then(|| fields.nth(2))
+                    .flatten()
+            })
+        })
+        .flatten();
+        self.notes.iter().map(String::as_str).chain(typical)
+    }
     /// Versioned object, with null locations for invalid spans; never panics on stale IDs.
     pub fn to_json(&self, sources: &SourceMap) -> serde_json::Value {
         use serde_json::json;
         json!({"schema_version": 1, "rule": self.rule.as_str(), "severity": self.severity.as_str(),
             "message": self.message, "primary": span_json(self.primary, sources),
             "secondary": self.secondary.iter().map(|s| json!({"span": span_json(s.span, sources), "message": s.message})).collect::<Vec<_>>(),
-            "notes": self.notes, "fix": self.fix.as_ref().map(|f| json!({"span": span_json(f.span, sources), "replacement": f.replacement, "message": f.message}))})
+            "notes": self.rendered_notes().collect::<Vec<_>>(), "fix": self.fix.as_ref().map(|f| json!({"span": span_json(f.span, sources), "replacement": f.replacement, "message": f.message}))})
     }
     pub fn render_human(&self, sources: &SourceMap) -> String {
         let mut out = format!(
@@ -191,7 +207,7 @@ impl Diagnostic {
         for label in &self.secondary {
             render_site(&mut out, label.span, &label.message, sources);
         }
-        for note in &self.notes {
+        for note in self.rendered_notes() {
             // A note that begins `help: ` is a suggested repair.
             match note.strip_prefix("help: ") {
                 Some(help) => out.push_str(&format!("  = help: {help}\n")),
@@ -284,6 +300,55 @@ mod tests {
             assert!(RuleId::new(invalid).is_err());
             assert!(std::panic::catch_unwind(|| RuleId::of(invalid)).is_err());
         }
+    }
+    #[test]
+    fn repair_guidance_matches_json_human_and_reference() {
+        let mut seen = std::collections::BTreeSet::new();
+        let reference = include_str!("../../../docs/diagnostics.md");
+        for line in include_str!("guidance.tsv").lines() {
+            let fields = line.split('\t').collect::<Vec<_>>();
+            let [rule, title, meaning, help] = fields.as_slice() else {
+                panic!("invalid guidance: {line}");
+            };
+            let rule = RuleId::new(*rule).unwrap();
+            assert!(seen.insert(rule.clone()), "duplicate {rule}");
+            let fix = help.strip_prefix("help: ").unwrap();
+            assert!(reference.contains(&format!(
+                "## {rule}: {title}\n\n{meaning}\n\nTypical fix: {fix}\n"
+            )));
+            let sources = SourceMap::default();
+            let diagnostic = Diagnostic::error(rule, Span::default(), "failed");
+            assert_eq!(
+                diagnostic.to_json(&sources)["notes"],
+                serde_json::json!([help])
+            );
+            assert!(
+                diagnostic
+                    .render_human(&sources)
+                    .contains(&format!("= help: {fix}"))
+            );
+        }
+        assert_eq!(reference.matches("\n## ").count(), seen.len());
+        assert!(seen.len() >= 15);
+    }
+    #[test]
+    fn specific_repairs_supersede_typical_guidance() {
+        let sources = SourceMap::default();
+        let mut d = Diagnostic::error(RuleId::of("OWN-2"), Span::default(), "failed");
+        d.notes.push("help: write `take xs` here".into());
+        assert_eq!(
+            d.to_json(&sources)["notes"],
+            serde_json::json!(["help: write `take xs` here"])
+        );
+        d.notes.clear();
+        d.fix = Some(Fix {
+            span: Span::default(),
+            replacement: "take xs".into(),
+            message: "move the last use".into(),
+        });
+        assert_eq!(d.to_json(&sources)["notes"], serde_json::json!([]));
+        let d = Diagnostic::error(RuleId::of("FAIL-1"), Span::default(), "failed");
+        assert_eq!(d.to_json(&sources)["notes"], serde_json::json!([]));
     }
     #[test]
     fn stable_json_and_unicode_locations() {
