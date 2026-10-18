@@ -43,6 +43,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Err(_) => return self.invalid("an environment payload offset beyond u64"),
         };
         let payload = Place {
+            columns: None,
             ptr: self.builder.offset(environment, self.const_u64(start)),
             layout: LayoutId(u32::MAX),
             align,
@@ -52,6 +53,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let ptr = self.builder.offset(payload.ptr, self.const_u64(offset));
             let align = align.min(low_bit(offset)).min(self.layout(layout)?.align);
             self.slots[s] = Some(Place {
+                columns: None,
                 ptr,
                 layout,
                 align,
@@ -110,6 +112,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 | ParameterPassing::TransferAddress
                 | ParameterPassing::ExclusiveAddress => {
                     let place = Place {
+                        columns: None,
                         ptr: self.module.parameter(self.function, first),
                         layout,
                         align,
@@ -154,6 +157,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         }
                         LayoutKind::Flat => {
                             let place = Place {
+                                columns: None,
                                 ptr: pointer,
                                 layout,
                                 align,
@@ -254,6 +258,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         layout: LayoutId,
         unaligned: bool,
     ) -> Emitted<Place<'m>> {
+        if place.columns.is_some() {
+            let field = self
+                .layout(place.layout)?
+                .fields
+                .iter()
+                .find(|f| f.offset == offset && f.layout == layout)
+                .ok_or_else(|| CodegenError::Invalid {
+                    definition: self.definition().clone(),
+                    what: "column field absent".into(),
+                })?;
+            return self.column_field(place, field);
+        }
         let ptr = if offset == 0 {
             place.ptr
         } else {
@@ -268,6 +284,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 .min(self.layout(layout)?.align)
         };
         Ok(Place {
+            columns: None,
             ptr,
             layout,
             align,

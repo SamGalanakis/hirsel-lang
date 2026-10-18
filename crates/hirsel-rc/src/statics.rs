@@ -106,6 +106,13 @@ impl Encoder<'_, '_> {
             return Ok(index);
         }
         let size = match self.kind(payload) {
+            LayoutKind::SoaColumns { element } => {
+                let (data, capacity, width) = self.columns(element, sequence_len(content)?)?;
+                capacity
+                    .checked_mul(width)
+                    .and_then(|n| data.checked_add(n))
+                    .ok_or_else(|| StaticError("a static column extent beyond u64".into()))?
+            }
             LayoutKind::Sequence { element } => {
                 let (start, stride) = self.elements(element)?;
                 let count = sequence_len(content)?;
@@ -119,6 +126,21 @@ impl Encoder<'_, '_> {
         let index = self.reserve(payload, size);
         self.write(payload, content, index, 0)?;
         Ok(index)
+    }
+
+    /// Column placement follows the same capacity quantum as dynamic construction.
+    fn columns(&self, element: LayoutId, count: u64) -> Result<(u64, u64, u64), StaticError> {
+        let mut quantum = 1;
+        let mut width = 0;
+        for field in &self.layouts.record(element).fields {
+            quantum = quantum.max(u64::from(self.layouts.record(field.layout).align));
+            width += self.fixed(field.layout)?;
+        }
+        let data = hirsel_lir::layout::soa_data_offset(quantum)
+            .map_err(|e| StaticError(format!("{e:?}")))?;
+        let capacity = hirsel_lir::layout::align_up(count, quantum)
+            .map_err(|e| StaticError(format!("{e:?}")))?;
+        Ok((data, capacity, width))
     }
 
     /// A sequence payload's element offset and stride.
@@ -225,6 +247,33 @@ impl Encoder<'_, '_> {
                 }
                 for (i, value) in fields.iter().enumerate() {
                     self.write(*element, value, block, offset + stride * i as u64)?;
+                }
+                Ok(())
+            }
+            (LayoutKind::SoaColumns { element }, ValueKind::Construct { fields: rows, .. }) => {
+                let count = rows.len() as u64;
+                let (data, capacity, _) = self.columns(*element, count)?;
+                self.put(block, offset, &count.to_le_bytes());
+                self.put(
+                    block,
+                    offset + SEQUENCE_CAPACITY_OFFSET,
+                    &capacity.to_le_bytes(),
+                );
+                let fields = self.layouts.record(*element).fields.clone();
+                for (index, row) in rows.iter().enumerate() {
+                    let ValueKind::Construct { fields: values, .. } = &row.kind else {
+                        return unsupported("a static column element without record fields");
+                    };
+                    let mut prefix = 0;
+                    for field in &fields {
+                        let stride = self.fixed(field.layout)?;
+                        let value = values.get(field.ordinal as usize).ok_or_else(|| {
+                            StaticError("a static row without a declared field".into())
+                        })?;
+                        let at = offset + data + capacity * prefix + index as u64 * stride;
+                        self.write(field.layout, value, block, at)?;
+                        prefix += stride;
+                    }
                 }
                 Ok(())
             }

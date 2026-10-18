@@ -564,3 +564,7 @@ count the unit read before its callback ran, is caught, and control resumes on
 it only in a library body's failure cleanup, with a u64 `start` and a `Body`
 target for `caught`, and `tests/it/revision31.rs` pairs each rule with its valid
 twin. Runtime ABI 10 adds the `isolate_catch` entry.
+
+Sequence length, capacity, reserve, length commits and library Slot projections
+also admit SoA payloads. Their element layout remains the ordinary row layout;
+physical consumers gather and scatter its fields using stored column capacity.

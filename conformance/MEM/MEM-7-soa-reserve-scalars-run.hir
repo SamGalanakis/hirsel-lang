@@ -1,0 +1,35 @@
+// rule: MEM-7
+// expect: run
+@soa
+type Row {
+  small: u8,
+  x: u64,
+  wide: u128,
+  flag: bool,
+}
+
+fn row(n: u64) -> Row {
+  Row(small: 7, x: n, wide: 123456789u128, flag: true)
+}
+
+fn check(t: Test, r: Row, n: u64) -> () {
+  test.check(t, r.small == 7)
+  test.check(t, r.x == n)
+  test.check(t, r.flag)
+  test.check(t, r.wide == 123456789u128)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut rows: List[Row] = []
+  list.reserve(mut rows, 1)
+  list.push(mut rows, row(1))
+  list.reserve(mut rows, 65)
+  check(t, rows[0], 1)
+  let shared = copy rows
+  list.reserve(mut rows, 129)
+  check(t, rows[0], 1)
+  check(t, shared[0], 1)
+  list.reserve(mut rows, 0)
+  test.check(t, list.len(rows) == 1)
+  Ok(())
+}

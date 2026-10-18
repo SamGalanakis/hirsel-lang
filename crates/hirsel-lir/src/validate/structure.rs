@@ -1018,7 +1018,11 @@ impl<S: Stage> Checker<'_, '_, S> {
             // count check (LIR schema revision 7).
             ProjectionStep::Slot(_) => (
                 match layout.kind {
-                    LayoutKind::Sequence { element } if !addr.crossings.is_empty() => Some(element),
+                    LayoutKind::Sequence { element } | LayoutKind::SoaColumns { element }
+                        if !addr.crossings.is_empty() =>
+                    {
+                        Some(element)
+                    }
                     _ => None,
                 },
                 Step::Slot,
@@ -1736,7 +1740,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                     .payload(operand)
                     .and_then(|p| layouts.get(p))
                     .is_some_and(|r| match r.kind {
-                        LayoutKind::Sequence { .. } => true,
+                        LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. } => true,
                         LayoutKind::Sequential { .. } => !capacity,
                         _ => false,
                     });
@@ -1772,7 +1776,11 @@ impl<S: Stage> Checker<'_, '_, S> {
                 if !sequential {
                     self.library_only(site, inst.opcode());
                 }
-                let sequence = sequential || matches!(kind, Some(LayoutKind::Sequence { .. }));
+                let sequence = sequential
+                    || matches!(
+                        kind,
+                        Some(LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. })
+                    );
                 if !sequence || self.scalar(amount) != Some(ScalarKind::U64) {
                     self.add(site, K::Type("sequence write"));
                 }

@@ -47,3 +47,15 @@ conformance/CONC/CONC-5-inert-capture-and-update.hir
 conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir
 conformance/FAIL/FAIL-2-isolate-failure-fields-run.hir
 conformance/FAIL/FAIL-3-drop-failure-fields.hir
+
+conformance/MEM/MEM-7-soa-construct-refs-run.hir
+conformance/MEM/MEM-7-soa-index-refs-run.hir
+conformance/MEM/MEM-7-soa-iterate-refs-run.hir
+conformance/MEM/MEM-7-soa-len-refs-run.hir
+conformance/MEM/MEM-7-soa-pop-refs-run.hir
+conformance/MEM/MEM-7-soa-push-refs-run.hir
+conformance/MEM/MEM-7-soa-remove-refs-run.hir
+conformance/MEM/MEM-7-soa-reserve-refs-run.hir
+
+conformance/MEM/MEM-14-soa-read-bounds-refs-fail.hir
+conformance/MEM/MEM-14-soa-write-bounds-refs-fail.hir

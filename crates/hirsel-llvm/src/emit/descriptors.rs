@@ -433,6 +433,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             None
         };
         Ok(Place {
+            columns: None,
             ptr: self.builder.offset(storage, self.const_u64(offset)),
             layout,
             align,

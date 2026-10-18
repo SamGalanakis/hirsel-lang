@@ -179,6 +179,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     };
                     let align = self.layout(result.layout)?.align;
                     let out = Place {
+                        columns: None,
                         ptr: self.module.parameter(self.function, index),
                         layout: result.layout,
                         align,
@@ -401,6 +402,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
         }
         let mut root_places = Vec::new();
+        let mut column_returns = Vec::new();
         for (i, parameter) in abi.parameters.iter().enumerate() {
             let Some(argument) = arguments.iter().find(|a| a.parameter == parameter.source) else {
                 return self.invalid("a call without an argument for a parameter");
@@ -428,7 +430,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         args.push(self.load(Shape::Scalar(ScalarKind::Pointer), place));
                         root_places.push(place);
                     } else {
-                        args.push(place.ptr);
+                        let passed = self.gather(place)?;
+                        if place.columns.is_some() {
+                            column_returns.push((place, passed));
+                        }
+                        args.push(passed.ptr);
                     }
                 }
                 (ParameterPassing::PointerLength, ArgumentValue::Value(value)) => {
@@ -538,6 +544,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             None => self.builder.call_typed(signature.ty, callee, &args),
         };
         signature.attribute_call(self.module, returned);
+        for (destination, temporary) in column_returns {
+            let shape = self.layout_shape(destination.layout)?;
+            self.scatter(destination, shape, self.load(shape, temporary))?;
+        }
         // Hand back every root before branching on status: cleanup and Error observe
         // exactly the same callee mutations as successful continuation.
         let status = signature.status(&self.builder, returned);

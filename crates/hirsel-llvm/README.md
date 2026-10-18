@@ -542,3 +542,9 @@ selects O0 and `Speed` selects O3. All profiles run the same IR validators.
 
 Zero-size flat sequence elements retain an explicit count after the byte
 extent prefix. They use fixed-stride indexing without reading element prefixes.
+
+SoA List element places retain their row index and stored column capacity.
+Reads gather and writes scatter declaration-order fields; field projections
+address a column directly. Reserve relocates every column to its new capacity,
+moving unique storage or duplicating shared children before releasing the old
+root. Mutable row calls gather into ABI storage and scatter back on either exit.

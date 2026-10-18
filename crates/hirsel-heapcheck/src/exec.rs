@@ -27,6 +27,8 @@ use std::collections::BTreeMap;
 mod codec;
 mod compare;
 mod flat;
+mod soa;
+use soa::ColumnRow;
 mod fork;
 pub(crate) use fork::campaign as fork_campaign;
 mod channels;
@@ -144,6 +146,7 @@ pub(crate) struct Frame {
     statement: u32,
     values: Snapshot<Option<Held>>,
     slots: Snapshot<SlotStore>,
+    column_aliases: Snapshot<Option<ColumnRow>>,
     versions: Snapshot<Option<ValueId>>,
     /// Where each prepared address's preparation located its place.
     prepared: Snapshot<Option<Located>>,
@@ -267,6 +270,7 @@ pub(crate) struct Machine<'p, S> {
 
 /// What a resolved address names.
 struct Resolved {
+    columns: Option<ColumnRow>,
     ptr: Ptr,
     layout: LayoutId,
     /// Counted blocks traversed, outermost first; all must be unique to write.
@@ -281,6 +285,15 @@ struct Resolved {
 
 impl Resolved {
     fn located(&self) -> Located {
+        if let Some(row) = self.columns {
+            return Located::Columns(
+                row.base.alloc,
+                row.base.generation,
+                row.base.offset,
+                row.capacity,
+                row.index,
+            );
+        }
         if self.path.is_empty() {
             Located::Frame(self.ptr.offset)
         } else {
@@ -295,6 +308,7 @@ impl Resolved {
 /// its offset, since a native slot's storage never moves.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Located {
+    Columns(AllocId, u32, u64, u64, u64),
     Heap(AllocId, u32, u64),
     Frame(u64),
     /// An unchecked address whose root did not resolve when it was prepared.
@@ -429,6 +443,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             statement: 0,
             values: (0..u.values.len()).map(|_| None).collect(),
             slots: u.slots.iter().map(|_| SlotStore::Dead).collect(),
+            column_aliases: (0..u.slots.len()).map(|_| None).collect(),
             versions: (0..u.slots.len()).map(|_| None).collect(),
             prepared: (0..u.addresses.len()).map(|_| None).collect(),
             loans: (0..u.tables.loans.len()).map(|_| None).collect(),
@@ -505,7 +520,11 @@ impl<'p, S: Stage> Machine<'p, S> {
     /// parameter's own name as their version. A parameter passed by address
     /// aliases the caller's place; one passed by value moves into frame
     /// storage, so the parameter name is from then on a version only.
-    fn bind_parameter_slots(&mut self, f: &mut Frame, by_address: &[Option<Ptr>]) -> Checked<()> {
+    fn bind_parameter_slots(
+        &mut self,
+        f: &mut Frame,
+        by_address: &[Option<(Ptr, Option<ColumnRow>)>],
+    ) -> Checked<()> {
         let u = self.unit(f.unit);
         let Some(abi) = self.program.layouts.fn_abis.get(u.header.abi.0 as usize) else {
             return Ok(());
@@ -522,7 +541,8 @@ impl<'p, S: Stage> Machine<'p, S> {
                 return fail(V::Malformed, format!("no parameter value {i}"));
             };
             f.versions[index] = Some(p);
-            if let Some(Some(ptr)) = by_address.get(i) {
+            if let Some(Some((ptr, columns))) = by_address.get(i) {
+                f.column_aliases[index] = *columns;
                 f.slots[index] = SlotStore::Alias(*ptr);
                 // The caller's place is the slot now: the parameter value
                 // names its first version, which an edge may join.
@@ -952,8 +972,10 @@ impl<'p, S: Stage> Machine<'p, S> {
         let mut root_slot = None;
         let mut flat_content = None;
         let mut flat_end = None;
+        let mut columns = None;
         let (mut ptr, mut layout) = match info.base {
             AddressBase::Slot(s) => {
+                columns = f.column_aliases[s.index()];
                 let slot = u
                     .slots
                     .get(s.index())
@@ -992,6 +1014,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     root_slot = r.root_slot;
                     flat_content = r.flat_content;
                     flat_end = r.flat_end;
+                    columns = r.columns;
                     (r.ptr, r.layout)
                 }
                 Err(e) => return Ok(Err(e)),
@@ -1030,6 +1053,26 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 ptr = target;
                 layout = payload;
+            }
+            if let (Some(row), ProjectionStep::Field(ordinal)) = (columns, *step) {
+                let fields = self.record(layout)?.fields.clone();
+                let position = fields
+                    .iter()
+                    .position(|f| f.ordinal == ordinal)
+                    .ok_or_else(|| err(V::Malformed, "column field absent"))?;
+                let (data, _, physical) = self.column_shape(layout)?;
+                let (prefix, stride) = physical[position];
+                let row_at = self
+                    .ledger
+                    .project(row.base, 0, ProjectionStep::Index(row.index));
+                ptr = self.ledger.project(
+                    row_at,
+                    data + row.capacity * prefix + row.index * stride,
+                    ProjectionStep::Field(ordinal),
+                );
+                layout = fields[position].layout;
+                columns = None;
+                continue;
             }
             let record = self.record(layout)?;
             let logical = (*step).try_map_index(|value| match self.read_use(f, value)? {
@@ -1092,6 +1135,35 @@ impl<'p, S: Stage> Machine<'p, S> {
                         .ok_or_else(|| err(V::Malformed, format!("no variant field {field}")))?;
                     ptr = self.ledger.project(ptr, fl.offset, logical);
                     layout = fl.layout;
+                }
+                ProjectionStep::Index(v) | ProjectionStep::Slot(v)
+                    if matches!(record.kind, LayoutKind::SoaColumns { .. }) =>
+                {
+                    let LayoutKind::SoaColumns { element } = record.kind else {
+                        unreachable!()
+                    };
+                    let Val::Bits { bits, .. } = self.read_use(f, v)? else {
+                        return fail(V::TypeConfusion, "column index is not an integer");
+                    };
+                    let capacity = self.columns_capacity(ptr, element)?;
+                    let bound = if matches!(step, ProjectionStep::Slot(_)) {
+                        capacity
+                    } else {
+                        self.read_scalar(ptr, 8)? as u64
+                    };
+                    if bits >= u128::from(bound) {
+                        if matches!(step, ProjectionStep::Slot(_)) || unchecked {
+                            return fail(V::OutOfExtent, "column index exceeds bound");
+                        }
+                        return Ok(Err(LangFailure));
+                    }
+                    columns = Some(ColumnRow {
+                        base: ptr,
+                        capacity,
+                        index: bits as u64,
+                    });
+                    ptr = self.ledger.project(ptr, 0, logical);
+                    layout = element;
                 }
                 ProjectionStep::Slot(v) => {
                     // An element slot below the capacity, initialised or not:
@@ -1277,6 +1349,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
         }
         Ok(Ok(Resolved {
+            columns,
             ptr,
             layout,
             path,
@@ -1486,7 +1559,10 @@ impl<'p, S: Stage> Machine<'p, S> {
         let element = match &self.record(r.layout)?.kind {
             LayoutKind::Block { payload } | LayoutKind::Box { payload } => {
                 match (&self.record(*payload)?.kind, sequential) {
-                    (LayoutKind::Sequence { element }, false)
+                    (
+                        LayoutKind::Sequence { element } | LayoutKind::SoaColumns { element },
+                        false,
+                    )
                     | (LayoutKind::Sequential { element }, true) => *element,
                     (kind, _) => {
                         return fail(V::TypeConfusion, format!("a sequence write of {kind:?}"));
@@ -3529,29 +3605,20 @@ impl<'p, S: Stage> Machine<'p, S> {
                     );
                 }
                 let ty = self.value_type(unit, result)?;
-                let size = self.bounded_size(r.ptr, ty.layout)?;
-                let owned = self.resources_of(ty.layout)?;
-                self.ledger
-                    .check(r.ptr)?
-                    .extent
-                    .check_range(r.ptr.offset, size)?;
+                let image = self.read_resolved(&r, false)?;
                 let through_slot = u.addresses[address.index()]
                     .projection
                     .get(&u.pools.projections)
                     .unwrap_or(&[])
                     .iter()
                     .any(|p| matches!(p, ProjectionStep::Slot(_)));
-                if through_slot
-                    && !self
-                        .initialized(&self.ledger.check(r.ptr)?.extent, r.ptr.offset, ty.layout)?
-                        .0
-                {
+                if through_slot && !self.initialized(&image, 0, ty.layout)?.0 {
                     return fail(V::UninitializedRead, "element slot has an unwritten field");
                 }
                 match mode {
                     ReadMode::Take => {
                         self.check_writable(&r)?;
-                        let e = self.take_part(r.ptr, size, &owned);
+                        let e = self.read_resolved(&r, true)?;
                         let e = self.widened(e, ty.layout)?;
                         let (val, borrow, credited) = self.val_from(e, ty.repr, ty.layout)?;
                         self.bind(
@@ -3565,11 +3632,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         )?;
                     }
                     ReadMode::Bits | ReadMode::Borrow => {
-                        let e = self.ledger.check(r.ptr)?.extent.copy(
-                            r.ptr.offset,
-                            size,
-                            Some((&self.ledger.path(r.ptr), &owned)),
-                        );
+                        let e = image;
                         let e = self.widened(e, ty.layout)?;
                         let (val, cell_borrow, _) = self.val_from(e, ty.repr, ty.layout)?;
                         let info = self.value_info(unit, result)?;
@@ -3614,13 +3677,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 let r = self.resolve_use(f, address)?;
                 let ty = self.value_type(unit, result)?;
-                let size = self.bounded_size(r.ptr, ty.layout)?;
-                let owned = self.resources_of(ty.layout)?;
-                let e = self.ledger.check(r.ptr)?.extent.copy(
-                    r.ptr.offset,
-                    size,
-                    Some((&self.ledger.path(r.ptr), &owned)),
-                );
+                let e = self.read_resolved(&r, false)?;
                 let e = self.widened(e, ty.layout)?;
                 let (val, _, _) = self.val_from(e, ty.repr, ty.layout)?;
                 let (val, credited) = self.copy_value(val, ty.layout)?;
@@ -3792,7 +3849,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                     (Val::Ptr(p), LayoutKind::Block { payload } | LayoutKind::Box { payload })
                         if matches!(
                             self.record(*payload)?.kind,
-                            LayoutKind::Sequence { .. } | LayoutKind::Sequential { .. }
+                            LayoutKind::Sequence { .. }
+                                | LayoutKind::Sequential { .. }
+                                | LayoutKind::SoaColumns { .. }
                         ) =>
                     {
                         self.read_scalar(p, 8)?
@@ -3837,6 +3896,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                             LayoutKind::Sequence { element } => {
                                 self.sequence_capacity_word(p, *element)?
                             }
+                            LayoutKind::SoaColumns { element } => {
+                                self.columns_capacity(p, *element)?
+                            }
                             kind => {
                                 return fail(
                                     V::TypeConfusion,
@@ -3860,6 +3922,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                         bits: u128::from(capacity),
                     },
                 )?;
+            }
+            Inst::SeqReserve {
+                address,
+                capacity,
+                version,
+            } if self.holds_columns(f, address)?.is_some() => {
+                let element = self.holds_columns(f, address)?.unwrap();
+                self.reserve_columns(f, address, capacity, version, element)?;
             }
             Inst::SeqReserve {
                 address,
@@ -4184,6 +4254,14 @@ impl<'p, S: Stage> Machine<'p, S> {
                 address,
                 len,
                 version,
+            } if self.holds_columns(f, address)?.is_some() => {
+                let element = self.holds_columns(f, address)?.unwrap();
+                self.set_columns_len(f, address, len, version, element)?;
+            }
+            Inst::SeqSetLen {
+                address,
+                len,
+                version,
             } => {
                 let (r, block, element) = self.sequence_write(f, address, false)?;
                 let Val::Bits { bits, .. } = self.read_use(f, len)? else {
@@ -4427,7 +4505,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         Some((&[], &[])),
                     );
                 }
-                self.write_value(r.ptr, layout, m)?;
+                self.write_resolved(&r, m)?;
                 if let Some(s) = r.root_slot {
                     f.versions[s.index()] = Some(version);
                 }
@@ -4459,10 +4537,16 @@ impl<'p, S: Stage> Machine<'p, S> {
                 self.check_writable(&r)?;
                 let layout = self.address_layout(unit, address)?;
                 let size = self.size(layout)?;
-                let target = self.ledger.check(r.ptr)?;
-                target.extent.check_range(r.ptr.offset, size)?;
-                let live = self.has_content(r.ptr, size)?;
-                let owned = self.resources_of(layout)?;
+                let live = if r.columns.is_some() {
+                    let image = self.read_resolved(&r, false)?;
+                    self.initialized(&image, 0, layout)?.1
+                } else {
+                    self.ledger
+                        .check(r.ptr)?
+                        .extent
+                        .check_range(r.ptr.offset, size)?;
+                    self.has_content(r.ptr, size)?
+                };
                 if live {
                     let SlotStore::Own(d) = f.slots[displaced.index()] else {
                         return fail(V::Malformed, format!("displaced {displaced:?} is not live"));
@@ -4473,7 +4557,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                             "displaced slot already holds a value",
                         );
                     }
-                    let old = self.take_part(r.ptr, size, &owned);
+                    let old = self.read_resolved(&r, true)?;
                     self.ledger.get_mut(d.alloc).extent.place(0, old);
                 } else if !if_live {
                     return fail(V::UninitializedRead, "replace of uninitialized storage");
@@ -4510,7 +4594,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         Some((&[], &[])),
                     );
                 }
-                self.write_value(r.ptr, layout, m)?;
+                self.write_resolved(&r, m)?;
                 if let Some(s) = r.root_slot {
                     f.versions[s.index()] = Some(version);
                 }
@@ -5193,6 +5277,11 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .put_cell(r.offset, word, cell);
             }
         }
+        for (block, &at) in data.blocks.iter().zip(&blocks) {
+            if let LayoutKind::SoaColumns { element } = self.record(block.layout)?.kind {
+                self.clear_column_spare(at, element)?;
+            }
+        }
         let Some(root) = blocks.first().copied() else {
             return fail(V::Malformed, "static data without a block");
         };
@@ -5545,6 +5634,13 @@ impl<'p, S: Stage> Machine<'p, S> {
                     (Some(p), _) => p,
                     // A counted sequence: its u64 count, then its elements
                     // from their alignment.
+                    (None, LayoutKind::SoaColumns { element }) => {
+                        let (data, quantum, columns) = self.column_shape(*element)?;
+                        let width: u64 = columns.iter().map(|&(_, stride)| stride).sum();
+                        let cap = hirsel_lir::layout::align_up(fields.len() as u64, quantum)
+                            .map_err(|_| err(V::OutOfExtent, "column construction overflow"))?;
+                        self.place_sized(f, site.placement, payload, data + cap * width)?
+                    }
                     (None, LayoutKind::Sequence { element }) => {
                         let (start, stride) = self.sequence_shape(*element)?;
                         let size = start + fields.len() as u64 * stride;
@@ -5662,6 +5758,24 @@ impl<'p, S: Stage> Machine<'p, S> {
                         ProjectionStep::Index(u64::from(fv.field)),
                     );
                     self.write_value(at, element, m)?;
+                }
+                return Ok(());
+            }
+            ConstructorKind::Sequence if matches!(record.kind, LayoutKind::SoaColumns { .. }) => {
+                let LayoutKind::SoaColumns { element } = record.kind else {
+                    unreachable!()
+                };
+                let (_, quantum, _) = self.column_shape(element)?;
+                let count = fields.len() as u64;
+                let cap = hirsel_lir::layout::align_up(count, quantum)
+                    .map_err(|_| err(V::OutOfExtent, "column construction overflow"))?;
+                let extent = &mut self.ledger.get_mut(target.alloc).extent;
+                extent.write_bytes(target.offset, &count.to_le_bytes());
+                extent.write_bytes(target.offset + 8, &cap.to_le_bytes());
+                for fv in fields {
+                    let moved = self.take_value(f, fv.value)?;
+                    let row = self.column_resolved(target, element, u64::from(fv.field))?;
+                    self.write_resolved(&row, moved)?;
                 }
                 return Ok(());
             }
@@ -6914,7 +7028,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         written.push((s, version));
                     }
                     if passing != hirsel_core_contract::Passing::Take {
-                        by_address[arg.parameter as usize] = Some(r.ptr);
+                        by_address[arg.parameter as usize] = Some((r.ptr, r.columns));
                     }
                     match passing {
                         hirsel_core_contract::Passing::Borrow => {}
@@ -8325,7 +8439,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         )?;
                         // The borrowed self is passed by address: a parameter slot, as for
                         // any address-passed parameter, aliases the finalized value.
-                        self.bind_parameter_slots(&mut frame, &[Some(base)])?;
+                        self.bind_parameter_slots(&mut frame, &[Some((base, None))])?;
                         return Ok(Some(Activity::Frame(Box::new(frame))));
                     }
                     DropStep::Release { offset } => {

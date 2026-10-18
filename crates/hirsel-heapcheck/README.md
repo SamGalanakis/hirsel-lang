@@ -307,8 +307,10 @@ producer that differs changes this crate or the producer):
   layouts and on sequence payloads (the u64 count, then the elements from
   their alignment). A String or Bytes literal block is such a payload, as
   native literals are. Fixed inline repeats drop high to low. Map/Set construction is an ordinary private record over entries and index sequences. Structure-of-arrays scan and drop walks use stored capacity for column
-  placement, with reverse row/field cleanup; sequence construction and indexing
-  remain unsupported.
+  placement, with reverse row/field cleanup. SoA construction scatters rows into
+  capacity-based columns; element reads gather their fields, and field places
+  address their columns directly. Reserve moves every column, transferring
+  private holders or duplicating shared ones. Length commits audit every slot.
 
 An operation model may take and return capability handles and plain inline
 values: `Arg::Handle` passes a context handle to the entry, and `OpValue` has

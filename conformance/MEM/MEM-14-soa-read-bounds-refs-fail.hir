@@ -1,0 +1,35 @@
+// rule: MEM-14
+// expect: fail MEM-14 at line 33
+@soa
+type Row {
+  small: u8,
+  x: u64,
+  bytes: Bytes,
+  children: List[u64],
+  flag: bool,
+}
+
+fn row(n: u64) -> Row {
+  let mut data: List[u8] = [65, 66]
+  let bytes = bytes.from_list(take data)
+  Row(small: 7, x: n, bytes: take bytes, children: [n], flag: true)
+}
+
+fn check(t: Test, r: Row, n: u64) -> () {
+  test.check(t, r.small == 7)
+  test.check(t, r.x == n)
+  test.check(t, r.flag)
+  test.check(t, bytes.len(r.bytes) == 2)
+  test.check(t, r.bytes[1] == 66)
+  test.check(t, r.children[0] == n)
+}
+
+fn replace(mut r: Row, n: u64) -> () {
+  r = row(n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut rows: List[Row] = [row(1), row(2)]
+  let _ = rows[9].x
+  Ok(())
+}

@@ -370,6 +370,30 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         self.builder.store(used, used_at, place.align.min(8));
                         return Ok(());
                     }
+                    LayoutKind::SoaColumns { element } => {
+                        let count = self.const_u64(values.len() as u64);
+                        let capacity =
+                            self.const_u64(self.column_capacity(values.len() as u64, element)?);
+                        self.builder.store(count, place.ptr, place.align.min(8));
+                        self.builder.store(
+                            capacity,
+                            self.builder.offset(place.ptr, self.const_u64(8)),
+                            place.align.min(8),
+                        );
+                        for value in values {
+                            let row = self.column_row(
+                                place,
+                                element,
+                                self.const_u64(u64::from(value.field)),
+                            )?;
+                            self.scatter(
+                                row,
+                                self.value_shape(value.value)?,
+                                self.counted_view(value.value)?,
+                            )?;
+                        }
+                        return Ok(());
+                    }
                     LayoutKind::Sequence { element } => {
                         // The element count, the capacity (the count: never more than the
                         // block's slots), then the elements from their alignment (runtime
@@ -845,6 +869,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             (SizeSpec::Fixed(size), _) => *size,
             // A flat record's extent is its parts' bytes, known once they are read.
             (SizeSpec::Dynamic(_), LayoutKind::Flat) if flat => 0,
+            (SizeSpec::Dynamic(_), LayoutKind::SoaColumns { element }) => {
+                let count = self.pool(site.fields, &self.unit.pools.fields)?.len() as u64;
+                let capacity = self.column_capacity(count, element)?;
+                let (data, _, width) = self.column_shape(element)?;
+                capacity
+                    .checked_mul(width)
+                    .and_then(|b| b.checked_add(data))
+                    .ok_or_else(|| CodegenError::Invalid {
+                        definition: self.definition().clone(),
+                        what: "column extent overflow".into(),
+                    })?
+            }
             (SizeSpec::Dynamic(_), LayoutKind::Sequence { element }) => {
                 let count = self.pool(site.fields, &self.unit.pools.fields)?.len() as u64;
                 let start = sequence_elements_offset(self.layout(element)?).ok();

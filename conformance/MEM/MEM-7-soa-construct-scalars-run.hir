@@ -1,0 +1,45 @@
+// rule: MEM-7
+// expect: run
+@serializable
+@soa
+type Row {
+  small: u8,
+  x: u64,
+  wide: u128,
+  flag: bool,
+}
+
+fn row(n: u64) -> Row {
+  Row(small: 7, x: n, wide: 123456789u128, flag: true)
+}
+
+fn check(t: Test, r: Row, n: u64) -> () {
+  test.check(t, r.small == 7)
+  test.check(t, r.x == n)
+  test.check(t, r.flag)
+  test.check(t, r.wide == 123456789u128)
+}
+
+const STORED: List[Row] = [Row(small: 7, x: 11, wide: 123456789u128, flag: true)]
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let empty: List[Row] = []
+  test.check(t, list.len(empty) == 0)
+  let rows: List[Row] = [row(1), row(2), row(3)]
+  check(t, rows[0], 1)
+  check(t, rows[2], 3)
+  let detached: List[Row] = copy_to(heap, rows)
+  check(t, detached[1], 2)
+  let mut decoded: List[Row] = codec.decode(codec.encode(rows))?
+  check(t, decoded[2], 3)
+  list.push(mut decoded, row(4))
+  check(t, decoded[3], 4)
+  let literal: List[Row] = [Row(small: 7, x: 10, wide: 123456789u128, flag: true)]
+  check(t, literal[0], 10)
+  let mut from_static = STORED
+  check(t, from_static[0], 11)
+  list.push(mut from_static, row(12))
+  check(t, from_static[1], 12)
+  check(t, STORED[0], 11)
+  Ok(())
+}

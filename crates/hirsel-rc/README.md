@@ -609,3 +609,7 @@ the payload. Ordinary placement, COW, counting and drop passes own all storage.
 Computed borrowed views (index or variant projections) materialize at their
 binding, keeping the parent check at its own source obligation before any child
 projection. Only total field paths flatten through a view alias.
+
+SoA Lists use the ordinary list library bodies and checked element slots.
+Construction, reserve, push, pop, remove, iteration and lengths retain the
+column payload kind through lowering; empty Lists use the static empty header.

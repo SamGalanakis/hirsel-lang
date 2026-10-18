@@ -47,6 +47,26 @@ impl Importer<'_, '_> {
                 .position(|p| p.root == place.root && p.projection == place.projection)
                 .map(|i| i as u32),
         };
+        // A field access can extend a computed origin without binding a new
+        // origin of its own. Preserve that prefix's site for its bounds check.
+        let site = self.origin_sites.get(&id).copied().or_else(|| {
+            self.origin_sites
+                .iter()
+                .filter_map(|(id, site)| {
+                    let prefix = &self.body.places[id.0 as usize];
+                    (prefix.root == place.root
+                        && prefix.projection.iter().any(|step| {
+                            matches!(
+                                step,
+                                tir::Projection::Index(_) | tir::Projection::VariantField { .. }
+                            )
+                        })
+                        && place.projection.starts_with(&prefix.projection))
+                    .then_some((prefix.projection.len(), *site))
+                })
+                .max_by_key(|(len, site)| (*len, site.start))
+                .map(|(_, site)| site)
+        });
         let temporary = self.out.slots[self.slot_for(place.root.0 as usize)?.index()].kind
             == SlotKind::Temporary;
         // A view temporary reads through the place it views.
@@ -199,7 +219,7 @@ impl Importer<'_, '_> {
                 crosses,
                 loan,
                 source: Some((ty, self.ty(place.ty)?)),
-                site: self.origin_sites.get(&id).copied(),
+                site,
             });
         }
         if self.layout_of(ty) != layout {
@@ -220,7 +240,7 @@ impl Importer<'_, '_> {
             crosses,
             loan,
             source: None,
-            site: self.origin_sites.get(&id).copied(),
+            site,
         })
     }
 

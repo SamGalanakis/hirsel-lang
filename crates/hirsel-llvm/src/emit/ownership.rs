@@ -4,6 +4,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// Adds one credit to every counted holder of the value at `place` (a semantic Copy by
     /// the `Dup` and `Fields` recipes), reading its layout's scan program.
     pub(super) fn dup_holders(&mut self, place: Place<'m>) -> Emitted {
+        let place = self.gather(place)?;
         self.invalidate_uniqueness();
         let record = self.layout(place.layout)?;
         if let LayoutKind::Block { .. } | LayoutKind::Box { .. } = record.kind {

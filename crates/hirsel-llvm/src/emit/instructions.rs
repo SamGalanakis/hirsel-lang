@@ -299,7 +299,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 } else {
                     self.counted_view(value)?
                 };
-                self.store(self.value_shape(value)?, stored, place);
+                self.scatter(place, self.value_shape(value)?, stored)?;
                 if let Some(slot) = self.whole_slot(address) {
                     self.settled(slot.index());
                 }
@@ -315,7 +315,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 // with nothing that can fail or call between the two stores.
                 let place = self.place(address)?;
                 let shape = self.value_shape(value)?;
-                let old = self.load(shape, place);
+                let old = self.load(shape, self.gather(place)?);
                 let Some(Some(slot)) = self.slots.get(displaced.index()).copied() else {
                     return self.invalid("a Replace without its displaced slot");
                 };
@@ -327,7 +327,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 } else {
                     self.counted_view(value)?
                 };
-                self.store(shape, stored, place);
+                self.scatter(place, shape, stored)?;
                 if let Some(state) = self.sequence_states[displaced.index()] {
                     let length = self.sequence_length(old, slot.layout)?;
                     self.builder.store(length, state.length, 8);
@@ -803,6 +803,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 address, capacity, ..
             } => {
                 let place = self.place(address)?;
+                if let Some(payload) = self.layout_payload(place.layout)?
+                    && let LayoutKind::SoaColumns { element } = self.layout(payload)?.kind
+                {
+                    return self.reserve_columns(place, payload, element, self.get(capacity)?);
+                }
                 if let Some(payload) = self.layout_payload(place.layout)?
                     && let LayoutKind::Sequential { element } = self.layout(payload)?.kind
                 {
@@ -1376,7 +1381,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 if self.value_type(result)?.layout != place.layout {
                     return self.invalid("a copy at another layout than its place");
                 }
-                let value = self.load(self.layout_shape(place.layout)?, place);
+                let value = self.load(self.layout_shape(place.layout)?, self.gather(place)?);
                 self.dup_holders(place)?;
                 self.define(result, value)
             }

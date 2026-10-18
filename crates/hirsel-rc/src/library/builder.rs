@@ -204,7 +204,9 @@ impl<'a> Cx<'a> {
     /// or Bytes storage).
     pub fn element(&self, layout: LayoutId) -> R<LayoutId> {
         match self.payload(layout).map(|p| &self.record(p).kind) {
-            Some(LayoutKind::Sequence { element }) => Ok(*element),
+            Some(LayoutKind::Sequence { element } | LayoutKind::SoaColumns { element }) => {
+                Ok(*element)
+            }
             // MEM-13: elements lie back to back at their own extents, so only a
             // walk from the first reaches one; pop and take-iteration would be O(n).
             Some(LayoutKind::Sequential { .. }) => self.unsupported(

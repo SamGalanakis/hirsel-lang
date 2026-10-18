@@ -72,9 +72,11 @@ fn reserve(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
         .payload(b.address_layout(list.address))
         .map(|p| &b.cx.record(p).kind)
     {
-        Some(LayoutKind::Sequence { element } | LayoutKind::Sequential { element }) => {
-            hirsel_lir::layout::least_size(&b.cx.record(*element).size)
-        }
+        Some(
+            LayoutKind::Sequence { element }
+            | LayoutKind::Sequential { element }
+            | LayoutKind::SoaColumns { element },
+        ) => hirsel_lir::layout::least_size(&b.cx.record(*element).size),
         _ => {
             return b
                 .cx

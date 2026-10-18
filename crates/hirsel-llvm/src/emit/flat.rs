@@ -17,7 +17,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return Ok(None);
         };
         Ok(match self.layout(payload)?.kind {
-            LayoutKind::Sequence { element } => Some(element),
+            LayoutKind::Sequence { element } | LayoutKind::SoaColumns { element } => Some(element),
             _ => None,
         })
     }
@@ -39,7 +39,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// Zero-sized elements report `u64::MAX`.
     pub(super) fn sequence_capacity(&mut self, value: ValueId) -> Emitted<Value<'m>> {
         let (data, element) = self.sequence_payload(value)?;
-        if self.fixed_size(element)? == 0 {
+        let Some(payload) = self.layout_payload(self.value_type(value)?.layout)? else {
+            return self.invalid("sequence capacity without payload");
+        };
+        if self.fixed_size(element)? == 0
+            && !matches!(self.layout(payload)?.kind, LayoutKind::SoaColumns { .. })
+        {
             return Ok(self.const_u64(u64::MAX));
         }
         let at = self
@@ -191,6 +196,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// `load`, except that a dynamic Packed value reads only its active extent: as an
     /// element of a sequential sequence it may end its storage (MEM-13).
     pub(super) fn load_bounded(&self, shape: Shape, place: Place<'m>) -> Emitted<Value<'m>> {
+        let place = self.gather(place)?;
         if hirsel_lir::layout::packed_extents(self.layout(place.layout)?).is_none() {
             return Ok(self.load(shape, place));
         }
@@ -584,6 +590,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 FlatPart::Fixed { value, size } => {
                     let layout = self.value_type(value)?.layout;
                     let place = Place {
+                        columns: None,
                         ptr: cursor,
                         layout,
                         align: 1,
@@ -683,6 +690,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             .binary(BinOp::Mul, index, self.const_u64(stride));
         let base = self.builder.offset(source.ptr, self.const_u64(start));
         let child = Place {
+            columns: None,
             ptr: self.builder.offset(base, offset),
             layout: element,
             align: self.layout(element)?.align,

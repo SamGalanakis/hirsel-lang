@@ -1,0 +1,51 @@
+// rule: MEM-7
+// expect: run
+@soa
+type Row {
+  small: u8,
+  x: u64,
+  bytes: Bytes,
+  children: List[u64],
+  flag: bool,
+}
+
+fn row(n: u64) -> Row {
+  let mut data: List[u8] = [65, 66]
+  let bytes = bytes.from_list(take data)
+  Row(small: 7, x: n, bytes: take bytes, children: [n], flag: true)
+}
+
+fn check(t: Test, r: Row, n: u64) -> () {
+  test.check(t, r.small == 7)
+  test.check(t, r.x == n)
+  test.check(t, r.flag)
+  test.check(t, bytes.len(r.bytes) == 2)
+  test.check(t, r.bytes[1] == 66)
+  test.check(t, r.children[0] == n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let rows: List[Row] = [row(1), row(2), row(3)]
+  let mut total: u64 = 0
+  for r in rows {
+    total += r.x
+  }
+  test.check(t, total == 6)
+  let shared = copy rows
+  let mut seen: u64 = 0
+  for r in take shared {
+    check(t, r, seen + 1)
+    seen += 1
+    if seen == 2 {
+      break
+    }
+  }
+  test.check(t, seen == 2)
+  check(t, rows[2], 3)
+  let fresh: List[Row] = [row(4), row(5), row(6)]
+  for r in take fresh {
+    check(t, r, 4)
+    break
+  }
+  Ok(())
+}

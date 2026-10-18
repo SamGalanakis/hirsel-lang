@@ -153,29 +153,6 @@ impl<S: Stage> Machine<'_, S> {
         Ok(offsets)
     }
 
-    /// SoA columns use the stored capacity, including over-reserved sources.
-    fn codec_columns(&self, element: LayoutId) -> Checked<(u64, u64, Vec<(u64, u64)>)> {
-        let r = self.record(element)?;
-        let quantum = r
-            .fields
-            .iter()
-            .map(|f| self.record(f.layout).map(|r| u64::from(r.align)))
-            .collect::<Checked<Vec<_>>>()?
-            .into_iter()
-            .max()
-            .unwrap_or(1);
-        let data = hirsel_lir::layout::soa_data_offset(quantum)
-            .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
-        let mut prefix = 0;
-        let mut columns = Vec::new();
-        for f in &r.fields {
-            let stride = self.size(f.layout)?;
-            columns.push((prefix, stride));
-            prefix += stride;
-        }
-        Ok((data, quantum, columns))
-    }
-
     /// The image of a root operand of `layout`, so every node reads at an `At`.
     fn codec_image(&self, val: &Val, layout: LayoutId) -> Checked<Extent> {
         Ok(match val {
@@ -359,7 +336,7 @@ impl<S: Stage> Machine<'_, S> {
                                     return fail(V::Malformed, "codec column element");
                                 };
                                 let capacity = self.bits_at(At::Heap(block.at(8)), 8)? as u64;
-                                let (data, _, columns) = self.codec_columns(e)?;
+                                let (data, _, columns) = self.column_shape(e)?;
                                 for i in (0..count).rev() {
                                     for (child, (prefix, stride)) in
                                         fields.iter().zip(&columns).rev()
@@ -1042,7 +1019,7 @@ impl<S: Stage> Machine<'_, S> {
                             else {
                                 return fail(V::Malformed, "codec column fields");
                             };
-                            let (data, quantum, columns) = self.codec_columns(e)?;
+                            let (data, quantum, columns) = self.column_shape(e)?;
                             let capacity = hirsel_lir::layout::align_up(count, quantum)
                                 .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
                             let stride: u64 = columns.iter().map(|&(_, stride)| stride).sum();
@@ -1058,6 +1035,7 @@ impl<S: Stage> Machine<'_, S> {
                                 &capacity.to_le_bytes(),
                             );
                             self.codec_cell(image, dest, block);
+                            self.clear_column_spare(block, e)?;
                             for i in (0..count).rev() {
                                 for (child, (prefix, stride)) in fields.iter().zip(&columns).rev() {
                                     work.push((

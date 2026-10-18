@@ -97,6 +97,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Err(error) => return self.invalid(format!("{error:?}")),
         };
         Ok(Place {
+            columns: None,
             ptr: self.builder.offset(block, self.const_u64(offset)),
             layout: payload,
             align,

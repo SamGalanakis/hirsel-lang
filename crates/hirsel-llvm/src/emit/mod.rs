@@ -67,6 +67,8 @@ mod ownership;
 mod pair;
 mod places;
 mod sequence_state;
+mod soa;
+use soa::ColumnRow;
 mod signature;
 mod values;
 
@@ -656,6 +658,7 @@ enum FlatPart<'m> {
 /// A prepared address: its pointer, layout and the alignment it is known to have.
 #[derive(Clone, Copy, Debug)]
 struct Place<'m> {
+    columns: Option<ColumnRow<'m>>,
     ptr: Value<'m>,
     layout: LayoutId,
     align: u32,

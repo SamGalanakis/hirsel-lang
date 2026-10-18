@@ -432,7 +432,9 @@ fn place_of<S>(unit: &LirUnit<S>, lay: Lay<'_>, address: AddressId) -> Option<Pl
                 ),
                 ProjectionStep::Slot(_) => (
                     match record.kind {
-                        LayoutKind::Sequence { element } => element,
+                        LayoutKind::Sequence { element } | LayoutKind::SoaColumns { element } => {
+                            element
+                        }
                         _ => return None,
                     },
                     Step::Slot,
@@ -3779,7 +3781,7 @@ fn child_layout(lay: Lay<'_>, layout: LayoutId, step: &ProjectionStep) -> Option
             _ => return None,
         },
         ProjectionStep::Slot(_) => match record.kind {
-            LayoutKind::Sequence { element } => element,
+            LayoutKind::Sequence { element } | LayoutKind::SoaColumns { element } => element,
             _ => return None,
         },
         ProjectionStep::FlatAt { .. } => return None,

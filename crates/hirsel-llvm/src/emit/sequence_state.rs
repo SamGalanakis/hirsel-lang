@@ -52,6 +52,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 continue;
             }
             let layout = ty.layout;
+            // Companion ABIs and deferred counts belong to ordinary sequence
+            // roots. Column payloads retain their count in their own header.
+            let Some(payload) = self.layout_payload(layout)? else {
+                continue;
+            };
+            if !matches!(self.layout(payload)?.kind, LayoutKind::Sequence { .. }) {
+                continue;
+            }
             let Some(element) = self.sequence_element(layout)? else {
                 continue;
             };

@@ -1,0 +1,43 @@
+// rule: MEM-7
+// expect: run
+@soa
+type Row {
+  small: u8,
+  x: u64,
+  bytes: Bytes,
+  children: List[u64],
+  flag: bool,
+}
+
+fn row(n: u64) -> Row {
+  let mut data: List[u8] = [65, 66]
+  let bytes = bytes.from_list(take data)
+  Row(small: 7, x: n, bytes: take bytes, children: [n], flag: true)
+}
+
+fn check(t: Test, r: Row, n: u64) -> () {
+  test.check(t, r.small == 7)
+  test.check(t, r.x == n)
+  test.check(t, r.flag)
+  test.check(t, bytes.len(r.bytes) == 2)
+  test.check(t, r.bytes[1] == 66)
+  test.check(t, r.children[0] == n)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut rows: List[Row] = []
+  for i in 0u64..3u64 {
+    list.push(mut rows, row(i))
+  }
+  let shared = copy rows
+  for i in 3u64..33u64 {
+    list.push(mut rows, row(i))
+  }
+  test.check(t, list.len(rows) == 33)
+  test.check(t, list.len(shared) == 3)
+  for i in 0u64..33u64 {
+    check(t, rows[i], i)
+  }
+  check(t, shared[2], 2)
+  Ok(())
+}

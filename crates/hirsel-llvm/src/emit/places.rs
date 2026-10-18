@@ -36,6 +36,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 } else {
                     // A pointer to a value of its own layout (a `mut` capture's address).
                     Place {
+                        columns: None,
                         ptr: pointer,
                         layout,
                         align: self.layout(layout)?.align,
@@ -165,6 +166,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             None
         };
         Ok(Place {
+            columns: None,
             ptr: pointer,
             layout: payload,
             align: record.align,
@@ -194,6 +196,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         let ptr = self.builder.offset(pointer, self.const_u64(offset));
         Ok(Place {
+            columns: None,
             ptr,
             layout: payload,
             align,
@@ -255,6 +258,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         let base = self.builder.offset(place.ptr, cursor);
                         let ptr = self.builder.offset(base, self.const_u64(field.offset));
                         return Ok(Place {
+                            columns: None,
                             ptr,
                             layout: field.layout,
                             align: 1,
@@ -288,6 +292,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             ProjectionStep::Slot(index) => {
                 // An element slot below the capacity, with no count check (LIR schema
                 // revision 7): the library body proves the bound.
+                if let LayoutKind::SoaColumns { element } = record.kind {
+                    return self.column_row(place, element, self.get(index)?);
+                }
                 let LayoutKind::Sequence { element } = record.kind else {
                     return self.invalid("an element slot of a layout that is no sequence");
                 };
@@ -308,6 +315,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     .min(low_bit(offset))
                     .min(self.layout(element)?.align);
                 Ok(Place {
+                    columns: None,
                     ptr: self.builder.offset(place.ptr, at),
                     layout: element,
                     align,
@@ -327,6 +335,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let first = self.sequential_first(place.ptr, element)?;
                 self.flat_content = Some(first);
                 Ok(Place {
+                    columns: None,
                     ptr: self.builder.offset(first, self.get(offset)?),
                     layout: element,
                     align: self.layout(element)?.align.min(place.align),
@@ -345,11 +354,22 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let content = self.builder.offset(place.ptr, self.const_u64(16));
                 self.flat_content = Some(content);
                 Ok(Place {
+                    columns: None,
                     ptr: self.builder.offset(content, self.get(offset)?),
                     layout: element,
                     align: 1,
                     block: place.block,
                 })
+            }
+            ProjectionStep::Index(index)
+                if matches!(record.kind, LayoutKind::SoaColumns { .. }) =>
+            {
+                let LayoutKind::SoaColumns { element } = record.kind else {
+                    unreachable!()
+                };
+                let count = self.load_u64(place.ptr);
+                let index = self.projection_index(index, count, failure, unchecked)?;
+                self.column_row(place, element, index)
             }
             ProjectionStep::Index(index)
                 if matches!(record.kind, LayoutKind::Sequential { .. }) =>
@@ -365,6 +385,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.flat_content = Some(first);
                 let ptr = self.sequential_walk(first, element, index)?;
                 Ok(Place {
+                    columns: None,
                     ptr,
                     layout: element,
                     align: self.layout(element)?.align.min(place.align),
@@ -392,6 +413,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.builder.offset(at, scaled)
                 };
                 Ok(Place {
+                    columns: None,
                     ptr,
                     layout: element,
                     align: 1,
@@ -442,6 +464,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         let payload = self.payload_of(owner, storage)?;
                         let bytes = self.builder.offset(payload.ptr, self.const_u64(8));
                         let base = Place {
+                            columns: None,
                             ptr: self.builder.offset(bytes, start),
                             layout: storage,
                             align: 1,
@@ -491,6 +514,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     .min(low_bit(element_offset))
                     .min(self.layout(element)?.align);
                 Ok(Place {
+                    columns: None,
                     ptr: self.builder.offset(base.ptr, offset),
                     layout: element,
                     align,

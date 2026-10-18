@@ -193,6 +193,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let align = self.layout(layout)?.align;
         let ty = self.module.array_type(self.module.int_type(8), size);
         Ok(Place {
+            columns: None,
             ptr: self.prologue.alloca(ty, align),
             layout,
             align,

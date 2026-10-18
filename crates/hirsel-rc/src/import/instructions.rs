@@ -1049,7 +1049,7 @@ impl Importer<'_, '_> {
             )
             && matches!(
                 self.layouts.record(layout).kind,
-                LayoutKind::Sequence { .. }
+                LayoutKind::Sequence { .. } | LayoutKind::SoaColumns { .. }
             )
             && matches!(
                 self.layouts.record(self.layout_of(ty)).kind,
