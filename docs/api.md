@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1213 exported definitions; 364 variants.
+1230 exported definitions; 383 variants.
 
 ## Types and roots
 
@@ -8408,6 +8408,255 @@ on a `ConnectTls` stream, `server_name` equal to the rule's address
 - `fn tls.peer(n: Net, s: Stream of n) -> Result[Option[Bytes], NetError]`
 
 the stream's own grant
+
+
+## toml
+
+<a id="def-std_401_2ftoml_2fDocument"></a>
+
+- `pub opaque type toml.Document: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2ftoml_2fMAX_5fNESTING"></a>
+
+- `pub const toml.MAX_NESTING: u64`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoml_2fMoment"></a>
+
+- `pub type toml.Moment = OffsetDateTime(time.DateTime, i32) | LocalDateTime(time.DateTime) | LocalDate( time.Date ) | LocalTime(time.TimeOfDay)`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftoml_2fMoment_23LocalDate"></a>
+
+- `LocalDate( time.Date ) -> toml.Moment`
+
+Variant of toml.Moment.
+
+References: [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2ftoml_2fMoment_23LocalDateTime"></a>
+
+- `LocalDateTime(time.DateTime) -> toml.Moment`
+
+Variant of toml.Moment.
+
+References: [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime)
+
+<a id="def-std_401_2ftoml_2fMoment_23LocalTime"></a>
+
+- `LocalTime(time.TimeOfDay) -> toml.Moment`
+
+Variant of toml.Moment.
+
+References: [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftoml_2fMoment_23OffsetDateTime"></a>
+
+- `OffsetDateTime(time.DateTime, i32) -> toml.Moment`
+
+Variant of toml.Moment.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime)
+
+<a id="def-std_401_2ftoml_2fPosition"></a>
+
+- `pub type toml.Position { line: u64, column: u64, }`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoml_2fSegment"></a>
+
+- `pub type toml.Segment = Key(String) | Index(u64)`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoml_2fSegment_23Index"></a>
+
+- `Index(u64) -> toml.Segment`
+
+Variant of toml.Segment.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftoml_2fSegment_23Key"></a>
+
+- `Key(String) -> toml.Segment`
+
+Variant of toml.Segment.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftoml_2fTomlError"></a>
+
+- `pub type toml.TomlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | InvalidValue | NotFound | NotTable`
+
+References: [`std@1/toml/Position`](#def-std_401_2ftoml_2fPosition)
+
+<a id="def-std_401_2ftoml_2fTomlError_23DuplicateKey"></a>
+
+- `DuplicateKey(Position) -> toml.TomlError`
+
+Variant of toml.TomlError.
+
+References: [`std@1/toml/Position`](#def-std_401_2ftoml_2fPosition)
+
+<a id="def-std_401_2ftoml_2fTomlError_23InvalidValue"></a>
+
+- `InvalidValue -> toml.TomlError`
+
+Variant of toml.TomlError.
+
+<a id="def-std_401_2ftoml_2fTomlError_23Nesting"></a>
+
+- `Nesting(Position) -> toml.TomlError`
+
+Variant of toml.TomlError.
+
+References: [`std@1/toml/Position`](#def-std_401_2ftoml_2fPosition)
+
+<a id="def-std_401_2ftoml_2fTomlError_23NotFound"></a>
+
+- `NotFound -> toml.TomlError`
+
+Variant of toml.TomlError.
+
+<a id="def-std_401_2ftoml_2fTomlError_23NotTable"></a>
+
+- `NotTable -> toml.TomlError`
+
+Variant of toml.TomlError.
+
+<a id="def-std_401_2ftoml_2fTomlError_23Syntax"></a>
+
+- `Syntax(Position) -> toml.TomlError`
+
+Variant of toml.TomlError.
+
+References: [`std@1/toml/Position`](#def-std_401_2ftoml_2fPosition)
+
+<a id="def-std_401_2ftoml_2fValue"></a>
+
+- `pub type toml.Value = Text(String) | Integer(i64) | Float(f64) | Bool(bool) | Datetime( String ) | Array(List[Value]) | Table(Map[String, Value])`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/f64`](#def-core_401_2ff64), [`core@1/i64`](#def-core_401_2fi64)
+
+<a id="def-std_401_2ftoml_2fValue_23Array"></a>
+
+- `Array(List[Value]) -> toml.Value`
+
+Variant of toml.Value.
+
+References: [`core@1/List`](#def-core_401_2fList)
+
+<a id="def-std_401_2ftoml_2fValue_23Bool"></a>
+
+- `Bool(bool) -> toml.Value`
+
+Variant of toml.Value.
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2ftoml_2fValue_23Datetime"></a>
+
+- `Datetime( String ) -> toml.Value`
+
+Variant of toml.Value.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftoml_2fValue_23Float"></a>
+
+- `Float(f64) -> toml.Value`
+
+Variant of toml.Value.
+
+References: [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ftoml_2fValue_23Integer"></a>
+
+- `Integer(i64) -> toml.Value`
+
+Variant of toml.Value.
+
+References: [`core@1/i64`](#def-core_401_2fi64)
+
+<a id="def-std_401_2ftoml_2fValue_23Table"></a>
+
+- `Table(Map[String, Value]) -> toml.Value`
+
+Variant of toml.Value.
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftoml_2fValue_23Text"></a>
+
+- `Text(String) -> toml.Value`
+
+Variant of toml.Value.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftoml_2fdatetime"></a>
+
+- `pub fn toml.datetime(value: Moment) -> Result[Value, TomlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/toml/Moment`](#def-std_401_2ftoml_2fMoment), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError), [`std@1/toml/Value`](#def-std_401_2ftoml_2fValue)
+
+<a id="def-std_401_2ftoml_2fdocument"></a>
+
+- `pub fn toml.document(take text: String) -> Result[Document, TomlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/toml/Document`](#def-std_401_2ftoml_2fDocument), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError)
+
+<a id="def-std_401_2ftoml_2fget"></a>
+
+- `pub fn toml.get(doc: Document, path: List[Segment]) -> Option[Value] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`std@1/toml/Document`](#def-std_401_2ftoml_2fDocument), [`std@1/toml/Segment`](#def-std_401_2ftoml_2fSegment), [`std@1/toml/Value`](#def-std_401_2ftoml_2fValue)
+
+<a id="def-std_401_2ftoml_2fmoment"></a>
+
+- `pub fn toml.moment(spelling: String) -> Result[Moment, TomlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/toml/Moment`](#def-std_401_2ftoml_2fMoment), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError)
+
+<a id="def-std_401_2ftoml_2fparse"></a>
+
+- `pub fn toml.parse(take text: String) -> Result[Value, TomlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError), [`std@1/toml/Value`](#def-std_401_2ftoml_2fValue)
+
+<a id="def-std_401_2ftoml_2fremove"></a>
+
+- `pub fn toml.remove(mut doc: Document, path: List[Segment]) -> Result[(), TomlError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/toml/Document`](#def-std_401_2ftoml_2fDocument), [`std@1/toml/Segment`](#def-std_401_2ftoml_2fSegment), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError)
+
+<a id="def-std_401_2ftoml_2froot"></a>
+
+- `pub fn toml.root(doc: Document) -> Value uses {}`
+
+References: [`std@1/toml/Document`](#def-std_401_2ftoml_2fDocument), [`std@1/toml/Value`](#def-std_401_2ftoml_2fValue)
+
+<a id="def-std_401_2ftoml_2fset"></a>
+
+- `pub fn toml.set(mut doc: Document, path: List[Segment], value: Value) -> Result[ (), TomlError ] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/toml/Document`](#def-std_401_2ftoml_2fDocument), [`std@1/toml/Segment`](#def-std_401_2ftoml_2fSegment), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError), [`std@1/toml/Value`](#def-std_401_2ftoml_2fValue)
+
+<a id="def-std_401_2ftoml_2fsource"></a>
+
+- `pub fn toml.source(doc: Document) -> String in doc uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/toml/Document`](#def-std_401_2ftoml_2fDocument)
+
+<a id="def-std_401_2ftoml_2fstringify"></a>
+
+- `pub fn toml.stringify(value: Value) -> Result[unique String, TomlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/toml/TomlError`](#def-std_401_2ftoml_2fTomlError), [`std@1/toml/Value`](#def-std_401_2ftoml_2fValue)
 
 
 ## type_shape
