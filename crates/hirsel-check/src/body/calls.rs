@@ -501,10 +501,15 @@ impl Checker<'_, '_> {
                     }
                 }
                 if !self.infer(template, constraint, &mut inferred) {
-                    self.report(
+                    let expected = self
+                        .partial_substitute(template, &inferred, &function.generics)?
+                        .unwrap_or(template);
+                    self.type_mismatch(
                         const { RuleId::of("LANG-7") },
                         self.span(id),
                         "argument does not match the declared parameter type",
+                        actual,
+                        expected,
                     );
                     bad = true;
                 }
@@ -1217,10 +1222,12 @@ impl Checker<'_, '_> {
             }
         } else {
             if !self.compatible(error, expected) {
-                self.report(
+                self.type_mismatch(
                     const { RuleId::of("LANG-8") },
                     self.span(id),
                     "plain ? requires identical error types",
+                    error,
+                    expected,
                 );
                 return Ok(self.error());
             }

@@ -48,6 +48,7 @@ pub fn parse(
         symbols,
         tree: SyntaxTree::default(),
         diagnostics: vec![],
+        recovered_names: std::collections::BTreeSet::new(),
         whitespace: 0,
         depth: 0,
         heights: depth::Heights::default(),
@@ -99,6 +100,7 @@ struct Parser<'a> {
     symbols: &'a Interner,
     tree: SyntaxTree,
     diagnostics: Vec<Diagnostic>,
+    recovered_names: std::collections::BTreeSet<String>,
     whitespace: usize,
     depth: usize,
     heights: depth::Heights,
@@ -216,7 +218,10 @@ impl Parser<'_> {
         matches!(
             self.token(offset).map(|t| &t.kind),
             Some(TokenKind::Ident(_))
-        )
+        ) || (matches!(
+            self.token(offset).map(|t| &t.kind),
+            Some(TokenKind::Keyword(_))
+        ) && self.recovered_names.contains(self.text_at(offset)))
     }
     fn name(&mut self) -> Parsed<Symbol> {
         match self.token(0).map(|t| &t.kind) {
@@ -225,10 +230,52 @@ impl Parser<'_> {
                 self.pos += 1;
                 Ok(s)
             }
-            Some(TokenKind::Keyword(_)) => self.fail(
-                const { RuleId::of("LANG-14") },
-                "reserved keyword cannot be a name",
-            ),
+            Some(TokenKind::Keyword(_)) => {
+                let spelling = self.text_at(0).to_owned();
+                if self.recovered_names.insert(spelling.clone()) {
+                    let role = match spelling.as_str() {
+                        "todo" => "an unfinished-code placeholder",
+                        "before" => "a pre-state snapshot in a postcondition",
+                        "result" => "the returned value in a postcondition",
+                        "distinct" => "a distinct type declaration",
+                        "fn" => "a function declaration or closure",
+                        "type" | "resource" | "flat" | "opaque" => "a type declaration",
+                        "if" | "else" | "match" => "conditional control flow",
+                        "for" | "while" | "break" | "continue" | "in" => "loop syntax",
+                        "return" => "returning from a function",
+                        "take" | "copy" | "unique" | "mut" => "an ownership operation",
+                        "requires" | "ensures" => "a contract clause",
+                        "uses" => "an authority restriction",
+                        "of" | "local" | "global" | "once" => "a type qualifier",
+                        "true" | "false" => "a boolean literal",
+                        "let" | "const" | "pub" => "a declaration",
+                        "box" => "boxed storage",
+                        "drop" => "a resource finalizer",
+                        "comptime" => "compile-time evaluation",
+                        "shape" => "a type shape expression",
+                        "heap" => "the heap allocation destination",
+                        "where" => "a refinement predicate",
+                        "extern" | "unsafe" => "foreign or unsafe operations",
+                        _ => "language syntax",
+                    };
+                    self.diagnostics.push(Diagnostic::error(
+                        const { RuleId::of("LANG-14") },
+                        self.span(),
+                        format!("`{spelling}` is reserved for {role}; choose another name"),
+                    ));
+                }
+                let symbol = (0..self.symbols.len())
+                    .map(|i| Symbol(i as u32))
+                    .find(|s| self.symbols.resolve(*s) == Some(spelling.as_str()));
+                self.pos += 1;
+                symbol.ok_or_else(|| {
+                    self.diagnostics.push(Diagnostic::error(
+                        const { RuleId::of("LANG-14") },
+                        self.span(),
+                        "keyword spelling is unavailable",
+                    ));
+                })
+            }
             _ => self.fail(const { RuleId::of("LANG-4") }, "expected a name"),
         }
     }

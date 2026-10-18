@@ -1,0 +1,12 @@
+// rule: CLO-2
+// expect: reject CAP-3 at line 9
+fn inner(f: fn() -> ()) uses {f} {
+  f()
+}
+
+fn example(f: fn() -> ()) uses {f} {
+  fn outer(g: fn() -> ()) uses {} {
+    inner(g)
+  }
+  outer(f)
+}

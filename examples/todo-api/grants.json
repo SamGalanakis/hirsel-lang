@@ -1,1 +1,1 @@
-{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[{"path":"data","host":"","access":"read_write"}],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}]}},"args":["8080"]}
+{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[{"path":"data","host":"data","access":"read_write"}],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"8080","operation":"listen"}]}},"args":["8080"]}

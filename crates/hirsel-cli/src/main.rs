@@ -2,7 +2,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n>] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file>";
 
 const DEFAULT_RUN_MAX_STEPS: u64 = 1_000_000_000;
 
@@ -26,14 +26,15 @@ enum Command {
     Simulation {
         config: OsString,
         file: OsString,
-        max_steps: u64,
+        max_steps: Option<u64>,
     },
     Run {
         file: OsString,
         launch: Option<Launch>,
         native: bool,
         proofs: Proofs,
-        max_steps: u64,
+        arguments: Option<Vec<OsString>>,
+        max_steps: Option<u64>,
     },
     Source {
         command: &'static str,
@@ -54,7 +55,7 @@ enum Launch {
     Replay(OsString),
 }
 impl Launch {
-    fn host(&self) -> hirsel_driver::HostLaunch<'_> {
+    fn host<'a>(&'a self, arguments: Option<&'a [OsString]>) -> hirsel_driver::HostLaunch<'a> {
         match self {
             Self::Live {
                 grants,
@@ -63,7 +64,10 @@ impl Launch {
                 revocations,
             } => hirsel_driver::HostLaunch::Live {
                 config: if *grants {
-                    hirsel_driver::LaunchConfig::Grants(Path::new(config))
+                    hirsel_driver::LaunchConfig::Grants {
+                        path: Path::new(config),
+                        arguments,
+                    }
                 } else {
                     hirsel_driver::LaunchConfig::Record(Path::new(config))
                 },
@@ -180,7 +184,16 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 let mut max_steps = None;
                 let mut file = None;
                 let mut proofs = Proofs::default();
-                while let Some(arg) = args.next()? {
+                let mut arguments = None;
+                loop {
+                    if let Some(mut raw) = args.try_raw_args() {
+                        if raw.peek().is_some_and(|arg| arg == "--") {
+                            raw.next();
+                            arguments = Some(raw.collect());
+                            break;
+                        }
+                    }
+                    let Some(arg) = args.next()? else { break };
                     match arg {
                         Long("proofs") if proofs.sidecar.is_none() => {
                             proofs.sidecar = Some(args.value()?)
@@ -196,12 +209,21 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         }
                         Long("replay") if replay.is_none() => replay = Some(args.value()?),
                         Long("max-steps") if max_steps.is_none() => {
-                            max_steps = Some(
-                                args.value()
-                                    .ok()
-                                    .and_then(|value| value.to_str()?.parse::<u64>().ok())
-                                    .ok_or("--max-steps requires an unsigned integer")?,
-                            );
+                            let value = args.value().ok();
+                            max_steps = Some(match value.as_deref().and_then(|v| v.to_str()) {
+                                Some("unbounded") => None,
+                                Some(value) => Some(value.parse::<u64>().map_err(|_| {
+                                    lexopt::Error::from(
+                                        "--max-steps requires an unsigned integer or unbounded",
+                                    )
+                                })?),
+                                None => {
+                                    return Err(
+                                        "--max-steps requires an unsigned integer or unbounded"
+                                            .into(),
+                                    );
+                                }
+                            });
                         }
                         Long("simulation") if simulation.is_none() => {
                             simulation = Some(args.value()?)
@@ -222,10 +244,21 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 if !native && proofs.sidecar.is_some() {
                     return Err("--proofs requires --native".into());
                 }
-                let max_steps = max_steps.unwrap_or(DEFAULT_RUN_MAX_STEPS);
                 if revocations.is_some() && (config.is_none() || replay.is_some()) {
                     return Err("--revocations requires a live --run or --grants launch".into());
                 }
+                if arguments.is_some() && !matches!(config, Some((true, _))) {
+                    return Err(if matches!(config, Some((false, _))) {
+                        "--run keeps the record's Args snapshot; trailing arguments require --grants"
+                    } else {
+                        "trailing arguments require --grants"
+                    }.into());
+                }
+                let max_steps = max_steps.unwrap_or(if config.is_some() {
+                    None
+                } else {
+                    Some(DEFAULT_RUN_MAX_STEPS)
+                });
                 let launch = match (config, record, replay) {
                     (None, None, None) => None,
                     (Some((grants, config)), record, None) => Some(Launch::Live {
@@ -260,6 +293,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                         launch,
                         native,
                         proofs,
+                        arguments,
                         max_steps,
                     }
                 }
@@ -380,7 +414,7 @@ fn execute(args: Vec<OsString>) -> u8 {
                     return 2;
                 }
             };
-            return run_result(hirsel_driver::run_path_with_step_limit(
+            return run_result(hirsel_driver::run_path_with_step_budget(
                 Path::new(&file),
                 simulation,
                 max_steps,
@@ -393,6 +427,7 @@ fn execute(args: Vec<OsString>) -> u8 {
             launch,
             native: true,
             proofs,
+            arguments,
             max_steps: _,
         } => {
             let evidence = match proofs.evidence() {
@@ -404,7 +439,9 @@ fn execute(args: Vec<OsString>) -> u8 {
             // program yet is a tool outcome (exit 2).
             return match hirsel_driver::native::run_path_native_with_config(
                 Path::new(&file),
-                launch.as_ref().map(Launch::host),
+                launch
+                    .as_ref()
+                    .map(|launch| launch.host(arguments.as_deref())),
                 evidence.as_ref(),
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
@@ -423,14 +460,17 @@ fn execute(args: Vec<OsString>) -> u8 {
             launch,
             native: false,
             proofs: _,
+            arguments,
             max_steps,
         } => {
             return run_result(match &launch {
-                Some(launch) => {
-                    hirsel_driver::run_path_on_host(Path::new(&file), launch.host(), max_steps)
-                }
+                Some(launch) => hirsel_driver::run_path_on_host(
+                    Path::new(&file),
+                    launch.host(arguments.as_deref()),
+                    max_steps,
+                ),
                 // Without a record the simulated world grants no host authority.
-                None => hirsel_driver::run_path_with_step_limit(
+                None => hirsel_driver::run_path_with_step_budget(
                     Path::new(&file),
                     hirsel_engine::SimulationConfig::default(),
                     max_steps,

@@ -6393,6 +6393,44 @@ impl Checker<'_> {
     }
     /// `context` says what imposes `required`: a parameter, an annotation,
     /// an aggregate part or the function result.
+    /// Diagnose the counted operand that prevents an aggregate from being unique.
+    /// Inspect only known constructions; an ordinary call's inputs do not say
+    /// which value its result aliases. This runs only after a failed proof.
+    fn aliased_source(&self, state: &State, expression: ExprId) -> ExprId {
+        let mut pending = vec![expression];
+        let mut seen = BTreeSet::new();
+        while let Some(value) = pending.pop() {
+            if !seen.insert(value) || self.property(value).is_some_and(|p| p.plain) {
+                continue;
+            }
+            let actual = self.value(state, value);
+            if actual.modes.uniqueness == Uniqueness::Unique {
+                continue;
+            }
+            let children = match &self.tree.expressions[value.0 as usize].kind {
+                ExprKind::Tuple(parts) | ExprKind::Sequence(parts) => parts.clone(),
+                ExprKind::Unary {
+                    op: UnaryOp::Box,
+                    value,
+                } => vec![*value],
+                ExprKind::Block {
+                    tail: Some(tail), ..
+                } => vec![*tail],
+                ExprKind::Call { arguments, .. }
+                    if self.body.calls.iter().any(|call| {
+                        call.expression == value
+                            && matches!(call.target, CallTarget::Constructor(_))
+                    }) =>
+                {
+                    arguments.iter().map(|a| a.value).collect()
+                }
+                _ => return actual.site.unwrap_or(value),
+            };
+            pending.extend(children.into_iter().rev());
+        }
+        expression
+    }
+
     fn required(
         &mut self,
         state: &State,
@@ -6448,14 +6486,37 @@ impl Checker<'_> {
             && actual.modes.uniqueness != Uniqueness::Unique
             && !self.property(expression).is_some_and(|p| p.plain)
         {
-            let value_site = self.span_of(actual.uniqueness_site.unwrap_or(expression));
+            let source = self.aliased_source(state, expression);
+            let cause = actual.uniqueness_site.unwrap_or(source);
+            let cause_span = self.span_of(cause);
+            let source_span = self.span_of(source);
+            // A transfer is the counted field expression; retain its written
+            // mode when the propagated uniqueness cause names its operand.
+            let provided = if matches!(
+                self.tree.expressions[source.0 as usize].kind,
+                ExprKind::Unary {
+                    op: UnaryOp::Take | UnaryOp::Copy,
+                    ..
+                }
+            ) && source_span.start <= cause_span.start
+                && source_span.end >= cause_span.end
+            {
+                source_span
+            } else {
+                cause_span
+            };
+            let primary = if span == value_site || span == cause_span {
+                provided
+            } else {
+                span
+            };
             self.report(
                 const { RuleId::of("MODE-2") },
-                span,
+                primary,
                 "this operation requires a unique value",
                 |_| {
                     Explanation::default()
-                        .provided(Fact::new(Cause::Aliased, value_site, &[]))
+                        .provided(Fact::new(Cause::Aliased, provided, &[]))
                         .required(Fact::new(Requirement::Unique, context.span, &[]))
                         .into()
                 },

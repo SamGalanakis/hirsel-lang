@@ -1,15 +1,3 @@
-// Inspect a boxed node through patterns while keeping its borrowed provenance.
-fn value_view(item: box json.Value) -> json.Value in item {
-  match item {
-    Null() => Null(),
-    Bool(b) => Bool(b),
-    Number(n) => Number(copy n),
-    Text(s) => Text(copy s),
-    Array(xs) => Array(copy xs),
-    Object(fields) => Object(copy fields),
-  }
-}
-
 // Query a top-level object member, preserving JSON number spelling.
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
   let text = common.input(rt, args, "{\"flock\":[\"ewe\",\"lamb\"],\"count\":2}")?
@@ -21,15 +9,21 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
     Ok(v) => take v,
     Error(_) => return Error(Invalid()),
   }
-  let output = match value {
+  let selected: json.Value = match value {
     Object(object) => match map.get(object, key) {
-      Some(item) => match json.stringify(value_view(item)) {
-        Ok(s) => copy s,
-        Error(_) => return Error(Invalid()),
-      },
+      Some(Null()) => Null(),
+      Some(Bool(b)) => Bool(b),
+      Some(Number(n)) => Number(copy n),
+      Some(Text(s)) => Text(copy s),
+      Some(Array(xs)) => Array(copy xs),
+      Some(Object(fields)) => Object(copy fields),
       None() => return Error(Invalid()),
     },
     _ => return Error(Invalid()),
+  }
+  let output = match json.stringify(selected) {
+    Ok(s) => copy s,
+    Error(_) => return Error(Invalid()),
   }
   common.print(rt, string.concat(output, "\n"))
 }

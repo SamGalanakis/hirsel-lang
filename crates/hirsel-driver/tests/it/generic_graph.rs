@@ -454,7 +454,7 @@ mod verdict {
                 let second = engine.generic_graph_diagnostics().unwrap();
                 assert_eq!(first, second);
                 assert_eq!(read(Counter::CacheValidationRows) - before, 0);
-                engine.comptime_limits.steps -= 1;
+                engine.comptime_limits.steps = engine.comptime_limits.steps.map(|steps| steps - 1);
                 let before = read(Counter::CacheValidationRows);
                 assert_eq!(engine.generic_graph_diagnostics().unwrap(), first);
                 assert!(read(Counter::CacheValidationRows) > before);

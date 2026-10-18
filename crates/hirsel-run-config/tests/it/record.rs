@@ -701,3 +701,40 @@ fn revocation_source_is_closed_and_hashes_the_exact_snapshot() {
             .revoked
     );
 }
+
+#[test]
+fn relative_grant_hosts_resolve_beside_the_template_and_records_remain_strict() {
+    let root = std::env::temp_dir().join(format!("hirsel-relative-grants-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("templates")).unwrap();
+    std::fs::create_dir_all(root.join("data")).unwrap();
+    let path = root.join("templates/grants.json");
+    let template = br#"{"io":{"dirs":[{"path":"data","host":"../data","access":"read"}]}}"#;
+    std::fs::write(&path, template).unwrap();
+    let run =
+        RunConfig::read_grants(&path, [0; 32], "probe@1/main".into(), LaunchKind::Main).unwrap();
+    assert_eq!(
+        run.record().io.as_ref().unwrap().dirs[0].host,
+        root.join("data").canonicalize().unwrap().to_str().unwrap()
+    );
+    assert!(RunConfig::validate(run.canonical()).is_ok());
+    // Bytes without a template location cannot bind a relative host.
+    assert!(
+        RunConfig::bind_grants(template, [0; 32], "probe@1/main".into(), LaunchKind::Main).is_err()
+    );
+    let mut relative_record = run.record().clone();
+    relative_record.io.as_mut().unwrap().dirs[0].host = "../data".into();
+    assert!(relative_record.validated().is_err());
+    for bad in [
+        r#"{"io":{"dirs":[{"path":"data","host":"missing","access":"read"}]}}"#,
+        r#"{"io":{"dirs":[{"path":"data","host":"../data","host":"../data","access":"read"}]}}"#,
+        r#"{"io":{"dirs":[{"path":"data","host":"../data","access":"read","unknown":true}]}}"#,
+    ] {
+        std::fs::write(&path, bad).unwrap();
+        assert!(
+            RunConfig::read_grants(&path, [0; 32], "probe@1/main".into(), LaunchKind::Main)
+                .is_err(),
+            "{bad}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

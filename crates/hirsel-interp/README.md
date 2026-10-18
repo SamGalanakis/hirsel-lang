@@ -85,7 +85,9 @@ reported explicitly, never silently approximated.
 
 ## Explicit limit and exit policies
 
-`Limits` defaults to 1,000,000 steps and 256 calls. One instruction or terminator
+`Limits` defaults to `Some(1_000_000)` steps and 256 calls. `steps: None`
+removes only the step bound; call depth is still checked. Step accounting saturates
+at u64::MAX for unbounded runs. One instruction or terminator
 costs one step; entering a frame and mandatory cleanup cost no steps. Exhaustion
 is reported before the next scheduled operation and still runs cleanup. Goto/Branch/Switch/Match have no failure list in the frozen TIR, so limit exhaustion
 on those edges runs no current-frame actions, then unwinds suspended calls.

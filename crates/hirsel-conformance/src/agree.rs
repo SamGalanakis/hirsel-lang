@@ -34,7 +34,7 @@ fn engine() -> QueryEngine {
     let mut interpreter = hirsel_engine::InterpreterAdapter::default();
     // Variants can introduce infinite loops. A deterministic instruction budget
     // bounds execution without confusing ordinary limits with interpreter bugs.
-    interpreter.limits.steps = 10_000;
+    interpreter.limits.steps = Some(10_000);
     adapters.interpreter = Some(Box::new(interpreter));
     // The environment hashes the spec; every variant shares one.
     static ENVIRONMENT: OnceLock<hirsel_engine::QueryEnvironment> = OnceLock::new();
@@ -286,7 +286,7 @@ fn classify_package_native(
                 Err(e) => return tool_error(e),
             };
             let mut interpreter = hirsel_engine::InterpreterAdapter::default();
-            interpreter.limits.steps = 10_000;
+            interpreter.limits.steps = Some(10_000);
             program.engine.adapters.interpreter = Some(Box::new(interpreter));
             let checked = program.check();
             (program.engine, checked, program.entry)

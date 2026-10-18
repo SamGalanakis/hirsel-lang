@@ -1,0 +1,15 @@
+// rule: SEM-5
+// expect: run
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, "" < "a")
+  test.check(t, "a" < "aa")
+  test.check(t, "aa" <= "aa")
+  test.check(t, "é" > "z")
+  test.check(t, "ab" >= "aa")
+  test.check(t, b"" < b"\x00")
+  test.check(t, b"\x00" < b"\x00\xff")
+  test.check(t, b"\xff" > b"\x7f")
+  test.check(t, b"ab" >= b"aa")
+  test.check(t, b"ab" <= b"ab")
+  Ok(())
+}

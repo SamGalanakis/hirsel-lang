@@ -23,7 +23,7 @@ fn execute(body: &str) {
         .unwrap_or_else(|e| panic!("{}", details(&e)));
     program.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
         limits: hirsel_interp::Limits {
-            steps: 16_000_000,
+            steps: Some(16_000_000),
             call_depth: 256,
         },
         ..Default::default()

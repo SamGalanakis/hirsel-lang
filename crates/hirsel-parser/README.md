@@ -47,3 +47,5 @@ Revision 7 accepts represented opaque @capability ordinary/resource declarations
 
 Binding-level `mut` in a pattern reports LANG-13 with the accepted
 `let mut (stream, _) = ...` spelling; mutability still applies to the whole pattern.
+
+After LANG-14, a keyword used as a name is retained as a recovery name, including subsequent references. Its diagnostic names the keyword’s syntax role; the invalid file remains unpublished.

@@ -210,6 +210,58 @@ impl Checker<'_, '_> {
             _ => None,
         }
     }
+    fn expected_variant(
+        &mut self,
+        id: ast::ExprId,
+        path: &ast::Path,
+        t: TypeId,
+        callee: bool,
+    ) -> Result<Option<TypeId>, QueryError> {
+        let nominal = self.packed_payload(t).unwrap_or(t);
+        let (owner, r) = self.representation(nominal)?;
+        if let TypeKind::Variant(vs) = self.kind(r) {
+            let name = path
+                .segments
+                .last()
+                .map(|s| self.name(*s))
+                .unwrap_or_default();
+            if let Some(index) = vs
+                .iter()
+                .position(|v| v.name == name && (callee || v.fields.is_empty()))
+            {
+                let variant = VariantId(index as u32);
+                let site = NameSite::Expression(id);
+                // H owns a deferred choice once the actual expected
+                // type selects its declaration. Retain it for J/K.
+                match self.source_rows.names.get(&id) {
+                    Some(&row) => {
+                        self.body.resolution.expressions[row].1 = ResolvedName::Variant(variant)
+                    }
+                    None => self
+                        .body
+                        .resolution
+                        .expressions
+                        .push((id, ResolvedName::Variant(variant))),
+                }
+                self.body.resolution.contextual.retain(|(at, name)| {
+                    *at != site
+                        || !matches!(
+                            name,
+                            ContextualName::Constructor(_) | ContextualName::Variant { .. }
+                        )
+                });
+                if let Some(owner) = owner {
+                    self.body
+                        .resolution
+                        .contextual
+                        .push((site.clone(), ContextualName::Variant { owner, variant }));
+                }
+                self.body.resolution.deferred.retain(|d| d.site != site);
+                return Ok(Some(if callee { nominal } else { t }));
+            }
+        }
+        Ok(None)
+    }
     pub(super) fn path_type(
         &mut self,
         id: ast::ExprId,
@@ -227,6 +279,19 @@ impl Checker<'_, '_> {
         if let Some(ResolvedName::Local(local)) = resolved {
             if path.segments.len() == 1 && self.superseded_pattern_local(local) {
                 resolved = None;
+            }
+        }
+        if path.package.is_none()
+            && path.segments.len() == 1
+            && matches!(resolved, Some(ResolvedName::Definition(_)))
+        {
+            if let Some(expected) = expected {
+                if self.expected_variant(id, path, expected, callee)?.is_some() {
+                    // Select the contextual declaration, then use the ordinary
+                    // fresh construction row below. Receiving locality is not
+                    // evidence about a newly constructed value.
+                    resolved = None;
+                }
             }
         }
         match resolved {
@@ -446,7 +511,7 @@ impl Checker<'_, '_> {
             }
             _ => {
                 let ctx = self
-                    .input
+                    .body
                     .resolution
                     .contextual
                     .iter()
@@ -504,43 +569,9 @@ impl Checker<'_, '_> {
                         t
                     });
                 }
-                if let Some(t) = expected {
-                    let nominal = self.packed_payload(t).unwrap_or(t);
-                    let (owner, r) = self.representation(nominal)?;
-                    if let TypeKind::Variant(vs) = self.kind(r) {
-                        let name = path
-                            .segments
-                            .last()
-                            .map(|s| self.name(*s))
-                            .unwrap_or_default();
-                        if let Some(index) = vs
-                            .iter()
-                            .position(|v| v.name == name && (callee || v.fields.is_empty()))
-                        {
-                            let variant = VariantId(index as u32);
-                            let site = NameSite::Expression(id);
-                            // H owns a deferred choice once the actual expected
-                            // type selects its declaration. Retain it for J/K.
-                            match self.source_rows.names.get(&id) {
-                                Some(&row) => {
-                                    self.body.resolution.expressions[row].1 =
-                                        ResolvedName::Variant(variant)
-                                }
-                                None => self
-                                    .body
-                                    .resolution
-                                    .expressions
-                                    .push((id, ResolvedName::Variant(variant))),
-                            }
-                            if let Some(owner) = owner {
-                                self.body.resolution.contextual.push((
-                                    site.clone(),
-                                    ContextualName::Variant { owner, variant },
-                                ));
-                            }
-                            self.body.resolution.deferred.retain(|d| d.site != site);
-                            return Ok(if callee { nominal } else { t });
-                        }
+                if let Some(expected) = expected {
+                    if let Some(variant) = self.expected_variant(id, path, expected, callee)? {
+                        return Ok(variant);
                     }
                 }
                 self.report(
@@ -1397,10 +1428,12 @@ impl Checker<'_, '_> {
             return Ok(self.error());
         }
         if !self.compatible(a, b) {
-            self.report(
+            self.type_mismatch(
                 const { RuleId::of("LANG-7") },
                 self.span(id),
                 "operator operands have different types",
+                b,
+                a,
             );
             return Ok(self.error());
         }
@@ -1527,13 +1560,16 @@ impl Checker<'_, '_> {
             }
             return Ok(item);
         }
+        if matches!(self.kind(ty), TypeKind::Primitive(Primitive::Bytes)) {
+            return Ok(self.primitive(Primitive::U8));
+        }
         if let Some(e) = self.element(ty) {
             return Ok(e);
         }
         self.report(
             const { RuleId::of("SEM-4") },
             self.span(source),
-            "expression is not a loop source",
+            "expression is not a loop source; use a range, Array, List, Inline, Bytes, Map, SortedMap, Set, Iter, string view or declared loop source",
         );
         Ok(self.error())
     }

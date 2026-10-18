@@ -60,7 +60,7 @@ fn evaluation_step_diagnostics_retry_after_budget_changes() {
 }
 fn evaluation_step_diagnostics_retry_after_budget_changes_on_compiler_thread() {
     let mut engine = engine("const VALUE: u32 = comptime (2 + 3)\n");
-    engine.comptime_limits.steps = 1;
+    engine.comptime_limits.steps = Some(1);
     let Err(QueryError::Diagnostics(ds)) = engine.lower_to_tir(&path("VALUE")) else {
         panic!("expected step exhaustion")
     };
@@ -69,7 +69,7 @@ fn evaluation_step_diagnostics_retry_after_budget_changes_on_compiler_thread() {
         engine.last_comptime_limit.as_ref().unwrap().kind,
         hirsel_tir::ToolingLimitKind::Steps
     );
-    engine.comptime_limits.steps = 100;
+    engine.comptime_limits.steps = Some(100);
     assert!(engine.lower_to_tir(&path("VALUE")).is_ok());
     assert_eq!(
         engine.materialize_constant(&path("VALUE")).unwrap(),

@@ -332,3 +332,7 @@ type, including the first branch of a match or conditional. Numeric literals and
 bare variants remain contextual under LANG-2.
 
 Call completion proves Serializable for every inferred actual before generic value normalization, including actuals inferred solely from the expected result (codec.decode). Parameter occurrence checks alone cannot cover this case.
+
+Shape mismatch diagnostics print both expected and actual source-shaped types, with iterative graph traversal and cycle detection. Bytes loops yield u8 through checked bytes.len and index operations; mutable Bytes iteration is rejected before publication.
+
+Contextual variants use the complete expected type before global-definition fallback, including nested generic constructor arguments. The selected constructor replaces stale resolver context and is published to the later phases. Local and parameter lookup retains precedence.

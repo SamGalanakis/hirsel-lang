@@ -276,6 +276,16 @@ impl RunConfig {
         entry: String,
         launch: LaunchKind,
     ) -> Result<ValidatedRun, RunRefusal> {
+        Self::bind_grants_at(bytes, program, entry, launch, None)
+    }
+
+    fn bind_grants_at(
+        bytes: &[u8],
+        program: [u8; 32],
+        entry: String,
+        launch: LaunchKind,
+        base: Option<&std::path::Path>,
+    ) -> Result<ValidatedRun, RunRefusal> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Grants {
@@ -290,9 +300,25 @@ impl RunConfig {
             admission: Option<Admission>,
         }
         integer_tokens(bytes)?;
-        let grants: Grants = serde_json::from_slice(bytes).map_err(|e| RunRefusal::Malformed {
-            detail: e.to_string(),
-        })?;
+        let mut grants: Grants =
+            serde_json::from_slice(bytes).map_err(|e| RunRefusal::Malformed {
+                detail: e.to_string(),
+            })?;
+        if let (Some(base), Some(io)) = (base, &mut grants.io) {
+            for mount in &mut io.dirs {
+                let host = std::path::Path::new(&mount.host);
+                if host.is_relative() {
+                    let canonical = base
+                        .join(host)
+                        .canonicalize()
+                        .map_err(|e| invalid("io.dirs.host", &e.to_string()))?;
+                    mount.host = canonical
+                        .to_str()
+                        .ok_or_else(|| invalid("io.dirs.host", "directory path is not UTF-8"))?
+                        .into();
+                }
+            }
+        }
         let mut record = Self::empty(program, entry, launch);
         record.inputs = grants.inputs;
         record.io = grants.io;
@@ -311,7 +337,7 @@ impl RunConfig {
         launch: LaunchKind,
     ) -> Result<ValidatedRun, RunRefusal> {
         let bytes = std::fs::read(path).map_err(|e| invalid("grants", &e.to_string()))?;
-        Self::bind_grants(&bytes, program, entry, launch)
+        Self::bind_grants_at(&bytes, program, entry, launch, path.parent())
     }
 
     /// Read an explicitly selected record; relative paths cannot resolve against cwd.

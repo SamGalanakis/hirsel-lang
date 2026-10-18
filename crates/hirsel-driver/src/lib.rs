@@ -56,33 +56,39 @@ pub fn run_path_with_simulation(
 ) -> Result<RunOutcome, ToolError> {
     run_simulation(path, simulation, None, stdout, stderr)
 }
-/// Execute simulated inputs with an explicit runtime workload budget.
+/// Execute simulated inputs with an explicit step budget; None is unbounded.
 /// Ordinary driver/conformance entry points retain their adapter defaults.
-pub fn run_path_with_step_limit(
-    path: &Path,
-    simulation: SimulationConfig,
-    max_steps: u64,
-    stdout: &mut dyn Write,
-    stderr: &mut dyn Write,
-) -> Result<RunOutcome, ToolError> {
-    run_simulation(path, simulation, Some(max_steps), stdout, stderr)
-}
-fn run_simulation(
+pub fn run_path_with_step_budget(
     path: &Path,
     simulation: SimulationConfig,
     max_steps: Option<u64>,
     stdout: &mut dyn Write,
     stderr: &mut dyn Write,
 ) -> Result<RunOutcome, ToolError> {
+    run_simulation(
+        path,
+        simulation,
+        Some(hirsel_interp::Limits {
+            steps: max_steps,
+            ..Default::default()
+        }),
+        stdout,
+        stderr,
+    )
+}
+fn run_simulation(
+    path: &Path,
+    simulation: SimulationConfig,
+    limits: Option<hirsel_interp::Limits>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<RunOutcome, ToolError> {
     let mut program = load_program(path)?;
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
-    if let Some(steps) = max_steps {
+    if let Some(limits) = limits {
         program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
-            limits: hirsel_interp::Limits {
-                steps,
-                ..Default::default()
-            },
+            limits,
             ..Default::default()
         }));
     }
@@ -168,7 +174,10 @@ pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
 #[derive(Clone, Copy)]
 pub enum LaunchConfig<'a> {
     Record(&'a Path),
-    Grants(&'a Path),
+    Grants {
+        path: &'a Path,
+        arguments: Option<&'a [std::ffi::OsString]>,
+    },
 }
 impl LaunchConfig<'_> {
     fn read(
@@ -177,12 +186,23 @@ impl LaunchConfig<'_> {
     ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_config::RunRefusal> {
         match self {
             Self::Record(path) => hirsel_engine::read_run_record(path),
-            Self::Grants(path) => hirsel_run_config::RunConfig::read_grants(
-                path,
-                revision.digest(),
-                revision.entry().into(),
-                hirsel_run_config::LaunchKind::Main,
-            ),
+            Self::Grants { path, arguments } => {
+                let run = hirsel_run_config::RunConfig::read_grants(
+                    path,
+                    revision.digest(),
+                    revision.entry().into(),
+                    hirsel_run_config::LaunchKind::Main,
+                )?;
+                match arguments {
+                    None => Ok(run),
+                    Some(arguments) => {
+                        let mut record = run.record().clone();
+                        record.args =
+                            Some(hirsel_run_config::snapshot_args(arguments.iter().cloned())?);
+                        record.validated()
+                    }
+                }
+            }
         }
     }
 }
@@ -289,7 +309,7 @@ pub(crate) fn bind_host_run(
 pub fn run_path_on_host(
     path: &Path,
     launch: HostLaunch<'_>,
-    max_steps: u64,
+    max_steps: Option<u64>,
 ) -> Result<RunOutcome, ToolError> {
     use hirsel_interp::Outcome;
     let mut program = load_program(path)?;

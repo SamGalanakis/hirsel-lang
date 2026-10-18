@@ -133,6 +133,18 @@ A launcher may bind a grants template to the selected program in one step
 zero seeds. Binding fields, unknown or duplicate fields and invalid grants refuse
 launch. The completed record follows ordinary validation and admission. Standalone
 arguments after the template path replace its Args snapshot as with `--hirsel-run`.
+For `hirsel run --grants`, arguments after `--` replace the template's Args with
+that exact UTF-8 snapshot, including an empty snapshot. Without `--`, the
+template's Args remain. `hirsel run --run` keeps the bound record's Args
+authoritative and rejects trailing arguments. A relative directory `host` in a
+grants template resolves against the template file's directory, then becomes a
+canonical absolute designator before record validation and host pinning. Bound
+records continue to require canonical absolute hosts.
+
+The interpreted host launcher (`--run` or `--grants`) has no default execution
+step budget. Simulated CLI runs default to 1,000,000,000 steps. An explicit
+`--max-steps <n>` selects a nonnegative u64 bound; `--max-steps unbounded` removes
+the step bound. These are tooling policies, not language failures or authority.
 
 ### PROG-4: Interop
 

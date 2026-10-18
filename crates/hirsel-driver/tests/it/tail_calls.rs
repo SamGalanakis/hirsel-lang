@@ -79,7 +79,7 @@ fn execute_recorded(engine: &mut QueryEngine, depth: usize) -> (Execution, Vec<u
         &config,
         vec![],
         Limits {
-            steps: 5_000_000,
+            steps: Some(5_000_000),
             call_depth: depth,
         },
         &mut library,

@@ -64,6 +64,18 @@ fn fake() -> Fake {
 }
 
 #[test]
+fn only_known_comment_names_are_header_directives() {
+    assert!(header("// note: authoring example\n// rule: OWN-6\n// expect: accept\n// explanation: ordinary prose\nfn f() {}\n// note: trailing prose\n").is_ok());
+    for source in [
+        "// rule OWN-6\n// expect: accept\n",
+        "// rule: OWN-6\n// expect: nope\n",
+        "// rule: OWN-6\n// expect: accept\nfn f() {}\n// entry: f\n",
+    ] {
+        assert!(header(source).is_err(), "{source}");
+    }
+}
+
+#[test]
 fn accepts_warnings_but_not_errors() {
     let expect = header(include_str!("../fixtures/conformance/OWN/accept.hir"))
         .unwrap()
@@ -239,7 +251,7 @@ fn malformed_headers_name_the_file_and_problem() {
             "// rule: OWN-6\n// expect: run\n// exit: 0\n// exit: 0\n",
             "duplicate exit",
         ),
-        ("// rules: OWN-6\n// expect: accept\n", "unknown directive"),
+        ("// rules: OWN-6\n// expect: accept\n", "missing rule"),
         (
             "// rule: OWN-6\nfn f() {}\n// expect: accept\n",
             "after source",

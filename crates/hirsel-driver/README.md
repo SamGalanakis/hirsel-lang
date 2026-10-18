@@ -102,10 +102,11 @@ Native live launches inherit stdin only under the admitted stdin projection.
 Their two output pipes drain concurrently into separate caller-owned writers,
 while retaining the same bytes for native observations and launch diagnostics.
 
-`run_path_with_step_limit` selects an explicit simulation execution budget;
-`run_path_on_host` receives the selected runtime step bound for live and replayed
-host runs. CLI callers supply one billion
-unless overridden. `run_path`, `run_path_with_simulation`, and interpreter
+`run_path_with_step_budget` selects an optional simulation execution budget;
+`run_path_on_host` receives the selected optional step bound for live and replayed
+host runs. `None` means unbounded. CLI callers supply one billion for simulation
+and replay, and no bound for admitted live host runs. `run_path`,
+`run_path_with_simulation`, and interpreter
 `Limits::default` retain their existing test/conformance budgets.
 
 HostLibrary implements OperationsAdapter, whose forwarding implementation is generated
@@ -115,3 +116,7 @@ retain typed snapshots while the evaluator retains owners and mutable loans. A
 `stdin.read` with no available byte parks its task on the same Readiness and resumes
 through `Library::read_stdin`. Socket and stdin readiness and relative timeouts are
 polled at scheduling points; the scheduler waits only when no task is runnable. Effect-free waits observe level-triggered cancellation.
+
+`LaunchConfig::Grants` can supply an explicit Args snapshot override, validated
+and included in the completed record before admission. An absent override retains
+the template's snapshot; an empty override grants empty Args.

@@ -1,0 +1,9 @@
+// rule: LANG-4
+// expect: accept
+type Record {
+  n: u64,
+}
+
+fn get(record: Record) -> u64 {
+  record.n
+}

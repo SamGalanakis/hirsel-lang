@@ -17,8 +17,31 @@ use crate::explain::{Cause, Explanation, Fact, Requirement};
 struct Frame {
     owner: NameSite,
     allowed: Uses,
+    receipts: BTreeSet<ParamId>,
     result: Option<TypeId>,
     restriction: RuleId,
+}
+impl Frame {
+    fn parameter_receipts(uses: &Uses, owner: NameSite) -> BTreeSet<ParamId> {
+        let Uses::Only(AuthoritySummary::Known(terms)) = uses else {
+            return BTreeSet::new();
+        };
+        terms
+            .iter()
+            .filter_map(|term| match term {
+                AuthorityTerm::Parameter(ParameterRef::Bound {
+                    depth: 0,
+                    parameter,
+                }) => Some(*parameter),
+                AuthorityTerm::Parameter(ParameterRef::Body { scope, parameter })
+                    if *scope == owner =>
+                {
+                    Some(*parameter)
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }
 /// What receives the value whose brand or placement is being judged, for
 /// the required side of a PROV explanation.
@@ -452,6 +475,12 @@ impl<'a> Checker<'a> {
         self.frames.push(Frame {
             owner: NameSite::Item(self.item),
             allowed,
+            receipts: match &self.signature.kind {
+                SignatureKind::Function(f) => {
+                    Frame::parameter_receipts(&f.uses, NameSite::Item(self.item))
+                }
+                _ => BTreeSet::new(),
+            },
             result,
             restriction: const { RuleId::of("CAP-1") },
         });
@@ -484,6 +513,7 @@ impl<'a> Checker<'a> {
             self.frames.push(Frame {
                 owner: NameSite::Expression(root),
                 allowed: Uses::Only(AuthoritySummary::inert()),
+                receipts: BTreeSet::new(),
                 result: Some(function.result),
                 restriction: const { RuleId::of("FACT-1") },
             });

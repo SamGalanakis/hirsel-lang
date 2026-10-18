@@ -54,7 +54,7 @@ selects an explicit bound.
 | [logsummary](logsummary/main.hir) | Count the first whitespace-delimited severity token, case-insensitively, in first-seen order. |
 | [calculator](calculator/main.hir) | Evaluate one whitespace-separated integer expression per line, left to right; report malformed expressions and continue. Checked arithmetic retains language overflow failures. |
 | [markdown](markdown/main.hir) | Render paragraphs, `#`/`##` headings and `-` lists; escape HTML metacharacters. |
-| [todo](todo/main.hir) | Execute `init`, `add TEXT`, `done NUMBER`, `list`; use leading `init` to create/reset state, otherwise load and atomically save newline-separated tasks (second argument is state path, default `todo.txt`). |
+| [todo](todo/main.hir) | Execute `add TEXT`, `done NUMBER`, `list`; missing state starts empty; load and atomically save newline-separated tasks (second argument is state path, default `todo.txt`). |
 | [adventure](adventure/main.hir) | Play a command-file state machine with a key, cave and locked gate. |
 | [httpget](httpget/main.hir) | Fetch a UTF-8 HTTP response from an explicitly granted endpoint; `demo.json` supplies a scripted local peer. |
 | [sortuniq](sortuniq/main.hir) | Sort distinct UTF-8 lines by byte order; empty fields, including the final field after a newline, are retained. |

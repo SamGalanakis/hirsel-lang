@@ -82,6 +82,7 @@ pub enum LoopRead {
 pub enum ForProtocol {
     Range { inclusive: bool },
     Sequence(BuiltinType),
+    Bytes,
     ConsumingSequence(BuiltinType),
     Map(BuiltinType),
     Set,

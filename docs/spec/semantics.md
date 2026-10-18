@@ -48,6 +48,10 @@ control characters in source must be escaped; invalid UTF-8 in a source file is 
 
 ### SEM-4: Iteration
 
+`Bytes` is a byte sequence: `for b in data` yields `u8` values in byte order.
+A `take` loop consumes the byte source; `mut` byte loops are rejected because
+`Bytes` is immutable.
+
 `for` takes a range (`a..b`, `a..=b`, with no overflow at `MAX`), a sequence (`Array`,
 `List`, `Inline`, flat and `Packed` sequences, string views), a declared loop source, or an
 `Iter[T]`, and binds a fresh name per iteration. Over a sequence, the source's marker sets
@@ -115,6 +119,9 @@ means `open`, `next`, construction and every relevant cleanup are proved noalloc
 neither.
 
 ### SEM-5: Maps
+
+The operators `<`, `<=`, `>` and `>=` compare `String` and `Bytes`
+byte-lexicographically; a proper prefix sorts before the longer value.
 
 `Map[K: key, V]` iterates in insertion order; the hash seed affects placement only. Map
 `==` is order-sensitive, and `map.same_entries` compares as sets. `Set` equality

@@ -281,7 +281,10 @@ fn lazy_publication_ends_on_source_environment_manifest_and_limit_edits() {
                         .borrow_mut()
                         .manifest_revision = ContentHash::of_bytes(b"edited")
                 }
-                "limits" => engine.comptime_limits.steps += 1,
+                "limits" => {
+                    engine.comptime_limits.steps =
+                        engine.comptime_limits.steps.map(|steps| steps + 1)
+                }
                 _ => unreachable!(),
             }
             engine.lower_to_tir(&path).unwrap();
@@ -618,13 +621,19 @@ fn compile_time_limit_edits_retry_cached_package_results() {
                 .diagnostics
                 .is_empty()
         );
-        let mut warm = f.load("app", &cache);
-        warm.engine.comptime_limits.steps = 0;
-        let cached = warm.check().unwrap();
-        let mut cold = f.load("app", &PackageCache::disabled());
-        cold.engine.comptime_limits.steps = 0;
-        assert_eq!(rendered(&cached), rendered(&cold.check().unwrap()));
-        assert_eq!(cached.diagnostics[0].rule.as_str(), "CT-1");
+        for steps in [Some(0), None, Some(u64::MAX)] {
+            let mut warm = f.load("app", &cache);
+            warm.engine.comptime_limits.steps = steps;
+            let cached = warm.check().unwrap();
+            let mut cold = f.load("app", &PackageCache::disabled());
+            cold.engine.comptime_limits.steps = steps;
+            assert_eq!(rendered(&cached), rendered(&cold.check().unwrap()));
+            if steps == Some(0) {
+                assert_eq!(cached.diagnostics[0].rule.as_str(), "CT-1");
+            } else {
+                assert!(cached.diagnostics.is_empty());
+            }
+        }
         assert!(
             f.load("app", &cache)
                 .check()

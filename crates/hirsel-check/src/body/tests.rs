@@ -242,3 +242,41 @@ fn comptime_runtime_dependencies_are_reported_at_the_name() {
         assert!(diagnostics.is_empty(), "{source}: {diagnostics:?}");
     }
 }
+
+#[test]
+fn shape_mismatches_print_both_source_types() {
+    for (source, expected, actual) in [
+        (
+            "fn g() -> Result[String, ()] { Ok(\"x\") }\nfn f() -> Result[String, ()] { g()? }",
+            "Result[String, ()]",
+            "String",
+        ),
+        (
+            "fn decode(t: Bytes) -> Result[String, ()] { Ok(\"x\") }\nfn first(t: Bytes) -> String { decode(t) }",
+            "String",
+            "Result[String, ()]",
+        ),
+        (
+            "fn f(x: u8) -> u8 { if true { x } else { false } }",
+            "u8",
+            "bool",
+        ),
+        ("fn f() -> bool { 1u8 == 2u16 }", "u8", "u16"),
+        ("fn f() -> (u8, u64) { (1u8, false) }", "u64", "bool"),
+    ] {
+        let (diagnostics, _, _) = support::check_source(source);
+        let diagnostic = diagnostics
+            .first()
+            .unwrap_or_else(|| panic!("{source}: {diagnostics:?}"));
+        assert!(
+            diagnostic
+                .message
+                .contains(&format!("expected `{expected}`")),
+            "{source}: {diagnostic:?}"
+        );
+        assert!(
+            diagnostic.message.contains(&format!("found `{actual}`")),
+            "{source}: {diagnostic:?}"
+        );
+    }
+}

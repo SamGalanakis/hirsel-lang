@@ -143,3 +143,5 @@ including associations unused by a loop.
 Phase fixtures can select dependency signature snapshots with
 `ManifestFixture::with_dependency_signatures`; their declaration metadata, visibility
 and top-level heads participate in the ordinary resolver index.
+
+A failed dotted module lookup that also names a local explains the module-head precedence and suggests renaming that local. User types cannot claim primitive or compiler-native constructor names; LANG-7 cites the declaration.

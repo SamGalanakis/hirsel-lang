@@ -1,23 +1,21 @@
-// Commands: init, add TEXT, done NUMBER (1-based), list. State is newline-separated UTF-8.
+// Commands: add TEXT, done NUMBER (1-based), list. Missing state starts empty.
 pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
-  let commands = common.input(
-    rt,
-    args,
-    "init\nadd feed sheep\nadd mend gate\ndone 1\nlist\n"
-  )?
+  let commands = common.input(rt, args, "add feed sheep\nadd mend gate\ndone 1\nlist\n")?
   let state = match arg.path(args, 1) {
     Ok(p) => p,
     Error(_) => path.of("todo.txt"),
   }
   let dir = io.dir(rt, path.of("")) ? Files
   let mut tasks: List[String] = []
-  if !string.starts_with(commands, "init\n") && commands != "init" {
-    let data = file.read_bytes(dir, state) ? Files
-    let text = string.from_bytes(copy data) ? Utf8
-    for line in string.split(take text, "\n") {
-      if string.byte_len(line) > 0 {
-        list.push(mut tasks, copy line)
-      }
+  let data = match file.read_bytes(dir, state) {
+    Ok(data) => take data,
+    Error(NotFound()) => b"",
+    Error(error) => return Error(Files(error)),
+  }
+  let text = string.from_bytes(copy data) ? Utf8
+  for line in string.split(take text, "\n") {
+    if string.byte_len(line) > 0 {
+      list.push(mut tasks, copy line)
     }
   }
   for raw in string.split(take commands, "\n") {
@@ -39,7 +37,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), common.Error] {
         }
       }
       tasks = take remaining
-    } else if line != "init" && line != "list" && string.byte_len(line) > 0 {
+    } else if line != "list" && string.byte_len(line) > 0 {
       return Error(Invalid())
     }
   }

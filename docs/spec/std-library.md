@@ -199,6 +199,11 @@ it is a `sort` comparator). `std@1/text` treats a
 `List[u8]` as a UTF-8 builder: `append` appends a string's bytes and `finish` validates the
 builder into a `String` or returns the bytes.
 
+`split` owns its input. After a borrowed text helper such as `trim`, use `unique`
+to make the owned copy: `string.split(unique string.trim(line), " ")`.
+`copy` shares the borrowed storage and keeps its locality; it does not satisfy an
+owning helper's global input requirement.
+
 ## Network addresses and URIs
 
 `std@1/net` parses and formats addresses: `parse_ipv4`, `parse_ipv6`, `parse_ip` and

@@ -208,3 +208,31 @@ fn pattern_mut_suggests_let_mut_before_the_whole_pattern() {
         first.message
     );
 }
+
+#[test]
+fn reserved_binding_names_recover_without_followup_syntax_errors() {
+    for name in ["todo", "before", "result", "distinct"] {
+        let source = format!(
+            "fn example() {{ let {name} = 1u64\n let next = {name}\n next }}\nfn after() {{}}\n"
+        );
+        let (output, _) = support::parse(&source);
+        assert_eq!(
+            output.diagnostics.len(),
+            1,
+            "{source}: {:?}",
+            output.diagnostics
+        );
+        assert_eq!(output.diagnostics[0].rule.as_str(), "LANG-14");
+        assert!(output.diagnostics[0].message.contains("reserved for"));
+        assert_eq!(output.syntax.roots.len(), 2);
+        assert!(output.syntax.has_syntax_errors);
+        assert!(
+            !output
+                .syntax
+                .tree
+                .expressions
+                .iter()
+                .any(|e| matches!(e.kind, ExprKind::Error))
+        );
+    }
+}

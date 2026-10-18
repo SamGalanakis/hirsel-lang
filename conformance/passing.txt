@@ -275,6 +275,12 @@ conformance/CLO/CLO-2-builtin-argument-callable-bad.hir
 conformance/CLO/CLO-2-builtin-argument-callable-ok.hir
 conformance/CLO/CLO-2-call-authority-join-bad.hir
 conformance/CLO/CLO-2-call-authority-join-ok.hir
+conformance/CLO/CLO-2-callback-forward-bad.hir
+conformance/CLO/CLO-2-callback-forward-local-bad.hir
+conformance/CLO/CLO-2-callback-forward-local-ok.hir
+conformance/CLO/CLO-2-callback-forward-ok.hir
+conformance/CLO/CLO-2-callback-forward-selected-ok.hir
+conformance/CLO/CLO-2-callback-forward-unselected-bad.hir
 conformance/CLO/CLO-2-capability-declared-authority-ok.hir
 conformance/CLO/CLO-2-capability-declared-authority.hir
 conformance/CLO/CLO-2-captured-capability-field-ok.hir
@@ -1059,6 +1065,8 @@ conformance/LANG/LANG-14-keyword-where-ok.hir
 conformance/LANG/LANG-14-keyword-while-bad.hir
 conformance/LANG/LANG-14-keyword-while-ok.hir
 conformance/LANG/LANG-14-prefix-forms.hir
+conformance/LANG/LANG-14-reserved-binding-recovery-bad.hir
+conformance/LANG/LANG-14-reserved-binding-recovery-ok.hir
 conformance/LANG/LANG-15-borrow-binding-readonly-bad.hir
 conformance/LANG/LANG-15-borrow-binding-readonly-ok.hir
 conformance/LANG/LANG-15-borrow-binding.hir
@@ -1167,6 +1175,10 @@ conformance/LANG/LANG-4-inert-recovery-ok.hir
 conformance/LANG/LANG-4-local-shadow-bad.hir
 conformance/LANG/LANG-4-local-shadow-ok.hir
 conformance/LANG/LANG-4-module-head-namespace.hir
+conformance/LANG/LANG-4-module-local-field-bad.hir
+conformance/LANG/LANG-4-module-local-field-ok.hir
+conformance/LANG/LANG-4-nested-builtin-variant-bad.hir
+conformance/LANG/LANG-4-nested-builtin-variant-run.hir
 conformance/LANG/LANG-4-nested-shadow-bad.hir
 conformance/LANG/LANG-4-nested-shadow-ok.hir
 conformance/LANG/LANG-4-other-module-shadow-run.hir
@@ -1225,6 +1237,8 @@ conformance/LANG/LANG-7-alias-field-locality-ok.hir
 conformance/LANG/LANG-7-any-bad.hir
 conformance/LANG/LANG-7-any-ok.hir
 conformance/LANG/LANG-7-boxed-tree-example.hir
+conformance/LANG/LANG-7-builtin-type-name-bad.hir
+conformance/LANG/LANG-7-builtin-type-name-ok.hir
 conformance/LANG/LANG-7-callback-passing-inferred-bad.hir
 conformance/LANG/LANG-7-callback-passing-inferred-ok.hir
 conformance/LANG/LANG-7-casts-bad.hir
@@ -1278,6 +1292,8 @@ conformance/LANG/LANG-7-overloading-ok.hir
 conformance/LANG/LANG-7-pathtime-from-parts-accept.hir
 conformance/LANG/LANG-7-pathtime-from-parts-reject.hir
 conformance/LANG/LANG-7-percent-example.hir
+conformance/LANG/LANG-7-prose-header-bad.hir
+conformance/LANG/LANG-7-prose-header-ok.hir
 conformance/LANG/LANG-7-size-equality-bad.hir
 conformance/LANG/LANG-7-size-equality-ok.hir
 conformance/LANG/LANG-7-type-name-alias-bad.hir
@@ -2141,6 +2157,8 @@ conformance/MODE/MODE-1-temporary-source-death-run.hir
 conformance/MODE/MODE-1-temporary-source-nested-closure-death-ok.hir
 conformance/MODE/MODE-1-temporary-source-ok.hir
 conformance/MODE/MODE-1-temporary-source-replaced-bad.hir
+conformance/MODE/MODE-1-trim-split-copy-bad.hir
+conformance/MODE/MODE-1-trim-split-unique-run.hir
 conformance/MODE/MODE-1-unique-local-taken-stays-local-bad.hir
 conformance/MODE/MODE-1-unique-local-taken-stays-local-ok.hir
 conformance/MODE/MODE-1-unique-taken-argument-bad.hir
@@ -2184,6 +2202,8 @@ conformance/MODE/MODE-2-constant-field-copy-unique-bad.hir
 conformance/MODE/MODE-2-constant-field-grouped-box-receipt-ok.hir
 conformance/MODE/MODE-2-constant-field-receipt-run.hir
 conformance/MODE/MODE-2-constant-field-unique-receipt-ok.hir
+conformance/MODE/MODE-2-constructor-counted-field-bad.hir
+conformance/MODE/MODE-2-constructor-counted-field-ok.hir
 conformance/MODE/MODE-2-copied-callable-getter-result-share-bad.hir
 conformance/MODE/MODE-2-copied-callable-getter-result-share-ok.hir
 conformance/MODE/MODE-2-copied-part-type-argument-bad.hir
@@ -3744,6 +3764,8 @@ conformance/SEM/SEM-4-borrowed-grapheme-alias-continue.hir
 conformance/SEM/SEM-4-buffered-file-run.hir
 conformance/SEM/SEM-4-buffered-reader-run.hir
 conformance/SEM/SEM-4-buffered-stream-run.hir
+conformance/SEM/SEM-4-bytes-loop-run.hir
+conformance/SEM/SEM-4-bytes-source-ok.hir
 conformance/SEM/SEM-4-call-source-not-iterable.hir
 conformance/SEM/SEM-4-call-sources.hir
 conformance/SEM/SEM-4-collection-source-sweep.hir
@@ -3782,11 +3804,12 @@ conformance/SEM/SEM-4-map-call-source.hir
 conformance/SEM/SEM-4-map-resource-borrow-run.hir
 conformance/SEM/SEM-4-map-resource-consume-break-run.hir
 conformance/SEM/SEM-4-map-resource-mut-run.hir
+conformance/SEM/SEM-4-mut-bytes-loop-bad.hir
+conformance/SEM/SEM-4-mut-bytes-loop-ok.hir
 conformance/SEM/SEM-4-mut-facted-element-bad.hir
 conformance/SEM/SEM-4-mut-facted-element-ok.hir
 conformance/SEM/SEM-4-mut-source-use-bad.hir
 conformance/SEM/SEM-4-mut-source-use-ok.hir
-conformance/SEM/SEM-4-non-source-bytes.hir
 conformance/SEM/SEM-4-non-source-simd.hir
 conformance/SEM/SEM-4-non-source-slots.hir
 conformance/SEM/SEM-4-non-source-string.hir
@@ -3824,6 +3847,9 @@ conformance/SEM/SEM-4-wave1-collections-run.hir
 conformance/SEM/SEM-4-wave1-counted-run.hir
 conformance/SEM/SEM-4-wave1-floor-run.hir
 conformance/SEM/SEM-4-wave1-primitives-run.hir
+conformance/SEM/SEM-5-byte-order-run.hir
+conformance/SEM/SEM-5-byte-order-type-bad.hir
+conformance/SEM/SEM-5-byte-order-type-ok.hir
 conformance/SEM/SEM-5-byte-slice-comparison-run.hir
 conformance/SEM/SEM-5-equality-order-sensitive.hir
 conformance/SEM/SEM-5-equality-same-order.hir

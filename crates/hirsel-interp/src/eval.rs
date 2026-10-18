@@ -489,7 +489,7 @@ fn execute_frames(
                                 suspended = &callback.state;
                             }
                             if callback_depth >= limits.call_depth
-                                || execution.steps == limits.steps
+                                || limits.steps == Some(execution.steps)
                             {
                                 let limit = ToolingLimit {
                                     kind: if callback_depth >= limits.call_depth {
@@ -500,7 +500,7 @@ fn execute_frames(
                                     limit: if callback_depth >= limits.call_depth {
                                         limits.call_depth as u64
                                     } else {
-                                        limits.steps
+                                        limits.steps.expect("step limit reached")
                                     },
                                     site: Some(state.anchor.site),
                                 };
@@ -547,7 +547,7 @@ fn execute_frames(
                                     anchor: Some(&state.anchor),
                                 },
                             )? {
-                                execution.steps += 1;
+                                execution.steps = execution.steps.saturating_add(1);
                                 let taken = function
                                     .parameters
                                     .iter()
@@ -1333,7 +1333,7 @@ fn execute_frames(
             .map_or_else(|| terminator_cleanup(&terminator), |i| Some(i.on_failure));
         // Issue #34: failure occurs at the next scheduled site after entry.
         // Control-only edges have no current-frame failure list in frozen TIR.
-        if frame.depth_failure || execution.steps == limits.steps {
+        if frame.depth_failure || limits.steps == Some(execution.steps) {
             let limit = ToolingLimit {
                 kind: if frame.depth_failure {
                     ToolingLimitKind::CallDepth
@@ -1343,7 +1343,7 @@ fn execute_frames(
                 limit: if frame.depth_failure {
                     limits.call_depth as u64
                 } else {
-                    limits.steps
+                    limits.steps.expect("step limit reached")
                 },
                 site: Some(site),
             };
@@ -1361,7 +1361,7 @@ fn execute_frames(
             }
             continue;
         }
-        execution.steps += 1;
+        execution.steps = execution.steps.saturating_add(1);
         if let Some(check) = &frame.check {
             let mut state = check.state.borrow_mut();
             state.site = site;

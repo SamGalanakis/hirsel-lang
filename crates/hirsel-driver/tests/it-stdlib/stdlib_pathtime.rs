@@ -14,7 +14,7 @@ fn execute(source: &str) {
     loaded.check_for_execution().unwrap();
     loaded.engine.adapters.interpreter = Some(Box::new(InterpreterAdapter {
         limits: hirsel_interp::Limits {
-            steps: 500_000_000,
+            steps: Some(500_000_000),
             call_depth: 256,
         },
         ..Default::default()

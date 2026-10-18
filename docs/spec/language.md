@@ -97,7 +97,9 @@ Core library roles such as `Unsafe`, `Result` and the capability types are ident
 fully qualified definition paths, never by spelling alone; a user type with the same name
 is a distinct type and cannot fill that role.
 
-A contextual variant selected by the expected type wins over a same-named function. A
+A contextual variant selected by the expected type wins over a same-named function.
+This applies through nested constructor arguments: with expected `Option[V]`,
+`Some(Array(xs))` selects `V`'s `Array` variant when `V` declares it. A
 versioned path consumes name and slash separators greedily up to its first dot,
 independently of whitespace; a member or numeric right operand ends the path for division.
 To divide a versioned path by a name, group the path: `(pkg@1/a) / b`. Parsing never
@@ -165,6 +167,9 @@ happens not to copy nor a library operation's name strengthens that contract. Co
 signatures obey the same rule.
 
 ### LANG-7: Types
+
+A user type name cannot be a primitive type name or a compiler-native
+type constructor name; choose a domain name.
 
 Types are algebraic data types with exhaustive `match`, generics with structural bounds
 and explicit dictionaries ([generics](generics.md)), size parameters `[n: size]` (equality

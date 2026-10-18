@@ -1,0 +1,7 @@
+// rule: LANG-14
+// expect: accept
+fn example() -> u64 {
+  let previous = 1u64
+  let next = previous
+  next
+}

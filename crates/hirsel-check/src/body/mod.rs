@@ -10,6 +10,7 @@ mod source_rows;
 mod tails;
 #[cfg(test)]
 mod tests;
+mod type_display;
 mod types;
 use hirsel_check_protocol::body::*;
 use hirsel_diag::{Diagnostic, RuleId};
@@ -693,7 +694,13 @@ impl Checker<'_, '_> {
                     .get(&id)
                     .cloned()
                     .unwrap_or((self.span(id), const { RuleId::of("LANG-7") }));
-                self.report(rule, span, "expression does not have the expected type");
+                self.type_mismatch(
+                    rule,
+                    span,
+                    "expression does not have the expected type",
+                    ty,
+                    expected,
+                );
                 ty = self.error();
             }
         }
@@ -1379,10 +1386,12 @@ impl Checker<'_, '_> {
                 } else if self.bottom(b) || self.compatible(a, b) {
                     a
                 } else {
-                    self.report(
+                    self.type_mismatch(
                         const { RuleId::of("LANG-7") },
                         self.span(id),
                         "branches have different types",
+                        b,
+                        a,
                     );
                     self.error()
                 }
@@ -1397,10 +1406,12 @@ impl Checker<'_, '_> {
                         if let Some(a) = result {
                             if !self.compatible(a, t) {
                                 bad = true;
-                                self.report(
+                                self.type_mismatch(
                                     const { RuleId::of("LANG-7") },
                                     self.span(id),
                                     "match arms have different types",
+                                    t,
+                                    a,
                                 );
                             }
                         } else {
@@ -1422,10 +1433,12 @@ impl Checker<'_, '_> {
                 } else if let Some(result) = self.frames[frame].result {
                     let unit = self.ty(TypeKind::Tuple(vec![].into()));
                     if !self.compatible(unit, result) {
-                        self.report(
+                        self.type_mismatch(
                             const { RuleId::of("LANG-7") },
                             self.span(id),
                             "bare return requires unit result",
+                            unit,
+                            result,
                         );
                     }
                 }
@@ -1820,12 +1833,21 @@ impl Checker<'_, '_> {
                             ..
                         } if marker == UseKind::Take => ForProtocol::ConsumingSequence(kind),
                         TypeKind::Builtin { kind, .. } => ForProtocol::Sequence(kind),
+                        TypeKind::Primitive(Primitive::Bytes) => ForProtocol::Bytes,
                         TypeKind::Named { definition, .. } => {
                             ForProtocol::BorrowedSource(definition)
                         }
                         _ => ForProtocol::Iterator,
                     },
                 };
+                if marker == UseKind::Mut && matches!(protocol, ForProtocol::Bytes) {
+                    self.report(
+                        const { RuleId::of("SEM-4") },
+                        self.span(source),
+                        "Bytes loops are read-only; borrow the source or consume it with take",
+                    );
+                    return Ok(());
+                }
                 let cursor = self.cursor_plan(id, source, t, e, &protocol)?;
                 let e = cursor.as_ref().map_or(e, |cursor| cursor.step.item);
                 // A nominal borrowed association returns owned Some payloads.
@@ -1926,10 +1948,12 @@ impl Checker<'_, '_> {
                         .result
                         .is_some_and(|r| !self.compatible(result, r))
                 {
-                    self.report(
+                    self.type_mismatch(
                         const { RuleId::of("LANG-7") },
                         self.span(id),
                         "closure exits have different result types",
+                        result,
+                        self.frames[child].result.unwrap(),
                     );
                 }
                 let mut ty = self.ty(TypeKind::Function(f));

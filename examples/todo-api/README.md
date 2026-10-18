@@ -21,11 +21,12 @@ Unknown paths are 404, other methods 405 with `Allow`, and malformed HTTP 400; e
 body is `{"error": message}`. Ids are never reused.
 
 The script grants stdout, cooperative tasks, listen on exactly `127.0.0.1:<port>` and
-read-write access to `./data` (filling in its absolute path, which a grant requires). The
+read-write access to `./data`. The shipped template names that directory relative to
+itself; the wrapper also selects the requested listen port. The
 state file `data/todos.json` is loaded at startup (missing means empty) and replaced
 atomically after every change, before the response is sent. Each connection runs in its
 own task; the list lives in a `Mutex`, and one writer task owns the file, skipping a
 snapshot when a newer one has already been written. The server reads at most 16 KiB of
 head and 64 KiB of body, closes each connection after its response, and runs in the
-interpreter only, since native tasks are not available yet. `--max-steps` is raised to its
-maximum because the interpreter's default step budget would end a long-running server.
+interpreter only, since native tasks are not available yet. Host runs have no default
+step budget, so the server can keep accepting requests.

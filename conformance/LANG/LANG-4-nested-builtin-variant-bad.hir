@@ -1,0 +1,7 @@
+// rule: LANG-4
+// expect: reject LANG-7 at line 6
+type Value = Leaf(u64) | Array(List[String])
+
+fn wrap(xs: List[u64]) -> Option[Value] {
+  Some(Array(unique xs))
+}

@@ -72,7 +72,11 @@ impl PackageCache {
             "hirsel.checked-package.limits.v1",
             [
                 revision.0.as_slice(),
-                limits.steps.to_le_bytes().as_slice(),
+                limits
+                    .steps
+                    .map(|steps| steps.to_le_bytes().to_vec())
+                    .unwrap_or_default()
+                    .as_slice(),
                 (limits.call_depth as u64).to_le_bytes().as_slice(),
             ],
         )

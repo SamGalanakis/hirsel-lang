@@ -122,10 +122,12 @@ impl Checker<'_, '_> {
                         refutable = true;
                         let t = self.literal(l, Some(inspected), p.origin.span, false);
                         if !self.compatible(t, inspected) {
-                            self.report(
+                            self.type_mismatch(
                                 const { RuleId::of("LANG-7") },
                                 p.origin.span,
                                 "literal pattern has the wrong type",
+                                t,
+                                inspected,
                             );
                         }
                         self.plans.pattern_literals.push((id, l.clone()));

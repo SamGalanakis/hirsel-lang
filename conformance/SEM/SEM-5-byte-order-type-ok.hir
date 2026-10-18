@@ -1,0 +1,5 @@
+// rule: SEM-5
+// expect: accept
+fn example() -> bool {
+  "a" < "b"
+}

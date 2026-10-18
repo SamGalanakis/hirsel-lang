@@ -144,7 +144,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
             let comment = comment.trim_start();
             let Some((key, value)) = comment.split_once(':') else {
                 if in_header
-                    && ["rule", "expect", "stdout", "exit"]
+                    && ["rule", "expect", "stdout", "exit", "entry", "spec"]
                         .iter()
                         .any(|k| comment.split_whitespace().next() == Some(k))
                 {
@@ -155,9 +155,15 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                 }
                 continue;
             };
-            let directive = matches!(key, "rule" | "expect" | "stdout" | "exit");
+            let directive = matches!(
+                key,
+                "rule" | "expect" | "stdout" | "exit" | "entry" | "spec"
+            );
+            if !directive {
+                continue;
+            }
             if !in_header {
-                if directive {
+                if directive && key != "spec" {
                     return Err(format!("line {}: directive after source code", index + 1));
                 }
                 continue;
@@ -253,7 +259,8 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                     if value_trimmed.strip_prefix('#').is_some_and(|n| {
                         !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
                     }) => {}
-                _ => return Err(format!("line {}: unknown directive {key:?}", index + 1)),
+                "spec" => return Err(format!("line {}: malformed spec directive", index + 1)),
+                _ => unreachable!("known conformance directive"),
             }
         }
         let rule = rule.ok_or("missing rule directive")?;

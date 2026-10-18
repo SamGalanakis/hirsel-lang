@@ -120,10 +120,10 @@ Simulation writes stdout and stderr to distinct tool sinks. Live Stdin/Stderr an
 Env operations use the admitted runtime providers through HostLibrary; only exact
 Env names in the run record are readable, with null distinct from a denied name.
 
-Interpreted `hirsel run` defaults to 1,000,000,000 execution steps. Use
-`--max-steps <n>` to select an explicit nonnegative u64 budget, including zero.
-The option works with simulated inputs, explicit host `--run` records and replays;
-`--native` rejects it. Exhaustion deterministically exits 2 and reports
+Interpreted host runs (`--run` or `--grants`) have no default step budget.
+Simulated runs and replays default to 1,000,000,000 execution steps. `--max-steps <n>`
+selects an explicit nonnegative u64 budget, including zero; `--max-steps unbounded`
+removes the step bound. `--native` rejects this interpreter option. Exhaustion deterministically exits 2 and reports
 `evaluator tooling limit: Steps`. Driver/conformance adapter defaults and
 compile-time evaluation budgets are independent.
 
@@ -131,3 +131,10 @@ compile-time evaluation budgets are independent.
 explicit schema-1 `{"schema":1,"revoked":["grant-reference"]}` host evidence.
 Executables accept `--hirsel-revocations <file>` before their launch input. The file
 is read once at admission; replay uses the recorded decision and digest.
+
+`hirsel run <source> --grants <template> -- args...` replaces the template's
+Args snapshot with exactly the trailing UTF-8 arguments, including an explicit
+empty snapshot. Without `--`, the template's Args are retained. `--run` keeps the
+record's Args authoritative and rejects trailing arguments. Relative directory
+hosts in a template resolve beside that template, then become canonical absolute
+hosts before ordinary validation and admission.

@@ -225,6 +225,17 @@ impl Checker<'_, '_> {
                 ));
             }
             ForProtocol::Range { .. } => ForExecution::Range,
+            ForProtocol::Bytes => {
+                let definition = ast::DefPath::core("bytes.len");
+                let result = self.loop_call(source, &definition, vec![])?;
+                if !matches!(self.kind(result), TypeKind::Primitive(Primitive::U64)) {
+                    return Err(protocol_error("Bytes length must return u64"));
+                }
+                ForExecution::Indexed {
+                    length: LoopLength::Definition { definition, result },
+                    read: LoopRead::Index { result: element },
+                }
+            }
             ForProtocol::Sequence(kind @ (BuiltinType::Array | BuiltinType::List)) => {
                 let module = if *kind == BuiltinType::Array {
                     "array"

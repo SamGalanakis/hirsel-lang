@@ -1,0 +1,6 @@
+// rule: SEM-4
+// expect: reject SEM-4 at line 5
+fn example() {
+  let mut data = b"ab"
+  for byte in mut data {}
+}

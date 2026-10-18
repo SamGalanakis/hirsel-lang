@@ -103,3 +103,8 @@ unknowns and duplicates refuse. Omitted fields use the same denial defaults as
 `Revocations::read_path` reads an explicit schema-1 host revocation list once. Its
 SHA-256 revision covers the exact file bytes; `evidence(reference)` records that
 revision and whether the named grant was listed. It supplies no authority itself.
+
+`read_grants` resolves relative `io.dirs[].host` paths against the selected
+template's directory and canonicalizes them before record validation. Absolute
+hosts retain strict canonical designator validation. `bind_grants` accepts bytes
+without a location and therefore requires absolute hosts, as do bound records.

@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 9
+type Reply {
+  status: u16,
+  body: String,
+}
+
+fn make(take body: String) -> unique Reply uses {} {
+  Reply(status: 200u16, body: take body)
+}

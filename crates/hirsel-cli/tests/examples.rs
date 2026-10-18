@@ -359,7 +359,7 @@ fn todo_persists_between_native_launches() {
     let executable = fixture.native_executable();
     let root = fixture.0.join("native/root");
     for (commands, expected) in [
-        ("init\nadd feed sheep\n", "1. feed sheep\n"),
+        ("add feed sheep\n", "1. feed sheep\n"),
         ("add mend gate\nlist\n", "1. feed sheep\n2. mend gate\n"),
     ] {
         std::fs::write(root.join("commands.txt"), commands).unwrap();
@@ -471,6 +471,7 @@ fn cli_interpreter_step_limits() {
     invoke(&[], 0, "");
     invoke(&["--max-steps", "1"], 2, "evaluator tooling limit: Steps\n");
     invoke(&["--max-steps=10000"], 0, "");
+    invoke(&["--max-steps", "unbounded"], 0, "");
     invoke(&["--max-steps=0"], 2, "evaluator tooling limit: Steps\n");
     let simulation = fixture.0.join("simulation.json");
     std::fs::write(&simulation, "{}").unwrap();
@@ -500,7 +501,7 @@ fn cli_interpreter_step_limits() {
         assert_eq!(output.status.code(), Some(2));
         assert!(
             String::from_utf8_lossy(&output.stderr)
-                .starts_with("--max-steps requires an unsigned integer\n")
+                .starts_with("--max-steps requires an unsigned integer or unbounded\n")
         );
     }
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
@@ -541,6 +542,24 @@ fn cli_interpreter_step_limits() {
         "evaluator tooling limit: Steps\n",
     );
     invoke(&["--grants", grants.to_str().unwrap()], 0, "");
+    invoke(
+        &[
+            "--grants",
+            grants.to_str().unwrap(),
+            "--max-steps=unbounded",
+        ],
+        0,
+        "",
+    );
+    invoke(
+        &[
+            "--simulation",
+            simulation.to_str().unwrap(),
+            "--max-steps=unbounded",
+        ],
+        0,
+        "",
+    );
 }
 
 #[test]

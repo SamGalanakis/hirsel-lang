@@ -1,0 +1,25 @@
+// rule: SEM-4
+// expect: run
+fn sum(data: Bytes) -> u64 {
+  let mut total: u64 = 0
+  for byte in data {
+    total += int.widen(byte)
+  }
+  total
+}
+
+fn consume(take data: Bytes) -> u64 {
+  let mut total: u64 = 0
+  for byte in take data {
+    total += int.widen(byte)
+  }
+  total
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, sum(b"\x00\x7f\xff") == 382)
+  test.check(t, sum(b"") == 0)
+  test.check(t, consume(b"ab") == 195)
+  test.check(t, consume(b"") == 0)
+  Ok(())
+}

@@ -279,7 +279,7 @@ fn mapper_cases(materialized: bool) {
             &run,
             vec![it],
             Limits {
-                steps: 1000,
+                steps: Some(1000),
                 call_depth: 3,
             },
             &mut library,

@@ -69,7 +69,10 @@ impl ImageInput {
             environment.compiler_version.as_bytes().to_vec(),
             environment.spec_hash.0.to_vec(),
             environment.builtin_signatures_hash.0.to_vec(),
-            self.limits.steps.to_le_bytes().to_vec(),
+            self.limits
+                .steps
+                .map(|steps| steps.to_le_bytes().to_vec())
+                .unwrap_or_default(),
             (self.limits.call_depth as u64).to_le_bytes().to_vec(),
         ];
         for (package, manifest) in &self.manifests {

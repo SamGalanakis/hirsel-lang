@@ -569,6 +569,17 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 drop,
                 ..
             } => {
+                let path = Path {
+                    package: None,
+                    segments: vec![item.name],
+                };
+                let spelling = self.spelling(item.name);
+                if !item.definition.package_is("core", "1")
+                    && (native_type(&path, self.symbols) || primitive(&spelling).is_some())
+                {
+                    self.diagnostic(const { RuleId::of("LANG-7") }, item.name_span,
+                        &format!("type `{spelling}` conflicts with a builtin type name; choose a domain name for the type"));
+                }
                 self.generics(&generics, item.origin.span);
                 for attribute in &item.attributes {
                     if self.symbols.resolve(attribute.name) == Some("loop_source") {
@@ -1784,6 +1795,20 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     && self.known_variant(path.segments[0])
                 {
                     self.defer(NameSite::Expression(id), path.segments[0], span);
+                } else if path.package.is_none()
+                    && path.segments.len() > 1
+                    && self.value(path.segments[0]).is_some()
+                    && self.module_path(path)
+                    && matches!(
+                        e,
+                        LookupError::Missing
+                            | LookupError::MissingMember(_)
+                            | LookupError::Provider(_)
+                    )
+                {
+                    let head = self.spelling(path.segments[0]);
+                    self.diagnostic(const { RuleId::of("LANG-4") }, span,
+                        &format!("before `.`, `{head}` names a module; rename the local `{head}` to access its fields"));
                 } else {
                     self.lookup_diagnostic(&e, span);
                 }

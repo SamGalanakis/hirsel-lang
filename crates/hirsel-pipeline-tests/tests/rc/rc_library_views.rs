@@ -259,7 +259,7 @@ fn unicode16_break_vectors_agree_through_compiled_hirsel() {
         native_matrix(),
         "views-unicode16",
         Limits {
-            steps: UNICODE16_STEPS,
+            steps: Some(UNICODE16_STEPS),
             ..Limits::default()
         },
     );

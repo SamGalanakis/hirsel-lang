@@ -1,0 +1,11 @@
+// rule: MODE-1
+// expect: run
+fn words(line: String) -> List[String] {
+  string.split(unique string.trim(line), " ")
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, words("  ewe lamb  ") == ["ewe", "lamb"])
+  test.check(t, words(" ") == [""])
+  Ok(())
+}

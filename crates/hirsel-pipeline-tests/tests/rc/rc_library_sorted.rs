@@ -416,7 +416,7 @@ fn native_cases(cases: Vec<(&str, String)>, large: bool) {
             if large {
                 adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
                     limits: hirsel_interp::Limits {
-                        steps: 100_000_000,
+                        steps: Some(100_000_000),
                         call_depth: 256,
                     },
                     ..Default::default()

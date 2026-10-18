@@ -161,7 +161,7 @@ fn operation_callbacks_use_frames_and_resume_a_thousand_times_with_mut_results()
             false,
             mutating,
             Limits {
-                steps: 20_000,
+                steps: Some(20_000),
                 call_depth: 2,
             },
         );
@@ -188,11 +188,15 @@ fn callback_failure_is_delivered_to_resume_but_cannot_be_swallowed() {
 fn callback_step_and_depth_limits_remain_tooling_outcomes() {
     for limits in [
         Limits {
-            steps: 2,
+            steps: None,
+            call_depth: 1,
+        },
+        Limits {
+            steps: Some(2),
             call_depth: 20,
         },
         Limits {
-            steps: 100,
+            steps: Some(100),
             call_depth: 1,
         },
     ] {
@@ -481,7 +485,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
                 },
                 vec![],
                 Limits {
-                    steps: 100,
+                    steps: Some(100),
                     call_depth: if tooling { 1 } else { 10 },
                 },
                 &mut ops,
@@ -734,7 +738,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
                 })],
             }],
             Limits {
-                steps: 100,
+                steps: Some(100),
                 call_depth: if abandoned { 1 } else { 10 },
             },
             &mut ops,

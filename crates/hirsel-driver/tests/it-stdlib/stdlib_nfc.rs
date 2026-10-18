@@ -175,7 +175,7 @@ fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize) -> usize {
             &configuration,
             arguments,
             Limits {
-                steps: 10_000_000,
+                steps: Some(10_000_000),
                 call_depth: 256,
             },
             &mut library,

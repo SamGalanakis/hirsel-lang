@@ -1,0 +1,9 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 4
+fn words(line: String) -> List[String] {
+  string.split(copy string.trim(line), " ")
+}
+
+pub fn main() -> Result[(), ()] {
+  Ok(())
+}

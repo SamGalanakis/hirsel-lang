@@ -1,0 +1,9 @@
+// rule: CLO-2
+// expect: reject CLO-2 at line 8
+fn inner(f: fn() -> ()) uses {f} {
+  f()
+}
+
+fn outer(f: fn() -> ()) uses {} {
+  inner(f)
+}

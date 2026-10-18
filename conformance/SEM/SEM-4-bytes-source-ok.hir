@@ -1,5 +1,5 @@
 // rule: SEM-4
-// expect: reject SEM-4 at line 4
+// expect: accept
 fn probe(xs: Bytes) {
   for x in xs {
     let _ = x

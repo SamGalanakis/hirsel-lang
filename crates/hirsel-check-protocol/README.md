@@ -26,3 +26,5 @@ driver, interpreter or validator dependency, including in tests.
 These records and helpers moved intact from hirsel-check. Import their actual
 module directly; there are no exports through the implementation crates. The
 frozen syntax/types/TIR public types and semantic encodings are unchanged.
+
+ForProtocol::Bytes selects the existing indexed execution plan with a checked bytes.len call and a plain u8 index result. It carries no new TIR operation.

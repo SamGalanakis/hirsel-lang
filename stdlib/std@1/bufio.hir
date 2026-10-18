@@ -48,7 +48,7 @@ pub fn read_more[S, E](
   mut source: S,
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
   max: u64
-) -> Result[u64, ReadError[E]] {
+) -> Result[u64, ReadError[E]] uses {refill} {
   if max == 0 {
     return Ok(0)
   }
@@ -78,7 +78,7 @@ fn fill[S, E](
   mut r: Reader,
   mut source: S,
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E]
-) -> Result[u64, ReadError[E]] {
+) -> Result[u64, ReadError[E]] uses {refill} {
   if buffered(r) != 0 {
     return Ok(buffered(r))
   }
@@ -92,7 +92,7 @@ pub fn read[S, E](
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
   mut out: List[u8],
   max: u64
-) -> Result[u64, ReadError[E]] {
+) -> Result[u64, ReadError[E]] uses {refill} {
   if max == 0 {
     return Ok(0)
   }
@@ -117,7 +117,7 @@ pub fn read_exact[S, E](
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
   mut out: List[u8],
   count: u64
-) -> Result[(), ReadError[E]] {
+) -> Result[(), ReadError[E]] uses {refill} {
   let mut remaining = count
   while remaining != 0 {
     let n = read(mut r, mut source, refill, mut out, remaining)?
@@ -136,7 +136,7 @@ pub fn read_until[S, E](
   delimiter: u8,
   mut out: List[u8],
   limit: u64
-) -> Result[u64, ReadError[E]] {
+) -> Result[u64, ReadError[E]] uses {refill} {
   if limit == 0 {
     return Error(Limit())
   }
@@ -180,7 +180,7 @@ pub fn read_line[S, E](
   mut source: S,
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
   limit: u64
-) -> Result[String, ReadError[E]] {
+) -> Result[String, ReadError[E]] uses {refill} {
   let mut out: List[u8] = []
   let _ = read_until(mut r, mut source, refill, 10u8, mut out, limit)?
   match core@1/string.from_bytes(core@1/bytes.from_list(take out)) {

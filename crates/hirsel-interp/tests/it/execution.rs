@@ -109,7 +109,7 @@ fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
         vec![countdown()],
         vec![int(P::U32, 20)],
         Limits {
-            steps: 10000,
+            steps: Some(10000),
             call_depth: 21,
         },
     );
@@ -118,7 +118,7 @@ fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
         vec![countdown()],
         vec![int(P::U32, 20)],
         Limits {
-            steps: 10000,
+            steps: Some(10000),
             call_depth: 20,
         },
     );
@@ -127,7 +127,7 @@ fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
         vec![countdown()],
         vec![int(P::U32, 2000)],
         Limits {
-            steps: 100000,
+            steps: Some(100000),
             call_depth: 3000,
         },
     );
@@ -270,18 +270,28 @@ fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
         vec![d.clone()],
         vec![],
         Limits {
-            steps: 1,
+            steps: Some(1),
             call_depth: 1,
         },
     );
     tooling_limit(&e, ToolingLimitKind::Steps, 9);
     assert_eq!(e.steps, 1);
     assert_eq!(cleanup_events(&e), vec![(1, drop(u))]);
+    let unbounded = execute(
+        vec![d.clone()],
+        vec![],
+        Limits {
+            steps: None,
+            call_depth: 1,
+        },
+    );
+    returned(&unbounded, Value::Unit);
+    assert_eq!(unbounded.steps, 2);
     let e = execute(
         vec![d],
         vec![],
         Limits {
-            steps: 2,
+            steps: Some(2),
             call_depth: 1,
         },
     );
@@ -293,7 +303,7 @@ fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
         vec![b.definition("main")],
         vec![],
         Limits {
-            steps: 100,
+            steps: Some(100),
             call_depth: 1,
         },
     );
@@ -344,7 +354,7 @@ fn depth_failure_occurs_after_entry_and_cleans_transferred_arguments() {
         vec![main, callee],
         vec![],
         Limits {
-            steps: 100,
+            steps: Some(100),
             call_depth: 1,
         },
     );
@@ -380,7 +390,7 @@ fn cleanup_zero_can_hold_actions_and_control_edges_have_no_failure_list() {
         vec![b.definition("main")],
         vec![],
         Limits {
-            steps: 5,
+            steps: Some(5),
             call_depth: 1,
         },
     );
@@ -424,7 +434,7 @@ fn effect_only_tracing_retains_no_events_for_a_long_pure_loop() {
         inputs: vec![],
     };
     let limits = Limits {
-        steps: 16_384,
+        steps: Some(16_384),
         call_depth: 1,
     };
     let execute_mode = |trace_mode| {
@@ -447,7 +457,7 @@ fn effect_only_tracing_retains_no_events_for_a_long_pure_loop() {
     };
     let full = execute_mode(hirsel_interp::TraceMode::Full);
     let effects = execute_mode(hirsel_interp::TraceMode::Effects);
-    assert!(full.trace.len() > limits.steps as usize);
+    assert!(full.trace.len() > limits.steps.unwrap() as usize);
     assert_eq!(
         effects.trace.capacity(),
         0,

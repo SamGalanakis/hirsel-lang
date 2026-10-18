@@ -37,7 +37,7 @@ selected program. For an entry receiving `Io`, `grants.json` can grant only stdo
 ```
 
 ```sh
-hirsel run hello.hir --grants grants.json
+hirsel run hello.hir --grants grants.json -- argument-one argument-two
 ./hello --hirsel-grants grants.json argument-one argument-two
 ```
 
@@ -45,6 +45,15 @@ Templates may supply `inputs`, `io`, `args`, `env`, `unsafe` and `admission`.
 Omitted fields deny authority and use zero seeds. Binding fields, unknown fields,
 duplicate fields and invalid grants refuse launch. Templates use the ordinary
 RunConfig validation and admission path; selecting code grants no authority.
+For `hirsel run --grants`, arguments after `--` replace the template's `args`
+with the exact UTF-8 snapshot, including an explicitly empty snapshot. Without
+`--`, the template's `args` remain. With `hirsel run --run`, the record's `args`
+are authoritative and trailing arguments are an error.
+
+Interpreted host runs (`--run` and `--grants`) have no default step budget;
+simulated runs keep a 1,000,000,000-step budget. `--max-steps <n>` selects a
+nonnegative u64 bound, and `--max-steps unbounded` removes it. These are tooling
+limits, independent of language semantics; `--native` rejects the option.
 
 For a record pinned to a particular semantic program revision, export its binding,
 edit its grants, and select it explicitly:
@@ -57,7 +66,9 @@ hirsel export --run hello.hir -o /absolute/path/run.json
 To read files, add a directory mount to `io.dirs`, for example
 `{"path":"data","host":"/absolute/host/directory","access":"read"}`.
 A program can acquire `io.dir(rt, path.of("data"))` and read relative paths within
-that grant. Use `read_write` only when writes are intended. No working directory,
+that grant. A relative `host` in a grants template resolves against the template
+file's directory and is canonicalized before validation and host pinning. Bound
+records still require canonical absolute hosts. Use `read_write` only when writes are intended. No working directory,
 standard stream, environment key, clock or network authority is implicit.
 
 To let a program run other programs, grant each one by its exact absolute path:

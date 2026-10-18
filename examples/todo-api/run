@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 port="${1:-8080}"
 mkdir -p data
-# A grant's host root must be absolute, so fill in this checkout's data directory.
+# Bind this launch's data directory and listen port.
 python3 - "$port" <<'PY'
 import json, sys
 from pathlib import Path
@@ -15,5 +15,4 @@ grants['io']['net']['rules'][0]['service'] = port
 grants['args'] = [port]
 Path('data/grants.json').write_text(json.dumps(grants))
 PY
-# A server outlives the interpreter's default step budget; lift it to the maximum.
-exec hirsel run hirsel.json --grants data/grants.json --max-steps 18446744073709551615
+exec hirsel run hirsel.json --grants data/grants.json

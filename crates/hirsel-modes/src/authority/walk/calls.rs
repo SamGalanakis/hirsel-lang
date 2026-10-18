@@ -1,6 +1,26 @@
 use super::*;
 
 impl Checker<'_> {
+    /// A selected parameter's unknown environment is already covered by the
+    /// enclosing declaration. Discharge only that exact receipt, independently
+    /// of every other operand and of the callee's ambient authority.
+    fn receipt_authority(
+        &self,
+        value: ExprId,
+        authority: AuthoritySummary,
+        frame: &Frame,
+    ) -> AuthoritySummary {
+        if authority == AuthoritySummary::Unknown
+            && self.binding(self.transparent_value(value)).is_some_and(|binding| {
+                binding.owner == frame.owner
+                    && matches!(binding.binding, ResolvedName::Parameter(p) if frame.receipts.contains(&p))
+            })
+        {
+            AuthoritySummary::inert()
+        } else {
+            authority
+        }
+    }
     fn callback_result_span(&self, call: ExprId) -> Span {
         if let ExprKind::Call { arguments, .. } = &self.tree.expressions[call.0 as usize].kind {
             if let Some(argument) = arguments.last() {
@@ -1169,16 +1189,75 @@ impl Checker<'_> {
                 }
             }
             if let Some(frame) = self.frames.last().cloned() {
-                if let Uses::Only(allowed) = frame.allowed {
+                if let Uses::Only(allowed) = &frame.allowed {
+                    let receipt_arguments: Vec<_> = arguments
+                        .iter()
+                        .zip(&authorities)
+                        .map(|(argument, authority)| {
+                            self.receipt_authority(argument.value, authority.clone(), &frame)
+                        })
+                        .collect();
+                    let mut receipt_required = self.scoped_authority(substitute_authority(
+                        &f.authority,
+                        &receipt_arguments,
+                        &generic_authorities,
+                    ));
+                    for (parameter, authority) in f.parameters.iter().zip(&receipt_arguments) {
+                        if parameter.passing == PassingMode::Borrow
+                            && matches!(
+                                self.out.body.types.get(parameter.ty).unwrap().kind,
+                                TypeKind::Function(_)
+                            )
+                        {
+                            receipt_required = receipt_required.join(authority.clone());
+                        }
+                    }
+                    let selected_callee =
+                        self.receipt_authority(callee, AuthoritySummary::Unknown, &frame)
+                            == AuthoritySummary::inert();
+                    if definition.is_none()
+                        && (selected_callee
+                            || self.ty(callee).is_some_and(|ty| {
+                                !self
+                                    .out
+                                    .body
+                                    .types
+                                    .get(ty)
+                                    .unwrap()
+                                    .modes
+                                    .relation
+                                    .is_global()
+                            }))
+                    {
+                        receipt_required = match &f.uses {
+                            Uses::Unrestricted => {
+                                self.receipt_authority(callee, AuthoritySummary::Unknown, &frame)
+                            }
+                            Uses::Only(uses) => self.scoped_authority(substitute_authority(
+                                uses,
+                                &receipt_arguments,
+                                &generic_authorities,
+                            )),
+                        };
+                        // Selecting the callee never selects callbacks supplied to it.
+                        for (ty, authority) in args.iter().zip(&receipt_arguments) {
+                            if matches!(
+                                self.out.body.types.get(*ty).unwrap().kind,
+                                TypeKind::Function(_)
+                            ) {
+                                receipt_required = receipt_required.join(authority.clone());
+                            }
+                        }
+                    }
                     // CAP-2/CLO-2, spec #58: captures were checked when the
                     // frame was created. Parameters and calls may derive new
                     // capability values inside it; their operation's input
                     // authority is checked by provision, not as ambient uses.
                     let ambient = if self.in_clause
                         || matches!(frame.owner, NameSite::Item(_))
-                        || transparent && required == AuthoritySummary::Unknown
+                        || transparent && receipt_required == AuthoritySummary::Unknown
                     {
-                        required.clone()
+                        receipt_required.clone()
                     } else if definition.is_none()
                         && self.ty(callee).is_some_and(|ty| {
                             !self
@@ -1203,28 +1282,6 @@ impl Checker<'_> {
                             &generic_authorities,
                         ))
                     };
-                    // An explicitly selected callback parameter supplies its
-                    // own unknown authority. Preserve that exact receipt instead
-                    // of treating its invocation as unknown ambient authority.
-                    let selected_parameter = matches!(frame.owner, NameSite::Item(owner) if owner == self.item)
-                        && definition.is_none()
-                        && self.binding(callee).is_some_and(|binding| {
-                            let ResolvedName::Parameter(parameter) = binding.binding else { return false; };
-                            if binding.owner != frame.owner { return false; }
-                            let SignatureKind::Function(header) = &self.signature.kind else { return false; };
-                            matches!(&header.uses, Uses::Only(AuthoritySummary::Known(terms)) if terms.contains(&AuthorityTerm::Parameter(ParameterRef::bound(parameter))))
-                        });
-                    // A receipt covers only the callee's own environment, not
-                    // a callback passed to it. Those invocation effects keep
-                    // their ordinary independent uses obligation.
-                    let additional_callbacks = arguments.iter().any(|argument| {
-                        self.ty(argument.value).is_some_and(|ty| {
-                            matches!(
-                                self.out.body.types.get(ty).unwrap().kind,
-                                TypeKind::Function(_)
-                            ) && !subset(&self.authority(ty), &allowed)
-                        })
-                    });
                     // CAP-5/CLO-2: an owner projection may derive Dir from an
                     // authorized Seal parameter. Prove the actual input values,
                     // never a type-level Dir <= Seal relation. Environment
@@ -1234,22 +1291,17 @@ impl Checker<'_> {
                         && matches!(frame.owner, NameSite::Item(_))
                         && arguments
                             .iter()
-                            .all(|a| subset(&self.used(a.value), &allowed))
-                        && (definition.is_some() || subset(&self.used(callee), &allowed))
+                            .all(|a| subset(&self.used(a.value), allowed))
+                        && (definition.is_some() || subset(&self.used(callee), allowed))
                         && subset(
                             &self.scoped_authority(substitute_authority(
                                 &f.authority,
                                 &vec![AuthoritySummary::inert(); f.parameters.len()],
                                 &generic_authorities,
                             )),
-                            &allowed,
+                            allowed,
                         );
-                    if !(ambient == AuthoritySummary::Unknown
-                        && selected_parameter
-                        && !additional_callbacks)
-                        && !derived_inputs
-                        && !subset(&ambient, &allowed)
-                    {
+                    if !derived_inputs && !subset(&ambient, allowed) {
                         let rule = if matches!(frame.restriction.as_str(), "CONC-5" | "CAP-3") {
                             frame.restriction.clone()
                         } else if transparent {
@@ -2013,7 +2065,7 @@ impl Checker<'_> {
                             self.explained(
                                 const { RuleId::of("CONC-6") },
                                 span,
-                                "channel payload type must be sendable",
+                                "channel payload type must be sendable; for counted data, write `unique` on the payload type (Sender[unique T] and Receiver[unique T]) or on its counted fields",
                                 self.boundary_explanation(
                                     None,
                                     span,
@@ -2121,7 +2173,18 @@ impl Checker<'_> {
                         })
                         .cloned()
                     {
-                        authority = authority.join(self.authority(b.ty));
+                        let selected = match b.binding {
+                            ResolvedName::Parameter(parameter) if b.owner == site => {
+                                AuthoritySummary::Known(
+                                    vec![AuthorityTerm::Parameter(ParameterRef::body(
+                                        site, parameter,
+                                    ))]
+                                    .into(),
+                                )
+                            }
+                            _ => self.authority(b.ty),
+                        };
+                        authority = authority.join(selected);
                     } else {
                         authority = AuthoritySummary::Unknown;
                     }
@@ -2674,15 +2737,35 @@ impl Checker<'_> {
             .as_ref()
             .map(|f| f.uses.clone())
             .unwrap_or_else(|| f.uses.clone());
+        let receipts = Frame::parameter_receipts(&capture_limit, owner);
+        // Own parameters remain substitution selectors. Outer parameters are
+        // captured values: publish their actual authority, as the body does.
+        if let Uses::Only(summary) = &capture_limit {
+            let published = match summary {
+                AuthoritySummary::Known(terms) => {
+                    terms
+                        .iter()
+                        .cloned()
+                        .fold(AuthoritySummary::inert(), |authority, term| {
+                            let own = matches!(term, AuthorityTerm::Parameter(
+                            ParameterRef::Body { scope, .. }
+                        ) if scope == owner);
+                            let selected = AuthoritySummary::Known(vec![term].into());
+                            authority.join(if own {
+                                selected
+                            } else {
+                                self.scoped_authority(selected)
+                            })
+                        })
+                }
+                AuthoritySummary::Unknown => AuthoritySummary::Unknown,
+            };
+            f.uses = Uses::Only(published);
+        }
         let capture_limit = match capture_limit {
             Uses::Only(a) => Uses::Only(self.scoped_authority(a)),
             other => other,
         };
-        // CLO-4/CAP-3: the contextual restriction is checked for captures and
-        // the body below, so the published callable must retain that promise.
-        if matches!(capture_limit, Uses::Only(_)) {
-            f.uses = capture_limit.clone();
-        }
         let free = self.free_uses(owner.clone(), body);
         let mut captures = Vec::new();
         let mut authority = AuthoritySummary::inert();
@@ -2998,6 +3081,7 @@ impl Checker<'_> {
         self.frames.push(Frame {
             owner: owner.clone(),
             allowed: Uses::Unrestricted,
+            receipts,
             result: (!inferred_result).then_some(f.result),
             restriction,
         });

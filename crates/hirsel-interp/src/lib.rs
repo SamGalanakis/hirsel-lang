@@ -25,13 +25,14 @@ pub use value::{Integer, Value};
 /// Limits are explicit inputs, independent of host stack size or wall time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Limits {
-    pub steps: u64,
+    /// None leaves execution steps unbounded; call depth is still checked.
+    pub steps: Option<u64>,
     pub call_depth: usize,
 }
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            steps: 1_000_000,
+            steps: Some(1_000_000),
             call_depth: 256,
         }
     }

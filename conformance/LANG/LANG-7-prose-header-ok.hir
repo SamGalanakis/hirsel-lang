@@ -1,0 +1,7 @@
+// note: an ordinary comment is allowed before directives.
+// rule: LANG-7
+// expect: accept
+// explanation: prose may contain a colon.
+fn example() -> u8 {
+  1u8
+}

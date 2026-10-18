@@ -177,6 +177,13 @@ The remaining 232 are listed with their phase/rule owners in pending.txt.
 
 ## Authority, provenance and capture tables
 
+Declared `uses` selections retain binder-exact parameter receipts in every callable
+frame. Call restriction checking discharges a selected operand independently before
+instantiating the callee's authority and joining callback effects; published authority
+stays unknown. Forwarding never grants an unselected callback or ambient capability.
+
+Uniqueness diagnostics trace a failed construction to its counted aliased operand, skipping plain fields. Channel payload diagnostics explain the unique payload/field spelling without changing the Sendable proof.
+
 Fresh call receipts own their identities even when their types are Plain;
 moving one ends dependent brands instead of detaching a copied alias. An error
 mapper's parameter refinements and crossing/authority bounds are checked against
