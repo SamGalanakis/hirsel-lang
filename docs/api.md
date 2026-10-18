@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1128 exported definitions; 315 variants.
+1142 exported definitions; 315 variants.
 
 ## Types and roots
 
@@ -7108,11 +7108,39 @@ References: [`core@1/Scope`](#def-core_401_2fScope), [`core@1/TaskSet`](#def-cor
 
 ## test
 
+<a id="def-std_401_2ftest_2fSource"></a>
+
+- `pub opaque type test.Source: inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2ftest_2fany_5fu64"></a>
+
+- `pub fn test.any_u64(mut s: Source) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
+
 <a id="def-std_401_2ftest_2fapprox"></a>
 
 - `@noalloc @track_caller pub fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()`
 
 References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/f64`](#def-core_401_2ff64)
+
+<a id="def-std_401_2ftest_2fascii_5fstring"></a>
+
+- `pub fn test.ascii_string(mut s: Source, max_len: u64) -> String`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
+
+<a id="def-std_401_2ftest_2fassert_5feq"></a>
+
+- `@track_caller pub fn test.assert_eq[T: data](t: Test, actual: T, expected: T, show: fn(T) -> String) -> ()`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/Test`](#def-core_401_2fTest)
+
+<a id="def-std_401_2ftest_2fbool"></a>
+
+- `pub fn test.bool(mut s: Source) -> bool uses {}`
+
+References: [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
 
 <a id="def-core_401_2ftest_2fcheck"></a>
 
@@ -7121,6 +7149,12 @@ References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/f64`](#def-core_401_
 <a id="def-core_401_2ftest_2fcheck_5fcase"></a>
 
 - `@noalloc fn test.check_case(t: Test, ok: bool, case: u64) -> ()`
+
+<a id="def-std_401_2ftest_2fchoice"></a>
+
+- `pub fn test.choice(mut s: Source, max: u64) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
 
 <a id="def-core_401_2ftest_2fdir"></a>
 
@@ -7144,21 +7178,23 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/Test`](#def-core
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/Test`](#def-core_401_2fTest)
 
+<a id="def-core_401_2ftest_2fexpect_5fsnapshot"></a>
+
+- `@noalloc fn test.expect_snapshot(t: Test, name: String, text: String) -> ()`
+
 <a id="def-core_401_2ftest_2ffail"></a>
 
 - `@noalloc fn test.fail(t: Test) -> Never`
 
-<a id="def-std_401_2ftest_2ffor_5fall"></a>
+<a id="def-std_401_2ftest_2flist_5fof"></a>
 
-- `@track_caller pub fn test.for_all[T](t: Test, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()`
+- `pub fn test.list_of[T](mut s: Source, max_len: u64, element: fn(mut Source) -> T) -> List[T]`
 
-References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/bool`](#def-core_401_2fbool)
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
 
-<a id="def-std_401_2ftest_2ffor_5fall_5fcases"></a>
+<a id="def-core_401_2ftest_2flog"></a>
 
-- `@track_caller pub fn test.for_all_cases[T](t: Test, cases: u64, gen: fn(Test) -> T, law: fn(T) -> bool uses {}) -> ()`
-
-References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64)
+- `@noalloc fn test.log(t: Test, text: String) -> ()`
 
 <a id="def-core_401_2ftest_2fnet"></a>
 
@@ -7167,6 +7203,46 @@ References: [`core@1/Test`](#def-core_401_2fTest), [`core@1/bool`](#def-core_401
 <a id="def-core_401_2ftest_2fprocess"></a>
 
 - `fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc`
+
+<a id="def-std_401_2ftest_2fproperty"></a>
+
+- `@track_caller pub fn test.property[T](t: Test, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String) -> ()`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/Test`](#def-core_401_2fTest), [`std@1/test/Source`](#def-std_401_2ftest_2fSource), [`std@1/test/bool`](#def-std_401_2ftest_2fbool)
+
+<a id="def-std_401_2ftest_2fproperty_5fcases"></a>
+
+- `@track_caller pub fn test.property_cases[T](t: Test, cases: u64, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String) -> ()`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/Test`](#def-core_401_2fTest), [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource), [`std@1/test/bool`](#def-std_401_2ftest_2fbool)
+
+<a id="def-std_401_2ftest_2fquoted"></a>
+
+- `pub fn test.quoted(value: String) -> String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2ftest_2frange_5fi64"></a>
+
+- `pub fn test.range_i64(mut s: Source, low: i64, high: i64) -> i64 uses {}`
+
+References: [`core@1/i64`](#def-core_401_2fi64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
+
+<a id="def-std_401_2ftest_2frange_5fu64"></a>
+
+- `pub fn test.range_u64(mut s: Source, low: u64, high: u64) -> u64 uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
+
+<a id="def-core_401_2ftest_2fseed"></a>
+
+- `@noalloc fn test.seed(t: Test) -> u64`
+
+<a id="def-std_401_2ftest_2fshow_5flist"></a>
+
+- `pub fn test.show_list[T](xs: List[T], show: fn(T) -> String) -> String`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
 
 
 ## text
