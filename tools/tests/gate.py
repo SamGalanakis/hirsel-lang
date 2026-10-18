@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 TOOLS = Path(__file__).resolve().parents[1]
@@ -332,6 +333,94 @@ class Slots(unittest.TestCase):
             self.assertTrue(entered.is_set())
             self.assertIn('waiting for one of 2 gate slots', said.getvalue())
             self.assertIn('took gate slot', said.getvalue())
+
+    def test_the_earlier_waiter_acquires_before_a_later_waiter_that_retries_first(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            environ = {gating.GATE_SLOTS: f'{scratch}/slots:1'}
+            early_waiting, late_waiting = threading.Event(), threading.Event()
+            early_retry, late_retry = threading.Event(), threading.Event()
+            late_attempted, early_entered = threading.Event(), threading.Event()
+            order, errors = [], []
+            late_polls = 0
+
+            def poll(_):
+                nonlocal late_polls
+                if threading.current_thread().name == 'early':
+                    early_waiting.set()
+                    if not early_retry.wait(5):
+                        raise AssertionError('earlier waiter was never released')
+                else:
+                    late_polls += 1
+                    late_waiting.set()
+                    if late_polls == 1:
+                        if not late_retry.wait(5):
+                            raise AssertionError('later waiter was never released')
+                    else:
+                        late_attempted.set()
+                        if not early_entered.wait(5):
+                            raise AssertionError('later waiter overtook or blocked the earlier waiter')
+
+            def wait(name):
+                try:
+                    with gating.gate_slot(environ):
+                        order.append(name)
+                        if name == 'early':
+                            early_entered.set()
+                        else:
+                            late_attempted.set()
+                except BaseException as error:
+                    errors.append(error)
+
+            early = threading.Thread(target=wait, args=('early',), name='early')
+            late = threading.Thread(target=wait, args=('late',), name='late')
+            with patch.object(gating.time, 'sleep', poll), contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    with gating.gate_slot(environ):
+                        early.start()
+                        self.assertTrue(early_waiting.wait(5))
+                        late.start()
+                        self.assertTrue(late_waiting.wait(5))
+                    late_retry.set()
+                    self.assertTrue(late_attempted.wait(5))
+                    self.assertEqual(order, [])
+                finally:
+                    early_retry.set()
+                    late_retry.set()
+                    early_entered.set()
+                    for waiter in (early, late):
+                        if waiter.ident is not None:
+                            waiter.join(5)
+                self.assertFalse(early.is_alive() or late.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(order, ['early', 'late'])
+                self.assertEqual(list((Path(scratch) / 'slots/queue').iterdir()), [])
+
+    def test_a_dead_ticket_is_removed_before_a_live_waiter_acquires(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            queue = Path(scratch) / 'slots/queue'
+            queue.mkdir(parents=True)
+            exited = subprocess.Popen([sys.executable, '-c', 'pass'])
+            self.assertEqual(exited.wait(), 0)
+            dead = queue / f'0-{exited.pid}'
+            dead.touch()
+            with gating.gate_slot({gating.GATE_SLOTS: f'{scratch}/slots:1'}):
+                self.assertFalse(dead.exists())
+                self.assertEqual(list(queue.iterdir()), [])
+
+    def test_an_interrupted_waiter_removes_its_ticket(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            environ = {gating.GATE_SLOTS: f'{scratch}/slots:1'}
+            queue = Path(scratch) / 'slots/queue'
+
+            def interrupt(_):
+                self.assertEqual(len(list(queue.iterdir())), 1)
+                raise KeyboardInterrupt
+
+            with gating.gate_slot(environ), patch.object(gating.time, 'sleep', interrupt):
+                with self.assertRaises(KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()):
+                    with gating.gate_slot(environ):
+                        self.fail('a waiter entered an occupied slot')
+                self.assertEqual(list(queue.iterdir()), [])
 
     def test_no_cap_without_the_variable_and_a_malformed_one_is_refused(self):
         with gating.gate_slot({}), gating.gate_slot({}), gating.gate_slot({}):

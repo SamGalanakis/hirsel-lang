@@ -483,9 +483,9 @@ listens on that IP have no scripted clients.
   nothing, so a read times out or never completes. The end of the steps is `Close()`.
 - Written bytes accumulate and are compared with the next `Expect(b)` once `b`'s length of
   them exist; a mismatch is `Reset()` at that point. Writes are otherwise accepted.
-- `net.listen` on a scripted listener's address succeeds; a second listen on it while the
-  first listener is open is `AddrInUse()`. A granted listen on an address with no scripted
-  listener has no clients. `net.local_addr` is the assigned listen address, including
+- `net.listen` on a scripted listener's address succeeds. A second listen on the same
+  nonzero address while the first listener is open is `AddrInUse()`. A granted listen
+  on an address with no scripted listener has no clients. `net.local_addr` is the assigned listen address, including
   the deterministic ephemeral port for a port-0 listen ([simulation](determinism.md#det-1-contract)).
 - `net.accept` takes the address's next client in list order, across every listener opened
   on it. The stream follows the client's steps as `Open(steps)` does, and the accepted

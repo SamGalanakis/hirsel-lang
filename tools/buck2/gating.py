@@ -75,9 +75,30 @@ GATE_SLOTS = 'HIRSEL_GATE_SLOTS'
 SLOT_POLL_SECONDS = 5
 
 
+def oldest_gate_ticket(queue):
+    """Find the earliest live waiter, discarding tickets left by exited gates."""
+    live = []
+    for ticket in queue.iterdir():
+        try:
+            stamp, pid = map(int, ticket.name.split('-'))
+        except ValueError:
+            continue
+        if pid <= 0:
+            continue
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            ticket.unlink(missing_ok=True)
+            continue
+        except PermissionError:
+            pass  # A live process owned by another user.
+        live.append((stamp, pid, ticket))
+    return min(live)[2] if live else None
+
+
 @contextlib.contextmanager
 def gate_slot(environ=os.environ):
-    """Hold one of the host's gate slots, waiting for one to free."""
+    """Hold one of the host's gate slots, in FIFO waiter order."""
     spec = environ.get(GATE_SLOTS, '')
     if not spec:
         yield
@@ -87,29 +108,45 @@ def gate_slot(environ=os.environ):
         raise SystemExit(f'gate: {GATE_SLOTS}={spec!r} is not dir:N')
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    waiting = None
+    queue = directory / 'queue'
+    queue.mkdir(exist_ok=True)
     while True:
-        for slot in range(int(count)):
-            # Python opens files non-inheritable, so Buck2 never holds the lock.
-            handle = open(directory / f'slot-{slot}', 'a+')
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                handle.close()
-                continue
-            with handle:
-                handle.truncate(0)
-                handle.write(f'{os.getpid()} {ROOT}\n')
-                handle.flush()
-                if waiting is not None:
-                    say(f'gate: took gate slot {slot} after waiting {time.monotonic() - waiting:.0f} s')
-                yield
-            return
-        if waiting is None:
-            holders = [(directory / f'slot-{slot}').read_text().strip() for slot in range(int(count))]
-            say(f'gate: waiting for one of {count} gate slots in {directory}; held by: ' + '; '.join(holders))
-            waiting = time.monotonic()
-        time.sleep(SLOT_POLL_SECONDS)
+        ticket = queue / f'{time.time_ns()}-{os.getpid()}'
+        try:
+            ticket.touch(exist_ok=False)
+            break
+        except FileExistsError:
+            continue
+    waiting = None
+    try:
+        while True:
+            if oldest_gate_ticket(queue) == ticket:
+                for slot in range(int(count)):
+                    # Python opens files non-inheritable, so Buck2 never holds the lock.
+                    handle = open(directory / f'slot-{slot}', 'a+')
+                    try:
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        handle.close()
+                        continue
+                    with handle:
+                        handle.truncate(0)
+                        handle.write(f'{os.getpid()} {ROOT}\n')
+                        handle.flush()
+                        ticket.unlink(missing_ok=True)
+                        if waiting is not None:
+                            say(f'gate: took gate slot {slot} after waiting {time.monotonic() - waiting:.0f} s')
+                        yield
+                    return
+            if waiting is None:
+                holders = [path.read_text().strip() if path.exists() else ''
+                           for slot in range(int(count))
+                           for path in [directory / f'slot-{slot}']]
+                say(f'gate: waiting for one of {count} gate slots in {directory}; held by: ' + '; '.join(holders))
+                waiting = time.monotonic()
+            time.sleep(SLOT_POLL_SECONDS)
+    finally:
+        ticket.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------- git
