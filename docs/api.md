@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-681 exported definitions; 232 variants.
+687 exported definitions; 238 variants.
 
 
 ## Types and roots
@@ -357,6 +357,21 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `fn channel.open[T: sendable](tasks: Tasks) -> (Sender[T], Receiver[T])` <!-- core@1/channel/open -->
 - `fn channel.receive[T](tasks: Tasks, mut r: Receiver[T]) -> Result[T, ChannelError]` <!-- core@1/channel/receive -->
 - `fn channel.send[T: sendable](tasks: Tasks, mut s: Sender[T], take v: T) -> Result[(), (T, ChannelError)]` <!-- core@1/channel/send -->
+
+## cli
+
+- `pub type cli.Flag { name: String, short: Option[u8], kind: Kind, help: String, }` <!-- std@1/cli/Flag -->
+- `pub type cli.Kind = Switch | Value` — Go flag.FlagSet.parseOne token handling, with immutable explicit specs. <!-- std@1/cli/Kind -->
+- `Switch -> cli.Kind` — Variant of cli.Kind. <!-- std@1/cli/Kind#Switch -->
+- `Value -> cli.Kind` — Variant of cli.Kind. <!-- std@1/cli/Kind#Value -->
+- `pub type cli.ParseError = UnknownFlag(u64) | MissingValue(u64) | UnexpectedValue(u64) | InvalidSpec` <!-- std@1/cli/ParseError -->
+- `InvalidSpec -> cli.ParseError` — Variant of cli.ParseError. <!-- std@1/cli/ParseError#InvalidSpec -->
+- `MissingValue(u64) -> cli.ParseError` — Variant of cli.ParseError. <!-- std@1/cli/ParseError#MissingValue -->
+- `UnexpectedValue(u64) -> cli.ParseError` — Variant of cli.ParseError. <!-- std@1/cli/ParseError#UnexpectedValue -->
+- `UnknownFlag(u64) -> cli.ParseError` — Variant of cli.ParseError. <!-- std@1/cli/ParseError#UnknownFlag -->
+- `pub type cli.Parsed { flags: Map[String, List[String]], positional: List[String], }` <!-- std@1/cli/Parsed -->
+- `pub fn cli.parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, ParseError] uses {}` <!-- std@1/cli/parse -->
+- `pub fn cli.usage(program: String, specs: List[Flag]) -> String uses {}` <!-- std@1/cli/usage -->
 
 ## clock
 

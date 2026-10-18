@@ -1,0 +1,142 @@
+// rule: SEM-3
+// expect: run
+// Go FlagSet token/error ideas, adapted to explicit specs and ordered repeats.
+fn specs() -> List[std@1/cli.Flag] {
+  [
+    std@1/cli.Flag(
+      name: "verbose",
+      short: Some(core@1/int.narrow('v')),
+      kind: Switch(),
+      help: "verbose output"
+    ),
+    std@1/cli.Flag(
+      name: "output",
+      short: Some(core@1/int.narrow('o')),
+      kind: Value(),
+      help: "output path"
+    )
+  ]
+}
+
+fn invalid(args: List[String]) -> Result[std@1/cli.Parsed, std@1/cli.ParseError] {
+  std@1/cli.parse(unique args, specs())
+}
+
+pub fn main() -> Result[(), ()] {
+  let initial = match std@1/cli.parse(
+    ["one", "-v", "--output=a", "-o", "b", "--output=", "--", "--unknown", "-"],
+    specs()
+  ) {
+    Ok(parsed) => take parsed,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  failure.check(initial.positional == ["one", "--unknown", "-"], TextInvariant())
+  failure.check(map.get(initial.flags, "verbose") == Some([""]), TextInvariant())
+  failure.check(
+    map.get(initial.flags, "output") == Some(["a", "b", ""]),
+    TextInvariant()
+  )
+  failure.check(map.get(initial.flags, "missing") == None(), TextInvariant())
+  match invalid(["--unknown"]) {
+    Error(UnknownFlag(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match invalid(["--output"]) {
+    Error(MissingValue(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match invalid(["--verbose="]) {
+    Error(UnexpectedValue(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match invalid(["-vo"]) {
+    Error(UnknownFlag(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match invalid(["--output", "--", "bad", "--what"]) {
+    Error(UnknownFlag(3)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let mut duplicates = specs()
+  list.push(
+    mut duplicates,
+    std@1/cli.Flag(name: "verbose", short: None(), kind: Switch(), help: "")
+  )
+  match std@1/cli.parse([], duplicates) {
+    Error(InvalidSpec()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let short_duplicates: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(
+      name: "a",
+      short: Some(core@1/int.narrow('x')),
+      kind: Switch(),
+      help: ""
+    ),
+    std@1/cli.Flag(
+      name: "b",
+      short: Some(core@1/int.narrow('x')),
+      kind: Value(),
+      help: ""
+    )
+  ]
+  match std@1/cli.parse([], short_duplicates) {
+    Error(InvalidSpec()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let bad: List[std@1/cli.Flag] = [
+    std@1/cli.Flag(name: "bad=name", short: None(), kind: Switch(), help: "")
+  ]
+  match std@1/cli.parse([], bad) {
+    Error(InvalidSpec()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  failure.check(
+    std@1/cli.usage("app", specs()) == "Usage: app [options] [--] [arguments]\n  -v, --verbose\tverbose output\n  -o, --output <value>\toutput path\n",
+    TextInvariant()
+  )
+  let positional = match std@1/cli.parse(["-", "", "--output", "-3"], specs()) {
+    Ok(parsed) => take parsed,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  failure.check(positional.positional == ["-", ""], TextInvariant())
+  failure.check(map.get(positional.flags, "output") == Some(["-3"]), TextInvariant())
+  let equals = match std@1/cli.parse(["-o=", "--output=a=b", "-o=c=d"], specs()) {
+    Ok(parsed) => take parsed,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  failure.check(
+    map.get(equals.flags, "output") == Some(["", "a=b", "c=d"]),
+    TextInvariant()
+  )
+  let invalid_shorts: List[u8] = [0u8, 32u8, 45u8, 61u8, 127u8, 255u8]
+  for short in invalid_shorts {
+    let bad_short: List[std@1/cli.Flag] = [
+      std@1/cli.Flag(name: "valid", short: Some(short), kind: Switch(), help: "")
+    ]
+    match std@1/cli.parse([], bad_short) {
+      Error(InvalidSpec()) => (),
+      _ => failure.check(false, TextInvariant()),
+    }
+  }
+  let invalid_names: List[String] = ["", "-bad", "has space", "tab\tname", "del\x7f"]
+  for name in invalid_names {
+    let bad_name: List[std@1/cli.Flag] = [
+      std@1/cli.Flag(name: copy name, short: None(), kind: Switch(), help: "")
+    ]
+    match std@1/cli.parse([], bad_name) {
+      Error(InvalidSpec()) => (),
+      _ => failure.check(false, TextInvariant()),
+    }
+  }
+  Ok(())
+}

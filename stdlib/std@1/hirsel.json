@@ -412,6 +412,12 @@
       "module": [
         "file"
       ]
+    },
+    {
+      "path": "cli.hir",
+      "module": [
+        "cli"
+      ]
     }
   ],
   "dependencies": []

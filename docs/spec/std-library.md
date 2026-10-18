@@ -641,6 +641,34 @@ emits exactly one LF. An empty field list writes a blank record. It appends to
 existing output. No file, stdin or network hook is hidden in the parser; refill
 carries the explicit source's authority, like bufio.
 
+## Explicit argument flag parsing
+
+`std@1/cli` parses a supplied argument snapshot as pure source. It defines
+`Kind = Switch | Value`, `Flag { name: String, short: Option[u8], kind: Kind,
+help: String }`, and `Parsed { flags: Map[String, List[String]], positional:
+List[String] }`. `ParseError = UnknownFlag(u64) | MissingValue(u64) |
+UnexpectedValue(u64) | InvalidSpec`; indices identify arguments, starting at zero.
+
+```text
+fn cli.parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, ParseError] uses {}
+fn cli.usage(program: String, specs: List[Flag]) -> String uses {}
+```
+
+Specs require nonempty long names without a leading dash, `=`, ASCII control,
+DEL or space, and unique names/short options. A short option is one printable
+ASCII byte other than dash or `=`. `parse` rejects invalid specs before input.
+Long flags accept `--name=value` or `--name value`; shorts accept `-x`,
+`-x=value` or `-x value`, without bundling. A value flag consumes its next token
+even if that token starts with a dash or is `--`. Switches reject explicit values
+and store an empty-string occurrence. Repeats retain occurrence order. Unknown
+flags fail; a lone dash is positional. Positionals may intermix with flags;
+a standalone `--` ends option parsing and is omitted from the result.
+
+`usage` requires valid specs (otherwise SEM-3 failure), emits a Usage line and
+one line per spec in declaration order, and appends LF. Applications collect
+Args through arg.count/text once, parse typed values separately, and choose how
+to print help or errors. There is no registration, ambient Args access or exit.
+
 ## SHA-256
 
 `std@1/sha256` implements SHA-256 entirely in ordinary, allocation-free source.

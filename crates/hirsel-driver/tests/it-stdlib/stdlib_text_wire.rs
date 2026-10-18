@@ -122,3 +122,8 @@ fn csv_is_ordinary_source() {
         &["reader", "feed", "parse", "read_record", "write_record"],
     );
 }
+
+#[test]
+fn cli_is_ordinary_source() {
+    source_codec("cli", "cli", &["parse", "usage"]);
+}

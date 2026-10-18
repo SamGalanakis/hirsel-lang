@@ -1,0 +1,197 @@
+// Go flag.FlagSet.parseOne token handling, with immutable explicit specs.
+pub type Kind = Switch | Value
+
+pub type Flag {
+  name: String,
+  short: Option[u8],
+  kind: Kind,
+  help: String,
+}
+
+pub type Parsed {
+  flags: Map[String, List[String]],
+  positional: List[String],
+}
+
+pub type ParseError = UnknownFlag(u64) | MissingValue(u64) | UnexpectedValue(u64) | InvalidSpec
+
+@noalloc
+fn valid_name(name: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(name)
+  if core@1/bytes.len(data) == 0 || core@1/int.widen(data[0]) == '-' {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    if core@1/int.widen(data[i]) <= ' ' || core@1/int.widen(data[i]) == '=' || data[i] == 127 {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+@noalloc
+fn valid_specs(specs: List[Flag]) -> bool uses {} {
+  let mut i: u64 = 0
+  while i < core@1/list.len(specs) {
+    if !valid_name(specs[i].name) {
+      return false
+    }
+    match specs[i].short {
+      Some(short) => {
+        if core@1/int.widen(short) <= ' ' || short >= 127 || core@1/int.widen(short) == '-' || core@1/int.widen(
+          short
+        ) == '=' {
+          return false
+        }
+      },
+      None() => (),
+    }
+    let mut j: u64 = 0
+    while j < i {
+      if specs[i].name == specs[j].name {
+        return false
+      }
+      match specs[i].short {
+        Some(short) => {
+          if specs[j].short == Some(short) {
+            return false
+          }
+        },
+        None() => (),
+      }
+      j += 1
+    }
+    i += 1
+  }
+  true
+}
+
+pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, ParseError] uses {} {
+  if !valid_specs(specs) {
+    return Error(InvalidSpec())
+  }
+  let mut flags: Map[String, List[String]] = core@1/map.empty()
+  let mut positional: List[String] = []
+  let mut index: u64 = 0
+  let mut options = true
+  while index < core@1/list.len(args) {
+    let token = args[index]
+    let data = core@1/string.as_bytes(token)
+    let len = core@1/bytes.len(data)
+    if options && token == "--" {
+      options = false
+    } else if options && len > 1 && core@1/int.widen(data[0]) == '-' {
+      let long = core@1/int.widen(data[1]) == '-'
+      let start: u64 = if long {
+        2
+      } else {
+        1
+      }
+      let mut end = start
+      while end < len && core@1/int.widen(data[end]) != '=' {
+        end += 1
+      }
+      let mut selected: Option[u64] = None()
+      let mut j: u64 = 0
+      while j < core@1/list.len(specs) {
+        let matches = if long {
+          let name_bytes = core@1/string.as_bytes(specs[j].name)
+          let mut same = core@1/bytes.len(name_bytes) == end - start
+          let mut k: u64 = 0
+          while same && k < end - start {
+            if data[start + k] != name_bytes[k] {
+              same = false
+            }
+            k += 1
+          }
+          same
+        } else {
+          end - start == 1 && specs[j].short == Some(data[start])
+        }
+        if matches {
+          selected = Some(j)
+        }
+        j += 1
+      }
+      let which = match selected {
+        Some(which) => which,
+        None() => return Error(UnknownFlag(index)),
+      }
+      let spec = specs[which]
+      let mut value = ""
+      if spec.kind == Switch() {
+        if end != len {
+          return Error(UnexpectedValue(index))
+        }
+      } else if end != len {
+        let mut builder: List[u8] = []
+        let mut k = end + 1
+        while k < len {
+          core@1/list.push(mut builder, data[k])
+          k += 1
+        }
+        value = match text.finish(take builder) {
+          Ok(s) => take s,
+          Error(_) => {
+            core@1/failure.check(false, TextInvariant())
+            ""
+          },
+        }
+      } else {
+        if index + 1 == core@1/list.len(args) {
+          return Error(MissingValue(index))
+        }
+        index += 1
+        value = copy args[index]
+      }
+      let mut occurrences: List[String] = match core@1/map.get(flags, spec.name) {
+        Some(values) => unique values,
+        None() => [],
+      }
+      core@1/list.push(mut occurrences, take value)
+      core@1/map.insert(mut flags, unique spec.name, take occurrences)
+    } else {
+      core@1/list.push(mut positional, copy token)
+    }
+    index += 1
+  }
+  Ok(Parsed(flags: take flags, positional: take positional))
+}
+
+pub fn usage(program: String, specs: List[Flag]) -> String uses {} {
+  core@1/failure.check(valid_specs(specs), TextInvariant())
+  let mut out: List[u8] = []
+  text.append(mut out, "Usage: ")
+  text.append(mut out, program)
+  text.append(mut out, " [options] [--] [arguments]\n")
+  let mut i: u64 = 0
+  while i < core@1/list.len(specs) {
+    text.append(mut out, "  ")
+    match specs[i].short {
+      Some(short) => {
+        text.append(mut out, "-")
+        core@1/list.push(mut out, short)
+        text.append(mut out, ", ")
+      },
+      None() => (),
+    }
+    text.append(mut out, "--")
+    text.append(mut out, specs[i].name)
+    if specs[i].kind == Value() {
+      text.append(mut out, " <value>")
+    }
+    text.append(mut out, "\t")
+    text.append(mut out, specs[i].help)
+    text.append(mut out, "\n")
+    i += 1
+  }
+  match text.finish(take out) {
+    Ok(s) => take s,
+    Error(_) => {
+      core@1/failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
