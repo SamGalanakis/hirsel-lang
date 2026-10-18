@@ -500,10 +500,11 @@ impl Frame {
         &mut self,
         operand: &Operand,
     ) -> Result<(Value, crate::checked::Shadow), AccessError> {
-        let shadow = self.access(operand.place, "operand")?;
+        let mut shadow = self.access(operand.place, "operand")?;
         let value = self.extract(operand)?;
         if operand.usage == UseKind::Copy {
             shadow.share();
+            shadow = shadow.copied();
             value.share_arena_storage();
         }
         let shadow = shadow.for_value(&value);

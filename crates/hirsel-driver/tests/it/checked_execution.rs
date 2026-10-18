@@ -892,3 +892,35 @@ fn a_borrowed_string_copied_into_a_constructor_still_cannot_escape() {
         assert!(validator_rejects(&mut engine, &wrap));
     });
 }
+
+/// `keep` holds a copy of `a`, so `unique a` deep-copies before the freeze.
+const FREEZE_COPY: &str = "fn freeze(take x: unique List[List[u64]]) -> u64 {\n  let s = shared.freeze(take x)\n  1u64\n}\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let a: unique List[List[u64]] = [[1u64]]\n  let mut keep: List[List[List[u64]]] = []\n  list.push(mut keep, copy a)\n  if freeze(unique a) + list.len(keep) == 2u64 { let _ = out.print(io.stdout(rt)?, \"two\\n\") }\n  Ok(())\n}";
+
+#[test]
+fn freezing_a_value_another_live_holder_shares_traps() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(FREEZE_COPY);
+        assert_eq!(printed(run(&mut engine, &[], true)), "two\n");
+        // A false uniqueness proof elides the deep copy (the ownership
+        // review's m6/m7): the frozen block is the one `keep` still holds.
+        let mut main = lowered(&mut engine, "main");
+        let mut replaced = 0;
+        for rvalue in &mut main.bodies[0].rvalues {
+            if let hirsel_tir::Rvalue::Unary {
+                op: hirsel_syntax::UnaryOp::Unique,
+                value,
+            } = rvalue
+            {
+                *rvalue = hirsel_tir::Rvalue::Use(value.clone());
+                replaced += 1;
+            }
+        }
+        assert_eq!(replaced, 1);
+        assert_eq!(printed(run(&mut engine, &[main.clone()], false)), "two\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[main.clone()], true)),
+            TrapRule::FreezeShared
+        );
+        assert!(validator_rejects(&mut engine, &main));
+    });
+}

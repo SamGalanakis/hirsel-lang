@@ -318,7 +318,11 @@ environment field shadows beneath a separate access view; invocation checks that
 view before selecting the fields, preserving the returned content's provenance.
 `@noalloc` also checks projected COW detaches,
 deep unique copies and implicit destruction, using shadow ownership witnesses
-preserved by takes and invalidated by copies. Traps transport as the internal `Error::Trapped` and never leave the run
+preserved by takes and invalidated by copies. A witness also counts the block's
+holders (`checked::Holder`): a copy is a new holder that lives while some shadow
+keeps it, and a native `mut` write-back keeps the holders its operation took, so
+`shared.freeze` traps (`FreezeShared`, MEM-11) when its argument's block has another
+live holder, independently of both checkers' uniqueness proofs. Traps transport as the internal `Error::Trapped` and never leave the run
 entry points. With `checked: None` nothing is tracked and execution is unchanged.
 
 Normal execution runs `arena.with` by calling its callback with an opaque

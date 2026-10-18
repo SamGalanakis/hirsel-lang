@@ -225,6 +225,16 @@ the call returns are still exactly what it returned, each proved unique by its o
 `-> unique R` makes the call's result unique, and a body that builds that result from a
 part of the lent `T` fails its own proof.
 
+Which engine checks what: the source checker and the IR checker both take a callee's
+parametric shape from one table (`hirsel_types::parametric_inputs`) and a function
+argument's result proof from one row test (`unique_rows`), so a fault there is common to
+both; each derives an argument's uniqueness at callee entry from its own flow. Checked
+execution judges neither: it counts each block's live holders, so `shared.freeze` of a
+value another live holder shares traps whatever was proved
+([implementation](implementation.md#checked-execution)), and the checked heap executor
+traps a write into a frozen graph whose counts exceed one. A false `unique` that changes
+no code, and so reaches no freeze, has no run-time witness.
+
 Two kinds of argument name such a parameter and supply nothing. A borrowed argument whose
 type names one only in data: a checked body cannot move a value out of a borrow
 ([OWN-1](#own-1-borrow)) or copy one ([GEN-1](generics.md#gen-1-bounds)), and what it

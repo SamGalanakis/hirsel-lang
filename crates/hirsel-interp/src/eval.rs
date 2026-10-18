@@ -1822,6 +1822,18 @@ fn execute_frames(
                                 }),
                         };
                         let types = call_types.as_ref().unwrap_or(&frame.definition.types);
+                        // MEM-11: freezing needs the sole owner, which checked
+                        // execution counts by holders, independently of the
+                        // static uniqueness proof.
+                        if path.is_core("shared.freeze")
+                            && let Some(check) = &frame.check
+                            && !checks.first().is_none_or(|input| input.shadow.sole_owner())
+                        {
+                            return Err(check.state.borrow().trap(
+                                crate::checked::TrapRule::FreezeShared,
+                                "the frozen value's block has another live holder",
+                            ));
+                        }
                         // MEM-6: a copy into a bounded arena charges its whole tree first,
                         // and builds every List and Array of it unshared there.
                         let exhausted = if path == hirsel_syntax::DefPath::core("copy_to") {
@@ -3520,6 +3532,11 @@ fn operation_bounds(
         .map(|(i, _)| {
             let mut shadow = checks.get(*i).map(|c| c.shadow.clone()).unwrap_or_default();
             shadow.add_bound(&moved);
+            for taken in &taken {
+                if let Some(input) = checks.get(*taken) {
+                    shadow.retain(&input.shadow);
+                }
+            }
             (*i, shadow)
         })
         .collect();

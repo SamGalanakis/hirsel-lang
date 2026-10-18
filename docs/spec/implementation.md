@@ -68,6 +68,7 @@ is no comparable observable outcome.
 | finaliser order not reverse declaration | DROP-2 | cleanup releases a declared owner before a live later declaration or descendant owner |
 | allocation inside `@noalloc` | MEM-5 | a noalloc body constructs or deep-copies counted storage, or mutates a block that needs a detach |
 | allocating call inside `@noalloc` | MEM-5 | a noalloc body calls a definition or implicitly invokes a destructor not declared `@noalloc` |
+| freeze of a value another holder shares | MEM-11, MODE-2 | `shared.freeze` receives a value one of whose tracked blocks has another live holder |
 
 An **access** is any operand extraction (read, copy, take, borrow, `mut`), the destination of
 a write through a projection, and a drop of live storage, the final return to the harness
@@ -82,7 +83,10 @@ inputs; a closure or function-type result `in env` keeps the callable's environm
 global value lends no lasting bound. Native callback returns and write-backs are checked
 after the callback frame exits. Named-owner release order follows declaration order and
 scope ancestry across cleanup chains, independently of storage-liveness scheduling. Fresh
-and taken blocks keep uniqueness witnesses; a semantic copy invalidates them. Arena root
+and taken blocks keep uniqueness witnesses; a semantic copy invalidates them and adds a
+holder of the block, which lives while some shadow keeps it, and the storage a native `mut`
+operation writes back keeps the holders it took. A copy of an element of a non-inline block
+adds no holder, since such a block has one shadow. Arena root
 builders stay writable, while a nested counted detach still allocates.
 
 This is an oracle over executed paths, not a proof of unexecuted edges: a missing scope end

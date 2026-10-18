@@ -12,7 +12,7 @@ use hirsel_tir::{Body, LocalId, ScopeId, Storage};
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
-    rc::Rc,
+    rc::{Rc, Weak},
 };
 
 /// Declared facts the driver supplies for checked execution only.
@@ -37,6 +37,7 @@ pub enum TrapRule {
     FinalizerOrder,
     AllocationInNoalloc,
     AllocatingCallInNoalloc,
+    FreezeShared,
 }
 impl TrapRule {
     pub fn as_str(self) -> &'static str {
@@ -47,6 +48,7 @@ impl TrapRule {
             Self::FinalizerOrder => "finaliser order not reverse declaration",
             Self::AllocationInNoalloc => "allocation inside @noalloc",
             Self::AllocatingCallInNoalloc => "allocating call inside @noalloc",
+            Self::FreezeShared => "freeze of a value another holder shares",
         }
     }
     /// The spec rules whose run-time consequence this trap witnesses.
@@ -56,6 +58,7 @@ impl TrapRule {
             Self::ArenaUseAfterEnd => "PROV-4/MEM-4",
             Self::FinalizerCount | Self::FinalizerOrder => "DROP-2",
             Self::AllocationInNoalloc | Self::AllocatingCallInNoalloc => "MEM-5",
+            Self::FreezeShared => "MEM-11/MODE-2",
         }
     }
 }
@@ -108,15 +111,89 @@ fn union(into: &mut Bound, other: &[u32]) {
     into.dedup();
 }
 
+/// One holder of a counted block: the run-time count a value-based
+/// interpreter has no blocks for (MODE-2, MEM-11). Every holder of a block
+/// shares its `Block`; a semantic copy is a new holder, administrative Take
+/// keeps the holder, and a holder lives while some shadow keeps it, so a
+/// block's live holders are its count as far as shadows reach. A copy of an
+/// element of a non-inline block is not tracked: such a block has one shadow.
+#[derive(Clone)]
+pub(crate) struct Holder {
+    block: Rc<Block>,
+    token: Rc<Token>,
+}
+struct Block {
+    /// Some copy may share the block, or its row did not promise it unique;
+    /// this never resets.
+    shared: Cell<bool>,
+    holders: RefCell<Vec<Weak<Token>>>,
+}
+/// A holder's identity, with the holders its storage keeps alive besides
+/// its own block: those a native `mut` operation took into it.
+#[derive(Default)]
+struct Token {
+    retained: RefCell<Vec<Rc<Token>>>,
+}
+impl Holder {
+    fn new(unique: bool) -> Self {
+        let token = Rc::new(Token::default());
+        Self {
+            block: Rc::new(Block {
+                shared: Cell::new(!unique),
+                holders: RefCell::new(vec![Rc::downgrade(&token)]),
+            }),
+            token,
+        }
+    }
+    /// A new holder of the same block, keeping what this one retains.
+    fn copy(&self) -> Self {
+        let token = Rc::new(Token {
+            retained: RefCell::new(self.token.retained.borrow().clone()),
+        });
+        let mut holders = self.block.holders.borrow_mut();
+        holders.retain(|holder| holder.strong_count() > 0);
+        holders.push(Rc::downgrade(&token));
+        Self {
+            block: self.block.clone(),
+            token,
+        }
+    }
+    /// Whether another holder of this block is still live.
+    fn shared_by_another(&self) -> bool {
+        self.block
+            .holders
+            .borrow()
+            .iter()
+            .filter_map(Weak::upgrade)
+            .any(|holder| !Rc::ptr_eq(&holder, &self.token))
+    }
+}
+impl std::fmt::Debug for Holder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Holder")
+            .field("shared", &self.block.shared.get())
+            .finish()
+    }
+}
+/// Holders compare by their sharing flag, as the witness compared before it
+/// counted holders.
+impl PartialEq for Holder {
+    fn eq(&self, other: &Self) -> bool {
+        self.block.shared.get() == other.block.shared.get()
+    }
+}
+impl Eq for Holder {}
+
 /// Bounds per value node: one per field of an inline aggregate, one for a block.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Shadow {
     Uniform(Bound),
     /// A run-time deep ownership witness. Semantic copies invalidate every
-    /// surviving shadow sharing this cell; administrative Take preserves it.
+    /// surviving shadow sharing this block and add a holder to it;
+    /// administrative Take preserves it.
     Ownership {
         content: Box<Shadow>,
-        shared: Rc<Cell<bool>>,
+        holder: Holder,
     },
     Parts(Vec<Shadow>),
     /// Content reached through storage bounded by `home`: a borrowed capture
@@ -326,13 +403,13 @@ impl Shadow {
         }
         Self::Ownership {
             content: Box::new(self),
-            shared: Rc::new(Cell::new(!unique)),
+            holder: Holder::new(unique),
         }
     }
     pub fn share(&self) {
         match self {
-            Self::Ownership { content, shared } => {
-                shared.set(true);
+            Self::Ownership { content, holder } => {
+                holder.block.shared.set(true);
                 content.share();
             }
             Self::Parts(parts) => {
@@ -346,19 +423,82 @@ impl Shadow {
     }
     pub fn is_unique(&self) -> bool {
         match self {
-            Self::Ownership { shared, .. } => !shared.get(),
+            Self::Ownership { holder, .. } => !holder.block.shared.get(),
             Self::Parts(parts) => parts.iter().all(Self::is_unique),
             Self::View { content, .. } => content.is_unique(),
             Self::Uniform(_) => true,
+        }
+    }
+    /// The shadow a semantic copy of this value holds: a new holder of each
+    /// block the witness tracks.
+    pub fn copied(&self) -> Self {
+        match self {
+            Self::Ownership { content, holder } => Self::Ownership {
+                content: Box::new(content.copied()),
+                holder: holder.copy(),
+            },
+            Self::Parts(parts) => Self::Parts(parts.iter().map(Self::copied).collect()),
+            Self::View { content, home } => Self::View {
+                content: Box::new(content.copied()),
+                home: home.clone(),
+            },
+            Self::Uniform(bound) => Self::Uniform(bound.clone()),
+        }
+    }
+    /// MEM-11: freezing needs the sole owner of every tracked block.
+    pub fn sole_owner(&self) -> bool {
+        match self {
+            Self::Ownership { content, holder } => {
+                !holder.shared_by_another() && content.sole_owner()
+            }
+            Self::Parts(parts) => parts.iter().all(Self::sole_owner),
+            Self::View { content, .. } => content.sole_owner(),
+            Self::Uniform(_) => true,
+        }
+    }
+    fn holders(&self, out: &mut Vec<Rc<Token>>) {
+        match self {
+            Self::Ownership { content, holder } => {
+                out.push(holder.token.clone());
+                content.holders(out);
+            }
+            Self::Parts(parts) => parts.iter().for_each(|part| part.holders(out)),
+            Self::View { content, .. } => content.holders(out),
+            Self::Uniform(_) => (),
+        }
+    }
+    /// A native `mut` operation may keep what it took in this storage, so
+    /// each of its blocks keeps the taken holders alive.
+    pub fn retain(&self, taken: &Self) {
+        let mut tokens = vec![];
+        taken.holders(&mut tokens);
+        if tokens.is_empty() {
+            return;
+        }
+        let mut work = vec![self];
+        while let Some(shadow) = work.pop() {
+            match shadow {
+                Self::Ownership { content, holder } => {
+                    holder
+                        .token
+                        .retained
+                        .borrow_mut()
+                        .extend(tokens.iter().cloned());
+                    work.push(content);
+                }
+                Self::Parts(parts) => work.extend(parts),
+                Self::View { content, .. } => work.push(content),
+                Self::Uniform(_) => (),
+            }
         }
     }
     /// Replace the local lifetime inside a callee without discarding the
     /// actual incoming sharing witness, including a forged Unique row.
     pub fn rebound(&self, bound: &Bound) -> Self {
         match self {
-            Self::Ownership { content, shared } => Self::Ownership {
+            Self::Ownership { content, holder } => Self::Ownership {
                 content: Box::new(content.rebound(bound)),
-                shared: shared.clone(),
+                holder: holder.clone(),
             },
             Self::Parts(parts) => Self::Parts(parts.iter().map(|p| p.rebound(bound)).collect()),
             _ => Self::of(bound.clone()),
@@ -387,7 +527,7 @@ impl Shadow {
         match self {
             Self::Ownership { content, .. } => Self::Ownership {
                 content: Box::new(content.fresh_copy(state)),
-                shared: Rc::new(Cell::new(false)),
+                holder: Holder::new(true),
             },
             Self::Parts(parts) => {
                 Self::Parts(parts.iter().map(|part| part.fresh_copy(state)).collect())
