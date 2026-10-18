@@ -232,6 +232,7 @@ impl Fixture {
             types: TypeStore::default(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 destructor_allocation: hirsel_types::Allocation::MayAllocate,
 
                 generics: vec![],
@@ -939,7 +940,7 @@ fn golden_vectors() {
         std::fs::write(
             concat!(env!("CARGO_MANIFEST_DIR"), "/src/golden.txt"),
             format!(
-                "# Canonical signature encoding v12 and SHA-256 vectors\n{}\n",
+                "# Canonical signature encoding v13 and SHA-256 vectors\n{}\n",
                 rows.join("\n")
             ),
         )
@@ -1189,7 +1190,7 @@ fn hash_changes_with_noalloc_drop_bound() {
         canonical_encoding(&signature, &[])
             .unwrap()
             .windows(29)
-            .any(|w| w == b"hirsel.signature.encoding.v12")
+            .any(|w| w == b"hirsel.signature.encoding.v13")
     );
 }
 

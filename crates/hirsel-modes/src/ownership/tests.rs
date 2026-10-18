@@ -25,6 +25,7 @@ fn resource_signature() -> Signature {
         fingerprint: Default::default(),
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
+            format: None,
             destructor_allocation: Allocation::NoAlloc,
             generics: vec![],
             representation: None,

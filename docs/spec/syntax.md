@@ -93,7 +93,7 @@ diagnostic.
 names in bounds; `sendable` is also a contextual type modifier when a type follows it,
 and `env` is a contextual place name inside a relation. Attribute names (`noalloc`,
 `layout`, `packed`, `align`, `soa`, `blocking`, `incomplete`, `capability`,
-`serializable`, `loop_source`, `advance_only`, `preserves_captures`, `preserves_unique`,
+`serializable`, `loop_source`, `format`, `advance_only`, `preserves_captures`, `preserves_unique`,
 `captures`) are
 contextual. `c`, `ffi`, primitive types and library types and functions are identifiers.
 `_` is the discard pattern, not a value binding.
@@ -127,7 +127,8 @@ literal      = integer | float | character | string | bytes | "true" | "false" ;
 f-string     = 'f"', f-text, { "{", expression, [ ":", format-spec ], "}", f-text }, '"' ; (* SEM-3 *)
 f-text       = { f-scalar | escape | "{{" | "}}" } ;      (* SEM-3 *)
 format-spec  = [ [ fill ], align ], [ "+" | "-" ], [ "#" ], [ "0" ],
-               { digit }, [ ".", digit, { digit } ], [ "x" | "X" | "b" | "o" ] ;
+               [ count ], [ ".", count ], [ "x" | "X" | "b" | "o" ] ;
+count        = digit, { digit } | name, "$" ;           (* SEM-3 *)
 align        = "<" | ">" | "^" ;
 fill         = string-scalar ; (* one scalar, excluding braces *)
 ```
@@ -155,11 +156,11 @@ tokens: `f"text{`, `}text{`, `}text"`, or a single `f"text"` with no holes, so a
 closing `}` is the first `}` that closes no brace the hole opened. A hole is not a
 grouping: its expression continues onto another line only where it would outside the
 f-string (an open delimiter or a missing operand), and its closing `}` stands on the line
-where the expression ends. A colon after the expression introduces a constant
-format specification, ending at `}`; its spelling is retained as one token.
+where the expression ends. A colon after the expression introduces a format
+specification, ending at `}`; its spelling is retained as one token.
 An empty hole, a hole without its `}`, an invalid specification or an unsupported
-format type for the hole's value is SEM-3. Width and precision are decimal u64
-constants; dynamic holes such as `{x:w$}` and `{x:.p$}` are unsupported. See
+format type for the hole's value is SEM-3. A width or precision is a decimal u64
+constant or `name$`, naming a `u64` in scope (`{x:w$}`, `{x:.p$}`). See
 [the formatting protocol](std-library.md#the-formatting-protocol) for semantics.
 
 Integers have no sign: `-128i8` is unary minus applied to a magnitude token, and the
@@ -258,7 +259,8 @@ attribute    = "@", ( "noalloc" | "soa" | "packed" | "blocking" | "incomplete" |
              | "align", "(", integer, ")"
              | "capability", "(", ("global" | "local"), ")"
              | "loop_source", "(", value-path, ",", value-path, ")"
-             | state-attribute ) ;      (* MEM-5/7, CONC-2, MODE-6, CAP-5, SER-1, SEM-4, CLO-2 *)
+             | "format", "(", value-path, ")"
+             | state-attribute ) ;      (* MEM-5/7, CONC-2, MODE-6, CAP-5, SER-1, SEM-3/4, CLO-2 *)
 state-attribute = ("advance_only" | "preserves_captures" | "preserves_unique" | "captures"),
                   "(", nonempty(value-path), ")" ; (* CLO-2 *)
 type-state-attribute = ("advance_only" | "preserves_captures" | "captures"),
@@ -320,7 +322,7 @@ zero-argument attribute on transparent records, variants, unconstrained distinct
 flat types; `[T: serializable]` is a generic schema bound
 ([SER-1](serialization.md#ser-1-serializable-schemas)). Neither is a prefix value
 modifier. Attributes have placement restrictions: layout attributes on types; `noalloc`
-on functions, function types and `drop`; `loop_source` on nominal types; state attributes
+on functions, function types and `drop`; `loop_source` and `format` on nominal types; state attributes
 on functions and callable types; `blocking` on externs; `incomplete` on functions. State
 selectors name only that callable's parameters and their explicit field paths; an omitted
 attribute promises nothing.

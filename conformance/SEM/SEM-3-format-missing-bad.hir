@@ -1,0 +1,17 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 16
+// A declared type without @format has no f-string text, even when a fitting
+// function exists; the hole names the type and @format.
+type Point {
+  x: i64,
+  y: i64,
+}
+
+@preserves_unique(out)
+fn point_text(p: Point, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"({p.x}, {p.y})")
+}
+
+fn label(p: Point) -> String {
+  f"at {p}"
+}

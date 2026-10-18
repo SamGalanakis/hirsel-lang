@@ -301,6 +301,7 @@ pub(crate) mod tests {
             fingerprint: ContentHash::default(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 generics: vec![],
                 representation,
                 bounds,

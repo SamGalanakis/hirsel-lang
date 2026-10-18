@@ -48,6 +48,7 @@ fn nominal(f: &mut Fixture, name: &str, arity: usize, representation: Option<Typ
         core(name),
         SignatureKind::Type(TypeDefinition {
             loop_source: None,
+            format: None,
             generics: (0..arity)
                 .map(|i| GenericParameter::Type {
                     name: format!("T{i}"),

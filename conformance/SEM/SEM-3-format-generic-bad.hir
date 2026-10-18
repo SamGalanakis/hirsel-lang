@@ -1,0 +1,14 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 5
+// A generic type's @format function is generic over the type's own parameters;
+// one formatting a single instantiation is rejected.
+@format(cell_text)
+type Cell[T] {
+  value: T,
+  id: u64,
+}
+
+@preserves_unique(out)
+fn cell_text(cell: Cell[u8], mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"cell {cell.id}")
+}

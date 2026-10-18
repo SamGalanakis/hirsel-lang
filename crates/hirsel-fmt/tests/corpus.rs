@@ -48,6 +48,7 @@ fn normalized(mut tree: SyntaxTree) -> SyntaxTree {
                 match argument {
                     AttributeArgument::LoopSource(s) => s.origin = origin,
                     AttributeArgument::StatePromise(s) => s.origin = origin,
+                    AttributeArgument::Format(s) => s.origin = origin,
                     _ => (),
                 }
             }

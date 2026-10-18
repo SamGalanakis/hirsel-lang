@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: accept
+// Twin of the u32 width: the name is a u64.
+fn label(n: u64, w: u64) -> String {
+  f"{n:w$}"
+}

@@ -78,18 +78,46 @@ The parser performs exactly this rewrite, so checking, ownership, lowering and b
 engines see ordinary calls of `std@1`, which the program must select; otherwise every
 f-string is SEM-3. A hole is a borrowed argument, read and not consumed, like an operand
 of `==`; it is checked with no expected type, so an unsuffixed literal hole needs a
-suffix. The f-string's `uses` are its holes' `uses`, because the protocol operations use
-nothing, and it allocates only its builder. A hole of type `String` is appended as is,
+suffix. The f-string's `uses` are its holes' `uses`, because the std protocol operations
+use nothing, and it allocates only its builder, plus whatever its holes' `@format`
+functions use and allocate. A hole of type `String` is appended as is,
 and `bool`, the integers and the floats as `to_string` spells them. A character literal
-is a `u32` and formats as its number. Any other hole type, including `Bytes`, records
-and type parameters, is SEM-3 naming the type: format it into a `String` first.
+is a `u32` and formats as its number. A hole of a declared type with a `@format`
+association calls that association's function, below. Any other hole type, including
+`Bytes`, tuples, type parameters and declared types without `@format`, is SEM-3 naming
+the type; the message for a declared type names `@format`.
 
-A hole may carry a constant format specification, such as `{n:08}` or `{mean:.2}`.
-The parser passes its options as constant arguments to the selected type's
-`format_into_spec`, through the same builder and ordinary call checking as a plain
-hole. Invalid syntax and a radix format on a noninteger value are SEM-3, with the
-unsupported format and value type named. Width, alignment, padding, precision and
-radix follow [the formatting protocol](std-library.md#the-formatting-protocol).
+**Format associations.** A nominal type opts into formatting with
+`@format(function)`, which names one ordinary declared function. After substituting the
+type's own type and size parameters, the function is exactly
+`fn(value: T, mut out: List[u8]) -> ()`: an unlabelled borrowed receiver of the declaring
+type `T`, an unlabelled `mut` UTF-8 builder selected by `@preserves_unique(out)`, a unit
+result and no error result. A generic type's function is generic over the same
+parameters (`@format(pair_text)` on `Pair[A, B]` names
+`fn pair_text[A, B](value: Pair[A, B], mut out: List[u8]) -> ()`), each inferred from the
+receiver. The function appends the value's text and keeps the builder's existing
+content, as the protocol operations do. The association is a signature input checked at
+the attribute, including when no f-string uses the type; any other shape is SEM-3 there.
+There is no derive, structural lookup or automatic formatting of records: an f-string
+hole of type `T` is `function(hole, mut builder)`, the same ordinary call as
+`u64.format_into` for a `u64` hole, checked as one. The function may be private;
+publishing the association grants f-strings, and only f-strings, permission to call it,
+as a loop source's association grants loops ([SEM-4](#sem-4-iteration)).
+
+A hole may carry a format specification, such as `{n:08}`, `{mean:.2}` or `{name:>w$}`.
+Options of only fill, alignment and width pad the hole's text: the parser binds the
+builder's byte length before a plain append, then calls `text.pad_from` (`String`, `bool`
+and `@format` types, left-aligned by default) or `text.pad_number_from` (integers and
+floats, right-aligned by default) with that start, the fill, alignment and width. Any
+other options pass to the selected scalar or `String` module's `format_into_spec`. On a
+`@format` type, precision, sign, `#`, `0` and radix formats are SEM-3: its text pads
+like a string but has no numeric or truncating options. A width or precision written
+`name$` is the value of the local or constant `name`, passed in place of the constant as
+an ordinary `u64` argument, so a name of another type is LANG-7; `{x:w$}`, `{x:.p$}` and
+`{x:>w$.p$}` are the same operations as their constant forms. Positional `1$` and `*`
+counts are SEM-3. Invalid syntax and a radix format on a noninteger value are SEM-3,
+with the unsupported format and value type named. Width, alignment, padding, precision
+and radix follow [the formatting protocol](std-library.md#the-formatting-protocol).
 
 ### SEM-4: Iteration
 

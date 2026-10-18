@@ -537,6 +537,7 @@ snapshot_struct!(Layout {
 snapshot_struct!(LoopSourceDeclaration { open, next, option } in Cx);
 snapshot_struct!(TypeDefinition {
     loop_source,
+    format,
     destructor_allocation,
     generics,
     representation,

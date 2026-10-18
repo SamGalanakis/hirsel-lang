@@ -1,0 +1,40 @@
+// rule: SEM-3
+// expect: run
+// stdout: | ticket    | owner     |
+// stdout: | #7 open   | ada       |
+// stdout: | #12 done  | grace     |
+// stdout: total 2.50h
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+@format(ticket_text)
+type Ticket {
+  id: u64,
+  done: bool,
+}
+
+@preserves_unique(out)
+fn ticket_text(ticket: Ticket, mut out: List[u8]) -> () uses {} {
+  let state = if ticket.done {
+    "done"
+  } else {
+    "open"
+  }
+  text.append(mut out, f"#{ticket.id} {state}")
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let tickets: List[(Ticket, String)] = [
+    (Ticket(id: 7, done: false), "ada"),
+    (Ticket(id: 12, done: true), "grace")
+  ]
+  let width: u64 = 9
+  out.print(output, f"| {"ticket":width$} | {"owner":width$} |\n") ? Output
+  for (ticket, owner) in tickets {
+    out.print(output, f"| {ticket:width$} | {owner:width$} |\n") ? Output
+  }
+  let hours = 2.5f64
+  let places: u64 = 2
+  out.print(output, f"total {hours:.places$}h\n") ? Output
+  Ok(())
+}

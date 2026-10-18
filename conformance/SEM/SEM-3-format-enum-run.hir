@@ -1,0 +1,26 @@
+// rule: SEM-3
+// expect: run
+// A variant type formats through its @format function.
+@format(light_text)
+type Light = Red | Amber(u8) | Green(minutes: u64, arrow: bool)
+
+@preserves_unique(out)
+fn light_text(light: Light, mut out: List[u8]) -> () uses {} {
+  match light {
+    Red => text.append(mut out, "red"),
+    Amber(level) => text.append(mut out, f"amber {level}"),
+    Green(minutes: minutes, arrow: arrow) => text.append(
+      mut out,
+      f"green {minutes}m arrow={arrow}"
+    ),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let red: Light = Red
+  let amber: Light = Amber(2)
+  let green: Light = Green(minutes: 5, arrow: true)
+  test.check(t, f"{red}, {amber}, {green}" == "red, amber 2, green 5m arrow=true")
+  test.check(t, f"<{red:>5}>" == "<  red>")
+  Ok(())
+}

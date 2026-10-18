@@ -310,6 +310,7 @@ impl Fixture {
                 fingerprint: ContentHash([3; 32]),
                 kind: SignatureKind::Type(TypeDefinition {
                     loop_source: None,
+                    format: None,
                     generics: vec![],
                     representation,
                     bounds,

@@ -10,7 +10,7 @@
   },
   "sources": [
     {
-      "path": "SEM-3-fstring-dynamic-width-ok.hir",
+      "path": "SEM-3-format-signature-ok.hir",
       "module": []
     }
   ],

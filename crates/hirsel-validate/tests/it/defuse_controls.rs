@@ -26,6 +26,7 @@ fn fixture(mutation: Mutation) -> Fixture {
     )));
     signature.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
+        format: None,
         destructor_allocation: Allocation::NoAlloc,
         generics: vec![],
         representation: Some(representation),

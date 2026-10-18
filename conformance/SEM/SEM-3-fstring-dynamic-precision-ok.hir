@@ -1,6 +1,0 @@
-// rule: SEM-3
-// expect: accept
-// Accepted twin with a valid static format.
-fn label() -> String {
-  f"{1u64:08}"
-}

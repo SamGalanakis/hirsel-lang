@@ -430,6 +430,7 @@ fn normalize_inner(
             inferred.dedup();
             SignatureKind::Type(TypeDefinition {
                 loop_source: n.loop_source(&item.attributes)?,
+                format: n.format(&item.attributes)?,
                 destructor_allocation,
                 generics: n.generics.clone(),
                 representation: if opaque { None } else { repr },
@@ -655,7 +656,7 @@ impl Normalizer<'_, '_> {
                 "noalloc" | "incomplete" | "advance_only" | "preserves_captures"
                 | "preserves_unique" | "captures" => function,
                 "blocking" => matches!(kind, ast::ItemKind::Function { abi: Some(_), .. }),
-                "layout" | "packed" | "align" | "soa" | "capability" | "loop_source"
+                "layout" | "packed" | "align" | "soa" | "capability" | "loop_source" | "format"
                 | "serializable" => type_,
                 _ => false,
             };
@@ -686,6 +687,15 @@ impl Normalizer<'_, '_> {
                             const { RuleId::of("SEM-4") },
                             a.origin.span,
                             "@loop_source requires open and next paths",
+                        ));
+                    }
+                }
+                "format" => {
+                    if !matches!(a.arguments.as_slice(), [ast::AttributeArgument::Format(_)]) {
+                        return Err(diagnostic(
+                            const { RuleId::of("SEM-3") },
+                            a.origin.span,
+                            "@format requires one function path",
                         ));
                     }
                 }
@@ -798,6 +808,25 @@ impl Normalizer<'_, '_> {
                 name: "Option".into(),
             }),
         }))
+    }
+    fn format(
+        &mut self,
+        attributes: &[ast::Attribute],
+    ) -> Result<Option<ast::DefPath>, QueryError> {
+        let Some(a) = attributes
+            .iter()
+            .find(|a| self.input.symbols.resolve(a.name) == Some("format"))
+        else {
+            return Ok(None);
+        };
+        let [ast::AttributeArgument::Format(s)] = a.arguments.as_slice() else {
+            return Err(diagnostic(
+                const { RuleId::of("SEM-3") },
+                a.origin.span,
+                "@format requires one function path",
+            ));
+        };
+        Ok(Some(self.definition(&s.function, None)?))
     }
     fn generic(&self, name: &str) -> Option<(u32, u32, &GenericParameter)> {
         std::iter::once(&self.generics)
@@ -2126,6 +2155,7 @@ impl Normalizer<'_, '_> {
                             types: TypeStore::default(),
                             kind: SignatureKind::Type(TypeDefinition {
                                 loop_source: None,
+                                format: None,
                                 destructor_allocation: Allocation::MayAllocate,
                                 generics: self.generics.clone(),
                                 representation: None,
@@ -2328,6 +2358,7 @@ impl Normalizer<'_, '_> {
                 types: self.types.clone(),
                 kind: SignatureKind::Type(TypeDefinition {
                     loop_source: None,
+                    format: None,
                     generics: self.generics.clone(),
                     representation: self.own_representation,
                     bounds: vec![],

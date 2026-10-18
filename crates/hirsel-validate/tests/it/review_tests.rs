@@ -2640,6 +2640,7 @@ fn constructed_payload_fixture(case: u32, transfer: bool) -> Fixture {
             types: f.definition.types.clone(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 generics: vec![],
                 representation: Some(representation),
                 bounds: vec![],
@@ -9964,6 +9965,7 @@ fn serializable_calls_reprove_nominal_opt_in_from_hand_built_ir() {
                 fingerprint: ContentHash::default(),
                 kind: SignatureKind::Type(TypeDefinition {
                     loop_source: None,
+                    format: None,
                     generics: vec![],
                     representation: Some(repr),
                     bounds: vec![],

@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "geo",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "api.hir",
+      "module": [
+        "api"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

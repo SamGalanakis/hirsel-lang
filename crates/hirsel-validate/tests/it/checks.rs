@@ -2017,6 +2017,7 @@ fn type_owned_resource_finalizer_borrows_self() {
     };
     signature.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
+        format: None,
         destructor_allocation: Allocation::NoAlloc,
         generics: vec![],
         representation: Some(unit),
@@ -2540,6 +2541,7 @@ fn generic_variant_equality_fixture(data_payload: bool) -> Fixture {
         types,
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
+            format: None,
             generics: vec![GenericParameter::Type {
                 name: "T".into(),
                 bounds: vec![].into(),
@@ -2774,6 +2776,7 @@ fn nominal_copy_fixture(payload: TypeKind, resource: bool) -> Fixture {
             types,
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 generics: vec![GenericParameter::Type {
                     name: "T".into(),
                     bounds: vec![].into(),
@@ -4795,6 +4798,7 @@ fn erased_capture_results_are_proved_from_actual_parameters() {
         fingerprint: ContentHash::default(),
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
+            format: None,
             generics: vec![],
             representation: None,
             bounds: vec![Bound::Plain, Bound::NoallocDrop],
@@ -4871,6 +4875,7 @@ fn heap_allocator_evidence_requires_the_declared_result_and_canonical_arena() {
     arena.metadata.roles = roles.clone();
     arena.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
+        format: None,
         generics: vec![],
         representation: None,
         bounds: vec![],

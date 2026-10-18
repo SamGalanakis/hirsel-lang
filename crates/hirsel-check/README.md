@@ -352,12 +352,19 @@ relations.
 
 F-string steps (SEM-3, `body/formats.rs`): an `Append` checks its value with no
 expected type, then its type selects `std@1/text.append` for `String` or
-`std@1/<scalar>.format_into` for `bool`, integers and floats, with the written
+`std@1/<scalar>.format_into` for `bool`, integers and floats, or the function a
+nominal type's `@format` association names, with the written
 `(value, mut builder)` mapped to declared ordinals; `Finish` is
 `std@1/text.finish_valid`. The callee is then typed and recorded in the body's
 resolution as a named reference to that operation, so modes and lowering see an
-ordinary call. Another value type, or a program without std@1, is SEM-3.
+ordinary call. Another value type, or a program without std@1, is SEM-3; for a
+nominal type the message names `@format`.
 
 Specified appends select `<scalar>.format_into_spec` or `text.format_into_spec`,
-with six parser-supplied constant options between the value and builder. Radix
-specifiers require integers (SEM-3). Ordinary call checking checks every option.
+with six parser-supplied options between the value and builder. Radix specifiers
+require integers, and an `@format` type takes no `AppendSpec` options (SEM-3).
+`Mark` is `core list.len` of the builder; `Pad(hole)` is `text.pad_number_from`
+for an integer or float hole and `text.pad_from` for `String`, `bool` and `@format`
+holes, and recovers silently when the hole's append already reported. Ordinary
+call checking checks every option, including a `name$` width's path (LANG-7 for
+a non-u64).

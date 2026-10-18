@@ -32,6 +32,14 @@ impl Phases for FrontPhases {
     ) -> Result<(), QueryError> {
         hirsel_signature::protocol::validate_loop_source(signature, span, provider)
     }
+    fn validate_format(
+        &self,
+        signature: &Signature,
+        span: hirsel_span::Span,
+        provider: &mut dyn SignatureProvider,
+    ) -> Result<(), QueryError> {
+        hirsel_signature::protocol::validate_format(signature, span, provider)
+    }
     fn checker(&self) -> Rc<dyn CheckerPhase> {
         Rc::new(BodyAdapter)
     }

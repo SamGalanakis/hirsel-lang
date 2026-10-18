@@ -1,0 +1,23 @@
+// rule: SEM-3
+// expect: run
+// A record formats through its @format function, plainly and padded.
+@format(point_text)
+type Point {
+  x: i64,
+  y: i64,
+}
+
+@preserves_unique(out)
+fn point_text(p: Point, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"({p.x}, {p.y})")
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let p = Point(x: 3, y: -4)
+  test.check(t, f"{p}" == "(3, -4)")
+  test.check(t, f"at {p}!" == "at (3, -4)!")
+  test.check(t, f"{p}{p}" == "(3, -4)(3, -4)")
+  test.check(t, f"[{p:9}]" == "[(3, -4)  ]")
+  test.check(t, f"[{Point(x: 0, y: 0)}]" == "[(0, 0)]")
+  Ok(())
+}

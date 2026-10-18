@@ -1,0 +1,13 @@
+// rule: SEM-3
+// expect: reject SEM-3 at line 4
+// An @format function borrows its receiver; one taking it is rejected at the attribute.
+@format(point_text)
+type Point {
+  x: i64,
+  y: i64,
+}
+
+@preserves_unique(out)
+fn point_text(take p: Point, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"({p.x}, {p.y})")
+}

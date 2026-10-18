@@ -5,7 +5,8 @@ use super::*;
 struct FormatParts {
     pieces: Vec<(usize, String)>,
     holes: Vec<ExprId>,
-    specs: Vec<String>,
+    /// Each hole's spec token position and spelling; empty for a plain hole.
+    specs: Vec<(usize, String)>,
 }
 
 impl Parser<'_> {
@@ -60,40 +61,21 @@ impl Parser<'_> {
                 value: empty,
             },
         )];
-        let mut values = vec![];
         for (i, (position, spelling)) in pieces.iter().enumerate() {
             let text = format_text(spelling);
             if !text.is_empty() {
                 let origin = self.token_origin(*position);
-                values.push((
-                    origin,
-                    self.synthetic_expr(origin, ExprKind::Literal(Literal::String(text))),
-                    FormatStep::Append,
-                ));
+                let value = self.synthetic_expr(origin, ExprKind::Literal(Literal::String(text)));
+                let call = self.format_step(origin, builder, FormatStep::Append, vec![value]);
+                statements.push(self.synthetic_stmt(origin, StmtKind::Expr(call)));
             }
             if let Some(&hole) = holes.get(i) {
-                let step = if specs[i].is_empty() {
-                    FormatStep::Append
-                } else {
-                    match parse_spec(&specs[i]) {
-                        Ok(spec) => FormatStep::AppendSpec(spec),
-                        Err(message) => {
-                            return self.fail_at(
-                                const { RuleId::of("SEM-3") },
-                                self.tree.expressions[hole.0 as usize].origin.span,
-                                message,
-                            );
-                        }
-                    }
-                };
-                values.push((self.tree.expressions[hole.0 as usize].origin, hole, step));
+                let (position, spelling) = &specs[i];
+                let statement = self.format_hole(builder, hole, *position, spelling)?;
+                statements.push(statement);
             }
         }
-        for (origin, value, step) in values {
-            let call = self.format_step(origin, builder, step, Some(value));
-            statements.push(self.synthetic_stmt(origin, StmtKind::Expr(call)));
-        }
-        let tail = self.format_step(whole, builder, FormatStep::Finish, None);
+        let tail = self.format_step(whole, builder, FormatStep::Finish, vec![]);
         let block = self.synthetic_expr(
             whole,
             ExprKind::Block {
@@ -105,7 +87,7 @@ impl Parser<'_> {
             expression: block,
             pieces: pieces.into_iter().map(|(_, spelling)| spelling).collect(),
             holes,
-            specs,
+            specs: specs.into_iter().map(|(_, spelling)| spelling).collect(),
         });
         Ok(block)
     }
@@ -145,11 +127,11 @@ impl Parser<'_> {
                         "an f-string format specifier follows its expression on the same line",
                     );
                 }
-                let spec = self.text_at(0).to_owned();
+                let spec = (self.pos, self.text_at(0).to_owned());
                 self.pos += 1;
                 spec
             } else {
-                String::new()
+                (self.pos, String::new())
             };
             specs.push(spec);
             if self.at_format(&[FormatPiece::Middle, FormatPiece::Tail]) {
@@ -170,12 +152,155 @@ impl Parser<'_> {
             }
         }
     }
+    /// One hole's statement. A plain hole is `Append(hole, mut $fmtN)`. A hole
+    /// whose options are only fill, alignment and width pads its plain text:
+    /// `{ let $markN = Mark($fmtN); Append(hole, mut $fmtN);
+    /// Pad[hole]($markN, fill, align, width, mut $fmtN) }`. Any other options are
+    /// one `AppendSpec(hole, fill, align, width, precision, flags, kind, mut $fmtN)`.
+    /// A `name$` width or precision is that name's value instead of a constant.
+    fn format_hole(
+        &mut self,
+        builder: Symbol,
+        hole: ExprId,
+        position: usize,
+        spelling: &str,
+    ) -> Parsed<StmtId> {
+        let origin = self.tree.expressions[hole.0 as usize].origin;
+        if spelling.is_empty() {
+            let call = self.format_step(origin, builder, FormatStep::Append, vec![hole]);
+            return Ok(self.synthetic_stmt(origin, StmtKind::Expr(call)));
+        }
+        let written = match parse_spec(spelling) {
+            Ok(written) => written,
+            Err(message) => {
+                return self.fail_at(const { RuleId::of("SEM-3") }, origin.span, message);
+            }
+        };
+        let FormatSpec {
+            fill,
+            align,
+            width,
+            precision,
+            flags,
+            kind,
+        } = written.spec;
+        // A named width or precision is a path at the spec token.
+        let spec = self.token_origin(position);
+        let count = |parser: &mut Self, name: Option<String>, value: u64| -> Parsed<ExprId> {
+            Ok(match name {
+                Some(name) => {
+                    let Some(symbol) = parser.symbols.get(&name) else {
+                        return parser.fail_at(
+                            const { RuleId::of("LANG-1") },
+                            spec.span,
+                            "f-string width names are missing from the symbol snapshot",
+                        );
+                    };
+                    parser.synthetic_expr(
+                        spec,
+                        ExprKind::Path(Path {
+                            package: None,
+                            segments: vec![symbol],
+                        }),
+                    )
+                }
+                None => parser.constant(origin, value),
+            })
+        };
+        if flags == 0 && kind == 0 {
+            let Some(mark) = self.symbols.get(&format!("$mark{}", self.formats)) else {
+                return self.fail_at(
+                    const { RuleId::of("LANG-1") },
+                    origin.span,
+                    "f-string mark names are missing from the symbol snapshot",
+                );
+            };
+            let place = self.synthetic_expr(
+                origin,
+                ExprKind::Path(Path {
+                    package: None,
+                    segments: vec![builder],
+                }),
+            );
+            let callee = self.synthetic_expr(origin, ExprKind::Formatter(FormatStep::Mark));
+            let length = self.synthetic_expr(
+                origin,
+                ExprKind::Call {
+                    callee,
+                    arguments: vec![Argument {
+                        label: None,
+                        value: place,
+                    }],
+                },
+            );
+            let pattern = self.synthetic_pattern(origin, PatternKind::Binding(mark));
+            let bind = self.synthetic_stmt(
+                origin,
+                StmtKind::Let {
+                    mutable: false,
+                    pattern,
+                    ty: None,
+                    value: length,
+                },
+            );
+            let append = self.format_step(origin, builder, FormatStep::Append, vec![hole]);
+            let append = self.synthetic_stmt(origin, StmtKind::Expr(append));
+            let start = self.synthetic_expr(
+                origin,
+                ExprKind::Path(Path {
+                    package: None,
+                    segments: vec![mark],
+                }),
+            );
+            let fill = self.constant(origin, fill);
+            let align = self.constant(origin, align);
+            let width = count(self, written.width, width)?;
+            let pad = self.format_step(
+                origin,
+                builder,
+                FormatStep::Pad(hole),
+                vec![start, fill, align, width],
+            );
+            let pad = self.synthetic_stmt(origin, StmtKind::Expr(pad));
+            let block = self.synthetic_expr(
+                origin,
+                ExprKind::Block {
+                    statements: vec![bind, append, pad],
+                    tail: None,
+                },
+            );
+            return Ok(self.synthetic_stmt(origin, StmtKind::Expr(block)));
+        }
+        let mut values = vec![
+            hole,
+            self.constant(origin, fill),
+            self.constant(origin, align),
+        ];
+        values.push(count(self, written.width, width)?);
+        values.push(count(self, written.precision, precision)?);
+        values.push(self.constant(origin, flags));
+        values.push(self.constant(origin, kind));
+        let call = self.format_step(
+            origin,
+            builder,
+            FormatStep::AppendSpec(written.spec),
+            values,
+        );
+        Ok(self.synthetic_stmt(origin, StmtKind::Expr(call)))
+    }
+    fn constant(&mut self, origin: Origin, value: u64) -> ExprId {
+        self.synthetic_expr(
+            origin,
+            ExprKind::Literal(Literal::Integer(format!("{value}u64"))),
+        )
+    }
+    /// `step(values..., mut builder)`, or `Finish(take builder)`.
     fn format_step(
         &mut self,
         origin: Origin,
         builder: Symbol,
         step: FormatStep,
-        value: Option<ExprId>,
+        values: Vec<ExprId>,
     ) -> ExprId {
         let place = self.synthetic_expr(
             origin,
@@ -185,27 +310,11 @@ impl Parser<'_> {
             }),
         );
         let op = match step {
-            FormatStep::Append | FormatStep::AppendSpec(_) => UnaryOp::Mut,
             FormatStep::Finish => UnaryOp::Take,
+            _ => UnaryOp::Mut,
         };
         let place = self.synthetic_expr(origin, ExprKind::Unary { op, value: place });
         let callee = self.synthetic_expr(origin, ExprKind::Formatter(step));
-        let mut values: Vec<_> = value.into_iter().collect();
-        if let FormatStep::AppendSpec(spec) = step {
-            for number in [
-                spec.fill,
-                spec.align,
-                spec.width,
-                spec.precision,
-                spec.flags,
-                spec.kind,
-            ] {
-                values.push(self.synthetic_expr(
-                    origin,
-                    ExprKind::Literal(Literal::Integer(format!("{number}u64"))),
-                ));
-            }
-        }
         let arguments = values
             .into_iter()
             .chain([place])
@@ -300,8 +409,23 @@ fn format_text(piece: &str) -> String {
     }
 }
 
-/// Rust's static `[fill]align sign # 0 width .precision type` grammar.
-fn parse_spec(spelling: &str) -> Result<FormatSpec, String> {
+/// Written options; a `name$` width or precision is named here, not constant.
+struct WrittenSpec {
+    spec: FormatSpec,
+    width: Option<String>,
+    precision: Option<String>,
+}
+
+/// A width or precision: decimal digits, `name$`, or absent.
+enum Count {
+    Absent,
+    Value(u64),
+    Name(String),
+}
+
+/// Rust's `[fill]align sign # 0 width .precision type` grammar, where a width
+/// or precision is decimal digits or a named `name$` argument.
+fn parse_spec(spelling: &str) -> Result<WrittenSpec, String> {
     let mut chars = spelling[1..].chars().peekable();
     let mut spec = FormatSpec {
         fill: 32,
@@ -349,35 +473,73 @@ fn parse_spec(spelling: &str) -> Result<FormatSpec, String> {
         spec.flags |= 4;
         chars.next();
     }
-    let number =
-        |chars: &mut std::iter::Peekable<std::str::Chars<'_>>| -> Result<Option<u64>, String> {
-            let mut value = None;
-            while let Some(digit) = chars.peek().and_then(|c| c.to_digit(10)) {
-                chars.next();
-                value = Some(
-                    value
-                        .unwrap_or(0u64)
-                        .checked_mul(10)
-                        .and_then(|n| n.checked_add(digit.into()))
-                        .ok_or("format width or precision exceeds u64")?,
-                );
+    let count = |chars: &mut std::iter::Peekable<std::str::Chars<'_>>| -> Result<Count, String> {
+        let mut look = chars.clone();
+        let mut name = String::new();
+        while let Some(&c) = look.peek() {
+            if c == '_' || c.is_ascii_alphabetic() || !name.is_empty() && c.is_ascii_digit() {
+                name.push(c);
+                look.next();
+            } else {
+                break;
             }
-            Ok(value)
-        };
-    spec.width = number(&mut chars)?.unwrap_or(0);
+        }
+        if !name.is_empty() {
+            if look.peek() != Some(&'$') {
+                return Ok(Count::Absent);
+            }
+            look.next();
+            *chars = look;
+            return Ok(Count::Name(name));
+        }
+        let mut value = None;
+        while let Some(digit) = chars.peek().and_then(|c| c.to_digit(10)) {
+            chars.next();
+            value = Some(
+                value
+                    .unwrap_or(0u64)
+                    .checked_mul(10)
+                    .and_then(|n| n.checked_add(digit.into()))
+                    .ok_or("format width or precision exceeds u64")?,
+            );
+        }
+        if chars.peek() == Some(&'$') {
+            return Err(
+                "a positional `N$` width or precision is unsupported; write `name$` with a u64 name in scope"
+                    .into(),
+            );
+        }
+        Ok(value.map_or(Count::Absent, Count::Value))
+    };
+    let mut written = WrittenSpec {
+        spec,
+        width: None,
+        precision: None,
+    };
+    match count(&mut chars)? {
+        Count::Absent => (),
+        Count::Value(width) => written.spec.width = width,
+        Count::Name(name) => written.width = Some(name),
+    }
     if chars.peek() == Some(&'.') {
         chars.next();
-        spec.flags |= 8;
-        spec.precision =
-            number(&mut chars)?.ok_or("format precision needs constant decimal digits")?;
+        written.spec.flags |= 8;
+        match count(&mut chars)? {
+            Count::Absent => {
+                return Err("format precision needs decimal digits or a `name$` argument".into());
+            }
+            Count::Value(precision) => written.spec.precision = precision,
+            Count::Name(name) => written.precision = Some(name),
+        }
     }
     if let Some(kind) = chars.next() {
         if !matches!(kind, 'x' | 'X' | 'b' | 'o') || chars.next().is_some() {
             return Err(format!(
-                "invalid format specifier `{spelling}`; expected constant width/precision and type x, X, b or o; width/precision holes are unsupported"
+                "invalid format specifier `{spelling}`; expected fill, alignment, sign, `#`, `0`, \
+                 a width and `.precision` of digits or `name$`, and type x, X, b or o"
             ));
         }
-        spec.kind = kind as u64;
+        written.spec.kind = kind as u64;
     }
-    Ok(spec)
+    Ok(written)
 }

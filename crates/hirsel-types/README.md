@@ -416,6 +416,10 @@ promises retain conservative guards.
 
 Revision 7 adds TypeDefinition.serializable as public explicit schema opt-in and TypeDefinition.implementation_authority as the owner-only CAP-5 ceiling. Whole-value authority stays nominal in every view. Public encoding excludes the private ceiling and includes opt-in/Serializable bounds: encoding v12, signature hash v11, driver query v12/interface11. Constructors default to no new evidence; Source and independent V prove seal ceilings and serialization eligibility.
 
+Revision 8 adds TypeDefinition.format, the function an `@format` association names
+(SEM-3), encoded after the loop association: encoding v13. Stage two
+(`hirsel_signature::protocol::validate_format`) checks its signature.
+
 `rows::JoinCache` and `Rows::join_cached` are additive pure-container helpers.
 One cache fixes one idempotent join operation and default-row domain, memoizes
 ordered radix-node pairs, and retains both operands so allocator pointer reuse

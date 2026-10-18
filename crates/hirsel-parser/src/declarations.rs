@@ -9,6 +9,15 @@ impl Parser<'_> {
         let mut arguments = vec![];
         match spelling.as_str() {
             "noalloc" | "soa" | "packed" | "blocking" | "incomplete" | "serializable" => {}
+            "format" => {
+                self.expect("(", const { RuleId::of("LANG-1") })?;
+                let function = self.path(false)?;
+                self.expect(")", const { RuleId::of("LANG-1") })?;
+                arguments.push(AttributeArgument::Format(FormatAssociation {
+                    function,
+                    origin: self.origin(start),
+                }));
+            }
             "loop_source" | "advance_only" | "preserves_captures" | "preserves_unique"
             | "captures" => {
                 self.expect("(", const { RuleId::of("LANG-1") })?;

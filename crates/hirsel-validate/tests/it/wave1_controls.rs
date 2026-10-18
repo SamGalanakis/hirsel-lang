@@ -322,6 +322,7 @@ fn inactive_payload(present: bool) -> Fixture {
             types,
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 generics: vec![GenericParameter::Type {
                     name: "T".into(),
                     bounds: vec![].into(),

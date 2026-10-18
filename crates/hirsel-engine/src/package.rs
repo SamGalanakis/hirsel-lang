@@ -67,7 +67,7 @@ impl LoadedProgram {
                 diagnostics.extend(errors);
                 continue;
             }
-            match crate::tools::loop_declaration_diagnostics(&mut self.engine, *file, context) {
+            match crate::tools::association_diagnostics(&mut self.engine, *file, context) {
                 Ok(errors) | Err(QueryError::Diagnostics(errors)) => {
                     preflight.insert(*file, errors.clone());
                     diagnostics.extend(errors);

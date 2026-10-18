@@ -56,4 +56,6 @@ which only ever appears as the callee of a desugared step, and
 the block the parser desugared it to.
 
 `FormatPiece::Spec` retains the raw colon/options token. `FormatStep::AppendSpec`
-carries parsed constant options; `FormatString.specs` retains each written spec.
+carries parsed options; `FormatStep::Mark` and `FormatStep::Pad(hole)` pad a hole
+whose options are only fill, alignment and width; `FormatString.specs` retains each
+written spec. `AttributeArgument::Format` carries an `@format(function)` path.

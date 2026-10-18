@@ -1,0 +1,37 @@
+// rule: SEM-3
+// expect: run
+// A generic type's @format function is generic over the same parameters, each
+// inferred from the hole's type.
+@format(pair_text)
+type Pair[A, B] {
+  first: A,
+  second: B,
+  label: String,
+}
+
+@preserves_unique(out)
+fn pair_text[A, B](pair: Pair[A, B], mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"pair {pair.label}")
+}
+
+@format(window_text)
+type Window[n: size] {
+  start: u64,
+  cells: Inline[u8, n],
+}
+
+@preserves_unique(out)
+fn window_text[n: size](window: Window[n], mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"window@{window.start}")
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let words = Pair(first: "a", second: 2u8, label: "word")
+  let counts: List[u64] = [1, 2]
+  let flags = Pair(first: true, second: counts, label: "flags")
+  test.check(t, f"{words}; {flags}" == "pair word; pair flags")
+  test.check(t, f"[{words:^11}]" == "[ pair word ]")
+  let window: Window[2] = Window(start: 9, cells: [0u8, 1u8])
+  test.check(t, f"{window}" == "window@9")
+  Ok(())
+}

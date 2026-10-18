@@ -165,6 +165,7 @@ fn type_signature(
         fingerprint: ast::ContentHash::of_bytes(name.as_bytes()),
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
+            format: None,
             generics: vec![],
             representation: repr,
             bounds,

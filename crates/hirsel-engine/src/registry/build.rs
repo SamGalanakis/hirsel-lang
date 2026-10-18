@@ -750,6 +750,7 @@ fn type_definition(
 ) -> TypeDefinition {
     TypeDefinition {
         loop_source: None,
+        format: None,
         generics,
         representation,
         bounds: vec![],

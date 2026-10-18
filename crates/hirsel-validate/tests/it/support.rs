@@ -355,6 +355,7 @@ pub(crate) fn arena_slot(f: &mut Fixture, storage: Storage) -> u32 {
     arena.metadata.roles = roles;
     arena.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
+        format: None,
         generics: vec![],
         representation: None,
         bounds: vec![],
@@ -399,6 +400,7 @@ pub(crate) fn capability_signature(name: &str) -> Signature {
     let mut s = function_signature(name, vec![], TypeKind::Tuple(vec![].into()));
     s.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
+        format: None,
         destructor_allocation: Allocation::NoAlloc,
         generics: vec![],
         representation: None,

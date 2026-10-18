@@ -6156,6 +6156,7 @@ mod nominal_limit_tests {
                     fingerprint: ContentHash::default(),
                     kind: SignatureKind::Type(TypeDefinition {
                         loop_source: None,
+                        format: None,
                         generics: vec![],
                         representation: Some(unit),
                         bounds: vec![],
@@ -6197,6 +6198,7 @@ mod nominal_limit_tests {
                         fingerprint: ContentHash::default(),
                         kind: SignatureKind::Type(TypeDefinition {
                             loop_source: None,
+                            format: None,
                             generics: vec![],
                             representation: Some(representation),
                             bounds: vec![],

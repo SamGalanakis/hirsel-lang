@@ -581,23 +581,22 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         &format!("type `{spelling}` conflicts with a builtin type name; choose a domain name for the type"));
                 }
                 self.generics(&generics, item.origin.span);
-                for attribute in &item.attributes {
-                    if self.symbols.resolve(attribute.name) == Some("loop_source") {
-                        for argument in &attribute.arguments {
-                            if let AttributeArgument::LoopSource(s) = argument {
-                                // Stage one records operation identities only. Reading
-                                // their signatures here cycles through the receiver's
-                                // header; stage two validates them after publication.
-                                for path in [&s.open, &s.next] {
-                                    match self.lookup(path, s.origin.span) {
-                                        Ok(definition) => self.output.paths.push((
-                                            NameSite::Item(id),
-                                            ResolvedName::Definition(definition),
-                                        )),
-                                        Err(e) => self.lookup_diagnostic(&e, s.origin.span),
-                                    }
-                                }
-                            }
+                for argument in item.attributes.iter().flat_map(|a| &a.arguments) {
+                    // Stage one records operation identities only. Reading their
+                    // signatures here cycles through the receiver's header; stage
+                    // two validates them after publication.
+                    let (paths, span) = match argument {
+                        AttributeArgument::LoopSource(s) => (vec![&s.open, &s.next], s.origin.span),
+                        AttributeArgument::Format(s) => (vec![&s.function], s.origin.span),
+                        _ => continue,
+                    };
+                    for path in paths {
+                        match self.lookup(path, span) {
+                            Ok(definition) => self
+                                .output
+                                .paths
+                                .push((NameSite::Item(id), ResolvedName::Definition(definition))),
+                            Err(e) => self.lookup_diagnostic(&e, span),
                         }
                     }
                 }
@@ -1316,6 +1315,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         s.kind,
                         ty::SignatureKind::Type(ty::TypeDefinition {
                             loop_source: None,
+                            format: None,
                             representation: None,
                             ..
                         })

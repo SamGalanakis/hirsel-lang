@@ -1,0 +1,48 @@
+// rule: SEM-3
+// expect: run
+// A @format function may itself format holes of other @format types.
+@format(point_text)
+type Point {
+  x: i64,
+  y: i64,
+}
+
+@preserves_unique(out)
+fn point_text(p: Point, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"({p.x}, {p.y})")
+}
+
+@format(segment_text)
+type Segment {
+  from: Point,
+  to: Point,
+}
+
+@preserves_unique(out)
+fn segment_text(s: Segment, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"{s.from} -> {s.to:>8}")
+}
+
+@format(route_text)
+type Route {
+  name: String,
+  legs: List[Segment],
+}
+
+@preserves_unique(out)
+fn route_text(route: Route, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"{route.name}:")
+  for leg in route.legs {
+    text.append(mut out, f" [{leg}]")
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let a = Point(x: 0, y: 0)
+  let b = Point(x: 1, y: 2)
+  let leg = Segment(from: a, to: b)
+  test.check(t, f"{leg}" == "(0, 0) ->   (1, 2)")
+  let route = Route(name: "walk", legs: [leg, Segment(from: b, to: a)])
+  test.check(t, f"{route}" == "walk: [(0, 0) ->   (1, 2)] [(1, 2) ->   (0, 0)]")
+  Ok(())
+}

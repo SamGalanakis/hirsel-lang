@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-765 exported definitions; 242 variants.
+768 exported definitions; 242 variants.
 
 
 ## Types and roots
@@ -758,6 +758,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@preserves_unique(out) pub fn internal.format.begin( length: u64, negative: bool, prefix: String, fill: u64, align: u64, width: u64, flags: u64, mut out: List[u8] ) -> u64 uses {}` — Emits left padding, then the sign and radix prefix. <!-- std@1/internal/format/begin -->
 - `@preserves_unique(out) pub fn internal.format.fixed( mantissa: u64, exponent: i32, negative: bool, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` — Exact dyadic-to-decimal conversion reuses the same fixed bigint as shortest. <!-- std@1/internal/format/fixed -->
 - `@preserves_unique(out) pub fn internal.format.integer( value: u128, negative: bool, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` <!-- std@1/internal/format/integer -->
+- `@preserves_unique(out) pub fn internal.format.pad_from( start: u64, fill: u64, align: u64, width: u64, numeric: bool, mut out: List[u8] ) -> () uses {}` — Pads the text appended since byte 'start' to 'width' scalars. <!-- std@1/internal/format/pad_from -->
 - `@noalloc pub fn internal.format.padding(width: u64, length: u64, align: u64, numeric: bool) -> (u64, u64) uses {}` <!-- std@1/internal/format/padding -->
 - `@preserves_unique(out) pub fn internal.format.repeat(mut out: List[u8], fill: u64, count: u64) -> () uses {}` — Padding and sign/prefix placement follow Rust core::fmt::Formatter. <!-- std@1/internal/format/repeat -->
 - `@noalloc pub fn internal.heap_ops.sift[T]( mut xs: unique List[T], begin: u64, end: u64, by: @noalloc fn(T, T) -> i32 uses {} ) -> () uses {}` — Shared sift kernels adapted from Rust/Zig heap algorithms. <!-- std@1/internal/heap_ops/sift -->
@@ -1091,6 +1092,8 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@preserves_unique(builder) pub fn text.finish(take builder: List[u8]) -> Result[String, Bytes] uses {}` <!-- std@1/text/finish -->
 - `@preserves_unique(builder) pub fn text.finish_valid(take builder: List[u8]) -> String uses {}` — The text that appends through the formatting protocol left in an empty builder: 'format_into' and 'append' only add valid UTF-8, so every 'to_string' and every f-string finishes here; invalid bytes fail TextInvariant. <!-- std@1/text/finish_valid -->
 - `@preserves_unique(out) pub fn text.format_into_spec( value: String, fill: u64, align: u64, width: u64, precision: u64, flags: u64, kind: u64, mut out: List[u8] ) -> () uses {}` — Width and precision count Unicode scalars, following Rust Formatter::pad. <!-- std@1/text/format_into_spec -->
+- `@preserves_unique(out) pub fn text.pad_from(start: u64, fill: u64, align: u64, width: u64, mut out: List[u8]) -> () uses {}` — Pads the text appended to 'out' since byte 'start' to 'width' Unicode scalars, left-aligned by default: an f-string hole of String, bool or a type with @format whose only options are fill, alignment and width. <!-- std@1/text/pad_from -->
+- `@preserves_unique(out) pub fn text.pad_number_from( start: u64, fill: u64, align: u64, width: u64, mut out: List[u8] ) -> () uses {}` — The same, right-aligned by default: an integer or float hole. <!-- std@1/text/pad_number_from -->
 
 ## time
 

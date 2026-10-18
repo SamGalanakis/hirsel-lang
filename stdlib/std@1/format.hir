@@ -29,6 +29,50 @@ pub fn padding(width: u64, length: u64, align: u64, numeric: bool) -> (u64, u64)
   (left, count - left)
 }
 
+// Pads the text appended since byte `start` to `width` scalars. Right padding
+// is appended; left padding is appended, then rotated in front of the text.
+@preserves_unique(out)
+pub fn pad_from(
+  start: u64,
+  fill: u64,
+  align: u64,
+  width: u64,
+  numeric: bool,
+  mut out: List[u8]
+) -> () uses {} {
+  let end = core@1/list.len(out)
+  let mut count: u64 = 0
+  let mut at = start
+  while at < end {
+    if out[at] & 192u8 != 128u8 {
+      count += 1
+    }
+    at += 1
+  }
+  let (left, right) = padding(width, count, align, numeric)
+  if left > 0 {
+    repeat(mut out, fill, left)
+    let total = core@1/list.len(out)
+    reverse(mut out, start, end)
+    reverse(mut out, end, total)
+    reverse(mut out, start, total)
+  }
+  repeat(mut out, fill, right)
+}
+
+@preserves_unique(out)
+fn reverse(mut out: List[u8], from: u64, to: u64) -> () uses {} {
+  let mut low = from
+  let mut high = to
+  while high > low + 1 {
+    high -= 1
+    let byte = out[low]
+    out[low] = out[high]
+    out[high] = byte
+    low += 1
+  }
+}
+
 // Emits left padding, then the sign and radix prefix. Returns right padding.
 @preserves_unique(out)
 pub fn begin(

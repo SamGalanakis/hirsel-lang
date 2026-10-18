@@ -48,7 +48,7 @@ pub fn canonical_encoding(
         heap,
     } = roles;
     let mut e = Encoder::default();
-    e.atom(b"hirsel.signature.encoding.v12");
+    e.atom(b"hirsel.signature.encoding.v13");
     e.path(definition);
     e.tag(match visibility {
         hirsel_syntax::Visibility::Private => "private",
@@ -154,6 +154,7 @@ pub fn canonical_encoding(
         }
         SignatureKind::Type(TypeDefinition {
             loop_source,
+            format,
             destructor_allocation,
             generics,
             representation,
@@ -182,6 +183,10 @@ pub fn canonical_encoding(
                 e.path(open);
                 e.path(next);
                 e.path(option);
+            }
+            e.boolean(format.is_some());
+            if let Some(function) = format {
+                e.path(function);
             }
             e.optional_type(*representation, types)?;
             e.bounds(bounds);

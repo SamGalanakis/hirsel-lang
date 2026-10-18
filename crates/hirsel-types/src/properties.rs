@@ -1349,6 +1349,7 @@ mod flat_tests {
             fingerprint: ContentHash::default(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 destructor_allocation: Allocation::MayAllocate,
                 generics: vec![],
                 representation: Some(bytes),
@@ -1652,6 +1653,7 @@ mod seal_cleanup_tests {
         let root = types.push(Type::unit());
         let mut d = TypeDefinition {
             loop_source: None,
+            format: None,
             generics: vec![],
             representation: Some(root),
             bounds: vec![],

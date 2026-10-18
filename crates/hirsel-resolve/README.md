@@ -134,7 +134,7 @@ importing package's dependency heads; the driver supplies that view.
 Type-item authority paths recognize the item's own type parameters before nominal
 lookup. Unknown names still diagnose LANG-4; callable/value path resolution is unchanged.
 
-`@loop_source` operation paths record manifest lookups and resolved definition
+`@loop_source` operation paths and the `@format` function path record manifest lookups and resolved definition
 identities without reading operation signatures. Those signatures may name the
 declaring receiver; querying them during header resolution creates a cycle.
 The second declaration stage validates every association after headers publish,

@@ -10,7 +10,7 @@
   },
   "sources": [
     {
-      "path": "SEM-3-fstring-dynamic-precision-bad.hir",
+      "path": "SEM-3-fstring-width-type-bad.hir",
       "module": []
     }
   ],

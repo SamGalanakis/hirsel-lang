@@ -470,16 +470,23 @@ pub enum ExprKind {
     Error,
 }
 /// `Append(value, mut builder)` appends a hole or text piece; `Finish(take builder)`
-/// returns the built `String`.
+/// returns the built `String`. A hole whose options are only fill, alignment and
+/// width is `Mark(builder)` (the builder's length), its plain `Append`, then
+/// `Pad(mark, fill, align, width, mut builder)` padding the hole's text; any other
+/// specified hole is one `AppendSpec(value, fill, align, width, precision, flags,
+/// kind, mut builder)`. `Pad` names the hole whose type selects its operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum FormatStep {
     Append,
     AppendSpec(FormatSpec),
+    Mark,
+    Pad(ExprId),
     Finish,
 }
-/// Constant formatting options. Alignment: 0 default, 1 left, 2 right, 3 center.
+/// Written formatting options. Alignment: 0 default, 1 left, 2 right, 3 center.
 /// Flags: 1 plus, 2 alternate, 4 sign-aware zero padding, 8 precision present.
-/// Kind: 0 display or the ASCII radix letter.
+/// Kind: 0 display or the ASCII radix letter. A width or precision written as
+/// `name$` is a runtime argument; its field here is then 0.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct FormatSpec {
     pub fill: u64,
@@ -663,6 +670,7 @@ pub struct Parameter {
 pub enum AttributeArgument {
     Name(Symbol),
     LoopSource(LoopSourceSyntax),
+    Format(FormatAssociation),
     StatePromise(StatePromiseSyntax),
     Keyword(Keyword),
     Integer(String),
@@ -672,6 +680,12 @@ pub enum AttributeArgument {
 pub struct LoopSourceSyntax {
     pub open: Path,
     pub next: Path,
+    pub origin: Origin,
+}
+/// `@format(function)`: the function an f-string hole of this type calls (SEM-3).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FormatAssociation {
+    pub function: Path,
     pub origin: Origin,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

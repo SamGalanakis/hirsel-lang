@@ -362,6 +362,7 @@ fn nonregular_nominal_bound_reports_the_declared_tooling_limit() {
             fingerprint: ContentHash::default(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 generics: vec![GenericParameter::Type {
                     name: "T".into(),
                     bounds: vec![].into(),
@@ -454,6 +455,7 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
                         fingerprint: ContentHash::default(),
                         kind: SignatureKind::Type(TypeDefinition {
                             loop_source: None,
+                            format: None,
                             generics: vec![],
                             representation: Some(root),
                             bounds: vec![],

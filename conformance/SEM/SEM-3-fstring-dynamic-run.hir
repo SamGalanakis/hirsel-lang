@@ -1,0 +1,35 @@
+// rule: SEM-3
+// expect: run
+// A `name$` width or precision takes a u64 in scope, as the same constant would.
+@format(tag_text)
+type Tag {
+  text: String,
+}
+
+@preserves_unique(out)
+fn tag_text(tag: Tag, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, tag.text)
+}
+
+const COLUMN: u64 = 7
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let w: u64 = 6
+  let p: u64 = 2
+  test.check(t, f"[{42u64:w$}]" == "[    42]")
+  test.check(t, f"[{42u64:<w$}]" == "[42    ]")
+  test.check(t, f"[{-42i32:0w$}]" == "[-00042]")
+  test.check(t, f"[{255u8:#0w$x}]" == "[0x00ff]")
+  test.check(t, f"[{3.14159f64:.p$}]" == "[3.14]")
+  test.check(t, f"[{3.14159f64:w$.p$}]" == "[  3.14]")
+  test.check(t, f"[{-2.5f32:*^w$.p$}]" == "[-2.50*]")
+  test.check(t, f"[{"abc":w$}]" == "[abc   ]")
+  test.check(t, f"[{"abcdef":.p$}]" == "[ab]")
+  test.check(t, f"[{"abcdef":>w$.p$}]" == "[    ab]")
+  test.check(t, f"[{true:^w$}]" == "[ true ]")
+  test.check(t, f"[{Tag(text: "id"):>w$}]" == "[    id]")
+  test.check(t, f"[{1u64:COLUMN$}]" == "[      1]")
+  let zero: u64 = 0
+  test.check(t, f"[{12345u64:zero$}][{1.5f64:.zero$}]" == "[12345][2]")
+  Ok(())
+}

@@ -133,6 +133,7 @@ impl<'a> Printer<'a> {
                                 cat([token(","), Space]),
                                 self.path(&s.next)?,
                             ]),
+                            AttributeArgument::Format(s) => self.path(&s.function)?,
                             AttributeArgument::StatePromise(s) => join(
                                 s.selectors
                                     .iter()

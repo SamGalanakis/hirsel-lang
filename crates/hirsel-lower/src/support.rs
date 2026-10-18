@@ -497,6 +497,7 @@ impl Fixture {
             types: self.checked.types.clone(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 generics: vec![],
                 representation: Some(representation),
                 destructor_allocation: Allocation::NoAlloc,

@@ -609,6 +609,8 @@ pub struct Layout {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypeDefinition {
     pub loop_source: Option<LoopSourceDeclaration>,
+    /// `@format(function)`: the function an f-string hole of this type calls (SEM-3).
+    pub format: Option<DefPath>,
     /// Declared resource finalizer promise; MayAllocate unless explicitly noalloc.
     pub destructor_allocation: Allocation,
     pub generics: Vec<GenericParameter>,

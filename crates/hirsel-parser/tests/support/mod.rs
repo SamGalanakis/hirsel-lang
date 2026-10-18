@@ -66,6 +66,7 @@ pub fn tokenize(file: FileId, source: &str, names: &mut Interner) -> Vec<Token> 
                 names.intern("List");
                 names.intern("u8");
                 names.intern(&format!("$fmt{}", holes.len()));
+                names.intern(&format!("$mark{}", holes.len()));
             }
             pos += if head { 2 } else { 1 };
             let mut open = false;

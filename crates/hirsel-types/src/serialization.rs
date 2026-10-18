@@ -442,6 +442,7 @@ mod tests {
             fingerprint: Default::default(),
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 generics: vec![],
                 representation: Some(root),
                 bounds: vec![Bound::Serializable],

@@ -16,6 +16,7 @@ fn nominal(name: &str) -> Signature {
     let unit = s.types.push(Type::unit());
     s.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
+        format: None,
         generics: vec![].into(),
         representation: Some(unit),
         bounds: vec![Bound::Plain],

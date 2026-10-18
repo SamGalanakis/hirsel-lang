@@ -190,8 +190,8 @@ pub(crate) fn read_source(path: &Path) -> Result<String, ToolError> {
     Ok(text)
 }
 /// Complete declaration preflight; package launch calls it for every selected file
-/// before any body can plan calls through a foreign association.
-pub(crate) fn loop_declaration_diagnostics(
+/// before any body can plan calls through a foreign loop or format association.
+pub(crate) fn association_diagnostics(
     engine: &mut QueryEngine,
     file: FileId,
     context: &FileContext,
@@ -203,20 +203,25 @@ pub(crate) fn loop_declaration_diagnostics(
     }
     for item in &parsed.value.roots {
         let source = &parsed.value.tree.items[item.0 as usize];
-        if let Some(attribute) = source
-            .attributes
-            .iter()
-            .find(|a| parsed.value.symbols.resolve(a.name) == Some("loop_source"))
-        {
+        for attribute in &source.attributes {
+            let name = parsed.value.symbols.resolve(attribute.name);
+            if !matches!(name, Some("loop_source" | "format")) {
+                continue;
+            }
             let phases = engine
                 .adapters
                 .phases
                 .clone()
                 .ok_or(QueryError::NotImplemented)?;
+            let span = attribute.origin.span;
             let result = engine
                 .item_signature(&source.definition)
                 .and_then(|signature| {
-                    phases.validate_loop_source(&signature.value, attribute.origin.span, engine)
+                    if name == Some("format") {
+                        phases.validate_format(&signature.value, span, engine)
+                    } else {
+                        phases.validate_loop_source(&signature.value, span, engine)
+                    }
                 });
             match result {
                 Ok(()) => (),
@@ -246,7 +251,7 @@ pub(crate) fn check_file_lowering(
     let mut diagnostics = vec![];
     let result = (|| -> Result<(), QueryError> {
         let parsed = engine.parse_file(file, context)?;
-        diagnostics.extend(loop_declaration_diagnostics(engine, file, context)?);
+        diagnostics.extend(association_diagnostics(engine, file, context)?);
         if crate::queries::has_errors(&diagnostics) {
             return Ok(());
         }

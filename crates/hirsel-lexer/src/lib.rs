@@ -141,6 +141,17 @@ impl<'a> Scanner<'a> {
                 {
                     self.literal_unit(false);
                 }
+                // A `name$` width or precision becomes a path the parser builds.
+                let spec = String::from_utf8_lossy(&self.bytes[start..self.pos]).into_owned();
+                for (end, _) in spec.match_indices('$') {
+                    let name = spec[..end]
+                        .rsplit(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
+                        .next()
+                        .unwrap_or("");
+                    if name.starts_with(|c: char| c == '_' || c.is_ascii_alphabetic()) {
+                        self.interner.intern(name);
+                    }
+                }
                 TokenKind::Format(FormatPiece::Spec)
             }
             b'}' if self.holes.last().is_some_and(|h| h.braces == 0) => self.format_text(false),
@@ -469,10 +480,12 @@ impl<'a> Scanner<'a> {
         let start = self.pos;
         if head {
             // The parser desugars every f-string into a block that binds its builder
-            // as `$fmt<depth>: List[u8]`; it reads names from an immutable snapshot.
+            // as `$fmt<depth>: List[u8]` and a padded hole's start as `$mark<depth>`;
+            // it reads names from an immutable snapshot.
             self.interner.intern("List");
             self.interner.intern("u8");
             self.interner.intern(&format!("$fmt{}", self.holes.len()));
+            self.interner.intern(&format!("$mark{}", self.holes.len()));
         }
         self.pos += if head { 2 } else { 1 };
         let (open, closed) = loop {

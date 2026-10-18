@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: reject LANG-4 at line 5
+// A `name$` width or precision names a u64 in scope; here it names nothing.
+fn label(n: u64) -> String {
+  f"{n:>w$}"
+}

@@ -45,6 +45,13 @@ pub trait Phases {
         span: Span,
         provider: &mut dyn SignatureProvider,
     ) -> Result<(), QueryError>;
+    /// Validates a `format` association even when no f-string formats its type.
+    fn validate_format(
+        &self,
+        signature: &Signature,
+        span: Span,
+        provider: &mut dyn SignatureProvider,
+    ) -> Result<(), QueryError>;
     fn checker(&self) -> Rc<dyn CheckerPhase>;
     /// Modes record their diagnostics in the session's shared compiler state.
     fn modes(&self, state: Rc<RefCell<CompilerState>>) -> Rc<dyn ModesPhase>;
@@ -65,6 +72,14 @@ pub(crate) fn engine_only_adapters() -> PhaseAdapters {
             Err(QueryError::NotImplemented)
         }
         fn validate_loop_source(
+            &self,
+            _: &Signature,
+            _: Span,
+            _: &mut dyn SignatureProvider,
+        ) -> Result<(), QueryError> {
+            Err(QueryError::NotImplemented)
+        }
+        fn validate_format(
             &self,
             _: &Signature,
             _: Span,

@@ -1,0 +1,10 @@
+// rule: SEM-3
+// expect: run
+// Another package's public type formats through its private @format function:
+// publishing the association lets f-strings, and only f-strings, call it.
+pub fn main(t: Test) -> Result[(), ()] {
+  let p = geo.api.Point(x: 1, y: 2)
+  test.check(t, f"{p}" == "<1;2>")
+  test.check(t, f"[{p:>7}]" == "[  <1;2>]")
+  Ok(())
+}

@@ -342,6 +342,7 @@ fn finalizer(order: &[u32]) -> Fixture {
     let unit = fun.result;
     signature.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
+        format: None,
         destructor_allocation: Allocation::NoAlloc,
         generics: (0..order.len())
             .map(|i| GenericParameter::Type {

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "package": {
-    "name": "application",
+    "name": "tour",
     "version": "1"
   },
   "entry": {
@@ -10,7 +10,7 @@
   },
   "sources": [
     {
-      "path": "SEM-3-fstring-dynamic-width-bad.hir",
+      "path": "SEM-3-tour-15-format-run.hir",
       "module": []
     }
   ],

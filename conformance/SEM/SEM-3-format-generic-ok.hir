@@ -1,0 +1,13 @@
+// rule: SEM-3
+// expect: accept
+// Twin of the single instantiation: the function is generic over T.
+@format(cell_text)
+type Cell[T] {
+  value: T,
+  id: u64,
+}
+
+@preserves_unique(out)
+fn cell_text[T](cell: Cell[T], mut out: List[u8]) -> () uses {} {
+  text.append(mut out, f"cell {cell.id}")
+}

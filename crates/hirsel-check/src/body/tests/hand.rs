@@ -374,6 +374,7 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
             types,
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 destructor_allocation: Allocation::NoAlloc,
                 generics: vec![
                     GenericParameter::Type {
@@ -469,6 +470,7 @@ fn finalizer_consumes_resolver_identity_instead_of_first_local() {
     };
     f.signature.kind = SignatureKind::Type(TypeDefinition {
         loop_source: None,
+        format: None,
         destructor_allocation: Allocation::MayAllocate,
         generics: vec![],
         representation: None,

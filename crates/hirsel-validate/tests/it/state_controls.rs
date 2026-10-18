@@ -450,6 +450,7 @@ fn creation_relay(hidden: bool) -> Fixture {
             types,
             kind: SignatureKind::Type(TypeDefinition {
                 loop_source: None,
+                format: None,
                 generics: vec![GenericParameter::Type {
                     name: "S".into(),
                     bounds: vec![].into(),

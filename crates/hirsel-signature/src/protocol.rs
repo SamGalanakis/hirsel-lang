@@ -70,31 +70,14 @@ pub fn validate_loop_source(
         }
     }
     let mut types = TypeStore::default();
-    let arguments = nominal
-        .generics
-        .iter()
-        .enumerate()
-        .map(|(ordinal, g)| match g {
-            GenericParameter::Type { .. } => GenericArgument::Type(types.push(Type {
-                drop_allocation: DropAllocation::DependsOn(
-                    vec![TypeParameterRef::bound(TypeParamId(ordinal as u32))].into(),
-                ),
-                ..Type::with_kind(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(
-                    ordinal as u32,
-                ))))
-            })),
-            GenericParameter::Size { .. } => GenericArgument::Size(Size::Parameter(
-                SizeParameterRef::bound(SizeParamId(ordinal as u32)),
-            )),
-        })
-        .collect();
-    let receiver = types.push(Type {
-        drop_allocation: DropAllocation::MayAllocate,
-        ..Type::with_kind(TypeKind::Named {
-            definition: signature.definition.clone(),
-            arguments,
-        })
-    });
+    let receiver = symbolic_receiver(signature, nominal, &mut types);
+    let loop_error = || {
+        diagnostic(
+            const { RuleId::of("SEM-4") },
+            span,
+            "loop operation receiver, arity or passing mode disagrees with its association",
+        )
+    };
     let cursor = specialize(
         &open.types,
         open_f,
@@ -103,7 +86,8 @@ pub fn validate_loop_source(
         PassingMode::Borrow,
         &nominal.generics,
         provider,
-        span,
+        0,
+        &loop_error,
     )?;
     if !types
         .get(cursor)
@@ -127,7 +111,8 @@ pub fn validate_loop_source(
         PassingMode::Mut,
         &nominal.generics,
         provider,
-        span,
+        0,
+        &loop_error,
     )?;
     let core_option = ast::DefPath(ast::ItemPath {
         package: ast::PackageId {
@@ -149,6 +134,102 @@ pub fn validate_loop_source(
     Ok(())
 }
 
+/// Validate an `@format(function)` association even when no f-string formats
+/// the type (SEM-3). After substituting the type's own generic parameters, the
+/// function is exactly `fn(value: T, mut out: List[u8]) -> ()`: an unlabelled
+/// borrowed receiver, an unlabelled `mut` UTF-8 builder it preserves unique,
+/// and no error result.
+pub fn validate_format(
+    signature: &Signature,
+    span: Span,
+    provider: &mut dyn SignatureProvider,
+) -> Result<(), QueryError> {
+    let SignatureKind::Type(nominal) = &signature.kind else {
+        return Ok(());
+    };
+    let Some(path) = &nominal.format else {
+        return Ok(());
+    };
+    let error = || {
+        diagnostic(
+            const { RuleId::of("SEM-3") },
+            span,
+            "an @format function is `fn(value: T, mut out: List[u8]) -> ()` for its type T, \
+             generic over T's own parameters, with @preserves_unique(out) and no error result",
+        )
+    };
+    let function = provider.signature(path)?;
+    let SignatureKind::Function(f) = &function.kind else {
+        return Err(error());
+    };
+    let mut types = TypeStore::default();
+    let receiver = symbolic_receiver(signature, nominal, &mut types);
+    let result = specialize(
+        &function.types,
+        f,
+        &mut types,
+        receiver,
+        PassingMode::Borrow,
+        &nominal.generics,
+        provider,
+        1,
+        &error,
+    )?;
+    let out = &f.parameters[1];
+    let builder = |ty: TypeId| {
+        let byte = |argument: &GenericArgument| matches!(argument, GenericArgument::Type(t) if matches!(function.types.get(*t).map(|r| &r.kind), Some(TypeKind::Primitive(Primitive::U8))));
+        matches!(function.types.get(ty).map(|r| &r.kind), Some(TypeKind::Builtin { kind: BuiltinType::List, arguments }) if matches!(arguments.as_slice(), [a] if byte(a)))
+    };
+    let preserved = f.state_promises.iter().any(|p| {
+        p.preserve_unique
+            && p.selector.fields.is_empty()
+            && p.selector.parameter == ParameterRef::bound(ParamId(1))
+    });
+    if out.passing != PassingMode::Mut
+        || out.label.is_some()
+        || !builder(out.ty)
+        || !preserved
+        || f.error.is_some()
+        || !matches!(&types.get(result).unwrap().kind, TypeKind::Tuple(items) if items.is_empty())
+    {
+        return Err(error());
+    }
+    Ok(())
+}
+/// The declaring type applied to its own generic parameters, as the
+/// association's operations must accept it.
+fn symbolic_receiver(
+    signature: &Signature,
+    nominal: &TypeDefinition,
+    types: &mut TypeStore,
+) -> TypeId {
+    let arguments = nominal
+        .generics
+        .iter()
+        .enumerate()
+        .map(|(ordinal, g)| match g {
+            GenericParameter::Type { .. } => GenericArgument::Type(types.push(Type {
+                drop_allocation: DropAllocation::DependsOn(
+                    vec![TypeParameterRef::bound(TypeParamId(ordinal as u32))].into(),
+                ),
+                ..Type::with_kind(TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(
+                    ordinal as u32,
+                ))))
+            })),
+            GenericParameter::Size { .. } => GenericArgument::Size(Size::Parameter(
+                SizeParameterRef::bound(SizeParamId(ordinal as u32)),
+            )),
+        })
+        .collect();
+    types.push(Type {
+        drop_allocation: DropAllocation::MayAllocate,
+        ..Type::with_kind(TypeKind::Named {
+            definition: signature.definition.clone(),
+            arguments,
+        })
+    })
+}
+
 fn specialize(
     source: &TypeStore,
     function: &FunctionType,
@@ -157,18 +238,15 @@ fn specialize(
     passing: PassingMode,
     receiver_generics: &[GenericParameter],
     provider: &mut dyn SignatureProvider,
-    span: Span,
+    extra: usize,
+    error: &dyn Fn() -> QueryError,
 ) -> Result<TypeId, QueryError> {
-    let error = || {
-        diagnostic(
-            const { RuleId::of("SEM-4") },
-            span,
-            "loop operation receiver, arity or passing mode disagrees with its association",
-        )
-    };
-    let [parameter] = function.parameters.as_slice() else {
+    let [parameter, rest @ ..] = function.parameters.as_slice() else {
         return Err(error());
     };
+    if rest.len() != extra {
+        return Err(error());
+    }
     if parameter.passing != passing || parameter.label.is_some() {
         return Err(error());
     }

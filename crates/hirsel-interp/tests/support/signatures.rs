@@ -212,6 +212,7 @@ pub fn fixture_signatures(
                     }
                     let declaration = TypeDefinition {
                         loop_source: None,
+                        format: None,
                         destructor_allocation: Allocation::MayAllocate,
                         generics: vec![],
                         representation: Some(representation),
@@ -271,6 +272,7 @@ pub fn fixture_signatures(
                         definition.types.clone(),
                         SignatureKind::Type(TypeDefinition {
                             loop_source: None,
+                            format: None,
                             destructor_allocation: Allocation::MayAllocate,
                             generics: vec![],
                             representation: Some(repr),
@@ -364,6 +366,7 @@ pub fn fixture_signatures(
                 types,
                 SignatureKind::Type(TypeDefinition {
                     loop_source: None,
+                    format: None,
                     destructor_allocation: Allocation::NoAlloc,
                     generics,
                     representation: Some(representation),
@@ -386,6 +389,7 @@ pub fn fixture_signatures(
         let path = hirsel_syntax::DefPath::core(name);
         let declaration = TypeDefinition {
             loop_source: None,
+            format: None,
             destructor_allocation: Allocation::MayAllocate,
             generics: vec![],
             representation: None,

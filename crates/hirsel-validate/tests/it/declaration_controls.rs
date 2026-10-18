@@ -22,6 +22,7 @@ fn declaration(
         types,
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
+            format: None,
             generics: vec![],
             representation: Some(root),
             bounds,

@@ -6,6 +6,7 @@ pub(super) fn signatures() -> Vec<Signature> {
     let b = Builder::new("T");
     let cursor = TypeDefinition {
         loop_source: None,
+        format: None,
         generics: b.generics.clone(),
         representation: None,
         bounds: vec![Bound::NoallocDrop],
@@ -97,6 +98,7 @@ pub(super) fn signatures() -> Vec<Signature> {
     let representation = b.ty("Array[T]", PassingMode::Take);
     let owner = TypeDefinition {
         loop_source: None,
+        format: None,
         generics: b.generics.clone(),
         representation: Some(representation),
         bounds: vec![],
@@ -169,6 +171,7 @@ pub(super) fn signatures() -> Vec<Signature> {
         let representation = b.ty(source, PassingMode::Take);
         let owner = TypeDefinition {
             loop_source: None,
+            format: None,
             generics: b.generics.clone(),
             representation: Some(representation),
             bounds: vec![],

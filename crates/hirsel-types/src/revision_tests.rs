@@ -1284,6 +1284,7 @@ fn plain_record() -> (hirsel_syntax::DefPath, SignatureRef) {
         fingerprint: hirsel_syntax::ContentHash::default(),
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
+            format: None,
             destructor_allocation: Allocation::MayAllocate,
             generics: vec![],
             representation: Some(representation),
@@ -1656,6 +1657,7 @@ fn cleanup_bound_instantiation_retains_exact_scopes_and_nested_binders() {
 fn an_owner_view_seals_to_its_public_signature_and_keeps_its_fingerprint() {
     let declaration = |representation, implementation_authority| TypeDefinition {
         loop_source: None,
+        format: None,
         generics: vec![],
         representation,
         bounds: vec![],

@@ -169,16 +169,26 @@ to append it: `text.append(mut builder, s)` appends a `String`'s bytes, and each
 module's `format_into(value, mut builder)` appends that scalar's text. Both only add
 valid UTF-8, keep existing content and fail only by allocation exhaustion.
 `text.finish_valid(take builder)` returns the builder's text as a `String` and fails `TextInvariant` on invalid UTF-8, which no protocol append produces.
+A declared type formats when it names its function with `@format(function)`, a
+`fn(value: T, mut out: List[u8]) -> ()` that preserves the builder's uniqueness
+([SEM-3](semantics.md#sem-3-strings)); it follows the same append contract.
 A scalar's `to_string` is its `format_into` applied to an empty builder, then
 `text.finish_valid`; an f-string is the same with one append per piece and hole
-([SEM-3](semantics.md#sem-3-strings)). A specified hole calls the same module's
+([SEM-3](semantics.md#sem-3-strings)). A hole whose options are only fill, alignment
+and width is its plain append followed by
+`text.pad_from(start: u64, fill: u64, align: u64, width: u64, mut out: List[u8]) -> () uses {}`,
+or `text.pad_number_from` with the same parameters for an integer or float, where
+`start` is the builder's byte length before the append: they pad the text appended since
+`start` to `width` Unicode scalars, left-aligned and right-aligned by default
+respectively. Any other specified hole calls the value's module's
 `format_into_spec(value, fill: u64, align: u64, width: u64, precision: u64,
 flags: u64, kind: u64, mut out: List[u8]) -> () uses {}`; `String` uses
 `text.format_into_spec`. These operations preserve the builder's uniqueness.
-The parser supplies constants: fill is a Unicode scalar (default space), alignment
+The parser supplies the options: fill is a Unicode scalar (default space), alignment
 is 0 default, 1 left, 2 right or 3 center; flags are bit 1 plus, bit 2 alternate,
 bit 4 sign-aware zero padding and bit 8 precision present; kind is 0 display or
-the ASCII code of `x`, `X`, `b` or `o`. Width and precision are decimal u64 values.
+the ASCII code of `x`, `X`, `b` or `o`. Width and precision are decimal u64 constants
+or, written `name$`, the value of a `u64` name in scope.
 Ordinary callers must supply these same valid option encodings.
 
 - `{x:9}` sets a minimum width, right-aligned for numbers and left-aligned for
@@ -200,9 +210,14 @@ Ordinary callers must supply these same valid option encodings.
   Radix formats on other types are SEM-3. String and bool formatting ignores sign,
   alternate and zero flags; alternate display has no effect on numbers.
 
+- `{x:w$}`, `{x:.p$}` and `{x:>w$.p$}` take the width or precision from the `u64` named
+  `w` or `p`, exactly as the same constant would.
+- A `@format` type's text takes fill, alignment and width as a string's does, counting
+  Unicode scalars and left-aligned by default; precision, sign, `#`, `0` and radix
+  formats on it are SEM-3.
+
 An empty specification is default formatting. Unknown type characters, malformed
-options and overflowing constants are SEM-3. Dynamic widths and precisions such as
-`{x:w$}` and `{x:.p$}` are not supported.
+options, overflowing constants and positional (`1$`) or `*` counts are SEM-3.
 
 ## Scalars
 

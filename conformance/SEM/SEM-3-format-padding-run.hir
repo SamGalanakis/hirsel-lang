@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// Fill, alignment and width pad a @format type's text by Unicode scalar count,
+// left-aligned by default, as strings pad.
+@format(tag_text)
+type Tag {
+  text: String,
+}
+
+@preserves_unique(out)
+fn tag_text(tag: Tag, mut out: List[u8]) -> () uses {} {
+  text.append(mut out, tag.text)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let sheep = Tag(text: "🐑é")
+  test.check(t, f"[{sheep:4}]" == "[🐑é  ]")
+  test.check(t, f"[{sheep:<4}]" == "[🐑é  ]")
+  test.check(t, f"[{sheep:>4}]" == "[  🐑é]")
+  test.check(t, f"[{sheep:^5}]" == "[ 🐑é  ]")
+  test.check(t, f"[{sheep:é^6}]" == "[éé🐑ééé]")
+  test.check(t, f"[{sheep:1}]" == "[🐑é]")
+  test.check(t, f"[{sheep:-<}]" == "[🐑é]")
+  let empty = Tag(text: "")
+  test.check(t, f"[{empty:*>3}]" == "[***]")
+  test.check(t, f"[{sheep:>3}|{empty:2}|{sheep:<3}]" == "[ 🐑é|  |🐑é ]")
+  Ok(())
+}

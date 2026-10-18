@@ -1,0 +1,6 @@
+// rule: SEM-3
+// expect: accept
+// Twin of the unresolved width: `w` is a parameter.
+fn label(n: u64, w: u64) -> String {
+  f"{n:>w$}"
+}

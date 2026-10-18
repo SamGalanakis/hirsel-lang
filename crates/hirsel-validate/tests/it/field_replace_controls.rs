@@ -55,6 +55,7 @@ fn replaced_field() -> (Fixture, u32, u32) {
         fingerprint: ContentHash::default(),
         kind: SignatureKind::Type(TypeDefinition {
             loop_source: None,
+            format: None,
             generics: vec![],
             representation: Some(representation),
             bounds: vec![],

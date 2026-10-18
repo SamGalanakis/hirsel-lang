@@ -421,8 +421,9 @@ Expected:
 
 An `f`-prefixed string builds a fresh `unique String` from its text and the values
 in its `{holes}`. A hole holds any expression, including calls and string literals;
-`String`, `bool`, the integers and the floats format as their `to_string` text, and
-any other type is a compile error naming it, so format records field by field.
+`String`, `bool`, the integers and the floats format as their `to_string` text, a
+type that declares `@format` formats through its function (next section), and any
+other type is a compile error naming it.
 `{{` and `}}` are literal braces. Holes are borrowed reads, and an f-string needs
 `std@1` selected. Format specifiers follow the expression: `{n:08}` zero-pads a number,
 `{mean:.2}` rounds a float to two decimal places, `{name:*^12}` centers text,
@@ -472,6 +473,66 @@ Expected:
 3 of 4 chores done (75%)
 next: write docs, {braces} stay literal
 mean 2.5, all done: false
+```
+<!-- /tour -->
+
+## Formatting your own types
+
+A type joins f-strings by naming one function with `@format`. The function borrows
+the value and appends its text to a `mut out: List[u8]` builder, usually with another
+f-string, and promises `@preserves_unique(out)`. A hole of that type calls it, so
+records, variants and generic types (with a function generic over the same
+parameters) format like scalars; nothing formats without the attribute. Fill,
+alignment and width pad the produced text as they pad strings. A width or precision
+can come from a `u64` in scope: `{name:width$}`, `{hours:.places$}`.
+
+<!-- tour: conformance/SEM/SEM-3-tour-15-format-run.hir -->
+[Runnable source](../conformance/SEM/SEM-3-tour-15-format-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+@format(ticket_text)
+type Ticket {
+  id: u64,
+  done: bool,
+}
+
+@preserves_unique(out)
+fn ticket_text(ticket: Ticket, mut out: List[u8]) -> () uses {} {
+  let state = if ticket.done {
+    "done"
+  } else {
+    "open"
+  }
+  text.append(mut out, f"#{ticket.id} {state}")
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let tickets: List[(Ticket, String)] = [
+    (Ticket(id: 7, done: false), "ada"),
+    (Ticket(id: 12, done: true), "grace")
+  ]
+  let width: u64 = 9
+  out.print(output, f"| {"ticket":width$} | {"owner":width$} |\n") ? Output
+  for (ticket, owner) in tickets {
+    out.print(output, f"| {ticket:width$} | {owner:width$} |\n") ? Output
+  }
+  let hours = 2.5f64
+  let places: u64 = 2
+  out.print(output, f"total {hours:.places$}h\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+| ticket    | owner     |
+| #7 open   | ada       |
+| #12 done  | grace     |
+total 2.50h
 ```
 <!-- /tour -->
 
