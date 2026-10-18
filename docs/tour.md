@@ -978,6 +978,45 @@ Expected:
 No stdout; exit 0 (all checks pass).
 <!-- /tour -->
 
+## CSV and byte codecs
+
+`std@1/csv` parses bounded records; base64 decodes byte fields, SHA-256 hashes
+bytes, and hex renders the digest. `test.expect_ok` transfers a successful
+Result payload. The [CSV-to-JSON tool](../examples/csvjson/main.hir) combines
+these helpers with flags, buffered input and escaped structured error logging.
+
+<!-- tour: conformance/SEM/SEM-3-tour-14-wire-run.hir -->
+[Runnable source](../conformance/SEM/SEM-3-tour-14-wire-run.hir)
+
+```hirsel
+pub fn trial(t: Test) -> Result[(), ()] {
+  let rows = std@1/test.expect_ok(
+    t,
+    std@1/csv.parse("body\nYWJj\n", std@1/csv.default_config())
+  )
+  let data = std@1/test.expect_ok(
+    t,
+    std@1/base64.decode(rows[1][0], Standard(), Required())
+  )
+  test.check(t, std@1/base64.encode(data, Standard(), Required()) == "YWJj")
+  let digest = std@1/sha256.digest(data)
+  let mut digest_bytes: List[u8] = []
+  for byte in digest {
+    list.push(mut digest_bytes, byte)
+  }
+  test.check(
+    t,
+    std@1/hex.encode(core@1/bytes.from_list(take digest_bytes)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+  )
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
 ## Native builds
 
 Build the complete values program above into a standalone executable:

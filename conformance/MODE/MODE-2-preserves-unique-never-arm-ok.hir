@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+// A call returning Never ends its arm, so the match's value is the Ok
+// payload alone and the promise is proved. Twin is
+// MODE-2-preserves-unique-never-arm-bad.
+@preserves_unique(value)
+fn unwrap(t: Test, take value: Result[List[u8], ()]) -> List[u8] {
+  match take value {
+    Ok(success) => take success,
+    Error(_) => core@1/test.fail(t),
+  }
+}

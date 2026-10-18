@@ -1,0 +1,21 @@
+// rule: MODE-2
+// expect: run
+// entry: trial
+// A @preserves_unique generic unwrap hands a unique payload back unique.
+@preserves_unique(value)
+fn unwrap[T, E](t: Test, take value: Result[T, E]) -> T {
+  match take value {
+    Ok(success) => take success,
+    Error(_) => core@1/test.fail(t),
+  }
+}
+
+fn make() -> unique Result[unique Bytes, ()] uses {} {
+  Ok(core@1/bytes.from_list([0u8]))
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let data: unique Bytes = unwrap(t, make())
+  core@1/test.check(t, core@1/bytes.len(data) == 1)
+  Ok(())
+}

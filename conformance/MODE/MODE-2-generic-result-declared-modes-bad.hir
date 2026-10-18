@@ -1,0 +1,21 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 18
+// A generic result `T` holds its declared modes, so a unique payload
+// instantiating it comes back aliased unless the callee promises it. Twin is
+// MODE-2-generic-result-preserves-unique-run.
+fn unwrap[T, E](t: Test, take value: Result[T, E]) -> T {
+  match take value {
+    Ok(success) => take success,
+    Error(_) => core@1/test.fail(t),
+  }
+}
+
+fn make() -> Result[unique Bytes, ()] uses {} {
+  Ok(core@1/bytes.from_list([0u8]))
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let data: unique Bytes = unwrap(t, make())
+  core@1/test.check(t, core@1/bytes.len(data) == 1)
+  Ok(())
+}

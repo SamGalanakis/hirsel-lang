@@ -1248,9 +1248,23 @@ pub(super) fn build(
                             fresh: matches!(expr.kind, ExprKind::Literal(_) | ExprKind::Heap),
                         },
                     };
+                    // A call whose result is Never has no normal successor
+                    // (TIR v3): its failure site is the call itself, and a
+                    // match arm it ends contributes no value to the join.
+                    let successors = if matches!(op, Op::Call { .. })
+                        && expression_type(body, expression, rows).is_some_and(|ty| {
+                            matches!(
+                                body.types.get(ty).unwrap().kind,
+                                TypeKind::Primitive(Primitive::Never)
+                            )
+                        }) {
+                        vec![]
+                    } else {
+                        vec![next]
+                    };
                     if children.is_empty() {
                         nodes[entry].op = op;
-                        nodes[entry].next = vec![next];
+                        nodes[entry].next = successors;
                     } else {
                         let lends = matches!(
                             op,
@@ -1259,7 +1273,7 @@ pub(super) fn build(
                                 ..
                             }
                         );
-                        let finish = node(&mut nodes, op, vec![next], expr.origin.span);
+                        let finish = node(&mut nodes, op, successors, expr.origin.span);
                         let mut current = finish;
                         let last = children.len() - 1;
                         for (index, (child, ctx, esc, own_capture)) in

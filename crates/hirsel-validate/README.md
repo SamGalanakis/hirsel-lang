@@ -377,7 +377,9 @@ does a return whose value holds none (`returning_shares`). A
 makes the selected and taken parameters current-unique, other `mut` parameters as declared; a selected `mut`
 parameter is held to the same exits and a selected `take` parameter's returned value
 must be unique. Only its "preserved unique
-hand-back" violations are kept. Hand-built controls are in
+hand-back" violations are kept. A call result declared as a bare type parameter is
+expected with the declared root modes (aliased unless written `unique`), whatever
+contract argument instantiates it, as the checker publishes it. Hand-built controls are in
 `tests/it/unique_handback_controls.rs`.
 
 Projected writes affect current uniqueness only when their contents belong to

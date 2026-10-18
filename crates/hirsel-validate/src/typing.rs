@@ -2363,8 +2363,16 @@ impl<'a> Checker<'a> {
             ),
             _ => false,
         };
+        // MODE-2: a result that is a bare type parameter is a value occurrence,
+        // so its root holds the declared modes: a generic body proves no `T`
+        // unique, whatever contract argument instantiates it.
+        let held_result = matches!(&store.get(f.result).unwrap().kind, TypeKind::Parameter(_))
+            && store.get(f.result).unwrap().modes.uniqueness == Uniqueness::Aliased;
         let expected = expected.map(|root| {
             let mut row = target.get(root).unwrap().clone();
+            if held_result {
+                row.modes.uniqueness = Uniqueness::Aliased;
+            }
             if sharing_result
                 && row.sendability_requirement == SendabilityRequirement::None
                 && row.modes.uniqueness == Uniqueness::Aliased

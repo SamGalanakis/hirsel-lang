@@ -1,0 +1,21 @@
+// rule: SEM-3
+// expect: run
+// entry: trial
+// A generic unwrap instantiated with a unique payload returns it under
+// the declared aliased result, in the checker and in V.
+fn unwrap[T, E](t: Test, take value: Result[T, E]) -> T {
+  match take value {
+    Ok(success) => take success,
+    Error(_) => core@1/test.fail(t),
+  }
+}
+
+fn make() -> Result[unique Bytes, ()] uses {} {
+  Ok(core@1/bytes.from_list([0u8]))
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let data = unwrap(t, make())
+  core@1/test.check(t, core@1/bytes.len(data) == 1)
+  Ok(())
+}

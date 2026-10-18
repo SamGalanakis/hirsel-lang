@@ -731,3 +731,92 @@ fn a_preserves_unique_proof_enters_a_plain_mut_sibling_aliased() {
     handback_error(&sibling_call(true, true), "preserved unique hand-back");
     sibling_call(false, true).valid();
 }
+
+/// `fn main(take xs: List[unique String]) -> String` returning
+/// `callee[unique String](take xs)`, where `fn callee[T](take value: List[T]) -> T`.
+/// With `forged`, the call's destination and main's result claim `unique`.
+fn generic_result(forged: bool) -> Fixture {
+    let mut f = Fixture::result_call(TypeKind::Primitive(Primitive::String), true);
+    let string = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::String)));
+    let mut row = f.definition.types.get(string).unwrap().clone();
+    row.modes.uniqueness = Uniqueness::Unique;
+    let unique = f.definition.types.push(row);
+    let xs = param(
+        &mut f,
+        TypeKind::Builtin {
+            kind: BuiltinType::List,
+            arguments: vec![GenericArgument::Type(unique)].into(),
+        },
+    );
+    let Terminator::Call {
+        callee: Callee::Definition {
+            arguments: generics,
+            ..
+        },
+        arguments,
+        returns: Some(returns),
+        ..
+    } = &mut f.body().blocks[0].terminator
+    else {
+        panic!()
+    };
+    *generics = vec![GenericArgument::Type(unique)];
+    arguments.push(CallArgument {
+        parameter: ParamId(0),
+        value: take(xs),
+    });
+    let destination = returns.destination;
+    if forged {
+        let body = f.body();
+        body.result = unique;
+        body.locals[0].ty = unique;
+        body.places[0].ty = unique;
+        let root = body.places[destination.0 as usize].root;
+        body.locals[root.0 as usize].ty = unique;
+        body.places[destination.0 as usize].ty = unique;
+    }
+    owner_sig(&mut f, &[PassingMode::Take]);
+    let mut callee = function_signature(
+        "callee",
+        vec![],
+        TypeKind::Parameter(TypeParameterRef::bound(TypeParamId(0))),
+    );
+    let SignatureKind::Function(fun) = &mut callee.kind else {
+        panic!()
+    };
+    let list = callee.types.push(ty(TypeKind::Builtin {
+        kind: BuiltinType::List,
+        arguments: vec![GenericArgument::Type(fun.result)].into(),
+    }));
+    fun.parameters = vec![Parameter {
+        name: None,
+        label: None,
+        passing: PassingMode::Take,
+        ty: list,
+    }]
+    .into();
+    fun.generics = vec![GenericParameter::Type {
+        name: "T".into(),
+        bounds: vec![].into(),
+    }]
+    .into();
+    f.signatures.insert(callee.definition.clone(), callee);
+    f
+}
+
+#[test]
+fn a_bare_generic_result_holds_its_declared_modes() {
+    // `T` is instantiated by a contract position, so it carries `unique`, but
+    // the result is a value occurrence: aliased, as the checker publishes it.
+    generic_result(false).valid();
+    let kinds = generic_result(true).kinds();
+    assert!(
+        kinds.contains(&ViolationKind::TypeMismatch {
+            entity: "call result"
+        }),
+        "{kinds:?}"
+    );
+}

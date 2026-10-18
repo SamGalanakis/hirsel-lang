@@ -1370,8 +1370,8 @@ impl Checker<'_> {
         self.flow_with(captures, report, None);
     }
     /// With `proof`, re-prove a `@preserves_unique` body (MODE-2): the selected
-    /// parameter and every counted taken or `mut` parameter enter unique, and
-    /// the selected parameter must leave unique.
+    /// parameter and every counted taken parameter enter unique, other `mut`
+    /// parameters as declared, and the selected parameter must leave unique.
     pub(super) fn flow_with(
         &mut self,
         captures: &[super::flow_origins::CapturedOrigin],

@@ -494,7 +494,8 @@ counted shares only mark it `borrow_only`. A failure site accepts that, and so d
 return whose value reaches none of it (`reached_bindings`). A temporary released after
 its last use stays `parked` on the storage until its statement's `StatementEnd`;
 `restore_borrowed` makes the storage unique again, at each statement end and kill, once
-no live binding, evaluated temporary or parked temporary reaches it. A taken argument of
+no live binding, evaluated temporary or parked temporary reaches it. A call whose
+type is Never has no successor node, so a match arm it ends adds nothing to the join. A taken argument of
 a call reaching it makes the share real (`share`). A `@preserves_unique`
 body is checked a second time (`flow::check` with a proof parameter) with its
 selected and non-plain taken parameters entering unique (`proof_entry`), other `mut`
