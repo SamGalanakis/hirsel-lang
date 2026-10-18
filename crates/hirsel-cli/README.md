@@ -34,7 +34,8 @@ filesystem and root arguments. The JSON object accepts `args`, `grants`, `projec
 `directories` as string arrays, `files` as a string-valued map, `env` as an exact
 name-to-string-or-null grant map, `stdin` as text or an array of bytes, and
 `monotonic` as a nonnegative u64 and `wall` as signed i64 nanoseconds, and `process` as a
-RunConfig `io.process` object whose `process.script@1` runs serve `proc.run`. File strings are exact UTF-8 bytes; paths remain
+RunConfig `io.process` object whose `process.script@1` runs serve `proc.run`, and `net`
+as a RunConfig `io.net` object whose `net.script@2` peers and listeners serve network calls. File strings are exact UTF-8 bytes; paths remain
 confined to the simulated root. For example:
 
 ```json

@@ -700,6 +700,11 @@ fn read_simulation(path: &Path) -> Result<hirsel_engine::SimulationConfig, Strin
                     }
                 }
             }
+            // The RunConfig `io.net` object; the simulation serves net.script@2.
+            "net" => {
+                config.net =
+                    Some(serde_json::from_value(value.clone()).map_err(|e| format!("net: {e}"))?)
+            }
             // The RunConfig `io.process` object; the simulation serves process.script@1.
             "process" => {
                 config.process = Some(

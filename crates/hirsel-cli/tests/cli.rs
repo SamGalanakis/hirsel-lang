@@ -2358,3 +2358,40 @@ fn check_reports_each_unsafe_ffi_package_in_both_formats() {
         "{\"schema_version\":1,\"unsafe_ffi_package\":{\"headers_checked\":false,\"link\":[\"-ldemo\"],\"name\":\"app\",\"version\":\"1\"}}\n"
     );
 }
+
+#[test]
+fn simulation_net_grant_assigns_the_first_ephemeral_listener_port() {
+    // The CLI's explicit grant input is outside the conformance header schema.
+    let source = file(
+        r#"
+pub type LaunchError = Grant(GrantError) | Network(NetError)
+pub fn main(rt: Io) -> Result[(), LaunchError] {
+  let n = io.net(rt) ? Grant
+  let l = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 0u16)) ? Network
+  let bound = net.local_addr(n, l) ? Network
+  failure.check(bound.port == 49152u16, Arithmetic())
+  Ok(())
+}
+"#,
+    );
+    let config = file(
+        r#"{"grants":["Io"],"projections":["net"],"net":{"provider":"net.script@2","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}],"peers":[]}}"#,
+    );
+    let result = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .args(["run", "--simulation"])
+        .arg(&config)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert_eq!(
+        result.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(result.stdout.is_empty());
+    assert!(result.stderr.is_empty());
+    for path in [source, config] {
+        std::fs::remove_file(path).unwrap();
+    }
+}
