@@ -465,6 +465,10 @@ printf '%s\\n' "$*" >> "$COMMANDS"
 case $1 in
   uquery) [[ $* == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit 0 ;;
   build)
+    if [[ $* == *show-json-output* ]]; then
+      echo '{"root//:hirsel-cli-bin-hirsel": ".buck2/bin/hirsel"}'
+      exit "${FAIL_BUILD:-0}"
+    fi
     if [[ $* == *show-full-json-output* && -n ${EXPIRED_ONCE:-} && ! -e $EXPIRED_ONCE ]]; then
       touch "$EXPIRED_ONCE"
       echo 'Error materializing artifact: retrieved 349 seconds ago with ttl = 0 seconds' >&2
@@ -487,6 +491,26 @@ if __name__ == "__main__":
     sys.exit(int(os.environ.get("FAIL_{upper}", "0")))
 '''
 
+FAKE_HIRSEL = '''#!/usr/bin/env python3
+import os
+from pathlib import Path
+import subprocess
+import sys
+with open(os.environ["COMMANDS"], "a") as log:
+    print("hirsel " + " ".join(sys.argv[1:]), file=log)
+if os.environ.get("FAIL_INDEX"):
+    print("partial output")
+    print("index generation failed", file=sys.stderr)
+    sys.exit(1)
+if os.environ.get("INDEX_PUSH_ONCE"):
+    marker = Path(os.environ["INDEX_PUSH_MARKER"])
+    if not marker.exists():
+        marker.touch()
+        subprocess.run(["git", "-C", os.environ["INDEX_PUSH_ONCE"], "push", "-q", "origin", "HEAD:main"],
+                       check=True, capture_output=True)
+sys.stdout.write(os.environ.get("INDEX_TEXT", Path("docs/catalogue.md").read_text()))
+'''
+
 
 class Scripts(unittest.TestCase):
     """tools/gate and tools/land in a scratch clone with a fake Buck2 and fake helpers."""
@@ -501,6 +525,7 @@ class Scripts(unittest.TestCase):
         scratch_repo(self.root)
         files = {'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\n', 'BUCK': BUCK, 'README.md': 'Hirsel\n',
                  'docs/building.md': 'See [the grammar](grammar.md).\n', 'docs/grammar.md': 'grammar\n',
+                 'docs/api.md': 'index\n', 'docs/catalogue.md': 'index\n',
                  **{f'crates/{crate}/Cargo.toml': f'[package]\nname = "{crate}"\n' for crate in impact.CRATE_CAMPAIGNS},
                  '.gitignore': (REPO / '.gitignore').read_text()}
         for name in ('gate', 'land'):
@@ -518,6 +543,9 @@ class Scripts(unittest.TestCase):
         buck2.parent.mkdir(parents=True)
         buck2.write_text(FAKE_BUCK2)
         buck2.chmod(0o755)
+        hirsel = buck2.with_name('hirsel')
+        hirsel.write_text(FAKE_HIRSEL)
+        hirsel.chmod(0o755)
         subprocess.run(['git', 'clone', '-q', '--bare', str(self.root), str(self.origin)], check=True)
         git(self.root, 'remote', 'add', 'origin', str(self.origin))
         git(self.root, 'fetch', '-q', 'origin')
@@ -576,6 +604,50 @@ class Scripts(unittest.TestCase):
                       'root//:a root//:a-clippy[clippy.txt]', logged)
         self.assertIn('fmt.py --check', logged)
         self.assertIn('sync.py --check', logged)
+        self.assertFalse(any(c.startswith('test') for c in logged))
+        self.assertNotIn('Regenerate the API index.', git(self.root, 'log', '--format=%s'))
+
+    def test_land_commits_the_index_generated_from_the_rebased_sources(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        self.sibling_pushes({'docs/catalogue.md': 'a new export\n'})
+        records = gating.green_records(self.root)
+        result, logged = self.run_tool('land')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(git(self.origin, 'show', 'main:docs/api.md'), 'a new export')
+        self.assertEqual(git(self.root, 'log', '-1', '--format=%s'), 'Regenerate the API index.')
+        self.assertEqual(git(self.root, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'), 'docs/api.md')
+        self.assertEqual(gating.green_records(self.root), records)
+        self.assertIn('hirsel doc --index', logged)
+        self.assertFalse(any(c.startswith('test') for c in logged))
+
+    def test_land_does_not_push_or_replace_the_page_when_index_generation_fails(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        before = git(self.origin, 'rev-parse', 'main')
+        result, _ = self.run_tool('land', env={'FAIL_INDEX': '1'})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('index generation failed', result.stdout)
+        self.assertEqual(git(self.origin, 'rev-parse', 'main'), before)
+        self.assertEqual((self.root / 'docs/api.md').read_text(), 'index\n')
+        self.assertEqual(git(self.root, 'status', '--porcelain'), '')
+
+    def test_land_regenerates_after_a_push_race_without_regating_or_extra_index_commits(self):
+        commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
+        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        records = gating.green_records(self.root)
+        commit(self.sibling, {'LICENSE': 'MIT\n'}, 'Main moves during generation')
+        result, logged = self.run_tool('land', env={
+            'INDEX_TEXT': 'a new export\n', 'INDEX_PUSH_ONCE': str(self.sibling),
+            'INDEX_PUSH_MARKER': str(self.sibling.parent / 'pushed'),
+        })
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('main moved during the checks', result.stdout)
+        self.assertEqual(git(self.origin, 'show', 'main:docs/api.md'), 'a new export')
+        self.assertEqual(git(self.origin, 'show', 'main:LICENSE'), 'MIT')
+        self.assertEqual(git(self.root, 'log', '--format=%s').splitlines().count('Regenerate the API index.'), 1)
+        self.assertEqual(gating.green_records(self.root), records)
+        self.assertEqual(logged.count('hirsel doc --index'), 2)
         self.assertFalse(any(c.startswith('test') for c in logged))
 
     def test_an_expired_clippy_output_is_fetched_again(self):

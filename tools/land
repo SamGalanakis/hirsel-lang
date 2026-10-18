@@ -4,7 +4,9 @@
     tools/land
 
 Fetch, rebase onto origin/main, then build the workspace, run Clippy, check
-formatting and the build files on the rebased tree, and push. A rejected push
+formatting and the build files on the rebased tree, regenerate docs/api.md
+with the built CLI, and push. Index changes get their own generated-only
+commit, 'Regenerate the API index.', without another gate. A rejected push
 (main moved) repeats the loop. A rebase conflict stops it: resolve it, run
 tools/gate on the result, and land again.
 
@@ -13,8 +15,11 @@ records the change's identity when it passes (gating.change_identity: the
 patch-id of the lane's own diff without context lines, and the crates it
 touches). Land refuses a change with no such record, so a clean rebase onto a
 newer main never reruns tests, and an edited or hand-merged change always does.
+The export/drift test stays in the gate; land refreshes its generated page
+after any newer declarations arrive through the rebase.
 """
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -30,6 +35,7 @@ from gating import say  # noqa: E402
 PY = sys.executable
 ATTEMPTS = 20
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
+CLI = 'root//:hirsel-cli-bin-hirsel'
 
 
 def run(*command, **kwargs):
@@ -67,6 +73,65 @@ def checks():
     return ok
 
 
+def regenerate_index(checked_head):
+    """Render with the checked CLI; return (success, generated commit's parent and id)."""
+    built = gating.buck2('build', '--show-json-output', CLI, capture_output=True, text=True)
+    if built.returncode:
+        say('land: cannot build the index generator\n' + gating.last_lines(built.stderr, 20))
+        return False, None
+    try:
+        executable = ROOT / json.loads(built.stdout)[CLI]
+    except (ValueError, KeyError, TypeError):
+        say('land: CLI build did not report its executable')
+        return False, None
+    try:
+        rendered = subprocess.run([str(executable), 'doc', '--index'], cwd=ROOT, capture_output=True)
+    except OSError as error:
+        say(f'land: cannot run the index generator: {error}')
+        return False, None
+    if rendered.returncode:
+        say('land: index generation failed\n' + gating.last_lines(rendered.stderr.decode(errors='replace'), 20))
+        return False, None
+    if (run('git', 'rev-parse', 'HEAD').stdout.strip() != checked_head
+            or run('git', 'status', '--porcelain').stdout.strip()):
+        say('land: the worktree changed during the checks; refusing to push')
+        return False, None
+    page = ROOT / 'docs/api.md'
+    if page.exists() and page.read_bytes() == rendered.stdout:
+        say('land: API index is current')
+        return True, None
+    page.write_bytes(rendered.stdout)
+    added = run('git', 'add', '--', 'docs/api.md')
+    committed = (run('git', 'commit', '-m', 'Regenerate the API index.', '--only', '--', 'docs/api.md')
+                 if added.returncode == 0 else added)
+    if committed.returncode:
+        say('land: cannot commit the regenerated index\n' + committed.stderr)
+        return False, None
+    generated = run('git', 'rev-parse', 'HEAD').stdout.strip()
+    say(f'land: regenerated docs/api.md in {generated[:12]} (generated docs only; no new gate)')
+    return True, (checked_head, generated)
+
+
+def undo_index_commit(generated):
+    """A failed push retries from the gated change, without its generated-only commit."""
+    if generated is None:
+        return True
+    parent, head = generated
+    if (run('git', 'rev-parse', 'HEAD').stdout.strip() != head
+            or run('git', 'status', '--porcelain').stdout.strip()):
+        say('land: the worktree changed during the push; leaving the generated commit for review')
+        return False
+    # Only the commit made above is undone. Keep the gated source commits and
+    # re-render the page after the next rebase; never transfer a green record.
+    reset = run('git', 'reset', '--soft', parent)
+    restored = (run('git', 'restore', '--staged', '--worktree', '--', 'docs/api.md')
+                if reset.returncode == 0 else reset)
+    if restored.returncode:
+        say('land: cannot restore the index after the rejected push\n' + restored.stderr)
+        return False
+    return True
+
+
 def main():
     if len(sys.argv) > 1:
         print(__doc__, file=sys.stderr)
@@ -100,13 +165,19 @@ def main():
             return 1
         say(f'land: attempt {attempt}: {run("git", "rev-list", "--count", f"{base}..HEAD").stdout.strip()} '
             f'commits on {base[:12]}, change {identity[:12]} passed tools/gate')
+        checked_head = run('git', 'rev-parse', 'HEAD').stdout.strip()
         if not checks():
             say('land: refusing to push a red tree')
+            return 1
+        ok, generated = regenerate_index(checked_head)
+        if not ok:
             return 1
         push = run('git', 'push', 'origin', 'HEAD:main')
         if push.returncode == 0:
             say(f'land: pushed {run("git", "rev-parse", "--short", "HEAD").stdout.strip()} to main')
             return 0
+        if not undo_index_commit(generated):
+            return 1
         if not any(marker in push.stderr for marker in REJECTED):
             say('land: git push failed\n' + push.stderr)
             return 1

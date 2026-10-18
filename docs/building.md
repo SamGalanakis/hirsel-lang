@@ -280,6 +280,14 @@ rebased tree, and push, repeating when main moved. It never runs tests: it
 refuses a change `tools/gate` has not passed, and stops on a rebase conflict
 (resolve it, gate the result, land again).
 
+After those checks, land runs the built `hirsel doc --index` and commits a
+changed `docs/api.md` separately as `Regenerate the API index.` before pushing.
+This generated-only update needs no new gate; a push retry regenerates it
+after the next rebase. The export-count and drift test stays in the gate.
+Declarations picked up by a clean rebase therefore reach main with a current
+index without another manual refresh or gate. Resolve an existing index
+conflict by regenerating.
+
 Changes to native code also run the filtered native matrix for the programs
 they add or touch on the pool. Focus runs book one CPU at lane priority:
 

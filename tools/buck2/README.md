@@ -50,6 +50,12 @@ python3 tools/buck2/sync.py                       # after metadata or action-siz
 tools/gate                                           # the per-push gate (tools/land lands)
 ```
 
+`tools/land` rebuilds after its rebase, then runs the built `hirsel doc --index`.
+It commits a changed `docs/api.md` separately as `Regenerate the API index.`
+before pushing; this generated-only commit needs no new gate. Push retries
+regenerate after the next rebase. The gate retains the export-count and drift
+test, so source changes and their published signatures stay in agreement.
+
 Builds use Buck2's default isolation dir, `v2`: never pass
 `--isolation-dir` (or pass only `--isolation-dir v2`) and leave
 `BUCK_ISOLATION_DIR` unset. Each worktree already has its own `v2` daemon.
