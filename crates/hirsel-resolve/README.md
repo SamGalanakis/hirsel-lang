@@ -96,7 +96,7 @@ are a separate namespace and take precedence before a dot.
 
 ## Verification and corpus responsibility
 
-`cargo test -p hirsel-resolve` runs hand-built ASTs and fake providers, with no
+`//:hirsel-resolve-unittest` runs hand-built ASTs and fake providers, with no
 implementation-crate dependency. A 256-case proptest permutes declaration order
 and compares `Resolution` by stable definition path. The resolver-owned corpus
 programs (the LANG-4, LANG-10 and PROG-2 rejections, their accepted twins, and the

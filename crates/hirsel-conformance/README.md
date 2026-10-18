@@ -66,7 +66,9 @@ can combine either script with `// grant: clock` to exercise deadline cancellati
 checker rejects, and for internal errors and panics in any phase.
 
 ```bash
-cargo run -q --release -p hirsel-conformance --bin agree -- --seed N --limit M
+python3 tools/buck2/agree.py        # the gate's sample, sharded on the pool
+agree="$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-agree --show-full-simple-output)"
+tools/capped "$agree" --seed N --limit M --path conformance/SEM/<program>.hir   # one program, locally
 ```
 
 Every corpus program not expected to be rejected is parsed, and a fixed
@@ -180,9 +182,10 @@ JSON lists these dynamic `format_exemptions`; there is no path allowlist.
 The `corpus-fmt` binary migrates files through the **release CLI**:
 
 ```bash
-cargo build --release -p hirsel-cli -p hirsel-conformance --bins
-cargo run --release -p hirsel-conformance --bin corpus-fmt -- \
-  --hirsel /path/to/target/release/hirsel --evidence /tmp/corpus-format-evidence
+release='--target-platforms //tools/buck2:release --show-full-simple-output'
+hirsel="$(.buck2/bin/buck2 build $release //:hirsel-cli-bin-hirsel)"
+fmt="$(.buck2/bin/buck2 build $release //:hirsel-conformance-bin-corpus-fmt)"
+tools/capped --timeout 3600 "$fmt" --hirsel "$hirsel" --evidence /tmp/corpus-format-evidence
 ```
 
 It first runs the entire suite and saves `before.json`, formats copies with
@@ -331,8 +334,8 @@ one optimized whole-program configuration on the shipped archive per target. Eve
 case must agree; unavailable cases fail. `--filter TEXT` narrows this sweep for
 local checks, without changing the full gate's selection. The fast gate is unchanged.
 
-`cargo run --release -p hirsel-conformance --bin profile -- PROGRAM [--cycles]
-[--output DIR] [--root DIR] [-- PROGRAM_ARGS...]` builds an O3 measurement executable with source
+`profile PROGRAM [--cycles] [--output DIR] [--root DIR] [-- PROGRAM_ARGS...]`
+(`//:hirsel-conformance-bin-profile`, run under `tools/capped`) builds an O3 measurement executable with source
 line tables, runs it under `nice -n 10` with an 8 GiB process-tree RSS watch, and prints
 up to ten source lines per nonzero counter kind with counts and percentages, followed
 by `profile-json PATH`. Counts are physical ownership operations. This profile selects

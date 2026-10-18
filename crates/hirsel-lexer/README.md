@@ -43,9 +43,9 @@ Recovery and diagnostics:
   Drivers validate UTF-8 and size before adding a source snapshot. Private scanner
   tests additionally exercise arbitrary invalid UTF-8 without losing any bytes.
 
-Run `cargo test -p hirsel-lexer`; the conformance integration test prints its file
-count and every reject whose first lexer diagnostic matches its rule and line
-with `cargo test -p hirsel-lexer --test conformance -- --nocapture`.
+`//:hirsel-lexer-unittest` and `//:hirsel-lexer-test-conformance` run them; the
+conformance integration test prints its file count and every reject whose first
+lexer diagnostic matches its rule and line with `--test-arg=--nocapture`.
 
 Single-quoted character literals denote one Unicode scalar and produce a Character
 token retaining its source spelling; `b'...'` byte literals denote one ASCII scalar

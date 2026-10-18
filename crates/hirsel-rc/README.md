@@ -171,7 +171,7 @@ at each stage and H against the interpreter, and keeps the declined twins.
 - `liveness`: backward value liveness over normal and failure edges, for RC
   insertion; validators never read it.
 
-`cargo test -p hirsel-pipeline-tests --test rc rc_import::corpus -- --ignored --nocapture` lowers
+`.buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- --test-arg=rc_import::corpus --test-arg=--ignored --test-arg=--nocapture` lowers
 every accepted conformance program and groups what does not validate (`ALL=1`
 names every program of a group);
 `rc_import::inspect` with `SRC=<file>` prints one program's units.

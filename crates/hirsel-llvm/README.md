@@ -319,7 +319,7 @@ mask or a mask on a variant in an inline release (no producer yet), return `Code
 
 Tests:
 
-- `cargo test -p hirsel-llvm` runs the in-process tests: the loaded libLLVM is the pin, every
+- `//:hirsel-llvm-unittest` and `//:hirsel-llvm-test-it` run the in-process tests: the loaded libLLVM is the pin, every
   `TargetSpec` agrees with LLVM, receipt and failure-code rejections, the object manifest,
   reproducible owned artifacts, parse and verifier errors, triple and DataLayout mismatches,
   and malformed objects. Fixtures (`tests/support/`) derive layouts and `FnAbi`s with

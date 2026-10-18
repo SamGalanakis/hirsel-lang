@@ -125,7 +125,7 @@ Implemented session API:
   partial check is Incomplete, including an empty file. Parsing errors can
   already reject source; no partial clean result is accepted or executed.
 
-Run `cargo test -p hirsel-driver`. Fake-adapter integration tests cover order,
+`//:hirsel-driver-test-it` runs them. Fake-adapter integration tests cover order,
 short-circuiting, body/signature invalidation, failed reads and snapshot retention.
 
 The formatter adapter's additive `format_query` method translates the formatter's
@@ -466,7 +466,7 @@ without depending on elapsed time. Literal height 1,600 remains the parser's
 operational rejection; bounded chains with 1,600 total statements are measured
 separately.
 
-`cargo run -p hirsel-driver --example corpus_dump -- <source> --canonical`
+`tools/capped "$(.buck2/bin/buck2 build //:hirsel-driver-example-corpus_dump --show-full-simple-output)" <source> --canonical`
 compares every root after canonical type numbering. The helper partitions complete
 type graphs, including every qualifier and recursive edges, then numbers equal rows
 at their first occurrence in the stable dump and prints the reachable type rows.

@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+"""Run one local command under a hard memory cap, a CPU quota and a timeout.
+
+    tools/capped [--timeout SECONDS] <command> [arguments...]
+
+The sanctioned way to run anything outside Buck2 on a shared host (a built
+`hirsel`, `hirsel-conformance`, a probe): the command runs in a systemd user
+scope with `MemoryMax=$HIRSEL_MEMORY_LIMIT` (default 4G), `MemorySwapMax=0`
+and `CPUQuota` of `$HIRSEL_JOBS` CPUs (default 2), under a timeout (default
+300 s). The command sees the same HIRSEL_MEMORY_LIMIT and HIRSEL_JOBS, so a
+hirsel binary's own guard (crates/hirsel-guard) caps itself identically.
+Runs take turns: a second one waits for the first. At exit it prints the
+scope's peak memory, wall time and exit status to stderr. A run that reaches
+the cap or the timeout is a finding: report the program and its peak, never
+raise the cap to make it pass. Many-program runs go through tools/gate.
+"""
+
+import argparse
+import fcntl
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import time
+
+DEFAULT_LIMIT = '4G'
+DEFAULT_JOBS = '2'
+DEFAULT_TIMEOUT = 300
+# The scope's processes get this long to exit after the timeout's SIGTERM.
+GRACE = 10
+LIMIT = re.compile(r'[1-9][0-9]*[KMGT]?')
+
+
+def mib(count: int) -> str:
+    return f'{count / (1 << 20):.0f} MiB'
+
+
+def own_cgroup() -> Path | None:
+    try:
+        for line in Path('/proc/self/cgroup').read_text().splitlines():
+            if line.startswith('0::'):
+                return Path('/sys/fs/cgroup' + line[3:].rstrip('/'))
+    except OSError:
+        pass
+    return None
+
+
+def inside(timeout: int, limit: str, command: list[str]) -> int:
+    """Inside the scope: run the command in its own process group under the
+    timeout, then report the scope's peak memory and whether it hit the cap."""
+    start = time.monotonic()
+    child = subprocess.Popen(command, start_new_session=True)
+    timed_out = False
+    try:
+        status = child.wait(timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        os.killpg(child.pid, signal.SIGTERM)
+        try:
+            child.wait(GRACE)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+        child.wait()
+        status = 124
+    except KeyboardInterrupt:
+        os.killpg(child.pid, signal.SIGKILL)
+        child.wait()
+        status = 130
+    if status < 0:
+        status = 128 - status
+    wall = time.monotonic() - start
+    cgroup = own_cgroup()
+    peak = 'unknown'
+    oom = False
+    if cgroup:
+        try:
+            peak = mib(int((cgroup / 'memory.peak').read_text()))
+        except (OSError, ValueError):
+            pass
+        try:
+            events = dict(line.split() for line in (cgroup / 'memory.events').read_text().splitlines())
+            oom = int(events.get('oom_kill', '0')) > 0
+        except (OSError, ValueError):
+            pass
+    notes = []
+    if oom:
+        notes.append(f'memory limit {limit} reached (HIRSEL_MEMORY_LIMIT): the kernel killed the command')
+    if timed_out:
+        notes.append(f'timed out after {timeout} s')
+    note = ''.join(f'; {n}' for n in notes)
+    print(f'capped: peak {peak} of {limit}, {wall:.1f} s, exit {status}{note}', file=sys.stderr)
+    return status
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description='Run one command under the HIRSEL_MEMORY_LIMIT cap, a HIRSEL_JOBS CPU quota and a timeout.')
+    parser.add_argument('--timeout', type=int, default=DEFAULT_TIMEOUT, help='seconds (default 300)')
+    parser.add_argument('--inside', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('command', nargs=argparse.REMAINDER)
+    args = parser.parse_args()
+    command = args.command[1:] if args.command[:1] == ['--'] else args.command
+    if not command:
+        parser.error('a command to run is required')
+    if args.timeout <= 0:
+        parser.error('--timeout must be positive')
+    limit = os.environ.get('HIRSEL_MEMORY_LIMIT') or DEFAULT_LIMIT
+    if not LIMIT.fullmatch(limit):
+        parser.error(f'HIRSEL_MEMORY_LIMIT={limit!r}: expected bytes or a K, M, G or T count, for example 4G')
+    if args.inside:
+        return inside(args.timeout, limit, command)
+    jobs = os.environ.get('HIRSEL_JOBS') or DEFAULT_JOBS
+    if not jobs.isdigit() or int(jobs) < 1:
+        parser.error(f'HIRSEL_JOBS={jobs!r}: expected a positive count of CPUs')
+    env = dict(os.environ, HIRSEL_MEMORY_LIMIT=limit, HIRSEL_JOBS=jobs)
+    # systemd-run --user reaches the user manager through XDG_RUNTIME_DIR.
+    runtime = env.setdefault('XDG_RUNTIME_DIR', f'/run/user/{os.getuid()}')
+    lock_path = Path(runtime if os.path.isdir(runtime) else '/tmp') / f'hirsel-capped-{os.getuid()}.lock'
+    with open(lock_path, 'a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f'capped: waiting for the run holding {lock_path}', file=sys.stderr)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        scope = ['systemd-run', '--user', '--scope', '--quiet', '--collect',
+                 '-p', f'MemoryMax={limit}', '-p', 'MemorySwapMax=0', '-p', 'OOMPolicy=continue',
+                 '-p', f'CPUQuota={int(jobs) * 100}%',
+                 '--', sys.executable, os.path.abspath(__file__), '--inside', '--timeout', str(args.timeout),
+                 '--', *command]
+        try:
+            return subprocess.run(scope, env=env).returncode
+        except KeyboardInterrupt:
+            return 130
+        except FileNotFoundError:
+            print('capped: systemd-run is not installed', file=sys.stderr)
+            return 127
+
+
+if __name__ == '__main__':
+    sys.exit(main())

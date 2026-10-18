@@ -21,8 +21,8 @@ Layout:
   `tests/rc/main.rs` links hirsel-rc's suites and `tests/front/main.rs` those of
   check, modes, lir and rt. A module named `<crate>_<file>` holds what was
   `crates/hirsel-<crate>/tests/it/<file>.rs`, so `rc::cleanup::x` became
-  `rc_cleanup::x` (`cargo test -p hirsel-pipeline-tests --test rc -- --exact
-  rc_cleanup::x`). A crate prefix such as `modes_` selects one crate's tests.
+  `rc_cleanup::x` (`.buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 --
+  --test-arg=rc_cleanup::x --test-arg=--exact`). A crate prefix such as `modes_` selects one crate's tests.
 - Each binary keeps its helpers local: `rc/support.rs` (compile a source program
   and adapt its validated native input into an rc `Program`), `rc/fixtures/`
   (golden LIR dumps, `tools/bless.sh rc-import` rewrites them), `rc/maps/seed.c`, and

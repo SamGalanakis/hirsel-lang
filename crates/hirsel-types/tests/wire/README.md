@@ -16,12 +16,11 @@ on the x86-64 and aarch64 target descriptions; ordinary padding is a rejected tw
 Reproduce the actual target round trips with the installed tools:
 
 ```sh
-export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
-cargo test -p hirsel-types --test wire -- --test-threads=4
+.buck2/bin/buck2 test //:hirsel-types-test-wire
+.buck2/bin/buck2 test //:hirsel-lir-test-it -- --test-arg=canonical_wire::
 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
 CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER='qemu-aarch64-static -L /usr/aarch64-linux-gnu' \
-cargo test -p hirsel-types --target aarch64-unknown-linux-gnu --test wire -- --test-threads=4
-cargo test -p hirsel-lir --test it canonical_wire:: -- --test-threads=4
+tools/capped --timeout 3600 cargo test -j 2 -p hirsel-types --target aarch64-unknown-linux-gnu --test wire
 ```
 
 The ignored `write_wire_goldens` test is only a manual regeneration tool. Payload

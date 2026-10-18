@@ -32,7 +32,7 @@ orphan trivia/EOF remain in that complement; failed-item text is retained even
 when no item AST can be constructed. Duplicate DefPaths remain unchanged for
 resolution to diagnose.
 
-`cargo test -p hirsel-parser` includes nine structural snapshots,
+`//:hirsel-parser-unittest` and `//:hirsel-parser-test-it` include nine structural snapshots,
 executable v19 spec listings, grammar examples, newline/completion and recovery edge cases,
 identity/trivia hashes, and 512 arbitrary token sequences. The test tokenizer
 lives only in `tests/support`. `tools/bless.sh snapshots` updates structural snapshots.

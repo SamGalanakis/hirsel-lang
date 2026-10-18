@@ -46,7 +46,7 @@ byte-invalid inputs refuse with the argument index, key index or selected Env ke
 They never read ambient argv/env. Empty snapshots remain explicit and granted
 unset keys remain null. Package versions are canonical decimal u64 majors.
 
-Checks: `cargo test -p hirsel-run-config`.
+Checks: `//:hirsel-run-config-unittest` and `//:hirsel-run-config-test-it`.
 
 `ProgramRevision::encode(entry, nodes)` is the sole semantic program encoder.
 It follows the entry's transitive graph, sorts identities and dependency sets,

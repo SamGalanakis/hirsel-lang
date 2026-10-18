@@ -68,7 +68,7 @@ Invariants:
   dropping an audit candidate. Candidate order and violation text remain the
   full recount's. Disagreement is `InternalAudit`, an H defect.
   `Config::full_recount_every_step` or `HIRSEL_HEAPCHECK_FULL_RECOUNT=1` runs
-  the old per-step recount as the reference too. `cargo test` runs the existing
+  the old per-step recount as the reference too. `//:hirsel-heapcheck-test-it` runs the existing
   fixtures/campaigns and all rc-trace vectors in both modes and compares the
   complete output, trace, violation and step count. The existing 30k-node
   small-stack stress retains its disabled per-step audit; a 543-node twin audits
@@ -499,7 +499,7 @@ must also be simulations. Models without this capability retain re-execution.
 Config::reexecute_campaign (HIRSEL_HEAPCHECK_REEXECUTE_CAMPAIGN=1) keeps the replay
 reference. Config::compare_campaigns (HIRSEL_HEAPCHECK_COMPARE_CAMPAIGNS=1)
 compares complete campaigns, including site indices, every Run and audit result.
-The fixture suite compares both campaigns with both audit modes in cargo test.
+The fixture suite compares both campaigns with both audit modes in `//:hirsel-heapcheck-test-it`.
 
 Operation address operands use checked storage and borrow/exclusive permissions.
 Taken operands are destroyed after either completion or failure unless the

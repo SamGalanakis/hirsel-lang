@@ -253,7 +253,7 @@ finds its sibling precheck immediately, including after installation. Plain
 (use `target/release/hirsel` after `cargo build --release`):
 
 ```sh
-target/debug/hirsel precheck stdlib/std@1/hirsel.json -o target/debug/hirsel-std.precheck
+tools/capped target/debug/hirsel precheck stdlib/std@1/hirsel.json -o target/debug/hirsel-std.precheck
 ```
 
 `hirsel` loads `$HIRSEL_PRECHECK`, or else `hirsel-std.precheck` beside its own
@@ -308,18 +308,42 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 
 ## Cargo
 
-Cargo needs no build service:
+Cargo needs no build service. What it builds runs locally, so it runs under
+[`tools/capped`](#run-locally):
 
 ```sh
 cargo build --workspace
-cargo test -p hirsel-lir
-cargo run -p hirsel-conformance -- --verbose
+tools/capped --timeout 1800 cargo test -j 2 -p hirsel-lir
+tools/capped target/debug/hirsel-conformance --verbose --shard 1/1 \
+  --path conformance/SEM/SEM-1-format-into-appends-run.hir
 ```
 
 `hirsel-conformance` reports counts by rule prefix; `--json` gives tool
 output. It finds the repository from the current directory; `--root <repo>`
-selects another checkout. `--update-passing` (run on this host by `tools/bless.sh passing`) adds newly
+selects another checkout. The whole corpus is a many-program run:
+`python3 tools/buck2/conformance.py` runs its shards on the pool. `--update-passing` (run on this host by `tools/bless.sh passing`) adds newly
 passing tests to `conformance/passing.txt` without removing existing entries.
+
+## Run locally
+
+The host is shared. A program run outside Buck2 (a built `hirsel`, a
+`hirsel-conformance --path` selection, a probe) runs through `tools/capped`, one
+program at a time:
+
+```sh
+tools/capped target/debug/hirsel run hello.hir
+HIRSEL_MEMORY_LIMIT=2G tools/capped --timeout 60 target/debug/hirsel check app/manifest.json
+```
+
+It runs the command in a systemd user scope with `MemoryMax` of
+`$HIRSEL_MEMORY_LIMIT` (bytes or a `K`, `M`, `G` or `T` count; default `4G`), no
+swap, a `CPUQuota` of `$HIRSEL_JOBS` CPUs (default 2) and a timeout (`--timeout`,
+default 300 s), and passes both variables on to the command. A second run waits
+for the first. At exit it prints the scope's peak memory, wall time and exit
+status. A run that reaches the cap or the timeout is a finding: report the program
+and its peak rather than raising the cap. Runs over many programs (a directory, a
+shard, a campaign) go through `tools/gate` or their Buck2 targets, which run on
+the pool within their measured reservations.
 
 ## Buck2
 

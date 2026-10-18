@@ -114,7 +114,7 @@ implementation. Signed constants carry width-sized two's-complement bits.
 
 ## Validation
 
-`cargo test -p hirsel-interp` runs scalar boundary tests, ordered
+`//:hirsel-interp-unittest` and `//:hirsel-interp-test-it` run scalar boundary tests, ordered
 control-flow/call/cleanup tests, an explicit 2,000-call fixture, budget/depth
 failures, and a resource-cleanup program whose trace and observable projection
 are checked over 100 reruns. `tests/support` is a crate-local hand-built TIR

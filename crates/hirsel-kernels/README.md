@@ -15,7 +15,7 @@ Invariants:
 
 `integer::{Format, Width}` transports scalar bit vectors, not runtime values. Grapheme segmentation and NFC normalization ship as ordinary std@1 source with vendored Unicode16 tables; there is no Rust segmentation or normalization kernel.
 
-`cargo test -p hirsel-kernels` checks every format conversion pair and masked-shift vectors, plus byte lengths 0–256 against the independent standard-library SipHash-1-3 implementation. Vector provenance lives in `native-tests/library/README.md`.
+`//:hirsel-kernels-test-vectors` checks every format conversion pair and masked-shift vectors, plus byte lengths 0–256 against the independent standard-library SipHash-1-3 implementation. Vector provenance lives in `native-tests/library/README.md`.
 
 Numeric formatting, parsing and reductions are ordinary std source; the former
 exact-sum kernel is deleted. Its independent rational vectors remain in

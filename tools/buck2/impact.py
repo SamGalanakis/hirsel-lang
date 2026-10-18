@@ -128,7 +128,7 @@ CRATE_TEST_DIRS = ('tests', 'benches', 'examples', 'proptest-regressions')
 # a build or test input (sync.py --check proves that the generated build files
 # do not change).
 TOOL_PATHS = (
-    'tools/gate', 'tools/land', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py', 'tools/tests/*',
+    'tools/gate', 'tools/land', 'tools/capped', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py', 'tools/tests/*',
     *(f'tools/buck2/{name}.py' for name in (
         'action_sizes_from_log', 'agree', 'clippy', 'conformance', 'fmt', 'full_gate_counts',
         'event_logs', 'gating', 'impact', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
