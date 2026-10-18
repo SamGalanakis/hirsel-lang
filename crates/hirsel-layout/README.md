@@ -19,3 +19,6 @@ Instance identity retains complete type structure, binders, size actuals,
 callable convention and environment layout, excluding implementation revisions.
 Operation schema tags convert exhaustively in both directions and preserve the
 canonical snapshot bytes. No layout, ABI or snapshot version changes.
+
+Flat Lists of zero-size elements store a u64 count after the byte-extent
+prefix, just as variable-element Lists do. Their elements remain fixed-size.

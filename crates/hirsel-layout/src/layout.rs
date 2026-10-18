@@ -2738,7 +2738,16 @@ impl<'o> LayoutBuilder<'o> {
             return self.memory(walk, ty, f, false);
         }
         let (ty, f) = (resolved, rf);
-        self.memoized(key.bytes, false, |b, key| b.derive_flat(walk, ty, f, key))
+        let body = self.memoized(key.bytes, false, |b, key| b.derive_flat(walk, ty, f, key))?;
+        // A zero-size value has no packing differences. Keep its ordinary
+        // layout so element reads retain their source type, including Unit.
+        let flat_nominal = matches!(&walk.row(ty, f)?.kind,
+            TypeKind::Named { definition, .. } if self.flat_owner(definition));
+        if self.record(body).size == SizeSpec::Fixed(0) && !flat_nominal {
+            self.memory(walk, ty, f, false)
+        } else {
+            Ok(body)
+        }
     }
 
     /// A field of a flat record: its body, behind a u64 length prefix when
@@ -2882,8 +2891,8 @@ impl<'o> LayoutBuilder<'o> {
                     return invalid("List needs a type actual");
                 };
                 let element = self.flat_field(walk, *element, f)?;
-                if element.align == 0 {
-                    // Variable elements: a u64 count, then length-prefixed elements.
+                if element.align == 0 || self.record(element.layout).size == SizeSpec::Fixed(0) {
+                    // Variable and zero-size elements need an explicit count.
                     Ok(self.prefixed(key, element.layout, 2 * FLAT_PREFIX))
                 } else {
                     Ok(self.prefixed(key, element.layout, FLAT_PREFIX))

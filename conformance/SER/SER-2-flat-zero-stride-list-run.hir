@@ -1,0 +1,45 @@
+// rule: SER-2
+// expect: run
+@serializable
+flat type Z {
+  items: List[()],
+}
+
+@serializable
+type Empty {}
+
+@serializable
+flat type More {
+  tuples: List[((), ())],
+  records: List[Empty],
+  flats: List[FlatEmpty],
+}
+
+@serializable
+flat type FlatEmpty {}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let original = Z(items: [(), ()])
+  test.check(t, list.len(original.items) == 2)
+  let wire = codec.encode(original)
+  let decoded: Z = codec.decode(wire)?
+  test.check(t, list.len(decoded.items) == 2)
+  test.check(t, codec.encode(decoded) == wire)
+  let mut count: u64 = 0
+  for item in decoded.items {
+    count += 1
+  }
+  test.check(t, count == 2)
+  let empty: Z = codec.decode(codec.encode(Z(items: [])))?
+  test.check(t, list.len(empty.items) == 0)
+  let more = More(
+    tuples: [((), ()), ((), ())],
+    records: [Empty(), Empty(), Empty()],
+    flats: [FlatEmpty(), FlatEmpty()]
+  )
+  let round: More = codec.decode(codec.encode(more))?
+  test.check(t, list.len(round.tuples) == 2)
+  test.check(t, list.len(round.records) == 3)
+  test.check(t, list.len(round.flats) == 2)
+  Ok(())
+}

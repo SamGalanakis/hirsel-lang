@@ -820,3 +820,7 @@ exposing host inode numbers. Simulated mount pins and issued directory grants
 retain identity across namespace changes, including empty removed directories.
 The checked heap model keeps logical handle paths separate from the current
 resolved directory roots, so held files and atomic temporaries follow their Dir.
+
+Zero-size flat List elements keep a stored count after their byte-extent
+prefix. Codec reconstruction preserves that count even when no element bytes
+are written; zero-size record fields retain their ordinary layout identity.

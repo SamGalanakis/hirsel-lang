@@ -542,3 +542,6 @@ The SER-2 executor walks variable flat field offsets, sequential Packed active
 extents and SoA columns from the layout table, independently of runtime codec
 program words. Reconstruction validates wire data first, then patches private
 flat framing and allocates fresh counted storage with exact sequence headers.
+
+Flat sequences of zero-size elements read their stored count independently
+of their byte extent and index at zero stride past both header words.

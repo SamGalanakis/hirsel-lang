@@ -539,3 +539,6 @@ their scheduled cleanup.
 
 `OptLevel::Default` selects LLVM O2 for ordinary standalone builds; `None`
 selects O0 and `Speed` selects O3. All profiles run the same IR validators.
+
+Zero-size flat sequence elements retain an explicit count after the byte
+extent prefix. They use fixed-stride indexing without reading element prefixes.

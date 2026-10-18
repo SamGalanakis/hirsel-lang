@@ -387,7 +387,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     let scaled = self
                         .builder
                         .binary(BinOp::Mul, index, self.const_u64(stride));
-                    let at = self.builder.offset(place.ptr, self.const_u64(8));
+                    let start = self.layout(place.layout)?.fields[0].offset;
+                    let at = self.builder.offset(place.ptr, self.const_u64(start));
                     self.builder.offset(at, scaled)
                 };
                 Ok(Place {

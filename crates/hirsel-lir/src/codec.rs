@@ -394,11 +394,7 @@ impl CodecPlan {
                 }
                 CodecNode::Sequence { layout, element } => {
                     let e = if r.kind == LayoutKind::Flat {
-                        let (at, e) = prefixed(r)?;
-                        if at == 8 && fixed(record(table, e)?)? == 0 {
-                            return Err("a flat sequence without an element count".into());
-                        }
-                        e
+                        prefixed(r)?.1
                     } else {
                         let (p, e) = sequence(table, *layout)?;
                         match record(table, p)?.kind {

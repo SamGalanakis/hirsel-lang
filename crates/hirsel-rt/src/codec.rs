@@ -501,6 +501,10 @@ unsafe fn flat_extent(program: &Program, node: usize, at: *const u8) -> u64 {
                     work.extend(fields.iter().rev());
                     0
                 }
+                Node::Fields(fields) => {
+                    work.extend(fields.iter().rev().map(|&(_, child)| child));
+                    0
+                }
                 Node::FlatVariant(arms) => {
                     let ordinal = cursor.cast::<u32>().read_unaligned() as usize;
                     let arm = arms
@@ -657,6 +661,9 @@ fn flat_decode(program: &Program, root: usize, input: &mut Input<'_>) -> Vec<u8>
                 work.push(Job::Visit(*child));
             }
             Node::FlatFields(fields) => work.extend(fields.iter().rev().map(|&f| Job::Visit(f))),
+            // Zero-size elements keep their ordinary layout identity: their
+            // fields have no packing offsets or bytes to reconstruct.
+            Node::Fields(fields) => work.extend(fields.iter().rev().map(|&(_, f)| Job::Visit(f))),
             Node::FlatVariant(arms) => {
                 let ordinal = checked(input.number(4)) as u32;
                 out.extend_from_slice(&ordinal.to_le_bytes());

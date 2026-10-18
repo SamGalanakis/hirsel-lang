@@ -62,9 +62,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     pub(super) fn flat_sequence(&self, layout: LayoutId) -> Emitted<(LayoutId, bool)> {
         let record = self.layout(layout)?;
         match (&record.kind, &record.size, record.fields.as_slice()) {
-            (LayoutKind::Flat, SizeSpec::Dynamic(_), [only]) if only.offset == 16 => {
-                Ok((only.layout, true))
-            }
+            (LayoutKind::Flat, SizeSpec::Dynamic(_), [only]) if only.offset == 16 => Ok((
+                only.layout,
+                !matches!(self.layout(only.layout)?.size, SizeSpec::Fixed(_)),
+            )),
             (LayoutKind::Flat, SizeSpec::Dynamic(_), [only])
                 if only.offset == 8
                     && matches!(self.layout(only.layout)?.size, SizeSpec::Fixed(_)) =>
@@ -79,18 +80,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// for variable elements, else the prefix's byte length over the element size.
     pub(super) fn flat_count(&self, place: Place<'m>) -> Emitted<Value<'m>> {
         let (element, variable) = self.flat_sequence(place.layout)?;
-        if variable {
+        if variable || self.fixed_size(element)? == 0 {
             return Ok(self.load_u64(self.builder.offset(place.ptr, self.const_u64(8))));
         }
-        match self.fixed_size(element)? {
-            0 => self.unsupported("a flat sequence of empty elements"),
-            size => {
-                let bytes = self.load_u64(place.ptr);
-                Ok(self
-                    .builder
-                    .binary(BinOp::UDiv, bytes, self.const_u64(size)))
-            }
-        }
+        let size = self.fixed_size(element)?;
+        let bytes = self.load_u64(place.ptr);
+        Ok(self
+            .builder
+            .binary(BinOp::UDiv, bytes, self.const_u64(size)))
     }
 
     /// The address of the `index`th prefixed encoding from `first`, each `8 + prefix` bytes.
@@ -665,6 +662,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return self.invalid("a flat sequence source without sequence storage");
         };
         let (encoded_element, variable) = self.flat_sequence(encoding)?;
+        let counted = variable || self.fixed_size(encoded_element)? == 0;
         let count = self.load_u64(source.ptr);
         let stride = self.fixed_size(element)?;
         let start = sequence_elements_offset(self.layout(element)?)
@@ -699,13 +697,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.builder.add_incoming(index, self.const_u64(0), entry);
         self.builder.add_incoming(index, next_index, back);
         self.builder
-            .add_incoming(total, self.const_u64(if variable { 16 } else { 8 }), entry);
+            .add_incoming(total, self.const_u64(if counted { 16 } else { 8 }), entry);
         self.builder.add_incoming(total, next_total, back);
         self.builder.position(exit);
         if let Some(output) = output {
             let length = self.builder.binary(BinOp::Sub, total, self.const_u64(8));
             self.builder.store(length, output, 1);
-            if variable {
+            if counted {
                 self.builder
                     .store(count, self.builder.offset(output, self.const_u64(8)), 1);
             }

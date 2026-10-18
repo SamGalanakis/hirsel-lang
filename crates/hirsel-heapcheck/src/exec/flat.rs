@@ -173,7 +173,7 @@ impl<S: Stage> Machine<'_, S> {
         }
         let index = index as u64;
         Ok(Some(match self.flat_prefixed(layout)? {
-            Some((16, _)) => {
+            Some((16, _)) if !matches!(self.record(element)?.size, SizeSpec::Fixed(_)) => {
                 let mut cursor = at.at(2 * PREFIX);
                 for _ in 0..index {
                     self.ledger.counters.flat_prefix_reads += 1;
@@ -184,7 +184,8 @@ impl<S: Stage> Machine<'_, S> {
                 }
                 (cursor, element)
             }
-            _ => (at.at(PREFIX + index * self.size(element)?), element),
+            Some((offset, _)) => (at.at(offset + index * self.size(element)?), element),
+            None => return fail(V::Malformed, "a flat sequence without content"),
         }))
     }
 

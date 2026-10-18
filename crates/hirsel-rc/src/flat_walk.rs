@@ -155,7 +155,11 @@ fn variable_sequence(
                 if r.kind == LayoutKind::Flat
                     && matches!(r.size, SizeSpec::Dynamic(_))
                     && r.fields.len() == 1
-                    && r.fields[0].offset == 16 =>
+                    && r.fields[0].offset == 16
+                    && !matches!(
+                        table.layouts.get(r.fields[0].layout.0 as usize)?.size,
+                        SizeSpec::Fixed(_)
+                    ) =>
             {
                 return Some((p, r.fields[0].layout));
             }
