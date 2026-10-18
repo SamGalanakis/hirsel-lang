@@ -424,6 +424,11 @@ conformance/CLO/CLO-4-lexical-generic-uses-ok.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-bad.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-ok.hir
 conformance/CLO/CLO-4-parameter-authority.hir
+conformance/CLO/CLO-4-scope-body-takes-let-mut-file-run.hir
+conformance/CLO/CLO-4-scope-body-takes-let-mut-list-run.hir
+conformance/CLO/CLO-4-scope-body-takes-let-mut-reassigned-run.hir
+conformance/CLO/CLO-4-scope-body-takes-let-mut-stream-run.hir
+conformance/CLO/CLO-4-scope-body-takes-outer-brand-stream-run.hir
 conformance/CLO/CLO-4-selected-callback-bad.hir
 conformance/CLO/CLO-4-selected-callback-forward-bad.hir
 conformance/CLO/CLO-4-selected-callback-forward-ok.hir
@@ -461,6 +466,8 @@ conformance/CONC/CONC-2-task-set-detach-all-run.hir
 conformance/CONC/CONC-2-task-set-first-completed-run.hir
 conformance/CONC/CONC-2-task-set-parameter-bad.hir
 conformance/CONC/CONC-2-task-set-parameter-ok.hir
+conformance/CONC/CONC-2-task-set-scope-body-capture-bad.hir
+conformance/CONC/CONC-2-task-set-scope-body-capture-run.hir
 conformance/CONC/CONC-2-task-set-unconsumed-bad.hir
 conformance/CONC/CONC-2-task-set-unconsumed-ok.hir
 conformance/CONC/CONC-2-tour-11-concurrency-run.hir
@@ -3307,6 +3314,7 @@ conformance/OWN/OWN-2-pathtime-duration-parse-accept.hir
 conformance/OWN/OWN-2-pathtime-duration-parse-reject.hir
 conformance/OWN/OWN-2-pathtime-time-parse-accept.hir
 conformance/OWN/OWN-2-pathtime-time-parse-reject.hir
+conformance/OWN/OWN-2-scope-body-taken-let-mut-read-bad.hir
 conformance/OWN/OWN-2-spec-save.hir
 conformance/OWN/OWN-2-taken-block-capture-run.hir
 conformance/OWN/OWN-2-taken-direct-capture-run.hir
