@@ -4,7 +4,8 @@ use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
 const USAGE: &str = "usage: hirsel check [--json] <source|manifest.json> | run [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc --index [--root <repo>]";
 
-const DEFAULT_RUN_MAX_STEPS: u64 = 1_000_000_000;
+mod execution_policy;
+use execution_policy::DEFAULT_RUN_MAX_STEPS;
 
 fn main() -> ExitCode {
     hirsel_engine::with_compiler_stack(|| ExitCode::from(execute(env::args_os().skip(1).collect())))

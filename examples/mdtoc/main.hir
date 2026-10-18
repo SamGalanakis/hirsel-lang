@@ -26,15 +26,13 @@ fn encode(mut out: List[u8], cp: u32) {
   }
 }
 
-// GitHub's anchor rule on the NFC text: ASCII letters lowercase, spaces become
-// `-`, `-` and `_` stay, other ASCII punctuation is dropped. Non-ASCII scalars
-// are kept as written: std@1 has no Unicode case mapping or letter classes yet.
+// Lowercase NFC text with Unicode simple case mapping. Spaces become `-`,
+// `-` and `_` stay, other ASCII punctuation is dropped. Non-ASCII scalars stay.
 fn slug(title: String) -> String {
   let mut out: List[u8] = []
-  for cp in string.scalars(unicode.normalize_nfc(title)) {
-    if cp >= 0x41 && cp <= 0x5a {
-      encode(mut out, cp + 0x20)
-    } else if cp >= 0x61 && cp <= 0x7a || cp >= 0x30 && cp <= 0x39 || cp == 0x2d || cp == 0x5f {
+  for scalar in string.scalars(unicode.normalize_nfc(title)) {
+    let cp = unicode.simple_lower(scalar)
+    if cp >= 0x61 && cp <= 0x7a || cp >= 0x30 && cp <= 0x39 || cp == 0x2d || cp == 0x5f {
       encode(mut out, cp)
     } else if cp == 0x20 {
       encode(mut out, 0x2d)

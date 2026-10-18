@@ -112,7 +112,10 @@ hirsel_test(
     runtime_archives = "//:hirsel-rt-archives",
     crate = "cli",
     crate_root = "crates/hirsel-cli/tests/cli.rs",
-    srcs = glob(["crates/hirsel-cli/tests/**"]) + [
+    srcs = glob([
+        "crates/hirsel-cli/tests/**",
+        "crates/hirsel-cli/src/**",
+    ]) + [
         "conformance/CAP/CAP-1-host-inputs-run.hir",
         "conformance/CONC/CONC-2-await.hir",
         "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
@@ -194,7 +197,10 @@ hirsel_test(
     runtime_archives = "//:hirsel-rt-archives",
     crate = "examples",
     crate_root = "crates/hirsel-cli/tests/examples.rs",
-    srcs = glob(["crates/hirsel-cli/tests/**"]) + [
+    srcs = glob([
+        "crates/hirsel-cli/tests/**",
+        "crates/hirsel-cli/src/**",
+    ]) + [
         "conformance/CAP/CAP-1-host-inputs-run.hir",
         "conformance/CONC/CONC-2-await.hir",
         "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",

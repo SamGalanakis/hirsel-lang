@@ -154,3 +154,7 @@ otherwise a path. Executables use `--hirsel-run` and `--hirsel-grants` to leave
 the program's flag space available. Inline templates require absolute directory
 hosts. `hirsel run <source|manifest> -- args...` grants only the exact Args
 snapshot through host admission, with the simulated CLI's default step budget.
+
+The examples harness supplies the same default step budget as the simulated CLI
+when invoking the interpreter in process; explicit test budgets remain selected
+by their callers. Bench-lite exercises both 40-word and 200-word corpora.

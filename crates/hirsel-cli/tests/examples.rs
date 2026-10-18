@@ -1,5 +1,8 @@
 //! End-to-end examples: exercise CLI manifests, std selection, actual output,
 //! and native linking rather than duplicating language conformance tests.
+#[path = "../src/execution_policy.rs"]
+mod execution_policy;
+use execution_policy::DEFAULT_RUN_MAX_STEPS;
 use std::{
     path::PathBuf,
     process::Command,
@@ -297,9 +300,10 @@ fn httpget() {
     simulation.net = Some(serde_json::from_value(config["net"].clone()).unwrap());
     let mut output = Vec::new();
     let result = hirsel_engine::with_compiler_stack(|| {
-        hirsel_driver::run_path_with_simulation(
+        hirsel_driver::run_path_with_step_budget(
             &fixture.0.join("hirsel.json"),
             simulation,
+            Some(DEFAULT_RUN_MAX_STEPS),
             &mut output,
             &mut Vec::new(),
         )
@@ -1105,9 +1109,10 @@ impl Example {
         simulation.files = self.files.iter().cloned().collect();
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         let result = hirsel_engine::with_compiler_stack(|| {
-            hirsel_driver::run_path_with_simulation(
+            hirsel_driver::run_path_with_step_budget(
                 &self.dir.join("hirsel.json"),
                 simulation,
+                Some(DEFAULT_RUN_MAX_STEPS),
                 &mut stdout,
                 &mut stderr,
             )
@@ -1309,6 +1314,7 @@ fn mdtoc(aarch64: bool) {
             "#### Deep_dive: 1-2-3 ###\n\n##   Spaced   Out   \r\n## Getting Started\n####### seven\n",
         ),
     );
+    example.data("unicode.md", "## Ünïcode\n");
     // A decomposed é (e + U+0301) slugs as its NFC composition.
     example.data("nfd.md", "## Cafe\u{301}\n");
     example.data("empty.md", "no headings\n");
@@ -1326,7 +1332,7 @@ fn mdtoc(aarch64: bool) {
                         "- [Hirsel Guide](#hirsel-guide)\n",
                         "  - [Getting Started](#getting-started)\n",
                         "  - [Getting Started](#getting-started-1)\n",
-                        "    - [Ünïcode & Café ✓](#Ünïcode--café-✓)\n",
+                        "    - [Ünïcode & Café ✓](#ünïcode--café-✓)\n",
                         "      - [Deep_dive: 1-2-3](#deep_dive-1-2-3)\n",
                         "  - [Spaced   Out](#spaced---out)\n",
                         "  - [Getting Started](#getting-started-2)\n",
@@ -1334,6 +1340,7 @@ fn mdtoc(aarch64: bool) {
                     "",
                 ),
             ),
+            (&["unicode.md"], (0, "- [Ünïcode](#ünïcode)\n", "")),
             (&["nfd.md"], (0, "- [Cafe\u{301}](#café)\n", "")),
             (&["empty.md"], (0, "", "")),
             (&["latin1.md"], (1, "", "error: latin1.md is not UTF-8\n")),
@@ -1366,7 +1373,6 @@ fn bench_lite(aarch64: bool) {
         )],
         include_str!("../../../examples/bench-lite/hirsel.json"),
     );
-    // Small enough for the interpreter's default step budget.
     let small = "words 40\ndifferent 35\nbytes 152\nchecksum 3136792867699900722\n  fo 3\n  ce 2\n  di 2\n  xu 2\n  ba 1\nheap and arena agree\n";
     check_cases(
         &example,
@@ -1374,6 +1380,14 @@ fn bench_lite(aarch64: bool) {
         aarch64,
         &[
             (&["40", "7"], (0, small, "")),
+            (
+                &["200", "7"],
+                (
+                    0,
+                    "words 200\ndifferent 150\nbytes 806\nchecksum 11645186517551137659\n  ce 6\n  ba 5\n  di 5\n  fo 5\n  ne 5\nheap and arena agree\n",
+                    "",
+                ),
+            ),
             (
                 &["0"],
                 (
