@@ -99,7 +99,16 @@ fn reject_matches_first_diagnostic_with_a_rule_and_exact_line() {
         .unwrap()
         .expect;
     let mut driver = fake();
+    driver.diagnostics = vec![diagnostic(Some("OWN-6"), 3, Severity::Warning)];
+    assert!(matches!(
+        classify(&driver, Path::new("test"), &expect),
+        Status::Fail(_)
+    ));
     driver.diagnostics = vec![diagnostic(Some("OWN-6"), 3, Severity::Error)];
+    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
+    driver
+        .diagnostics
+        .insert(0, diagnostic(Some("OWN-7"), 3, Severity::Warning));
     assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
     driver
         .diagnostics

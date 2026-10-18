@@ -139,7 +139,11 @@ fn evaluate_on_compiler_thread(
             return (Status::Fail(observation.actual.clone()), observation);
         }
     };
-    if let Some(d) = output.diagnostics.first() {
+    if let Some(d) = output
+        .diagnostics
+        .iter()
+        .find(|d| d.severity == Severity::Error)
+    {
         observation.primary_external = d.primary.file != primary_file;
         observation.primary =
             crate::corpus_format::primary_at_span(&mut engine, d.rule.as_str(), d.primary);

@@ -461,14 +461,18 @@ pub fn classify(driver: &(impl Driver + ?Sized), path: &Path, expect: &Expect) -
         Ok(diagnostics) => diagnostics,
         Err(NotImplemented) => return Status::NotImplemented,
     };
-    if (!matches!(expect, Expect::Reject { .. }) || output.diagnostics.is_empty())
+    let first_error = output
+        .diagnostics
+        .iter()
+        .find(|d| d.severity == Severity::Error);
+    if (!matches!(expect, Expect::Reject { .. }) || first_error.is_none())
         && output.completion != hirsel_engine::CheckCompletion::Complete
     {
         return Status::NotImplemented;
     }
     let diagnostics = &output.diagnostics;
     if let Expect::Reject { rule, line } = expect {
-        return if diagnostics.first().is_some_and(|d| {
+        return if first_error.is_some_and(|d| {
             &d.rule == rule
                 && output
                     .sources

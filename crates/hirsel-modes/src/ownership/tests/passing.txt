@@ -1191,6 +1191,7 @@ OWN/OWN-4-heap-capacity-set-append-run.hir
 OWN/OWN-4-heap-capacity-sorted-closure-run.hir
 OWN/OWN-4-nested-markers-run.hir
 OWN/OWN-4-plain-implicit-copy.hir
+OWN/OWN-4-redundant-copy-repair-ok.hir
 OWN/OWN-4-static-copy-write-run.hir
 OWN/OWN-4-static-map-copy-insert-run.hir
 OWN/OWN-4-tour-02-modes-run.hir

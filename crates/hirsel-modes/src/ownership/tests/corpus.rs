@@ -1,6 +1,6 @@
 use super::super::*;
 use super::source_support as support;
-use hirsel_diag::Diagnostic;
+use hirsel_diag::{Diagnostic, Severity};
 use hirsel_resolve::{ManifestFixture, ManifestIndex};
 use hirsel_span::SourceMap;
 use hirsel_syntax as ast;
@@ -252,9 +252,10 @@ fn source_corpus_ratchets_rule_and_primary_line() {
             }
             count.1 += 1;
             let outcome = run_with_authority(&source, &base).and_then(|(ds, authority, map)| {
+                let first_error = ds.iter().find(|d| d.severity == Severity::Error);
                 if let Some((rule, line)) = rejection {
                     let line = line.parse::<u32>().unwrap();
-                    match ds.first() {
+                    match first_error {
                         Some(d)
                             if d.rule.as_str() == rule
                                 && map.location(d.primary).unwrap().line == line =>
@@ -262,7 +263,9 @@ fn source_corpus_ratchets_rule_and_primary_line() {
                             Ok(())
                         }
                         _ if authority.iter().any(|d| {
-                            d.rule.as_str() == rule && map.location(d.primary).unwrap().line == line
+                            d.severity == Severity::Error
+                                && d.rule.as_str() == rule
+                                && map.location(d.primary).unwrap().line == line
                         }) =>
                         {
                             Err(format!("dependency-owned J: {rule} line {line}"))
@@ -275,7 +278,7 @@ fn source_corpus_ratchets_rule_and_primary_line() {
                         )),
                         None => Err(format!("not done: missing {rule} line {line}")),
                     }
-                } else if let Some(d) = ds.first() {
+                } else if let Some(d) = first_error {
                     Err(format!(
                         "not done: unexpected {} line {} ({})",
                         d.rule,

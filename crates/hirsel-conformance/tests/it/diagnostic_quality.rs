@@ -1,3 +1,4 @@
+use hirsel_conformance::{Compiler, Driver, Expect, Status};
 use hirsel_diag::Severity;
 use hirsel_engine::CheckOutput;
 use std::path::{Path, PathBuf};
@@ -55,6 +56,25 @@ fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
                 line,
                 "{case}"
             );
+            if d.severity == Severity::Warning {
+                let path = root().join(case);
+                assert_eq!(Compiler.evaluate(&path, &Expect::Accept).0, Status::Pass);
+                assert!(
+                    matches!(
+                        Compiler
+                            .evaluate(
+                                &path,
+                                &Expect::Reject {
+                                    rule: d.rule.clone(),
+                                    line: line as usize,
+                                }
+                            )
+                            .0,
+                        Status::Fail(_)
+                    ),
+                    "a warning cannot satisfy a rejection"
+                );
+            }
             let json = d.to_json(&output.sources);
             let fix = &json["fix"];
             assert_eq!(fix["span"]["file_id"], json["primary"]["file_id"]);

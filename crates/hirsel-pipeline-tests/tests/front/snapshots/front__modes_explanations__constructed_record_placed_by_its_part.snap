@@ -12,3 +12,4 @@ error[PROV-4]: an arena value cannot be kept where no placement is declared: `x`
  --> ../../conformance/PROV/PROV-4-constructed-part-relation-bad.hir:10:19
   10 | fn f(a: Arena) -> Ast {
      |                   ^^^ required: the result requires `in heap`
+  = help: Keep the value inside `arena.with`, or declare the receiver `in a` for the correct arena `a`. `copy x` and `unique x` keep its placement; neither moves arena data to the heap.
