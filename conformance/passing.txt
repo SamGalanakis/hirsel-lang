@@ -477,11 +477,13 @@ conformance/CONC/CONC-3-clock-denied-run.hir
 conformance/CONC/CONC-3-clock-process-deadline-run.hir
 conformance/CONC/CONC-3-clock-process-races-run.hir
 conformance/CONC/CONC-3-clock-sleep-duration-run.hir
+conformance/CONC/CONC-3-clock-sleep-order-run.hir
 conformance/CONC/CONC-3-clock-tied-timers-run.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
 conformance/CONC/CONC-3-process-run-canceled-run.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
+conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
 conformance/CONC/CONC-4-sequential-atomic-order.hir
 conformance/CONC/CONC-5-channel-in-body-bad.hir
 conformance/CONC/CONC-5-channel-in-body-ok.hir

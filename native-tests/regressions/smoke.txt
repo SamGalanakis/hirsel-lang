@@ -106,3 +106,5 @@ conformance/SEM/SEM-3-raw-literals-run.hir
 conformance/SEM/SEM-3-tour-05-chars-run.hir
 conformance/SEM/SEM-3-tour-15-format-run.hir
 conformance/SER/SER-2-char-run.hir
+conformance/CONC/CONC-3-clock-sleep-order-run.hir
+conformance/CONC/CONC-3-task-capture-after-sleep-run.hir

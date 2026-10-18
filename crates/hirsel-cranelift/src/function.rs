@@ -720,6 +720,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 self.versions.insert(value);
             }
         }
+        // Captures name their environment slots' initial storage versions.
+        self.versions.extend(unit.captures.iter().copied());
         loop {
             let mut grew = false;
             for edge in &unit.tables.edges {

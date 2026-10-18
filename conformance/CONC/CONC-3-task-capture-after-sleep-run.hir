@@ -1,0 +1,26 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let child = task.async(
+        s,
+        fn() -> bool {
+          let slept = match time.sleep(c, duration.from_parts(1, 0)) {
+            Ok(()) => true,
+            Error(_) => false,
+          }
+          let tx = take sender
+          slept
+        }
+      )
+      failure.check(task.await(s, take child), Arithmetic())
+    }
+  )
+  Ok(())
+}

@@ -1,7 +1,6 @@
 // rule: CONC-3
 // expect: run
 // grant: clock
-// Native promotion waits on native-catchup: LLVM refuses a value used before its definition.
 fn require(value: bool) -> () {
   failure.check(value, Arithmetic())
 }
