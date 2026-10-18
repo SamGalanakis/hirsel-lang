@@ -2040,10 +2040,19 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.write_block(site, st, address, version);
             }
             // A push's preparation may copy or relocate the block at the
-            // place (LIR schema revision 32): a write, as a reserve's.
+            // place (LIR schema revision 32): a write, as a reserve's. Its
+            // count is read (revision 34).
             Inst::ArenaPush {
-                address, version, ..
-            } => self.write_block(site, st, address, version),
+                address,
+                count,
+                version,
+                ..
+            } => {
+                if let Some(count) = count {
+                    self.borrow(site, st, cr, count);
+                }
+                self.write_block(site, st, address, version)
+            }
             // A semantic copy's mark reads the value, which keeps its credits.
             Inst::Share { value } => self.borrow(site, st, cr, value),
             // A write of a builder's open element reads its operand (LIR

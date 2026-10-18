@@ -1742,6 +1742,7 @@ fn execute_frames(
                         } else {
                             list_write(&path, &mut arguments, &mut budgets)
                                 .or_else(|| keyed_write(&path, &mut arguments, &mut budgets))
+                                .or_else(|| read_write(&path, &mut arguments, &mut budgets))
                         };
                         let result = if let Some(arena) = exhausted {
                             budgets.exhausted(arena, execution.failures.len());
@@ -2493,6 +2494,55 @@ fn list_write(
             .iter()
             .flatten()
             .for_each(crate::value::Value::share_arena_storage);
+    }
+    None
+}
+
+/// MEM-6: an Io read into an arena List (`stdin.read`, `file.read`,
+/// `net.read`) charges its maximum bytes before its effect, whatever it then
+/// reads, and first copies a shared List within its arena, charged its length,
+/// so an `OutOfSpace` reads nothing. Returns the arena whose budget is
+/// exceeded.
+fn read_write(
+    path: &hirsel_syntax::DefPath,
+    arguments: &mut [Value],
+    budgets: &mut crate::bounded::Budgets,
+) -> Option<u64> {
+    let (buffer, max) = if *path == hirsel_syntax::DefPath::core("stdin.read") {
+        (1, 2)
+    } else if *path == hirsel_syntax::DefPath::core("file.read")
+        || *path == hirsel_syntax::DefPath::core("net.read")
+    {
+        (2, 3)
+    } else {
+        return None;
+    };
+    let max = match arguments.get(max) {
+        Some(Value::Integer(i)) => u64::try_from(i.bits()).ok()?,
+        _ => return None,
+    };
+    let Some(Value::Sequence {
+        kind: hirsel_types::BuiltinType::List,
+        elements,
+        arena: Some(storage),
+    }) = arguments.get_mut(buffer)
+    else {
+        return None;
+    };
+    let shared = if storage.shared() {
+        elements.len() as u64
+    } else {
+        0
+    };
+    let bytes = storage
+        .element
+        .saturating_mul(max)
+        .saturating_add(storage.element.saturating_mul(shared));
+    if let Err(arena) = budgets.charge(storage.arena, bytes) {
+        return Some(arena);
+    }
+    if storage.shared() {
+        *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
     }
     None
 }

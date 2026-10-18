@@ -209,8 +209,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
             Inst::Share { value } => self.share(value),
             Inst::ArenaPush {
-                address, failure, ..
-            } => self.arena_push(address, failure),
+                address,
+                count,
+                failure,
+                ..
+            } => self.arena_push(address, count, failure),
             Inst::Unary {
                 result,
                 op,

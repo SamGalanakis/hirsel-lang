@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 12
+#define HIRSEL_RT_V2_ABI_VERSION 13
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -502,6 +502,12 @@ hirsel_rt_v2_header *hirsel_rt_v2_arena_alloc(hirsel_rt_v2_ctx *ctx, hirsel_rt_v
  * budget. */
 uint8_t hirsel_rt_v2_arena_push(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t element_size,
                                 uint64_t element_align, hirsel_rt_v2_header **out_block);
+/* Prepare an Io read's `count` appended elements to the List block `block` at once (MEM-6,
+ * ABI 13): as hirsel_rt_v2_arena_push, charged `count` elements, and relocated to
+ * max(4, 2 * count of the block, its count plus `count`) elements when they do not fit. */
+uint8_t hirsel_rt_v2_arena_reserve(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t count,
+                                   uint64_t element_size, uint64_t element_align,
+                                   hirsel_rt_v2_header **out_block);
 /* Enter an arena's region, seeding its cursor and limit from an idle pooled segment if any. */
 void hirsel_rt_v2_arena_enter(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_region *region);
 /* Bounded arenas (MEM-6). Bound an entered arena to `capacity` logical bytes. */

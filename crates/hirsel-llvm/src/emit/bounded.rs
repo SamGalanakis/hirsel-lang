@@ -265,10 +265,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(())
     }
 
-    /// `ArenaPush`: a tracked arena List at `address` is charged one element and given room
-    /// for it by the runtime, which may copy or relocate it within its arena (MEM-6). Any
-    /// other block passes one count test; its deferred length stays in its register.
-    pub(super) fn arena_push(&mut self, address: AddressId, failure: FailureId) -> Emitted {
+    /// `ArenaPush`: a tracked arena List at `address` is charged one element, or `count`,
+    /// and given room for them by the runtime, which may copy or relocate it within its arena
+    /// (MEM-6). Any other block passes one count test; its deferred length stays in its
+    /// register.
+    pub(super) fn arena_push(
+        &mut self,
+        address: AddressId,
+        count: Option<ValueId>,
+        failure: FailureId,
+    ) -> Emitted {
         use hirsel_lir::runtime_abi::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_OFFSET};
         let place = self.place(address)?;
         let Some(element) = self.sequence_element(place.layout)? else {
@@ -314,19 +320,38 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         // The block goes by value and comes back through a cell of its own, so the
         // place's slot stays promotable; an exhausted push leaves the cell as it was.
-        let entry = self.runtime(RuntimeEntry::ArenaPush)?;
         let out = self.prologue.alloca(self.module.ptr_type(), 8);
         self.builder.store(block, out, 8);
-        let status = self.builder.call(
-            entry,
-            &[
-                self.context,
-                block,
-                self.const_u64(size),
-                self.const_u64(align),
-                out,
-            ],
-        );
+        let status = match count {
+            None => {
+                let entry = self.runtime(RuntimeEntry::ArenaPush)?;
+                self.builder.call(
+                    entry,
+                    &[
+                        self.context,
+                        block,
+                        self.const_u64(size),
+                        self.const_u64(align),
+                        out,
+                    ],
+                )
+            }
+            Some(count) => {
+                let entry = self.runtime(RuntimeEntry::ArenaReserve)?;
+                let count = self.get(count)?;
+                self.builder.call(
+                    entry,
+                    &[
+                        self.context,
+                        block,
+                        count,
+                        self.const_u64(size),
+                        self.const_u64(align),
+                        out,
+                    ],
+                )
+            }
+        };
         let pushed = self.builder.load(self.module.ptr_type(), out, 8);
         self.store(Shape::Scalar(ScalarKind::Pointer), pushed, place);
         if let Some(state) = self.sequence_state_at(place) {

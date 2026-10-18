@@ -120,6 +120,7 @@ fn push(case: Push) -> Vec<K> {
         ENTRY,
         Inst::ArenaPush {
             address,
+            count: None,
             version,
             failure,
         },

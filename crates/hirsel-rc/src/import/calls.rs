@@ -107,6 +107,35 @@ impl Importer<'_, '_> {
         Ok(())
     }
 
+    /// An `ArenaPush` of the read's maximum through an address of its own
+    /// of its `mut` buffer, a separate write P4 leaves to it.
+    fn read_room(&mut self, arguments: &[tir::CallArgument], buffer: u32, max: u32) -> R<()> {
+        let argument = |at: u32| {
+            arguments
+                .iter()
+                .find(|a| a.parameter.0 == at)
+                .ok_or_else(|| PassError::Malformed("an Io read's arguments".into()))
+        };
+        let (buffer, max) = (argument(buffer)?, argument(max)?);
+        if buffer.value.usage != UseKind::Mut {
+            return malformed("an Io read's buffer is not lent mut");
+        }
+        let count = self.operand(&max.value)?;
+        let p = self.place(buffer.value.place)?;
+        let address = self.address(&p)?;
+        let ty = self.out.slots[p.slot.index()].ty;
+        let version = self.value(ty, Holding::Plain);
+        let failure = self.fail(None)?;
+        self.push(Inst::ArenaPush {
+            address,
+            count: Some(count),
+            version,
+            failure,
+        });
+        self.versions[p.slot.index()] = Some(version);
+        Ok(())
+    }
+
     pub(super) fn own_abi(&self) -> hirsel_lir::abi_types::FnAbi {
         self.layouts.table().fn_abis[self.instances.abis[self.id.index()].0 as usize].clone()
     }
@@ -150,6 +179,15 @@ impl Importer<'_, '_> {
             if (lowering.lower)(&mut ImportCx { im: self }, &shape)? {
                 return Ok(());
             }
+        }
+        // MEM-6: an Io read's appends are charged and given room in an arena
+        // List before its effect and before its operands, so an `OutOfSpace`
+        // reads nothing (LIR schema revision 34). It takes no input.
+        if let tir::Callee::Definition { path, .. } = callee
+            && self.program.operations.contains_key(path)
+            && let Some((buffer, max)) = read_room(path)
+        {
+            self.read_room(arguments, buffer, max)?;
         }
         // Native operand preparation can still fail before the call is
         // entered. Its TIR failure chain already excludes all taken inputs;
@@ -556,5 +594,17 @@ impl Importer<'_, '_> {
             .fn_abi(&callee.store, callable, CallableShape::Definition)
             .map_err(|e| PassError::Layout(path.clone(), e))?;
         Ok((abi, arguments))
+    }
+}
+
+/// The buffer and maximum parameters of an Io read that appends up to its
+/// maximum bytes to a List (MEM-6).
+fn read_room(path: &DefPath) -> Option<(u32, u32)> {
+    if core_operation(path, "stdin", "read") {
+        Some((1, 2))
+    } else if core_operation(path, "file", "read") || core_operation(path, "net", "read") {
+        Some((2, 3))
+    } else {
+        None
     }
 }

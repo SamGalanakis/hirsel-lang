@@ -1,0 +1,36 @@
+// rule: MEM-6
+// expect: run
+// entry: exercise
+// "An Io read into a List in it (stdin.read, file.read, net.read) charges its maximum bytes
+// before its effect." A read of up to 4 or 100 bytes into a one-byte arena List charges 4 or
+// 100 whatever it reads, here all 8 bytes of the file; a heap List is not charged.
+fn read(d: Dir, cap: u64, max: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut buffer: List[u8] in a = [33u8]
+      let mut rest: List[u8] = []
+      match file.open(d, path.of("message")) {
+        Ok(opened) => {
+          let mut f = opened
+          let n = match file.read(d, mut f, mut buffer, max) {
+            Ok(n) => n,
+            Error(_) => 100u64,
+          }
+          let _ = file.read(d, mut f, mut rest, 100u64)
+          n + list.len(buffer) + list.len(rest)
+        },
+        Error(_) => 200u64,
+      }
+    }
+  )
+}
+
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("message"), b"ten-four")])
+  test.check(t, read(d, 4u64, 4u64) == Error(OutOfSpace()))
+  test.check(t, read(d, 5u64, 4u64) == Ok(13u64))
+  test.check(t, read(d, 100u64, 100u64) == Error(OutOfSpace()))
+  test.check(t, read(d, 101u64, 100u64) == Ok(17u64))
+  Ok(())
+}

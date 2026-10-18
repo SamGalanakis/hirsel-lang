@@ -419,6 +419,44 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_push(
     out_block: *mut *mut Header,
 ) -> u8 {
     // SAFETY: caller contract.
+    unsafe { prepare(ctx, block, 1, element_size, element_align, out_block) }
+}
+
+/// Prepare an Io read's `count` appended elements to the List block `block` at once (MEM-6,
+/// runtime ABI 13), before the read: a tracked arena block is charged `count` elements and, when
+/// shared, its count of them; then a shared block is copied within its arena and one without
+/// room for `count` more relocated there, each to `max(4, 2 * count of the block, its count plus
+/// count)` elements, so the read appends without charging or relocating. Otherwise as
+/// [`hirsel_rt_v2_arena_push`].
+///
+/// # Safety
+/// As [`hirsel_rt_v2_arena_push`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_arena_reserve(
+    ctx: *mut RunCtx,
+    block: *mut Header,
+    count: u64,
+    element_size: u64,
+    element_align: u64,
+    out_block: *mut *mut Header,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe { prepare(ctx, block, count, element_size, element_align, out_block) }
+}
+
+/// Room for `count` more elements in the List block `block`, charged (MEM-6).
+///
+/// # Safety
+/// As [`hirsel_rt_v2_arena_push`].
+unsafe fn prepare(
+    ctx: *mut RunCtx,
+    block: *mut Header,
+    count: u64,
+    element_size: u64,
+    element_align: u64,
+    out_block: *mut *mut Header,
+) -> u8 {
+    // SAFETY: caller contract.
     unsafe {
         if !is_tracked(block) {
             out_block.write(block);
@@ -430,18 +468,22 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_push(
         let len = crate::alloc::payload(block).cast::<u64>().read();
         let each = element_charge(&*ctx, block);
         let copied = if shared { each.saturating_mul(len) } else { 0 };
-        if !charge_arena(region, each.saturating_add(copied)) {
+        if !charge_arena(region, each.saturating_mul(count).saturating_add(copied)) {
             return crate::STATUS_EXHAUSTED;
         }
         let capacity = crate::alloc::payload(block)
             .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
             .cast::<u64>()
             .read();
+        let wanted = len
+            .checked_add(count)
+            .unwrap_or_else(|| fault("a sequence capacity overflows its extent"));
         let mut slot = block;
-        if shared || len >= capacity {
+        if shared || wanted > capacity {
             let slots = len
                 .checked_mul(2)
                 .unwrap_or_else(|| fault("a sequence capacity overflows its extent"))
+                .max(wanted)
                 .max(4);
             tracked_move(
                 ctx,

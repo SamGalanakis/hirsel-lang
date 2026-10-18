@@ -1813,11 +1813,22 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
             }
             // One push's preparation of a List block (MEM-6, LIR schema
-            // revision 32): `list.push`'s, never a sequential one's.
+            // revision 32): `list.push`'s, never a sequential one's. One of
+            // `count` elements prepares an Io read's appends, which import
+            // places in user code (revision 34).
             Inst::ArenaPush {
-                address, version, ..
+                address,
+                count,
+                version,
+                ..
             } => {
-                self.library_only(site, inst.opcode());
+                match count {
+                    None => self.library_only(site, inst.opcode()),
+                    Some(count) if self.scalar(count) != Some(ScalarKind::U64) => {
+                        self.add(site, K::Type("arena push count"));
+                    }
+                    Some(_) => {}
+                }
                 let sequence = self
                     .address_layout(facts, address)
                     .and_then(|l| layouts.payload(l))
@@ -4289,6 +4300,9 @@ fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usage)> {
         }
         | Inst::SeqSetLen { len: value, .. }
         | Inst::SeqAppend { value, .. }
+        | Inst::ArenaPush {
+            count: Some(value), ..
+        }
         | Inst::RegionPublish { value }
         | Inst::Forget { value } => out.push(op(value)),
         Inst::UpdateMask { mask, .. } => out.push(op(mask)),

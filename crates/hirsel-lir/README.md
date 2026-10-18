@@ -594,3 +594,10 @@ whose `ArenaPush` charges the entry. RC's copy-on-write treats a Map's own entri
 as its storage: crossing its block does not make them nested, while a Map or Set lent or
 written through another block is shared like a List. Runtime ABI 12 lets a tracked arena
 block have a fixed layout.
+
+LIR revision 34 (MEM-6) charges an Io read into an arena List before its effect.
+`ArenaPush::count`, a u64, prepares that many appended elements at once: import places one,
+with the read's maximum, before each `stdin.read`, `file.read` and `net.read` call, in any
+unit, through an address of its own. The read then appends without charging or relocating.
+`tests/it/revision34.rs` pairs its rule with a valid twin. Runtime ABI 13 adds
+`hirsel_rt_v2_arena_reserve`.

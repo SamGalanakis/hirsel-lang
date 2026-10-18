@@ -302,7 +302,10 @@ extent words unused) charges nothing itself, its entries List at payload offset 
 tracked and charged as any List, so an insert of a new key charges one entry through the
 entries' push and the first write after a copy-on-write copy of the shared block charges the
 entry count, and its index is neither tracked nor charged. `map.empty()` and `set.empty()` construct
-that block where their relation places them (PROV-4), as a literal does. A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
+that block where their relation places them (PROV-4), as a literal does. An Io read into an
+arena List (`stdin.read`, `file.read`, `net.read`) is charged its maximum bytes before its
+effect (runtime ABI 13): compiled code first calls `hirsel_rt_v2_arena_reserve`, which charges
+them and copies or relocates the List as a push does, so the read appends in place. A callback's own `OutOfSpace` becomes `Error(OutOfSpace)` once its cleanup has run, unless that
 cleanup failed too: then the failure propagates with the `OutOfSpace` primary (FAIL-3). The
 reference interpreter (`hirsel-interp`, `src/bounded.rs`) charges from
 `hirsel_types::logical`; H and native execution charge from layouts

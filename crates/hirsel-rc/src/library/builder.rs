@@ -873,6 +873,7 @@ impl<'c, 'a> Body<'c, 'a> {
         let failure = self.failure(None);
         self.push(Inst::ArenaPush {
             address,
+            count: None,
             version,
             failure,
         });

@@ -1,0 +1,41 @@
+// rule: MEM-6
+// expect: run
+// stdout: 19 fits
+// stdout: 18 out of space
+// "An Io read into a List in it charges its maximum bytes before its effect." A stdin.read
+// of up to 16 bytes into a two-byte arena List charges 16 whatever it reads, then a push
+// charges one more. A run supplies no stdin, so the read appends nothing.
+fn read(stdin: Stdin, cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut buffer: List[u8] in a = [1, 2]
+      let _ = stdin.read(stdin, mut buffer, 16)
+      list.push(mut buffer, 3)
+      list.len(buffer)
+    }
+  )
+}
+
+fn report(stdout: Stdout, fits: String, over: String, r: Result[u64, OutOfSpace]) -> () {
+  if r == Ok(3u64) {
+    let _ = out.print(stdout, fits)
+  } else if r == Error(OutOfSpace()) {
+    let _ = out.print(stdout, over)
+  } else {
+    let _ = out.print(stdout, "bad\n")
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let stdout = io.stdout(rt) ? grant_error
+  let stdin = io.stdin(rt) ? grant_error
+  report(stdout, "19 fits\n", "19 out of space\n", read(stdin, 19u64))
+  report(stdout, "18 fits\n", "18 out of space\n", read(stdin, 18u64))
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

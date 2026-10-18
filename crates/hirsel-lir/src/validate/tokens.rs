@@ -468,6 +468,9 @@ fn token_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<ValueId> {
         }
         | Inst::SeqSetLen { len: value, .. }
         | Inst::SeqAppend { value, .. }
+        | Inst::ArenaPush {
+            count: Some(value), ..
+        }
         | Inst::Release { value, .. }
         | Inst::Reset { value, .. }
         | Inst::Forget { value }

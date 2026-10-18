@@ -1097,6 +1097,14 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     insts.push(Inst::Share { value: v(2) });
     insts.push(Inst::ArenaPush {
         address: a(0),
+        count: None,
+        version: v(59),
+        failure: f,
+    });
+    // LIR schema revision 34.
+    insts.push(Inst::ArenaPush {
+        address: a(0),
+        count: Some(v(1)),
         version: v(59),
         failure: f,
     });

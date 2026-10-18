@@ -124,11 +124,13 @@ proven, and an inferred closure literal carries the evidence its body proves.
 ### MEM-6: Bounded arenas
 
 `arena.bounded(cap, body) -> Result[R, OutOfSpace]`: each constructor into that arena
-charges a logical size, each `list.push` to a List in it charges its element's logical
-size before it consumes its argument, and each `map.insert` or `set.insert` of a key a Map
-or Set in it does not hold charges that entry's logical size (key plus value, or the
-member) before it consumes its arguments; exceeding `cap` is a failure that unwinds to this
-call, which returns `Error(OutOfSpace)`. A key that fails `Depth`
+charges a logical size, each `list.push` to a List in it charges its element's logical size
+before it consumes its argument, and each `map.insert` or `set.insert` of a key a Map or
+Set in it does not hold charges that entry's logical size (key plus value, or the member)
+before it consumes its arguments, and each Io read into a List in it (`stdin.read`,
+`file.read`, `net.read`) charges its maximum bytes before its effect, whatever it then
+reads; exceeding `cap` is a failure that unwinds to this call, which returns
+`Error(OutOfSpace)`, and a read that exceeds it reads nothing. A key that fails `Depth`
 ([MEM-3](#mem-3-freeing)) charges nothing. Spare capacity, growth relocation, a Map's or
 Set's hash index and abandoned storage are not charged, so the charge is the same on every
 engine. The logical size table is in the Bounded arenas section of
@@ -140,20 +142,20 @@ by this rule) is **unshared**. It becomes **shared** for good when it or a value
 is copied (`copy`, a capture by copy, an owned read of a part, a counted local result such
 as `map.get`'s), and when it is written or lent `mut` through another block (a box payload,
 a sequence element, a map entry), since that block's holders are not tracked. The first
-write to a shared arena List or Array (a push, an element store, `pop`, `remove` or `swap`
-that moves an element), or Map or Set (an insert of a new key, a `map.insert` that replaces
-a value, or a `remove` of a held key), copies it into the same arena as a new unshared one,
-charged its copied length or entry count, whose elements or entries are then held twice and
-so shared, then the write proceeds; a write that fails its bounds check, and a `set.insert`
-of a member the Set holds, copies nothing, and `list.reserve` is only a hint there. A
-remove charges nothing and returns nothing to the budget. A List of `Packed` values
-([MEM-13](#mem-13-packed-variants)), whose storage is sequential, is not tracked: a write
-to one is not charged. An unshared List grows in place, relocating within its arena by
-doubling from four elements when full, so its storage is at most four times its charged
-bytes plus four elements; an unshared Map or Set keeps its entries the same way.
-Consequently a push or insert through a nested place (`list.push(mut adj[i], x)` in an
-arena) copies the inner List, Map or Set each time, charged; one held by a binding or an
-inline record field grows in amortized constant time.
+write to a shared arena List or Array (a push, an Io read, an element store, `pop`,
+`remove` or `swap` that moves an element), or Map or Set (an insert of a new key, a
+`map.insert` that replaces a value, or a `remove` of a held key), copies it into the same
+arena as a new unshared one, charged its copied length or entry count, whose elements or
+entries are then held twice and so shared, then the write proceeds; a write that fails its
+bounds check, and a `set.insert` of a member the Set holds, copies nothing, and
+`list.reserve` is only a hint there. A remove charges nothing and returns nothing to the
+budget. A List of `Packed` values ([MEM-13](#mem-13-packed-variants)), whose storage is
+sequential, is not tracked: a write to one is not charged. An unshared List grows in place,
+relocating within its arena by doubling from four elements when full, so its storage is at
+most four times its charged bytes plus four elements; an unshared Map or Set keeps its
+entries the same way. Consequently a push or insert through a nested place
+(`list.push(mut adj[i], x)` in an arena) copies the inner List, Map or Set each time,
+charged; one held by a binding or an inline record field grows in amortized constant time.
 
 ### MEM-7: Layout
 

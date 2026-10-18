@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 12;
+pub const ABI_VERSION: u32 = 13;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -398,6 +398,7 @@ pub enum RuntimeEntry {
     RegionExit,
     ArenaAlloc,
     ArenaPush,
+    ArenaReserve,
     ArenaEnter,
     ArenaBound,
     ArenaExhausted,
@@ -493,7 +494,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 61] = [
+    pub const ALL: [RuntimeEntry; 62] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -533,6 +534,7 @@ impl RuntimeEntry {
         Self::RegionExit,
         Self::ArenaAlloc,
         Self::ArenaPush,
+        Self::ArenaReserve,
         Self::ArenaEnter,
         Self::ArenaBound,
         Self::ArenaExhausted,
@@ -827,6 +829,20 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::ArenaReserve => (
+                "hirsel_rt_v2_arena_reserve",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        BLOCK,
+                        p("count", U64),
+                        p("element_size", U64),
+                        p("element_align", U64),
+                        p("out_block", ptr(N::Header, 2)),
+                    ]
+                },
+            ),
             Self::ArenaEnter => ("hirsel_rt_v2_arena_enter", VOID, const { &[CTX, REGION] }),
             Self::ArenaBound => (
                 "hirsel_rt_v2_arena_bound",
@@ -1013,6 +1029,7 @@ snapshot_enum!(RuntimeEntry {
     RegionExit,
     ArenaAlloc,
     ArenaPush,
+    ArenaReserve,
     ArenaEnter,
     ArenaBound,
     ArenaExhausted,

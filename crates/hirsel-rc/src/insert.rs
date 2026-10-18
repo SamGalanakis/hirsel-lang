@@ -2265,6 +2265,7 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::BeginLoan { address, .. }
             // A sequence write writes the content its place holds.
             | Inst::SeqReserve { address, .. }
+            | Inst::ArenaPush { address, .. }
             | Inst::SeqSetLen { address, .. }
             | Inst::SeqAppend { address, .. } => addr_use(address, &mut used),
             Inst::Store { address, .. } => match slot(address) {
@@ -3461,7 +3462,12 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *result = map(*result);
                 *value = map(*value);
             }
-            Inst::ArenaPush { version, .. } => *version = map(*version),
+            Inst::ArenaPush { count, version, .. } => {
+                if let Some(count) = count {
+                    *count = map(*count);
+                }
+                *version = map(*version);
+            }
             Inst::Store { value, version, .. } => {
                 *value = map(*value);
                 *version = map(*version);

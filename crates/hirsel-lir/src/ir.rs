@@ -637,8 +637,15 @@ pub enum Inst {
     /// element. A heap, static or untracked block is left alone. A write:
     /// `version` is the root's new reaching value. Fails with the arena's
     /// `OutOfSpace`. Library units only.
+    ///
+    /// With `count` (a u64, LIR schema revision 34) it prepares that many
+    /// appended elements at once, before an Io read appends up to `count`
+    /// bytes: the List is charged `count` elements, copied when shared,
+    /// then relocated to `max(4, 2 * len, len + count)` elements when they
+    /// do not fit, so the read itself never charges or relocates. Any unit.
     ArenaPush {
         address: AddressId,
+        count: Option<ValueId>,
         version: ValueId,
         failure: FailureId,
     },
@@ -2054,10 +2061,14 @@ impl Inst {
             }
             Self::ArenaPush {
                 address,
+                count,
                 version,
                 failure,
             } => {
                 f(R::Address(address));
+                if let Some(count) = count {
+                    f(R::Value(count));
+                }
                 f(R::Value(version));
                 f(R::Failure(failure));
             }
@@ -2850,7 +2861,7 @@ snapshot_enum!(Inst {
     SeqReserve { address, capacity, version },
     SeqSetLen { address, len, version },
     SeqAppend { address, value, version },
-    ArenaPush { address, version, failure },
+    ArenaPush { address, count, version, failure },
     FlatAppend { address, construct, version },
     FlatField { address, field, op, version },
     FlatClose { address, construct, field, version },

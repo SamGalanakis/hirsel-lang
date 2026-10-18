@@ -152,10 +152,15 @@ impl FnEmitter<'_, '_, '_> {
         Ok(())
     }
 
-    /// `ArenaPush`: the runtime charges a tracked arena List at `address` one element and
-    /// gives it room, possibly copying or relocating it within its arena; any other block
-    /// it leaves as it is. An exhausted push changes nothing.
-    pub(crate) fn arena_push(&mut self, address: AddressId, failure: FailureId) -> Emitted {
+    /// `ArenaPush`: the runtime charges a tracked arena List at `address` one element, or
+    /// `count`, and gives it room, possibly copying or relocating it within its arena; any
+    /// other block it leaves as it is. An exhausted push changes nothing.
+    pub(crate) fn arena_push(
+        &mut self,
+        address: AddressId,
+        count: Option<ValueId>,
+        failure: FailureId,
+    ) -> Emitted {
         let place = self.place(address)?;
         let Some(element) = self.sequence_element(place.layout)? else {
             return self.invalid("an arena push of a place that holds no List block");
@@ -171,7 +176,16 @@ impl FnEmitter<'_, '_, '_> {
         let out = self.out_word();
         let (size, align) = (self.u64c(size), self.u64c(align));
         let context = self.context;
-        let status = self.rt1(RuntimeEntry::ArenaPush, &[context, block, size, align, out])?;
+        let status = match count {
+            None => self.rt1(RuntimeEntry::ArenaPush, &[context, block, size, align, out])?,
+            Some(count) => {
+                let count = self.get1(count)?;
+                self.rt1(
+                    RuntimeEntry::ArenaReserve,
+                    &[context, block, count, size, align, out],
+                )?
+            }
+        };
         let Some(anchor) = self
             .unit
             .tables

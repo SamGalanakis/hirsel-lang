@@ -3567,11 +3567,22 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             Inst::ArenaPush {
                 address,
+                count,
                 version,
                 failure,
             } => {
+                let count = match count {
+                    None => 1,
+                    Some(count) => match self.read_use(f, count)? {
+                        Val::Bits {
+                            scalar: ScalarKind::U64,
+                            bits,
+                        } => bits as u64,
+                        _ => return fail(V::TypeConfusion, "an arena push count is no u64"),
+                    },
+                };
                 let (r, block, element) = self.sequence_place(f, address, false)?;
-                if let Some(region) = self.arena_push(&r, block, element)? {
+                if let Some(region) = self.arena_push(&r, block, element, count)? {
                     return self.exhaust(f, failure, region);
                 }
                 if let Some(s) = r.root_slot {
@@ -5685,16 +5696,19 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
     }
 
-    /// `hirsel_rt_v2_arena_push` (runtime ABI 11) on the List block `block`
-    /// the place `r` holds: a tracked arena block is charged its element and,
-    /// when shared, its count of them, then a shared block is copied and a
-    /// full one relocated within its arena to `max(4, 2 * count)` elements.
-    /// Returns the arena when the charge exceeds its budget, nothing changed.
+    /// `hirsel_rt_v2_arena_push` (runtime ABI 11), or `hirsel_rt_v2_arena_reserve`
+    /// of `count` elements (ABI 13), on the List block `block` the place `r`
+    /// holds: a tracked arena block is charged `count` elements and, when
+    /// shared, its count of them, then a shared block is copied and one
+    /// without room for `count` more relocated within its arena to
+    /// `max(4, 2 * len, len + count)` elements. Returns the arena when the
+    /// charge exceeds its budget, nothing changed.
     fn arena_push(
         &mut self,
         r: &Resolved,
         block: Ptr,
         element: LayoutId,
+        count: u64,
     ) -> Checked<Option<usize>> {
         let Some(region) = self.tracked_region(block)? else {
             return Ok(None);
@@ -5708,13 +5722,17 @@ impl<'p, S: Stage> Machine<'p, S> {
             .map_err(|_| err(V::Malformed, "a sequence count beyond u64"))?;
         let each = self.block_charge(layout, 1)?;
         let copied = if shared { each.saturating_mul(len) } else { 0 };
-        if !self.charge(region, each.saturating_add(copied)) {
+        if !self.charge(region, each.saturating_mul(count).saturating_add(copied)) {
             return Ok(Some(region));
         }
-        if shared || len >= self.sequence_capacity_word(block, element)? {
+        let wanted = len
+            .checked_add(count)
+            .ok_or_else(|| err(V::Malformed, "a sequence capacity beyond u64"))?;
+        if shared || wanted > self.sequence_capacity_word(block, element)? {
             let slots = len
                 .checked_mul(2)
                 .ok_or_else(|| err(V::Malformed, "a sequence capacity beyond u64"))?
+                .max(wanted)
                 .max(4);
             self.tracked_move(r, block, element, region, slots, shared)?;
         }
@@ -7796,6 +7814,28 @@ impl<'p, S: Stage> Machine<'p, S> {
             .checked_mul(stride)
             .and_then(|n| start.checked_add(n))
             .ok_or_else(|| err(V::OutOfExtent, "operation update extent"))?;
+        if let Some((old, _)) = old
+            && self.tracked_region(old)?.is_some()
+        {
+            // An Io read into a tracked arena List appends in the room its
+            // `ArenaPush` prepared and charged (MEM-6, LIR schema revision 34).
+            self.check_private(old)?;
+            if count > self.sequence_capacity_word(old, element)? {
+                return fail(
+                    V::OutOfExtent,
+                    "an Io read past the room prepared in its arena List",
+                );
+            }
+            let extent = &mut self.ledger.get_mut(old.alloc).extent;
+            extent.write_bytes(old.offset, &count.to_le_bytes());
+            for (i, bits) in bits.into_iter().enumerate() {
+                extent.write_bytes(
+                    old.offset + start + i as u64 * stride,
+                    &bits.to_le_bytes()[..stride as usize],
+                );
+            }
+            return Ok(());
+        }
         let mut image = Extent::new(size);
         if old.is_some() {
             image.write_bytes(0, &count.to_le_bytes());
