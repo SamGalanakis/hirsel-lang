@@ -13,11 +13,6 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let text = time.format(stamp) ? Time
   let duration = duration.parse("1.500s") ? Parse
   let output = io.stdout(rt) ? Grant
-  out.print(output, path.text(p)) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, text) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, duration.format(duration)) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{path.text(p)}\n{text}\n{duration.format(duration)}\n") ? Output
   Ok(())
 }

@@ -5,6 +5,10 @@ use std::{collections::BTreeSet, fs, path::Path};
 const PAGE: &str = include_str!("../../../../docs/tour.md");
 const START: &str = "<!-- tour: ";
 const END: &str = "<!-- /tour -->";
+// Only a program that calls C may be checked without running: the reference
+// interpreter does not call C.
+const ACCEPT: &str = "`hirsel check` accepts it; the reference interpreter does not call C, \
+                      so run it with `hirsel run --native`.";
 
 fn snippets() -> Vec<(&'static str, &'static str)> {
     PAGE.split(START)
@@ -49,6 +53,7 @@ fn published_programs_and_outputs_match_the_corpus() {
             .unwrap();
         let expected = match header.expect {
             Expect::Test => "All selected @test functions pass.".into(),
+            Expect::Accept if source.contains("extern \"c\" fn ") => ACCEPT.into(),
             Expect::Run { stdout, exit } if stdout.is_empty() && exit == 0 => {
                 "No stdout; exit 0 (all checks pass).".into()
             }
@@ -144,15 +149,15 @@ fn full_gate_tour_programs_agree_natively() {
         let matrix = smoke_matrix();
         let tools = Toolchain::for_matrix(&dir.join("runtime"), &matrix).unwrap();
         for (path, _) in snippets() {
-            // Native structured tasks are not implemented. This is stated in
-            // the page; the ordinary and checked interpreter test still runs it.
-            if path == "conformance/CONC/CONC-2-tour-11-concurrency-run.hir" {
+            let full = root.join(path);
+            let source = fs::read_to_string(&full).unwrap();
+            // The heap interpreter does not call C; the corpus checks the FFI step.
+            if source.contains("extern \"c\" fn ") {
                 continue;
             }
-            let full = root.join(path);
             let case = Case {
                 id: path.into(),
-                source: fs::read_to_string(&full).unwrap(),
+                source,
                 path: Some(full),
             };
             let case_dir = dir.join(Path::new(path).file_stem().unwrap());

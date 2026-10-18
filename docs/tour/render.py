@@ -5,6 +5,8 @@ import re
 
 ROOT = Path(__file__).resolve().parents[2]
 PAGE = ROOT / 'docs/tour.md'
+ACCEPT = ('`hirsel check` accepts it; the reference interpreter does not call C, '
+          'so run it with `hirsel run --native`.')
 PATTERN = re.compile(r'<!-- tour: (conformance/[^\n]+\.hir) -->\n.*?<!-- /tour -->', re.S)
 
 
@@ -23,6 +25,8 @@ def render(match):
                 f'No stdout; exit {exit_code}.')
     if any(line.strip() == '// expect: test' for line in lines[:split]):
         expected = 'All selected @test functions pass.'
+    if any(line.strip() == '// expect: accept' for line in lines[:split]):
+        expected = ACCEPT
     return (f'<!-- tour: {path} -->\n'
             f'[Runnable source](../{path})\n\n'
             f'```hirsel\n{body}```\n\nExpected:\n\n{expected}\n<!-- /tour -->')

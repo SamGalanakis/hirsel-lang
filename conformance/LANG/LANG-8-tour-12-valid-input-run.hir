@@ -2,9 +2,8 @@
 // expect: run
 pub fn main() -> Result[(), String] {
   let line = " 42\n"
-  let number = match u64.parse(string.trim(line)) {
-    Ok(n) => n,
-    Error(_) => return Error("bad input: expected one decimal number"),
+  let Ok(number) = u64.parse(string.trim(line)) else {
+    return Error("bad input: expected one decimal number")
   }
   failure.check(number == 42, Arithmetic())
   Ok(())

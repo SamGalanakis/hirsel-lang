@@ -10,21 +10,32 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
         resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
         tls: Plain(),
         connections: [
-          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), Close()])
+          Open(
+            [
+              Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\n\r\ntrue"
+              )
+            ]
+          )
         ]
       )
     ],
     []
   )
-  let response = http.fetch(
-    n,
-    http.default_config(),
+  let mut config = http.default_config()
+  config.idle_timeout = None()
+  let mut client = http.client(n, None(), config)?
+  let first = http.client_fetch(mut client, Get(), "http://tour.test/", [], None())?
+  test.check(t, first.status == 200u16 && first.body == b"ok")
+  // The peer accepts one connection, so this request reuses it.
+  let second = http.client_fetch(
+    mut client,
     Get(),
-    "http://tour.test/",
+    "http://tour.test/ready",
     [],
     None()
   )?
-  test.check(t, response.status == 200u16)
-  test.check(t, response.body == b"ok")
+  test.check(t, http.response_json(second) == Ok(Bool(true)))
   Ok(())
 }

@@ -1,0 +1,20 @@
+// rule: PROG-4
+// expect: accept
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+/// Returns the value of name, a NUL-terminated byte string, or NULL when it is unset.
+/// The result points into the C environment; Hirsel only tests it and retains nothing.
+extern "c" fn getenv(u: Unsafe, name: Bytes) -> Option[Ptr[u8]]
+
+/// Returns glibc's static version string, which is never NULL.
+extern "c" fn gnu_get_libc_version(u: Unsafe) -> Ptr[u8]
+
+pub fn main(rt: Io, u: Unsafe) -> Result[(), AppError] {
+  let _ = gnu_get_libc_version(u)
+  let home = match getenv(u, b"HOME\0") {
+    Some(_) => "set",
+    None() => "unset",
+  }
+  out.print(io.stdout(rt) ? Grant, f"HOME is {home}\n") ? Output
+  Ok(())
+}

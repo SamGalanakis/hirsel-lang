@@ -14,21 +14,14 @@ pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), AppError] {
   }
   let label = match env.get(environment, "TOUR_LABEL") {
     Ok(Some(value)) => take value,
-    Ok(None()) => "unset",
-    Error(NotGranted()) => "unset",
+    Ok(None()) | Error(NotGranted()) => "unset",
     Error(e) => return Error(Environment(e)),
   }
   let output = io.stdout(rt) ? Grant
-  out.print(output, name) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, label) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{name}\n{label}\n") ? Output
   let input = io.stdin(rt) ? Grant
-  while true {
-    match input.read_line(input) ? Input {
-      Some(line) => out.print(output, line) ? Output,
-      None() => return Ok(()),
-    }
+  while let Some(line) = input.read_line(input) ? Input {
+    out.print(output, line) ? Output
   }
   Ok(())
 }

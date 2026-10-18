@@ -16,18 +16,9 @@ fn ascii(byte: u8) -> bool {
   }
 }
 
-fn number(line: String) -> Result[u64, String] {
-  let Ok(n) = u64.parse(string.trim(line)) else {
-    return Error("bad input: expected one decimal number")
-  }
-  Ok(n)
-}
-
 pub fn main() -> Result[(), String] {
   failure.check(class('q') == 1 && class('7') == 2 && class('\t') == 3, TextInvariant())
   failure.check(ascii(0x41) && !ascii(0xE9), TextInvariant())
-  let n = number(" 42\n")?
-  failure.check(n == 42, Arithmetic())
   let words: List[String] = ["3", "x", "4"]
   let mut total = 0u64
   for word in words {

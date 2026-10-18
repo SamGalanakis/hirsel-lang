@@ -1,0 +1,32 @@
+// rule: CAP-1
+// expect: run
+pub fn main(t: Test) -> Result[(), ProcessError] {
+  let bc = path.of("/usr/bin/bc")
+  let p = test.process(
+    t,
+    [
+      ProcessScript(
+        program: "/usr/bin/bc",
+        args: ["--version"],
+        outcome: Ok(ProcessOutput(status: Exited(0), stdout: b"bc 1.07\n", stderr: b""))
+      )
+    ],
+    [
+      ChildScript(
+        program: "/usr/bin/bc",
+        args: ["-q"],
+        steps: [Expect(b"6*7\n"), Print(b"42\n"), Exit(Exited(0))]
+      )
+    ]
+  )
+  let version = proc.run(p, bc, ["--version"], b"", None(), 4096u64, None())?
+  test.check(t, version.status == Exited(0) && version.stdout == b"bc 1.07\n")
+  let mut calc = proc.spawn(p, bc, ["-q"], None())?
+  child.write(p, mut calc, b"6*7\n")?
+  child.close_stdin(p, mut calc)
+  let mut answer: List[u8] = []
+  while child.read_stdout(p, mut calc, mut answer, 64u64)? > 0 {}
+  test.check(t, bytes.from_list(take answer) == b"42\n")
+  test.check(t, child.wait(p, take calc) == Ok(Exited(0)))
+  Ok(())
+}

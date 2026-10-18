@@ -4,9 +4,8 @@
 pub type AppError = Json(json.JsonError) | Grant(GrantError) | Output(OutputError)
 
 pub fn main(rt: Io) -> Result[(), AppError] {
-  let value = json.parse("{\"n\": 1, \"ok\": true}") ? Json
+  let value = json.parse(r#"{"n": 1, "ok": true}"#) ? Json
   let text = json.stringify(value) ? Json
-  out.print(io.stdout(rt) ? Grant, text) ? Output
-  out.print(io.stdout(rt) ? Grant, "\n") ? Output
+  out.print(io.stdout(rt) ? Grant, f"{text}\n") ? Output
   Ok(())
 }

@@ -1,0 +1,40 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// stdout: finished: slept
+// stdout: expired: canceled
+pub type AppError = Grant(GrantError) | Sleep(time.SleepError) | Output(OutputError)
+
+fn nap(c: MonotonicClock, seconds: i64) -> String {
+  match time.sleep(c, duration.from_parts(seconds, 0)) {
+    Ok(()) => "slept",
+    Error(_) => "canceled",
+  }
+}
+
+fn bounded(tasks: Tasks, deadline: Deadline, seconds: i64) -> String {
+  let outcome = task.scope_until(
+    tasks,
+    deadline,
+    fn(s: Scope) -> String {
+      nap(deadline.clock, seconds)
+    }
+  )
+  match outcome {
+    Finished(text) => f"finished: {text}\n",
+    Expired(text) => f"expired: {text}\n",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let c = io.monotonic_clock(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let deadline = Deadline(
+    clock: c,
+    at: time.deadline(c, duration.from_parts(2, 0)) ? Sleep
+  )
+  out.print(output, bounded(tasks, deadline, 1)) ? Output
+  out.print(output, bounded(tasks, deadline, 5)) ? Output
+  Ok(())
+}

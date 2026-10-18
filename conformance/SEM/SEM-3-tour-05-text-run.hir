@@ -12,13 +12,11 @@ fn words(line: String) -> List[String] {
 pub fn main(rt: Io) -> Result[(), AppError] {
   failure.check(words("  é sheep  ") == ["é", "sheep"], TextInvariant())
   let text = "é"
-  let start = match string.position(text, 0) {
-    Some(p) => p,
-    None() => return Error(Boundary()),
+  let Some(start) = string.position(text, 0) else {
+    return Error(Boundary())
   }
-  let end = match string.position(text, 2) {
-    Some(p) => p,
-    None() => return Error(Boundary()),
+  let Some(end) = string.position(text, 2) else {
+    return Error(Boundary())
   }
   let part = string.slice(text, start, end)
   let mut scalars: u64 = 0
@@ -28,12 +26,11 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let raw: Bytes = b"\xff"
   let invalid = string.from_bytes(copy raw)
   failure.check(invalid == Error(raw), TextInvariant())
+  failure.check(
+    string.byte_len(r"C:\tmp") == 6 && br"a\nb" == b"a\\nb",
+    TextInvariant()
+  )
   let output = io.stdout(rt) ? Grant
-  out.print(output, part) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, u64.to_string(string.byte_len(part))) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, u64.to_string(scalars)) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{part}\n{string.byte_len(part)}\n{scalars}\n") ? Output
   Ok(())
 }

@@ -80,6 +80,7 @@ conformance/CAP/CAP-1-tasks-projection-bad.hir
 conformance/CAP/CAP-1-tasks-projection-ok.hir
 conformance/CAP/CAP-1-test-directory-example.hir
 conformance/CAP/CAP-1-tour-10-inputs-run.hir
+conformance/CAP/CAP-1-tour-16-processes-run.hir
 conformance/CAP/CAP-1-unsafe-parameter.hir
 conformance/CAP/CAP-2-aggregate-summary-bad.hir
 conformance/CAP/CAP-2-aggregate-summary-ok.hir
@@ -513,6 +514,7 @@ conformance/CONC/CONC-3-process-run-canceled-run.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
 conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
+conformance/CONC/CONC-3-tour-11-deadline-run.hir
 conformance/CONC/CONC-4-sequential-atomic-order.hir
 conformance/CONC/CONC-5-channel-in-body-bad.hir
 conformance/CONC/CONC-5-channel-in-body-ok.hir
@@ -3583,6 +3585,7 @@ conformance/PROG/PROG-4-ffi-null-call-ok.hir
 conformance/PROG/PROG-4-ffi-null-layout-run.hir
 conformance/PROG/PROG-4-ffi-null-nested-bad.hir
 conformance/PROG/PROG-4-ffi-null-nested-ok.hir
+conformance/PROG/PROG-4-tour-17-ffi-ok.hir
 conformance/PROV/PROV-1-alias-branch-else-exit-ok.hir
 conformance/PROV/PROV-1-alias-branch-if-exit-ok.hir
 conformance/PROV/PROV-1-alias-branch-if-live-bad.hir

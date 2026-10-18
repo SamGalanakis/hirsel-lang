@@ -17,8 +17,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let output = io.stdout(rt) ? Grant
   for (key, value) in counts {
     if !set.contains(seen, key) {
-      out.print(output, key) ? Output
-      out.print(output, "\n") ? Output
+      out.print(output, f"{key}\n") ? Output
       set.insert(mut seen, unique key)
     }
   }

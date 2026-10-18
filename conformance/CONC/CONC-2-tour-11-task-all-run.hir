@@ -11,10 +11,8 @@ fn total(from: u64, to: u64) -> Result[u64, RangeError] {
     return Error(Empty(from, to))
   }
   let mut sum: u64 = 0
-  let mut i = from
-  while i <= to {
+  for i in from..=to {
     sum += i
-    i += 1
   }
   Ok(sum)
 }

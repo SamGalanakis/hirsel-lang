@@ -13,8 +13,9 @@ or dependency downloads. `json.parse` names a selected package definition;
 
 ## Statements at a glance
 
-Use `while`, `for x in xs`, half-open ranges `0u64..n`, `break`, `continue`,
-and checked indexing `xs[i]`; assign with `xs[i] = value` on a mutable list.
+Use `while`, `for x in xs`, half-open ranges `0u64..n`, closed ranges `1u64..=3`,
+`break`, `continue` and checked indexing `xs[i]`; assign with `xs[i] = value` on
+a mutable list.
 
 <!-- tour: conformance/LANG/LANG-6-tour-00-statements-run.hir -->
 [Runnable source](../conformance/LANG/LANG-6-tour-00-statements-run.hir)
@@ -33,13 +34,16 @@ pub fn main() -> Result[(), ()] {
     }
     total += xs[i]
   }
-  while total < 20 {
+  for n in 1u64..=3 {
+    total += n
+  }
+  while total < 30 {
     total += 1
-    if total == 19 {
+    if total == 25 {
       break
     }
   }
-  failure.check(total == 19, Arithmetic())
+  failure.check(total == 25, Arithmetic())
   Ok(())
 }
 ```
@@ -148,7 +152,8 @@ The mistakes to avoid first:
 Records, variants, tuples and sized scalars have value semantics. `match` is
 exhaustive, and arithmetic uses one integer width at a time. Overflow fails;
 choose `int.checked_add` or `int.wrapping_add` explicitly when needed. A public
-signature may mention only public types.
+signature may mention only public types. `f"{n}\n"` formats a value into a fresh
+string ([f-strings](#building-text-with-f-strings) below).
 
 Run `hirsel run conformance/LANG/LANG-2-tour-01-values-run.hir`.
 The default source runner uses a simulated world; it grants no host access.
@@ -177,8 +182,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let p = Point(x: 3, y: 4)
   let n = score(Dot(p))
   let output = io.stdout(rt) ? Grant
-  out.print(output, u64.to_string(n)) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{n}\n") ? Output
   Ok(())
 }
 ```
@@ -295,7 +299,9 @@ input error
 An annotated callable type can specialize a top-level generic function name. The same
 works for arguments, record fields and returns when the complete expected callable type
 determines every type and size parameter. The declared modes and effects still apply;
-missing context or an undetermined parameter is LANG-2.
+missing context or an undetermined parameter is LANG-2. A generic function declared
+inside a body, like `tagged`, works the same way and may capture locals; a capturing
+one borrows its scope, so bind it locally or pass it to a callable parameter.
 
 <!-- tour: conformance/LANG/LANG-2-generic-callable-context-run.hir -->
 [Runnable source](../conformance/LANG/LANG-2-generic-callable-context-run.hir)
@@ -336,6 +342,12 @@ pub fn main() -> Result[(), String] {
   let g = callback()
   let h = returned(true)
   failure.check(g(11) == 11 && h(13) == 13, Bounds())
+  let tag = 9u64
+  fn tagged[T](take value: T) -> (u64, T) {
+    (tag, value)
+  }
+  let pair: fn(take u64) -> (u64, u64) uses {} = tagged
+  failure.check(pair(4) == (9, 4), Bounds())
   Ok(())
 }
 ```
@@ -395,6 +407,8 @@ No stdout; exit 0 (all checks pass).
 Use `Result[(), String]` for an entry that needs to fail with an application
 message. `Error("bad input: ...")` exits 1; no fake `FileFault(0u32)` is needed.
 A helper can return `Result[T, String]`, and plain `?` propagates its message.
+`let Ok(number) = .. else { return .. }` binds a success and leaves on anything else
+([patterns](#patterns-conditional-let-alternatives-and-ranges) below).
 The line below can come from `input.read_line`; the example deliberately rejects it.
 
 <!-- tour: conformance/LANG/LANG-8-tour-12-bad-input-run.hir -->
@@ -403,9 +417,8 @@ The line below can come from `input.read_line`; the example deliberately rejects
 ```hirsel
 pub fn main() -> Result[(), String] {
   let line = "not a number"
-  let number = match u64.parse(string.trim(line)) {
-    Ok(n) => n,
-    Error(_) => return Error("bad input: expected one decimal number"),
+  let Ok(number) = u64.parse(string.trim(line)) else {
+    return Error("bad input: expected one decimal number")
   }
   failure.check(number == 42, Arithmetic())
   Ok(())
@@ -425,9 +438,8 @@ The same parser accepts a trimmed decimal:
 ```hirsel
 pub fn main() -> Result[(), String] {
   let line = " 42\n"
-  let number = match u64.parse(string.trim(line)) {
-    Ok(n) => n,
-    Error(_) => return Error("bad input: expected one decimal number"),
+  let Ok(number) = u64.parse(string.trim(line)) else {
+    return Error("bad input: expected one decimal number")
   }
   failure.check(number == 42, Arithmetic())
   Ok(())
@@ -473,18 +485,9 @@ fn ascii(byte: u8) -> bool {
   }
 }
 
-fn number(line: String) -> Result[u64, String] {
-  let Ok(n) = u64.parse(string.trim(line)) else {
-    return Error("bad input: expected one decimal number")
-  }
-  Ok(n)
-}
-
 pub fn main() -> Result[(), String] {
   failure.check(class('q') == 1 && class('7') == 2 && class('\t') == 3, TextInvariant())
   failure.check(ascii(0x41) && !ascii(0xE9), TextInvariant())
-  let n = number(" 42\n")?
-  failure.check(n == 42, Arithmetic())
   let words: List[String] = ["3", "x", "4"]
   let mut total = 0u64
   for word in words {
@@ -541,8 +544,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let output = io.stdout(rt) ? Grant
   for (key, value) in counts {
     if !set.contains(seen, key) {
-      out.print(output, key) ? Output
-      out.print(output, "\n") ? Output
+      out.print(output, f"{key}\n") ? Output
       set.insert(mut seen, unique key)
     }
   }
@@ -592,13 +594,11 @@ fn words(line: String) -> List[String] {
 pub fn main(rt: Io) -> Result[(), AppError] {
   failure.check(words("  é sheep  ") == ["é", "sheep"], TextInvariant())
   let text = "é"
-  let start = match string.position(text, 0) {
-    Some(p) => p,
-    None() => return Error(Boundary()),
+  let Some(start) = string.position(text, 0) else {
+    return Error(Boundary())
   }
-  let end = match string.position(text, 2) {
-    Some(p) => p,
-    None() => return Error(Boundary()),
+  let Some(end) = string.position(text, 2) else {
+    return Error(Boundary())
   }
   let part = string.slice(text, start, end)
   let mut scalars: u64 = 0
@@ -608,13 +608,12 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let raw: Bytes = b"\xff"
   let invalid = string.from_bytes(copy raw)
   failure.check(invalid == Error(raw), TextInvariant())
+  failure.check(
+    string.byte_len(r"C:\tmp") == 6 && br"a\nb" == b"a\\nb",
+    TextInvariant()
+  )
   let output = io.stdout(rt) ? Grant
-  out.print(output, part) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, u64.to_string(string.byte_len(part))) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, u64.to_string(scalars)) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{part}\n{string.byte_len(part)}\n{scalars}\n") ? Output
   Ok(())
 }
 ```
@@ -824,7 +823,8 @@ total 2.50h
 `std@1` is ordinary Hirsel source. JSON numbers retain their decimal spelling;
 objects retain insertion order and duplicate keys are rejected. There is no
 automatic conversion of application records to JSON: construct or inspect
-`json.Value`, whose nested arrays and objects contain `Value`s.
+`json.Value`, whose nested arrays and objects contain `Value`s. A raw literal such
+as `r#"{"n": 1}"#` writes JSON text without escaping its quotes.
 
 <!-- tour: conformance/LANG/LANG-8-tour-06-json-run.hir -->
 [Runnable source](../conformance/LANG/LANG-8-tour-06-json-run.hir)
@@ -833,10 +833,9 @@ automatic conversion of application records to JSON: construct or inspect
 pub type AppError = Json(json.JsonError) | Grant(GrantError) | Output(OutputError)
 
 pub fn main(rt: Io) -> Result[(), AppError] {
-  let value = json.parse("{\"n\": 1, \"ok\": true}") ? Json
+  let value = json.parse(r#"{"n": 1, "ok": true}"#) ? Json
   let text = json.stringify(value) ? Json
-  out.print(io.stdout(rt) ? Grant, text) ? Output
-  out.print(io.stdout(rt) ? Grant, "\n") ? Output
+  out.print(io.stdout(rt) ? Grant, f"{text}\n") ? Output
   Ok(())
 }
 ```
@@ -871,12 +870,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
   let text = time.format(stamp) ? Time
   let duration = duration.parse("1.500s") ? Parse
   let output = io.stdout(rt) ? Grant
-  out.print(output, path.text(p)) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, text) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, duration.format(duration)) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{path.text(p)}\n{text}\n{duration.format(duration)}\n") ? Output
   Ok(())
 }
 ```
@@ -927,10 +921,16 @@ No stdout; exit 0 (all checks pass).
 
 ## Standard library: HTTP
 
-`http.fetch` needs a `Net`, a config, a method, a URL, headers and an optional
-body. Network authority is a finite set of exact address/port/operation rules;
-a URL cannot widen it, including on redirects. This complete program uses a
-scripted peer from `Test`, so it needs no live server. Run a Test entry with
+`http.client(net, clock, config)` makes a `Client` that keeps finished connections
+open for the next request to the same origin; `http.client_fetch` takes it `mut`
+with a method, a URL, headers and an optional body. Idle expiry needs a
+`MonotonicClock`; pass `None()` and set `idle_timeout = None()` to keep connections
+until the Client drops. `http.client_send` sends a `Body` from `http.json_body` or
+`http.form_body`, and `http.response_json` decodes a reply. Bound a whole exchange
+with `task.scope_until` (below). `http.fetch` makes one unpooled request. Network
+authority is a finite set of exact address/port/operation rules; a URL cannot widen
+it, including on redirects. This complete program uses a scripted peer from `Test`
+that accepts one connection, so it needs no live server. Run a Test entry with
 `hirsel run` just like the other source fixtures: the simulator supplies Test.
 
 <!-- tour: conformance/LANG/LANG-9-tour-08-http-run.hir -->
@@ -947,22 +947,33 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
         resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
         tls: Plain(),
         connections: [
-          Open([Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"), Close()])
+          Open(
+            [
+              Send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 4\r\n\r\ntrue"
+              )
+            ]
+          )
         ]
       )
     ],
     []
   )
-  let response = http.fetch(
-    n,
-    http.default_config(),
+  let mut config = http.default_config()
+  config.idle_timeout = None()
+  let mut client = http.client(n, None(), config)?
+  let first = http.client_fetch(mut client, Get(), "http://tour.test/", [], None())?
+  test.check(t, first.status == 200u16 && first.body == b"ok")
+  // The peer accepts one connection, so this request reuses it.
+  let second = http.client_fetch(
+    mut client,
     Get(),
-    "http://tour.test/",
+    "http://tour.test/ready",
     [],
     None()
   )?
-  test.check(t, response.status == 200u16)
-  test.check(t, response.body == b"ok")
+  test.check(t, http.response_json(second) == Ok(Bool(true)))
   Ok(())
 }
 ```
@@ -976,7 +987,8 @@ For a real server, see [hello-web](../examples/hello-web/main.hir),
 [hello-web-concurrent](../examples/hello-web-concurrent/main.hir) and
 [todo-api](../examples/todo-api/main.hir). They show listen/accept,
 `http.receive_request` with head/body limits, `http.respond`, connection cleanup
-and application routing. The concurrent examples currently run in the interpreter.
+and application routing; [fetchjson](../examples/fetchjson/README.md) posts JSON over one
+Client. All of them also build natively.
 
 ## File I/O: read, replace, handle missing files
 
@@ -1056,7 +1068,12 @@ Roots arrive as entry parameters; each Io projection is fallible. `arg.count`
 and `arg.text` use the explicit zero-based argument snapshot, excluding the
 executable. `env.get` distinguishes a denied key (`Error(NotGranted())`) from a
 granted unset key (`Ok(None())`). Io alone grants neither stdin nor stdout.
-`input.read_line` returns `Some` for a final unterminated line and `None` at EOF.
+`input.read_line` returns `Some` for a final unterminated line and `None` at EOF,
+so `while let Some(line) = ..` reads every line. For lines with a length bound, keep
+one `bufio.Reader` and call `bufio.stdin_read_line(stdin, mut reader, limit)`, which
+returns `""` at EOF; `stdin_read_until`, `stdin_read_exact` and `stdin_read` follow
+the file adapters. `Ok(None()) | Error(NotGranted())` below handles both kinds of
+absence in one arm.
 
 Run the following in the default simulator (empty Args, Env and stdin), or use
 `hirsel run conformance/CAP/CAP-1-tour-10-inputs-run.hir --grants docs/tour/inputs.json </dev/null`
@@ -1081,21 +1098,14 @@ pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), AppError] {
   }
   let label = match env.get(environment, "TOUR_LABEL") {
     Ok(Some(value)) => take value,
-    Ok(None()) => "unset",
-    Error(NotGranted()) => "unset",
+    Ok(None()) | Error(NotGranted()) => "unset",
     Error(e) => return Error(Environment(e)),
   }
   let output = io.stdout(rt) ? Grant
-  out.print(output, name) ? Output
-  out.print(output, "\n") ? Output
-  out.print(output, label) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{name}\n{label}\n") ? Output
   let input = io.stdin(rt) ? Grant
-  while true {
-    match input.read_line(input) ? Input {
-      Some(line) => out.print(output, line) ? Output,
-      None() => return Ok(()),
-    }
+  while let Some(line) = input.read_line(input) ? Input {
+    out.print(output, line) ? Output
   }
   Ok(())
 }
@@ -1167,8 +1177,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
     }
   ) ? Channel
   let output = io.stdout(rt) ? Grant
-  out.print(output, u64.to_string(received)) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{received}\n") ? Output
   Ok(())
 }
 ```
@@ -1184,7 +1193,10 @@ To wait for several children, add their handles to a `TaskSet` and hand it to
 `task.all`, which returns every result in the order they were added, or the
 first `Error` once it has cancelled and joined the children still running.
 `task.select` instead returns the index and result of the first child to
-finish and cancels the rest. A task set must be consumed like a handle.
+finish and cancels the rest. To handle children as they finish, `task.await_any(s, set)`
+returns the index of the next one and `task.await_at(s, mut set, i)` its result;
+`task.cancel_all` or `task.detach_all` consumes what is left. A task set must be
+consumed like a handle.
 
 <!-- tour: conformance/CONC/CONC-2-tour-11-task-all-run.hir -->
 [Runnable source](../conformance/CONC/CONC-2-tour-11-task-all-run.hir)
@@ -1199,10 +1211,8 @@ fn total(from: u64, to: u64) -> Result[u64, RangeError] {
     return Error(Empty(from, to))
   }
   let mut sum: u64 = 0
-  let mut i = from
-  while i <= to {
+  for i in from..=to {
     sum += i
-    i += 1
   }
   Ok(sum)
 }
@@ -1252,6 +1262,116 @@ Expected:
 ```
 <!-- /tour -->
 
+`task.scope_until(tasks, deadline, body)` bounds a scope by a `Deadline` on a
+monotonic clock: when the clock reaches it, the scope is cancelled and returns
+`Expired(result)`; a body that ends first returns `Finished(result)`. Nothing polls:
+each blocking operation inside is a cancellation point that returns `Canceled`.
+`time.deadline(clock, interval)` computes the instant. In the corpus the clock is
+virtual; on the host, run it with
+`--grants '{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[]}}'`.
+
+<!-- tour: conformance/CONC/CONC-3-tour-11-deadline-run.hir -->
+[Runnable source](../conformance/CONC/CONC-3-tour-11-deadline-run.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Sleep(time.SleepError) | Output(OutputError)
+
+fn nap(c: MonotonicClock, seconds: i64) -> String {
+  match time.sleep(c, duration.from_parts(seconds, 0)) {
+    Ok(()) => "slept",
+    Error(_) => "canceled",
+  }
+}
+
+fn bounded(tasks: Tasks, deadline: Deadline, seconds: i64) -> String {
+  let outcome = task.scope_until(
+    tasks,
+    deadline,
+    fn(s: Scope) -> String {
+      nap(deadline.clock, seconds)
+    }
+  )
+  match outcome {
+    Finished(text) => f"finished: {text}\n",
+    Expired(text) => f"expired: {text}\n",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let c = io.monotonic_clock(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let deadline = Deadline(
+    clock: c,
+    at: time.deadline(c, duration.from_parts(2, 0)) ? Sleep
+  )
+  out.print(output, bounded(tasks, deadline, 1)) ? Output
+  out.print(output, bounded(tasks, deadline, 5)) ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+```text
+finished: slept
+expired: canceled
+```
+<!-- /tour -->
+
+## Processes
+
+`proc.run` runs a program to completion with its stdin, an output bound and an
+optional `Deadline`: past it the child is stopped and the run returns `TimedOut()`.
+`proc.spawn` instead returns a `Child of p` to stream: `child.write`, `close_stdin`,
+`read_stdout` (0 at end of output), `read_stderr`, `wait` and `kill` each park only
+their task. Dropping a `Child` kills and reaps it. A process grant names exact
+program paths. `test.process` scripts both kinds: a `ProcessScript` is one `proc.run`
+outcome, and a `ChildScript` plays `Print`, `Expect` and `Exit` steps against what the
+program writes. [testrun](../examples/testrun/main.hir) streams a real child under a
+deadline.
+
+<!-- tour: conformance/CAP/CAP-1-tour-16-processes-run.hir -->
+[Runnable source](../conformance/CAP/CAP-1-tour-16-processes-run.hir)
+
+```hirsel
+pub fn main(t: Test) -> Result[(), ProcessError] {
+  let bc = path.of("/usr/bin/bc")
+  let p = test.process(
+    t,
+    [
+      ProcessScript(
+        program: "/usr/bin/bc",
+        args: ["--version"],
+        outcome: Ok(ProcessOutput(status: Exited(0), stdout: b"bc 1.07\n", stderr: b""))
+      )
+    ],
+    [
+      ChildScript(
+        program: "/usr/bin/bc",
+        args: ["-q"],
+        steps: [Expect(b"6*7\n"), Print(b"42\n"), Exit(Exited(0))]
+      )
+    ]
+  )
+  let version = proc.run(p, bc, ["--version"], b"", None(), 4096u64, None())?
+  test.check(t, version.status == Exited(0) && version.stdout == b"bc 1.07\n")
+  let mut calc = proc.spawn(p, bc, ["-q"], None())?
+  child.write(p, mut calc, b"6*7\n")?
+  child.close_stdin(p, mut calc)
+  let mut answer: List[u8] = []
+  while child.read_stdout(p, mut calc, mut answer, 64u64)? > 0 {}
+  test.check(t, bytes.from_list(take answer) == b"42\n")
+  test.check(t, child.wait(p, take calc) == Ok(Exited(0)))
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
 ## Arenas
 
 Ordinary code needs no arena annotation. When storage lifetime matters,
@@ -1274,8 +1394,7 @@ pub fn main(rt: Io) -> Result[(), AppError] {
     }
   )
   let output = io.stdout(rt) ? Grant
-  out.print(output, text) ? Output
-  out.print(output, "\n") ? Output
+  out.print(output, f"{text}\n") ? Output
   Ok(())
 }
 ```
@@ -1382,6 +1501,45 @@ cranelift` for the fastest compile, or `--target aarch64-linux` for the
 supported cross target. The executable still
 requires explicit launch grants; building it grants no authority.
 
+## Foreign functions
+
+An `extern "c" fn` declares a C function in a package whose manifest has an
+`unsafe_ffi` field (its `link` list names the libraries) and takes an `Unsafe` root.
+Its doc comment states the aliasing contract. `Ptr[T]` and `FnPtr[..]` are non-null:
+a zero pointer from C ends the process with PROG-4 at the call. Declare a pointer
+that may be NULL as `Option[Ptr[T]]` (or `Option[FnPtr[..]]`), which has the same
+one-pointer ABI, with `None()` for NULL. A pointer is an opaque address that Hirsel
+code passes back to C; the null check proves nothing else about it.
+
+<!-- tour: conformance/PROG/PROG-4-tour-17-ffi-ok.hir -->
+[Runnable source](../conformance/PROG/PROG-4-tour-17-ffi-ok.hir)
+
+```hirsel
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+/// Returns the value of name, a NUL-terminated byte string, or NULL when it is unset.
+/// The result points into the C environment; Hirsel only tests it and retains nothing.
+extern "c" fn getenv(u: Unsafe, name: Bytes) -> Option[Ptr[u8]]
+
+/// Returns glibc's static version string, which is never NULL.
+extern "c" fn gnu_get_libc_version(u: Unsafe) -> Ptr[u8]
+
+pub fn main(rt: Io, u: Unsafe) -> Result[(), AppError] {
+  let _ = gnu_get_libc_version(u)
+  let home = match getenv(u, b"HOME\0") {
+    Some(_) => "set",
+    None() => "unset",
+  }
+  out.print(io.stdout(rt) ? Grant, f"HOME is {home}\n") ? Output
+  Ok(())
+}
+```
+
+Expected:
+
+`hirsel check` accepts it; the reference interpreter does not call C, so run it with `hirsel run --native`.
+<!-- /tour -->
+
 ## Documenting your package
 
 Attach `///` comments to public declarations, then select the package manifest:
@@ -1404,11 +1562,12 @@ command on `stdlib/std@1/hirsel.json`.
 Every Hirsel block above is rendered from its linked conformance program,
 including the expected stdout. Run `python3 docs/tour/render.py` after editing a
 source. The tour integration tests reject stale, missing or extra blocks and run
-every listed program through both ordinary and checked interpretation. The normal
-gate also enforces canonical source formatting and the passing ratchet. These
-are ordinary corpus inputs for the on-demand native campaign. An additional
-full-gate tour test retains every native-capable snippet even when corpus
-coverage minimization would omit it; native tasks remain unavailable.
+every listed program through both ordinary and checked interpretation, except the
+foreign-function step, which is checked only. The normal gate also enforces
+canonical source formatting and the passing ratchet. These are ordinary corpus
+inputs for the on-demand native campaign. An additional full-gate tour test runs
+every snippet natively, other than the one calling C, even when corpus coverage
+minimization would omit it.
 
 Continue with the [dogfood tools](../examples/README.md) for complete programs
 that read files, build text, parse JSON and implement a command loop.
