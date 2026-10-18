@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1230 exported definitions; 383 variants.
+1238 exported definitions; 383 variants.
 
 ## Types and roots
 
@@ -147,6 +147,10 @@ Variant of CheckRule.
 <a id="def-core_401_2fChild"></a>
 
 - `opaque resource type Child: sendable + noalloc_drop uses {Proc}`
+
+<a id="def-core_401_2fChildGroup"></a>
+
+- `opaque resource type ChildGroup: sendable + noalloc_drop uses {Proc}`
 
 <a id="def-core_401_2fChildScript"></a>
 
@@ -505,6 +509,10 @@ Variant of FloatIntError.
 - `NotGranted() -> GrantError`
 
 Variant of GrantError.
+
+<a id="def-core_401_2fGroupOutput"></a>
+
+- `type GroupOutput uses {} = { statuses: List[ExitStatus], stderr: List[Bytes] }`
 
 <a id="def-core_401_2fHasher"></a>
 
@@ -4421,6 +4429,25 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/List`](#def-core_401_2
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/glob/Pattern`](#def-std_401_2fglob_2fPattern)
 
 
+## group
+
+<a id="def-core_401_2fgroup_2fclose_5fstdin"></a>
+
+- `@noalloc fn group.close_stdin(p: Proc, mut g: ChildGroup of p) -> ()`
+
+<a id="def-core_401_2fgroup_2fkill"></a>
+
+- `@noalloc fn group.kill(p: Proc, mut g: ChildGroup of p, signal: Signal) -> ()`
+
+<a id="def-core_401_2fgroup_2fread_5fstdout"></a>
+
+- `fn group.read_stdout(p: Proc, mut g: ChildGroup of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]`
+
+<a id="def-core_401_2fgroup_2fwrite"></a>
+
+- `@noalloc fn group.write(p: Proc, mut g: ChildGroup of p, data: Bytes) -> Result[(), ProcessError]`
+
+
 ## hex
 
 <a id="def-std_401_2fhex_2fDecodeError"></a>
@@ -6613,6 +6640,14 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 <a id="def-core_401_2fproc_2fspawn"></a>
 
 - `fn proc.spawn(p: Proc, cmd: Command) -> Result[Child of p, ProcessError]`
+
+<a id="def-core_401_2fproc_2fspawn_5fpipeline"></a>
+
+- `fn proc.spawn_pipeline(p: Proc, stages: List[Command], max_stderr: u64) -> Result[ChildGroup of p, ProcessError]`
+
+<a id="def-core_401_2fproc_2fwait_5fgroup"></a>
+
+- `fn proc.wait_group(p: Proc, take g: ChildGroup of p, deadline: Option[Deadline]) -> Result[GroupOutput, ProcessError]`
 
 
 ## process
