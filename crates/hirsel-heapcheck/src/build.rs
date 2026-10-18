@@ -120,6 +120,44 @@ impl Layouts {
         id
     }
 
+    /// A `Shared[T]` root reference to a heap root block whose `Frozen`
+    /// payload holds `value` inline at offset 0 (MEM-11): the payload thaws
+    /// the value before releasing it, as `hirsel-layout` derives it.
+    pub fn shared(&mut self, value: LayoutId) -> LayoutId {
+        let v = self.get(value).clone();
+        let frozen = self.push(LayoutKind::Frozen { value }, self.fixed(value), v.align);
+        let r = self.get_mut(frozen);
+        r.fields = vec![FieldLayout {
+            ordinal: 0,
+            offset: 0,
+            layout: value,
+            unaligned: false,
+        }];
+        r.abi = v.abi.clone();
+        if !v.scan.is_empty() {
+            r.scan = vec![ScanStep::Inline {
+                offset: 0,
+                layout: value,
+            }];
+        }
+        if !v.drop.is_empty() {
+            r.drop = vec![
+                DropStep::Thaw {
+                    offset: 0,
+                    layout: value,
+                },
+                DropStep::Child {
+                    offset: 0,
+                    layout: value,
+                },
+            ];
+        }
+        r.copy = CopyRecipe::NotCopyable;
+        let id = self.block(frozen);
+        self.get_mut(id).kind = LayoutKind::Shared { payload: frozen };
+        id
+    }
+
     /// An arena token: one pointer word naming an open arena (or the heap).
     pub fn arena(&mut self) -> LayoutId {
         let (word, align) = (self.word(), self.target.alignments.pointer);

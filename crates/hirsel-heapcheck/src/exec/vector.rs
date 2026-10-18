@@ -852,7 +852,7 @@ impl<'p> Runner<'p> {
                         (_, Some(Count::Finite(0)) | None) => "count dead".to_string(),
                         (_, Some(Count::Finite(n))) => format!("count fin {n}"),
                         (_, Some(Count::Immortal)) => "count immortal".to_string(),
-                        (_, Some(Count::Root(_) | Count::Frozen | Count::Arena { .. })) => {
+                        (_, Some(Count::Root(_) | Count::Frozen { .. } | Count::Arena { .. })) => {
                             unreachable!("the vector machine has no Shared roots or arenas")
                         }
                     };

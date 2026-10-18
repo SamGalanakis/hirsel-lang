@@ -363,9 +363,13 @@ pub enum Count {
     /// A `Shared` root block: the number of live roots (MEM-11), kept apart
     /// from ordinary credits. Only roots dup and release it.
     Root(u64),
-    /// A block of a frozen graph: one holder, its parent, and no count
-    /// operation or write while a root of the graph lives.
-    Frozen,
+    /// A block of a frozen graph while a root of the graph lives: its parent
+    /// holds it, never written, and `copies` more holders hold it uncredited,
+    /// each a copy read out of the frozen value (`shared.with`). A copy's dup
+    /// and release change only `copies`, and none may outlive the roots.
+    Frozen {
+        copies: u64,
+    },
     /// A tracked arena List block (MEM-6, runtime ABI 11): never released,
     /// and shared, stickily, from its first dup or `Share`.
     Arena {
@@ -378,7 +382,7 @@ impl Count {
     pub fn holders(self) -> Option<u64> {
         match self {
             Count::Finite(n) | Count::Root(n) => Some(n),
-            Count::Frozen => Some(1),
+            Count::Frozen { copies } => Some(1 + copies),
             Count::Immortal | Count::Arena { .. } => None,
         }
     }

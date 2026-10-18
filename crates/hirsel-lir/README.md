@@ -532,6 +532,15 @@ moves a value into a fresh root and `Thaw` moves the last root's value out. A
 library unit may test the uniqueness of an owned root before RC, since its count
 is the root count. Runtime ABI 8 adds `hirsel_rt_v2_freeze` and `hirsel_rt_v2_thaw`.
 
+A library unit may also address field 0 of a borrowed `Shared` root's `Frozen`
+payload (`shared.with`): the projection dereferences the root block as it does a
+Block or Box. Such an address admits only its preparation, a further projection, an
+immutable `BeginLoan` and a `Read Borrow`; any other use, such as a `Store`, `Read
+Take`, `Copy`, `Drop` or `mut` argument, is `Type("access to a frozen value other than
+a borrow")`, and a source unit's projection through a root is `AddressType`. The loan
+on the root's slot keeps the root live while the view is used. `tests/it/shared.rs`
+pairs each rule with its valid twin.
+
 LIR revision 28 adds `AddressInfo.source_place` and `unchecked`: the canonical
 TIR place and the exact projection ordinals whose bounds/tag guards PS-13
 removes. Paths, reaching versions and ownership replay are unchanged. C requires

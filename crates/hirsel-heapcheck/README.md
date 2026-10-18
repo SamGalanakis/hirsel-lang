@@ -293,13 +293,19 @@ producer that differs changes this crate or the producer):
   `Count::Root(n)`, the number of roots, and marks every counted heap block the
   value reaches `Count::Frozen` (static and region blocks and nested roots
   excluded); a block found at another count than one is shared. Only roots dup,
-  release and test a root count; a dup, release or write that reaches a frozen
-  block is `WriteShared`, and the holder audit holds each frozen block to its
-  one parent cell. `Thaw` requires `Root(1)`, restores the graph to
+  release and test a root count. A frozen block is never written
+  (`WriteShared`); a dup of one is a copy read out of the frozen value
+  (`shared.with`), counted as `Count::Frozen { copies }` and given back by its
+  release, while releasing the parent's own holder is `WriteShared`. The holder
+  audit holds each frozen block to its parent cell plus its live copies, and a
+  thaw, or a dying root's thaw step, that finds a copy still live is
+  `WriteShared`: no copy outlives the last root. `Thaw` requires `Root(1)`, restores the graph to
   `Finite(1)`, moves the value out and frees the root; the dying root's
   `DropStep::Thaw` restores the graph before its value is released. A deep
   `UniqueCopy` that reaches a root adds a root per new holder instead of
-  copying it, and a root is never a reset donor.
+  copying it, and a root is never a reset donor. An address through a root
+  (`shared.with`'s view) checks the root block live and puts it on the
+  address's path, so a write through it is `WriteShared` at the root count.
 - A borrowed capture is stored in its environment field as the view itself:
   no credit, still a borrow in persistent storage, its resources left to the
   creator. A capture slot must have its environment field's layout.

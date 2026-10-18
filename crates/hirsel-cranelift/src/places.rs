@@ -181,7 +181,12 @@ impl FnEmitter<'_, '_, '_> {
     /// The payload a block reference value or field points at.
     pub(crate) fn payload(&mut self, pointer: Value, layout: LayoutId) -> Emitted<Place> {
         let record = self.layout(layout)?;
-        let (LayoutKind::Block { payload } | LayoutKind::Box { payload }) = record.kind else {
+        // A `Shared` root's payload is its `Frozen` record, read only through
+        // `shared.with`'s borrow (MEM-11).
+        let (LayoutKind::Block { payload }
+        | LayoutKind::Box { payload }
+        | LayoutKind::Shared { payload }) = record.kind
+        else {
             return self.invalid("an address through a value that is not a block reference");
         };
         let uncounted = record
@@ -208,7 +213,9 @@ impl FnEmitter<'_, '_, '_> {
             let pointer = self.load_ptr(place.ptr);
             return self.payload(pointer, place.layout);
         }
-        if let LayoutKind::Block { .. } | LayoutKind::Box { .. } = self.layout(place.layout)?.kind {
+        if let LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } =
+            self.layout(place.layout)?.kind
+        {
             let pointer = self.load_ptr(place.ptr);
             place = self.payload(pointer, place.layout)?;
         }

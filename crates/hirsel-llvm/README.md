@@ -273,7 +273,8 @@ an inline value spills it to a stack slot of its layout and calls
 receive the construction's destination token (runtime ABI 6). `Freeze` allocates a heap
 root of its `Frozen` payload, stores the value in it and calls `hirsel_rt_v2_freeze`;
 `Thaw` calls `hirsel_rt_v2_thaw`, loads the value out and frees the root shallowly
-(runtime ABI 8). A `Shared` root is one pointer word; no glue covers a frozen layout, whose
+(runtime ABI 8). An address through a `Shared` root (`shared.with`'s borrowed view) lands
+past the root block's header, as one through a Block does. A `Shared` root is one pointer word; no glue covers a frozen layout, whose
 `THAW` step only the runtime walk runs. Regions use `region_enter`/`reserve`/`schedule`/`exit` on a
 48-byte record per region instance, and a region reference addresses its payload directly.
 `FinalizeBegin`/`FinalizeEnd` call `hirsel_rt_v2_finalize_begin`/`end`. A layout with a

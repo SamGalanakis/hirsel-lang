@@ -1,8 +1,9 @@
 //! `Shared[T]` roots (MEM-11, LIR schema revision 27): `Freeze` and `Thaw`
 //! are library-only moves between a value and its root, a root is a counted
 //! block released at its frozen payload, and a library may test an owned
-//! root's count before RC. One hand-built mutation per obligation, each
-//! paired with its valid twin.
+//! root's count before RC. A library may also read the frozen value in place
+//! through a borrowed root (`shared.with`), by borrow only. One hand-built
+//! mutation per obligation, each paired with its valid twin.
 use crate::support;
 
 use hirsel_core_contract::Passing;
@@ -150,5 +151,72 @@ fn a_library_may_test_an_owned_root_count_before_rc() {
     pair(
         |m| early_test(if m { l::BLK } else { l::SHARED }),
         |k| *k == K::Type("library uniqueness ownership"),
+    );
+}
+
+/// What a unit does through the frozen value of its borrowed root parameter.
+#[derive(Clone, Copy, PartialEq)]
+enum Through {
+    Borrow,
+    Take,
+    Store,
+}
+
+/// `shared.with`'s read: an address of field 0 of the root's `Frozen` payload,
+/// prepared, then used as `through` says; a library unit unless `source`.
+fn frozen_view(source: bool, through: Through) -> Vec<K> {
+    let mut t = Lir::<Rc>::new(
+        &[(Passing::Borrow, l::SHARED), (Passing::Take, l::BLK)],
+        None,
+    );
+    if !source {
+        library(&mut t);
+    }
+    let s = t.slot(l::SHARED, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(s);
+    t.param(version);
+    let x = t.owned(l::BLK);
+    t.param(x);
+    let view = t.at(ENTRY, s, &[ProjectionStep::Field(0)], &[Undo::Release(x)]);
+    match through {
+        Through::Borrow => {
+            let loan = t.loan(view, false);
+            t.begin(ENTRY, loan);
+            t.read(ENTRY, view, version, ReadMode::Borrow, Some(loan));
+            t.end(ENTRY, loan);
+        }
+        Through::Take => {
+            let taken = t.read(ENTRY, view, version, ReadMode::Take, None);
+            t.release_then(ENTRY, taken, &[Undo::Release(x)]);
+        }
+        Through::Store => {
+            t.store(ENTRY, view, x, s);
+            t.builder.ret(ENTRY, None);
+            return t.check();
+        }
+    }
+    t.release_then(ENTRY, x, &[]);
+    t.builder.ret(ENTRY, None);
+    t.check()
+}
+
+#[test]
+fn only_a_library_reads_a_frozen_value_through_its_borrowed_root() {
+    pair(
+        |m| frozen_view(m, Through::Borrow),
+        |k| matches!(k, K::AddressType(_)),
+    );
+}
+
+#[test]
+fn a_frozen_value_is_never_moved_or_written_through_its_root() {
+    let frozen = |k: &K| *k == K::Type("access to a frozen value other than a borrow");
+    pair(
+        |m| frozen_view(false, if m { Through::Take } else { Through::Borrow }),
+        frozen,
+    );
+    pair(
+        |m| frozen_view(false, if m { Through::Store } else { Through::Borrow }),
+        frozen,
     );
 }

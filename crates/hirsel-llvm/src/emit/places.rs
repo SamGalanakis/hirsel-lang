@@ -179,7 +179,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// Regional flat payloads carry a real immortal header before that address.
     pub(super) fn payload(&self, pointer: Value<'m>, layout: LayoutId) -> Emitted<Place<'m>> {
         let record = self.layout(layout)?;
-        let (LayoutKind::Block { payload } | LayoutKind::Box { payload }) = record.kind else {
+        // A `Shared` root's payload is its `Frozen` record, read only through
+        // `shared.with`'s borrow (MEM-11).
+        let (LayoutKind::Block { payload }
+        | LayoutKind::Box { payload }
+        | LayoutKind::Shared { payload }) = record.kind
+        else {
             return self.invalid("an address through a value that is not a block reference");
         };
         let align = self.layout(payload)?.align;
@@ -220,7 +225,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
             return self.payload(pointer, place.layout);
         }
-        if let LayoutKind::Block { .. } | LayoutKind::Box { .. } = self.layout(place.layout)?.kind {
+        if let LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } =
+            self.layout(place.layout)?.kind
+        {
             let pointer = self.load(Shape::Scalar(ScalarKind::Pointer), place);
             place = self.payload(pointer, place.layout)?;
         }

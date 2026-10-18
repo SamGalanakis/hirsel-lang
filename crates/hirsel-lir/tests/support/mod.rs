@@ -1116,8 +1116,9 @@ impl<S: Stage> Lir<S> {
                 layout = payload;
                 continue;
             }
-            if let LayoutKind::Block { payload } | LayoutKind::Box { payload } =
-                self.table.layouts[layout.0 as usize].kind
+            if let LayoutKind::Block { payload }
+            | LayoutKind::Box { payload }
+            | LayoutKind::Shared { payload } = self.table.layouts[layout.0 as usize].kind
             {
                 layout = payload;
             }

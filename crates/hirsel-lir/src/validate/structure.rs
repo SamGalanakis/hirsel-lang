@@ -80,6 +80,9 @@ pub(super) struct Addr {
     /// One whole element of a sequential Packed sequence (MEM-13): its end
     /// is its start plus its own extent, so `FlatNext` may name it.
     pub sequential_element: bool,
+    /// Inside the value a `Shared` root freezes (MEM-11): read only by a
+    /// borrow, in a library unit; never written, moved, copied or dropped.
+    pub frozen: bool,
 }
 
 impl Addr {
@@ -878,6 +881,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                         layout: unit.types[unit.slots[slot.index()].ty.index()].layout,
                         flat_variable: false,
                         sequential_element: false,
+                        frozen: false,
                     },
                     (AddressBase::Value(value), _) => {
                         match self.cx.layouts.payload(self.layout_of(value)) {
@@ -895,6 +899,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                                 layout: payload,
                                 flat_variable: false,
                                 sequential_element: false,
+                                frozen: false,
                             },
                             None => {
                                 self.add(Site::UNIT, K::AddressType(id));
@@ -945,7 +950,16 @@ impl<S: Stage> Checker<'_, '_, S> {
             addr.layout = *payload;
             return true;
         }
-        if let Some(payload) = layouts.payload(addr.layout) {
+        // Through a `Shared` root into its `Frozen` payload, only for
+        // `shared.with`'s library body (MEM-11).
+        if let Some(LayoutKind::Shared { payload }) = layouts.get(addr.layout).map(|r| &r.kind) {
+            if self.cx.unit.header.origin != UnitOrigin::Library {
+                return false;
+            }
+            addr.crossings.push(addr.path.len());
+            addr.layout = *payload;
+            addr.frozen = true;
+        } else if let Some(payload) = layouts.payload(addr.layout) {
             addr.crossings.push(addr.path.len());
             if matches!(
                 layouts.get(addr.layout).map(|r| &r.kind),
@@ -1073,6 +1087,13 @@ impl<S: Stage> Checker<'_, '_, S> {
             })?;
         let (offset, content) = layouts.flat_prefixed(element)?;
         (offset == 8 && layouts.fixed_size(content).is_none()).then_some(content)
+    }
+
+    /// Whether `address` lies inside the frozen value of a `Shared` root.
+    fn frozen(&self, facts: &Facts, address: AddressId) -> bool {
+        facts.addresses[address.index()]
+            .as_ref()
+            .is_some_and(|a| a.frozen)
     }
 
     /// Whether `address` lies inside a dynamic-size part of a flat value.
@@ -4009,6 +4030,21 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
                 for address in inst_addresses(self.cx, inst) {
                     self.use_address(facts, &prepared, at, address);
+                    let read = matches!(
+                        inst,
+                        Inst::Address { .. }
+                            | Inst::Read {
+                                mode: ReadMode::Borrow,
+                                ..
+                            }
+                            | Inst::BeginLoan { mutable: false, .. }
+                    );
+                    if !read && self.frozen(facts, address) {
+                        self.add(
+                            Site::at(b, i as u32),
+                            K::Type("access to a frozen value other than a borrow"),
+                        );
+                    }
                 }
                 if let Some(f) = Inst::failure(inst) {
                     self.failure_uses(facts, at, f);
@@ -4032,6 +4068,12 @@ impl<S: Stage> Checker<'_, '_, S> {
                 {
                     if let ArgumentValue::Address { address, .. } = arg.value {
                         self.use_address(facts, &prepared, at, address);
+                        if self.frozen(facts, address) {
+                            self.add(
+                                Site::at(b, pos),
+                                K::Type("access to a frozen value other than a borrow"),
+                            );
+                        }
                     }
                 }
             }

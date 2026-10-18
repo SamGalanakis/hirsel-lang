@@ -18,5 +18,6 @@ mod programs;
 mod revision3;
 mod revision4;
 mod revision7;
+mod shared;
 mod vectors;
 mod versions;
