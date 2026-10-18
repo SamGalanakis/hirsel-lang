@@ -1,0 +1,11 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 8
+// A range pattern no value reaches, because earlier arms match every value
+// it matches, is rejected.
+fn bucket(n: u32) -> u32 {
+  match n {
+    0..=99 => 1,
+    10..=20 => 2,
+    _ => 3,
+  }
+}

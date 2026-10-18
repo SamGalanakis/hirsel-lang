@@ -352,9 +352,7 @@ pub fn scalar_bits(literal: &Literal, width: u32) -> Option<u128> {
                 None => (false, s.as_str()),
             };
             let s = s.replace('_', "");
-            let end = s
-                .find(|c| c == 'u' || c == 'i')
-                .unwrap_or(s.len());
+            let end = s.find(|c| c == 'u' || c == 'i').unwrap_or(s.len());
             let s = &s[..end];
             let (radix, digits) = if let Some(d) = s.strip_prefix("0x") {
                 (16, d)
@@ -367,7 +365,11 @@ pub fn scalar_bits(literal: &Literal, width: u32) -> Option<u128> {
             };
             let n = u128::from_str_radix(digits, radix).ok()?;
             let mask = u128::MAX >> (128 - width.clamp(1, 128));
-            Some(if negative { 0u128.wrapping_sub(n) & mask } else { n & mask })
+            Some(if negative {
+                0u128.wrapping_sub(n) & mask
+            } else {
+                n & mask
+            })
         }
         _ => None,
     }

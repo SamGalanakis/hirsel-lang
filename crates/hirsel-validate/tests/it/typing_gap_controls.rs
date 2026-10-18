@@ -813,3 +813,66 @@ fn a_closure_type_claims_the_crossing_mode_of_its_captures() {
     claimed_sendability(Sendability::DependsOn(vec![t].into()))
         .broken(mismatch("closure sendability"));
 }
+
+/// `match n { start..=end => .., .. }` over a borrowed scalar of `primitive`,
+/// one returning arm per range, in order.
+fn range_match(primitive: Primitive, ranges: &[(Constant, Constant)]) -> Fixture {
+    let mut f = Fixture::unit();
+    let p = param(&mut f, TypeKind::Primitive(primitive));
+    let mut patterns = vec![];
+    let mut arms = vec![];
+    for (index, (start, end)) in ranges.iter().enumerate() {
+        patterns.push(MatchPattern {
+            place: PlaceId(p),
+            kind: MatchPatternKind::Range {
+                start: start.clone(),
+                end: end.clone(),
+            },
+        });
+        arms.push(MatchArm {
+            pattern: MatchPatternId(index as u32),
+            guard: None,
+            target: BlockId(1 + index as u32),
+        });
+        f.body().blocks.push(block(vec![], ret(0, 0)));
+    }
+    f.body().matches.push(MatchTable {
+        scrutinee: PlaceId(p),
+        patterns,
+        arms,
+    });
+    f.body().blocks[0].terminator = Terminator::Match {
+        table: MatchTableId(0),
+        from: 0,
+    };
+    owner_signature(&mut f, PassingMode::Borrow);
+    f
+}
+
+#[test]
+fn range_patterns_are_ordered_typed_and_cover_by_interval() {
+    let n = |n: u128| Constant::Integer(n);
+    // u8 split in two halves, and every Unicode scalar around the surrogates.
+    range_match(Primitive::U8, &[(n(0), n(127)), (n(128), n(255))]).valid();
+    range_match(
+        Primitive::Char,
+        &[(n(0), n(0xD7FF)), (n(0xE000), n(0x10FFFF))],
+    )
+    .valid();
+    // i8 `-128..=-1` and `0..=127` are the bits 0x80..=0xFF and 0..=0x7F.
+    range_match(Primitive::I8, &[(n(0x80), n(0xFF)), (n(0), n(0x7F))]).valid();
+    // Bounds order by the place's signedness: i8 `1..=-1` is empty.
+    range_match(Primitive::I8, &[(n(1), n(0xFF)), (n(0x80), n(0x7F))])
+        .broken(mismatch("match pattern"));
+    // An empty unsigned range, a bound outside the type and a non-scalar bound.
+    range_match(Primitive::U8, &[(n(9), n(0)), (n(0), n(255))]).broken(mismatch("match pattern"));
+    range_match(Primitive::U8, &[(n(0), n(256))]).broken(mismatch("match pattern"));
+    range_match(
+        Primitive::Bool,
+        &[(Constant::Bool(false), Constant::Bool(true))],
+    )
+    .broken(mismatch("match pattern"));
+    // A gap at 127 leaves the match uncovered.
+    range_match(Primitive::U8, &[(n(0), n(126)), (n(128), n(255))])
+        .broken(vec![ViolationKind::MatchCoverage]);
+}

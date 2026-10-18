@@ -1,0 +1,9 @@
+// rule: LANG-13
+// expect: accept
+// Range patterns select integer and char scalars only.
+fn lower(c: char) -> bool {
+  match c {
+    'a'..='z' => true,
+    _ => false,
+  }
+}

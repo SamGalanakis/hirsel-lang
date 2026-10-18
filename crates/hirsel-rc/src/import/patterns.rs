@@ -90,33 +90,18 @@ impl Importer<'_, '_> {
             }
             P::Literal(tir::Constant::Integer(n)) => {
                 let v = self.pattern_bits(pattern.place)?;
-                let ty = self.value_type(v);
-                let constant = self.constant(ty, ConstantValue::Integer(*n));
-                let k = self.fresh(ty);
-                self.push(Inst::Const {
-                    result: k,
-                    constant,
-                });
-                let bty = self.bool_type()?;
-                let c = self.value(bty, Holding::Plain);
-                let failure = self.fail(None)?;
-                self.push(Inst::Binary {
-                    result: c,
-                    op: BinaryOp::Eq,
-                    left: v,
-                    right: k,
-                    failure,
-                });
-                let cont = self.block(BlockKind::Body);
-                let yes = self.edge(cont, Vec::new());
-                let no = self.edge(fail, Vec::new());
-                self.terminate(Terminator::Branch {
-                    condition: c,
-                    yes,
-                    no,
-                });
-                self.current = cont;
+                self.compare_constant(v, BinaryOp::Eq, *n, fail)?;
             }
+            P::Range {
+                start: tir::Constant::Integer(start),
+                end: tir::Constant::Integer(end),
+            } => {
+                // The value type's signedness orders both comparisons.
+                let v = self.pattern_bits(pattern.place)?;
+                self.compare_constant(v, BinaryOp::Ge, *start, fail)?;
+                self.compare_constant(v, BinaryOp::Le, *end, fail)?;
+            }
+            P::Range { .. } => return malformed("a range pattern with non-integer bounds"),
             P::Literal(other) => {
                 return unsupported(format!("a {other:?} literal pattern"));
             }
@@ -134,6 +119,37 @@ impl Importer<'_, '_> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Continue when `v op n` holds; otherwise jump to `fail`.
+    fn compare_constant(&mut self, v: ValueId, op: BinaryOp, n: u128, fail: BlockId) -> R<()> {
+        let ty = self.value_type(v);
+        let constant = self.constant(ty, ConstantValue::Integer(n));
+        let k = self.fresh(ty);
+        self.push(Inst::Const {
+            result: k,
+            constant,
+        });
+        let bty = self.bool_type()?;
+        let c = self.value(bty, Holding::Plain);
+        let failure = self.fail(None)?;
+        self.push(Inst::Binary {
+            result: c,
+            op,
+            left: v,
+            right: k,
+            failure,
+        });
+        let cont = self.block(BlockKind::Body);
+        let yes = self.edge(cont, Vec::new());
+        let no = self.edge(fail, Vec::new());
+        self.terminate(Terminator::Branch {
+            condition: c,
+            yes,
+            no,
+        });
+        self.current = cont;
         Ok(())
     }
 

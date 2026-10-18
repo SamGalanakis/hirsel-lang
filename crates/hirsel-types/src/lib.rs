@@ -101,7 +101,11 @@ impl Primitive {
             return Some(bits);
         }
         let (width, signed) = self.integer_width()?;
-        Some(if signed { bits ^ (1 << (width - 1)) } else { bits })
+        Some(if signed {
+            bits ^ (1 << (width - 1))
+        } else {
+            bits
+        })
     }
 }
 /// Equality-only generic sizes (LANG-7); arithmetic sizes are not a type language.
@@ -880,6 +884,8 @@ pub enum PatternDecisionKind {
     Wildcard,
     Binding(LocalId),
     Literal,
+    /// A closed scalar range; its bounds stay in the syntax tree (LANG-13).
+    Range,
     Tuple,
     Constructor(ContextualName),
     Error,

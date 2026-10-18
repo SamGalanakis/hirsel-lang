@@ -578,6 +578,9 @@ impl<'a> Printer<'a> {
                 PatternKind::Wildcard => token("_"),
                 PatternKind::Binding(s) => self.name(*s)?,
                 PatternKind::Literal(l) => literal(l),
+                PatternKind::Range { start, end } => {
+                    cat([literal(start), token("..="), literal(end)])
+                }
                 PatternKind::Tuple(ps) => list(
                     "(",
                     ps.iter()

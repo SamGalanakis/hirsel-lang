@@ -393,6 +393,27 @@ impl Frame {
                     }
                 }
                 (
+                    MatchPatternKind::Range {
+                        start: Constant::Integer(start),
+                        end: Constant::Integer(end),
+                    },
+                    v @ (Value::Integer(_) | Value::Char(_)),
+                ) => {
+                    let (primitive, bits) = match v {
+                        Value::Integer(n) => (n.kind(), n.bits()),
+                        Value::Char(c) => (hirsel_types::Primitive::Char, u128::from(*c)),
+                        _ => unreachable!(),
+                    };
+                    let key = |bits| primitive.pattern_key(bits);
+                    let inside = matches!(
+                        (key(*start), key(bits), key(*end)),
+                        (Some(low), Some(value), Some(high)) if low <= value && value <= high
+                    );
+                    if !inside {
+                        return Ok(false);
+                    }
+                }
+                (
                     MatchPatternKind::Variant { variant, .. },
                     Value::Variant { variant: tag, .. }
                     | Value::ResourceVariant { variant: tag, .. },

@@ -416,7 +416,9 @@ Index on Map/SortedMap denotes the SEM-5 ordered entry position, typed as [key, 
 MatchTable retains an ordered arm list and an acyclic pattern arena of checked
 projection places. Match selects the first matching arm from its index; nonzero
 starts require that arm's failed guard path. V independently specializes pattern
-matrices for exhaustive unguarded coverage and checks binding test/commit modes
+matrices for exhaustive unguarded coverage (an integer or char column splits its
+domain at the bounds of its literal and range patterns; a range's bounds must order
+by the place's signedness) and checks binding test/commit modes
 against explicit instructions. MAX_MATCH_WORK bounds proof work deterministically;
 tooling_limit_error maps exhaustion to an operational tooling failure. The interpreter
 uses no expanded decision graph. See the R4 match addendum for ownership, size and

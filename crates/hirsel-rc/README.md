@@ -109,7 +109,8 @@ at each stage and H against the interpreter, and keeps the declined twins.
   of the chain does not touch meet as early as they agree. A TIR cleanup
   action anchors at its position in the first cleanup (by id) that runs it,
   the same name in every chain through it. `Match` becomes ordered tag switches (exhaustive, the
-  `otherwise` edge unreachable) and literal tests, with guard continuations.
+  `otherwise` edge unreachable) and literal and range tests (a range is two
+  comparisons ordered by the value type's signedness), with guard continuations.
   A comparison of non-scalar operands is `Inst::Compare` (MEM-3 Depth), its
   owned operands read through views under synthetic loans and the taken ones
   released after. Taken comparison and flat-construction operands move into

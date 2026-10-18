@@ -1,0 +1,9 @@
+// rule: LANG-13
+// expect: accept
+// A range pattern's bounds are literals, not names or expressions.
+fn above(n: u32, low: u32) -> bool {
+  match n {
+    m if m >= low && m <= 100 => true,
+    _ => false,
+  }
+}

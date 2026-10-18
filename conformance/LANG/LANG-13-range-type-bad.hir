@@ -1,0 +1,9 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 6
+// Range patterns select integer and char scalars only.
+fn unit(x: f64) -> bool {
+  match x {
+    0.0..=1.0 => true,
+    _ => false,
+  }
+}

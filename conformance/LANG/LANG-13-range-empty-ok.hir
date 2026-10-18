@@ -1,0 +1,9 @@
+// rule: LANG-13
+// expect: accept
+// A range pattern whose start exceeds its end matches nothing.
+fn digit(b: u8) -> bool {
+  match b {
+    b'0'..=b'9' => true,
+    _ => false,
+  }
+}

@@ -514,36 +514,12 @@ impl Normalizer<'_, '_> {
             }
             ast::PatternKind::Literal(l) => {
                 e.tag("literal-pattern");
-                match l {
-                    ast::Literal::Integer(s) => {
-                        e.tag("integer");
-                        e.tag(&s.replace('_', ""));
-                    }
-                    ast::Literal::Float(s) => {
-                        e.tag("float");
-                        e.tag(&s.replace('_', ""));
-                    }
-                    ast::Literal::Character(s) => {
-                        e.tag("character");
-                        e.tag(s);
-                    }
-                    ast::Literal::Byte(s) => {
-                        e.tag("byte");
-                        e.tag(s);
-                    }
-                    ast::Literal::String(s) => {
-                        e.tag("string");
-                        e.tag(s);
-                    }
-                    ast::Literal::Bytes(s) => {
-                        e.tag("bytes");
-                        e.tag(s);
-                    }
-                    ast::Literal::Bool(b) => {
-                        e.tag("bool");
-                        e.boolean(*b);
-                    }
-                }
+                literal_pattern(l, e);
+            }
+            ast::PatternKind::Range { start, end } => {
+                e.tag("range-pattern");
+                literal_pattern(start, e);
+                literal_pattern(end, e);
             }
             ast::PatternKind::Error => {
                 return Err(diagnostic(
@@ -579,5 +555,38 @@ fn binary(b: ast::BinaryOp) -> &'static str {
         ast::BinaryOp::Or => "or",
         ast::BinaryOp::Range => "range",
         ast::BinaryOp::RangeInclusive => "range-inclusive",
+    }
+}
+
+fn literal_pattern(l: &ast::Literal, e: &mut Encoder) {
+    match l {
+        ast::Literal::Integer(s) => {
+            e.tag("integer");
+            e.tag(&s.replace('_', ""));
+        }
+        ast::Literal::Float(s) => {
+            e.tag("float");
+            e.tag(&s.replace('_', ""));
+        }
+        ast::Literal::Character(s) => {
+            e.tag("character");
+            e.tag(s);
+        }
+        ast::Literal::Byte(s) => {
+            e.tag("byte");
+            e.tag(s);
+        }
+        ast::Literal::String(s) => {
+            e.tag("string");
+            e.tag(s);
+        }
+        ast::Literal::Bytes(s) => {
+            e.tag("bytes");
+            e.tag(s);
+        }
+        ast::Literal::Bool(b) => {
+            e.tag("bool");
+            e.boolean(*b);
+        }
     }
 }

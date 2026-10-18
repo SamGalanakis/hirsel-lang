@@ -326,6 +326,20 @@ impl Parser<'_> {
         self.depth -= 1;
         self.complete(result)
     }
+    /// A literal pattern or range bound; a negative integer keeps its sign.
+    fn pattern_literal(&mut self) -> Parsed<Option<Literal>> {
+        if !self.eat("-") {
+            return Ok(self.literal());
+        }
+        if let Some(Literal::Integer(n)) = self.literal() {
+            Ok(Some(Literal::Integer(format!("-{n}"))))
+        } else {
+            self.fail(
+                const { RuleId::of("LANG-13") },
+                "negative pattern requires integer literal",
+            )
+        }
+    }
     fn pattern_inner(&mut self) -> Parsed<PatternId> {
         if self.at("mut") {
             return self.fail(
@@ -336,17 +350,28 @@ impl Parser<'_> {
         let start = self.pos;
         let kind = if self.eat("_") {
             PatternKind::Wildcard
-        } else if self.eat("-") {
-            if let Some(Literal::Integer(n)) = self.literal() {
-                PatternKind::Literal(Literal::Integer(format!("-{n}")))
-            } else {
+        } else if let Some(literal) = self.pattern_literal()? {
+            if self.eat("..=") {
+                match self.pattern_literal()? {
+                    Some(end) => PatternKind::Range {
+                        start: literal,
+                        end,
+                    },
+                    None => {
+                        return self.fail(
+                            const { RuleId::of("LANG-13") },
+                            "a range pattern's bounds are literals",
+                        );
+                    }
+                }
+            } else if self.at("..") {
                 return self.fail(
                     const { RuleId::of("LANG-13") },
-                    "negative pattern requires integer literal",
+                    "a range pattern is closed: write `a..=b`",
                 );
+            } else {
+                PatternKind::Literal(literal)
             }
-        } else if let Some(literal) = self.literal() {
-            PatternKind::Literal(literal)
         } else if self.eat("(") {
             if self.eat(")") {
                 PatternKind::Tuple(vec![])
@@ -407,6 +432,11 @@ impl Parser<'_> {
                 })();
                 self.whitespace -= 1;
                 result?
+            } else if self.at("..=") || self.at("..") {
+                return self.fail(
+                    const { RuleId::of("LANG-13") },
+                    "a range pattern's bounds are literals",
+                );
             } else {
                 PatternKind::Binding(name)
             }

@@ -1,0 +1,75 @@
+// rule: LANG-13
+// expect: run
+// Closed range patterns select integer, byte and char scalars, nested and
+// beside literals; the first matching arm wins where ranges overlap, and a
+// partition of u8 needs no wildcard.
+fn class(b: u8) -> u32 {
+  match b {
+    b'0'..=b'9' => 1,
+    b'a'..=b'z' => 2,
+    0..=47 => 3,
+    58..=96 => 4,
+    123..=255 => 5,
+  }
+}
+
+fn sign(n: i64) -> i64 {
+  match n {
+    -9223372036854775808..=-1 => -1,
+    0 => 0,
+    1..=9223372036854775807 => 1,
+  }
+}
+
+fn small(n: Option[i32]) -> u32 {
+  match n {
+    Some(-9..=9) => 1,
+    Some(10..=99) => 2,
+    Some(_) => 3,
+    None => 0,
+  }
+}
+
+fn first_wins(n: u16) -> u32 {
+  match n {
+    0..=9 => 1,
+    5..=19 => 2,
+    20 => 3,
+    _ => 4,
+  }
+}
+
+fn vowel_or_letter(c: char) -> u32 {
+  match c {
+    'a' => 1,
+    'b'..='z' if c != 'e' => 2,
+    'e' => 1,
+    'A'..='Z' => 3,
+    _ => 0,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, class(b'5') == 1)
+  test.check(t, class(b'q') == 2)
+  test.check(t, class(b' ') == 3)
+  test.check(t, class(b'A') == 4)
+  test.check(t, class(255) == 5)
+  test.check(t, sign(-9223372036854775807) == -1)
+  test.check(t, sign(0) == 0)
+  test.check(t, sign(42) == 1)
+  test.check(t, small(Some(-9)) == 1)
+  test.check(t, small(Some(10)) == 2)
+  test.check(t, small(Some(-10)) == 3)
+  test.check(t, small(None) == 0)
+  test.check(t, first_wins(7) == 1)
+  test.check(t, first_wins(12) == 2)
+  test.check(t, first_wins(20) == 3)
+  test.check(t, first_wins(65535) == 4)
+  test.check(t, vowel_or_letter('a') == 1)
+  test.check(t, vowel_or_letter('e') == 1)
+  test.check(t, vowel_or_letter('q') == 2)
+  test.check(t, vowel_or_letter('Q') == 3)
+  test.check(t, vowel_or_letter('7') == 0)
+  Ok(())
+}

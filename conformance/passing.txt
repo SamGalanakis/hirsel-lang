@@ -1116,6 +1116,17 @@ conformance/LANG/LANG-13-package-module-destructure-bad.hir
 conformance/LANG/LANG-13-package-module-destructure-ok.hir
 conformance/LANG/LANG-13-pattern-mut-position-bad.hir
 conformance/LANG/LANG-13-pattern-mut-position-ok.hir
+conformance/LANG/LANG-13-range-bound-bad.hir
+conformance/LANG/LANG-13-range-bound-ok.hir
+conformance/LANG/LANG-13-range-covered-bad.hir
+conformance/LANG/LANG-13-range-covered-ok.hir
+conformance/LANG/LANG-13-range-empty-bad.hir
+conformance/LANG/LANG-13-range-empty-ok.hir
+conformance/LANG/LANG-13-range-half-open-bad.hir
+conformance/LANG/LANG-13-range-half-open-ok.hir
+conformance/LANG/LANG-13-range-pattern-run.hir
+conformance/LANG/LANG-13-range-type-bad.hir
+conformance/LANG/LANG-13-range-type-ok.hir
 conformance/LANG/LANG-13-refutable-let-bad.hir
 conformance/LANG/LANG-13-refutable-let-ok.hir
 conformance/LANG/LANG-14-keyword-before-bad.hir
@@ -1458,6 +1469,8 @@ conformance/LANG/LANG-7-pathtime-from-parts-reject.hir
 conformance/LANG/LANG-7-percent-example.hir
 conformance/LANG/LANG-7-prose-header-bad.hir
 conformance/LANG/LANG-7-prose-header-ok.hir
+conformance/LANG/LANG-7-range-coverage-bad.hir
+conformance/LANG/LANG-7-range-coverage-ok.hir
 conformance/LANG/LANG-7-size-equality-bad.hir
 conformance/LANG/LANG-7-size-equality-ok.hir
 conformance/LANG/LANG-7-type-name-alias-bad.hir

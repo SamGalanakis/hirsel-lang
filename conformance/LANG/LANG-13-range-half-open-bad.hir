@@ -1,0 +1,9 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 6
+// Range patterns are closed; `a..b` is not a pattern.
+fn digit(n: u32) -> bool {
+  match n {
+    0..10 => true,
+    _ => false,
+  }
+}

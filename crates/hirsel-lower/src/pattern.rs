@@ -79,7 +79,9 @@ impl Builder<'_, '_> {
         let place = self.inspected_pattern_place(&row, place);
         let span = self.input.tree.patterns[id.0 as usize].origin.span;
         match row.kind {
-            PatternDecisionKind::Wildcard | PatternDecisionKind::Literal => {}
+            PatternDecisionKind::Wildcard
+            | PatternDecisionKind::Literal
+            | PatternDecisionKind::Range => {}
             PatternDecisionKind::Error => {
                 return self.error(span, "recovery pattern reached lowering");
             }
@@ -408,6 +410,22 @@ impl Builder<'_, '_> {
                         .kind,
                     span,
                 )?)
+            }
+            PatternDecisionKind::Range => {
+                let hirsel_syntax::PatternKind::Range { start, end } =
+                    &self.input.tree.patterns[id.0 as usize].kind
+                else {
+                    return self.error(span, "range decision on a non-range pattern");
+                };
+                let ty = &self
+                    .types
+                    .get(self.body.places[place.0 as usize].ty)
+                    .unwrap()
+                    .kind;
+                MatchPatternKind::Range {
+                    start: super::literal::constant(start, ty, span)?,
+                    end: super::literal::constant(end, ty, span)?,
+                }
             }
             PatternDecisionKind::Tuple => MatchPatternKind::Tuple(fields),
             PatternDecisionKind::Constructor(ContextualName::Constructor(definition)) => {

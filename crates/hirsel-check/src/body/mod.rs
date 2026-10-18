@@ -1826,6 +1826,9 @@ impl Checker<'_, '_> {
                         "match does not cover every value",
                     );
                 }
+                if !self.invalid(ty) {
+                    self.unreachable_ranges(ty, &arms)?;
+                }
                 self.work.push(Work::Finish(id, expected, frame));
                 self.work
                     .push(Work::AfterChild(After::MatchArm(id, 0, expected, frame)));

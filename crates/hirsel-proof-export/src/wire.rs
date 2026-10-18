@@ -752,6 +752,7 @@ snapshot_enum!(MatchPatternKind {
     Wildcard,
     Binding { usage, guard_usage },
     Literal(c),
+    Range { start, end },
     Tuple(fields),
     Record { definition, fields },
     Variant { definition, variant, fields }

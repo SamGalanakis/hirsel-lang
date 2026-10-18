@@ -1,0 +1,17 @@
+// rule: LANG-7
+// expect: accept
+// Ranges count toward exhaustiveness: a partition of u8 or of every Unicode
+// scalar needs no wildcard.
+fn half(b: u8) -> u32 {
+  match b {
+    0..=127 => 0,
+    128..=255 => 1,
+  }
+}
+
+fn plane(c: char) -> u32 {
+  match c {
+    '\u{0}'..='\u{FFFF}' => 0,
+    '\u{10000}'..='\u{10FFFF}' => 1,
+  }
+}

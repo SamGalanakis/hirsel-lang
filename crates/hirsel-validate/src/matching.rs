@@ -29,6 +29,44 @@ enum Tag {
     Record,
     Variant(u32),
 }
+/// The order key of an integer or char constant of a range-pattern type.
+fn range_key(c: &Constant, kind: &TypeKind) -> Option<u128> {
+    match (c, kind) {
+        (Constant::Integer(bits), TypeKind::Primitive(p)) => p.pattern_key(*bits),
+        _ => None,
+    }
+}
+/// The key interval a literal or range pattern covers on a scalar place.
+fn interval(pattern: &MatchPatternKind, kind: &TypeKind) -> Option<(u128, u128)> {
+    match pattern {
+        MatchPatternKind::Literal(c) => range_key(c, kind).map(|k| (k, k)),
+        MatchPatternKind::Range { start, end } => {
+            Some((range_key(start, kind)?, range_key(end, kind)?))
+        }
+        _ => None,
+    }
+}
+/// The domain of a scalar column split at every row interval's bounds; each
+/// piece lies wholly inside or outside each interval.
+fn scalar_pieces(domain: Vec<(u128, u128)>, intervals: &[(u128, u128)]) -> Vec<(u128, u128)> {
+    let mut cuts: Vec<u128> = intervals
+        .iter()
+        .flat_map(|(low, high)| [Some(*low), high.checked_add(1)])
+        .flatten()
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut pieces = vec![];
+    for (from, to) in domain {
+        let mut low = from;
+        for cut in cuts.iter().filter(|c| **c > from && **c <= to) {
+            pieces.push((low, cut - 1));
+            low = *cut;
+        }
+        pieces.push((low, to));
+    }
+    pieces
+}
 fn tag(pattern: &MatchPatternKind) -> Option<Tag> {
     match pattern {
         MatchPatternKind::Literal(Constant::Bool(b)) => Some(Tag::Bool(*b)),
@@ -88,6 +126,14 @@ impl Checker<'_> {
                             && (*usage != UseKind::Copy || self.plain_or_copyable(ty))
                     }
                     (MatchPatternKind::Literal(c), Some(k)) => crate::typing::constant_valid(c, k),
+                    (MatchPatternKind::Range { start, end }, Some(k)) => {
+                        crate::typing::constant_valid(start, k)
+                            && crate::typing::constant_valid(end, k)
+                            && matches!(
+                                (range_key(start, k), range_key(end, k)),
+                                (Some(low), Some(high)) if low <= high
+                            )
+                    }
                     (MatchPatternKind::Tuple(fields), Some(TypeKind::Tuple(ts))) => {
                         fields.len() == ts.len()
                             && fields.iter().all(|(f, _)| (*f as usize) < ts.len())
@@ -538,7 +584,45 @@ impl Checker<'_> {
             while let Some(TypeKind::Box(payload)) = self.layout(store, inspected) {
                 inspected = payload;
             }
-            let domain = match self.layout(store, inspected) {
+            let layout = self.layout(store, inspected);
+            if let Some(kind @ TypeKind::Primitive(p)) = &layout
+                && let Some(domain) = p.pattern_domain()
+            {
+                let intervals: Vec<_> = matrix
+                    .iter()
+                    .filter_map(|row| {
+                        row[0].and_then(|id| interval(&table.patterns[id.0 as usize].kind, kind))
+                    })
+                    .collect();
+                if !intervals.is_empty() {
+                    // Pieces kept by the same rows specialize identically.
+                    let mut seen = BTreeSet::new();
+                    for (low, high) in scalar_pieces(domain, &intervals) {
+                        let kept: Vec<usize> = matrix
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, row)| {
+                                wildcard(table, row[0])
+                                    || interval(
+                                        &table.patterns[row[0].unwrap().0 as usize].kind,
+                                        kind,
+                                    )
+                                    .is_some_and(|(a, b)| a <= low && high <= b)
+                            })
+                            .map(|(index, _)| index)
+                            .collect();
+                        if seen.insert(kept.clone()) {
+                            let specialized = kept
+                                .iter()
+                                .map(|index| matrix[*index][1..].to_vec())
+                                .collect();
+                            pending.push((tail.to_vec(), specialized));
+                        }
+                    }
+                    continue;
+                }
+            }
+            let domain = match layout {
                 Some(TypeKind::Primitive(Primitive::Bool)) => {
                     Some(vec![(Tag::Bool(false), vec![]), (Tag::Bool(true), vec![])])
                 }

@@ -463,6 +463,12 @@ pub enum MatchPatternKind {
         guard_usage: UseKind,
     },
     Literal(Constant),
+    /// A closed scalar range: both bounds are `Constant::Integer` bits of the
+    /// place's integer or char type, and `start` orders at or before `end` (LANG-13).
+    Range {
+        start: Constant,
+        end: Constant,
+    },
     Tuple(Vec<(u32, MatchPatternId)>),
     Record {
         definition: DefPath,

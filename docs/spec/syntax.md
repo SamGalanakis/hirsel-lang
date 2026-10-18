@@ -459,13 +459,14 @@ match-expr   = "match", expression, "{",
 arm          = pattern, [ "if", expression ], "=>", expression ; (* LANG-7/13 *)
 closure      = "fn", "(", list(parameter), ")", [ "->", type ],
                [ uses ], { contract }, block, [ uses ] ; (* CLO-1/4, FACT-1 *)
-pattern      = "_" | name | literal | "-", integer
+pattern      = "_" | name | scalar, [ "..=", scalar ]
              | "(", ")" | "(", pattern, ")"
              | "(", pattern, ",", list(pattern), ")"
              | name, "(", pattern-fields, ")" ;          (* LANG-7/13 *)
 pattern-fields= empty | "..", [ "," ]
              | pattern-field, { ",", pattern-field }, [ ",", [ "..", [ "," ] ] ] ; (* OWN-8, LANG-13 *)
 pattern-field= [ name, ":" ], pattern ;                  (* LANG-12/13 *)
+scalar       = literal | "-", integer ;                  (* LANG-13 *)
 ```
 
 `keyword` in `member` means any LANG-14 token; `same-line-value-path` is a `value-path`
@@ -475,9 +476,9 @@ subject to newline rule 5. `empty` is the empty sequence.
 count toward exhaustiveness. `let` rejects refutable patterns semantically, including a
 bare name that resolves to a nullary variant; parsing never guesses from capitalisation.
 Labels and payload arity are checked against the expected type. A record rest pattern is
-last and needs a comma after preceding fields (`Rec(x: x, ..)`). There is no pattern
-alternation, no range pattern, no `if let`, no `let .. else` and no qualified variant
-constructor.
+last and needs a comma after preceding fields (`Rec(x: x, ..)`). A range pattern is
+closed (`a..=b`) and its bounds are literals. There is no pattern alternation, no
+`if let`, no `let .. else` and no qualified variant constructor.
 
 A statement expression becomes the block's tail exactly when it is last and not followed
 by a semicolon. An assignment's left side parses as an expression and must check as a

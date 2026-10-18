@@ -362,6 +362,15 @@ fn area(s: Figure) -> u32 {
 }
 ```
 
+A range pattern `a..=b` matches the integer or char scalars from `a` to `b` inclusive.
+Both bounds are literals of the scrutinee's type (integer, character or byte literals,
+a negative integer written with its sign); a range whose start exceeds its end is
+rejected, and there is no half-open range pattern. Ranges and literals partition a
+scalar's domain for exhaustiveness, so arms covering every `u8` or every Unicode scalar
+need no `_`. Arms are tried in order and overlapping ranges are allowed, but a range
+pattern no value reaches, because earlier unguarded arms match every value it
+matches, is rejected.
+
 Destructuring a value of a type that declares `drop` is allowed only in that type's
 defining module. A committed whole destructure consumes the resource without running its
 finalizer: bound fields move to their bindings, and fields omitted with `_` or a rest

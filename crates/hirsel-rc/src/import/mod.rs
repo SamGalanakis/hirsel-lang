@@ -670,7 +670,7 @@ fn irrefutable(m: &tir::MatchTable, id: tir::MatchPatternId) -> bool {
         P::Tuple(fields) | P::Record { fields, .. } => {
             fields.iter().all(|(_, sub)| irrefutable(m, *sub))
         }
-        P::Literal(_) | P::Variant { .. } => false,
+        P::Literal(_) | P::Range { .. } | P::Variant { .. } => false,
     }
 }
 
