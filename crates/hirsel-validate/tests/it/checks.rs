@@ -3372,14 +3372,48 @@ fn comparison_sets_aside_nested_brands() {
 }
 
 #[test]
-fn comparison_nested_qualifiers_and_arithmetic_operands_remain_exact() {
+fn comparison_nested_qualifiers_but_uniqueness_and_arithmetic_operands_remain_exact() {
+    // A comparison only borrows, so a nested `unique` part compares with an
+    // aliased one (MODE-2); another nested qualifier stays exact.
+    let (mut f, scalar, result) = nested_comparison(|t| t.modes.uniqueness = Uniqueness::Unique);
+    f.valid();
+    let (allocating, _, _) = nested_comparison(|t| t.drop_allocation = DropAllocation::MayAllocate);
+    // The forged cleanup also fails the tuple's construction; only the
+    // comparison is under test.
+    assert!(allocating.kinds().contains(&ViolationKind::TypeMismatch {
+        entity: "binary operands"
+    }));
+    revise_comparison_place(&mut f, result, |t| {
+        t.kind = TypeKind::Primitive(Primitive::U8)
+    });
+    let unique_scalar = f.slot(TypeKind::Primitive(Primitive::U8), Storage::Temporary);
+    revise_comparison_place(&mut f, unique_scalar, |t| {
+        t.modes.uniqueness = Uniqueness::Unique
+    });
+    // Initialize before the arithmetic instruction, preserving operand availability.
+    let comparison = f.body().blocks[0].instructions.pop().unwrap();
+    f.assign(unique_scalar, Rvalue::Constant(Constant::Integer(2)), 0);
+    f.body().blocks[0].instructions.push(comparison);
+    f.body().rvalues[4] = Rvalue::Binary {
+        op: BinaryOp::Add,
+        left: copy(scalar),
+        right: copy(unique_scalar),
+    };
+    f.broken(vec![ViolationKind::TypeMismatch {
+        entity: "binary operands",
+    }]);
+}
+
+/// Compares `(u8,)` with a tuple whose part is the `u8` row as `change` revises
+/// it, returning the fixture, the scalar slot and the result slot.
+fn nested_comparison(change: impl FnOnce(&mut Type)) -> (Fixture, u32, u32) {
     let mut f = Fixture::unit();
     let scalar = f.slot(TypeKind::Primitive(Primitive::U8), Storage::Temporary);
     f.assign(scalar, Rvalue::Constant(Constant::Integer(1)), 0);
     let left_child = f.body().places[scalar as usize].ty;
-    let mut unique = f.definition.types.get(left_child).unwrap().clone();
-    unique.modes.uniqueness = Uniqueness::Unique;
-    let right_child = f.definition.types.push(unique);
+    let mut changed = f.definition.types.get(left_child).unwrap().clone();
+    change(&mut changed);
+    let right_child = f.definition.types.push(changed);
     let left = f.slot(TypeKind::Tuple(vec![left_child].into()), Storage::Temporary);
     let right = f.slot(
         TypeKind::Tuple(vec![right_child].into()),
@@ -3409,28 +3443,7 @@ fn comparison_nested_qualifiers_and_arithmetic_operands_remain_exact() {
         },
         0,
     );
-    f.broken(vec![ViolationKind::TypeMismatch {
-        entity: "binary operands",
-    }]);
-    revise_comparison_place(&mut f, result, |t| {
-        t.kind = TypeKind::Primitive(Primitive::U8)
-    });
-    let unique_scalar = f.slot(TypeKind::Primitive(Primitive::U8), Storage::Temporary);
-    revise_comparison_place(&mut f, unique_scalar, |t| {
-        t.modes.uniqueness = Uniqueness::Unique
-    });
-    // Initialize before the arithmetic instruction, preserving operand availability.
-    let comparison = f.body().blocks[0].instructions.pop().unwrap();
-    f.assign(unique_scalar, Rvalue::Constant(Constant::Integer(2)), 0);
-    f.body().blocks[0].instructions.push(comparison);
-    f.body().rvalues[4] = Rvalue::Binary {
-        op: BinaryOp::Add,
-        left: copy(scalar),
-        right: copy(unique_scalar),
-    };
-    f.broken(vec![ViolationKind::TypeMismatch {
-        entity: "binary operands",
-    }]);
+    (f, scalar, result)
 }
 
 fn function_authority_flow_fixture(

@@ -432,6 +432,15 @@ impl Checker<'_, '_> {
         row.modes.relation = row.modes.relation.union(&placement);
         self.body.types.push(row)
     }
+    // An equality operand only borrows, so the type it inherits from the
+    // other side drops its `unique` qualifiers (MODE-2).
+    fn compared_operand_type(&mut self, op: ast::BinaryOp, t: TypeId) -> TypeId {
+        if matches!(op, ast::BinaryOp::Eq | ast::BinaryOp::Ne) {
+            hirsel_types::erase_uniqueness(&mut self.body.types, t).unwrap_or(t)
+        } else {
+            t
+        }
+    }
     fn placed_part_type(&mut self, owner: TypeId, part: TypeId) -> TypeId {
         if self.construction_placement(owner).is_none() {
             return part;
@@ -959,7 +968,8 @@ impl Checker<'_, '_> {
                     Some(self.primitive(Primitive::Bool))
                 } else {
                     let e = if comparison { None } else { expected };
-                    self.hint(left, frame)?.or(self.hint(right, frame)?).or(e)
+                    let hint = self.hint(left, frame)?.or(self.hint(right, frame)?).or(e);
+                    hint.map(|t| self.compared_operand_type(op, t))
                 };
                 self.work
                     .push(Work::AfterChild(After::Binary(id, expected, frame)));
@@ -1630,7 +1640,7 @@ impl Checker<'_, '_> {
     fn after(&mut self, after: After) -> Result<(), QueryError> {
         match after {
             After::Binary(id, expected, frame) => {
-                let ast::ExprKind::Binary { left, right, .. } =
+                let ast::ExprKind::Binary { op, left, right } =
                     self.input.tree.expressions[id.0 as usize].kind
                 else {
                     unreachable!()
@@ -1648,6 +1658,7 @@ impl Checker<'_, '_> {
                     const { RuleId::of("LANG-7") }
                 };
                 self.expected_sites.insert(right, (self.span(id), rule));
+                let t = self.compared_operand_type(op, t);
                 self.work.push(Work::Enter(right, Some(t), frame));
             }
             After::CallCallee(id, expected, frame) => self.start_call(id, expected, frame)?,

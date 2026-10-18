@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+// An `==` or `!=` operand only borrows, so the type it inherits from the other
+// side drops its `unique` qualifiers and a borrowed `data` fills `Ok(data)`, in
+// either order. Twin is MODE-2-equality-operand-drops-unique-mismatch-bad.
+fn same(r: Result[unique Bytes, ()], data: Bytes) -> bool uses {} {
+  r == Ok(data)
+}
+
+fn differs(r: Result[unique Bytes, ()], data: Bytes) -> bool uses {} {
+  Ok(data) != r
+}

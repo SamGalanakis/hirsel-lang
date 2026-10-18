@@ -749,6 +749,15 @@ pub fn erase_brands(store: &mut TypeStore, root: TypeId) -> Result<TypeId, Graph
     })
 }
 
+/// Remove every `unique` qualifier of a type graph, nested rows included,
+/// leaving brands, relations and shape (MODE-2).
+pub fn erase_uniqueness(store: &mut TypeStore, root: TypeId) -> Result<TypeId, GraphError> {
+    rewrite_parameter_graph(store, root, |_, row, _| {
+        row.modes.uniqueness = Uniqueness::Aliased;
+        Ok(())
+    })
+}
+
 /// Map only the relation places of a type graph, leaving brand origins.
 pub fn map_relation_places(
     store: &mut TypeStore,

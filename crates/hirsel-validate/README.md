@@ -214,8 +214,9 @@ Structural Plain/Copyable/NeedsRelease/Sendable proofs and value compatibility
 now come from hirsel-types, using the supplied declaration snapshots. Projection
 locality changes rederive root sendability; nonplain Local parts cannot retain
 a global Sendable promise. Unique extraction and read-only comparison likewise
-rederive only the root summary after their root uniqueness judgment. Nested
-proofs remain exact. Generic expected graphs specialize derived summaries;
+rederive only the root summary after their root uniqueness judgment; a
+comparison also sets aside nested `unique` parts, since it only borrows. Other
+nested proofs remain exact. Generic expected graphs specialize derived summaries;
 comparisons never normalize away missing actual evidence. Root brand erasure
 and membership in a joined storage brand are permitted without granting a new
 origin; branded source-use diagnostics remain J's responsibility.

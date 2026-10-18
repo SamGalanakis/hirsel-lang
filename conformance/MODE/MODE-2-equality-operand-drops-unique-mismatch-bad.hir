@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: reject LANG-7 at line 7
+// Dropping `unique` keeps the rest of the inherited type: a `String` payload
+// still cannot compare with a `Bytes` one. Twin is
+// MODE-2-equality-operand-drops-unique-ok.
+fn same(r: Result[unique Bytes, ()], name: String) -> bool uses {} {
+  r == Ok(name)
+}

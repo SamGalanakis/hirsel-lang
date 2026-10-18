@@ -50,7 +50,10 @@ closure. There are no lifetime variables.
 Arithmetic, logical and bitwise computation, unary operations included, produces
 unbranded results. An expected annotation cannot certify a brand. A comparison sets aside
 root brands, locality and uniqueness while preserving nested types and placement, and
-returns an unbranded `bool`. `copy` and `take` transport existing evidence; a freshly
+returns an unbranded `bool`. A comparison only borrows, so an operand of `==` or `!=` is
+checked against the type it inherits from the other side with every `unique` qualifier,
+nested ones included, removed: `base64.decode(x) == Ok(data)` accepts a borrowed
+`data: Bytes`. `copy` and `take` transport existing evidence; a freshly
 computed owner has a fresh identity. A sampled opaque value's brand (such as an `Instant`
 of a clock) is introduced only by its declared primitive producer and preserved by
 ordinary substitution and payload transport; a written expected brand or a decoder cannot

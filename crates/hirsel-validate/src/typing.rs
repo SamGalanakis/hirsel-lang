@@ -768,12 +768,13 @@ impl<'a> Checker<'a> {
         }
     }
     /// A comparison borrows both operands and reads their contents, so no
-    /// root evidence about either holder takes part: uniqueness is set aside,
-    /// differing relations, arena placement included, meet at a common
-    /// borrowed root (a read is the same wherever the content lives), and
-    /// brands, nested ones included, are identity evidence rather than operand
-    /// type. Cleanup and every other nested qualifier remain exact. Sendability is derived again for a row whose
-    /// holder evidence changed, never for one compared as published.
+    /// root evidence about either holder takes part: uniqueness, nested
+    /// `unique` parts included, is set aside, differing relations, arena
+    /// placement included, meet at a common borrowed root (a read is the same
+    /// wherever the content lives), and brands, nested ones included, are
+    /// identity evidence rather than operand type. Cleanup and every other
+    /// nested qualifier remain exact. Sendability is derived again for a row
+    /// whose holder evidence changed, never for one compared as published.
     fn comparison_type(&mut self, left: TypeId, right: TypeId) {
         let mut store = self.working_store();
         let rows = [left, right].map(|t| store.get(t).unwrap().clone());
@@ -788,6 +789,9 @@ impl<'a> Checker<'a> {
             let root = store.push(row);
             // A graph that cannot be rewritten is compared as published.
             let root = hirsel_types::erase_brands(&mut store, root).unwrap_or(root);
+            let aliased = hirsel_types::erase_uniqueness(&mut store, root).unwrap_or(root);
+            let derive = derive || aliased != root;
+            let root = aliased;
             let root = if derive {
                 self.derive_sendability(&mut store, root)
             } else {
