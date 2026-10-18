@@ -3114,6 +3114,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                 self.define_fresh(f, result, val)?;
             }
             Inst::FunctionRef { result, symbol } => {
+                let ty = self.lir_type(unit, u.values[result.index()].ty)?;
+                if ty.repr == ValueRepr::Scalar(ScalarKind::Pointer) {
+                    return fail(V::Unsupported, "a C callback: H does not run C");
+                }
                 let code = Some(self.program.function(self.symbol(unit, symbol)?)?);
                 self.define_fresh(f, result, Val::Callable { code, env: None })?;
             }

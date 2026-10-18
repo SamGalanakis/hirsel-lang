@@ -462,6 +462,8 @@ pub enum Inst {
         result: ValueId,
         constant: ConstantId,
     },
+    /// A definition as a callable value, or, at a pointer scalar result, the
+    /// address of its C callback thunk (PROG-4).
     FunctionRef {
         result: ValueId,
         symbol: SymbolId,

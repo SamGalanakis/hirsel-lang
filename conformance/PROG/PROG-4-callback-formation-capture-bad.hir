@@ -1,0 +1,28 @@
+// rule: PROG-4
+// expect: reject LANG-7 at line 18
+type Count {
+  calls: u32,
+}
+
+/// Calls f(ctx, i) for each i below n during the call and retains neither.
+extern "c" fn each(
+  u: Unsafe,
+  f: FnPtr[fn(mut ctx: unique Count, x: i32) -> i32],
+  mut ctx: unique Count,
+  n: i32
+) -> ()
+
+pub fn main(u: Unsafe) -> Result[(), ()] {
+  let mut count = Count(calls: 0)
+  let step: i32 = 2
+  each(
+    u,
+    fn(mut ctx: Count, x: i32) -> i32 {
+      ctx.calls += 1
+      x + step
+    },
+    mut count,
+    3
+  )
+  Ok(())
+}

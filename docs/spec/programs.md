@@ -206,7 +206,10 @@ view. A foreign handle is a raw pointer held by a resource whose `drop` releases
 the library.
 
 **Callbacks.** A callback type is `FnPtr[fn(mut ctx: C, ...) -> R]` whose first parameter
-is the context and whose other parameters and result follow the extern rules. Any other
+is the context, whose other parameters are numbers and pointers passed by value, and whose
+result follows the extern rules. A callback value is formed only by naming a non-generic
+definition that is not an extern where a callback type of its shape is expected; a closure
+or a generic definition there is a type error. Any other
 `mut` parameter of an extern is a context `mut ctx: unique C`, passed as an opaque
 exclusive address that C only hands back to a callback; `unique` is canonical for a plain
 `C`. Every other `FnPtr`, a closure type `fn(...)`, and a context that is not `mut` are

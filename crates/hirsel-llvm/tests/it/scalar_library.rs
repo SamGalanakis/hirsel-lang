@@ -1013,6 +1013,7 @@ fn every_target_agrees_with_the_interpreter_on_every_scalar_library_operation() 
                     finalizers: &program.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
+                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
                     registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                         &program.table.table,
                         &program.finalizers,

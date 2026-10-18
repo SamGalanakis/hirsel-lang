@@ -504,12 +504,26 @@ impl Checker<'_, '_> {
                             Uses::Unrestricted => f.uses = Uses::Only(f.authority.clone()),
                             Uses::Only(allowed) => f.authority = allowed.clone(),
                         }
+                        let callable = f.generics.is_empty() && f.foreign.is_none();
                         let ty = self.ty(TypeKind::Function(f));
                         // Named references have no environment; parameter types
                         // are invocation inputs rather than captured values.
                         let mut row = self.body.types.get(ty).unwrap().clone();
                         row.modes.sendability = Sendability::Sendable;
-                        Ok(self.body.types.push(row))
+                        let named = self.body.types.push(row);
+                        // PROG-4: a non-generic definition named where a callback
+                        // `FnPtr[F]` of its shape is expected is that callback.
+                        if let Some(pointer) = expected.filter(|_| callable)
+                            && let TypeKind::Builtin {
+                                kind: BuiltinType::FnPtr,
+                                arguments,
+                            } = self.kind(pointer)
+                            && let [GenericArgument::Type(signature)] = arguments[..]
+                            && self.compatible(named, signature)
+                        {
+                            return Ok(pointer);
+                        }
+                        Ok(named)
                     }
                     SignatureKind::Const(t) => {
                         let root = self.import(*t, &s.types)?;

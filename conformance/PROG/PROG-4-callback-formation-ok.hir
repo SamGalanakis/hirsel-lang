@@ -1,0 +1,24 @@
+// rule: PROG-4
+// expect: accept
+type Count {
+  calls: u32,
+}
+
+/// Calls f(ctx, i) for each i below n during the call and retains neither.
+extern "c" fn each(
+  u: Unsafe,
+  f: FnPtr[fn(mut ctx: unique Count, x: i32) -> i32],
+  mut ctx: unique Count,
+  n: i32
+) -> ()
+
+fn visit(mut ctx: Count, x: i32) -> i32 {
+  ctx.calls += 1
+  x
+}
+
+pub fn main(u: Unsafe) -> Result[(), ()] {
+  let mut count = Count(calls: 0)
+  each(u, visit, mut count, 3)
+  Ok(())
+}

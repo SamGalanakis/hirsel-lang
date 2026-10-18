@@ -74,6 +74,9 @@ pub struct EmitInputs<'a> {
     /// Small source units another object of the partition implements, emitted here as
     /// `available_externally` bodies so calls into them inline across objects.
     pub available_externally: &'a BTreeSet<ContentHash>,
+    /// The definitions some unit of the program names as a C callback (PROG-4): each one's
+    /// own object exports its `callback_thunk_name` thunk.
+    pub callbacks: &'a BTreeSet<DefPath>,
     pub opt: OptLevel,
     pub registry: crate::descriptor_registry::DescriptorRegistry,
     /// Instrument inline count edges. Set only when linking a measurement runtime archive.
@@ -149,6 +152,18 @@ pub fn function_thunk_name(definition: &DefPath, instance: Option<&ContentHash>)
     let name = symbol_name(definition, instance);
     format!("_H1T{}", &name[3..])
 }
+
+/// The link name of a definition's C callback thunk (PROG-4): the C-convention entry
+/// `R (*)(void *ctx, ...)` that calls the definition with the run context of its thread's
+/// extern call. It is `symbol_name` with `C` after the `_H1` prefix, injective as
+/// `function_thunk_name` is.
+pub fn callback_thunk_name(definition: &DefPath, instance: Option<&ContentHash>) -> String {
+    let name = symbol_name(definition, instance);
+    format!("_H1C{}", &name[3..])
+}
+
+/// No callbacks, for inputs that name none.
+pub static NO_CALLBACKS: BTreeSet<DefPath> = BTreeSet::new();
 
 /// A digest names the layout's runtime descriptor: one address identity across every object.
 pub fn descriptor_name(layout: &LayoutRecord) -> String {
@@ -586,6 +601,7 @@ mod tests {
             finalizers: &finalizers,
             inline_instances: &BTreeSet::new(),
             available_externally: &BTreeSet::new(),
+            callbacks: &NO_CALLBACKS,
             registry: crate::descriptor_registry::DescriptorRegistry::new(&layouts, &finalizers),
             opt: OptLevel::None,
             measurement: false,

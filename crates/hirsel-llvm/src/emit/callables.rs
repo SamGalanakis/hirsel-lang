@@ -71,6 +71,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let Some(symbol) = self.unit.tables.symbols.get(symbol.index()) else {
             return self.invalid("a function reference outside the symbol table");
         };
+        // At a pointer scalar, the definition's C callback thunk (PROG-4).
+        if self.layout(self.value_type(result)?.layout)?.kind
+            == LayoutKind::Scalar(ScalarKind::Pointer)
+        {
+            let name = callback_thunk_name(&symbol.definition, symbol.instance.as_ref());
+            self.import_function(&name, &symbol.definition, None);
+            return Ok(self.module.function_address(&name));
+        }
         let name = function_thunk_name(&symbol.definition, symbol.instance.as_ref());
         self.import_function(&name, &symbol.definition, None);
         let code = self.module.function_address(&name);

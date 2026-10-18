@@ -18,8 +18,8 @@ use hirsel_lir::abi_types::{
 };
 use hirsel_lir::emission::{
     EmitInputs, IMMORTAL_PREFIX, IMMORTAL_PREFIX_BYTES, Manifested, OptLevel, PrefixWord,
-    TOOLCHAIN_IMPORTS, artifact, check_receipt, descriptor_name, function_thunk_name,
-    register_result, scalar_shape, site_code, slice_storage, symbol_name,
+    TOOLCHAIN_IMPORTS, artifact, callback_thunk_name, check_receipt, descriptor_name,
+    function_thunk_name, register_result, scalar_shape, site_code, slice_storage, symbol_name,
 };
 use hirsel_lir::ir::*;
 use hirsel_lir::layout::{
@@ -406,6 +406,28 @@ fn lower<T>(
                 let thunk =
                     function_thunk_name(&unit.header.definition, Some(&unit.header.instance));
                 define_function_thunk(&module, &thunk, function, &signature);
+                manifested.exports.insert(
+                    thunk.clone(),
+                    ObjectSymbol {
+                        name: thunk,
+                        kind: ObjectSymbolKind::Function,
+                        definition: Some(unit.header.definition.clone()),
+                        abi: Some(abi_digest(abi)),
+                    },
+                );
+            }
+            if inputs.callbacks.contains(&unit.header.definition) {
+                let thunk =
+                    callback_thunk_name(&unit.header.definition, Some(&unit.header.instance));
+                foreign::define_callback_thunk(
+                    &module,
+                    &mut manifested,
+                    inputs.layouts,
+                    &thunk,
+                    function,
+                    &signature,
+                    &unit.header.definition,
+                )?;
                 manifested.exports.insert(
                     thunk.clone(),
                     ObjectSymbol {

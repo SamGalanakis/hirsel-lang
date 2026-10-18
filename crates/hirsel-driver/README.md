@@ -44,6 +44,8 @@ inputs, passed after the runtime archive (`-l<name>` or the file); the link acce
 `Foreign` imports beside runtime ones. `foreign_unreplayable` sets hirsel-rt's
 `UNREPLAYABLE` bit beside the root mask, so the executable refuses `--hirsel-record` and
 `--hirsel-replay`; H refuses an extern call as `Unsupported`.
+`ReadyProgram.callbacks` names the definitions a unit references as C callbacks, whose
+objects export their callback thunks.
 
 Native callable-target specializations retain their original instance's signature
 and placement proofs. `ReadyProgram.inline_instances` lets `native::link` include

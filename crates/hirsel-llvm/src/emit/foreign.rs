@@ -110,6 +110,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         // deferred counts are stored and must-unique facts dropped first.
         self.flush_lengths(true)?;
         self.invalidate_uniqueness();
+        // A callback C makes during the call finds this thread's run context.
+        let enter = self.runtime(RuntimeEntry::ForeignEnter)?;
+        self.builder.call(enter, &[self.context]);
         let returned = self.builder.call(function, &args);
         self.module
             .add_call_attribute(returned, AttributeSlot::Function, Attribute::NoUnwind);
@@ -143,4 +146,126 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         self.jump(normal)
     }
+}
+
+/// Declares the runtime entry `entry` for module-level code and records its import.
+fn runtime_function<'m>(
+    module: &'m Module<'m>,
+    manifested: &mut Manifested,
+    entry: RuntimeEntry,
+    ty: Type<'m>,
+) -> Function<'m> {
+    let symbol = entry.declaration().symbol;
+    let function = module
+        .function(symbol, ty)
+        .expect("a runtime entry is declared with its one type");
+    crate::runtime::substrate(module, function, entry);
+    manifested.import(symbol, ObjectSymbolKind::Runtime, None);
+    function
+}
+
+/// Defines `name`, the C callback thunk of the definition entry `target` (PROG-4):
+/// `R name(void *ctx, ...)` in the platform C convention. It takes the run context of its
+/// thread's extern call, passes `ctx` back as the definition's `mut` context address and
+/// the other arguments by value, and returns the definition's scalar result, or nothing.
+/// A failure in the definition ends the process.
+pub(super) fn define_callback_thunk<'m>(
+    module: &'m Module<'m>,
+    manifested: &mut Manifested,
+    layouts: &LayoutTable,
+    name: &str,
+    target: Function<'m>,
+    signature: &Signature<'m, '_>,
+    definition: &DefPath,
+) -> Result<Function<'m>, CodegenError> {
+    let abi = signature.abi;
+    let unsupported = |what: &str| CodegenError::Unsupported {
+        definition: definition.clone(),
+        what: format!("a C callback {what}"),
+    };
+    if abi.shape != CallableShape::Definition || abi.environment || !signature.roots.is_empty() {
+        return Err(unsupported("of a definition with an environment or roots"));
+    }
+    let Some((context, rest)) = abi.parameters.split_first() else {
+        return Err(unsupported("without a context parameter"));
+    };
+    if context.passing != ParameterPassing::ExclusiveAddress {
+        return Err(unsupported("whose context is not a `mut` address"));
+    }
+    let ptr = module.ptr_type();
+    let mut types = vec![ptr];
+    for (index, parameter) in rest.iter().enumerate() {
+        if parameter.passing != ParameterPassing::ByValue || parameter.slots.len() != 1 {
+            return Err(unsupported("parameter that is not one scalar"));
+        }
+        types.push(signature.types[signature.first[index + 1] as usize]);
+    }
+    let builder = Builder::new(module);
+    let returns = match signature.value {
+        Some((kind, _)) => scalar::scalar_type(&builder, kind),
+        None => module.void_type(),
+    };
+    let thunk = module
+        .function(name, module.function_type(returns, &types))
+        .map_err(|what| CodegenError::Invalid {
+            definition: definition.clone(),
+            what,
+        })?;
+    module.add_attribute(thunk, AttributeSlot::Function, Attribute::NoUnwind);
+    let enter = runtime_function(
+        module,
+        manifested,
+        RuntimeEntry::CallbackContext,
+        module.function_type(ptr, &[]),
+    );
+    let failed = runtime_function(
+        module,
+        manifested,
+        RuntimeEntry::CallbackFailed,
+        module.function_type(module.void_type(), &[ptr]),
+    );
+    builder.position(module.append_block(thunk));
+    let run = builder.call(enter, &[]);
+    let mut arguments = Vec::new();
+    for hidden in &signature.hidden {
+        match hidden {
+            Hidden::Context => arguments.push(run),
+            Hidden::Destination => arguments.push(module.const_zero(ptr)),
+            // A unit result has no bytes; anything else returns in a register.
+            Hidden::Result => match abi.result.as_ref().and_then(|r| layouts.layout(r.layout)) {
+                Some(layout) if layout.kind == LayoutKind::Unit => {
+                    arguments.push(builder.alloca(module.int_type(8), 1))
+                }
+                _ => return Err(unsupported("result that is not a scalar")),
+            },
+            Hidden::Environment => return Err(unsupported("with an environment")),
+        }
+    }
+    arguments.push(module.parameter(thunk, 0));
+    arguments.extend((1..types.len() as u32).map(|i| module.parameter(thunk, i)));
+    let returned = builder.call(target, &arguments);
+    signature.attribute_call(module, returned);
+    let status = if signature.returns_status() {
+        returned
+    } else {
+        builder.extract(returned, signature.status_field)
+    };
+    let failure = module.append_block(thunk);
+    let normal = module.append_block(thunk);
+    let zero = module.const_zero(module.int_type(8));
+    let nonzero = builder.icmp(IntPredicate::Ne, status, zero);
+    builder.cond_br(nonzero, failure, normal);
+    builder.position(failure);
+    builder.call(failed, &[run]);
+    builder.unreachable();
+    builder.position(normal);
+    match signature.value {
+        Some((kind, field)) => {
+            let word = builder.extract(returned, field);
+            let word_ty = value_word(module, kind);
+            builder.ret(decode_word(&builder, kind, word, word_ty));
+        }
+        None => builder.ret_void(),
+    }
+    Ok(thunk)
 }

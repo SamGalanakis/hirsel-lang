@@ -19,7 +19,7 @@ pub const SECTION22: &str = include_str!("section22.txt");
 /// Deliberately absent; no guessed APIs for the still-open questions.
 pub const OMITTED: &[(&str, u32)] = &[
     ("package discovery and manifest APIs", 4),
-    ("FFI wrappers, callbacks and raw-pointer APIs", 6),
+    ("raw-pointer APIs beyond PROG-4 externs and callbacks", 6),
     ("comptime step-budget API", 7),
     ("frame/arena/scratch charge and depth constants", 16),
 ];

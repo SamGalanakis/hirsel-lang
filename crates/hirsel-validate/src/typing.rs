@@ -2695,7 +2695,28 @@ impl<'a> Checker<'a> {
                     },
                     ..Type::with_kind(TypeKind::Function(function))
                 });
-                if !self.compatible(&mut store, ty, derived, TypeRelation::Value) {
+                // PROG-4: a non-generic definition typed as a callback `FnPtr[F]`
+                // has F's shape.
+                let callback = match &store.get(ty).map(|t| &t.kind) {
+                    Some(TypeKind::Builtin {
+                        kind: BuiltinType::FnPtr,
+                        arguments,
+                    }) if declared.foreign.is_none() && declared.generics.is_empty() => {
+                        match arguments[..] {
+                            [GenericArgument::Type(signature)] => Some(signature),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                let matches = match callback {
+                    Some(signature) => {
+                        hirsel_types::shape_equal(&store, signature, &store, derived)
+                            .unwrap_or(false)
+                    }
+                    None => self.compatible(&mut store, ty, derived, TypeRelation::Value),
+                };
+                if !matches {
                     self.error(ViolationKind::TypeMismatch {
                         entity: "function reference",
                     });

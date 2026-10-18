@@ -3083,6 +3083,10 @@ conformance/PROG/PROG-3-zero-entry-error-run.hir
 conformance/PROG/PROG-3-zero-entry-run.hir
 conformance/PROG/PROG-4-callback-context-bad.hir
 conformance/PROG/PROG-4-callback-context-ok.hir
+conformance/PROG/PROG-4-callback-formation-capture-bad.hir
+conformance/PROG/PROG-4-callback-formation-ok.hir
+conformance/PROG/PROG-4-callback-parameter-bad.hir
+conformance/PROG/PROG-4-callback-parameter-ok.hir
 conformance/PROG/PROG-4-extern-closure-callback-bad.hir
 conformance/PROG/PROG-4-extern-closure-callback-ok.hir
 conformance/PROG/PROG-4-extern-contract-bad.hir

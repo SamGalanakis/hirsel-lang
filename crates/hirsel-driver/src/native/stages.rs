@@ -150,6 +150,8 @@ pub struct ReadyProgram {
     /// Callable-target specializations and their known bodies, available in
     /// each calling partition without changing their source failure anchors.
     pub inline_instances: std::collections::BTreeSet<ContentHash>,
+    /// The definitions some unit names as a C callback (PROG-4).
+    pub callbacks: BTreeSet<DefPath>,
     /// Per resource layout, the instance digest of its drop body's unit.
     pub finalizers: BTreeMap<LayoutId, ContentHash>,
     /// Instance digest of each non-generic function, for entry lookup.
@@ -329,7 +331,12 @@ pub fn build_program(
             (unit.header.definition.clone(), unit.header.instance)
         })
         .collect();
+    let callbacks = units
+        .iter()
+        .flat_map(|unit| callbacks(unit.unit()))
+        .collect();
     Ok(ReadyProgram {
+        callbacks,
         operations,
         launch: options.launch.clone(),
         revisions: BTreeMap::new(),
@@ -395,4 +402,18 @@ fn discharged(
         }
     }
     Ok(removed)
+}
+
+/// The definitions `unit` names as C callbacks: `FunctionRef`s at a pointer scalar (PROG-4).
+fn callbacks(unit: &hirsel_lir::ir::LirUnit<Ready>) -> impl Iterator<Item = DefPath> + '_ {
+    use hirsel_lir::ir::{Inst, ValueRepr};
+    unit.instructions.iter().filter_map(|inst| match *inst {
+        Inst::FunctionRef { result, symbol }
+            if unit.types[unit.values[result.index()].ty.index()].repr
+                == ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Pointer) =>
+        {
+            Some(unit.tables.symbols[symbol.index()].definition.clone())
+        }
+        _ => None,
+    })
 }

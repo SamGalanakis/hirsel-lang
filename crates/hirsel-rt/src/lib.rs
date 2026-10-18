@@ -45,6 +45,7 @@ pub mod count;
 pub mod failure;
 mod fiber;
 pub mod finalize;
+pub mod foreign;
 #[cfg(feature = "measurement")]
 pub mod measurement;
 mod memcheck;

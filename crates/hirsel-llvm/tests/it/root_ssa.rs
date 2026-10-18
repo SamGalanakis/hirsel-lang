@@ -170,6 +170,7 @@ fn object(program: &Program, opt: OptLevel) -> Vec<u8> {
         finalizers: &program.finalizers,
         inline_instances: &std::collections::BTreeSet::new(),
         available_externally: &std::collections::BTreeSet::new(),
+        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
         registry: DescriptorRegistry::new(&program.table.table, &program.finalizers),
         opt,
         measurement: false,

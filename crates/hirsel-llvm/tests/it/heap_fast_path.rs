@@ -67,6 +67,7 @@ fn inputs<'a>(
         finalizers: &p.finalizers,
         inline_instances: &INLINE,
         available_externally: &INLINE,
+        callbacks: &hirsel_lir::emission::NO_CALLBACKS,
         registry: DescriptorRegistry::new(&p.table.table, &p.finalizers),
         opt,
         measurement: false,

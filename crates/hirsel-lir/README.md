@@ -104,7 +104,7 @@ Invariants:
   form; `rt_program` lowers the niche's arm to `STEP_NONNULL`.
 - Externs have the `Foreign` FnAbi shape and only they do (PROG-4): no run context,
   environment or destination, and a scalar result or none. `Ptr` and `FnPtr` are pointer
-  scalars.
+  scalars, and a `FunctionRef` at a pointer scalar is a definition's C callback address.
 - Unavailable, never guessed. Open attribute combinations (#47), C interop
   beyond plain `@layout(c)` records (#6) and M2 builtins return
   `LayoutError::Unavailable` with their issue. A dynamic extent (Packed,

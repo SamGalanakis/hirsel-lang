@@ -309,6 +309,7 @@ fn capture_masks_agree_on_both_native_targets() {
                     finalizers: &p.finalizers,
                     inline_instances: &std::collections::BTreeSet::new(),
                     available_externally: &std::collections::BTreeSet::new(),
+                    callbacks: &hirsel_lir::emission::NO_CALLBACKS,
                     registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                         &p.table.table,
                         &p.finalizers,
@@ -519,6 +520,7 @@ fn initialization_masks_share_the_named_live_word_limit() {
             finalizers: &finalizers,
             inline_instances: &std::collections::BTreeSet::new(),
             available_externally: &std::collections::BTreeSet::new(),
+            callbacks: &hirsel_lir::emission::NO_CALLBACKS,
             registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                 &table.table,
                 &finalizers,

@@ -181,10 +181,50 @@ void *counter_new(int32_t start) {
 int32_t counter_bump(void *c) { return ++((counter *)c)->value; }
 void counter_free(void *c) { freed++; free(c); }
 int32_t counter_freed(void) { return freed; }
+
+int32_t demo_each(void *ctx, int32_t (*f)(void *, int32_t), int32_t n) {
+    int32_t sum = 0;
+    for (int32_t i = 0; i < n; i++) sum += f(ctx, i);
+    return sum;
+}
 "#;
 
-/// Its safe wrapper: externs, a handle resource and wrappers.
-const DEMO_HIR: &str = "/// Reads its arguments only.
+/// Its safe wrapper: externs, a handle resource, a callback and wrappers.
+const DEMO_HIR: &str = "pub type Tally {
+  calls: i32,
+}
+
+/// Calls f(ctx, i) for each i below n during the call and retains neither.
+extern \"c\" fn demo_each(
+  u: Unsafe,
+  mut ctx: unique Tally,
+  f: FnPtr[fn(mut state: unique Tally, i: i32) -> i32],
+  n: i32
+) -> i32
+
+fn double(mut ctx: Tally, i: i32) -> i32 {
+  ctx.calls += 1
+  i * 2
+}
+
+fn explode(mut ctx: Tally, i: i32) -> i32 {
+  ctx.calls += 1
+  2147483647 + i
+}
+
+/// 100 times the sum of the doubled numbers below n, plus how many C visited.
+pub fn each_doubled(u: Unsafe, n: i32) -> i32 {
+  let mut tally = Tally(calls: 0)
+  let total = demo_each(u, mut tally, double, n)
+  total * 100 + tally.calls
+}
+
+pub fn each_exploding(u: Unsafe, n: i32) -> i32 {
+  let mut tally = Tally(calls: 0)
+  demo_each(u, mut tally, explode, n)
+}
+
+/// Reads its arguments only.
 extern \"c\" fn demo_add(u: Unsafe, a: i32, b: i32) -> i32
 
 /// Reads its argument only.
@@ -274,6 +314,9 @@ const NATIVE_MAIN: &str = "pub fn main(u: Unsafe) -> Result[(), ()] {
   if lib.freed(u) != 1 {
     return Error(())
   }
+  if lib.each_doubled(u, 4) != 1204 {
+    return Error(())
+  }
   Ok(())
 }
 
@@ -303,15 +346,23 @@ fn native_demo(name: &str, main: &str) -> (PathBuf, PathBuf, PathBuf) {
         .unwrap();
     assert!(compiled.status.success(), "{compiled:?}");
     std::fs::write(root.join("lib/lib.hir"), DEMO_HIR).unwrap();
-    let wrappers: Vec<_> = ["add", "sum", "low", "negate", "scale"]
-        .into_iter()
-        .map(|name| json!({"module":[],"name":name,"kind":"pure","model":"deterministic"}))
-        .chain(
-            ["counter", "bump", "freed"]
-                .into_iter()
-                .map(|name| json!({"module":[],"name":name,"kind":"handle","model":"none"})),
-        )
-        .collect();
+    let wrappers: Vec<_> = [
+        "add",
+        "sum",
+        "low",
+        "negate",
+        "scale",
+        "each_doubled",
+        "each_exploding",
+    ]
+    .into_iter()
+    .map(|name| json!({"module":[],"name":name,"kind":"pure","model":"deterministic"}))
+    .chain(
+        ["counter", "bump", "freed"]
+            .into_iter()
+            .map(|name| json!({"module":[],"name":name,"kind":"handle","model":"none"})),
+    )
+    .collect();
     let lib = json!({"schema":1,"package":{"name":"lib","version":"1"},
         "sources":[{"path":"lib.hir","module":[]}],"dependencies":[],
         "unsafe_ffi":{"link":["demo.o"],"headers_checked":false,"wrappers":wrappers}});
@@ -419,5 +470,24 @@ fn native_runs_reaching_only_deterministic_wrappers_record() {
         let recorded = execute(&root, &executable, true);
         assert_eq!(recorded.status.code(), Some(0), "{recorded:?}");
         assert!(root.join("tape").exists());
+    });
+}
+
+#[test]
+fn native_callback_failure_ends_the_process() {
+    with_compiler_stack(|| {
+        let main = "pub fn main(u: Unsafe) -> Result[(), ()] {
+  let _ = lib.each_exploding(u, 3)
+  Ok(())
+}
+";
+        let (root, _, executable) = native_demo("callback-failure", main);
+        let ran = execute(&root, &executable, false);
+        assert!(!ran.status.success(), "{ran:?}");
+        let stderr = String::from_utf8_lossy(&ran.stderr);
+        assert!(
+            stderr.contains("a callback failed; the process ends"),
+            "{stderr}"
+        );
     });
 }

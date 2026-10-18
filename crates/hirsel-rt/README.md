@@ -473,6 +473,16 @@ The public RealIo adapter retains history by default for tests and local observe
 `harness/output-bench.c` compares this ordinary path and ordinary recording
 against identical raw C writes; neither mode claims durability.
 
+## Foreign calls
+
+An extern call (PROG-4) first calls `hirsel_rt_v2_foreign_enter(ctx)`, which records the
+run context for its thread. A C callback thunk reads it back with
+`hirsel_rt_v2_callback_context`, which ends the process when the thread has none, and a
+callback that fails calls `hirsel_rt_v2_callback_failed`, which ends the process: the C
+frames between the callback and the extern call cannot run cleanup. The launchers strip
+the `standalone::UNREPLAYABLE` bit from the compiled root mask and refuse a recording or a
+replay when it is set.
+
 ## Timing, diagnostics and measurement archives
 
 Cargo features are independent link-time choices, all off by default:

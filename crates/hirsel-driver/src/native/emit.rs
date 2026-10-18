@@ -97,6 +97,7 @@ pub fn emit_ir(program: &ReadyProgram, opt: OptLevel) -> Result<String, NativeEr
         finalizers: &program.finalizers,
         inline_instances: &program.inline_instances,
         available_externally: &BTreeSet::new(),
+        callbacks: &program.callbacks,
         opt,
         registry: hirsel_lir::descriptor_registry::DescriptorRegistry::new(
             &program.table,
@@ -135,6 +136,7 @@ pub(crate) fn emit_registered(
         finalizers: &program.finalizers,
         inline_instances: &program.inline_instances,
         available_externally: copies,
+        callbacks: &program.callbacks,
         opt,
         registry: registry.clone(),
         measurement,

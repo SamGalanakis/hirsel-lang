@@ -1213,8 +1213,12 @@ impl<S: Stage> Checker<'_, '_, S> {
                 facts.statics[result.index()] = true;
             }
             Inst::FunctionRef { result, symbol } => {
+                // A callable, or a definition's C callback address (PROG-4).
                 if unit.tables.symbols[symbol.index()].kind != SymbolKind::Function
-                    || self.ty(result).repr != ValueRepr::Callable
+                    || !matches!(
+                        self.ty(result).repr,
+                        ValueRepr::Callable | ValueRepr::Scalar(ScalarKind::Pointer)
+                    )
                 {
                     self.add(site, K::Type("function reference"));
                 }

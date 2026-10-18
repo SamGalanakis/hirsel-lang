@@ -481,6 +481,12 @@ void hirsel_rt_v2_failure_clear(hirsel_rt_v2_ctx *ctx);
 void hirsel_rt_v2_invariant_fault(void);
 void hirsel_rt_v2_diag_panic(void);
 
+/* PROG-4: an extern call records its thread's run context for C callback thunks; a
+   failing callback ends the process. */
+void hirsel_rt_v2_foreign_enter(hirsel_rt_v2_ctx *ctx);
+hirsel_rt_v2_ctx *hirsel_rt_v2_callback_context(void);
+void hirsel_rt_v2_callback_failed(hirsel_rt_v2_ctx *ctx);
+
 #ifdef __cplusplus
 }
 #endif

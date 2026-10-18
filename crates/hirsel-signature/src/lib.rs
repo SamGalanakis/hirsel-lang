@@ -2366,8 +2366,9 @@ impl Normalizer<'_, '_> {
         p.passing == PassingMode::Mut
             && matches!(self.ffi_class(p.ty), None | Some(FfiClass::Record))
     }
-    /// A C-callable callback: `fn(mut ctx: unique C, ...) -> R` over foreign
-    /// argument and result types, with no state promises (PROG-4).
+    /// A C-callable callback: `fn(mut ctx: unique C, ...) -> R` whose other
+    /// parameters are numbers and pointers C passes by value, with a foreign
+    /// result and no state promises (PROG-4).
     fn ffi_callback(&self, f: TypeId) -> bool {
         let Some(TypeKind::Function(f)) = self.types.get(f).map(|t| &t.kind) else {
             return false;
@@ -2379,8 +2380,11 @@ impl Normalizer<'_, '_> {
             && f.generics.is_empty()
             && f.state_promises.is_empty()
             && rest.iter().all(|p| {
-                self.ffi_class(p.ty)
-                    .is_some_and(|c| FfiClass::permits(c, p.passing))
+                p.passing != PassingMode::Mut
+                    && matches!(
+                        self.ffi_class(p.ty),
+                        Some(FfiClass::Numeric | FfiClass::Pointer)
+                    )
             })
             && self.ffi_class(f.result).is_some_and(FfiClass::result)
     }

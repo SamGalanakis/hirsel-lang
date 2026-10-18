@@ -2003,3 +2003,24 @@ fn a_diverging_function_has_no_normal_return() {
         |k| *k == K::Type("returned value"),
     );
 }
+
+/// A `FunctionRef` is a callable or, at a pointer scalar, a definition's C callback
+/// address (PROG-4); no other scalar.
+fn function_ref(repr: ValueRepr, layout: LayoutId) -> Vec<K> {
+    let mut t = Lir::<Value>::new(&[], None);
+    let symbol = t.builder.symbol(SymbolKind::Function, path("visit"));
+    let f = t.value_as(repr, layout, Holding::Plain);
+    t.builder
+        .push(ENTRY, Inst::FunctionRef { result: f, symbol });
+    t.builder.ret(ENTRY, None);
+    t.check()
+}
+
+#[test]
+fn a_function_reference_is_a_callable_or_a_callback_address() {
+    use hirsel_lir::layout_types::ScalarKind;
+    let pointer = ValueRepr::Scalar(ScalarKind::Pointer);
+    assert_eq!(function_ref(pointer, l::PTR), vec![]);
+    let integer = function_ref(ValueRepr::Scalar(ScalarKind::I64), l::I64);
+    assert_eq!(integer, vec![K::Type("function reference")]);
+}

@@ -383,6 +383,12 @@ pub enum RuntimeEntry {
     FailureClear,
     InvariantFault,
     DiagPanic,
+    /// Before an extern call: the calling thread's run context, for callbacks.
+    ForeignEnter,
+    /// In a C callback thunk: the run context of its thread's extern call.
+    CallbackContext,
+    /// A callback failed: the process ends (PROG-4).
+    CallbackFailed,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -453,7 +459,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 55] = [
+    pub const ALL: [RuntimeEntry; 58] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -509,6 +515,9 @@ impl RuntimeEntry {
         Self::FailureClear,
         Self::InvariantFault,
         Self::DiagPanic,
+        Self::ForeignEnter,
+        Self::CallbackContext,
+        Self::CallbackFailed,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -830,6 +839,13 @@ impl RuntimeEntry {
             Self::FailureClear => ("hirsel_rt_v2_failure_clear", VOID, const { &[CTX] }),
             Self::InvariantFault => ("hirsel_rt_v2_invariant_fault", VOID, const { &[] }),
             Self::DiagPanic => ("hirsel_rt_v2_diag_panic", VOID, const { &[] }),
+            Self::ForeignEnter => ("hirsel_rt_v2_foreign_enter", VOID, const { &[CTX] }),
+            Self::CallbackContext => (
+                "hirsel_rt_v2_callback_context",
+                ptr(N::Ctx, 1),
+                const { &[] },
+            ),
+            Self::CallbackFailed => ("hirsel_rt_v2_callback_failed", VOID, const { &[CTX] }),
         };
         RuntimeDeclaration {
             entry: self,
@@ -935,4 +951,7 @@ snapshot_enum!(RuntimeEntry {
     FailureClear,
     InvariantFault,
     DiagPanic,
+    ForeignEnter,
+    CallbackContext,
+    CallbackFailed,
 });
