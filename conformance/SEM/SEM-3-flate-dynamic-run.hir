@@ -1,0 +1,20 @@
+// rule: SEM-3
+// expect: run
+// A dynamic-code DEFLATE stream written by CPython's zlib, decoded within
+// exact bounds.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // dynamic Huffman codes.
+  let input1 = b"5\x8d\xc1\x0d\x00A\x08\x02\xffVak\x03\xf6_\xc3\xe1\xee\xad&bp\x88\x88)@be+\xda\xff\xaa4\x0bt\x97\x9f_\xc8'1\x8f/\xe123\xb9\xb4\xae\xa9\xa5\xdaN,/\xd62wJ\x96?"
+  check(
+    flate.inflate(input1, 120) == Ok(
+      b"abad\x0aaaabba\x0aaaaaaaa\x0aaa aaaaaaababaaad\x0aa  \x0ac\x0aaa aaaa\x0aabcaaabbdaaaaaa\x0aa\x0abac\x0acaddabc baaaaa\x0ababca ccc\x0aabadaaaacaaaaacabbcbc"
+    )
+  )
+  check(flate.inflate(input1, 119) == Error(TooLarge()))
+  check(flate.inflate(bytes.slice(input1, 0, 60), 120) == Error(Truncated()))
+  Ok(())
+}

@@ -1,0 +1,54 @@
+// rule: SEM-3
+// expect: run
+// Go src/compress/flate/flate_test.go TestStreams, cases 4-7
+// (golang/go ebe2feef). Unlike Go, bytes after the final block are an error.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+fn corrupt(decoded: Result[Bytes, flate.FlateError]) -> bool uses {} {
+  match decoded {
+    Error(Corrupt(_)) => true,
+    _ => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // complete HCLenTree, complete HLitTree, degenerate HDistTree, use missing HDist symbol
+  check(
+    corrupt(
+      flate.inflate(
+        b"\x00\x01\x00\xfe\xff\x00\x0d\xe0\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x06\x10\x00\x00\x00\x00@p",
+        1024
+      )
+    )
+  )
+  // complete HCLenTree, empty HLitTree, empty HDistTree
+  check(
+    corrupt(
+      flate.inflate(
+        b"\x05\xe0\x01\x04\x00\x00\x00\x00\x10\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x08",
+        1024
+      )
+    )
+  )
+  // complete HCLenTree, empty HLitTree, degenerate HDistTree
+  check(
+    corrupt(
+      flate.inflate(
+        b"\x05\xe0\x01\x04\x00\x00\x00\x00\x10\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x08\x00\x00\x00\x08",
+        1024
+      )
+    )
+  )
+  // complete HCLenTree, degenerate HLitTree, degenerate HDistTree, use missing HLit symbol
+  check(
+    corrupt(
+      flate.inflate(
+        b"\x05\xe0\x01\x04\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1c",
+        1024
+      )
+    )
+  )
+  Ok(())
+}

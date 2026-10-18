@@ -1,0 +1,20 @@
+// rule: SEM-3
+// expect: run
+// Go src/compress/flate/flate_test.go TestStreams, cases 27-27
+// (golang/go ebe2feef). Unlike Go, bytes after the final block are an error.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // issue 11033 - empty HDistTree unexpectedly leads to error
+  check(
+    flate.inflate(
+      b"\x05\x0f\xb1\x09\xc0 \xcc\xa5\xd0\x17\xdc\xbc\xa0D\x88\x1e\xe1\x03N\xc1I\xc8\x98\x0b\xbcA<*\xb3[\xe9\xdc\xb1G4I\x92$I\x92$\x11 #\x06\xee\x97\xb08:R\x1bO\xfd\xcf2\x17\xf9\xf7\xd3\xad\xb7\x01",
+      1024
+    ) == Ok(
+      b"100644 he.php\x00]\x055_~\xd9W\xff\x08J\x90\x92]\x19\xe3\xeb\xc6\xd0\xc6\xd7"
+    )
+  )
+  Ok(())
+}

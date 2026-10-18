@@ -1,0 +1,19 @@
+// rule: SEM-3
+// expect: run
+// A hand-built dynamic block whose literal code has lengths 1 to 15, checked
+// against CPython's zlib. Its 95 symbols pass the lookup table's build point, so
+// 10- to 15-bit codes take the canonical walk.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let long_codes = b"\x05\xe0\xc1\x95eY\x96e\xd9\xd1:\xd7>\xf7}Q\xf3\xc8\x02\xff=\x0c\xed\xde\xf7\xfb\xfb\xf7\xdf\xff\xfe\xef\xff\xfd\x7f\xff?\xed\xde\xf7\xfb\xfb\xf7\xdf\xff\xfe\xef\xff\xfd\x7f\xff?\xed\xde\xf7\xfb\xfb\xf7\xdf\xff\xfe\xef\xff\xfd\x7f\xff?\xed\xde\xf7\xfb\xfb\xf7\xdf\xff\xfe\xef\xff\xfd\x7f\xff?\xed\xde\xf7\xfb\xfb\xf7\xdf\xff\xfe\xef\xff\xfd\x7f\xff?\x00\x00\xf8\xff\x03"
+  check(
+    flate.inflate(long_codes, 95) == Ok(
+      b"abcdefghijklmnoabcdefghijklmnoabcdefghijklmnoabcdefghijklmnoabcdefghijklmnoaaaaaaaaaaaaaaaaaaaa"
+    )
+  )
+  check(flate.inflate(bytes.slice(long_codes, 0, 101), 1024) == Error(Truncated()))
+  Ok(())
+}

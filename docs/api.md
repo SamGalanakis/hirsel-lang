@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-945 exported definitions; 280 variants.
+949 exported definitions; 286 variants.
 
 ## Types and roots
 
@@ -3029,6 +3029,82 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 <a id="def-core_401_2ffile_2fwrite_5fbytes"></a>
 
 - `fn file.write_bytes(d: Dir, p: Path, take data: Bytes) -> Result[(), FileError]`
+
+
+## flate
+
+<a id="def-std_401_2fflate_2fFlateError"></a>
+
+- `pub type flate.FlateError = Truncated | Corrupt(u64) | Header | Checksum | TooLarge | TrailingData( u64 )`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fflate_2fFlateError_23Checksum"></a>
+
+- `Checksum -> flate.FlateError`
+
+Variant of flate.FlateError.
+
+<a id="def-std_401_2fflate_2fFlateError_23Corrupt"></a>
+
+- `Corrupt(u64) -> flate.FlateError`
+
+Variant of flate.FlateError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fflate_2fFlateError_23Header"></a>
+
+- `Header -> flate.FlateError`
+
+Variant of flate.FlateError.
+
+<a id="def-std_401_2fflate_2fFlateError_23TooLarge"></a>
+
+- `TooLarge -> flate.FlateError`
+
+Variant of flate.FlateError.
+
+<a id="def-std_401_2fflate_2fFlateError_23TrailingData"></a>
+
+- `TrailingData( u64 ) -> flate.FlateError`
+
+Variant of flate.FlateError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fflate_2fFlateError_23Truncated"></a>
+
+- `Truncated -> flate.FlateError`
+
+Variant of flate.FlateError.
+
+<a id="def-std_401_2fflate_2fgzip_5fdecode"></a>
+
+- `pub fn flate.gzip_decode(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {}`
+
+Decodes gzip data (RFC 1952): one or more members, concatenated, producing
+at most `limit` bytes in total. Bytes after a member must begin another.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fflate_2finflate"></a>
+
+- `pub fn flate.inflate(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {}`
+
+Decodes a raw DEFLATE stream (RFC 1951) that ends exactly at the end of
+`data`, producing at most `limit` bytes.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
+
+<a id="def-std_401_2fflate_2fzlib_5fdecode"></a>
+
+- `pub fn flate.zlib_decode(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {}`
+
+Decodes zlib data (RFC 1950) without a preset dictionary, producing at most
+`limit` bytes. The stream must end exactly at the end of `data`.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError)
 
 
 ## float

@@ -1,0 +1,40 @@
+// rule: SEM-3
+// expect: run
+// Go src/compress/flate/flate_test.go TestTruncatedStreams (golang/go ebe2feef),
+// hand-built fixed-code streams, output bounds, and streams written by CPython's
+// zlib. Unlike Go, bytes after the final block are an error.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+fn corrupt(decoded: Result[Bytes, flate.FlateError]) -> bool uses {} {
+  match decoded {
+    Error(Corrupt(_)) => true,
+    _ => false,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // TestTruncatedStreams: every proper prefix of a stored then final empty block.
+  let stream = b"\x00\x0c\x00\xf3\xffhello, world\x01\x00\x00\xff\xff"
+  let mut i: u64 = 0
+  while i < bytes.len(stream) {
+    check(flate.inflate(bytes.slice(stream, 0, i), 1024) == Error(Truncated()))
+    i += 1
+  }
+  check(flate.inflate(stream, 1024) == Ok(b"hello, world"))
+  check(flate.inflate(stream, 12) == Ok(b"hello, world"))
+  check(flate.inflate(stream, 11) == Error(TooLarge()))
+  // Reserved block type 3, and a stored length whose complement is wrong.
+  check(flate.inflate(b"\x07", 1024) == Error(Corrupt(1u64)))
+  check(flate.inflate(b"\x01\x01\x00\x00\x00\x11", 1024) == Error(Corrupt(5u64)))
+  // Fixed codes: a match before any output, distance code 30, and a match.
+  check(flate.inflate(b"\x03\x02\x00", 1024) == Error(Corrupt(2u64)))
+  check(corrupt(flate.inflate(b"K\x04>\x00", 1024)))
+  check(flate.inflate(b"K\x04\x02\x00", 1024) == Ok(b"aaaa"))
+  check(flate.inflate(b"K\x04\x02\x00", 4) == Ok(b"aaaa"))
+  check(flate.inflate(b"K\x04\x02\x00", 3) == Error(TooLarge()))
+  check(flate.inflate(b"K\x04\x02\x00", 0) == Error(TooLarge()))
+  check(flate.inflate(b"K\x04\x02\x00\x00", 1024) == Error(TrailingData(4u64)))
+  Ok(())
+}

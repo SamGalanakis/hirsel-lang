@@ -589,6 +589,12 @@
       "module": [
         "string"
       ]
+    },
+    {
+      "path": "flate.hir",
+      "module": [
+        "flate"
+      ]
     }
   ],
   "dependencies": []

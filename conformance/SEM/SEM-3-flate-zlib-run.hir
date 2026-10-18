@@ -1,0 +1,88 @@
+// rule: SEM-3
+// expect: run
+// Go src/compress/zlib/reader_test.go zlibTests (golang/go ebe2feef) and streams
+// written by CPython's zlib. Preset dictionaries are unsupported (Header) and,
+// unlike Go, bytes after the checksum are an error.
+fn check(ok: bool) -> () uses {} {
+  failure.check(ok, TextInvariant())
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // truncated empty
+  check(flate.zlib_decode(b"", 4096) == Error(Truncated()))
+  // truncated dict
+  check(flate.zlib_decode(b"x\xbb", 4096) == Error(Header()))
+  // truncated checksum
+  check(
+    flate.zlib_decode(
+      b"x\xbb\x00\x01\x00\x01\xcaH\xcd\xc9\xc9\xd7Q(\xcf/\xcaI\x01\x04\x00\x00\xff\xff",
+      4096
+    ) == Error(Header())
+  )
+  // empty
+  check(flate.zlib_decode(b"x\x9c\x03\x00\x00\x00\x00\x01", 4096) == Ok(b""))
+  // goodbye
+  check(
+    flate.zlib_decode(b"x\x9cK\xcf\xcfOI\xaaL\xd5Q(\xcf/\xcaI\x01\x00(\xa5\x05^", 4096) == Ok(
+      b"goodbye, world"
+    )
+  )
+  // bad header (CINFO)
+  check(flate.zlib_decode(b"\x88\x98\x03\x00\x00\x00\x00\x01", 4096) == Error(Header()))
+  // bad header (FCHECK)
+  check(flate.zlib_decode(b"x\x9f\x03\x00\x00\x00\x00\x01", 4096) == Error(Header()))
+  // bad checksum
+  check(flate.zlib_decode(b"x\x9c\x03\x00\x00\x00\x00\xff", 4096) == Error(Checksum()))
+  // not enough data
+  check(flate.zlib_decode(b"x\x9c\x03\x00\x00\x00", 4096) == Error(Truncated()))
+  // excess data is silently ignored
+  check(
+    flate.zlib_decode(b"x\x9c\x03\x00\x00\x00\x00\x01x\x9c\xff", 4096) == Error(
+      TrailingData(8u64)
+    )
+  )
+  // dictionary
+  check(
+    flate.zlib_decode(b"x\xbb\x1c2\x04'\xf3\x00\xb1u \x1cE.\x00$\x12\x04t", 4096) == Error(
+      Header()
+    )
+  )
+  // wrong dictionary
+  check(
+    flate.zlib_decode(b"x\xbb\x1c2\x04'\xf3\x00\xb1u \x1cE.\x00$\x12\x04t", 4096) == Error(
+      Header()
+    )
+  )
+  // truncated zlib stream amid raw-block
+  check(
+    flate.zlib_decode(b"x\x9c\x00\x0c\x00\xf3\xffhello", 4096) == Error(Truncated())
+  )
+  // truncated zlib stream amid fixed-block
+  check(flate.zlib_decode(b"x\x9c\xf2H\xcd", 4096) == Error(Truncated()))
+  // CPython zlib: dynamic Huffman codes.
+  check(
+    flate.zlib_decode(
+      b"x\xda5\x8d\xc1\x0d\x00A\x08\x02\xffVak\x03\xf6_\xc3\xe1\xee\xad&bp\x88\x88)@be+\xda\xff\xaa4\x0bt\x97\x9f_\xc8'1\x8f/\xe123\xb9\xb4\xae\xa9\xa5\xdaN,/\xd62wJ\x96?H\xbc(\x1c",
+      120
+    ) == Ok(
+      b"abad\x0aaaabba\x0aaaaaaaa\x0aaa aaaaaaababaaad\x0aa  \x0ac\x0aaa aaaa\x0aabcaaabbdaaaaaa\x0aa\x0abac\x0acaddabc baaaaa\x0ababca ccc\x0aabadaaaacaaaaacabbcbc"
+    )
+  )
+  // CPython zlib: stored blocks.
+  check(
+    flate.zlib_decode(
+      b"x\xda\x01<\x00\xc3\xff\xae\xc4g\x1cZ\xa2\x96\x14\xa4\x1a\xe9gk@w\xb6\xca\x1bL\x83\x8a\xa0\x9c\xe5\x1f\x83\x0eqJ\x1c\x11,\x02\x8b\x82C1\xc2\xca\xcdXNn\xc7^DD\x0a\xe45\xf9\x14>\xb9X8\xb7\x9ev8&=\x19\xfc",
+      60
+    ) == Ok(
+      b"\xae\xc4g\x1cZ\xa2\x96\x14\xa4\x1a\xe9gk@w\xb6\xca\x1bL\x83\x8a\xa0\x9c\xe5\x1f\x83\x0eqJ\x1c\x11,\x02\x8b\x82C1\xc2\xca\xcdXNn\xc7^DD\x0a\xe45\xf9\x14>\xb9X8\xb7\x9ev8"
+    )
+  )
+  // An Adler-32 mismatch in the last byte.
+  check(
+    flate.zlib_decode(
+      b"x\xda5\x8d\xc1\x0d\x00A\x08\x02\xffVak\x03\xf6_\xc3\xe1\xee\xad&bp\x88\x88)@be+\xda\xff\xaa4\x0bt\x97\x9f_\xc8'1\x8f/\xe123\xb9\xb4\xae\xa9\xa5\xdaN,/\xd62wJ\x96?H\xbc(\x1d",
+      4096
+    ) == Error(Checksum())
+  )
+  Ok(())
+}

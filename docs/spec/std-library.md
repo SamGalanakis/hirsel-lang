@@ -1474,3 +1474,37 @@ symlinks, and rejects a starting symlink or non-directory with `NotDirectory`.
 The first listing error is returned without a partial result. Listings are not a
 filesystem snapshot: concurrent changes can cause lookup errors or different
 entries, and all subsequent lookups retain the existing Dir confinement.
+
+## Compressed data
+
+`std@1/flate` decodes whole buffers of DEFLATE (RFC 1951), zlib (RFC 1950) and
+gzip (RFC 1952) data, ported from Go's `compress/flate`, `compress/zlib` and
+`compress/gzip` readers with their test vectors:
+
+```text
+FlateError = Truncated | Corrupt(u64) | Header | Checksum | TooLarge | TrailingData(u64)
+fn flate.inflate(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {}
+fn flate.zlib_decode(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {}
+fn flate.gzip_decode(data: Bytes, limit: u64) -> Result[unique Bytes, FlateError] uses {}
+```
+
+Output above `limit` bytes is `TooLarge()`, detected before the excess is written.
+Input that ends inside a block, header or trailer is `Truncated()`. `Corrupt(n)`
+covers reserved block types, stored lengths whose complement differs, code lengths
+past 286 literal or 30 distance codes, repeats before the first length or past the
+table, incomplete or oversubscribed codes (a single one-bit code is accepted, as
+in zlib), reserved symbols 286, 287, 30 and 31, and distances before the start of
+the stream's output; `n` is the number of input bytes holding the consumed bits.
+Empty codes are accepted and corrupt only when used.
+
+`inflate` and `zlib_decode` require the stream to end at the end of `data`; later
+bytes are `TrailingData(offset)` (Go ignores them). `zlib_decode` accepts only
+method 8 with a window of at most 32 KiB and a valid header check; a preset
+dictionary is `Header()`, and an Adler-32 mismatch is `Checksum()`.
+`gzip_decode` reads one or more concatenated members (Go's multistream default),
+concatenating their output under one `limit`; a back-reference cannot reach into
+an earlier member. Bytes after a member must start another member: fewer than 10
+are `Truncated()`, and a wrong magic number, a method other than 8, a reserved flag
+bit (RFC 1952 section 2.3.1.2; Go ignores them) or a header CRC mismatch is
+`Header()`. Extra fields, names and comments are skipped. A CRC-32 or size
+mismatch is `Checksum()`. No partial output is returned.

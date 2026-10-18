@@ -88,6 +88,29 @@ fn full_gate_sha256_million_a_native_reference() {
 }
 
 #[test]
+fn flate_is_ordinary_source() {
+    source_codec("flate-inflate", "flate", &["inflate"]);
+}
+
+// Go's gettysburg member and multi-block streams exceed the corpus step budget;
+// the bounded corpus vectors exercise the same source kernel.
+#[test]
+fn flate_large_vectors_execute_std_source() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/flate-large.hir");
+        let outcome = run_path_with_step_budget(
+            &path,
+            SimulationConfig::default(),
+            Some(5_000_000),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+    });
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",
