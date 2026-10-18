@@ -209,6 +209,11 @@ binders, labels, passing conventions and layout flags. H uses it before later
 mode, origin, placement, cleanup and callable-effect judgments. It validates
 reachable edges and ignores unrelated rows; strict semantic equality is unchanged.
 
+`shape_equal_with_holes` additionally admits caller-designated inference variables
+at any nested edge while comparing every known constructor. Both rooted graphs
+still reject recovery rows and structural cycles; it neither binds variables nor
+changes the strict comparator used for published types.
+
 `structural_flat` proves complete root Flatness through declared snapshots and
 actual arguments. It is independent of field storage compatibility and fixed-size
 layout. String/Bytes roots fail; explicit flat layouts and opaque Flat exports

@@ -916,6 +916,19 @@ pub fn shape_equal(
     b: &TypeStore,
     b_root: TypeId,
 ) -> Result<bool, GraphError> {
+    shape_equal_with_holes(a, a_root, b, b_root, |_| false)
+}
+
+/// Compare known type shape while allowing caller-designated inference holes.
+/// Both complete graphs are still validated; recovery rows and cycles are errors.
+/// This does not bind holes or change strict semantic/receiving comparisons.
+pub fn shape_equal_with_holes(
+    a: &TypeStore,
+    a_root: TypeId,
+    b: &TypeStore,
+    b_root: TypeId,
+    hole: impl Fn(&TypeKind) -> bool,
+) -> Result<bool, GraphError> {
     fn valid(source: &TypeStore, root: TypeId) -> Result<(), GraphError> {
         let mut pending = vec![(root, false)];
         let mut active = BTreeSet::new();
@@ -989,6 +1002,9 @@ pub fn shape_equal(
         }
         let a = &a.get(a_id).ok_or(GraphError::MissingType(a_id))?.kind;
         let b = &b.get(b_id).ok_or(GraphError::MissingType(b_id))?.kind;
+        if hole(a) || hole(b) {
+            continue;
+        }
         let equal = match (a, b) {
             (TypeKind::Primitive(a), TypeKind::Primitive(b)) => a == b,
             (TypeKind::Parameter(a), TypeKind::Parameter(b)) => a == b,
@@ -1065,6 +1081,32 @@ pub fn shape_equal(
 #[cfg(test)]
 mod shape_tests {
     use super::*;
+
+    #[test]
+    fn inference_holes_preserve_known_nested_shapes_and_graph_validation() {
+        let mut store = TypeStore::default();
+        let variable = TypeParameterRef::bound(TypeParamId(0));
+        let hole = store.push(row(TypeKind::Parameter(variable)));
+        let boolean = store.push(Type::boolean());
+        let byte = store.push(row(TypeKind::Primitive(Primitive::U8)));
+        let partial = store.push(row(TypeKind::Tuple(vec![hole, boolean].into())));
+        let complete = store.push(row(TypeKind::Tuple(vec![byte, boolean].into())));
+        let wrong_part = store.push(row(TypeKind::Tuple(vec![byte, byte].into())));
+        let wrong_constructor = store.push(row(TypeKind::Box(complete)));
+        let is_hole = |kind: &TypeKind| matches!(kind, TypeKind::Parameter(p) if *p == variable);
+        assert!(!shape_equal(&store, partial, &store, complete).unwrap());
+        assert!(shape_equal_with_holes(&store, partial, &store, complete, is_hole).unwrap());
+        assert!(!shape_equal_with_holes(&store, partial, &store, wrong_part, is_hole).unwrap());
+        assert!(
+            !shape_equal_with_holes(&store, partial, &store, wrong_constructor, is_hole).unwrap()
+        );
+        let recovery = store.push(row(TypeKind::Error));
+        assert!(matches!(
+            shape_equal_with_holes(&store, hole, &store, recovery, is_hole),
+            Err(GraphError::RecoveryType(_))
+        ));
+    }
+
     fn row(kind: TypeKind) -> Type {
         Type::with_kind(kind)
     }
