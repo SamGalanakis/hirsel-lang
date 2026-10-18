@@ -1501,6 +1501,13 @@ primary_operations! { self, call, context, name, a, value;
                         .into_result(0, vec![1]),
                 ));
             },
+    Primitive: "map.len" | "set.len" => u64_value(collection::len(arg(a, 0)?)?),
+    Primitive: "map.remove" => {
+        return Ok(Some(keyed(collection::map_remove(arg(a, 0)?.clone(), arg(a, 1)?), &call, context)?));
+    },
+    Primitive: "set.remove" => {
+        return Ok(Some(keyed(collection::set_remove(arg(a, 0)?.clone(), arg(a, 1)?), &call, context)?));
+    },
     Primitive: "map.empty" => collection::sequence(BuiltinType::Map, []),
     Primitive: "set.empty" => collection::sequence(BuiltinType::Set, []),
     Primitive: "map.insert" => {
@@ -1527,7 +1534,7 @@ primary_operations! { self, call, context, name, a, value;
                     context,
                 )?));
             },
-    Primitive: "set.contains" => {
+    Primitive: "map.contains" | "set.contains" => {
                 return Ok(Some(keyed(
                     collection::contains(arg(a, 0)?, arg(a, 1)?)
                         .map(|b| OperationResult::returned(Value::Bool(b))),

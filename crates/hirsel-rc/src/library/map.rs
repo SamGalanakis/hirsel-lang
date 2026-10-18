@@ -25,6 +25,9 @@ macro_rules! body {
     };
 }
 body!(GET, "map.get", get);
+body!(CONTAINS_MAP, "map.contains", contains);
+body!(REMOVE_MAP, "map.remove", remove_map);
+body!(REMOVE_SET, "set.remove", remove_set);
 body!(CONTAINS, "set.contains", contains);
 body!(INSERT_MAP, "map.insert", insert_map);
 body!(INSERT_SET, "set.insert", insert_set);
@@ -44,6 +47,14 @@ pub static EMPTY_MAP: InlineLowering = InlineLowering {
 pub static EMPTY_SET: InlineLowering = InlineLowering {
     path: || hirsel_syntax::DefPath::core("set.empty"),
     lower: empty,
+};
+pub static PUBLIC_MAP_LEN: InlineLowering = InlineLowering {
+    path: || hirsel_syntax::DefPath::core("map.len"),
+    lower: length,
+};
+pub static PUBLIC_SET_LEN: InlineLowering = InlineLowering {
+    path: || hirsel_syntax::DefPath::core("set.len"),
+    lower: length,
 };
 pub static MAP_LEN: InlineLowering = InlineLowering {
     path: || hirsel_syntax::DefPath::core("$intrinsic.MapInsertionOrder_len"),
@@ -237,7 +248,7 @@ fn helper(
             foreign: None,
         }),
     );
-    let path = if name == "list.push" {
+    let path = if name.starts_with("list.") {
         hirsel_syntax::DefPath::core(name)
     } else {
         native_path(name)
@@ -362,7 +373,7 @@ fn hash(b: &mut Body<'_, '_>, a: AddressId) -> R<ValueId> {
 }
 fn probe_call(b: &mut Body<'_, '_>) -> R<ValueId> {
     let k = b.cx.type_actual(0)?;
-    let types = if b.parameters.len() == 3 || b.cx.path == hirsel_syntax::DefPath::core("map.get") {
+    let types = if b.cx.arguments.len() == 2 {
         vec![k, b.cx.type_actual(1)?]
     } else {
         vec![k]
@@ -1069,7 +1080,13 @@ fn index_update(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let small = b.compare(BinaryOp::Le, n, eight)?;
     let done = b.block(BlockKind::Body, &[]);
     let check = b.block(BlockKind::Body, &[]);
-    b.branch(small, done, check);
+    let small_table = b.block(BlockKind::Body, &[]);
+    b.branch(small, small_table, check);
+    b.at(small_table);
+    // Removal can leave an allocated index behind even below the threshold.
+    // Every later insertion must maintain it while probes still consult it.
+    let unindexed = b.compare(BinaryOp::Eq, capacity, zero)?;
+    b.branch(unindexed, done, check);
     b.at(done);
     unit(&mut b);
     b.at(check);
@@ -1246,4 +1263,181 @@ fn protect(b: &mut Body<'_, '_>, first: usize, loan: LoanId) {
         b.ed.unit.terminators[cleanup.index()] = Terminator::Jump(old);
         b.ed.unit.tables.failures[i].cleanup = b.edge(cleanup, &[]);
     }
+}
+
+fn remove_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    remove(cx, true)
+}
+fn remove_set(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    remove(cx, false)
+}
+fn temporary(b: &mut Body<'_, '_>, layout: LayoutId) -> R<(SlotId, AddressId)> {
+    let slot = b.slot(layout, SlotKind::Temporary);
+    b.push(Inst::StorageLive { slot });
+    let address = b.place(AddressBase::Slot(slot), &[], layout, None)?;
+    Ok((slot, address))
+}
+fn remove(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
+    let mut b = Body::new(cx)?;
+    let ordinal = probe_call(&mut b)?;
+    let container = b.parameters[0];
+    let entries = field(&mut b, container.address, 0)?;
+    let count = len(&mut b, entries)?;
+    let hit = b.compare(BinaryOp::Lt, ordinal, count)?;
+    let found = b.block(BlockKind::Body, &[]);
+    let missing = b.block(BlockKind::Body, &[]);
+    b.branch(hit, found, missing);
+    b.at(missing);
+    let result = if is_map { option(&mut b, None)? } else { hit };
+    b.ret(Some(result));
+    b.at(found);
+    let moved_value = remove_entry(&mut b, entries, ordinal, is_map)?;
+    reindex(&mut b, is_map)?;
+    let result = if let Some((slot, address)) = moved_value {
+        let value = b.take(address)?;
+        b.push(Inst::StorageDead {
+            slot,
+            if_live: false,
+        });
+        option(&mut b, Some(value))?
+    } else {
+        hit
+    };
+    b.ret(Some(result));
+    Ok(b.finish())
+}
+// Ordered removal changes dense ordinals. Rebuild only the private index, in
+// its existing initialized storage; entry/value owners never get copied.
+fn reindex(b: &mut Body<'_, '_>, is_map: bool) -> R<()> {
+    let container = b.parameters[0];
+    let entries = field(b, container.address, 0)?;
+    let index = field(b, container.address, 1)?;
+    let capacity = len(b, index)?;
+    let count = len(b, entries)?;
+    let zero = b.u64(0)?;
+    let one = b.u64(1)?;
+    let word = b.u64_layout()?;
+    let nonempty = b.compare(BinaryOp::Ne, capacity, zero)?;
+    let rebuild = b.block(BlockKind::Body, &[]);
+    let done_version = b.version(container.slot);
+    let done = b.block(BlockKind::Body, &[done_version]);
+    let before = b.reaching(container.slot)?;
+    let yes = b.edge(rebuild, &[]);
+    let no = b.edge(done, &[before]);
+    b.terminate(Terminator::Branch {
+        condition: nonempty,
+        yes,
+        no,
+    });
+    b.at(rebuild);
+    let position = b.fresh(word);
+    let zero_version = b.version(container.slot);
+    let zeros = b.block(BlockKind::Body, &[position, zero_version]);
+    let store = b.block(BlockKind::Body, &[]);
+    let filled = b.block(BlockKind::Body, &[]);
+    b.jump(zeros, &[zero, before]);
+    b.at(zeros);
+    b.set_reaching(container.slot, zero_version);
+    let more = b.compare(BinaryOp::Lt, position, capacity)?;
+    b.branch(more, store, filled);
+    b.at(store);
+    let slot = b.slot_place(index, position)?;
+    let u32_layout = b.cx.primitive(Primitive::U32)?;
+    let null = b.constant(u32_layout, ConstantValue::Integer(0));
+    overwrite(b, slot, null)?;
+    let next = b.add(ArithMode::Wrapping, position, one);
+    let after = b.reaching(container.slot)?;
+    b.jump(zeros, &[next, after]);
+    b.at(filled);
+    b.set_reaching(container.slot, zero_version);
+    let ordinal = b.fresh(word);
+    let all_version = b.version(container.slot);
+    let all = b.block(BlockKind::Body, &[ordinal, all_version]);
+    let put = b.block(BlockKind::Body, &[]);
+    let complete = b.block(BlockKind::Body, &[]);
+    b.jump(all, &[zero, zero_version]);
+    b.at(all);
+    b.set_reaching(container.slot, all_version);
+    let more = b.compare(BinaryOp::Lt, ordinal, count)?;
+    b.branch(more, put, complete);
+    b.at(put);
+    index_put(b, entries, index, ordinal, capacity, is_map)?;
+    let next = b.add(ArithMode::Wrapping, ordinal, one);
+    let after = b.reaching(container.slot)?;
+    b.jump(all, &[next, after]);
+    b.at(complete);
+    b.set_reaching(container.slot, all_version);
+    b.jump(done, &[all_version]);
+    b.at(done);
+    b.set_reaching(container.slot, done_version);
+    Ok(())
+}
+// Shared ordered-entry removal for Map, Set and branded SortedMap. The caller
+// keeps the returned value owner live through any private metadata repair.
+pub(super) fn remove_entry(
+    b: &mut Body<'_, '_>,
+    entries: AddressId,
+    ordinal: ValueId,
+    is_map: bool,
+) -> R<Option<(SlotId, AddressId)>> {
+    let k = b.cx.type_actual(0)?;
+    let element_ty = if is_map {
+        let v = b.cx.type_actual(1)?;
+        add_type(&mut b.cx.store, TypeKind::Tuple(vec![k, v].into()))
+    } else {
+        k
+    };
+    let list_ty = builtin(b, BuiltinType::List, &[element_ty]);
+    let index_ty = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U64));
+    let direct = helper(
+        b,
+        "list.remove",
+        &[(PassingMode::Mut, list_ty), (PassingMode::Borrow, index_ty)],
+        element_ty,
+        Allocation::NoAlloc,
+        vec![GenericArgument::Type(element_ty)],
+    )?;
+    // Preparing an address may fail. Do it before the call produces an owner,
+    // then immediately store that owner so every subsequent failure can drop it.
+    let layout = b.cx.layout(element_ty)?;
+    let (entry_slot, entry) = temporary(b, layout)?;
+    let list = mut_argument(b, 0, entries)?;
+    let removed = call(b, direct, &[list, argument(1, Passing::Borrow, ordinal)])?.unwrap();
+    b.store(entry, removed)?;
+    b.hold(entry_slot, entry);
+    let moved_value = if is_map {
+        // Prepare every address while the tuple is complete. Moving both fields
+        // and storing their separate owners cannot fail or leave a partial drop.
+        let key = field(b, entry, 0)?;
+        let value = field(b, entry, 1)?;
+        let key_layout = b.address_layout(key);
+        let value_layout = b.address_layout(value);
+        let (key_slot, key_owner) = temporary(b, key_layout)?;
+        let (value_slot, value_owner) = temporary(b, value_layout)?;
+        let value = b.take(value)?;
+        let key = b.take(key)?;
+        b.forget_held(entry);
+        b.push(Inst::StorageDead {
+            slot: entry_slot,
+            if_live: false,
+        });
+        b.store(value_owner, value)?;
+        b.hold(value_slot, value_owner);
+        b.store(key_owner, key)?;
+        b.hold(key_slot, key_owner);
+        drop_place(b, key_owner);
+        b.push(Inst::StorageDead {
+            slot: key_slot,
+            if_live: false,
+        });
+        Some((value_slot, value_owner))
+    } else {
+        drop_place(b, entry);
+        b.push(Inst::StorageDead {
+            slot: entry_slot,
+            if_live: false,
+        });
+        None
+    };
+    Ok(moved_value)
 }

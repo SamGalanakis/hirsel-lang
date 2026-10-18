@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "map_cycle_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "SEM-5-std-set-string-remove-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

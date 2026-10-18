@@ -1,0 +1,35 @@
+// rule: DROP-2
+// expect: run
+// stdout: before
+// stdout: owned
+// stdout: two
+// stdout: after
+// stdout: three
+// stdout: one
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut m: unique Map[String, Trace] = map.empty()
+  map.insert(mut m, "one", Trace(stdout: o, text: "one\n"))
+  map.insert(mut m, "two", Trace(stdout: o, text: "two\n"))
+  map.insert(mut m, "three", Trace(stdout: o, text: "three\n"))
+  failure.check(map.contains(m, "two") && !map.contains(m, "missing"), Bounds())
+  let _ = out.print(o, "before\n")
+  match map.remove(mut m, "two") {
+    Some(item) => {
+      let _ = out.print(o, "owned\n")
+      let _ = take item
+    },
+    None => failure.check(false, Bounds()),
+  }
+  failure.check(map.len(m) == 2, Bounds())
+  let _ = out.print(o, "after\n")
+  Ok(())
+}

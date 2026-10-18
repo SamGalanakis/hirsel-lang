@@ -89,6 +89,9 @@ pub const BODIES: &[&LibraryBody] = &[
     &list::INLINE_NEXT,
     &list::CURSOR_DROP,
     &map::GET,
+    &map::CONTAINS_MAP,
+    &map::REMOVE_MAP,
+    &map::REMOVE_SET,
     &map::CONTAINS,
     &map::INSERT_MAP,
     &map::INSERT_SET,
@@ -154,6 +157,8 @@ pub const INLINE: &[&InlineLowering] = &[
     &map::EMPTY_MAP,
     &map::EMPTY_SET,
     &map::MAP_LEN,
+    &map::PUBLIC_MAP_LEN,
+    &map::PUBLIC_SET_LEN,
     // sorted (lib-sorted): sorted_map.empty, SortedMapOrder_len.
     &sorted::EMPTY,
     &sorted::LEN,
@@ -224,7 +229,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 15;
+pub const REVISION: u32 = 16;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

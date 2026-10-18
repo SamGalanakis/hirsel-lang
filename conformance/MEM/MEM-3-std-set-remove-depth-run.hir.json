@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "map_lifecycle_tests",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "MEM-3-std-set-remove-depth-run.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
+}

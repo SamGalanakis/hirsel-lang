@@ -33,10 +33,11 @@ pub fn elements(value: &Value, kind: BuiltinType) -> Result<Vec<Value>, Error> {
 }
 
 pub fn len(value: &Value) -> Result<u64, Error> {
-    if let Value::Sequence { elements, .. } = value {
-        Ok(elements.len() as u64)
-    } else {
-        Err(invalid("expected sequence"))
+    match value {
+        Value::Sequence { elements, .. } | Value::Map(elements) | Value::Set(elements) => {
+            Ok(elements.len() as u64)
+        }
+        _ => Err(invalid("expected collection")),
     }
 }
 /// A collection update and every owned value it displaced travel together.
@@ -176,11 +177,13 @@ pub fn get(map: &Value, key: &Value) -> Result<Option<Value>, KeyedError> {
     value.share_arena_storage();
     Ok(Some(value))
 }
-pub fn contains(set: &Value, value: &Value) -> Result<bool, KeyedError> {
-    let Value::Set(elements) = set else {
-        return Err(invalid("set.contains requires Set").into());
+pub fn contains(collection: &Value, key: &Value) -> Result<bool, KeyedError> {
+    let found = match collection {
+        Value::Map(elements) => find(elements, key, entry_key)?,
+        Value::Set(elements) => find(elements, key, |member| Ok(member))?,
+        _ => return Err(invalid("contains requires Map or Set").into()),
     };
-    Ok(find(elements, value, |member| Ok(member))?.is_some())
+    Ok(found.is_some())
 }
 /// Data equality uses IEEE float comparisons and structural declaration order.
 pub fn data_equal(a: &Value, b: &Value) -> bool {
@@ -275,5 +278,49 @@ pub fn order(a: Integer, b: Integer) -> Option<i32> {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
+    })
+}
+
+/// Ordered eviction transfers V and separately releases the stored key.
+pub fn map_remove(mut value: Value, key: &Value) -> Result<OperationResult, KeyedError> {
+    let Value::Map(elements) = &mut value else {
+        return Err(invalid("map.remove requires Map").into());
+    };
+    let (result, released) = if let Some(index) = find(elements, key, entry_key)? {
+        let Some(Value::Tuple(mut pair)) = elements.remove(index) else {
+            return Err(invalid("invalid map entry").into());
+        };
+        let stored_key = pair[0].take().ok_or_else(|| invalid("dead map key"))?;
+        let item = pair[1].take().ok_or_else(|| invalid("dead map value"))?;
+        (super::some(item), vec![stored_key])
+    } else {
+        (super::none(), vec![])
+    };
+    Ok(OperationResult::Complete {
+        value: result,
+        arguments: vec![(0, value)],
+        consumed: vec![],
+        released,
+    })
+}
+pub fn set_remove(mut value: Value, key: &Value) -> Result<OperationResult, KeyedError> {
+    let Value::Set(elements) = &mut value else {
+        return Err(invalid("set.remove requires Set").into());
+    };
+    let index = find(elements, key, |member| Ok(member))?;
+    let released = if let Some(index) = index {
+        vec![
+            elements
+                .remove(index)
+                .ok_or_else(|| invalid("dead set element"))?,
+        ]
+    } else {
+        vec![]
+    };
+    Ok(OperationResult::Complete {
+        value: Value::Bool(index.is_some()),
+        arguments: vec![(0, value)],
+        consumed: vec![],
+        released,
     })
 }

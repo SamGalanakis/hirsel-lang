@@ -1,0 +1,5 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 4
+fn remove(mut s: Set[u64]) -> bool {
+  set.remove(mut s, 1)
+}

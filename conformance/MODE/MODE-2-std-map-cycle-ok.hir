@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: accept
+fn cycle(mut m: unique Map[u64, String]) -> () {
+  match take map.remove(mut m, 1) {
+    Some(item) => {
+      let kept = copy item
+      let restored = unique item
+      map.insert(mut m, 2, take restored)
+      let _ = map.remove(mut m, 2)
+      let _ = string.byte_len(kept)
+    },
+    None => {},
+  }
+}

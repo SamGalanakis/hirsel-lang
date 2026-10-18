@@ -1,0 +1,19 @@
+// rule: MEM-3
+// expect: run
+// Even empty-container removal hashes and validates the complete key.
+type Chain = End(value: Option[u64]) | Link(next: box Chain)
+
+fn chain(depth: u64) -> Chain {
+  let mut c: Chain = End(value: None)
+  for _ in 0u64..depth {
+    c = Link(next: box take c)
+  }
+  take c
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let mut container: unique Set[Chain] = set.empty()
+  let deep = chain(8)
+  let found = set.remove(mut container, deep)
+  Ok(())
+}

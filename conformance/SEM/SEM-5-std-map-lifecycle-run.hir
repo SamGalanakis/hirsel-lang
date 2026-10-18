@@ -1,0 +1,74 @@
+// rule: SEM-5
+// expect: run
+// Rust Map/Set lifecycle and Zig ArrayHashMap ordered-removal vectors.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut m: unique Map[u64, u64] = map.empty()
+  let mut s: unique Set[u64] = set.empty()
+  failure.check(map.len(m) == 0 && set.len(s) == 0, Bounds())
+  failure.check(!map.contains(m, 0) && !set.contains(s, 0), Bounds())
+  failure.check(map.remove(mut m, 0) == None && !set.remove(mut s, 0), Bounds())
+  for i in 0u64..20u64 {
+    map.insert(mut m, i, i * 10)
+    set.insert(mut s, i)
+  }
+  map.insert(mut m, 5, 55)
+  set.insert(mut s, 5)
+  failure.check(map.len(m) == 20 && set.len(s) == 20, Bounds())
+  failure.check(map.remove(mut m, 0) == Some(0u64), Bounds())
+  failure.check(map.remove(mut m, 7) == Some(70u64), Bounds())
+  failure.check(map.remove(mut m, 19) == Some(190u64), Bounds())
+  failure.check(map.remove(mut m, 7) == None, Bounds())
+  failure.check(
+    set.remove(mut s, 0) && set.remove(mut s, 7) && set.remove(mut s, 19),
+    Bounds()
+  )
+  failure.check(!set.remove(mut s, 7), Bounds())
+  failure.check(map.len(m) == 17 && set.len(s) == 17, Bounds())
+  for i in 0u64..20u64 {
+    let present = i != 0 && i != 7 && i != 19
+    failure.check(
+      map.contains(m, i) == present && set.contains(s, i) == present,
+      Bounds()
+    )
+    let expected: Option[u64] = if !present {
+      None
+    } else {
+      Some(
+        if i == 5 {
+          55u64
+        } else {
+          i * 10
+        }
+      )
+    }
+    failure.check(map.get(m, i) == expected, Bounds())
+  }
+  map.insert(mut m, 7, 77)
+  set.insert(mut s, 7)
+  let mut expected: u64 = 1
+  for entry in m {
+    let (key, value) = entry
+    if expected == 7 {
+      expected += 1
+    }
+    if expected == 19 {
+      failure.check(key == 7 && value == 77, Bounds())
+    } else {
+      failure.check(key == expected, Bounds())
+    }
+    expected += 1
+  }
+  failure.check(expected == 20 && map.len(m) == 18 && set.len(s) == 18, Bounds())
+  for i in 0u64..20u64 {
+    let _ = map.remove(mut m, i)
+    let _ = set.remove(mut s, i)
+  }
+  failure.check(map.len(m) == 0 && set.len(s) == 0, Bounds())
+  map.insert(mut m, 42, 420)
+  set.insert(mut s, 42)
+  failure.check(
+    map.remove(mut m, 42) == Some(420u64) && set.remove(mut s, 42),
+    Bounds()
+  )
+  Ok(())
+}

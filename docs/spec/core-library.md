@@ -190,9 +190,14 @@ N fn failure.check(condition: bool, rule: CheckRule) -> () uses {}
 fn map.empty[K: key, V]() -> unique Map[K, V]
 @preserves_unique(m) fn map.insert[K: key, V](mut m: Map[K, V], take k: K, take v: V) -> ()
 N fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
+N fn map.contains[K: key, V](m: Map[K, V], k: K) -> bool
+N fn map.len[K: key, V](m: Map[K, V]) -> u64
+fn map.remove[K: key, V](mut m: unique Map[K, V], k: K) -> unique Option[V]
 fn set.empty[T: key]() -> unique Set[T]
 @preserves_unique(s) fn set.insert[T: key](mut s: Set[T], take value: T) -> ()
 N fn set.contains[T: key](s: Set[T], value: T) -> bool
+N fn set.len[T: key](s: Set[T]) -> u64
+fn set.remove[T: key](mut s: unique Set[T], value: T) -> bool
 fn sorted_map.empty[K, V](by: Order[K]) -> unique SortedMap[K, V] of by
 @preserves_unique(m) @unretained(by) fn sorted_map.insert[K, V](by: Order[K], mut m: SortedMap[K, V] of by, take k: K, take v: V) -> ()
 N fn simd.splat[A, n: size](value: A) -> Simd[A, n]
@@ -725,6 +730,17 @@ operation's allocation joins them.
 `map.empty`, `set.empty` and `sorted_map.empty` each return a fresh unique
 container. Two constructor calls produce independent owners; SortedMap retains
 its existing `of by` brand.
+
+## Map and Set lifecycle
+
+`map.empty` and `set.empty` return fresh unique containers. Length is O(1).
+`map.contains` probes keys without copying, retaining or destroying a value,
+including move-only resource values. Map and Set removal require unique mutation and
+leave missing keys unchanged (`None` or `false`). Map removal returns a unique option, transfers the stored
+value with its deep uniqueness and drops its stored key exactly once; Set removal drops its removed value
+exactly once. Remaining Map entries keep insertion order, and reinserting a removed
+key appends a new position. Removal shifts dense entries and repairs only the
+private index, taking O(n + index capacity) time without copying payloads.
 
 ## Example application definitions
 
