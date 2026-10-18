@@ -590,6 +590,57 @@ rules. Generated immutable ranges and mapping rows come from the vendored
 UnicodeData.txt and PropList.txt; `stdlib/unicode16/generate.py --check` verifies
 byte-identical NFC and property table regeneration.
 
+## Bounded CSV
+
+`std@1/csv` is an ordinary-source incremental CSV parser and writer. Its public
+`Config` has `delimiter: u8`, `fields_per_record: Option[u64]` and
+`max_record_bytes: u64`; `default_config()` chooses comma, no width constraint,
+and 1 MiB per record. `CsvError = Syntax(u64) | UnequalFields(u64) |
+RecordTooLarge | InvalidUtf8 | InvalidDelimiter`, and
+`ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead`.
+
+```text
+fn csv.reader(config: Config) -> Result[Reader, CsvError] uses {}
+fn csv.feed(mut reader: Reader, chunk: Bytes, eof: bool) -> Result[List[List[String]], CsvError] uses {}
+fn csv.parse(take text: String, config: Config) -> Result[List[List[String]], CsvError] uses {}
+fn csv.read_record[S,E](mut reader: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E]) -> Result[Option[List[String]], ReadError[E]]
+fn csv.write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[(), CsvError] uses {}
+```
+
+Delimiters must be nonzero ASCII other than quote/CR/LF. Fields may be quoted,
+contain delimiters or newlines, and escape a quote by doubling it. A quote in an
+unquoted field or data after a closing quote is syntax error. Outside quotes,
+LF, CR and CRLF terminate records; quoted CRLF is preserved as data, matching
+`examples/csvjson`. Empty fields and blank records (one empty field) are
+preserved; empty input has no records, and a final terminator adds no extra row.
+EOF finalizes an unterminated record once, rejecting an unclosed quote. Later
+empty feeds are harmless; a nonempty feed after EOF returns Syntax at EOF.
+
+The record limit counts raw bytes, including quotes and delimiters but excluding
+an outside-quote record terminator. It is checked before retaining another byte;
+zero allows empty records only. Width is checked per record when configured.
+Syntax offsets are absolute input byte offsets (EOF when a quote is unclosed);
+UnequalFields reports the record's starting byte offset. UTF-8 may cross chunks,
+but every completed field must validate. Header uniqueness is application policy.
+Parser errors are terminal; subsequent calls report Syntax at the current offset.
+
+`feed` returns all complete rows from its explicit chunk, allocating in proportion
+to that chunk. `parse` uses the same transitions. `read_record` parses only through
+one returned row and retains bounded raw lookahead, with no completed-row queue.
+Refills request at most 4096 bytes and at most the current record's remaining
+limit plus one; the extra byte permits a terminator at the exact limit. Refills
+append exactly their returned count and must not exceed the request; violating
+that contract yields InvalidRead. Source errors propagate as Source and end the
+reader. None occurs only at clean EOF and repeated reads never refill after EOF.
+Callers should continue with read_record while it has raw lookahead; feeding
+external chunks while lookahead remains is a Syntax/state error.
+
+The writer validates the delimiter before mutating output (Strings are already
+valid UTF-8), quotes fields only for delimiter/quote/CR/LF, doubles quotes and
+emits exactly one LF. An empty field list writes a blank record. It appends to
+existing output. No file, stdin or network hook is hidden in the parser; refill
+carries the explicit source's authority, like bufio.
+
 ## SHA-256
 
 `std@1/sha256` implements SHA-256 entirely in ordinary, allocation-free source.

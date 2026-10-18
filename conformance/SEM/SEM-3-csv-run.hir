@@ -1,0 +1,252 @@
+// rule: SEM-3
+// expect: run
+// Go encoding/csv quoting/width/writer vectors and every incremental split.
+fn parse(text: String) -> List[List[String]] {
+  match std@1/csv.parse(unique text, std@1/csv.default_config()) {
+    Ok(rows) => take rows,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      []
+    },
+  }
+}
+
+fn split_case(text: String, expected: List[List[String]]) -> () {
+  let data = string.as_bytes(text)
+  failure.check(parse(text) == expected, TextInvariant())
+  for split in 0u64..bytes.len(data) + 1 {
+    let mut reader = match std@1/csv.reader(std@1/csv.default_config()) {
+      Ok(reader) => take reader,
+      Error(_) => {
+        failure.check(false, TextInvariant())
+        return
+      },
+    }
+    let mut rows = match std@1/csv.feed(mut reader, bytes.slice(data, 0, split), false) {
+      Ok(rows) => take rows,
+      Error(_) => {
+        failure.check(false, TextInvariant())
+        return
+      },
+    }
+    match std@1/csv.feed(mut reader, bytes.slice(data, split, bytes.len(data)), true) {
+      Ok(more) => {
+        for row in more {
+          list.push(mut rows, copy row)
+        }
+      },
+      Error(_) => failure.check(false, TextInvariant()),
+    }
+    failure.check(rows == expected, TextInvariant())
+    failure.check(std@1/csv.feed(mut reader, b"", true) == Ok([]), TextInvariant())
+    failure.check(
+      std@1/csv.feed(mut reader, b"x", false) == Error(Syntax(bytes.len(data))),
+      TextInvariant()
+    )
+    failure.check(
+      std@1/csv.feed(mut reader, b"", true) == Error(Syntax(bytes.len(data))),
+      TextInvariant()
+    )
+  }
+}
+
+// Deliberately short source refills, including UTF-8/CRLF/quote boundaries.
+type InputSource {
+  data: Bytes,
+  offset: u64,
+  chunk: u64,
+  calls: u64,
+}
+
+fn refill(mut source: InputSource, mut out: List[u8], max: u64) -> Result[u64, u8] {
+  source.calls += 1
+  let remaining = bytes.len(source.data) - source.offset
+  let count = if remaining < max {
+    remaining
+  } else {
+    max
+  }
+  let n = if count < source.chunk {
+    count
+  } else {
+    source.chunk
+  }
+  for i in 0u64..n {
+    list.push(mut out, source.data[source.offset + i])
+  }
+  source.offset += n
+  Ok(n)
+}
+
+fn broken(mut source: InputSource, mut out: List[u8], max: u64) -> Result[u64, u8] {
+  Ok(1)
+}
+
+fn failed(mut source: InputSource, mut out: List[u8], max: u64) -> Result[u64, u8] {
+  Error(7)
+}
+
+pub fn main() -> Result[(), ()] {
+  split_case("", [])
+  split_case("\n", [[""]])
+  split_case(",\n", [["", ""]])
+  split_case("a,b\r\nc,d", [["a", "b"], ["c", "d"]])
+  split_case("\"a,b\",c\n\"a\"\"b\",\"é\nü\"\r\n", [["a,b", "c"], ["a\"b", "é\nü"]])
+  split_case("a,", [["a", ""]])
+  split_case("\"\"", [[""]])
+  split_case("\"a\r\nb\"", [["a\r\nb"]])
+  failure.check(
+    std@1/csv.parse("a\"b", std@1/csv.default_config()) == Error(Syntax(1)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/csv.parse("\"a\"x", std@1/csv.default_config()) == Error(Syntax(3)),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/csv.parse("\"a", std@1/csv.default_config()) == Error(Syntax(2)),
+    TextInvariant()
+  )
+  let mut config = std@1/csv.default_config()
+  config.max_record_bytes = 3
+  failure.check(std@1/csv.parse("abc\r\n", config) == Ok([["abc"]]), TextInvariant())
+  failure.check(
+    std@1/csv.parse("abcd", config) == Error(RecordTooLarge()),
+    TextInvariant()
+  )
+  failure.check(
+    std@1/csv.parse("\"abc", config) == Error(RecordTooLarge()),
+    TextInvariant()
+  )
+  config.max_record_bytes = 0
+  failure.check(std@1/csv.parse("\r\n", config) == Ok([[""]]), TextInvariant())
+  failure.check(
+    std@1/csv.parse("a", config) == Error(RecordTooLarge()),
+    TextInvariant()
+  )
+  config.max_record_bytes = 3
+  config.fields_per_record = Some(2)
+  failure.check(
+    std@1/csv.parse("a,b\nx", config) == Error(UnequalFields(4)),
+    TextInvariant()
+  )
+  config.delimiter = 34
+  failure.check(
+    std@1/csv.parse("", config) == Error(InvalidDelimiter()),
+    TextInvariant()
+  )
+  let mut invalid = match std@1/csv.reader(std@1/csv.default_config()) {
+    Ok(fresh) => take fresh,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  failure.check(
+    std@1/csv.feed(mut invalid, b"\xff", true) == Error(InvalidUtf8()),
+    TextInvariant()
+  )
+  let mut out: List[u8] = [65]
+  failure.check(
+    std@1/csv.write_record(["a"], 0, mut out) == Error(InvalidDelimiter()),
+    TextInvariant()
+  )
+  failure.check(out == [65], TextInvariant())
+  failure.check(
+    std@1/csv.write_record(["a,b", "a\"b", "é\nü", ""], 44, mut out) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(
+    text.finish(take out) == Ok("A\"a,b\",\"a\"\"b\",\"é\nü\",\n"),
+    TextInvariant()
+  )
+  for chunk in 1u64..12u64 {
+    let mut source = InputSource(
+      data: b"a,b\r\n\"\xc3\xa9\n\xc3\xbc\",\"x\"\"y\"\n",
+      offset: 0,
+      chunk: chunk,
+      calls: 0
+    )
+    let mut reader = match std@1/csv.reader(std@1/csv.default_config()) {
+      Ok(reader) => take reader,
+      Error(_) => {
+        failure.check(false, TextInvariant())
+        return Error(())
+      },
+    }
+    failure.check(
+      std@1/csv.read_record(mut reader, mut source, refill) == Ok(Some(["a", "b"])),
+      TextInvariant()
+    )
+    failure.check(
+      std@1/csv.read_record(mut reader, mut source, refill) == Ok(
+        Some(["é\nü", "x\"y"])
+      ),
+      TextInvariant()
+    )
+    failure.check(
+      std@1/csv.read_record(mut reader, mut source, refill) == Ok(None()),
+      TextInvariant()
+    )
+    let calls = source.calls
+    failure.check(
+      std@1/csv.read_record(mut reader, mut source, refill) == Ok(None()),
+      TextInvariant()
+    )
+    failure.check(source.calls == calls, TextInvariant())
+  }
+  let mut bounded_source = InputSource(
+    data: b"\"abcdef",
+    offset: 0,
+    chunk: 1000,
+    calls: 0
+  )
+  let mut bounded_config = std@1/csv.default_config()
+  bounded_config.max_record_bytes = 3
+  let mut bounded_reader = match std@1/csv.reader(bounded_config) {
+    Ok(fresh) => take fresh,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  failure.check(
+    std@1/csv.read_record(mut bounded_reader, mut bounded_source, refill) == Error(
+      Csv(RecordTooLarge())
+    ),
+    TextInvariant()
+  )
+  failure.check(bounded_source.offset == 4, TextInvariant())
+  let bounded_calls = bounded_source.calls
+  failure.check(
+    std@1/csv.read_record(mut bounded_reader, mut bounded_source, refill) == Error(
+      Csv(Syntax(4))
+    ),
+    TextInvariant()
+  )
+  failure.check(bounded_source.calls == bounded_calls, TextInvariant())
+  let mut source = InputSource(data: b"", offset: 0, chunk: 1, calls: 0)
+  let mut reader = match std@1/csv.reader(std@1/csv.default_config()) {
+    Ok(reader) => take reader,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  failure.check(
+    std@1/csv.read_record(mut reader, mut source, failed) == Error(Source(7u8)),
+    TextInvariant()
+  )
+  reader = match std@1/csv.reader(std@1/csv.default_config()) {
+    Ok(fresh) => take fresh,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      return Error(())
+    },
+  }
+  failure.check(
+    std@1/csv.read_record(mut reader, mut source, broken) == Error(InvalidRead()),
+    TextInvariant()
+  )
+  Ok(())
+}

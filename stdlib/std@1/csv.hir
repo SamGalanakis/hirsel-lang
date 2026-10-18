@@ -1,0 +1,295 @@
+// Go encoding/csv reader/writer state transitions, adapted to bounded chunks.
+pub type Config {
+  delimiter: u8,
+  fields_per_record: Option[u64],
+  max_record_bytes: u64,
+}
+
+pub type CsvError = Syntax(u64) | UnequalFields(u64) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter
+
+pub type ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead
+
+pub opaque type Reader: copyable + inert + noalloc_drop uses {} {
+  config: Config,
+  input: List[u8],
+  cursor: u64,
+  row: List[String],
+  field: List[u8],
+  mode: u8,
+  record_bytes: u64,
+  offset: u64,
+  record_start: u64,
+  skip_lf: bool,
+  ended: bool,
+  failed: bool,
+}
+
+pub fn default_config() -> Config uses {} {
+  Config(
+    delimiter: core@1/int.narrow(','),
+    fields_per_record: None(),
+    max_record_bytes: 1048576
+  )
+}
+
+@noalloc
+fn delimiter_valid(delimiter: u8) -> bool uses {} {
+  delimiter > 0 && delimiter < 128 && core@1/int.widen(delimiter) != '"' && core@1/int.widen(
+    delimiter
+  ) != '\n' && core@1/int.widen(delimiter) != '\r'
+}
+
+pub fn reader(config: Config) -> Result[Reader, CsvError] uses {} {
+  if !delimiter_valid(config.delimiter) {
+    return Error(InvalidDelimiter())
+  }
+  Ok(
+    Reader(
+      config: config,
+      input: [],
+      cursor: 0,
+      row: [],
+      field: [],
+      mode: 0,
+      record_bytes: 0,
+      offset: 0,
+      record_start: 0,
+      skip_lf: false,
+      ended: false,
+      failed: false
+    )
+  )
+}
+
+fn finish_field(mut r: Reader) -> Result[(), CsvError] uses {} {
+  let field = unique r.field
+  r.field = []
+  let value = match core@1/string.from_bytes(core@1/bytes.from_list(take field)) {
+    Ok(value) => take value,
+    Error(_) => return Error(InvalidUtf8()),
+  }
+  core@1/list.push(mut r.row, take value)
+  r.mode = 0
+  Ok(())
+}
+
+fn finish_row(mut r: Reader) -> Result[Option[List[String]], CsvError] uses {} {
+  finish_field(mut r)?
+  match r.config.fields_per_record {
+    Some(width) => {
+      if core@1/list.len(r.row) != width {
+        return Error(UnequalFields(r.record_start))
+      }
+    },
+    None() => (),
+  }
+  let row = unique r.row
+  r.row = []
+  r.record_bytes = 0
+  r.record_start = r.offset
+  Ok(Some(take row))
+}
+
+// One byte, one transition, at most one completed record. No completed-row queue.
+fn step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] uses {} {
+  let at = r.offset
+  core@1/failure.check(at < 18446744073709551615u64, TextInvariant())
+  r.offset += 1
+  if r.skip_lf {
+    r.skip_lf = false
+    if core@1/int.widen(byte) == '\n' {
+      r.record_start = r.offset
+      return Ok(None())
+    }
+  }
+  let terminator = r.mode != 2 && (core@1/int.widen(byte) == '\n' || core@1/int.widen(
+    byte
+  ) == '\r')
+  if terminator {
+    r.skip_lf = core@1/int.widen(byte) == '\r'
+    return finish_row(mut r)
+  }
+  if r.record_bytes == r.config.max_record_bytes {
+    return Error(RecordTooLarge())
+  }
+  r.record_bytes += 1
+  if r.mode == 2 {
+    if core@1/int.widen(byte) == '"' {
+      r.mode = 3
+    } else {
+      core@1/list.push(mut r.field, byte)
+    }
+  } else if r.mode == 3 {
+    if core@1/int.widen(byte) == '"' {
+      core@1/list.push(mut r.field, byte)
+      r.mode = 2
+    } else if byte == r.config.delimiter {
+      finish_field(mut r)?
+    } else {
+      return Error(Syntax(at))
+    }
+  } else if byte == r.config.delimiter {
+    finish_field(mut r)?
+  } else if core@1/int.widen(byte) == '"' {
+    if r.mode != 0 {
+      return Error(Syntax(at))
+    }
+    r.mode = 2
+  } else {
+    core@1/list.push(mut r.field, byte)
+    r.mode = 1
+  }
+  Ok(None())
+}
+
+fn end(mut r: Reader) -> Result[Option[List[String]], CsvError] uses {} {
+  r.ended = true
+  if r.mode == 2 {
+    return Error(Syntax(r.offset))
+  }
+  if r.record_bytes != 0 {
+    return finish_row(mut r)
+  }
+  Ok(None())
+}
+
+pub fn feed(mut r: Reader, chunk: Bytes, eof: bool) -> Result[
+  List[List[String]],
+  CsvError
+] uses {} {
+  let len = core@1/bytes.len(chunk)
+  if r.failed || r.cursor != core@1/list.len(r.input) || r.ended && len != 0 {
+    r.failed = true
+    return Error(Syntax(r.offset))
+  }
+  let mut rows: List[List[String]] = []
+  let mut i: u64 = 0
+  while i < len {
+    match step(mut r, chunk[i]) {
+      Ok(Some(row)) => core@1/list.push(mut rows, take row),
+      Ok(None()) => (),
+      Error(error) => {
+        r.failed = true
+        return Error(error)
+      },
+    }
+    i += 1
+  }
+  if eof && !r.ended {
+    match end(mut r) {
+      Ok(Some(row)) => core@1/list.push(mut rows, take row),
+      Ok(None()) => (),
+      Error(error) => {
+        r.failed = true
+        return Error(error)
+      },
+    }
+  }
+  Ok(take rows)
+}
+
+pub fn parse(take text: String, config: Config) -> Result[List[List[String]], CsvError] uses {} {
+  let mut r = reader(config)?
+  feed(mut r, core@1/string.as_bytes(text), true)
+}
+
+pub fn read_record[S, E](
+  mut r: Reader,
+  mut source: S,
+  refill: fn(mut S, mut List[u8], u64) -> Result[u64, E]
+) -> Result[Option[List[String]], ReadError[E]] {
+  if r.failed {
+    return Error(Csv(Syntax(r.offset)))
+  }
+  if r.ended {
+    return Ok(None())
+  }
+  while true {
+    if r.cursor == core@1/list.len(r.input) {
+      r.input = []
+      r.cursor = 0
+      let remaining = r.config.max_record_bytes - r.record_bytes
+      let capacity: u64 = if remaining >= 4095 {
+        4096
+      } else {
+        remaining + 1
+      }
+      let count = match refill(mut source, mut r.input, capacity) {
+        Ok(count) => count,
+        Error(error) => {
+          r.failed = true
+          return Error(Source(take error))
+        },
+      }
+      if count > capacity || core@1/list.len(r.input) != count {
+        r.failed = true
+        return Error(InvalidRead())
+      }
+      if count == 0 {
+        match end(mut r) {
+          Ok(row) => return Ok(take row),
+          Error(error) => {
+            r.failed = true
+            return Error(Csv(error))
+          },
+        }
+      }
+    }
+    let byte = r.input[r.cursor]
+    r.cursor += 1
+    let outcome = step(mut r, byte)
+    match take outcome {
+      Ok(Some(row)) => return Ok(Some(take row)),
+      Ok(None()) => (),
+      Error(error) => {
+        r.failed = true
+        return Error(Csv(error))
+      },
+    }
+  }
+  Ok(None())
+}
+
+pub fn write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[
+  (),
+  CsvError
+] uses {} {
+  if !delimiter_valid(delimiter) {
+    return Error(InvalidDelimiter())
+  }
+  let mut field_index: u64 = 0
+  while field_index < core@1/list.len(fields) {
+    if field_index != 0 {
+      core@1/list.push(mut out, delimiter)
+    }
+    let data = core@1/string.as_bytes(fields[field_index])
+    let mut quoted = false
+    let mut i: u64 = 0
+    while i < core@1/bytes.len(data) {
+      let byte = data[i]
+      if byte == delimiter || core@1/int.widen(byte) == '"' || core@1/int.widen(byte) == '\n' || core@1/int.widen(
+        byte
+      ) == '\r' {
+        quoted = true
+      }
+      i += 1
+    }
+    if quoted {
+      core@1/list.push(mut out, core@1/int.narrow('"'))
+    }
+    i = 0
+    while i < core@1/bytes.len(data) {
+      if core@1/int.widen(data[i]) == '"' {
+        core@1/list.push(mut out, core@1/int.narrow('"'))
+      }
+      core@1/list.push(mut out, data[i])
+      i += 1
+    }
+    if quoted {
+      core@1/list.push(mut out, core@1/int.narrow('"'))
+    }
+    field_index += 1
+  }
+  core@1/list.push(mut out, core@1/int.narrow('\n'))
+  Ok(())
+}

@@ -113,3 +113,12 @@ fn unicode16_property_tables_regenerate() {
 fn ascii_radix_is_ordinary_source() {
     source_codec("ascii-radix", "ascii", &["digit_value_radix"]);
 }
+
+#[test]
+fn csv_is_ordinary_source() {
+    source_codec(
+        "csv",
+        "csv",
+        &["reader", "feed", "parse", "read_record", "write_record"],
+    );
+}

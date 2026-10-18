@@ -366,6 +366,12 @@
       ]
     },
     {
+      "path": "csv.hir",
+      "module": [
+        "csv"
+      ]
+    },
+    {
       "path": "hex.hir",
       "module": [
         "hex"

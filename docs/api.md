@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-671 exported definitions; 224 variants.
+681 exported definitions; 232 variants.
 
 
 ## Types and roots
@@ -368,6 +368,27 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `fn codec.decode[T: serializable](data: Bytes) -> Result[T, DecodeError]` <!-- core@1/codec/decode -->
 - `fn codec.encode[T: serializable](value: T) -> Bytes` <!-- core@1/codec/encode -->
+
+## csv
+
+- `pub type csv.Config { delimiter: u8, fields_per_record: Option[u64], max_record_bytes: u64, }` — Go encoding/csv reader/writer state transitions, adapted to bounded chunks. <!-- std@1/csv/Config -->
+- `pub type csv.CsvError = Syntax(u64) | UnequalFields(u64) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter` <!-- std@1/csv/CsvError -->
+- `InvalidDelimiter -> csv.CsvError` — Variant of csv.CsvError. <!-- std@1/csv/CsvError#InvalidDelimiter -->
+- `InvalidUtf8 -> csv.CsvError` — Variant of csv.CsvError. <!-- std@1/csv/CsvError#InvalidUtf8 -->
+- `RecordTooLarge -> csv.CsvError` — Variant of csv.CsvError. <!-- std@1/csv/CsvError#RecordTooLarge -->
+- `Syntax(u64) -> csv.CsvError` — Variant of csv.CsvError. <!-- std@1/csv/CsvError#Syntax -->
+- `UnequalFields(u64) -> csv.CsvError` — Variant of csv.CsvError. <!-- std@1/csv/CsvError#UnequalFields -->
+- `pub type csv.ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead` <!-- std@1/csv/ReadError -->
+- `Csv(CsvError) -> csv.ReadError[E]` — Variant of csv.ReadError. <!-- std@1/csv/ReadError#Csv -->
+- `InvalidRead -> csv.ReadError[E]` — Variant of csv.ReadError. <!-- std@1/csv/ReadError#InvalidRead -->
+- `Source(E) -> csv.ReadError[E]` — Variant of csv.ReadError. <!-- std@1/csv/ReadError#Source -->
+- `pub opaque type csv.Reader: copyable + inert + noalloc_drop uses {}` <!-- std@1/csv/Reader -->
+- `pub fn csv.default_config() -> Config uses {}` <!-- std@1/csv/default_config -->
+- `pub fn csv.feed(mut r: Reader, chunk: Bytes, eof: bool) -> Result[ List[List[String]], CsvError ] uses {}` <!-- std@1/csv/feed -->
+- `pub fn csv.parse(take text: String, config: Config) -> Result[List[List[String]], CsvError] uses {}` <!-- std@1/csv/parse -->
+- `pub fn csv.read_record[S, E]( mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64, E] ) -> Result[Option[List[String]], ReadError[E]]` <!-- std@1/csv/read_record -->
+- `pub fn csv.reader(config: Config) -> Result[Reader, CsvError] uses {}` <!-- std@1/csv/reader -->
+- `pub fn csv.write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[ (), CsvError ] uses {}` <!-- std@1/csv/write_record -->
 
 ## dir
 
