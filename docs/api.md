@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1125 exported definitions; 313 variants.
+1127 exported definitions; 313 variants.
 
 ## Types and roots
 
@@ -3288,6 +3288,18 @@ References: [`core@1/Body`](#def-core_401_2fBody), [`core@1/Result`](#def-core_4
 - `pub fn derive.json_bool(value: json.Value) -> Result[bool, String] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fderive_2fjson_5ffloat"></a>
+
+- `pub fn derive.json_float(take spelling: String) -> json.Value uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fderive_2fjson_5ffloat_5ftext"></a>
+
+- `pub fn derive.json_float_text(value: json.Value) -> Result[unique String, String] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
 <a id="def-std_401_2fderive_2fjson_5fnumber"></a>
 
