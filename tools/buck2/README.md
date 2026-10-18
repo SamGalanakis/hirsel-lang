@@ -272,6 +272,16 @@ them into a shared directory.
 
 ## Cost-balanced test shards
 
+`hirsel-cli-test-examples` uses one shard per declared test case (`CASE_SHARDED`
+in `sync.py`), including its ignored native cases. The existing launcher deals
+these equal-cost cases by name, preserving compiled test identities and exact
+filters; an exact example runs through `hirsel-cli-test-examples-shard-1`.
+Rerun `sync.py` after adding or removing an example test.
+Each shard requests one CPU and twice the CLI integration tests' measured memory
+reservation (currently 1 GiB), instead of the unmeasured binary's 2 GiB fallback.
+The gate selects every shard, so independent examples can run in parallel without
+one long action holding the whole examples suite's reservation.
+
 A binary in `SHARDED` (`sync.py`) has a table of measured seconds per case,
 `test-costs/<binary>.tsv`. `sync.py` gives it `ceil(total / (TEST_THREADS *
 SHARD_SECONDS))` shards, and `test_launcher.sh` deals its listed cases out

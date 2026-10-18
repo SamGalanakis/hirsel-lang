@@ -185,6 +185,11 @@ SHARDED = [
     "hirsel-pipeline-tests-test-rc",
     "hirsel-rt-test-it",
 ]
+# Example cases each build and exercise a program. Keep one compiled test case
+# per shard, using the launcher's existing equal-cost assignment by name.
+CASE_SHARDED = {
+    "hirsel-cli-test-examples": "crates/hirsel-cli/tests/examples.rs",
+}
 TEST_THREADS = 4
 SHARD_SECONDS = 40
 COSTS = HERE / "test-costs"
@@ -192,6 +197,12 @@ COSTS = HERE / "test-costs"
 
 def shards(binary: str) -> tuple[int, str | None]:
     """A test binary's shard count and cost table (unsharded: 1, None)."""
+    if binary in CASE_SHARDED:
+        source = (ROOT / CASE_SHARDED[binary]).read_text()
+        # This harness declares top-level tests and example!(...) test cases;
+        # the indented #[test] inside the macro is its template, not a case.
+        count = len(re.findall(r"(?m)^#\[test\]$|^example!\(", source))
+        return max(1, count), None
     if binary not in SHARDED:
         return 1, None
     table = COSTS / f"{binary}.tsv"

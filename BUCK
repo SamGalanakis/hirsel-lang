@@ -187,6 +187,7 @@ hirsel_test(
     bin_exes = {
         "hirsel": "//:hirsel-cli-bin-hirsel",
     },
+    shards = 33,
     data = glob([
         "conformance/**",
         "packages/**",
