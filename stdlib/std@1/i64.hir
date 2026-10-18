@@ -35,22 +35,5 @@ pub fn to_string(value: i64) -> String uses {} {
 
 @noalloc
 pub fn parse(text: String) -> Result[i64, scalar.ParseError] uses {} {
-  match internal.decimal.read_unsigned(
-    text,
-    true,
-    9223372036854775807u128,
-    9223372036854775808u128
-  ) {
-    Error(error) => Error(error),
-    Ok((magnitude, negative)) => {
-      let raw = if negative {
-        core@1/int.wrapping_add(~magnitude, 1)
-      } else {
-        magnitude
-      }
-      let wide: i128 = core@1/int.truncate(raw)
-      let value: i64 = core@1/int.narrow(wide)
-      Ok(value)
-    },
-  }
+  parse_radix(text, 10)
 }

@@ -97,7 +97,19 @@
       ]
     },
     {
+      "path": "u8_ops.hir",
+      "module": [
+        "u8"
+      ]
+    },
+    {
       "path": "u16.hir",
+      "module": [
+        "u16"
+      ]
+    },
+    {
+      "path": "u16_ops.hir",
       "module": [
         "u16"
       ]
@@ -109,7 +121,19 @@
       ]
     },
     {
+      "path": "u32_ops.hir",
+      "module": [
+        "u32"
+      ]
+    },
+    {
       "path": "u64.hir",
+      "module": [
+        "u64"
+      ]
+    },
+    {
+      "path": "u64_ops.hir",
       "module": [
         "u64"
       ]
@@ -121,7 +145,19 @@
       ]
     },
     {
+      "path": "u128_ops.hir",
+      "module": [
+        "u128"
+      ]
+    },
+    {
       "path": "i8.hir",
+      "module": [
+        "i8"
+      ]
+    },
+    {
+      "path": "i8_ops.hir",
       "module": [
         "i8"
       ]
@@ -133,7 +169,19 @@
       ]
     },
     {
+      "path": "i16_ops.hir",
+      "module": [
+        "i16"
+      ]
+    },
+    {
       "path": "i32.hir",
+      "module": [
+        "i32"
+      ]
+    },
+    {
+      "path": "i32_ops.hir",
       "module": [
         "i32"
       ]
@@ -145,7 +193,19 @@
       ]
     },
     {
+      "path": "i64_ops.hir",
+      "module": [
+        "i64"
+      ]
+    },
+    {
       "path": "i128.hir",
+      "module": [
+        "i128"
+      ]
+    },
+    {
+      "path": "i128_ops.hir",
       "module": [
         "i128"
       ]
@@ -188,6 +248,13 @@
       "module": [
         "internal",
         "decimal"
+      ]
+    },
+    {
+      "path": "integer.hir",
+      "module": [
+        "internal",
+        "integer"
       ]
     },
     {

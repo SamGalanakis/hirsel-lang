@@ -37,6 +37,7 @@ the license named in its row; the license texts follow once each.
 | Zig standard library | `lib/std/process.zig` `run` per-stream `stdout_limit`/`stderr_limit` (`StreamTooLong`, child killed) | `proc.run` `max_output` and `OutputLimit()` | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | Rust standard library | Unix socket nonblocking, poll and SO_ERROR conventions; TCP nonblocking test vectors | `crates/hirsel-rt/src/net_host/cooperative.rs`, `crates/hirsel-rt/tests/it/net.rs` | same | MIT |
 | Rust standard library | `library/coretests/tests/num/{cast,floats}.rs`, `library/core/src/num/{f32,f64}.rs` | integer-to-float boundary tests | same | MIT |
+| Rust standard library | `library/core/src/num/{int_macros,uint_macros}.rs`, integer-policy boundary tests | `tools/generate-integer-ops.py`, std integer policy modules and conformance vectors | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Rust standard library | `library/alloc/src/rcs/arc.rs` `Arc::make_mut` isolation examples | heapcheck persistent snapshots and fork-isolation controls in `crates/hirsel-heapcheck/src/{snapshot,ledger}.rs` | same | MIT |
 | Rust standard library | `str::split_ascii_whitespace`, slice split/filter algorithm, string examples and ASCII whitespace vectors | `stdlib/std@1/string.hir`, `conformance/SEM/SEM-3-split-ascii-whitespace-run.hir` | same | MIT |
 | Rust standard library | `str` `Ord` (byte-lexicographic order) and `alloctests/tests/str.rs` `test_le` vectors | `stdlib/std@1/string.hir` `compare`, `conformance/SEM/SEM-3-string-compare-run.hir` | same | MIT |
@@ -59,6 +60,7 @@ the license named in its row; the license texts follow once each.
 | postcard | `de::test_alloc::{vec,zst_vec}`, `de::tests::{de_str,enums}` vectors adapted to SER-2 lengths/tags | `conformance/SER/SER-2-*` | jamesmunns/postcard `872b9082589ebd1384a1b95ca232b1727bcddd29` | MIT |
 | bincode | `tests/{basic_types,derive}.rs` scalar, UTF-8 and enum-boundary controls adapted to SER-2 | `conformance/SER/SER-2-*` | bincode 2.0.1 crate release | MIT |
 | RFC 8949 | Appendix A data examples and sections 4.2, 5.3.1, 5.6 deterministic/validity cases adapted to SER-2 | `conformance/SER/SER-2-*` | RFC 8949 (December 2020) | Simplified BSD (IETF Trust) |
+| Go standard library | `src/internal/strconv/{atoi,itoa}.go` cutoff radix loops and radix vectors | `stdlib/std@1/integer.hir`, integer radix conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 

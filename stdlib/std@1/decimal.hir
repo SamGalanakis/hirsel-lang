@@ -32,60 +32,6 @@ pub fn write_unsigned[n: size](value: u128, negative: bool, mut buffer: Inline[u
   Ok(count + prefix)
 }
 
-// Overflow does not excuse invalid trailing syntax: validate the complete input.
-@noalloc
-pub fn read_unsigned(
-  text: String,
-  signed: bool,
-  positive_limit: u128,
-  negative_limit: u128
-) -> Result[(u128, bool), scalar.ParseError] uses {} {
-  let bytes = core@1/string.as_bytes(text)
-  let length = core@1/bytes.len(bytes)
-  if length == 0 {
-    return Error(Invalid)
-  }
-  let negative = bytes[0] == 45
-  if negative && !signed {
-    return Error(Invalid)
-  }
-  let mut i: u64 = if negative {
-    1
-  } else {
-    0
-  }
-  if i == length {
-    return Error(Invalid)
-  }
-  let limit = if negative {
-    negative_limit
-  } else {
-    positive_limit
-  }
-  let mut value: u128 = 0
-  let mut overflow: bool = false
-  while i < length {
-    let byte = bytes[i]
-    if byte < 48 || byte > 57 {
-      return Error(Invalid)
-    }
-    let digit: u128 = core@1/int.widen(byte - 48)
-    if !overflow {
-      if value > limit / 10 || value == limit / 10 && digit > limit % 10 {
-        overflow = true
-      } else {
-        value = value * 10 + digit
-      }
-    }
-    i += 1
-  }
-  if overflow {
-    Error(OutOfRange)
-  } else {
-    Ok((value, negative))
-  }
-}
-
 // The UTF-8 text a formatter appended to an empty builder.
 pub fn finish(take builder: List[u8]) -> String uses {} {
   match core@1/string.from_bytes(core@1/bytes.from_list(take builder)) {

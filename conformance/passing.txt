@@ -3605,6 +3605,16 @@ conformance/SEM/SEM-1-signed-subtract-max-ok.hir
 conformance/SEM/SEM-1-signed-subtract-ok.hir
 conformance/SEM/SEM-1-simd-integer-domain-bad.hir
 conformance/SEM/SEM-1-simd-integer-domain-ok.hir
+conformance/SEM/SEM-1-std-integer-i8-policy-edges-0-run.hir
+conformance/SEM/SEM-1-std-integer-i8-policy-edges-1-run.hir
+conformance/SEM/SEM-1-std-integer-i8-policy-edges-2-run.hir
+conformance/SEM/SEM-1-std-integer-i8-policy-edges-3-run.hir
+conformance/SEM/SEM-1-std-integer-policy-extrema-run.hir
+conformance/SEM/SEM-1-std-integer-radix-run.hir
+conformance/SEM/SEM-1-std-integer-u8-policy-edges-0-run.hir
+conformance/SEM/SEM-1-std-integer-u8-policy-edges-1-run.hir
+conformance/SEM/SEM-1-std-integer-u8-policy-edges-2-run.hir
+conformance/SEM/SEM-1-std-integer-u8-policy-edges-3-run.hir
 conformance/SEM/SEM-1-truncate-boundary.hir
 conformance/SEM/SEM-1-truncate-out-of-range.hir
 conformance/SEM/SEM-1-truncate-zero.hir

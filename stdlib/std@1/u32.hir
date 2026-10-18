@@ -22,11 +22,5 @@ pub fn to_string(value: u32) -> String uses {} {
 
 @noalloc
 pub fn parse(text: String) -> Result[u32, scalar.ParseError] uses {} {
-  match internal.decimal.read_unsigned(text, false, 4294967295u128, 0u128) {
-    Error(error) => Error(error),
-    Ok((magnitude, negative)) => {
-      let value: u32 = core@1/int.narrow(magnitude)
-      Ok(value)
-    },
-  }
+  parse_radix(text, 10)
 }

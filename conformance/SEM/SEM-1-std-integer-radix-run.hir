@@ -1,0 +1,499 @@
+// rule: SEM-1
+// expect: run
+// Go strconv radix vectors adapted to Hirsel grammar and all ten widths.
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(u8.parse_radix("0", 2) == Ok(0u8), Bounds())
+  failure.check(u8.format_radix(0u8, 2) == Ok("0"), Bounds())
+  failure.check(u8.parse_radix("11111111", 2) == Ok(255u8), Bounds())
+  failure.check(u8.format_radix(255u8, 2) == Ok("11111111"), Bounds())
+  failure.check(u8.parse_radix("0", 10) == Ok(0u8), Bounds())
+  failure.check(u8.format_radix(0u8, 10) == Ok("0"), Bounds())
+  failure.check(u8.parse_radix("255", 10) == Ok(255u8), Bounds())
+  failure.check(u8.format_radix(255u8, 10) == Ok("255"), Bounds())
+  failure.check(u8.parse_radix("0", 16) == Ok(0u8), Bounds())
+  failure.check(u8.format_radix(0u8, 16) == Ok("0"), Bounds())
+  failure.check(u8.parse_radix("FF", 16) == Ok(255u8), Bounds())
+  failure.check(u8.format_radix(255u8, 16) == Ok("ff"), Bounds())
+  failure.check(u8.parse_radix("0", 36) == Ok(0u8), Bounds())
+  failure.check(u8.format_radix(0u8, 36) == Ok("0"), Bounds())
+  failure.check(u8.parse_radix("73", 36) == Ok(255u8), Bounds())
+  failure.check(u8.format_radix(255u8, 36) == Ok("73"), Bounds())
+  failure.check(u8.parse_radix("256", 10) == Error(OutOfRange), Bounds())
+  failure.check(u16.parse_radix("0", 2) == Ok(0u16), Bounds())
+  failure.check(u16.format_radix(0u16, 2) == Ok("0"), Bounds())
+  failure.check(u16.parse_radix("1111111111111111", 2) == Ok(65535u16), Bounds())
+  failure.check(u16.format_radix(65535u16, 2) == Ok("1111111111111111"), Bounds())
+  failure.check(u16.parse_radix("0", 10) == Ok(0u16), Bounds())
+  failure.check(u16.format_radix(0u16, 10) == Ok("0"), Bounds())
+  failure.check(u16.parse_radix("65535", 10) == Ok(65535u16), Bounds())
+  failure.check(u16.format_radix(65535u16, 10) == Ok("65535"), Bounds())
+  failure.check(u16.parse_radix("0", 16) == Ok(0u16), Bounds())
+  failure.check(u16.format_radix(0u16, 16) == Ok("0"), Bounds())
+  failure.check(u16.parse_radix("FFFF", 16) == Ok(65535u16), Bounds())
+  failure.check(u16.format_radix(65535u16, 16) == Ok("ffff"), Bounds())
+  failure.check(u16.parse_radix("0", 36) == Ok(0u16), Bounds())
+  failure.check(u16.format_radix(0u16, 36) == Ok("0"), Bounds())
+  failure.check(u16.parse_radix("1EKF", 36) == Ok(65535u16), Bounds())
+  failure.check(u16.format_radix(65535u16, 36) == Ok("1ekf"), Bounds())
+  failure.check(u16.parse_radix("65536", 10) == Error(OutOfRange), Bounds())
+  failure.check(u32.parse_radix("0", 2) == Ok(0u32), Bounds())
+  failure.check(u32.format_radix(0u32, 2) == Ok("0"), Bounds())
+  failure.check(
+    u32.parse_radix("11111111111111111111111111111111", 2) == Ok(4294967295u32),
+    Bounds()
+  )
+  failure.check(
+    u32.format_radix(4294967295u32, 2) == Ok("11111111111111111111111111111111"),
+    Bounds()
+  )
+  failure.check(u32.parse_radix("0", 10) == Ok(0u32), Bounds())
+  failure.check(u32.format_radix(0u32, 10) == Ok("0"), Bounds())
+  failure.check(u32.parse_radix("4294967295", 10) == Ok(4294967295u32), Bounds())
+  failure.check(u32.format_radix(4294967295u32, 10) == Ok("4294967295"), Bounds())
+  failure.check(u32.parse_radix("0", 16) == Ok(0u32), Bounds())
+  failure.check(u32.format_radix(0u32, 16) == Ok("0"), Bounds())
+  failure.check(u32.parse_radix("FFFFFFFF", 16) == Ok(4294967295u32), Bounds())
+  failure.check(u32.format_radix(4294967295u32, 16) == Ok("ffffffff"), Bounds())
+  failure.check(u32.parse_radix("0", 36) == Ok(0u32), Bounds())
+  failure.check(u32.format_radix(0u32, 36) == Ok("0"), Bounds())
+  failure.check(u32.parse_radix("1Z141Z3", 36) == Ok(4294967295u32), Bounds())
+  failure.check(u32.format_radix(4294967295u32, 36) == Ok("1z141z3"), Bounds())
+  failure.check(u32.parse_radix("4294967296", 10) == Error(OutOfRange), Bounds())
+  failure.check(u64.parse_radix("0", 2) == Ok(0u64), Bounds())
+  failure.check(u64.format_radix(0u64, 2) == Ok("0"), Bounds())
+  failure.check(
+    u64.parse_radix(
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      2
+    ) == Ok(18446744073709551615u64),
+    Bounds()
+  )
+  failure.check(
+    u64.format_radix(18446744073709551615u64, 2) == Ok(
+      "1111111111111111111111111111111111111111111111111111111111111111"
+    ),
+    Bounds()
+  )
+  failure.check(u64.parse_radix("0", 10) == Ok(0u64), Bounds())
+  failure.check(u64.format_radix(0u64, 10) == Ok("0"), Bounds())
+  failure.check(
+    u64.parse_radix("18446744073709551615", 10) == Ok(18446744073709551615u64),
+    Bounds()
+  )
+  failure.check(
+    u64.format_radix(18446744073709551615u64, 10) == Ok("18446744073709551615"),
+    Bounds()
+  )
+  failure.check(u64.parse_radix("0", 16) == Ok(0u64), Bounds())
+  failure.check(u64.format_radix(0u64, 16) == Ok("0"), Bounds())
+  failure.check(
+    u64.parse_radix("FFFFFFFFFFFFFFFF", 16) == Ok(18446744073709551615u64),
+    Bounds()
+  )
+  failure.check(
+    u64.format_radix(18446744073709551615u64, 16) == Ok("ffffffffffffffff"),
+    Bounds()
+  )
+  failure.check(u64.parse_radix("0", 36) == Ok(0u64), Bounds())
+  failure.check(u64.format_radix(0u64, 36) == Ok("0"), Bounds())
+  failure.check(
+    u64.parse_radix("3W5E11264SGSF", 36) == Ok(18446744073709551615u64),
+    Bounds()
+  )
+  failure.check(
+    u64.format_radix(18446744073709551615u64, 36) == Ok("3w5e11264sgsf"),
+    Bounds()
+  )
+  failure.check(
+    u64.parse_radix("18446744073709551616", 10) == Error(OutOfRange),
+    Bounds()
+  )
+  failure.check(u128.parse_radix("0", 2) == Ok(0u128), Bounds())
+  failure.check(u128.format_radix(0u128, 2) == Ok("0"), Bounds())
+  failure.check(
+    u128.parse_radix(
+      "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      2
+    ) == Ok(340282366920938463463374607431768211455u128),
+    Bounds()
+  )
+  failure.check(
+    u128.format_radix(340282366920938463463374607431768211455u128, 2) == Ok(
+      "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    ),
+    Bounds()
+  )
+  failure.check(u128.parse_radix("0", 10) == Ok(0u128), Bounds())
+  failure.check(u128.format_radix(0u128, 10) == Ok("0"), Bounds())
+  failure.check(
+    u128.parse_radix("340282366920938463463374607431768211455", 10) == Ok(
+      340282366920938463463374607431768211455u128
+    ),
+    Bounds()
+  )
+  failure.check(
+    u128.format_radix(340282366920938463463374607431768211455u128, 10) == Ok(
+      "340282366920938463463374607431768211455"
+    ),
+    Bounds()
+  )
+  failure.check(u128.parse_radix("0", 16) == Ok(0u128), Bounds())
+  failure.check(u128.format_radix(0u128, 16) == Ok("0"), Bounds())
+  failure.check(
+    u128.parse_radix("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", 16) == Ok(
+      340282366920938463463374607431768211455u128
+    ),
+    Bounds()
+  )
+  failure.check(
+    u128.format_radix(340282366920938463463374607431768211455u128, 16) == Ok(
+      "ffffffffffffffffffffffffffffffff"
+    ),
+    Bounds()
+  )
+  failure.check(u128.parse_radix("0", 36) == Ok(0u128), Bounds())
+  failure.check(u128.format_radix(0u128, 36) == Ok("0"), Bounds())
+  failure.check(
+    u128.parse_radix("F5LXX1ZZ5PNORYNQGLHZMSP33", 36) == Ok(
+      340282366920938463463374607431768211455u128
+    ),
+    Bounds()
+  )
+  failure.check(
+    u128.format_radix(340282366920938463463374607431768211455u128, 36) == Ok(
+      "f5lxx1zz5pnorynqglhzmsp33"
+    ),
+    Bounds()
+  )
+  failure.check(
+    u128.parse_radix("340282366920938463463374607431768211456", 10) == Error(OutOfRange),
+    Bounds()
+  )
+  failure.check(i8.parse_radix("-10000000", 2) == Ok(-128i8), Bounds())
+  failure.check(i8.format_radix(-128i8, 2) == Ok("-10000000"), Bounds())
+  failure.check(i8.parse_radix("0", 2) == Ok(0i8), Bounds())
+  failure.check(i8.format_radix(0i8, 2) == Ok("0"), Bounds())
+  failure.check(i8.parse_radix("1111111", 2) == Ok(127i8), Bounds())
+  failure.check(i8.format_radix(127i8, 2) == Ok("1111111"), Bounds())
+  failure.check(i8.parse_radix("-128", 10) == Ok(-128i8), Bounds())
+  failure.check(i8.format_radix(-128i8, 10) == Ok("-128"), Bounds())
+  failure.check(i8.parse_radix("0", 10) == Ok(0i8), Bounds())
+  failure.check(i8.format_radix(0i8, 10) == Ok("0"), Bounds())
+  failure.check(i8.parse_radix("127", 10) == Ok(127i8), Bounds())
+  failure.check(i8.format_radix(127i8, 10) == Ok("127"), Bounds())
+  failure.check(i8.parse_radix("-80", 16) == Ok(-128i8), Bounds())
+  failure.check(i8.format_radix(-128i8, 16) == Ok("-80"), Bounds())
+  failure.check(i8.parse_radix("0", 16) == Ok(0i8), Bounds())
+  failure.check(i8.format_radix(0i8, 16) == Ok("0"), Bounds())
+  failure.check(i8.parse_radix("7F", 16) == Ok(127i8), Bounds())
+  failure.check(i8.format_radix(127i8, 16) == Ok("7f"), Bounds())
+  failure.check(i8.parse_radix("-3K", 36) == Ok(-128i8), Bounds())
+  failure.check(i8.format_radix(-128i8, 36) == Ok("-3k"), Bounds())
+  failure.check(i8.parse_radix("0", 36) == Ok(0i8), Bounds())
+  failure.check(i8.format_radix(0i8, 36) == Ok("0"), Bounds())
+  failure.check(i8.parse_radix("3J", 36) == Ok(127i8), Bounds())
+  failure.check(i8.format_radix(127i8, 36) == Ok("3j"), Bounds())
+  failure.check(i8.parse_radix("128", 10) == Error(OutOfRange), Bounds())
+  failure.check(i8.parse_radix("-129", 10) == Error(OutOfRange), Bounds())
+  failure.check(i16.parse_radix("-1000000000000000", 2) == Ok(-32768i16), Bounds())
+  failure.check(i16.format_radix(-32768i16, 2) == Ok("-1000000000000000"), Bounds())
+  failure.check(i16.parse_radix("0", 2) == Ok(0i16), Bounds())
+  failure.check(i16.format_radix(0i16, 2) == Ok("0"), Bounds())
+  failure.check(i16.parse_radix("111111111111111", 2) == Ok(32767i16), Bounds())
+  failure.check(i16.format_radix(32767i16, 2) == Ok("111111111111111"), Bounds())
+  failure.check(i16.parse_radix("-32768", 10) == Ok(-32768i16), Bounds())
+  failure.check(i16.format_radix(-32768i16, 10) == Ok("-32768"), Bounds())
+  failure.check(i16.parse_radix("0", 10) == Ok(0i16), Bounds())
+  failure.check(i16.format_radix(0i16, 10) == Ok("0"), Bounds())
+  failure.check(i16.parse_radix("32767", 10) == Ok(32767i16), Bounds())
+  failure.check(i16.format_radix(32767i16, 10) == Ok("32767"), Bounds())
+  failure.check(i16.parse_radix("-8000", 16) == Ok(-32768i16), Bounds())
+  failure.check(i16.format_radix(-32768i16, 16) == Ok("-8000"), Bounds())
+  failure.check(i16.parse_radix("0", 16) == Ok(0i16), Bounds())
+  failure.check(i16.format_radix(0i16, 16) == Ok("0"), Bounds())
+  failure.check(i16.parse_radix("7FFF", 16) == Ok(32767i16), Bounds())
+  failure.check(i16.format_radix(32767i16, 16) == Ok("7fff"), Bounds())
+  failure.check(i16.parse_radix("-PA8", 36) == Ok(-32768i16), Bounds())
+  failure.check(i16.format_radix(-32768i16, 36) == Ok("-pa8"), Bounds())
+  failure.check(i16.parse_radix("0", 36) == Ok(0i16), Bounds())
+  failure.check(i16.format_radix(0i16, 36) == Ok("0"), Bounds())
+  failure.check(i16.parse_radix("PA7", 36) == Ok(32767i16), Bounds())
+  failure.check(i16.format_radix(32767i16, 36) == Ok("pa7"), Bounds())
+  failure.check(i16.parse_radix("32768", 10) == Error(OutOfRange), Bounds())
+  failure.check(i16.parse_radix("-32769", 10) == Error(OutOfRange), Bounds())
+  failure.check(
+    i32.parse_radix("-10000000000000000000000000000000", 2) == Ok(-2147483648i32),
+    Bounds()
+  )
+  failure.check(
+    i32.format_radix(-2147483648i32, 2) == Ok("-10000000000000000000000000000000"),
+    Bounds()
+  )
+  failure.check(i32.parse_radix("0", 2) == Ok(0i32), Bounds())
+  failure.check(i32.format_radix(0i32, 2) == Ok("0"), Bounds())
+  failure.check(
+    i32.parse_radix("1111111111111111111111111111111", 2) == Ok(2147483647i32),
+    Bounds()
+  )
+  failure.check(
+    i32.format_radix(2147483647i32, 2) == Ok("1111111111111111111111111111111"),
+    Bounds()
+  )
+  failure.check(i32.parse_radix("-2147483648", 10) == Ok(-2147483648i32), Bounds())
+  failure.check(i32.format_radix(-2147483648i32, 10) == Ok("-2147483648"), Bounds())
+  failure.check(i32.parse_radix("0", 10) == Ok(0i32), Bounds())
+  failure.check(i32.format_radix(0i32, 10) == Ok("0"), Bounds())
+  failure.check(i32.parse_radix("2147483647", 10) == Ok(2147483647i32), Bounds())
+  failure.check(i32.format_radix(2147483647i32, 10) == Ok("2147483647"), Bounds())
+  failure.check(i32.parse_radix("-80000000", 16) == Ok(-2147483648i32), Bounds())
+  failure.check(i32.format_radix(-2147483648i32, 16) == Ok("-80000000"), Bounds())
+  failure.check(i32.parse_radix("0", 16) == Ok(0i32), Bounds())
+  failure.check(i32.format_radix(0i32, 16) == Ok("0"), Bounds())
+  failure.check(i32.parse_radix("7FFFFFFF", 16) == Ok(2147483647i32), Bounds())
+  failure.check(i32.format_radix(2147483647i32, 16) == Ok("7fffffff"), Bounds())
+  failure.check(i32.parse_radix("-ZIK0ZK", 36) == Ok(-2147483648i32), Bounds())
+  failure.check(i32.format_radix(-2147483648i32, 36) == Ok("-zik0zk"), Bounds())
+  failure.check(i32.parse_radix("0", 36) == Ok(0i32), Bounds())
+  failure.check(i32.format_radix(0i32, 36) == Ok("0"), Bounds())
+  failure.check(i32.parse_radix("ZIK0ZJ", 36) == Ok(2147483647i32), Bounds())
+  failure.check(i32.format_radix(2147483647i32, 36) == Ok("zik0zj"), Bounds())
+  failure.check(i32.parse_radix("2147483648", 10) == Error(OutOfRange), Bounds())
+  failure.check(i32.parse_radix("-2147483649", 10) == Error(OutOfRange), Bounds())
+  failure.check(
+    i64.parse_radix(
+      "-1000000000000000000000000000000000000000000000000000000000000000",
+      2
+    ) == Ok(-9223372036854775808i64),
+    Bounds()
+  )
+  failure.check(
+    i64.format_radix(-9223372036854775808i64, 2) == Ok(
+      "-1000000000000000000000000000000000000000000000000000000000000000"
+    ),
+    Bounds()
+  )
+  failure.check(i64.parse_radix("0", 2) == Ok(0i64), Bounds())
+  failure.check(i64.format_radix(0i64, 2) == Ok("0"), Bounds())
+  failure.check(
+    i64.parse_radix(
+      "111111111111111111111111111111111111111111111111111111111111111",
+      2
+    ) == Ok(9223372036854775807i64),
+    Bounds()
+  )
+  failure.check(
+    i64.format_radix(9223372036854775807i64, 2) == Ok(
+      "111111111111111111111111111111111111111111111111111111111111111"
+    ),
+    Bounds()
+  )
+  failure.check(
+    i64.parse_radix("-9223372036854775808", 10) == Ok(-9223372036854775808i64),
+    Bounds()
+  )
+  failure.check(
+    i64.format_radix(-9223372036854775808i64, 10) == Ok("-9223372036854775808"),
+    Bounds()
+  )
+  failure.check(i64.parse_radix("0", 10) == Ok(0i64), Bounds())
+  failure.check(i64.format_radix(0i64, 10) == Ok("0"), Bounds())
+  failure.check(
+    i64.parse_radix("9223372036854775807", 10) == Ok(9223372036854775807i64),
+    Bounds()
+  )
+  failure.check(
+    i64.format_radix(9223372036854775807i64, 10) == Ok("9223372036854775807"),
+    Bounds()
+  )
+  failure.check(
+    i64.parse_radix("-8000000000000000", 16) == Ok(-9223372036854775808i64),
+    Bounds()
+  )
+  failure.check(
+    i64.format_radix(-9223372036854775808i64, 16) == Ok("-8000000000000000"),
+    Bounds()
+  )
+  failure.check(i64.parse_radix("0", 16) == Ok(0i64), Bounds())
+  failure.check(i64.format_radix(0i64, 16) == Ok("0"), Bounds())
+  failure.check(
+    i64.parse_radix("7FFFFFFFFFFFFFFF", 16) == Ok(9223372036854775807i64),
+    Bounds()
+  )
+  failure.check(
+    i64.format_radix(9223372036854775807i64, 16) == Ok("7fffffffffffffff"),
+    Bounds()
+  )
+  failure.check(
+    i64.parse_radix("-1Y2P0IJ32E8E8", 36) == Ok(-9223372036854775808i64),
+    Bounds()
+  )
+  failure.check(
+    i64.format_radix(-9223372036854775808i64, 36) == Ok("-1y2p0ij32e8e8"),
+    Bounds()
+  )
+  failure.check(i64.parse_radix("0", 36) == Ok(0i64), Bounds())
+  failure.check(i64.format_radix(0i64, 36) == Ok("0"), Bounds())
+  failure.check(
+    i64.parse_radix("1Y2P0IJ32E8E7", 36) == Ok(9223372036854775807i64),
+    Bounds()
+  )
+  failure.check(
+    i64.format_radix(9223372036854775807i64, 36) == Ok("1y2p0ij32e8e7"),
+    Bounds()
+  )
+  failure.check(
+    i64.parse_radix("9223372036854775808", 10) == Error(OutOfRange),
+    Bounds()
+  )
+  failure.check(
+    i64.parse_radix("-9223372036854775809", 10) == Error(OutOfRange),
+    Bounds()
+  )
+  failure.check(
+    i128.parse_radix(
+      "-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      2
+    ) == Ok(-170141183460469231731687303715884105728i128),
+    Bounds()
+  )
+  failure.check(
+    i128.format_radix(-170141183460469231731687303715884105728i128, 2) == Ok(
+      "-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    ),
+    Bounds()
+  )
+  failure.check(i128.parse_radix("0", 2) == Ok(0i128), Bounds())
+  failure.check(i128.format_radix(0i128, 2) == Ok("0"), Bounds())
+  failure.check(
+    i128.parse_radix(
+      "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      2
+    ) == Ok(170141183460469231731687303715884105727i128),
+    Bounds()
+  )
+  failure.check(
+    i128.format_radix(170141183460469231731687303715884105727i128, 2) == Ok(
+      "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.parse_radix("-170141183460469231731687303715884105728", 10) == Ok(
+      -170141183460469231731687303715884105728i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.format_radix(-170141183460469231731687303715884105728i128, 10) == Ok(
+      "-170141183460469231731687303715884105728"
+    ),
+    Bounds()
+  )
+  failure.check(i128.parse_radix("0", 10) == Ok(0i128), Bounds())
+  failure.check(i128.format_radix(0i128, 10) == Ok("0"), Bounds())
+  failure.check(
+    i128.parse_radix("170141183460469231731687303715884105727", 10) == Ok(
+      170141183460469231731687303715884105727i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.format_radix(170141183460469231731687303715884105727i128, 10) == Ok(
+      "170141183460469231731687303715884105727"
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.parse_radix("-80000000000000000000000000000000", 16) == Ok(
+      -170141183460469231731687303715884105728i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.format_radix(-170141183460469231731687303715884105728i128, 16) == Ok(
+      "-80000000000000000000000000000000"
+    ),
+    Bounds()
+  )
+  failure.check(i128.parse_radix("0", 16) == Ok(0i128), Bounds())
+  failure.check(i128.format_radix(0i128, 16) == Ok("0"), Bounds())
+  failure.check(
+    i128.parse_radix("7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", 16) == Ok(
+      170141183460469231731687303715884105727i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.format_radix(170141183460469231731687303715884105727i128, 16) == Ok(
+      "7fffffffffffffffffffffffffffffff"
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.parse_radix("-7KSYYIZZKUTUDZBV8AQZTECJK", 36) == Ok(
+      -170141183460469231731687303715884105728i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.format_radix(-170141183460469231731687303715884105728i128, 36) == Ok(
+      "-7ksyyizzkutudzbv8aqztecjk"
+    ),
+    Bounds()
+  )
+  failure.check(i128.parse_radix("0", 36) == Ok(0i128), Bounds())
+  failure.check(i128.format_radix(0i128, 36) == Ok("0"), Bounds())
+  failure.check(
+    i128.parse_radix("7KSYYIZZKUTUDZBV8AQZTECJJ", 36) == Ok(
+      170141183460469231731687303715884105727i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.format_radix(170141183460469231731687303715884105727i128, 36) == Ok(
+      "7ksyyizzkutudzbv8aqztecjj"
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.parse_radix("170141183460469231731687303715884105728", 10) == Error(OutOfRange),
+    Bounds()
+  )
+  failure.check(
+    i128.parse_radix("-170141183460469231731687303715884105729", 10) == Error(
+      OutOfRange
+    ),
+    Bounds()
+  )
+  for radix in 2u8..37u8 {
+    let text = u8.format_radix(255u8, radix)
+    match text {
+      Ok(value) => failure.check(u8.parse_radix(value, radix) == Ok(255u8), Bounds()),
+      Error(_) => failure.check(false, Bounds()),
+    }
+  }
+  let invalid: Array[String] = [
+    "",
+    "+1",
+    "-",
+    " 1",
+    "1 ",
+    "0x10",
+    "1_0",
+    "é",
+    "999999x"
+  ]
+  for text in invalid {
+    failure.check(u8.parse_radix(text, 10) == Error(Invalid), Bounds())
+  }
+  failure.check(u8.parse("999999x") == Error(Invalid), Bounds())
+  failure.check(u8.parse_radix("-1", 10) == Error(Invalid), Bounds())
+  failure.check(i8.parse_radix("-0", 36) == Ok(0i8), Bounds())
+  failure.check(u8.parse_radix("000ff", 16) == Ok(255u8), Bounds())
+  let invalid_radices: Array[u8] = [0u8, 1u8, 37u8, 255u8]
+  for radix in invalid_radices {
+    failure.check(u64.parse_radix("1", radix) == Error(Invalid), Bounds())
+    failure.check(u64.format_radix(1u64, radix) == Error(Invalid), Bounds())
+  }
+  Ok(())
+}

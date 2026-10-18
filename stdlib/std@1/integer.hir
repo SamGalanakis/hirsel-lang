@@ -1,0 +1,198 @@
+// Go internal/strconv/{atoi,itoa}.go radix loops (ebe2feef).
+// Decimal and arbitrary-radix parsing share grammar and overflow handling.
+@noalloc
+pub fn read_radix(text: String, radix: u8, signed: bool, positive_limit: u128, negative_limit: u128) -> Result[(u128, bool), scalar.ParseError] uses {} {
+  if radix < 2 || radix > 36 { return Error(Invalid) }
+  let bytes = core@1/string.as_bytes(text)
+  let length = core@1/bytes.len(bytes)
+  if length == 0 { return Error(Invalid) }
+  let negative = bytes[0] == 45
+  if negative && !signed { return Error(Invalid) }
+  let mut i: u64 = if negative { 1 } else { 0 }
+  if i == length { return Error(Invalid) }
+  let limit = if negative { negative_limit } else { positive_limit }
+  let base: u128 = core@1/int.widen(radix)
+  let cutoff = limit / base
+  let last_digit = limit % base
+  let mut value: u128 = 0
+  let mut overflow: bool = false
+  while i < length {
+    let byte = bytes[i]
+    let digit_byte = if byte >= 48 && byte <= 57 {
+      byte - 48
+    } else if byte >= 65 && byte <= 90 {
+      byte - 65 + 10
+    } else if byte >= 97 && byte <= 122 {
+      byte - 97 + 10
+    } else {
+      return Error(Invalid)
+    }
+    if digit_byte >= radix { return Error(Invalid) }
+    let digit: u128 = core@1/int.widen(digit_byte)
+    if !overflow {
+      if value > cutoff || value == cutoff && digit > last_digit {
+        overflow = true
+      } else {
+        value = value * base + digit
+      }
+    }
+    i += 1
+  }
+  if overflow { Error(OutOfRange) } else { Ok((value, negative)) }
+}
+
+pub fn format_radix(value: u128, negative: bool, radix: u8) -> Result[String, scalar.ParseError] uses {} {
+  if radix < 2 || radix > 36 { return Error(Invalid) }
+  if radix == 10 {
+    let mut decimal: List[u8] = []
+    internal.decimal.append(mut decimal, value, negative)
+    return Ok(internal.decimal.finish(take decimal))
+  }
+  let mut digits: Inline[u8, 129] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+  ]
+  let base: u128 = core@1/int.widen(radix)
+  let mut remaining = value
+  let mut start: u64 = 129
+  let mut more: bool = true
+  while more {
+    start -= 1
+    let digit: u8 = core@1/int.narrow(remaining % base)
+    digits[start] = if digit < 10 { digit + 48 } else { digit - 10 + 97 }
+    remaining /= base
+    more = remaining != 0
+  }
+  if negative { start -= 1; digits[start] = 45 }
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, 129 - start)
+  for i in start..129u64 { core@1/list.push(mut out, digits[i]) }
+  Ok(internal.decimal.finish(take out))
+}

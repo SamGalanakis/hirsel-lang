@@ -1,0 +1,42 @@
+// rule: SEM-1
+// expect: run
+// Rust integer-policy edge vectors: every i8 left operand against eight boundary right operands.
+pub fn main(t: Test) -> Result[(), ()] {
+  let boundaries: Array[i8] = [-128i8, -127i8, -2i8, -1i8, 0i8, 1i8, 126i8, 127i8]
+  for wide in -128i16..-64i16 {
+    let a: i8 = int.narrow(wide)
+    for b in boundaries {
+      let left: i32 = int.widen(a)
+      let right: i32 = int.widen(b)
+      let difference = left - right
+      let product = left * right
+      let expected_sub: Option[i8] = int.try_narrow(difference)
+      let expected_mul: Option[i8] = int.try_narrow(product)
+      failure.check(i8.checked_sub(a, b) == expected_sub, Bounds())
+      failure.check(i8.checked_mul(a, b) == expected_mul, Bounds())
+      let sub_clamped = if difference < -128i32 {
+        -128i32
+      } else if difference > 127i32 {
+        127i32
+      } else {
+        difference
+      }
+      let mul_clamped = if product < -128i32 {
+        -128i32
+      } else if product > 127i32 {
+        127i32
+      } else {
+        product
+      }
+      let saturated_sub: i8 = int.narrow(sub_clamped)
+      let saturated_mul: i8 = int.narrow(mul_clamped)
+      failure.check(i8.saturating_sub(a, b) == saturated_sub, Bounds())
+      failure.check(i8.saturating_mul(a, b) == saturated_mul, Bounds())
+      let wrapped_sub: i8 = int.truncate(difference)
+      let wrapped_mul: i8 = int.truncate(product)
+      failure.check(i8.wrapping_sub(a, b) == wrapped_sub, Bounds())
+      failure.check(i8.wrapping_mul(a, b) == wrapped_mul, Bounds())
+    }
+  }
+  Ok(())
+}

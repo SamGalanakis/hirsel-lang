@@ -166,6 +166,31 @@ exactly `true` or `false`. Integers use decimal `-?[0-9]+`, with a minus only fo
 types; leading zeros are accepted; a plus sign, whitespace, underscores and radix prefixes
 are rejected; unrepresentable values are `OutOfRange`.
 
+Every integer module (`u8`, `u16`, `u32`, `u64`, `u128`, `i8`, `i16`, `i32`,
+`i64`, `i128`) additionally declares the following concrete signatures, where
+`T` below denotes that module's scalar type, rather than a source generic:
+
+```text
+N fn T.checked_sub(a: T, b: T) -> Option[T] uses {}
+N fn T.checked_mul(a: T, b: T) -> Option[T] uses {}
+N fn T.saturating_sub(a: T, b: T) -> T uses {}
+N fn T.saturating_mul(a: T, b: T) -> T uses {}
+N fn T.wrapping_sub(a: T, b: T) -> T uses {}
+N fn T.wrapping_mul(a: T, b: T) -> T uses {}
+N fn T.parse_radix(text: String, radix: u8) -> Result[T, scalar.ParseError] uses {}
+fn T.format_radix(value: T, radix: u8) -> Result[String, scalar.ParseError] uses {}
+```
+
+Checked operations return `None` exactly when the mathematical result is outside
+that type's range. Saturation clamps to its minimum or maximum, according to the
+mathematical result; wrapping computes modulo the type's bit width. These are
+ordinary source kernels, including u128 multiplication without a wider scalar.
+Radices are 2 through 36, with case-insensitive ASCII digits on input and lowercase
+output. Only signed types accept a leading minus. No plus, whitespace, underscore
+or implicit radix prefix is accepted. Invalid radix or grammar yields `Invalid`,
+including invalid syntax following overflowing digits; otherwise overflow yields
+`OutOfRange`. Decimal `parse` delegates to the same kernel with radix 10.
+
 Floats format with the shortest decimal digits that round-trip, ties to even. Fixed
 notation is used for decimal exponents in [-6, 21), and `d[.ddd]e[-]N` otherwise (the
 ECMAScript `Number::toString` thresholds). Whole fixed numbers omit `.0`, negative zero is

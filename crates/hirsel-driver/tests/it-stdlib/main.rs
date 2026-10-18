@@ -7,6 +7,7 @@ mod source_std_cache;
 mod stdlib_graphemes;
 mod stdlib_http;
 mod stdlib_http_wire;
+mod stdlib_integer_policy;
 mod stdlib_iter;
 mod stdlib_json;
 mod stdlib_net;

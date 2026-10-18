@@ -1,0 +1,263 @@
+// rule: SEM-1
+// expect: run
+// Rust int_macros/uint_macros extrema and ownership-free arithmetic vectors.
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(u8.checked_mul(255u8, 1u8) == Some(255u8), Bounds())
+  failure.check(u8.checked_mul(255u8, 2u8) == None, Bounds())
+  failure.check(u8.checked_mul(0u8, 255u8) == Some(0u8), Bounds())
+  failure.check(u8.checked_sub(255u8, 255u8) == Some(0u8), Bounds())
+  failure.check(u8.saturating_mul(255u8, 2u8) == 255u8, Bounds())
+  failure.check(u8.wrapping_mul(255u8, 255u8) == 1u8, Bounds())
+  failure.check(u8.checked_sub(0u8, 1u8) == None, Bounds())
+  failure.check(u8.saturating_sub(0u8, 255u8) == 0u8, Bounds())
+  failure.check(u8.wrapping_sub(0u8, 1u8) == 255u8, Bounds())
+  failure.check(u16.checked_mul(65535u16, 1u16) == Some(65535u16), Bounds())
+  failure.check(u16.checked_mul(65535u16, 2u16) == None, Bounds())
+  failure.check(u16.checked_mul(0u16, 65535u16) == Some(0u16), Bounds())
+  failure.check(u16.checked_sub(65535u16, 65535u16) == Some(0u16), Bounds())
+  failure.check(u16.saturating_mul(65535u16, 2u16) == 65535u16, Bounds())
+  failure.check(u16.wrapping_mul(65535u16, 65535u16) == 1u16, Bounds())
+  failure.check(u16.checked_sub(0u16, 1u16) == None, Bounds())
+  failure.check(u16.saturating_sub(0u16, 65535u16) == 0u16, Bounds())
+  failure.check(u16.wrapping_sub(0u16, 1u16) == 65535u16, Bounds())
+  failure.check(u32.checked_mul(4294967295u32, 1u32) == Some(4294967295u32), Bounds())
+  failure.check(u32.checked_mul(4294967295u32, 2u32) == None, Bounds())
+  failure.check(u32.checked_mul(0u32, 4294967295u32) == Some(0u32), Bounds())
+  failure.check(u32.checked_sub(4294967295u32, 4294967295u32) == Some(0u32), Bounds())
+  failure.check(u32.saturating_mul(4294967295u32, 2u32) == 4294967295u32, Bounds())
+  failure.check(u32.wrapping_mul(4294967295u32, 4294967295u32) == 1u32, Bounds())
+  failure.check(u32.checked_sub(0u32, 1u32) == None, Bounds())
+  failure.check(u32.saturating_sub(0u32, 4294967295u32) == 0u32, Bounds())
+  failure.check(u32.wrapping_sub(0u32, 1u32) == 4294967295u32, Bounds())
+  failure.check(
+    u64.checked_mul(18446744073709551615u64, 1u64) == Some(18446744073709551615u64),
+    Bounds()
+  )
+  failure.check(u64.checked_mul(18446744073709551615u64, 2u64) == None, Bounds())
+  failure.check(u64.checked_mul(0u64, 18446744073709551615u64) == Some(0u64), Bounds())
+  failure.check(
+    u64.checked_sub(18446744073709551615u64, 18446744073709551615u64) == Some(0u64),
+    Bounds()
+  )
+  failure.check(
+    u64.saturating_mul(18446744073709551615u64, 2u64) == 18446744073709551615u64,
+    Bounds()
+  )
+  failure.check(
+    u64.wrapping_mul(18446744073709551615u64, 18446744073709551615u64) == 1u64,
+    Bounds()
+  )
+  failure.check(u64.checked_sub(0u64, 1u64) == None, Bounds())
+  failure.check(u64.saturating_sub(0u64, 18446744073709551615u64) == 0u64, Bounds())
+  failure.check(u64.wrapping_sub(0u64, 1u64) == 18446744073709551615u64, Bounds())
+  failure.check(
+    u128.checked_mul(340282366920938463463374607431768211455u128, 1u128) == Some(
+      340282366920938463463374607431768211455u128
+    ),
+    Bounds()
+  )
+  failure.check(
+    u128.checked_mul(340282366920938463463374607431768211455u128, 2u128) == None,
+    Bounds()
+  )
+  failure.check(
+    u128.checked_mul(0u128, 340282366920938463463374607431768211455u128) == Some(0u128),
+    Bounds()
+  )
+  failure.check(
+    u128.checked_sub(
+      340282366920938463463374607431768211455u128,
+      340282366920938463463374607431768211455u128
+    ) == Some(0u128),
+    Bounds()
+  )
+  failure.check(
+    u128.saturating_mul(340282366920938463463374607431768211455u128, 2u128) == 340282366920938463463374607431768211455u128,
+    Bounds()
+  )
+  failure.check(
+    u128.wrapping_mul(
+      340282366920938463463374607431768211455u128,
+      340282366920938463463374607431768211455u128
+    ) == 1u128,
+    Bounds()
+  )
+  failure.check(u128.checked_sub(0u128, 1u128) == None, Bounds())
+  failure.check(
+    u128.saturating_sub(0u128, 340282366920938463463374607431768211455u128) == 0u128,
+    Bounds()
+  )
+  failure.check(
+    u128.wrapping_sub(0u128, 1u128) == 340282366920938463463374607431768211455u128,
+    Bounds()
+  )
+  failure.check(i8.checked_mul(127i8, 1i8) == Some(127i8), Bounds())
+  failure.check(i8.checked_mul(127i8, 2i8) == None, Bounds())
+  failure.check(i8.checked_mul(0i8, 127i8) == Some(0i8), Bounds())
+  failure.check(i8.checked_sub(127i8, 127i8) == Some(0i8), Bounds())
+  failure.check(i8.saturating_mul(127i8, 2i8) == 127i8, Bounds())
+  failure.check(i8.wrapping_mul(127i8, 127i8) == 1i8, Bounds())
+  failure.check(i8.checked_mul(-128i8, -1i8) == None, Bounds())
+  failure.check(i8.checked_mul(-128i8, 1i8) == Some(-128i8), Bounds())
+  failure.check(i8.checked_mul(-64i8, 2i8) == Some(-128i8), Bounds())
+  failure.check(i8.saturating_mul(-128i8, -1i8) == 127i8, Bounds())
+  failure.check(i8.saturating_mul(-128i8, 2i8) == -128i8, Bounds())
+  failure.check(i8.saturating_sub(-128i8, 1i8) == -128i8, Bounds())
+  failure.check(i8.saturating_sub(127i8, -1i8) == 127i8, Bounds())
+  failure.check(i8.wrapping_sub(127i8, -1i8) == -128i8, Bounds())
+  failure.check(i8.wrapping_mul(-128i8, -1i8) == -128i8, Bounds())
+  failure.check(i16.checked_mul(32767i16, 1i16) == Some(32767i16), Bounds())
+  failure.check(i16.checked_mul(32767i16, 2i16) == None, Bounds())
+  failure.check(i16.checked_mul(0i16, 32767i16) == Some(0i16), Bounds())
+  failure.check(i16.checked_sub(32767i16, 32767i16) == Some(0i16), Bounds())
+  failure.check(i16.saturating_mul(32767i16, 2i16) == 32767i16, Bounds())
+  failure.check(i16.wrapping_mul(32767i16, 32767i16) == 1i16, Bounds())
+  failure.check(i16.checked_mul(-32768i16, -1i16) == None, Bounds())
+  failure.check(i16.checked_mul(-32768i16, 1i16) == Some(-32768i16), Bounds())
+  failure.check(i16.checked_mul(-16384i16, 2i16) == Some(-32768i16), Bounds())
+  failure.check(i16.saturating_mul(-32768i16, -1i16) == 32767i16, Bounds())
+  failure.check(i16.saturating_mul(-32768i16, 2i16) == -32768i16, Bounds())
+  failure.check(i16.saturating_sub(-32768i16, 1i16) == -32768i16, Bounds())
+  failure.check(i16.saturating_sub(32767i16, -1i16) == 32767i16, Bounds())
+  failure.check(i16.wrapping_sub(32767i16, -1i16) == -32768i16, Bounds())
+  failure.check(i16.wrapping_mul(-32768i16, -1i16) == -32768i16, Bounds())
+  failure.check(i32.checked_mul(2147483647i32, 1i32) == Some(2147483647i32), Bounds())
+  failure.check(i32.checked_mul(2147483647i32, 2i32) == None, Bounds())
+  failure.check(i32.checked_mul(0i32, 2147483647i32) == Some(0i32), Bounds())
+  failure.check(i32.checked_sub(2147483647i32, 2147483647i32) == Some(0i32), Bounds())
+  failure.check(i32.saturating_mul(2147483647i32, 2i32) == 2147483647i32, Bounds())
+  failure.check(i32.wrapping_mul(2147483647i32, 2147483647i32) == 1i32, Bounds())
+  failure.check(i32.checked_mul(-2147483648i32, -1i32) == None, Bounds())
+  failure.check(i32.checked_mul(-2147483648i32, 1i32) == Some(-2147483648i32), Bounds())
+  failure.check(i32.checked_mul(-1073741824i32, 2i32) == Some(-2147483648i32), Bounds())
+  failure.check(i32.saturating_mul(-2147483648i32, -1i32) == 2147483647i32, Bounds())
+  failure.check(i32.saturating_mul(-2147483648i32, 2i32) == -2147483648i32, Bounds())
+  failure.check(i32.saturating_sub(-2147483648i32, 1i32) == -2147483648i32, Bounds())
+  failure.check(i32.saturating_sub(2147483647i32, -1i32) == 2147483647i32, Bounds())
+  failure.check(i32.wrapping_sub(2147483647i32, -1i32) == -2147483648i32, Bounds())
+  failure.check(i32.wrapping_mul(-2147483648i32, -1i32) == -2147483648i32, Bounds())
+  failure.check(
+    i64.checked_mul(9223372036854775807i64, 1i64) == Some(9223372036854775807i64),
+    Bounds()
+  )
+  failure.check(i64.checked_mul(9223372036854775807i64, 2i64) == None, Bounds())
+  failure.check(i64.checked_mul(0i64, 9223372036854775807i64) == Some(0i64), Bounds())
+  failure.check(
+    i64.checked_sub(9223372036854775807i64, 9223372036854775807i64) == Some(0i64),
+    Bounds()
+  )
+  failure.check(
+    i64.saturating_mul(9223372036854775807i64, 2i64) == 9223372036854775807i64,
+    Bounds()
+  )
+  failure.check(
+    i64.wrapping_mul(9223372036854775807i64, 9223372036854775807i64) == 1i64,
+    Bounds()
+  )
+  failure.check(i64.checked_mul(-9223372036854775808i64, -1i64) == None, Bounds())
+  failure.check(
+    i64.checked_mul(-9223372036854775808i64, 1i64) == Some(-9223372036854775808i64),
+    Bounds()
+  )
+  failure.check(
+    i64.checked_mul(-4611686018427387904i64, 2i64) == Some(-9223372036854775808i64),
+    Bounds()
+  )
+  failure.check(
+    i64.saturating_mul(-9223372036854775808i64, -1i64) == 9223372036854775807i64,
+    Bounds()
+  )
+  failure.check(
+    i64.saturating_mul(-9223372036854775808i64, 2i64) == -9223372036854775808i64,
+    Bounds()
+  )
+  failure.check(
+    i64.saturating_sub(-9223372036854775808i64, 1i64) == -9223372036854775808i64,
+    Bounds()
+  )
+  failure.check(
+    i64.saturating_sub(9223372036854775807i64, -1i64) == 9223372036854775807i64,
+    Bounds()
+  )
+  failure.check(
+    i64.wrapping_sub(9223372036854775807i64, -1i64) == -9223372036854775808i64,
+    Bounds()
+  )
+  failure.check(
+    i64.wrapping_mul(-9223372036854775808i64, -1i64) == -9223372036854775808i64,
+    Bounds()
+  )
+  failure.check(
+    i128.checked_mul(170141183460469231731687303715884105727i128, 1i128) == Some(
+      170141183460469231731687303715884105727i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.checked_mul(170141183460469231731687303715884105727i128, 2i128) == None,
+    Bounds()
+  )
+  failure.check(
+    i128.checked_mul(0i128, 170141183460469231731687303715884105727i128) == Some(0i128),
+    Bounds()
+  )
+  failure.check(
+    i128.checked_sub(
+      170141183460469231731687303715884105727i128,
+      170141183460469231731687303715884105727i128
+    ) == Some(0i128),
+    Bounds()
+  )
+  failure.check(
+    i128.saturating_mul(170141183460469231731687303715884105727i128, 2i128) == 170141183460469231731687303715884105727i128,
+    Bounds()
+  )
+  failure.check(
+    i128.wrapping_mul(
+      170141183460469231731687303715884105727i128,
+      170141183460469231731687303715884105727i128
+    ) == 1i128,
+    Bounds()
+  )
+  failure.check(
+    i128.checked_mul(-170141183460469231731687303715884105728i128, -1i128) == None,
+    Bounds()
+  )
+  failure.check(
+    i128.checked_mul(-170141183460469231731687303715884105728i128, 1i128) == Some(
+      -170141183460469231731687303715884105728i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.checked_mul(-85070591730234615865843651857942052864i128, 2i128) == Some(
+      -170141183460469231731687303715884105728i128
+    ),
+    Bounds()
+  )
+  failure.check(
+    i128.saturating_mul(-170141183460469231731687303715884105728i128, -1i128) == 170141183460469231731687303715884105727i128,
+    Bounds()
+  )
+  failure.check(
+    i128.saturating_mul(-170141183460469231731687303715884105728i128, 2i128) == -170141183460469231731687303715884105728i128,
+    Bounds()
+  )
+  failure.check(
+    i128.saturating_sub(-170141183460469231731687303715884105728i128, 1i128) == -170141183460469231731687303715884105728i128,
+    Bounds()
+  )
+  failure.check(
+    i128.saturating_sub(170141183460469231731687303715884105727i128, -1i128) == 170141183460469231731687303715884105727i128,
+    Bounds()
+  )
+  failure.check(
+    i128.wrapping_sub(170141183460469231731687303715884105727i128, -1i128) == -170141183460469231731687303715884105728i128,
+    Bounds()
+  )
+  failure.check(
+    i128.wrapping_mul(-170141183460469231731687303715884105728i128, -1i128) == -170141183460469231731687303715884105728i128,
+    Bounds()
+  )
+  Ok(())
+}
