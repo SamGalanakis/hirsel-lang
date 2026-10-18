@@ -567,6 +567,47 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "mut r: Receiver[T], mut message: Option[List[T]]",
             "u32",
         ),
+        // A Mutex or Atomic holds its pointer-free payload as the `Some` image of an
+        // `Option` of `size` bytes, which the runtime copies (CONC-4, CONC-5, FAIL-4).
+        (
+            "T",
+            "$intrinsic.MutexCreate",
+            "value: Option[T], size: u64",
+            "Mutex[T]",
+        ),
+        // 0: the payload moved into `slot`; 1: the mutex is dead.
+        (
+            "T",
+            "$intrinsic.MutexTake",
+            "m: Mutex[T], mut slot: Option[T], size: u64",
+            "u32",
+        ),
+        (
+            "T",
+            "$intrinsic.MutexPut",
+            "m: Mutex[T], value: Option[T], size: u64",
+            "()",
+        ),
+        ("T", "$intrinsic.MutexKill", "m: Mutex[T]", "()"),
+        ("T", "$intrinsic.MutexCause", "m: Mutex[T]", "()"),
+        (
+            "A",
+            "$intrinsic.AtomicCreate",
+            "value: Option[A], size: u64",
+            "Atomic[A]",
+        ),
+        (
+            "A",
+            "$intrinsic.AtomicLoad",
+            "a: Atomic[A], mut slot: Option[A], size: u64",
+            "()",
+        ),
+        (
+            "A",
+            "$intrinsic.AtomicStore",
+            "a: Atomic[A], value: Option[A], size: u64",
+            "()",
+        ),
     ] {
         let mut b = Builder::new(generics).with_declarations(&out);
         let f = b.function(params, result, false);

@@ -348,6 +348,9 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
 root, a send and a receive move it out of and into the bodies' `Option` slots, and the last
 receiver's close drops the messages nobody received, oldest first.
 
+`exec/sync.rs` is the runtime's mutex and atomic cells: each holds its payload's `Some` image,
+and a dead mutex keeps the failure chain of the body that killed it.
+
 `exec/views.rs` marshals Unicode cursor operations to `Operations` as slice bytes
 and relative positions, retaining the original checked owner and borrow. Open
 writes an uncounted view; next installs its exclusive position update and returns

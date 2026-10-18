@@ -109,7 +109,11 @@ pub(super) fn intrinsic(
 }
 
 /// The type of parameter `ordinal` of a `Function` row.
-fn parameter(store: &hirsel_types::TypeStore, callable: TypeId, ordinal: usize) -> R<TypeId> {
+pub(super) fn parameter(
+    store: &hirsel_types::TypeStore,
+    callable: TypeId,
+    ordinal: usize,
+) -> R<TypeId> {
     match store.get(callable).map(|t| &t.kind) {
         Some(TypeKind::Function(f)) if f.parameters.len() > ordinal => Ok(f.parameters[ordinal].ty),
         _ => Err(PassError::Malformed(format!(

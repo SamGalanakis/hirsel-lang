@@ -43,3 +43,5 @@ conformance/SER/SER-2-vectors-run.hir
 conformance/CONC/CONC-6-buffer-drains.hir
 conformance/CONC/CONC-6-receiver-child-capture.hir
 conformance/CONC/CONC-8-two-task-channel-run.hir
+conformance/CONC/CONC-5-inert-capture-and-update.hir
+conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir

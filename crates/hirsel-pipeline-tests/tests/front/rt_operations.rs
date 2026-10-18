@@ -195,6 +195,11 @@ fn inventory_set_equality_and_digest_control() {
         "task.await",
         "channel.send",
         "channel.receive",
+        "mutex.create",
+        "mutex.with",
+        "atomic.create",
+        "atomic.load",
+        "atomic.store",
     ] {
         assert_eq!(
             native
@@ -206,7 +211,7 @@ fn inventory_set_equality_and_digest_control() {
             Disposition::Body
         );
     }
-    for name in ["task.isolate", "mutex.with", "atomic.load"] {
+    for name in ["task.isolate", "task.check_canceled"] {
         assert!(matches!(
             native
                 .rows()

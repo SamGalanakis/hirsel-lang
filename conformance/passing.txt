@@ -418,10 +418,12 @@ conformance/CONC/CONC-2-unconsumed-handle-ok.hir
 conformance/CONC/CONC-3-canceled-pure-child.hir
 conformance/CONC/CONC-3-child-local-scope.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
+conformance/CONC/CONC-4-sequential-atomic-order.hir
 conformance/CONC/CONC-5-channel-in-body-bad.hir
 conformance/CONC/CONC-5-channel-in-body-ok.hir
 conformance/CONC/CONC-5-create-unique-payload-bad.hir
 conformance/CONC/CONC-5-create-unique-payload-ok.hir
+conformance/CONC/CONC-5-inert-capture-and-update.hir
 conformance/CONC/CONC-5-io-in-body-bad.hir
 conformance/CONC/CONC-5-io-in-body-ok.hir
 conformance/CONC/CONC-5-match-inner-receipt-bad.hir
@@ -718,6 +720,8 @@ conformance/FAIL/FAIL-3-map-displaced-finalizer.hir
 conformance/FAIL/FAIL-3-mapped-iterator-callback-mut-state-bad.hir
 conformance/FAIL/FAIL-3-mapped-iterator-callback-mut-state-ok.hir
 conformance/FAIL/FAIL-3-sorted-insert-taken-callback.hir
+conformance/FAIL/FAIL-4-mutex-body-failure.hir
+conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir
 conformance/GEN/GEN-1-borrowed-root-comparison-bad.hir
 conformance/GEN/GEN-1-borrowed-root-comparison-ok.hir
 conformance/GEN/GEN-1-borrowed-root-comparison-run.hir

@@ -31,6 +31,7 @@ mod fork;
 pub(crate) use fork::campaign as fork_campaign;
 mod channels;
 mod holders;
+mod sync;
 mod tasks;
 mod vector;
 mod versions;

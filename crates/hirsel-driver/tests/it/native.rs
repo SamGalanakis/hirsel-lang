@@ -319,7 +319,7 @@ fn a_native_gap_is_a_tool_outcome_not_a_source_verdict() {
         assert_eq!(grant.reference.exit_code, Some(0));
         assert!(build(&grant.validated, &Options::new(x86())).is_ok());
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine.sources.add("unavailable.hir", "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let counter: Atomic[u8] = atomic.create(tasks, 7u8); Ok(()) }".into()).unwrap();
+        let file = engine.sources.add("unavailable.hir", "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let tasks = io.tasks(rt)?; let store: Mutex[String] = mutex.create(tasks, \"x\"); Ok(()) }".into()).unwrap();
         let progress = check_progress(&mut engine, file, &default_context()).unwrap();
         assert!(progress.diagnostics.is_empty());
         assert_eq!(
@@ -329,7 +329,7 @@ fn a_native_gap_is_a_tool_outcome_not_a_source_verdict() {
         let input = engine.export_native_input().unwrap();
         let input = engine.import_native_input(input).unwrap();
         let Err(error) = build(&input, &Options::new(x86())) else {
-            panic!("atomic.create requires the native Atomic implementation")
+            panic!("a Mutex of a String requires the native M2 Mutex")
         };
         assert!(
             (StageName::Import..=StageName::Ready).contains(&error.stage),
@@ -384,8 +384,8 @@ fn every_runtime_primitive_row_matches_its_export() {
             }
         }
         assert_eq!(
-            primitives, 89,
-            "Io, Args, Env, Test, host streams, text, scalar/position cursors, network streams and listeners, processes, and the task and channel runtime entries"
+            primitives, 97,
+            "Io, Args, Env, Test, host streams, text, scalar/position cursors, network streams and listeners, processes, and the task, channel, mutex and atomic runtime entries"
         );
         // Calls of each, with each float family, on both targets.
         let calls = checked(

@@ -146,6 +146,17 @@ uint8_t hirsel_rt_v2_channel_open(hirsel_rt_v2_ctx*, void*, uint64_t*, const uin
 uint8_t hirsel_rt_v2_sender_dup(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_channel_send(hirsel_rt_v2_ctx*, uint32_t*, uint64_t*, hirsel_rt_v2_header**);
 uint8_t hirsel_rt_v2_channel_receive(hirsel_rt_v2_ctx*, uint32_t*, uint64_t*, hirsel_rt_v2_header**);
+/* Mutexes and atomics (CONC-4, CONC-5, FAIL-4). Mutex and Atomic are run-local handle words;
+   a pointer-free payload crosses as the Some image of an Option of `size` bytes. MutexTake's
+   status is 0 acquired, 1 dead. */
+uint8_t hirsel_rt_v2_mutex_create(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint8_t*, uint64_t);
+uint8_t hirsel_rt_v2_mutex_take(hirsel_rt_v2_ctx*, uint32_t*, const uint64_t*, uint8_t*, uint64_t);
+uint8_t hirsel_rt_v2_mutex_put(hirsel_rt_v2_ctx*, const uint64_t*, const uint8_t*, uint64_t);
+uint8_t hirsel_rt_v2_mutex_kill(hirsel_rt_v2_ctx*, const uint64_t*);
+uint8_t hirsel_rt_v2_mutex_cause(hirsel_rt_v2_ctx*, const uint64_t*);
+uint8_t hirsel_rt_v2_atomic_create(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint8_t*, uint64_t);
+uint8_t hirsel_rt_v2_atomic_load(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t*, uint64_t);
+uint8_t hirsel_rt_v2_atomic_store(hirsel_rt_v2_ctx*, const uint64_t*, const uint8_t*, uint64_t);
 #ifdef __cplusplus
 }
 #endif

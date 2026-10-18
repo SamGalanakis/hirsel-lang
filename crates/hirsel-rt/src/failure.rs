@@ -58,6 +58,17 @@ impl FailureState {
             .collect()
     }
 
+    /// The whole chain in order, each record's own failures attributed to `own`; the state is
+    /// kept (FAIL-4: a dead mutex keeps the chain of the body that killed it).
+    pub(crate) fn chain(&self, own: &[u32]) -> Vec<Chained> {
+        self.primary
+            .iter()
+            .chain(&self.causes)
+            .zip(&self.spawns)
+            .map(|(record, spawn)| (*record, spawn.clone().unwrap_or_else(|| own.to_vec())))
+            .collect()
+    }
+
     /// Continue the chain with a joined child's failures, in their order.
     pub(crate) fn append_chain(&mut self, chain: Vec<Chained>) {
         for (record, spawn) in chain {

@@ -1324,12 +1324,15 @@ fn incomplete_and_foreign_types_are_named() {
         b.layout(&t.store, c),
         Err(LayoutError::Unavailable { issue: Some(6), .. })
     ));
-    let u8_ = t.p(Primitive::U8);
-    let mutex = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(u8_)]);
+    // A Mutex holds a pointer-free payload natively (CONC-4); one with pointers is M2.
+    let text = t.p(Primitive::String);
+    let mutex = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(text)]);
     match b.layout(&t.store, mutex) {
         Err(LayoutError::Unavailable { issue: None, .. }) => {}
         other => panic!("Mutex: {other:?}"),
     }
+    let u8_ = t.p(Primitive::U8);
+    let plain = t.builtin(BuiltinType::Mutex, vec![GenericArgument::Type(u8_)]);
     let free = t.param(0);
     assert_eq!(b.layout(&t.store, free), Err(LayoutError::Incomplete));
     let missing = t.named(&path("Nowhere"), vec![]);
@@ -1340,6 +1343,11 @@ fn incomplete_and_foreign_types_are_named() {
     // Failed requests leave no partial records behind.
     let table = checked(b);
     assert!(table.layouts.len() <= 2, "{} records", table.layouts.len());
+    assert!(
+        LayoutBuilder::new(&x86(), &owners)
+            .layout(&t.store, plain)
+            .is_ok()
+    );
     // Raw and callback pointers are pointer scalars (PROG-4).
     let mut b = LayoutBuilder::new(&x86(), &owners);
     for kind in [BuiltinType::Ptr, BuiltinType::FnPtr] {

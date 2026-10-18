@@ -27,6 +27,7 @@ pub mod owners;
 pub mod shared;
 pub mod slots;
 pub mod sorted;
+pub mod sync;
 pub mod tasks;
 pub mod value;
 pub mod views;
@@ -125,6 +126,11 @@ pub const BODIES: &[&LibraryBody] = &[
     &tasks::MAIN,
     &channels::SEND,
     &channels::RECEIVE,
+    &sync::MUTEX_CREATE,
+    &sync::MUTEX_WITH,
+    &sync::ATOMIC_CREATE,
+    &sync::ATOMIC_LOAD,
+    &sync::ATOMIC_STORE,
     // value: an operation used as a function value.
     &value::FORWARD,
     // views (lib-views): none; its cursor protocols are runtime primitives.
@@ -196,7 +202,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 13;
+pub const REVISION: u32 = 14;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

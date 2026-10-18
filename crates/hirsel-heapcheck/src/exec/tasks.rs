@@ -83,7 +83,7 @@ pub(super) struct Task {
     unanchored: std::collections::BTreeSet<usize>,
     state: State,
     scope: Option<u32>,
-    path: Vec<u32>,
+    pub(super) path: Vec<u32>,
     spawned: u32,
     canceled: Option<u32>,
     scopes: Vec<u32>,
@@ -152,6 +152,7 @@ pub(super) struct Tasks {
     /// Parked tasks, in park order.
     parked: Vec<u32>,
     pub(super) channels: super::channels::Channels,
+    pub(super) sync: super::sync::Synchronizers,
     /// The switch the running operation requested, and whether the running
     /// task completed (its stack is not kept).
     switch: Option<(u32, bool)>,
@@ -188,6 +189,14 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         "sender.dup",
         "$intrinsic.ChannelSend",
         "$intrinsic.ChannelReceive",
+        "$intrinsic.MutexCreate",
+        "$intrinsic.MutexTake",
+        "$intrinsic.MutexPut",
+        "$intrinsic.MutexKill",
+        "$intrinsic.MutexCause",
+        "$intrinsic.AtomicCreate",
+        "$intrinsic.AtomicLoad",
+        "$intrinsic.AtomicStore",
     ]
     .into_iter()
     .find(|n| *n == name)
@@ -203,6 +212,7 @@ impl Tasks {
             runnable: VecDeque::new(),
             parked: Vec::new(),
             channels: Default::default(),
+            sync: Default::default(),
             switch: None,
             spawns: Vec::new(),
         }
@@ -438,8 +448,20 @@ impl<S: Stage> Machine<'_, S> {
             .collect()
     }
 
+    /// The running task's failures, as [`Self::take_chain`] gives them, kept (FAIL-4: a dead
+    /// mutex keeps the chain of the body that killed it).
+    pub(super) fn chain(&mut self, own: &[u32]) -> Vec<(ObservedFailure, Vec<u32>)> {
+        let failures = self.failures.clone();
+        let spawns = self.scheduler().task_spawns().clone();
+        failures
+            .into_iter()
+            .zip(spawns.into_iter().chain(std::iter::repeat(None)))
+            .map(|(f, spawn)| (f, spawn.unwrap_or_else(|| own.to_vec())))
+            .collect()
+    }
+
     /// Continue the running task's chain with a child's (a join).
-    fn append_chain(&mut self, chain: Vec<(ObservedFailure, Vec<u32>)>) {
+    pub(super) fn append_chain(&mut self, chain: Vec<(ObservedFailure, Vec<u32>)>) {
         for (failure, spawn) in chain {
             let len = self.failures.len();
             let spawns = self.scheduler().task_spawns();
@@ -489,6 +511,11 @@ impl<S: Stage> Machine<'_, S> {
             | "$intrinsic.ChannelSend"
             | "$intrinsic.ChannelReceive" => {
                 self.channel_operation(f, site, name, &arguments, normal)
+            }
+            name if name.starts_with("$intrinsic.Mutex")
+                || name.starts_with("$intrinsic.Atomic") =>
+            {
+                self.sync_operation(f, site, name, &arguments, normal)
             }
             "$intrinsic.TaskScopeEnter" => {
                 let s = self.scheduler();

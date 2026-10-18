@@ -384,6 +384,13 @@ it completes, or at the detach if it already has; only live children keep scope 
   reaches the scheduler instead of the Io adapter, and the last receiver's close releases the
   messages nobody received, oldest first.
 
+`sync.rs` is the run's mutex and atomic cells (CONC-4, CONC-5, FAIL-4), behind the compiled
+bodies of `mutex.create`, `mutex.with` and `atomic.*`. A cell holds its payload as the `Some`
+image of an `Option`, which the runtime copies: the layout of `Mutex[T]` requires a pointer-free
+payload with no drop (others stay M2), and an atomic's payload is a scalar. A mutex body may not
+yield, so no task observes a mutex another holds. A failing body kills its mutex, which keeps the
+failure chain; a later `mutex.with` fails FAIL-4 continued by that chain.
+
 ## Launch and the Hirsel-ABI Io entries
 
 `hirsel_rt_v2_launch(entry, result_size, layouts, layout_count, config)` (`src/launch.rs`) binds

@@ -54,6 +54,7 @@ mod memcheck;
 pub mod region;
 pub mod release;
 pub mod shared;
+mod sync;
 pub mod tasks;
 
 pub use alloc::{

@@ -173,6 +173,7 @@ pub(crate) struct Scheduler {
     /// Parked tasks, in park order.
     parked: Vec<u32>,
     pub(crate) channels: crate::channels::Channels,
+    sync: crate::sync::Synchronizers,
     idle_stacks: Vec<Stack>,
     /// The stack of a task that completed; the next task to run recycles it.
     retired: Option<Stack>,
@@ -1068,4 +1069,168 @@ pub(crate) unsafe fn close_endpoint(ctx: *mut RunCtx, word: u64, anchor: u64) ->
         };
     }
     status
+}
+
+/// `$intrinsic.MutexCreate[T](value, size)` (CONC-5): a mutex holding the `Some` image `value`.
+///
+/// # Safety
+/// `ctx` is live, `out` writable and `value` readable for `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    value: *const u8,
+    size: u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(scheduler(ctx).sync.create(value, size));
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `$intrinsic.MutexTake[T](m, mut slot, size)`: move the payload's image into the `None` slot
+/// (status 0), or report the mutex dead (status 1). Acquiring is not a yield.
+///
+/// # Safety
+/// `ctx` is live, `out` writable, `m` a Mutex word and `slot` writable for `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
+    ctx: *mut RunCtx,
+    out: *mut u32,
+    m: *const u64,
+    slot: *mut u8,
+    size: u64,
+) -> u8 {
+    let sync = &mut scheduler(ctx).sync;
+    // SAFETY: caller contract.
+    let word = unsafe { m.read() };
+    let status = if sync.dead(word).is_some() {
+        1
+    } else {
+        // SAFETY: caller contract.
+        unsafe { sync.read(word, slot, size, true) };
+        0
+    };
+    // SAFETY: caller contract.
+    unsafe { out.write(status) };
+    STATUS_OK
+}
+
+/// `$intrinsic.MutexPut[T](m, value, size)`: the body returned; its payload's image goes back,
+/// and the operation yields.
+///
+/// # Safety
+/// `ctx` is live, `m` a Mutex word and `value` readable for `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
+    ctx: *mut RunCtx,
+    m: *const u64,
+    value: *const u8,
+    size: u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        scheduler(ctx).sync.write(m.read(), value, size);
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `$intrinsic.MutexKill[T](m)` (FAIL-4): the body failed; the mutex keeps the failure chain,
+/// and the operation yields.
+///
+/// # Safety
+/// `ctx` is live, its failure active, and `m` a Mutex word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut RunCtx, m: *const u64) -> u8 {
+    let s = scheduler(ctx);
+    let current = s.current;
+    let path = s.task(current).path.clone();
+    // SAFETY: the context is live.
+    let chain = unsafe { (*ctx).failure.chain(&path) };
+    // SAFETY: caller contract.
+    unsafe {
+        scheduler(ctx).sync.kill(m.read(), chain);
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `$intrinsic.MutexCause[T](m)` (FAIL-4): continue the running task's failure, a dead mutex's
+/// acquisition, with the chain that killed it.
+///
+/// # Safety
+/// `ctx` is live and `m` a dead Mutex's word.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut RunCtx, m: *const u64) -> u8 {
+    // SAFETY: caller contract.
+    let chain = scheduler(ctx)
+        .sync
+        .dead(unsafe { m.read() })
+        .cloned()
+        .unwrap_or_else(|| fault("the cause of a mutex that is not dead"));
+    // SAFETY: the context is live.
+    unsafe { (*ctx).failure.append_chain(chain) };
+    STATUS_OK
+}
+
+/// `$intrinsic.AtomicCreate[A](value, size)` (CONC-4): an atomic holding the `Some` image.
+///
+/// # Safety
+/// `ctx` is live, `out` writable and `value` readable for `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
+    ctx: *mut RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    value: *const u8,
+    size: u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        out.write(scheduler(ctx).sync.create(value, size));
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `$intrinsic.AtomicLoad[A](a, mut slot, size)`: copy the atomic's image into the `None` slot.
+///
+/// # Safety
+/// `ctx` is live, `a` an Atomic word and `slot` writable for `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
+    ctx: *mut RunCtx,
+    a: *const u64,
+    slot: *mut u8,
+    size: u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        scheduler(ctx).sync.read(a.read(), slot, size, false);
+        yield_now(ctx);
+    }
+    STATUS_OK
+}
+
+/// `$intrinsic.AtomicStore[A](a, value, size)`: replace the atomic's image.
+///
+/// # Safety
+/// `ctx` is live, `a` an Atomic word and `value` readable for `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
+    ctx: *mut RunCtx,
+    a: *const u64,
+    value: *const u8,
+    size: u64,
+) -> u8 {
+    // SAFETY: caller contract.
+    unsafe {
+        scheduler(ctx).sync.write(a.read(), value, size);
+        yield_now(ctx);
+    }
+    STATUS_OK
 }

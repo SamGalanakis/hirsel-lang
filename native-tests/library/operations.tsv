@@ -2,6 +2,9 @@ copy_to	5311d8cb4bda2f9532931752d1e98cc3d6098dd2c3d3ab143d2ba765de1c95c5	0:b:n;1
 forget	c592913d30391818bea47b8d61f0e41a7f33967532702d30495fba395aa29e63	0:t:[0]->n
 $intrinsic.ArrayConsume_next	0c31dea92588ea31ba3c947525c9f4b6e2c73156e9f9b7d65287d56c37179372	0:m:[0]->[0]
 $intrinsic.ArrayConsume_open	1b987d85c85e27fe9d8362789231f306f9097baad73b9c1587c208b546289796	0:t:[0]->[0]
+$intrinsic.AtomicCreate	2646522c78f9a09942dbda438b8da72cf8c08c3fad251adab98c7582c8e074ae	0:b:[0];1:b:n->n
+$intrinsic.AtomicLoad	3f8a4ccd7c8a4f280d4640bf5c52cf04e23408be93ec986076f69f5dda7f2f17	0:b:n;1:m:[0];2:b:n->n
+$intrinsic.AtomicStore	f858b771230a94639c5bfd07b24b8c3f0af9333ede6e61cd14b38d38f6944132	0:b:n;1:b:[0];2:b:n->n
 $intrinsic.ChannelReceive	c6d2465b96654ce7529941af2be2f0216af06fdeeced89f7928fa115b5bcdcbf	0:m:[0];1:m:[0]->n
 $intrinsic.ChannelSend	0100e4489ee541da7fb0d8e89442401c506457b91673f1cf81e14dac915751b0	0:m:[0];1:m:[0]->n
 $intrinsic.InlineConsume_next	295cc2383b56d67815e4768ac2a2d51d537bad65f84b1329a5568a4da6bb0ebc	0:m:[0]->[0]
@@ -11,6 +14,11 @@ $intrinsic.ListConsume_open	f260a290764cdc1e54b78e0bd009ed693e1ecd0624b12920d3b5
 $intrinsic.MapInsertionOrder_len	287310b501ed67cdb79eea3cb00455fec483d53ac60f9c29a2608866b7e658c4	0:b:[0,1]->n
 $intrinsic.MapInsertionOrder_next	f3cc2eab7ed6da351db2d8ea3f5df14d7294d88375af016d934beb240419c93b	0:m:[0,1]->[0,1]
 $intrinsic.MapInsertionOrder_open	585d68a6b443e18347173ed27c5bad552198e87ea03608b1bddcce41d739ddd4	0:t:[0,1]->[0,1]
+$intrinsic.MutexCause	df106f2f6e1fb9abc7b7f1dd416bb4e632f8fcbc59b38b6bf5997835cded8a08	0:b:[0]->n
+$intrinsic.MutexCreate	7f7a6859ca8a14d4a3f69343dc8692cec9f8a0f1458198415c117716624b6271	0:b:[0];1:b:n->[0]
+$intrinsic.MutexKill	4ab51e5ab239f5b5b183f9e84b5c891fa571c52cc0302e41bda20add8a4f75e6	0:b:[0]->n
+$intrinsic.MutexPut	3a783e16fa58cc3f6aa295ff9e9df05b3b18025229d82b54ae1bc1c00910ab04	0:b:[0];1:b:[0];2:b:n->n
+$intrinsic.MutexTake	a0ba0945297b366d44579ba6ccfd6ec0123b7902585048fa359b88712a609783	0:b:[0];1:m:[0];2:b:n->n
 $intrinsic.NetReadInto	7fae9220da1f92202f1f65cac1d1af01cd1f9193a5121b66242517720ae2c13c	0:b:n;1:m:n;2:m:n;3:b:n->n
 $intrinsic.OrderCompare_i128	9d7fc9d63d6decfa0c3ea48d431cbff619da89d7ae02dd7545b177ed860dd935	0:b:n;1:b:n->n
 $intrinsic.OrderCompare_i16	5ba54b66b2ebb49bba2db0d90023ef9a9ac2653469572c124c069841fd0b8b3a	0:b:n;1:b:n->n

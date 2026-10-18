@@ -113,6 +113,11 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "task.await"
             | "channel.send"
             | "channel.receive"
+            | "mutex.create"
+            | "mutex.with"
+            | "atomic.create"
+            | "atomic.load"
+            | "atomic.store"
     ) || MAP_BODIES.contains(&name.as_str())
     {
         row.dispositions.native = Disposition::Body;
@@ -168,6 +173,15 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "channel.open" | "sender.dup" => Some(format!("hirsel_rt_v2_{}", name.replace('.', "_"))),
         "$intrinsic.ChannelSend" => Some("hirsel_rt_v2_channel_send".into()),
         "$intrinsic.ChannelReceive" => Some("hirsel_rt_v2_channel_receive".into()),
+        // Mutex and atomic cells (`sync.rs`) behind their compiled bodies.
+        "$intrinsic.MutexCreate" => Some("hirsel_rt_v2_mutex_create".into()),
+        "$intrinsic.MutexTake" => Some("hirsel_rt_v2_mutex_take".into()),
+        "$intrinsic.MutexPut" => Some("hirsel_rt_v2_mutex_put".into()),
+        "$intrinsic.MutexKill" => Some("hirsel_rt_v2_mutex_kill".into()),
+        "$intrinsic.MutexCause" => Some("hirsel_rt_v2_mutex_cause".into()),
+        "$intrinsic.AtomicCreate" => Some("hirsel_rt_v2_atomic_create".into()),
+        "$intrinsic.AtomicLoad" => Some("hirsel_rt_v2_atomic_load".into()),
+        "$intrinsic.AtomicStore" => Some("hirsel_rt_v2_atomic_store".into()),
         "$intrinsic.UnicodeScalars_open" => Some("hirsel_rt_v2_unicode_scalars_open".into()),
         "$intrinsic.UnicodeScalars_next" => Some("hirsel_rt_v2_unicode_scalars_next".into()),
         "$intrinsic.ScalarPositions_open" => Some("hirsel_rt_v2_scalar_positions_open".into()),
@@ -395,6 +409,54 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: false,
         result: Some((4, 4)),
         parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_mutex_create",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_mutex_take",
+        destination: false,
+        result: Some((4, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_mutex_put",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_mutex_kill",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_mutex_cause",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_atomic_create",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_atomic_load",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_atomic_store",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_channel_receive",
@@ -1070,6 +1132,14 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.TaskJoin",
     "$intrinsic.ChannelSend",
     "$intrinsic.ChannelReceive",
+    "$intrinsic.MutexCreate",
+    "$intrinsic.MutexTake",
+    "$intrinsic.MutexPut",
+    "$intrinsic.MutexKill",
+    "$intrinsic.MutexCause",
+    "$intrinsic.AtomicCreate",
+    "$intrinsic.AtomicLoad",
+    "$intrinsic.AtomicStore",
     "$intrinsic.OrderCompare_i128",
     "$intrinsic.OrderCompare_i16",
     "$intrinsic.OrderCompare_i32",
