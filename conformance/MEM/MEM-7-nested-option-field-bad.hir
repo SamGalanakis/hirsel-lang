@@ -1,0 +1,7 @@
+// rule: MEM-7
+// expect: reject MEM-7 at line 6
+// Nesting Option around the record itself keeps its layout recursive: the inner
+// argument holds Setting inline, so it still needs a block boundary such as box.
+type Setting {
+  value: Option[Option[Setting]],
+}

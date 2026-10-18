@@ -1,0 +1,52 @@
+// rule: MEM-7
+// expect: run
+// stdout: three unset absent 7
+// A record field or variant payload holding Option[Option[u64]] is inline and not
+// recursive: the inner Option is an argument of the outer one, not Option's own
+// representation. So is an Option nested inside a tuple argument.
+type Setting {
+  value: Option[Option[u64]],
+}
+
+type Choice = Nested(Option[Option[u8]]) | Paired(Option[(Option[u8], u8)])
+
+fn total(c: Choice) -> u8 {
+  match c {
+    Nested(Some(Some(n))) => n,
+    Paired(Some((Some(a), b))) => a + b,
+    _ => 0,
+  }
+}
+
+fn output_error[E](take e: E) -> () {}
+
+fn describe(s: Setting) -> String {
+  match s.value {
+    Some(Some(n)) if n == 3 => "three",
+    Some(Some(_)) => "other",
+    Some(None) => "unset",
+    None => "absent",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let set = Setting(value: Some(Some(3)))
+  let unset = Setting(value: Some(None))
+  let absent = Setting(value: None)
+  let stdout = io.stdout(rt) ? grant_error
+  out.print(stdout, describe(set)) ? output_error
+  out.print(stdout, " ") ? output_error
+  out.print(stdout, describe(unset)) ? output_error
+  out.print(stdout, " ") ? output_error
+  out.print(stdout, describe(absent)) ? output_error
+  let sum = total(Nested(Some(Some(3)))) + total(Paired(Some((Some(1), 3))))
+  failure.check(sum == 7, TextInvariant())
+  out.print(stdout, " 7") ? output_error
+  out.print(stdout, "\n") ? output_error
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

@@ -61,7 +61,7 @@ impl Audit<'_, '_> {
         };
         for (span, ty) in annotations {
             let mut active = BTreeSet::from([item.definition.clone()]);
-            if self.inline_cycle(ty, &mut active)? {
+            if self.inline_cycle(ty, &mut active, &mut BTreeSet::new())? {
                 self.report(
                     const { RuleId::of("MEM-7") },
                     span,
@@ -72,20 +72,48 @@ impl Audit<'_, '_> {
         Ok(())
     }
 
+    /// Whether `root` reaches an `active` definition inline. Each named type is
+    /// walked once through its generic representation, with its definition
+    /// active, and then through the arguments that representation holds inline,
+    /// without it: `Option[Option[u64]]` nests an argument, not `Option` itself.
+    /// Parameters of the representation being walked that `root` holds inline
+    /// are added to `inline`.
     fn inline_cycle(
         &mut self,
         root: TypeId,
         active: &mut BTreeSet<ast::DefPath>,
+        inline: &mut BTreeSet<u32>,
     ) -> Result<bool, QueryError> {
-        let children = match self.types.get(root).unwrap().kind.clone() {
-            TypeKind::Named { definition, .. } => {
+        let children: SharedSlice<TypeId> = match self.types.get(root).unwrap().kind.clone() {
+            TypeKind::Parameter(BinderRef::Bound {
+                depth: 0,
+                parameter,
+            }) => {
+                inline.insert(parameter.0);
+                return Ok(false);
+            }
+            TypeKind::Named {
+                definition,
+                arguments,
+            } => {
                 if !active.insert(definition.clone()) {
                     return Ok(true);
                 }
-                let (representation, _) = self.representation(root)?;
-                let cycle = representation != root && self.inline_cycle(representation, active)?;
+                let mut held = BTreeSet::new();
+                let cycle = match self.generic_representation(&definition)? {
+                    Some(representation) => self.inline_cycle(representation, active, &mut held)?,
+                    None => false,
+                };
                 active.remove(&definition);
-                return Ok(cycle);
+                if cycle {
+                    return Ok(true);
+                }
+                held.into_iter()
+                    .filter_map(|i| match arguments.get(i as usize) {
+                        Some(GenericArgument::Type(t)) => Some(*t),
+                        _ => None,
+                    })
+                    .collect()
             }
             TypeKind::Tuple(fields) => fields,
             TypeKind::Record(fields) => fields.iter().map(|f| f.ty).collect(),
@@ -112,15 +140,35 @@ impl Audit<'_, '_> {
                     .collect()
             }
             // Box, List/Array/Map and callable environments provide block boundaries.
-            // Generic parameters are inline but have no nominal recursive edge until
-            // instantiated; named arguments are substituted at representation import.
             _ => vec![].into(),
         };
         for child in children {
-            if self.inline_cycle(child, active)? {
+            if self.inline_cycle(child, active, inline)? {
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    /// A named type's representation over its own parameters, if it has one.
+    fn generic_representation(
+        &mut self,
+        definition: &ast::DefPath,
+    ) -> Result<Option<TypeId>, QueryError> {
+        let s = self.snapshot(definition)?;
+        let SignatureKind::Type(d) = &s.kind else {
+            return Ok(None);
+        };
+        let Some(representation) = d.representation else {
+            return Ok(None);
+        };
+        import_type(&s.types, representation, &mut self.types)
+            .map(Some)
+            .map_err(|error| {
+                QueryError::Operational(OperationalFailure {
+                    operation: "inline layout audit".into(),
+                    message: format!("{error:?}"),
+                })
+            })
     }
 }
