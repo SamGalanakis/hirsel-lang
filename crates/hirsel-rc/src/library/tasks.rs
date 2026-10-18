@@ -593,9 +593,10 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
             b.constant(unit, ConstantValue::Unit)
         }
     };
-    super::iter::drop_local(&mut b, f_slot, f_address);
+    // The result is held before the callable's drop, whose failure then releases it.
     let some = option(&mut b, option_layout, 1, &[value]);
     let (slot, address) = local(&mut b, some)?;
+    super::iter::drop_local(&mut b, f_slot, f_address);
     let none = option(&mut b, option_layout, 0, &[]);
     let (none_slot, none_address) = local(&mut b, none)?;
     let size = b.u64(size)?;
