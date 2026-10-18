@@ -1693,11 +1693,17 @@ fn testrun_streams_a_test_and_stops_it_at_its_deadline() {
 
 #[test]
 fn example_packages_run_their_declared_tests() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for name in ["calculator", "mdtoc"] {
+    for (name, source) in [
+        (
+            "calculator",
+            include_str!("../../../examples/calculator/main.hir"),
+        ),
+        ("mdtoc", include_str!("../../../examples/mdtoc/main.hir")),
+    ] {
+        let fixture = Fixture::new(name, source);
         let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .args(["test", "--json"])
-            .arg(root.join(format!("examples/{name}/hirsel.json")))
+            .arg(fixture.0.join("hirsel.json"))
             .output()
             .unwrap();
         assert_eq!(output.status.code(), Some(0), "{name}: {output:?}");

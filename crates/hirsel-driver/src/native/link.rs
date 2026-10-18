@@ -1099,7 +1099,7 @@ fn link_launcher(
     if !standalone {
         command.args(toolchain.loader_flags(target));
     }
-    command.arg(write("main.o", &main)?);
+    command.arg(write("main.o", main)?);
     for (index, object) in objects.iter().enumerate() {
         command.arg(write(&format!("unit-{index}.o"), &object.bytes)?);
     }
