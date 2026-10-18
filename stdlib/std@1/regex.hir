@@ -177,7 +177,7 @@ fn finish_context(mut tree: Tree, mut ctx: Context) -> Result[u64, CompileError]
   }
 }
 
-fn class_ranges(cp: u32) -> List[(u32, u32)] uses {} {
+fn class_ranges(cp: u32) -> unique List[(u32, u32)] uses {} {
   if cp == 100 || cp == 68 {
     [(48, 57)]
   } else if cp == 115 || cp == 83 {

@@ -1,0 +1,7 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 6
+fn decoded(data: Bytes) -> unique String uses {} {
+  let text = utf8.decode_lossy(data)
+  let kept = copy text
+  text
+}

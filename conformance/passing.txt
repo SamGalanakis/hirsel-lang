@@ -2407,6 +2407,8 @@ conformance/MODE/MODE-2-shared-owned-capture-bad.hir
 conformance/MODE/MODE-2-sharing-counted-part-bad.hir
 conformance/MODE/MODE-2-sharing-counted-part-ok.hir
 conformance/MODE/MODE-2-std-container-empty-run.hir
+conformance/MODE/MODE-2-std-decode-lossy-copied-bad.hir
+conformance/MODE/MODE-2-std-decode-lossy-unique-ok.hir
 conformance/MODE/MODE-2-unique-argument-bad.hir
 conformance/MODE/MODE-2-unique-argument-ok.hir
 conformance/MODE/MODE-2-unique-clause-borrow-copy-bad.hir

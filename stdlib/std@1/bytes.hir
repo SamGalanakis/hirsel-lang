@@ -1,5 +1,5 @@
 // Left-to-right nonoverlapping byte replacement, including arbitrary UTF-8 errors.
-pub fn replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src {
+pub fn replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src {
   let width = core@1/bytes.len(old)
   core@1/failure.check(width != 0, TextInvariant())
   let len = core@1/bytes.len(src)

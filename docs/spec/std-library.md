@@ -65,7 +65,7 @@ N fn time.between(clock: MonotonicClock, start: Instant of clock, end: Instant o
 N fn time.compare(clock: MonotonicClock, a: Instant of clock, b: Instant of clock) -> i32
 N fn time.deadline(clock: MonotonicClock, interval: time.Duration) -> Result[Instant of clock, time.SleepError]
 N fn time.sleep(clock: MonotonicClock, interval: time.Duration) -> Result[(), time.SleepError]
-fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src
+fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src
 N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
 N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
@@ -629,7 +629,7 @@ scalar kernels rather than retaining private digit/classification copies.
 -> List[String] uses {}` returns owned LF/CRLF-separated lines without their
 terminators, preserves interior empty lines, and omits an extra trailing empty
 line. Empty input has no lines; a bare CR remains data.
-`string.replace(s: String, old: String, new: String) -> String uses {}` borrows
+`string.replace(s: String, old: String, new: String) -> unique String uses {}` borrows
 inputs and returns owned text, replacing nonoverlapping matches left to right.
 An empty pattern inserts `new` at every UTF-8 scalar boundary, including both
 ends (once for an empty input). All three helpers are ordinary source.
@@ -640,7 +640,7 @@ ends (once for an empty input). All three helpers are ordinary source.
 utf8.EncodeError] uses {}` appends the scalar's UTF-8 encoding. `EncodeError =
 InvalidScalar(u32)` rejects surrogates and values above U+10FFFF before touching
 `out`. Existing bytes in the builder are preserved on this validation error.
-`utf8.decode_lossy(data: Bytes) -> String uses {}` borrows arbitrary bytes and
+`utf8.decode_lossy(data: Bytes) -> unique String uses {}` borrows arbitrary bytes and
 returns owned UTF-8. It replaces each invalid sequence with U+FFFD using Rust's
 maximal valid-prefix/error-span policy: a valid but incomplete prefix is replaced
 once; an invalid next byte is reconsidered as the start of the next sequence.
@@ -656,7 +656,7 @@ InvalidPadding(u64) | NonCanonical(u64)`. Its pure source functions borrow input
 and return owned output:
 
 ```text
-fn base64.encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> String uses {}
+fn base64.encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique String uses {}
 fn base64.decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[Bytes, DecodeError] uses {}
 ```
 
@@ -670,7 +670,7 @@ last data byte of a noncanonical final quantum. No partial output is returned.
 
 ## Hexadecimal codec
 
-`hex.encode(data: Bytes) -> String` emits lowercase hexadecimal.
+`hex.encode(data: Bytes) -> unique String` emits lowercase hexadecimal.
 `hex.decode(text: String) -> Result[Bytes, hex.DecodeError]` accepts both ASCII
 letter cases, with `DecodeError = InvalidDigit(u64) | OddLength`. Offsets are
 input byte offsets. Decoding checks digits in order; an invalid final byte

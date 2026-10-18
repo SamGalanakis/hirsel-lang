@@ -1,7 +1,7 @@
 // Go encoding/hex Encode/Decode, adapted under BSD-3-Clause; see NOTICES.
 pub type DecodeError = InvalidDigit(u64) | OddLength
 
-pub fn encode(data: Bytes) -> String uses {} {
+pub fn encode(data: Bytes) -> unique String uses {} {
   let digits = core@1/string.as_bytes("0123456789abcdef")
   let len = core@1/bytes.len(data)
   core@1/failure.check(len <= 9223372036854775807u64, TextInvariant())

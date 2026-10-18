@@ -252,7 +252,7 @@ pub fn lines(take s: String) -> List[String] uses {} {
   take out
 }
 
-pub fn replace(s: String, old: String, new: String) -> String uses {} {
+pub fn replace(s: String, old: String, new: String) -> unique String uses {} {
   let source = core@1/string.as_bytes(s)
   let needle = core@1/string.as_bytes(old)
   let width = core@1/bytes.len(needle)

@@ -16,7 +16,7 @@ fn alphabet_bytes(alphabet: Alphabet) -> Bytes uses {} {
   )
 }
 
-pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> String uses {} {
+pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique String uses {} {
   let table = alphabet_bytes(alphabet)
   let len = core@1/bytes.len(data)
   let remainder = len % 3

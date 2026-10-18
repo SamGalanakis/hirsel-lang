@@ -1,0 +1,5 @@
+// rule: MODE-2
+// expect: accept
+fn decoded(data: Bytes) -> unique String uses {} {
+  utf8.decode_lossy(data)
+}
