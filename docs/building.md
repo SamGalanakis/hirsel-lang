@@ -43,14 +43,25 @@ hirsel run hello.hir --grants grants.json -- argument-one argument-two
 ./hello --hirsel-grants grants.json argument-one argument-two
 ```
 
-Templates may supply `inputs`, `io`, `args`, `env`, `unsafe` and `admission`.
+`--grants` and `--run` accept inline JSON when the argument starts with `{`;
+otherwise the argument is a path. Built executables spell these flags
+`--hirsel-grants` and `--hirsel-run` so programs keep their own flag space:
+
+```sh
+hirsel run hello.hir --grants '{"io":{"stdout":"stdout.bytes@1","dirs":[]}}'
+./hello --hirsel-grants '{"io":{"stdout":"stdout.bytes@1","dirs":[]}}'
+```
+
+Inline templates require absolute directory hosts. Templates may supply `inputs`, `io`, `args`, `env`, `unsafe` and `admission`.
 Omitted fields deny authority and use zero seeds. Binding fields, unknown fields,
 duplicate fields and invalid grants refuse launch. Templates use the ordinary
 RunConfig validation and admission path; selecting code grants no authority.
 For `hirsel run --grants`, arguments after `--` replace the template's `args`
 with the exact UTF-8 snapshot, including an explicitly empty snapshot. Without
 `--`, the template's `args` remain. With `hirsel run --run`, the record's `args`
-are authoritative and trailing arguments are an error.
+are authoritative and trailing arguments are an error. Without either option,
+`hirsel run program.hir -- args...` grants only Args with exactly those values,
+including an explicitly empty snapshot. No other authority is implied.
 
 Interpreted host runs (`--run` and `--grants`) have no default step budget;
 simulated runs keep a 1,000,000,000-step budget. `--max-steps <n>` selects a
@@ -79,7 +90,7 @@ in `io`. `io.process(rt)` then projects a `Proc`, and `proc.run` runs `/usr/bin/
 with an empty environment except `HOME`; any other program is `NotGranted()`. A granted
 program can do whatever the host lets it do.
 
-The run record path must be absolute; a template path may be relative. The launcher validates the record, checks
+When supplied as a path, the run record path must be absolute; a template path may be relative. The launcher validates the record, checks
 its semantic program revision, entry and launch kind, checks required roots and
 admission conditions, then pins host grants before entry. The same binary can
 accept different grants and seeds on subsequent launches. Unknown or unsupported

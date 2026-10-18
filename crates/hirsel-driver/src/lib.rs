@@ -200,9 +200,9 @@ pub fn export_run_path(path: &Path) -> Result<Vec<u8>, ToolError> {
 /// Explicit production launch input. Templates bind to the code selected by this launch.
 #[derive(Clone, Copy)]
 pub enum LaunchConfig<'a> {
-    Record(&'a Path),
+    Record(&'a std::ffi::OsStr),
     Grants {
-        path: &'a Path,
+        input: &'a std::ffi::OsStr,
         arguments: Option<&'a [std::ffi::OsString]>,
     },
 }
@@ -212,10 +212,10 @@ impl LaunchConfig<'_> {
         revision: &hirsel_run_config::ProgramRevision,
     ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_config::RunRefusal> {
         match self {
-            Self::Record(path) => hirsel_engine::read_run_record(path),
-            Self::Grants { path, arguments } => {
-                let run = hirsel_run_config::RunConfig::read_grants(
-                    path,
+            Self::Record(input) => hirsel_run_config::RunConfig::record_input(input),
+            Self::Grants { input, arguments } => {
+                let run = hirsel_run_config::RunConfig::grants_input(
+                    input,
                     revision.digest(),
                     revision.entry().into(),
                     hirsel_run_config::LaunchKind::Main,

@@ -414,7 +414,7 @@ fn native_calls_c_with_scalars_a_byte_view_and_a_released_handle() {
         let tape = root.join("tape");
         let launch = HostLaunch::Live {
             config: LaunchConfig::Grants {
-                path: &grants,
+                input: grants.as_os_str(),
                 arguments: None,
             },
             record: Some(&tape),

@@ -106,7 +106,8 @@ derived from the engine's shared `entry_roots` validation. The executable embeds
 semantic program revision and entry identity; fresh launch grants and argv are
 validated and admitted by the runtime, independently of compiler profile.
 
-`LaunchConfig` selects either a bound record or a grants template. Both source
+`LaunchConfig` selects either a bound record or a grants template from an explicit
+OS argument: a leading `{` selects inline JSON, otherwise it selects a path. Both source
 engines resolve it against the checked semantic revision before host admission;
 templates never pass through a temporary exported record. Native host launches pass
 `--hirsel-record <tape>` or `--hirsel-replay <tape>` to the executable after the driver

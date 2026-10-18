@@ -149,11 +149,11 @@ fn select_run(
     let record = match arguments.first() {
         None => RunConfig::empty(program, entry.into(), launch),
         Some(flag) if flag == "--hirsel-run" || flag == "--hirsel-grants" => {
-            let path = arguments.get(1).ok_or_else(invalid)?;
+            let input = arguments.get(1).ok_or_else(invalid)?;
             let run = if flag == "--hirsel-grants" {
-                RunConfig::read_grants(std::path::Path::new(path), program, entry.into(), launch)?
+                RunConfig::grants_input(input, program, entry.into(), launch)?
             } else {
-                RunConfig::read_path(std::path::Path::new(path))?
+                RunConfig::record_input(input)?
             };
             run.check_program(program, entry, launch)?;
             let mut record = run.record().clone();

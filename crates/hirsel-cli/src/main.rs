@@ -70,11 +70,11 @@ impl Launch {
             } => hirsel_driver::HostLaunch::Live {
                 config: if *grants {
                     hirsel_driver::LaunchConfig::Grants {
-                        path: Path::new(config),
+                        input: config,
                         arguments,
                     }
                 } else {
-                    hirsel_driver::LaunchConfig::Record(Path::new(config))
+                    hirsel_driver::LaunchConfig::Record(config)
                 },
                 record: record.as_deref().map(Path::new),
                 revocations: revocations.as_deref().map(Path::new),
@@ -285,11 +285,15 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 if revocations.is_some() && (config.is_none() || replay.is_some()) {
                     return Err("--revocations requires a live --run or --grants launch".into());
                 }
-                if arguments.is_some() && !matches!(config, Some((true, _))) {
+                if arguments.is_some()
+                    && (matches!(config, Some((false, _)))
+                        || replay.is_some()
+                        || simulation.is_some())
+                {
                     return Err(if matches!(config, Some((false, _))) {
                         "--run keeps the record's Args snapshot; trailing arguments require --grants"
                     } else {
-                        "trailing arguments require --grants"
+                        "trailing arguments cannot combine with --replay or --simulation"
                     }.into());
                 }
                 let max_steps = max_steps.unwrap_or(if config.is_some() {
@@ -297,6 +301,11 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 } else {
                     Some(DEFAULT_RUN_MAX_STEPS)
                 });
+                // The explicit delimiter grants precisely Args. Bind an empty template
+                // through the same host admission path as an explicit grants launch.
+                if arguments.is_some() && config.is_none() {
+                    config = Some((true, "{}".into()));
+                }
                 let launch = match (config, record, replay) {
                     (None, None, None) => None,
                     (Some((grants, config)), record, None) => Some(Launch::Live {

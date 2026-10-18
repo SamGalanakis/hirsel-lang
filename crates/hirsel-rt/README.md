@@ -828,3 +828,7 @@ resolved directory roots, so held files and atomic temporaries follow their Dir.
 Zero-size flat List elements keep a stored count after their byte-extent
 prefix. Codec reconstruction preserves that count even when no element bytes
 are written; zero-size record fields retain their ordinary layout identity.
+
+Standalone `--hirsel-run` and `--hirsel-grants` accept inline JSON when their
+argument starts with `{`, otherwise a path. Both forms use the shared RunConfig
+input selection and schema validation before binding checks and admission.

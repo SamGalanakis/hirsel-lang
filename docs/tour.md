@@ -80,6 +80,14 @@ printf '{"io":{"dirs":[{"path":"data","host":"%s/data","access":"read_write"}]}}
 hirsel run program.hir --grants "$scratch/grants.json"
 ```
 
+`--grants` and `--run` take inline JSON when the argument starts with `{`,
+otherwise a path. For example, grant only stdout with
+`hirsel run program.hir --grants '{"io":{"stdout":"stdout.bytes@1","dirs":[]}}'`.
+Built executables use `--hirsel-grants` and `--hirsel-run` so the program keeps
+its own flag space. Inline directory grants need absolute host paths.
+`hirsel run program.hir -- 200 7` grants only Args with those exact values;
+an entry also requiring Io needs an explicit Io grant.
+
 Acquire that mount with `io.dir(rt, path.of("data"))`; file paths are relative
 to the mount. Use `read` access when the program only reads.
 

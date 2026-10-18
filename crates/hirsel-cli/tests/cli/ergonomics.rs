@@ -158,3 +158,168 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         assert!(output.stdout.is_empty());
     }
 }
+
+#[test]
+fn inline_launch_json_works_in_the_cli_and_built_executables() {
+    let source = file(
+        r#"pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let text = match arg.text(args, 0) { Ok(t) => t, Error(_) => "empty" }
+  let _ = out.print(output, text)
+  Ok(())
+}"#,
+    );
+    let grants = r#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":["inline λ"]}"#;
+    let record_path = run_record(&source, serde_json::from_str(grants).unwrap());
+    let record = std::fs::read_to_string(&record_path).unwrap();
+    let exe = source.with_extension("exe");
+    let build = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{build:?}");
+    for engine in ["interpreted", "native", "built"] {
+        let built = engine == "built";
+        for (flag, input) in [("grants", grants), ("run", record.as_str())] {
+            let mut command = if built {
+                Command::new(&exe)
+            } else {
+                let mut c = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                c.arg("run").arg(&source);
+                if engine == "native" {
+                    c.arg("--native");
+                }
+                c
+            };
+            command
+                .arg(if built {
+                    format!("--hirsel-{flag}")
+                } else {
+                    format!("--{flag}")
+                })
+                .arg(input);
+            if built {
+                command.arg("inline λ");
+            }
+            let output = command.output().unwrap();
+            assert_eq!(output.status.code(), Some(0), "{built} {flag}: {output:?}");
+            assert_eq!(output.stdout, "inline λ".as_bytes());
+            assert!(output.stderr.is_empty(), "{output:?}");
+        }
+        for bad in ["{", r#"{"io":true}"#, r#"{"args":[],"args":[]}"#] {
+            let mut command = if built {
+                Command::new(&exe)
+            } else {
+                let mut c = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                c.arg("run").arg(&source);
+                if engine == "native" {
+                    c.arg("--native");
+                }
+                c
+            };
+            let output = command
+                .arg(if built { "--hirsel-grants" } else { "--grants" })
+                .arg(bad)
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "{output:?}");
+            assert!(output.stdout.is_empty(), "{output:?}");
+            assert!(!output.stderr.is_empty());
+        }
+    }
+    std::fs::remove_file(exe).unwrap();
+}
+
+#[test]
+fn trailing_arguments_alone_grant_only_the_exact_args_snapshot() {
+    let source = file(
+        r#"pub fn main(args: Args) -> Result[(), ()] {
+  failure.check(arg.count(args) == 4, Arithmetic())
+  for i in 0u64..arg.count(args) {
+    let text = match arg.text(args, i) { Ok(t) => t, Error(_) => "invalid" }
+    let expected = match i { 0 => "200", 1 => "", 2 => "λ", _ => "--flag" }
+    failure.check(text == expected, Arithmetic())
+  }
+  Ok(())
+}"#,
+    );
+    let manifest = source.with_extension("manifest.json");
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "schema": 1, "package": {"name": "standalone", "version": "0"},
+            "entry": {"module": [], "name": "main"},
+            "sources": [{"path": source.file_name().unwrap().to_str().unwrap(), "module": []}],
+            "dependencies": []
+        })
+        .to_string(),
+    )
+    .unwrap();
+    for program in [&source, &manifest] {
+        for native in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run").arg(program);
+            if native {
+                command.arg("--native");
+            }
+            let output = command
+                .args(["--", "200", "", "λ", "--flag"])
+                .output()
+                .unwrap();
+            assert_eq!(output.status.code(), Some(0), "{output:?}");
+            assert!(output.stdout.is_empty());
+            assert!(output.stderr.is_empty());
+        }
+    }
+    let empty = file(
+        "pub fn main(args: Args) -> Result[(), ()] { failure.check(arg.count(args) == 0, Arithmetic()); Ok(()) }",
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&empty)
+        .arg("--")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let limited = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("run")
+        .arg(&empty)
+        .args(["--max-steps", "0", "--"])
+        .output()
+        .unwrap();
+    assert_eq!(limited.status.code(), Some(2), "{limited:?}");
+    assert!(String::from_utf8_lossy(&limited.stderr).contains("Steps"));
+    for root in ["rt: Io", "env: Env", "permit: Unsafe"] {
+        let denied = file(&format!(
+            "pub fn main(args: Args, {root}) -> Result[(), ()] {{ Ok(()) }}"
+        ));
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(&denied)
+            .args(["--", "200", "7"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{root}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("not_granted"),
+            "{output:?}"
+        );
+        assert!(output.stdout.is_empty());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt;
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .arg(&source)
+            .arg("--")
+            .arg(std::ffi::OsString::from_vec(vec![255]))
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("args[0]"));
+    }
+}

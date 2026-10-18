@@ -148,3 +148,9 @@ empty snapshot. Without `--`, the template's Args are retained. `--run` keeps th
 record's Args authoritative and rejects trailing arguments. Relative directory
 hosts in a template resolve beside that template, then become canonical absolute
 hosts before ordinary validation and admission.
+
+`--run` and `--grants` accept inline JSON when the argument starts with `{`,
+otherwise a path. Executables use `--hirsel-run` and `--hirsel-grants` to leave
+the program's flag space available. Inline templates require absolute directory
+hosts. `hirsel run <source|manifest> -- args...` grants only the exact Args
+snapshot through host admission, with the simulated CLI's default step budget.
