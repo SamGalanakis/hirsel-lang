@@ -265,7 +265,7 @@ const PROCESS_PROGRAM: &str = r#"pub fn main(rt: Io, args: Args) -> Result[(), G
     Ok(program) => program,
     Error(_) => path.of("/missing"),
   }
-  match proc.run(p, program, ["recorded"], b"", None(), 64, None()) {
+  match proc.run(p, Command(program: program, args: ["recorded"], dir: None(), env: None()), b"", 64, None()) {
     Ok(o) => {
       if o.status == Exited(0) && o.stdout == b"recorded\n" {
         let _ = out.print(out, "echo ran\n")
@@ -352,7 +352,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Some(at) => at,
     None() => now,
   }
-  match proc.run(p, sleep, ["infinity"], b"", None(), 64, Some(Deadline(clock: c, at: soon))) {
+  match proc.run(p, Command(program: sleep, args: ["infinity"], dir: None(), env: None()), b"", 64, Some(Deadline(clock: c, at: soon))) {
     Error(TimedOut()) => {
       let _ = out.print(out, "timed out\n")
     },
@@ -365,7 +365,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Some(at) => at,
     None() => fresh,
   }
-  match proc.run(p, sleep, ["0"], b"", None(), 64, Some(Deadline(clock: c, at: later))) {
+  match proc.run(p, Command(program: sleep, args: ["0"], dir: None(), env: None()), b"", 64, Some(Deadline(clock: c, at: later))) {
     Ok(o) => {
       if o.status == Exited(0) {
         let _ = out.print(out, "in time\n")
@@ -398,7 +398,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
       let h = task.async(
         s,
         fn() -> bool {
-          proc.run(p, script, [], b"", None(), 64, None()) == Error(Canceled(Requested))
+          proc.run(p, Command(program: script, args: [], dir: None(), env: None()), b"", 64, None()) == Error(Canceled(Requested))
         }
       )
       let mut signal: List[u8] = []
@@ -447,7 +447,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     Ok(program) => program,
     Error(_) => path.of("/missing"),
   }
-  let mut c = proc.spawn(p, cat, [], None()) ? failed
+  let mut c = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None())) ? failed
   show(out, echo(p, mut c, b"ping\n") ? failed)
   show(out, echo(p, mut c, b"pong\n") ? failed)
   child.close_stdin(p, mut c)
@@ -458,12 +458,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   if child.wait(p, take c) == Ok(Exited(0)) {
     let _ = out.print(out, "exited 0\n")
   }
-  let mut killed = proc.spawn(p, cat, [], None()) ? failed
+  let mut killed = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None())) ? failed
   child.kill(p, mut killed)
   if child.wait(p, take killed) == Ok(Signaled(9)) {
     let _ = out.print(out, "killed\n")
   }
-  let _ = proc.spawn(p, cat, [], None())
+  let _ = proc.spawn(p, Command(program: cat, args: [], dir: None(), env: None()))
   Ok(())
 }
 "#;

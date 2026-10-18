@@ -333,6 +333,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "clock: MonotonicClock,at: Instant of .clock",
         ),
         (
+            "Command",
+            "",
+            "program: Path,args: List[String],dir: Option[Dir],env: Option[List[(String, String)]]",
+        ),
+        (
             "UdpReceived",
             "",
             "count: u64,peer: SocketAddr,truncated: bool",
@@ -378,6 +383,15 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             t.authority = AuthoritySummary::Known(
                 vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
                     "MonotonicClock",
+                ))]
+                .into(),
+            );
+        }
+        if name == "Command" {
+            // A command names its working directory, so it carries Dir authority.
+            t.authority = AuthoritySummary::Known(
+                vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
+                    "Dir",
                 ))]
                 .into(),
             );

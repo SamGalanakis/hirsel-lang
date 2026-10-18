@@ -41,16 +41,52 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let test = path.of("/bin/test")
   let _ = out.print(
     output,
-    outcome(proc.run(p, test, [], b"", None(), 64u64, Some(after(c, start, 1000u64))))
+    outcome(
+      proc.run(
+        p,
+        Command(program: test, args: [], dir: None(), env: None()),
+        b"",
+        64u64,
+        Some(after(c, start, 1000u64))
+      )
+    )
   )
   let _ = out.print(
     output,
     outcome(
-      proc.run(p, test, [], b"", None(), 64u64, Some(Deadline(clock: c, at: start)))
+      proc.run(
+        p,
+        Command(program: test, args: [], dir: None(), env: None()),
+        b"",
+        64u64,
+        Some(Deadline(clock: c, at: start))
+      )
     )
   )
-  let _ = out.print(output, outcome(proc.run(p, test, [], b"", None(), 64u64, None())))
-  let _ = out.print(output, outcome(proc.run(p, test, [], b"", None(), 64u64, None())))
+  let _ = out.print(
+    output,
+    outcome(
+      proc.run(
+        p,
+        Command(program: test, args: [], dir: None(), env: None()),
+        b"",
+        64u64,
+        None()
+      )
+    )
+  )
+  let _ = out.print(
+    output,
+    outcome(
+      proc.run(
+        p,
+        Command(program: test, args: [], dir: None(), env: None()),
+        b"",
+        64u64,
+        None()
+      )
+    )
+  )
   let _ = out.print(output, elapsed(c, start))
   Ok(())
 }

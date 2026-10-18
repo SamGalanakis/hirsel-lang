@@ -34,14 +34,38 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
   let p = test.process(t, [], [bc(), quit])
   test.check(
     t,
-    refused(p, proc.spawn(p, path.of("bc"), ["-q"], None()), InvalidInput())
+    refused(
+      p,
+      proc.spawn(
+        p,
+        Command(program: path.of("bc"), args: ["-q"], dir: None(), env: None())
+      ),
+      InvalidInput()
+    )
   )
   test.check(
     t,
-    refused(p, proc.spawn(p, path.of("/usr/bin/dc"), [], None()), NotGranted())
+    refused(
+      p,
+      proc.spawn(
+        p,
+        Command(program: path.of("/usr/bin/dc"), args: [], dir: None(), env: None())
+      ),
+      NotGranted()
+    )
   )
-  test.check(t, refused(p, proc.spawn(p, path, [], None()), NotFound()))
-  let mut c = proc.spawn(p, path, ["-q"], None())?
+  test.check(
+    t,
+    refused(
+      p,
+      proc.spawn(p, Command(program: path, args: [], dir: None(), env: None())),
+      NotFound()
+    )
+  )
+  let mut c = proc.spawn(
+    p,
+    Command(program: path, args: ["-q"], dir: None(), env: None())
+  )?
   let mut out: List[u8] = []
   test.check(t, child.read_stdout(p, mut c, mut out, 64u64)? == 6u64)
   test.check(t, child.read_stdout(p, mut c, mut out, 0u64) == Error(InvalidInput()))
@@ -60,9 +84,19 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
   test.check(t, child.write(p, mut c, b"x") == Error(InvalidInput()))
   test.check(t, child.wait(p, take c) == Ok(Exited(3)))
   // A kill ends the script without checking its Expect.
-  let mut second = proc.spawn(p, path, ["-q"], None())?
+  let mut second = proc.spawn(
+    p,
+    Command(program: path, args: ["-q"], dir: None(), env: None())
+  )?
   child.kill(p, mut second)
   test.check(t, child.wait(p, take second) == Ok(Signaled(9)))
-  test.check(t, refused(p, proc.spawn(p, path, ["-q"], None()), NotFound()))
+  test.check(
+    t,
+    refused(
+      p,
+      proc.spawn(p, Command(program: path, args: ["-q"], dir: None(), env: None())),
+      NotFound()
+    )
+  )
   Ok(())
 }

@@ -92,8 +92,8 @@ fn udp.recv_from(n: Net, mut s: UdpSocket of n, mut buffer: List[u8], max: u64) 
 N fn udp.close(n: Net, take s: UdpSocket of n) -> ()
 
 // CAP-1/2, PROV-1/3, DROP-2/3, CONC-1/3, DET-1
-fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
-fn proc.spawn(p: Proc, program: Path, args: List[String], dir: Option[Dir]) -> Result[Child of p, ProcessError]
+fn proc.run(p: Proc, cmd: Command, stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
+fn proc.spawn(p: Proc, cmd: Command) -> Result[Child of p, ProcessError]
 N fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessError]
 N fn child.close_stdin(p: Proc, mut c: Child of p) -> ()
 fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]

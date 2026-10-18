@@ -8,10 +8,8 @@ fn bounded(p: Proc, c: MonotonicClock) -> Result[ProcessOutput, ProcessError] {
   }
   proc.run(
     p,
-    path.of("/bin/true"),
-    [],
+    Command(program: path.of("/bin/true"), args: [], dir: None(), env: None()),
     b"",
-    None(),
     64,
     Some(Deadline(clock: c, at: now))
   )

@@ -4,12 +4,19 @@
 pub fn main(rt: Io) -> Result[(), GrantError] {
   let p = io.process(rt)?
   failure.check(
-    proc.run(p, path.of("/bin/echo"), ["hello"], b"", None(), 64, None()) == Error(
-      NotGranted()
-    ),
+    proc.run(
+      p,
+      Command(program: path.of("/bin/echo"), args: ["hello"], dir: None(), env: None()),
+      b"",
+      64,
+      None()
+    ) == Error(NotGranted()),
     Bounds()
   )
-  let spawned: bool = match proc.spawn(p, path.of("/bin/cat"), [], None()) {
+  let spawned: bool = match proc.spawn(
+    p,
+    Command(program: path.of("/bin/cat"), args: [], dir: None(), env: None())
+  ) {
     Error(NotGranted()) => true,
     _ => false,
   }

@@ -134,7 +134,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   show(out, "net", network)
   // Starting the child also precedes the short scope; it never produces stdout
   // or exits by itself, so the scope alone ends the read.
-  let started = match proc.spawn(p, hang, ["infinity"], None()) {
+  let started = match proc.spawn(p, Command(program: hang, args: ["infinity"], dir: None(), env: None())) {
     Ok(child) => take child,
     Error(_) => return Ok(()),
   }

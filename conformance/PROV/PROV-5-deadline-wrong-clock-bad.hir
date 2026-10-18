@@ -1,6 +1,8 @@
 // rule: PROV-5
 // expect: reject PROV-5 at line 19
 // An instant of one clock cannot bound a run on another.
+// A Deadline's Instant must be of its own clock field,
+// whichever clocks the program holds.
 fn bounded(p: Proc, a: MonotonicClock, b: MonotonicClock) -> Result[
   ProcessOutput,
   ProcessError
@@ -11,10 +13,8 @@ fn bounded(p: Proc, a: MonotonicClock, b: MonotonicClock) -> Result[
   }
   proc.run(
     p,
-    path.of("/bin/true"),
-    [],
+    Command(program: path.of("/bin/true"), args: [], dir: None(), env: None()),
     b"",
-    None(),
     64,
     Some(Deadline(clock: b, at: now))
   )

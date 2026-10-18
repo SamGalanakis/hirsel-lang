@@ -93,7 +93,8 @@ without leading zeros, and `operation` one of `connect`, `connect_tls`, `listen`
 **Process grants** name a provider and rules `{program, env}` sorted and unique by
 `program`: `program` is a canonical absolute path ([processes](core-library.md#processes)),
 and `env` a sorted, unique list of variable names, each nonempty and without `=` or NUL,
-passed through from the launcher's environment; `env` may be omitted for none. For example
+that the program's children may receive, passed through from the launcher's environment
+or set by a `Command`; `env` may be omitted for none. For example
 `{"provider": "process.spawn@1", "rules": [{"program": "/usr/bin/git", "env": ["HOME"]}]}`.
 
 **Providers** name versioned observable contracts, identical for real hosts, simulation and
@@ -286,9 +287,9 @@ InDoubt; continuing from an InDoubt write never retries it.
 
 ### Process recording
 
-A process run is recorded at the call: the request (the `Proc` handle, program, arguments,
-every stdin byte, the working-directory handle or none, `max_output`, and the deadline's
-clock handle and ticks or none) and the completion (the exit status with exactly the
+A process run is recorded at the call: the request (the `Proc` handle, the command's
+program, arguments, working-directory handle or none and exact environment or none, every
+stdin byte, `max_output`, and the deadline's clock handle and ticks or none) and the completion (the exit status with exactly the
 captured stdout and stderr bytes, or the error, `TimedOut()` included). Elapsed time and the
 order in which the child's streams were drained are never recorded. Under
 `tasks.cooperative@1` a run that parks records `blocked` and a `ready` event like a network
@@ -298,8 +299,7 @@ records nothing more, since cancellation is derived from the schedule. A complet
 below its deadline.
 
 A streaming child is recorded at the stream API, as a network stream is: `proc.spawn` (the
-`Proc` handle, program, arguments and working-directory handle; the `Child` handle or the
-error), each `child.write` (every byte; success or the error), each read (the stream and
+`Proc` handle and the command; the `Child` handle or the error), each `child.write` (every byte; success or the error), each read (the stream and
 `max`; exactly the bytes it delivered, end of stream or the error), `close_stdin`, `kill`,
 `wait` (the `ExitStatus` or the error) and the close of a dropped `Child`. The bytes `wait`
 discards are never recorded. Reads, writes and waits park and are readied as recorded.

@@ -130,8 +130,8 @@ fn udp.recv_from(n: Net, mut s: UdpSocket of n, mut buffer: List[u8], max: u64) 
 N fn udp.close(n: Net, take s: UdpSocket of n) -> ()
 
 // CAP-1/2, PROV-1/3, DROP-2/3, CONC-1/3, DET-1
-fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
-fn proc.spawn(p: Proc, program: Path, args: List[String], dir: Option[Dir]) -> Result[Child of p, ProcessError]
+fn proc.run(p: Proc, cmd: Command, stdin: Bytes, max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
+fn proc.spawn(p: Proc, cmd: Command) -> Result[Child of p, ProcessError]
 N fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessError]
 N fn child.close_stdin(p: Proc, mut c: Child of p) -> ()
 fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
@@ -709,32 +709,40 @@ ProcessError  = NotGranted() | InvalidInput() | NotFound() | PermissionDenied()
               | OutputLimit() | Fault(u32) | TimedOut() | Canceled(CancelCause)
               | InputClosed()
 Deadline      = { clock: MonotonicClock, at: Instant of .clock }
+Command       = { program: Path, args: List[String], dir: Option[Dir],
+                  env: Option[List[(String, String)]] }
 ProcessScript = { program: String, args: List[String],
                   outcome: Result[ProcessOutput, ProcessError] }
 ChildScript   = { program: String, args: List[String], steps: List[ChildStep] }
 ChildStep     = Print(Bytes) | PrintErr(Bytes) | Expect(Bytes) | Exit(ExitStatus)
 ```
 
-`proc.run(p, program, args, stdin, dir, max_output, deadline)` runs one child to completion
-and returns its exit status and everything it wrote to standard output and standard error.
-`proc.spawn(p, program, args, dir)` starts a streaming child that the program talks to while
-it runs. Both make these checks in this order, each before any host effect:
+A `Command` describes one child: the program to run, its arguments, its working directory
+and its environment. `proc.run(p, cmd, stdin, max_output, deadline)` runs one child to
+completion and returns its exit status and everything it wrote to standard output and
+standard error. `proc.spawn(p, cmd)` starts a streaming child that the program talks to
+while it runs. Both make these checks of `cmd` in this order, each before any host effect:
 
 1. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
-   `..` component and no trailing `/`, and no argument contains a NUL byte; otherwise
-   `InvalidInput()`.
-2. `program` must equal a rule of `p` byte for byte; otherwise `NotGranted()`. No `PATH`
-   search, link resolution or prefix match takes part in the check.
-3. With `Some(d)`, the child's working directory is `d`'s directory; a `Dir` with no host
-   directory (one from `test.dir`) is `InvalidInput()` for a host provider. With `None()`
-   the working directory is `/`. A `Dir` grants the child nothing; it only names where it
-   starts.
+   `..` component and no trailing `/`, and no argument contains a NUL byte. With `env`
+   `Some(vars)`, every name must be nonempty without `=` or NUL, no value may contain NUL,
+   and no name may appear twice. Otherwise `InvalidInput()`.
+2. `program` must equal a rule of `p` byte for byte, and with `env` `Some(vars)` every
+   name in `vars` must be one of that rule's environment names; otherwise `NotGranted()`.
+   No `PATH` search, link resolution or prefix match takes part in the check.
+3. With `dir` `Some(d)`, the child's working directory is `d`'s directory; a `Dir` with no
+   host directory (one from `test.dir`) is `InvalidInput()` for a host provider. With
+   `None()` the working directory is `/`. A `Dir` grants the child nothing; it only names
+   where it starts.
 Cancellation follows these program checks as specified by
 [CONC-3](concurrency.md#conc-3-cancellation). After that, for `proc.run` with `Some(d)`, a
 deadline `d.at` that `d.clock` has already reached is `TimedOut()`, and nothing is spawned.
 
-The child's argument vector is `program` followed by `args`. Its environment holds exactly
-the variables its rule lists that are set in the launcher's environment, and nothing else.
+The child's argument vector is `program` followed by `args`. With `env` `None()` its
+environment holds exactly the variables its rule lists that are set in the launcher's
+environment; with `Some(vars)` it holds exactly `vars`, and nothing is inherited. A rule's
+environment names bound what a child can see from either source, as an `Env` grant bounds
+`env.get`.
 A missing executable is `NotFound()`, one the host refuses to execute `PermissionDenied()`,
 and any other spawn, stream or wait failure `Fault(code)`, a capability input like other
 fault codes. A child that exits has status `Exited(code)`, one ended by a signal
@@ -801,7 +809,7 @@ script outcome or step that is not valid for a host child (a noncanonical `progr
 outcome `Error(Canceled(_))`) is invalid input. A `proc.run` on it makes the same checks,
 then takes the first unused run entry whose `program` and `args` equal its own and returns
 its `outcome`, with an output longer than `max_output` on either stream returning
-`OutputLimit()`. With no such entry the result is `NotFound()`. `stdin` and `dir` are not
+`OutputLimit()`. With no such entry the result is `NotFound()`. `stdin`, `dir` and `env` are not
 consulted beyond their checks. A scripted run takes no time: its deadline matters only to
 the check before spawning, and an outcome `Error(TimedOut())` scripts a timeout.
 

@@ -224,11 +224,14 @@ The compiler's native entry wrapper registers the returned Error and its immutab
 
 `process.rs` holds the Process capability (docs/spec/core-library.md#processes).
 `State::execute_process` checks every `proc.run` before any effect: the Proc and Dir
-handles, a canonical absolute program and NUL-free arguments (InvalidInput), then the
-exact rules (NotGranted); a scripted world (`process.script@1`, `test.process`) is
-served from its entries, and only a checked host run reaches the adapter's provider.
-`RealIo` runs it with `run_host`: std `Command`, an empty environment plus the rule's
-pass-through names, `/` or the pinned Dir as working directory, and one `poll` loop
+handles, then `hirsel_run_config::Command::check`: a canonical absolute program,
+NUL-free arguments and a well-formed exact environment (InvalidInput), then the exact
+rule and its environment names (NotGranted); a scripted world (`process.script@1`,
+`test.process`) is served from its entries, and only a checked host run reaches the
+adapter's provider. `RealIo` runs it with `run_host` over `host_command`: std `Command`
+with a cleared environment plus the rule's pass-through names (`ChildEnv::Inherit`) or
+exactly the command's variables (`ChildEnv::Exact`), `/` or the pinned Dir as working
+directory, and one `poll` loop
 that feeds stdin and drains both pipes, killing a child past `max_output` on either
 stream. A `Deadline` is the Instant's CLOCK_MONOTONIC ticks: a reached one is
 `TimedOut` before spawning, and at expiry the child gets SIGTERM, then SIGKILL after
@@ -243,7 +246,8 @@ discarded, so a child that ignores its stdin cannot end the program. `SimIo` rep
 the recorded completion in place of the host and rejects one that contradicts the
 re-derived checks. A launch without a run record reads the root Proc's `io.process`
 grant JSON from `HIRSEL_RT_PROCESS`, for live runs and replay alike. Tape forms are `process`, `test_process` (runs and
-children) and `process_run` (with its deadline as `clock:ticks` or `none`) requests and a
+children) and `process_run` (with its deadline as `clock:ticks` or `none`, then its
+command: program, directory, counted arguments, and `inherit` or counted variables) requests and a
 `process` completion (`host_io_tape.rs`). A recorded `TimedOut` needs a deadline, and
 raises the latest monotonic reading to it as a completed timer wait does; a scripted
 world times out only a deadline that reading already reached.

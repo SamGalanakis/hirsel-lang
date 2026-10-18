@@ -2500,7 +2500,7 @@ fn real_host_processes_run_granted_echo_and_false_and_refuse_everything_else() {
         r#"pub fn main(rt: Io) -> Result[(), GrantError] {
   let out = io.stdout(rt)?
   let p = io.process(rt)?
-  match proc.run(p, path.of("/bin/echo"), ["hello", "from echo"], b"", None(), 1024, None()) {
+  match proc.run(p, Command(program: path.of("/bin/echo"), args: ["hello", "from echo"], dir: None(), env: None()), b"", 1024, None()) {
     Ok(o) => {
       if o.status == Exited(0) && o.stdout == b"hello from echo\n" && o.stderr == b"" {
         let _ = out.print(out, "echo ok\n")
@@ -2508,14 +2508,14 @@ fn real_host_processes_run_granted_echo_and_false_and_refuse_everything_else() {
     },
     Error(_) => (),
   }
-  let fails = proc.run(p, path.of("/bin/false"), [], b"", None(), 1024, None())
+  let fails = proc.run(p, Command(program: path.of("/bin/false"), args: [], dir: None(), env: None()), b"", 1024, None())
   if fails == Ok(ProcessOutput(status: Exited(1), stdout: b"", stderr: b"")) {
     let _ = out.print(out, "false exited 1\n")
   }
-  if proc.run(p, path.of("/bin/sh"), ["-c", "true"], b"", None(), 1024, None()) == Error(NotGranted()) {
+  if proc.run(p, Command(program: path.of("/bin/sh"), args: ["-c", "true"], dir: None(), env: None()), b"", 1024, None()) == Error(NotGranted()) {
     let _ = out.print(out, "sh not granted\n")
   }
-  if proc.run(p, path.of("echo"), [], b"", None(), 1024, None()) == Error(InvalidInput()) {
+  if proc.run(p, Command(program: path.of("echo"), args: [], dir: None(), env: None()), b"", 1024, None()) == Error(InvalidInput()) {
     let _ = out.print(out, "search name refused\n")
   }
   Ok(())

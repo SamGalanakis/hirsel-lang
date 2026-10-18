@@ -1359,7 +1359,9 @@ expired: canceled
 
 ## Processes
 
-`proc.run` runs a program to completion with its stdin, an output bound and an
+A `Command` names a program, its arguments, an optional working `Dir` and an optional
+exact environment (`None()` passes through only the names the grant lists).
+`proc.run` runs one to completion with its stdin, an output bound and an
 optional `Deadline`: past it the child is stopped and the run returns `TimedOut()`.
 `proc.spawn` instead returns a `Child of p` to stream: `child.write`, `close_stdin`,
 `read_stdout` (0 at end of output), `read_stderr`, `wait` and `kill` each park only
@@ -1392,9 +1394,18 @@ pub fn main(t: Test) -> Result[(), ProcessError] {
       )
     ]
   )
-  let version = proc.run(p, bc, ["--version"], b"", None(), 4096u64, None())?
+  let version = proc.run(
+    p,
+    Command(program: bc, args: ["--version"], dir: None(), env: None()),
+    b"",
+    4096u64,
+    None()
+  )?
   test.check(t, version.status == Exited(0) && version.stdout == b"bc 1.07\n")
-  let mut calc = proc.spawn(p, bc, ["-q"], None())?
+  let mut calc = proc.spawn(
+    p,
+    Command(program: bc, args: ["-q"], dir: None(), env: None())
+  )?
   child.write(p, mut calc, b"6*7\n")?
   child.close_stdin(p, mut calc)
   let mut answer: List[u8] = []

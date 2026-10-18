@@ -121,15 +121,39 @@ pub fn canonical_program(path: &str) -> bool {
     })
 }
 
-/// The checks every provider makes, in order, before any effect.
-pub fn check(program: &str, args: &[String], rules: &[ProcessRule]) -> Result<(), ProcessFailure> {
-    if !canonical_program(program) || args.iter().any(|a| a.contains('\0')) {
-        return Err(ProcessFailure::InvalidInput);
+/// One `Command` (docs/spec/core-library.md#processes): a program, its arguments, the
+/// working directory's Dir handle (`None` is `/`) and an exact environment (`None`
+/// inherits the granting rule's names from the launcher).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Command {
+    pub program: String,
+    pub args: Vec<String>,
+    pub directory: Option<u64>,
+    pub env: Option<Vec<(String, String)>>,
+}
+
+impl Command {
+    /// The program and environment checks every provider makes, in order, before any
+    /// effect: the granting rule, or the failure.
+    pub fn check<'r>(&self, rules: &'r [ProcessRule]) -> Result<&'r ProcessRule, ProcessFailure> {
+        let vars = self.env.as_deref().unwrap_or_default();
+        let mut names: Vec<&str> = vars.iter().map(|(name, _)| name.as_str()).collect();
+        names.sort_unstable();
+        if !canonical_program(&self.program)
+            || self.args.iter().any(|a| a.contains('\0'))
+            || vars.iter().any(|(name, value)| {
+                name.is_empty() || name.contains(['=', '\0']) || value.contains('\0')
+            })
+            || names.windows(2).any(|p| p[0] == p[1])
+        {
+            return Err(ProcessFailure::InvalidInput);
+        }
+        rules
+            .iter()
+            .find(|r| r.program == self.program)
+            .filter(|rule| names.iter().all(|name| rule.env.iter().any(|e| e == name)))
+            .ok_or(ProcessFailure::NotGranted)
     }
-    if !rules.iter().any(|r| r.program == program) {
-        return Err(ProcessFailure::NotGranted);
-    }
-    Ok(())
 }
 
 /// A completion's streams bounded by `max_output`, as every provider applies it.

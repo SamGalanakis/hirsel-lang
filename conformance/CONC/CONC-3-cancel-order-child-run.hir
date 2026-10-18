@@ -6,7 +6,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   let c = io.monotonic_clock(rt)?
   let p = io.process(rt)?
-  let opened_child = match proc.spawn(p, path.of("/bin/test"), [], None()) {
+  let opened_child = match proc.spawn(
+    p,
+    Command(program: path.of("/bin/test"), args: [], dir: None(), env: None())
+  ) {
     Ok(child) => take child,
     Error(_) => {
       failure.check(false, Arithmetic())
@@ -49,10 +52,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
       failure.check(
         proc.run(
           p,
-          path.of("/bin/test"),
-          [],
+          Command(program: path.of("/bin/test"), args: [], dir: None(), env: None()),
           b"",
-          None(),
           64u64,
           Some(Deadline(clock: c, at: now))
         ) == Error(Canceled(DeadlineExceeded())),

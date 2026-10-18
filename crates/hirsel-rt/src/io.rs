@@ -133,22 +133,18 @@ pub enum Request {
         runs: Vec<hirsel_run_config::ProcessRun>,
         children: Vec<hirsel_run_config::ChildRun>,
     },
-    /// `proc.run`; `directory` is the working directory's Dir handle.
+    /// `proc.run`.
     ProcessRun {
         process: u64,
-        program: String,
-        args: Vec<String>,
+        command: hirsel_run_config::Command,
         stdin: Vec<u8>,
-        directory: Option<u64>,
         max_output: u64,
         deadline: Option<crate::process::Deadline>,
     },
-    /// `proc.spawn`; `directory` is the working directory's Dir handle.
+    /// `proc.spawn`.
     ProcessSpawn {
         process: u64,
-        program: String,
-        args: Vec<String>,
-        directory: Option<u64>,
+        command: hirsel_run_config::Command,
     },
     /// The streaming child operations name their Proc, as stream operations name their Net.
     ChildWrite {

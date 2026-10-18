@@ -31,7 +31,10 @@ fn print_line(out: Stdout, take line: List[u8]) -> () {
 // Spawn the test and print its output line by line until it ends. Past the deadline the
 // read returns Canceled; returning then drops the Child, which kills the test.
 fn stream(p: Proc, out: Stdout, program: Path) -> Verdict {
-  let mut test = match proc.spawn(p, program, [], None()) {
+  let mut test = match proc.spawn(
+    p,
+    Command(program: program, args: [], dir: None(), env: None())
+  ) {
     Ok(c) => take c,
     Error(e) => return NotRun(e),
   }

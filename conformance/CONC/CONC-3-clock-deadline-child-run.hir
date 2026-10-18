@@ -55,7 +55,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     tasks,
     after(c, start, 1000u64),
     fn(s: Scope) -> String {
-      let mut test = match proc.spawn(p, path.of("/bin/test"), [], None()) {
+      let mut test = match proc.spawn(
+        p,
+        Command(program: path.of("/bin/test"), args: [], dir: None(), env: None())
+      ) {
         Ok(child) => take child,
         Error(_) => return "not spawned",
       }

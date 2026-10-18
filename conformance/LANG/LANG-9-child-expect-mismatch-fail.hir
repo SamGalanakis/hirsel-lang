@@ -8,7 +8,11 @@ pub fn trial(t: Test) -> Result[(), ProcessError] {
     [],
     [ChildScript(program: "/bin/cat", args: [], steps: [Expect(b"ping\n")])]
   )
-  let mut c = proc.spawn(p, path.of("/bin/cat"), [], None())?
+  let mut c = proc.spawn(p, plain(path.of("/bin/cat")))?
   child.write(p, mut c, b"pong\n")?
   Ok(())
+}
+
+fn plain(program: Path) -> Command {
+  Command(program: program, args: [], dir: None(), env: None())
 }

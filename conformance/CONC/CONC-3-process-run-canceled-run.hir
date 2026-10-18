@@ -16,10 +16,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
           let _ = channel.receive(tasks, mut r)
           let ungranted: bool = match proc.run(
             p,
-            path.of("/bin/echo"),
-            [],
+            Command(program: path.of("/bin/echo"), args: [], dir: None(), env: None()),
             b"",
-            None(),
             64,
             None()
           ) {
@@ -28,33 +26,35 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
           }
           let invalid: bool = match proc.run(
             p,
-            path.of("echo"),
-            [],
+            Command(program: path.of("echo"), args: [], dir: None(), env: None()),
             b"",
-            None(),
             64,
             None()
           ) {
             Error(InvalidInput()) => true,
             _ => false,
           }
-          let spawned: bool = match proc.spawn(p, path.of("echo"), [], None()) {
+          let spawned: bool = match proc.spawn(
+            p,
+            Command(program: path.of("echo"), args: [], dir: None(), env: None())
+          ) {
             Error(InvalidInput()) => true,
             _ => false,
           }
           let valid_run: bool = match proc.run(
             p,
-            path.of("/bin/test"),
-            [],
+            Command(program: path.of("/bin/test"), args: [], dir: None(), env: None()),
             b"",
-            None(),
             64,
             None()
           ) {
             Error(Canceled(Requested)) => true,
             _ => false,
           }
-          let valid_spawn: bool = match proc.spawn(p, path.of("/bin/test"), [], None()) {
+          let valid_spawn: bool = match proc.spawn(
+            p,
+            Command(program: path.of("/bin/test"), args: [], dir: None(), env: None())
+          ) {
             Error(Canceled(Requested)) => true,
             _ => false,
           }
@@ -66,16 +66,29 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     }
   )
   failure.check(
-    proc.run(p, path.of("/bin/echo"), [], b"", None(), 64, None()) == Error(
-      NotGranted()
-    ),
+    proc.run(
+      p,
+      Command(program: path.of("/bin/echo"), args: [], dir: None(), env: None()),
+      b"",
+      64,
+      None()
+    ) == Error(NotGranted()),
     Arithmetic()
   )
   failure.check(
-    proc.run(p, path.of("echo"), [], b"", None(), 64, None()) == Error(InvalidInput()),
+    proc.run(
+      p,
+      Command(program: path.of("echo"), args: [], dir: None(), env: None()),
+      b"",
+      64,
+      None()
+    ) == Error(InvalidInput()),
     Arithmetic()
   )
-  let spawned: bool = match proc.spawn(p, path.of("echo"), [], None()) {
+  let spawned: bool = match proc.spawn(
+    p,
+    Command(program: path.of("echo"), args: [], dir: None(), env: None())
+  ) {
     Error(InvalidInput()) => true,
     _ => false,
   }

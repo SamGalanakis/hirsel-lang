@@ -5,7 +5,7 @@ use hirsel_heapcheck::{OpOutcome, OpValue, Operations};
 use hirsel_lir::layout_types::ScalarKind;
 use hirsel_rt::io::{Completion as C, Request as R};
 use hirsel_rt::process::{
-    ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessOutcome, ProcessRun,
+    ChildRun, ChildStep, Command, ExitStatus, ProcessFailure, ProcessOutcome, ProcessRun,
 };
 
 fn bytes(v: &OpValue) -> Option<Vec<u8>> {
@@ -154,6 +154,43 @@ fn script(v: &OpValue) -> Option<ProcessRun> {
 }
 
 impl Io {
+    /// A `Command` value. The model's Dir handles are H's own, so its Dir is checked here
+    /// and not passed on: a scripted world does not consult it, and the model has no host
+    /// world to start one in. `Err` is the CAP-2 failure of a value that is not a Dir.
+    fn command(&self, v: &OpValue) -> Option<Result<Command, OpOutcome>> {
+        let OpValue::Aggregate(fields) = v else {
+            return None;
+        };
+        let [OpValue::Handle(path), argv, dir, env] = fields.as_slice() else {
+            return None;
+        };
+        match variant(dir)? {
+            (0, _) => {}
+            (1, OpValue::Handle(d)) if matches!(self.grants.get(d), Some(IoGrant::Dir { .. })) => {}
+            _ => return Some(Err(OpOutcome::Fail("CAP-2".into()))),
+        }
+        let env = match variant(env)? {
+            (0, _) => None,
+            (1, OpValue::Sequence(vars)) => Some(
+                vars.iter()
+                    .map(|var| match var {
+                        OpValue::Aggregate(pair) => match pair.as_slice() {
+                            [name, value] => Some((text(name)?, text(value)?)),
+                            _ => None,
+                        },
+                        _ => None,
+                    })
+                    .collect::<Option<_>>()?,
+            ),
+            _ => return None,
+        };
+        Some(Ok(Command {
+            program: self.paths.get(path.checked_sub(1)? as usize)?.clone(),
+            args: strings(argv)?,
+            directory: None,
+            env,
+        }))
+    }
     pub(super) fn process(
         &mut self,
         module: Option<&str>,
@@ -176,7 +213,7 @@ impl Io {
                 }
             }
             (Some("io"), "process", [OpValue::Handle(1)]) => R::Process { io: 1 },
-            (Some("proc"), "run", [p, OpValue::Handle(path), argv, stdin, dir, max, deadline]) => {
+            (Some("proc"), "run", [p, cmd, stdin, max, deadline]) => {
                 // The runtime's policy checks a deadline against the clock's reading, which
                 // H owns; a run that starts before it is reached races it.
                 let deadline = match variant(deadline)? {
@@ -198,20 +235,14 @@ impl Io {
                     },
                     _ => return None,
                 };
-                // The model's Dir handles are H's own; check one here. A scripted world
-                // does not consult it, and the model has no host world to start one in.
-                match variant(dir)? {
-                    (0, _) => {}
-                    (1, OpValue::Handle(d))
-                        if matches!(self.grants.get(d), Some(IoGrant::Dir { .. })) => {}
-                    _ => return Some(OpOutcome::Fail("CAP-2".into())),
-                }
+                let command = match self.command(cmd)? {
+                    Ok(command) => command,
+                    Err(fail) => return Some(fail),
+                };
                 let request = R::ProcessRun {
                     process: self.network_id(p)?,
-                    program: self.paths.get(path.checked_sub(1)? as usize)?.clone(),
-                    args: strings(argv)?,
+                    command,
                     stdin: bytes(stdin)?,
-                    directory: None,
                     max_output: word(max)?,
                     deadline: deadline
                         .map(|(_, at, _, clock)| hirsel_rt::process::Deadline { clock, ticks: at }),
@@ -243,20 +274,13 @@ impl Io {
                     },
                 );
             }
-            (Some("proc"), "spawn", [p, OpValue::Handle(path), argv, dir]) => {
-                match variant(dir)? {
-                    (0, _) => {}
-                    (1, OpValue::Handle(d))
-                        if matches!(self.grants.get(d), Some(IoGrant::Dir { .. })) => {}
-                    _ => return Some(OpOutcome::Fail("CAP-2".into())),
-                }
-                R::ProcessSpawn {
+            (Some("proc"), "spawn", [p, cmd]) => match self.command(cmd)? {
+                Ok(command) => R::ProcessSpawn {
                     process: self.network_id(p)?,
-                    program: self.paths.get(path.checked_sub(1)? as usize)?.clone(),
-                    args: strings(argv)?,
-                    directory: None,
-                }
-            }
+                    command,
+                },
+                Err(fail) => return Some(fail),
+            },
             (Some("child"), _, [p, c, rest @ ..]) => {
                 let (process, child) = (self.network_id(p)?, self.network_id(c)?);
                 let request = match (name, rest) {

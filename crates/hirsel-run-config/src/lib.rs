@@ -20,8 +20,8 @@ pub mod tls;
 pub use child::{ChildStream, ScriptChild, ScriptRead, child_mismatch, child_unmet};
 mod process;
 pub use process::{
-    ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule,
-    ProcessRun, bounded, canonical_program, check, decode_child_runs, decode_process_runs,
+    ChildRun, ChildStep, Command, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome,
+    ProcessRule, ProcessRun, bounded, canonical_program, decode_child_runs, decode_process_runs,
     encode_child_runs, encode_process_runs, scriptable, validate_process_grant,
 };
 

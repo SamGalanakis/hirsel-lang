@@ -54,6 +54,8 @@ conformance/CAP/CAP-1-net-tls-truncate-run.hir
 conformance/CAP/CAP-1-net-ungranted-host-run.hir
 conformance/CAP/CAP-1-normalize-tree-example.hir
 conformance/CAP/CAP-1-output-no-added-newline.hir
+conformance/CAP/CAP-1-process-env-run.hir
+conformance/CAP/CAP-1-process-env-scripted-run.hir
 conformance/CAP/CAP-1-process-projection-bad.hir
 conformance/CAP/CAP-1-process-projection-ok.hir
 conformance/CAP/CAP-1-process-run-bad.hir

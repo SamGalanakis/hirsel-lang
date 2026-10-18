@@ -1,0 +1,34 @@
+// rule: CAP-1
+// expect: run
+// entry: exercise
+// A test.process Proc's rules list no environment names, so an empty exact environment
+// runs and any named variable is not granted, for runs and spawns alike.
+fn echo(take env: Option[List[(String, String)]]) -> Command {
+  Command(program: path.of("/bin/echo"), args: ["hi"], dir: None(), env: env)
+}
+
+pub fn exercise(t: Test) -> Result[(), ProcessError] {
+  let p = test.process(
+    t,
+    [
+      ProcessScript(
+        program: "/bin/echo",
+        args: ["hi"],
+        outcome: Ok(ProcessOutput(status: Exited(0), stdout: b"hi\n", stderr: b""))
+      )
+    ],
+    [ChildScript(program: "/bin/echo", args: ["hi"], steps: [Print(b"hi\n")])]
+  )
+  let granted = proc.run(p, echo(Some([("TERM", "dumb")])), b"", 64u64, None())
+  test.check(t, granted == Error(NotGranted()))
+  let spawned = match proc.spawn(p, echo(Some([("TERM", "dumb")]))) {
+    Error(e) => e == NotGranted(),
+    Ok(_) => false,
+  }
+  test.check(t, spawned)
+  let ran = proc.run(p, echo(Some([])), b"", 64u64, None())?
+  test.check(t, ran.stdout == b"hi\n")
+  let c = proc.spawn(p, echo(Some([])))?
+  test.check(t, child.wait(p, take c) == Ok(Exited(0)))
+  Ok(())
+}

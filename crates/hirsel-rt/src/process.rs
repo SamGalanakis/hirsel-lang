@@ -12,8 +12,8 @@
 use crate::handles::Grant;
 use crate::io::{AdapterError, Completion, Request, State};
 pub use hirsel_run_config::{
-    ChildRun, ChildStep, ChildStream, ExitStatus, ProcessFailure, ProcessOutcome, ProcessRule,
-    ProcessRun, ScriptChild, ScriptRead, bounded, canonical_program, check,
+    ChildRun, ChildStep, ChildStream, Command, ExitStatus, ProcessFailure, ProcessOutcome,
+    ProcessRule, ProcessRun, ScriptChild, ScriptRead, bounded, canonical_program,
 };
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -37,18 +37,49 @@ pub enum ProcessWorld {
     Script(u64),
 }
 
+/// A child's environment after the checks passed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ChildEnv {
+    /// The granting rule's names, with the values the launcher's environment has.
+    Inherit(Vec<String>),
+    /// Exactly these variables, each name granted by the rule.
+    Exact(Vec<(String, String)>),
+}
+impl ChildEnv {
+    /// The environment `command` gets under its granting `rule`.
+    pub fn of(command: &Command, rule: &ProcessRule) -> Self {
+        match &command.env {
+            Some(vars) => Self::Exact(vars.clone()),
+            None => Self::Inherit(rule.env.clone()),
+        }
+    }
+}
+
 /// One run after every check passed: the host provider's whole input.
 pub struct ProcessSpec<'a> {
     pub program: &'a str,
     pub args: &'a [String],
     pub stdin: &'a [u8],
-    /// Pass-through variable names from the granting rule.
-    pub env: &'a [String],
+    pub env: ChildEnv,
     /// The working directory's Dir handle, always host-backed here; `None` is `/`.
     pub directory: Option<u64>,
     pub max_output: u64,
     /// CLOCK_MONOTONIC nanoseconds by which the run must end.
     pub deadline: Option<u64>,
+}
+impl<'a> ProcessSpec<'a> {
+    /// The checked `command` under `rule`, with no input and no bound: a spawn's spec.
+    pub fn of(command: &'a Command, rule: &ProcessRule) -> Self {
+        Self {
+            program: &command.program,
+            args: &command.args,
+            stdin: &[],
+            env: ChildEnv::of(command, rule),
+            directory: command.directory,
+            max_output: 0,
+            deadline: None,
+        }
+    }
 }
 
 /// What a host provider performs after every check passed. Its answer is the completion
@@ -110,41 +141,44 @@ impl State {
             _ => Err(AdapterError::InvalidHandle(id)),
         }
     }
+    /// A command's checks (docs/spec/core-library.md#processes): program and environment,
+    /// then a working directory a host provider cannot start in.
+    fn command_error(
+        &self,
+        command: &Command,
+        rules: &[ProcessRule],
+        world: ProcessWorld,
+    ) -> Result<Option<ProcessFailure>, AdapterError> {
+        if let Some(d) = command.directory
+            && !matches!(self.handles.rows.get(&d), Some(Grant::Directory { .. }))
+        {
+            return Err(AdapterError::InvalidHandle(d));
+        }
+        Ok(command.check(rules).err().or_else(|| {
+            (world == ProcessWorld::Host
+                && command
+                    .directory
+                    .is_some_and(|d| self.fake_directories.contains_key(&d)))
+            .then_some(ProcessFailure::InvalidInput)
+        }))
+    }
     pub(crate) fn process_error(
         &self,
         request: &Request,
     ) -> Result<Option<Completion>, AdapterError> {
         let failure = match request {
             Request::ProcessRun {
-                process,
-                program,
-                args,
-                directory,
-                ..
+                process, command, ..
             }
-            | Request::ProcessSpawn {
-                process,
-                program,
-                args,
-                directory,
-            } => {
+            | Request::ProcessSpawn { process, command } => {
                 let (rules, world) = self.process_grant(*process)?;
-                if let Some(d) = directory
-                    && !matches!(self.handles.rows.get(d), Some(Grant::Directory { .. }))
-                {
-                    return Err(AdapterError::InvalidHandle(*d));
-                }
                 if let Request::ProcessRun {
                     deadline: Some(d), ..
                 } = request
                 {
                     self.expect(d.clock, Grant::MonotonicClock)?;
                 }
-                check(program, args, &rules).err().or_else(|| {
-                    (world == ProcessWorld::Host
-                        && directory.is_some_and(|d| self.fake_directories.contains_key(&d)))
-                    .then_some(ProcessFailure::InvalidInput)
-                })
+                self.command_error(command, &rules, world)?
             }
             Request::ChildWrite { process, child, .. } => {
                 let (_, open) = self.child_grant(*process, *child)?;
@@ -234,10 +268,8 @@ impl State {
             }
             Request::ProcessRun {
                 process,
-                program,
-                args,
+                command,
                 stdin,
-                directory,
                 max_output,
                 deadline,
             } => {
@@ -258,23 +290,23 @@ impl State {
                             .get_mut(&id)
                             .ok_or(AdapterError::InvalidCompletion)?;
                         match runs.iter_mut().find(|r| {
-                            r.as_ref()
-                                .is_some_and(|r| &r.program == program && &r.args == args)
+                            r.as_ref().is_some_and(|r| {
+                                r.program == command.program && r.args == command.args
+                            })
                         }) {
                             Some(entry) => bounded(entry.take().unwrap().outcome, *max_output),
                             None => ProcessOutcome::Error(ProcessFailure::NotFound),
                         }
                     }
                     ProcessWorld::Host => {
-                        let rule = rules.iter().find(|r| &r.program == program).unwrap();
+                        let rule = command
+                            .check(&rules)
+                            .map_err(|_| AdapterError::InvalidCompletion)?;
                         let Completion::Process(outcome) = host(HostCall::Run(&ProcessSpec {
-                            program,
-                            args,
                             stdin,
-                            env: &rule.env,
-                            directory: *directory,
                             max_output: *max_output,
                             deadline: deadline.map(|d| d.ticks),
+                            ..ProcessSpec::of(command, rule)
                         }))?
                         else {
                             return Err(AdapterError::InvalidCompletion);
@@ -288,7 +320,7 @@ impl State {
                                 | ProcessFailure::InputClosed,
                             ) => false,
                             ProcessOutcome::Error(ProcessFailure::InvalidInput) => {
-                                directory.is_some()
+                                command.directory.is_some()
                             }
                             ProcessOutcome::Error(ProcessFailure::TimedOut) => deadline.is_some(),
                             outcome => bounded(outcome.clone(), *max_output) == *outcome,
@@ -308,12 +340,7 @@ impl State {
                 }
                 Ok(Completion::Process(outcome))
             }
-            Request::ProcessSpawn {
-                process,
-                program,
-                args,
-                directory,
-            } => {
+            Request::ProcessSpawn { process, command } => {
                 let (rules, world) = self.process_grant(*process)?;
                 let child = self.handles.next();
                 let spawned = match world {
@@ -323,8 +350,9 @@ impl State {
                             .get_mut(&id)
                             .ok_or(AdapterError::InvalidCompletion)?;
                         match children.iter_mut().find(|c| {
-                            c.as_ref()
-                                .is_some_and(|c| &c.program == program && &c.args == args)
+                            c.as_ref().is_some_and(|c| {
+                                c.program == command.program && c.args == command.args
+                            })
                         }) {
                             Some(entry) => {
                                 let script = ScriptChild::new(entry.take().unwrap());
@@ -335,16 +363,10 @@ impl State {
                         }
                     }
                     ProcessWorld::Host => {
-                        let rule = rules.iter().find(|r| &r.program == program).unwrap();
-                        let spec = ProcessSpec {
-                            program,
-                            args,
-                            stdin: &[],
-                            env: &rule.env,
-                            directory: *directory,
-                            max_output: 0,
-                            deadline: None,
-                        };
+                        let rule = command
+                            .check(&rules)
+                            .map_err(|_| AdapterError::InvalidCompletion)?;
+                        let spec = ProcessSpec::of(command, rule);
                         match host(HostCall::Spawn { child, spec: &spec })? {
                             Completion::Spawned(Ok(id)) if id == child => Ok(child),
                             Completion::Spawned(Err(
@@ -353,7 +375,7 @@ impl State {
                                 | ProcessFailure::Fault(_)),
                             )) => Err(failure),
                             Completion::Spawned(Err(ProcessFailure::InvalidInput))
-                                if directory.is_some() =>
+                                if command.directory.is_some() =>
                             {
                                 Err(ProcessFailure::InvalidInput)
                             }
@@ -663,6 +685,34 @@ fn terminate(child: &mut std::process::Child, cancel: Option<RawFd>) {
     }
 }
 
+/// The host command for one checked spec: its program and arguments, its exact or
+/// inherited environment and nothing else, starting in `cwd` (a pinned directory
+/// descriptor) or `/`, with all three standard streams piped.
+pub(crate) fn host_command(spec: &ProcessSpec<'_>, cwd: Option<RawFd>) -> std::process::Command {
+    use std::process::Stdio;
+    let mut command = std::process::Command::new(spec.program);
+    command
+        .args(spec.args)
+        .env_clear()
+        .current_dir(cwd.map_or_else(|| "/".to_owned(), |fd| format!("/proc/self/fd/{fd}")))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    match &spec.env {
+        ChildEnv::Inherit(names) => {
+            for name in names {
+                if let Some(value) = std::env::var_os(name) {
+                    command.env(name, value);
+                }
+            }
+        }
+        ChildEnv::Exact(vars) => {
+            command.envs(vars.iter().map(|(name, value)| (name, value)));
+        }
+    }
+    command
+}
+
 /// Run one checked program on the host to completion, starting in `cwd` (a pinned
 /// directory descriptor) or `/`. The run ends `TimedOut()` at its deadline, and kills the
 /// child at once when `cancel` becomes readable (its outcome is then discarded).
@@ -672,24 +722,10 @@ pub fn run_host(
     cancel: Option<RawFd>,
 ) -> ProcessOutcome {
     use std::os::unix::process::ExitStatusExt;
-    use std::process::{Command, Stdio};
     if spec.deadline.is_some_and(|d| monotonic_now() >= d) {
         return ProcessOutcome::Error(ProcessFailure::TimedOut);
     }
-    let mut command = Command::new(spec.program);
-    command
-        .args(spec.args)
-        .env_clear()
-        .current_dir(cwd.map_or_else(|| "/".to_owned(), |fd| format!("/proc/self/fd/{fd}")))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for name in spec.env {
-        if let Some(value) = std::env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    let mut child = match command.spawn() {
+    let mut child = match host_command(spec, cwd).spawn() {
         Ok(child) => child,
         Err(error) => return ProcessOutcome::Error(spawn_failure(&error)),
     };
@@ -832,7 +868,7 @@ pub(crate) fn run_cooperative(
         let program = spec.program.to_owned();
         let args = spec.args.to_vec();
         let stdin = spec.stdin.to_vec();
-        let env = spec.env.to_vec();
+        let env = spec.env.clone();
         let (directory, max_output, deadline) = (spec.directory, spec.max_output, spec.deadline);
         // The thread keeps its own descriptor of the working directory.
         let cwd = match cwd {
@@ -849,7 +885,7 @@ pub(crate) fn run_cooperative(
                 program: &program,
                 args: &args,
                 stdin: &stdin,
-                env: &env,
+                env,
                 directory,
                 max_output,
                 deadline,
@@ -1148,34 +1184,48 @@ unsafe fn child_script(at: *const u8) -> ChildRun {
     }
 }
 
+/// One borrowed `Command` (40 bytes): program Path at 0, args List at 8, `Option[Dir]`
+/// (u32 tag, Dir at 24) at 16, and `Option[List[(String, String)]]` at 32, a null-niche
+/// block pointer whose elements are 48-byte name and value Strings.
+unsafe fn command(ctx: *mut crate::RunCtx, at: *const u8) -> Command {
+    let env = unsafe { at.add(32).cast::<*mut crate::Header>().read() };
+    Command {
+        program: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { at.cast::<u64>().read() }),
+        args: unsafe {
+            list(at.add(8).cast::<*mut crate::Header>().read(), 24, |a| {
+                text(a)
+            })
+        },
+        directory: match unsafe { at.add(16).cast::<u32>().read() } {
+            0 => None,
+            _ => Some(unsafe { at.add(24).cast::<u64>().read() }),
+        },
+        env: (!env.is_null())
+            .then(|| unsafe { list(env, 48, |var| (text(var), text(var.add(24)))) }),
+    }
+}
+
 /// # Safety
-/// Context is bound; Proc, Path, the List[String] block, the Bytes slice, the
-/// `Option[Dir]` (u32 tag, Dir at 8) and the `Option[Deadline]` (u32 tag, the clock at 8
-/// and the Instant's ticks at 16) are borrowed live values; out is writable.
+/// Context is bound; Proc, the Command, the Bytes slice and the `Option[Deadline]` (u32
+/// tag, the clock at 8 and the Instant's ticks at 16) are borrowed live values; out is
+/// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
     ctx: *mut crate::RunCtx,
     _destination: *mut u8,
     out: *mut ProcessResult,
     process: *const u64,
-    program: *const u64,
-    args: *mut crate::Header,
+    cmd: *const u8,
     stdin_owner: *mut crate::Header,
     stdin_start: u64,
     stdin_length: u64,
-    directory: *const u8,
     max_output: u64,
     deadline: *const u8,
 ) -> u8 {
     let request = Request::ProcessRun {
         process: unsafe { process.read() },
-        program: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { program.read() }),
-        args: unsafe { list(args, 24, |a| text(a)) },
+        command: unsafe { command(ctx, cmd) },
         stdin: unsafe { crate::io::slice_bytes(stdin_owner, stdin_start, stdin_length) }.to_vec(),
-        directory: match unsafe { directory.cast::<u32>().read() } {
-            0 => None,
-            _ => Some(unsafe { directory.add(8).cast::<u64>().read() }),
-        },
         max_output,
         deadline: match unsafe { deadline.cast::<u32>().read() } {
             0 => None,
@@ -1303,28 +1353,20 @@ impl ChildPairResult {
     }
 }
 
-/// `proc.spawn(p, program, args, dir) -> Result[Child of p, ProcessError]`.
+/// `proc.spawn(p, cmd) -> Result[Child of p, ProcessError]`.
 /// # Safety
-/// Context is bound; Proc, Path, the List[String] block and the `Option[Dir]` (u32 tag, Dir
-/// at 8) are borrowed live values; out is writable.
+/// Context is bound; Proc and the Command are borrowed live values; out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn(
     ctx: *mut crate::RunCtx,
     _destination: *mut u8,
     out: *mut ChildWordResult,
     process: *const u64,
-    program: *const u64,
-    args: *mut crate::Header,
-    directory: *const u8,
+    cmd: *const u8,
 ) -> u8 {
     let request = Request::ProcessSpawn {
         process: unsafe { process.read() },
-        program: unsafe { crate::io::Binding::get(ctx) }.path(unsafe { program.read() }),
-        args: unsafe { list(args, 24, |a| text(a)) },
-        directory: match unsafe { directory.cast::<u32>().read() } {
-            0 => None,
-            _ => Some(unsafe { directory.add(8).cast::<u64>().read() }),
-        },
+        command: unsafe { command(ctx, cmd) },
     };
     let Ok(Completion::Spawned(value)) = (unsafe { crate::io::capability_call(ctx, request) })
     else {

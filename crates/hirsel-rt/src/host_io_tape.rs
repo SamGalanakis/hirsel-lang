@@ -17,6 +17,41 @@ fn failure_word(failure: ProcessFailure) -> String {
     }
 }
 
+fn deadline_word(deadline: Option<crate::process::Deadline>) -> String {
+    deadline.map_or_else(|| "none".into(), |d| format!("{}:{}", d.clock, d.ticks))
+}
+/// A Command's words: program, directory, the argument count and each argument, then
+/// `inherit` or the variable count and each name and value. Each count leads the words it
+/// counts.
+fn command_words(command: &hirsel_run_config::Command) -> String {
+    let mut text = format!(
+        "{} {} {}",
+        hex(command.program.as_bytes()),
+        command
+            .directory
+            .map_or_else(|| "none".into(), |d| d.to_string()),
+        command.args.len()
+    );
+    for arg in &command.args {
+        text.push(' ');
+        text.push_str(&hex(arg.as_bytes()));
+    }
+    match &command.env {
+        None => text.push_str(" inherit"),
+        Some(vars) => {
+            text.push_str(&format!(" {}", vars.len()));
+            for (name, value) in vars {
+                text.push_str(&format!(
+                    " {} {}",
+                    hex(name.as_bytes()),
+                    hex(value.as_bytes())
+                ));
+            }
+        }
+    }
+    text
+}
+
 pub(crate) fn render_request(request: &Request) -> Option<String> {
     Some(match request {
         Request::Stdin { io } => format!("stdin {io}"),
@@ -37,47 +72,20 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
             hex(&hirsel_run_config::encode_process_runs(runs)),
             hex(&hirsel_run_config::encode_child_runs(children))
         ),
-        // The argument count leads, so every word after it is one argument.
         Request::ProcessRun {
             process,
-            program,
-            args,
+            command,
             stdin,
-            directory,
             max_output,
             deadline,
-        } => {
-            let mut text = format!(
-                "process_run {process} {} {} {} {max_output} {} {}",
-                hex(program.as_bytes()),
-                hex(stdin),
-                directory.map_or_else(|| "none".into(), |d| d.to_string()),
-                deadline.map_or_else(|| "none".into(), |d| format!("{}:{}", d.clock, d.ticks)),
-                args.len()
-            );
-            for arg in args {
-                text.push(' ');
-                text.push_str(&hex(arg.as_bytes()));
-            }
-            text
-        }
-        Request::ProcessSpawn {
-            process,
-            program,
-            args,
-            directory,
-        } => {
-            let mut text = format!(
-                "process_spawn {process} {} {} {}",
-                hex(program.as_bytes()),
-                directory.map_or_else(|| "none".into(), |d| d.to_string()),
-                args.len()
-            );
-            for arg in args {
-                text.push(' ');
-                text.push_str(&hex(arg.as_bytes()));
-            }
-            text
+        } => format!(
+            "process_run {process} {} {max_output} {} {}",
+            hex(stdin),
+            deadline_word(*deadline),
+            command_words(command)
+        ),
+        Request::ProcessSpawn { process, command } => {
+            format!("process_spawn {process} {}", command_words(command))
         }
         Request::ChildWrite {
             process,
@@ -191,6 +199,68 @@ fn bytes(word: &str) -> Result<Vec<u8>, String> {
 fn text(word: &str) -> Result<String, String> {
     String::from_utf8(bytes(word)?).map_err(|_| "bad host input tape UTF-8".into())
 }
+fn parse_deadline(word: &str) -> Result<Option<crate::process::Deadline>, String> {
+    Ok(match word {
+        "none" => None,
+        d => {
+            let (clock, ticks) = d.split_once(':').ok_or("process tape deadline")?;
+            Some(crate::process::Deadline {
+                clock: number(clock)?,
+                ticks: number(ticks)?,
+            })
+        }
+    })
+}
+/// One Command from the front of `words`, as [`command_words`] writes it.
+fn parse_command<'a>(
+    words: &mut impl Iterator<Item = &'a str>,
+) -> Result<(hirsel_run_config::Command, usize), String> {
+    let mut used = 0;
+    let mut next = || {
+        used += 1;
+        words
+            .next()
+            .ok_or_else(|| "truncated process tape command".to_string())
+    };
+    let program = text(next()?)?;
+    let directory = match next()? {
+        "none" => None,
+        d => Some(number(d)?),
+    };
+    let args = (0..number::<usize>(next()?)?)
+        .map(|_| text(next()?))
+        .collect::<Result<_, _>>()?;
+    let env = match next()? {
+        "inherit" => None,
+        count => Some(
+            (0..number::<usize>(count)?)
+                .map(|_| Ok((text(next()?)?, text(next()?)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+    };
+    Ok((
+        hirsel_run_config::Command {
+            program,
+            args,
+            directory,
+            env,
+        },
+        used,
+    ))
+}
+/// A command that used every remaining word.
+fn ended(
+    rest: &[&str],
+) -> impl FnOnce((hirsel_run_config::Command, usize)) -> Result<hirsel_run_config::Command, String>
+{
+    let len = rest.len();
+    move |(command, used)| {
+        (used == len)
+            .then_some(command)
+            .ok_or_else(|| "trailing process tape words".into())
+    }
+}
+
 pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
     Ok(Some(match words {
         ["stdin", io] => Request::Stdin { io: number(io)? },
@@ -230,60 +300,21 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
         [
             "process_run",
             process,
-            program,
             stdin,
-            directory,
             max_output,
             deadline,
-            count,
-            args @ ..,
-        ] => {
-            if number::<usize>(count)? != args.len() {
-                return Err("process tape argument count".into());
-            }
-            Request::ProcessRun {
-                process: number(process)?,
-                program: text(program)?,
-                args: args.iter().map(|a| text(a)).collect::<Result<_, _>>()?,
-                stdin: bytes(stdin)?,
-                directory: match *directory {
-                    "none" => None,
-                    d => Some(number(d)?),
-                },
-                max_output: number(max_output)?,
-                deadline: match *deadline {
-                    "none" => None,
-                    d => {
-                        let (clock, ticks) = d.split_once(':').ok_or("process tape deadline")?;
-                        Some(crate::process::Deadline {
-                            clock: number(clock)?,
-                            ticks: number(ticks)?,
-                        })
-                    }
-                },
-            }
-        }
-        [
-            "process_spawn",
-            process,
-            program,
-            directory,
-            count,
-            args @ ..,
-        ] => {
-            if number::<usize>(count)? != args.len() {
-                return Err("process tape argument count".into());
-            }
-            Request::ProcessSpawn {
-                process: number(process)?,
-                program: text(program)?,
-                args: args.iter().map(|a| text(a)).collect::<Result<_, _>>()?,
-                directory: match *directory {
-                    "none" => None,
-                    d => Some(number(d)?),
-                },
-            }
-        }
+            rest @ ..,
+        ] => Request::ProcessRun {
+            process: number(process)?,
+            stdin: bytes(stdin)?,
+            max_output: number(max_output)?,
+            deadline: parse_deadline(deadline)?,
+            command: parse_command(&mut rest.iter().copied()).and_then(ended(rest))?,
+        },
+        ["process_spawn", process, rest @ ..] => Request::ProcessSpawn {
+            process: number(process)?,
+            command: parse_command(&mut rest.iter().copied()).and_then(ended(rest))?,
+        },
         ["child_write", process, child, b] => Request::ChildWrite {
             process: number(process)?,
             child: number(child)?,

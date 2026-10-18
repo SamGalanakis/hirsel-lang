@@ -742,25 +742,13 @@ impl HostLibrary {
         use hirsel_interp::library::process::{failure_value, script_failure, status_value};
         let process = self.id(&a[0])?;
         let request = match name {
-            "proc.spawn" => R::ProcessSpawn {
-                process,
-                program: text(fields(&a[1])?[0])?,
-                args: fields(&a[2])?
-                    .into_iter()
-                    .map(text)
-                    .collect::<Result<_, _>>()?,
-                directory: match tag(&a[3])? {
-                    0 => None,
-                    _ => match self.id(fields(&a[3])?[0]) {
-                        Ok(directory) => Some(directory),
-                        // A test.dir Dir has no host directory to start in.
-                        Err(_) => {
-                            return Ok(OperationResult::returned(error(failure_value(
-                                ProcessFailure::InvalidInput,
-                            ))));
-                        }
-                    },
-                },
+            "proc.spawn" => match self.command(&a[1])? {
+                Some(command) => R::ProcessSpawn { process, command },
+                None => {
+                    return Ok(OperationResult::returned(error(failure_value(
+                        ProcessFailure::InvalidInput,
+                    ))));
+                }
             },
             "child.write" => R::ChildWrite {
                 process,
@@ -849,23 +837,49 @@ impl HostLibrary {
         })
     }
     /// Issue `proc.run` under `token`: its completion, or Blocked while the child runs.
-    fn process_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
-        let directory = match tag(&a[4])? {
+    /// A `Command` value with its host Dir handle; `None` for a Dir with no host directory
+    /// to start in (one from test.dir).
+    fn command(&self, v: &Value) -> Result<Option<hirsel_rt::process::Command>, Error> {
+        let f = fields(v)?;
+        let directory = match tag(f[2])? {
             0 => None,
-            _ => match self.id(fields(&a[4])?[0]) {
+            _ => match self.id(fields(f[2])?[0]) {
                 Ok(directory) => Some(directory),
-                // A test.dir Dir has no host directory to start in.
-                Err(_) => {
-                    return Ok(OperationResult::returned(process_value(
-                        ProcessOutcome::Error(ProcessFailure::InvalidInput),
-                    )));
-                }
+                Err(_) => return Ok(None),
             },
         };
-        let deadline = match tag(&a[6])? {
+        let env = match tag(f[3])? {
+            0 => None,
+            _ => Some(
+                fields(fields(f[3])?[0])?
+                    .into_iter()
+                    .map(|var| match fields(var)?.as_slice() {
+                        [name, value] => Ok((text(name)?, text(value)?)),
+                        _ => Err(invalid()),
+                    })
+                    .collect::<Result<_, Error>>()?,
+            ),
+        };
+        Ok(Some(hirsel_rt::process::Command {
+            program: text(fields(f[0])?[0])?,
+            args: fields(f[1])?
+                .into_iter()
+                .map(text)
+                .collect::<Result<_, _>>()?,
+            directory,
+            env,
+        }))
+    }
+    fn process_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
+        let Some(command) = self.command(&a[1])? else {
+            return Ok(OperationResult::returned(process_value(
+                ProcessOutcome::Error(ProcessFailure::InvalidInput),
+            )));
+        };
+        let deadline = match tag(&a[4])? {
             0 => None,
             _ => {
-                let deadline = fields(fields(&a[6])?[0])?;
+                let deadline = fields(fields(&a[4])?[0])?;
                 let Value::Handle { kind, id: ticks } = deadline[1] else {
                     return Err(invalid());
                 };
@@ -880,14 +894,9 @@ impl HostLibrary {
         };
         let request = R::ProcessRun {
             process: self.id(&a[0])?,
-            program: text(fields(&a[1])?[0])?,
-            args: fields(&a[2])?
-                .into_iter()
-                .map(text)
-                .collect::<Result<_, _>>()?,
-            stdin: bytes(&a[3])?,
-            directory,
-            max_output: word(&a[5])?,
+            command,
+            stdin: bytes(&a[2])?,
+            max_output: word(&a[3])?,
             deadline,
         };
         self.io.adapter().enter(token);
@@ -1807,15 +1816,22 @@ mod tests {
         else {
             panic!("test.dir must return a directory");
         };
+        let command = Value::Record {
+            definition: DefPath::core("Command"),
+            fields: vec![
+                Some(Value::Record {
+                    definition: DefPath::core("Path"),
+                    fields: vec![Some(Value::String("/bin/echo".into()))],
+                }),
+                Some(sequence(BuiltinType::List, [])),
+                Some(variant(1, vec![directory])),
+                Some(variant(0, vec![])),
+            ],
+        };
         let arguments = [
             process,
-            Value::Record {
-                definition: DefPath::core("Path"),
-                fields: vec![Some(Value::String("/bin/echo".into()))],
-            },
-            sequence(BuiltinType::List, []),
+            command,
             Value::Bytes(vec![]),
-            variant(1, vec![directory]),
             u64_value(1024),
             variant(0, vec![]),
         ];

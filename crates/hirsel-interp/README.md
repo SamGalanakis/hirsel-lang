@@ -527,9 +527,10 @@ language failure (a scripted client's unmet Expect) reports it through
 
 `library::process` is the reference Process provider. `SimulationConfig.process`
 holds the `io.process` grant; the `process` projection mints the root Proc with its
-rules. `proc.run` returns Canceled in a cancelled scope, then checks a canonical
-absolute program and NUL-free arguments (InvalidInput) and the exact rules
-(NotGranted); a deadline virtual time has reached is TimedOut, and otherwise it
+rules. `proc.run` returns Canceled in a cancelled scope, then checks its `Command`
+(`hirsel_run_config::Command::check`: a canonical absolute program, NUL-free arguments
+and a well-formed exact environment, InvalidInput; the exact rule and its environment
+names, NotGranted); a deadline virtual time has reached is TimedOut, and otherwise it
 serves the first unused `process.script@1` or `test.process` entry with equal program
 and args (none: NotFound), bounding each stream by `max_output` (OutputLimit). It
 never spawns: the driver's host library sends `process.spawn@1` runs to the runtime.

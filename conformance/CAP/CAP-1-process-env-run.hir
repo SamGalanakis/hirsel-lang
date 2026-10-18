@@ -1,0 +1,40 @@
+// rule: CAP-1
+// expect: run
+// process: {"provider":"process.script@1","rules":[{"program":"/usr/bin/sort","env":["LC_ALL"]}],"runs":[{"program":"/usr/bin/sort","args":[],"outcome":{"output":{"status":{"exited":0},"stdout":[97,10,98,10],"stderr":[]}}}]}
+// stdout: HOME not granted
+// stdout: LC_ALL twice invalid
+// stdout: A=B invalid
+// stdout: sorted 4 bytes
+// A Command's exact environment may name only variables its rule lists. Any other name
+// is not granted, and a malformed or repeated name is invalid input; neither takes the
+// script's one run.
+fn sort(take env: List[(String, String)]) -> Command {
+  Command(program: path.of("/usr/bin/sort"), args: [], dir: None(), env: Some(env))
+}
+
+fn report(r: Result[ProcessOutput, ProcessError]) -> String {
+  match r {
+    Ok(o) => f"sorted {bytes.len(o.stdout)} bytes",
+    Error(NotGranted()) => "not granted",
+    Error(InvalidInput()) => "invalid",
+    Error(_) => "failed",
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let output = io.stdout(rt)?
+  let p = io.process(rt)?
+  let home = report(proc.run(p, sort([("HOME", "/root")]), b"", 64u64, None()))
+  let _ = out.print(output, f"HOME {home}\n")
+  let twice = report(
+    proc.run(p, sort([("LC_ALL", "C"), ("LC_ALL", "C")]), b"", 64u64, None())
+  )
+  let _ = out.print(output, f"LC_ALL twice {twice}\n")
+  let equals = report(proc.run(p, sort([("A=B", "C")]), b"", 64u64, None()))
+  let _ = out.print(output, f"A=B {equals}\n")
+  let _ = out.print(
+    output,
+    f"{report(proc.run(p, sort([("LC_ALL", "C")]), b"b\na\n", 64u64, None()))}\n"
+  )
+  Ok(())
+}

@@ -15,10 +15,8 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   }
   let reached = match proc.run(
     p,
-    path.of("/bin/sleep"),
-    [],
+    Command(program: path.of("/bin/sleep"), args: [], dir: None(), env: None()),
     b"",
-    None(),
     64u64,
     Some(Deadline(clock: c, at: start))
   ) {
@@ -28,10 +26,8 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   failure.check(reached, Arithmetic())
   let served = match proc.run(
     p,
-    path.of("/bin/sleep"),
-    [],
+    Command(program: path.of("/bin/sleep"), args: [], dir: None(), env: None()),
     b"",
-    None(),
     64u64,
     Some(Deadline(clock: c, at: future))
   ) {
@@ -41,10 +37,8 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   failure.check(served, Arithmetic())
   let spent = match proc.run(
     p,
-    path.of("/bin/sleep"),
-    [],
+    Command(program: path.of("/bin/sleep"), args: [], dir: None(), env: None()),
     b"",
-    None(),
     64u64,
     Some(Deadline(clock: c, at: future))
   ) {

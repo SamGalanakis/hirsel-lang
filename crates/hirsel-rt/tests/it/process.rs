@@ -59,12 +59,20 @@ fn host(rules: &[(&str, &[&str])]) -> (Disposable, RealIo, u64) {
 fn run(process: u64, program: &str, args: &[&str], stdin: &[u8], max: u64) -> Request {
     Request::ProcessRun {
         process,
-        program: program.into(),
-        args: args.iter().map(|a| (*a).into()).collect(),
+        command: command(program, args),
         stdin: stdin.to_vec(),
-        directory: None,
         max_output: max,
         deadline: None,
+    }
+}
+
+/// A Command that starts in `/` and inherits its rule's environment names.
+fn command(program: &str, args: &[&str]) -> Command {
+    Command {
+        program: program.into(),
+        args: args.iter().map(|a| (*a).into()).collect(),
+        directory: None,
+        env: None,
     }
 }
 
@@ -206,15 +214,67 @@ fn the_environment_holds_only_the_rule_names_and_the_directory_is_explicit() {
         panic!("root Dir")
     };
     let mut request = run(p, SH, &["-c", "pwd -P"], b"", 4096);
-    let Request::ProcessRun { directory, .. } = &mut request else {
+    let Request::ProcessRun { command, .. } = &mut request else {
         unreachable!()
     };
-    *directory = Some(dir);
+    command.directory = Some(dir);
     let expected = format!("{}\n", std::fs::canonicalize(&temp.0).unwrap().display());
     assert_eq!(
         io.call(request),
         Ok(output(ExitStatus::Exited(0), expected.as_bytes(), b""))
     );
+}
+
+#[test]
+fn an_exact_environment_replaces_inheritance_and_names_only_granted_variables() {
+    let (_temp, mut io, p) = host(&[("/usr/bin/env", &["HIRSEL_SET", "PATH"])]);
+    let exact = |vars: &[(&str, &str)]| {
+        let mut request = run(p, "/usr/bin/env", &[], b"", 4096);
+        let Request::ProcessRun { command, .. } = &mut request else {
+            unreachable!()
+        };
+        command.env = Some(
+            vars.iter()
+                .map(|(n, v)| ((*n).into(), (*v).into()))
+                .collect(),
+        );
+        request
+    };
+    // Nothing is inherited: PATH, granted and set in the launcher, is absent.
+    assert_eq!(
+        io.call(exact(&[("HIRSEL_SET", "a b=c")])),
+        Ok(output(ExitStatus::Exited(0), b"HIRSEL_SET=a b=c\n", b""))
+    );
+    assert_eq!(
+        io.call(exact(&[])),
+        Ok(output(ExitStatus::Exited(0), b"", b""))
+    );
+    // A name the rule does not list is not granted; malformed names and values, and a
+    // repeated name, are invalid before that.
+    for (vars, failure) in [
+        (&[("HOME", "/")][..], ProcessFailure::NotGranted),
+        (
+            &[("HIRSEL_SET", "x"), ("LD_PRELOAD", "/x.so")][..],
+            ProcessFailure::NotGranted,
+        ),
+        (&[("", "x")][..], ProcessFailure::InvalidInput),
+        (&[("A=B", "x")][..], ProcessFailure::InvalidInput),
+        (&[("HIRSEL_SET", "x\0")][..], ProcessFailure::InvalidInput),
+        (
+            &[("HIRSEL_SET", "x"), ("HIRSEL_SET", "y")][..],
+            ProcessFailure::InvalidInput,
+        ),
+        (
+            &[("LD_PRELOAD", "x"), ("A=B", "y")][..],
+            ProcessFailure::InvalidInput,
+        ),
+    ] {
+        assert_eq!(
+            io.call(exact(vars)),
+            Ok(Completion::Process(ProcessOutcome::Error(failure))),
+            "{vars:?}"
+        );
+    }
 }
 
 #[test]
@@ -411,9 +471,7 @@ fn a_deadline_times_out_a_running_child_and_a_reached_one_spawns_nothing() {
     let (clock, now) = clock(&mut io);
     let mut reached = run(p, SH, &["-c", "touch spawned"], b"", 64);
     let Request::ProcessRun {
-        deadline,
-        directory,
-        ..
+        deadline, command, ..
     } = &mut reached
     else {
         unreachable!()
@@ -425,7 +483,7 @@ fn a_deadline_times_out_a_running_child_and_a_reached_one_spawns_nothing() {
     }) else {
         panic!("root Dir")
     };
-    *directory = Some(dir);
+    command.directory = Some(dir);
     assert_eq!(io.call(reached.clone()), Ok(TIMED_OUT));
     assert!(!marker.exists());
     // Its accepted twin, with no deadline, spawns.
@@ -526,10 +584,10 @@ fn cancelling_a_parked_run_kills_its_child_at_once() {
     }) else {
         panic!("root Dir")
     };
-    let Request::ProcessRun { directory, .. } = &mut request else {
+    let Request::ProcessRun { command, .. } = &mut request else {
         unreachable!()
     };
-    *directory = Some(dir);
+    command.directory = Some(dir);
     io.enter(4);
     assert_eq!(io.call(request), Err(AdapterError::Blocked));
     // The scheduler finishes a cancelled token: the child is killed and reaped then.
@@ -544,9 +602,7 @@ fn cancelling_a_parked_run_kills_its_child_at_once() {
 fn spawn(process: u64, program: &str, args: &[&str]) -> Request {
     Request::ProcessSpawn {
         process,
-        program: program.into(),
-        args: args.iter().map(|a| (*a).into()).collect(),
-        directory: None,
+        command: command(program, args),
     }
 }
 
@@ -688,9 +744,10 @@ fn kill_signals_the_child_writes_after_exit_are_input_closed_and_a_drop_kills() 
         &mut io,
         Request::ProcessSpawn {
             process: p,
-            program: SH.into(),
-            args: vec!["-c".into(), "sleep 0.3; touch survived".into()],
-            directory: Some(dir),
+            command: Command {
+                directory: Some(dir),
+                ..command(SH, &["-c", "sleep 0.3; touch survived"])
+            },
         },
     );
     let begun = std::time::Instant::now();
@@ -741,7 +798,7 @@ fn children_record_and_replay_without_spawning() {
     let spawn_at = |program: &str| {
         tape.iter()
             .position(
-                |e| matches!(&e.request, Request::ProcessSpawn { program: p, .. } if p == program),
+                |e| matches!(&e.request, Request::ProcessSpawn { command, .. } if command.program == program),
             )
             .unwrap()
     };
@@ -816,9 +873,10 @@ fn cooperative_reads_and_waits_park_and_a_cancelled_wait_kills_its_child() {
         &mut io,
         Request::ProcessSpawn {
             process: p,
-            program: SH.into(),
-            args: vec!["-c".into(), "sleep 0.3; touch survived".into()],
-            directory: Some(dir),
+            command: Command {
+                directory: Some(dir),
+                ..command(SH, &["-c", "sleep 0.3; touch survived"])
+            },
         },
     );
     io.enter(7);

@@ -9,9 +9,9 @@ use super::{
 };
 use crate::{Error, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_run_config::{
-    ChildRun, ChildStep, ChildStream, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome,
-    ProcessRule, ProcessRun, ProviderContract, ScriptChild, ScriptRead, bounded, canonical_program,
-    check, scriptable,
+    ChildRun, ChildStep, ChildStream, Command, ExitStatus, ProcessFailure, ProcessGrant,
+    ProcessOutcome, ProcessRule, ProcessRun, ProviderContract, ScriptChild, ScriptRead, bounded,
+    canonical_program, scriptable,
 };
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
@@ -322,6 +322,39 @@ fn deadline(v: &Value) -> Result<Option<(&Value, u64)>, Error> {
 }
 
 impl Simulation {
+    /// A `Command` value, its Dir checked to be one.
+    fn command(&self, v: &Value) -> Result<Command, Error> {
+        let f = record_fields(v, "Command", 4)?;
+        let directory = match variant_fields(f[2])? {
+            (0, d) if d.is_empty() => None,
+            (1, d) if d.len() == 1 => Some(self.id(d[0], "Dir")?),
+            _ => return Err(invalid("Option[Dir] representation")),
+        };
+        let env = match variant_fields(f[3])? {
+            (0, e) if e.is_empty() => None,
+            (1, e) if e.len() == 1 => Some(
+                collection::elements(e[0], BuiltinType::List)?
+                    .iter()
+                    .map(|var| match var {
+                        Value::Tuple(pair) => match pair.as_slice() {
+                            [Some(name), Some(value)] => {
+                                Ok((text(name)?.to_owned(), text(value)?.to_owned()))
+                            }
+                            _ => Err(invalid("environment variable representation")),
+                        },
+                        _ => Err(invalid("environment variable representation")),
+                    })
+                    .collect::<Result<_, Error>>()?,
+            ),
+            _ => return Err(invalid("Option[List[(String, String)]] representation")),
+        };
+        Ok(Command {
+            program: super::dispatch::path_text(f[0])?.to_owned(),
+            args: strings(f[1])?,
+            directory,
+            env,
+        })
+    }
     fn process_grant(&self, v: &Value) -> Result<(u64, Vec<ProcessRule>), Error> {
         let id = self.id(v, "Proc")?;
         let Some(Grant::Proc { world, rules }) = self.grants.get(&id) else {
@@ -389,30 +422,22 @@ impl Simulation {
             }
             "proc.run" => {
                 let (world, rules) = self.process_grant(arg(a, 0)?)?;
-                let program = super::dispatch::path_text(arg(a, 1)?)?.to_owned();
-                let args = strings(arg(a, 2)?)?;
-                bytes(arg(a, 3)?)?;
-                let with_dir = match variant_fields(arg(a, 4)?)? {
-                    (0, d) if d.is_empty() => false,
-                    (1, d) if d.len() == 1 => {
-                        self.id(d[0], "Dir")?;
-                        true
-                    }
-                    _ => return Err(invalid("Option[Dir] representation")),
-                };
-                let max_output = match arg(a, 5)? {
+                let command = self.command(arg(a, 1)?)?;
+                bytes(arg(a, 2)?)?;
+                let with_dir = command.directory.is_some();
+                let max_output = match arg(a, 3)? {
                     Value::Integer(n) if n.kind() == Primitive::U64 => n.bits() as u64,
                     _ => return Err(invalid("max_output requires u64")),
                 };
                 // The clock is only the deadline's owner: a host adapter's handle serves too.
-                let deadline = deadline(arg(a, 6)?)?;
+                let deadline = deadline(arg(a, 4)?)?;
                 if deadline.is_some_and(
                     |(clock, _)| !matches!(clock, Value::Handle { kind, .. } if kind == "MonotonicClock"),
                 ) {
                     return Err(invalid("expected MonotonicClock"));
                 }
                 let deadline = deadline.map(|(_, ticks)| ticks);
-                let checked = check(&program, &args, &rules).and_then(|()| {
+                let checked = command.check(&rules).map(|_| ()).and_then(|()| {
                     canceled.map_or(Ok(()), |cause| Err(ProcessFailure::Canceled(cause)))
                 });
                 let request = encode_arguments(a);
@@ -462,7 +487,7 @@ impl Simulation {
                         .ok_or_else(|| invalid("missing process world"))?;
                     match runs.iter_mut().find(|r| {
                         r.as_ref()
-                            .is_some_and(|r| r.program == program && r.args == args)
+                            .is_some_and(|r| r.program == command.program && r.args == command.args)
                     }) {
                         Some(entry) => bounded(entry.take().unwrap().outcome, max_output),
                         None => ProcessOutcome::Error(ProcessFailure::NotFound),
@@ -550,16 +575,8 @@ impl Simulation {
             "proc.spawn" => {
                 let (world, rules) = self.process_grant(arg(a, 0)?)?;
                 let process = self.id(arg(a, 0)?, "Proc")?;
-                let program = super::dispatch::path_text(arg(a, 1)?)?.to_owned();
-                let args = strings(arg(a, 2)?)?;
-                match variant_fields(arg(a, 3)?)? {
-                    (0, d) if d.is_empty() => {}
-                    (1, d) if d.len() == 1 => {
-                        self.id(d[0], "Dir")?;
-                    }
-                    _ => return Err(invalid("Option[Dir] representation")),
-                }
-                let checked = check(&program, &args, &rules).and_then(|()| {
+                let command = self.command(arg(a, 1)?)?;
+                let checked = command.check(&rules).map(|_| ()).and_then(|()| {
                     canceled.map_or(Ok(()), |cause| Err(ProcessFailure::Canceled(cause)))
                 });
                 match checked {
@@ -582,8 +599,9 @@ impl Simulation {
                             .get_mut(&world)
                             .ok_or_else(|| invalid("missing process world"))?;
                         match children.iter_mut().find(|c| {
-                            c.as_ref()
-                                .is_some_and(|c| c.program == program && c.args == args)
+                            c.as_ref().is_some_and(|c| {
+                                c.program == command.program && c.args == command.args
+                            })
                         }) {
                             None => error(failure_value(ProcessFailure::NotFound)),
                             Some(entry) => {

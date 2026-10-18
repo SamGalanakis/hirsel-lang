@@ -136,21 +136,7 @@ impl HostChildren {
         spec: &crate::process::ProcessSpec<'_>,
         cwd: Option<RawFd>,
     ) -> Result<(), ProcessFailure> {
-        use std::process::{Command, Stdio};
-        let mut command = Command::new(spec.program);
-        command
-            .args(spec.args)
-            .env_clear()
-            .current_dir(cwd.map_or_else(|| "/".to_owned(), |fd| format!("/proc/self/fd/{fd}")))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for name in spec.env {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
-        let mut child = command
+        let mut child = crate::process::host_command(spec, cwd)
             .spawn()
             .map_err(|e| crate::process::spawn_failure(&e))?;
         let child = HostChild {
