@@ -417,10 +417,12 @@ conformance/CONC/CONC-2-tour-11-concurrency-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir
 conformance/CONC/CONC-2-unconsumed-handle-ok.hir
 conformance/CONC/CONC-3-canceled-pure-child.hir
+conformance/CONC/CONC-3-cancellation-shields-drop-run.hir
 conformance/CONC/CONC-3-check-canceled-run.hir
 conformance/CONC/CONC-3-child-local-scope.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
+conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
 conformance/CONC/CONC-4-sequential-atomic-order.hir
 conformance/CONC/CONC-5-channel-in-body-bad.hir
 conformance/CONC/CONC-5-channel-in-body-ok.hir

@@ -152,6 +152,49 @@ impl Operations for Io {
     fn yielded(&mut self) -> bool {
         std::mem::take(&mut self.yielded)
     }
+    /// The runtime's cancellation points (`hirsel-rt/src/host_waits.rs`): a canceled stdin
+    /// read, print or waiting network request completes `Canceled(cause)` with no effect,
+    /// before its handle is consulted, and is still a capability operation.
+    fn canceled(&mut self, op: &OperationId, args: &[OpValue], cause: u32) -> Option<OpOutcome> {
+        let path = &op.definition.0;
+        if !path.package.name_is("core") {
+            return None;
+        }
+        let module = path.modules.first().map(String::as_str);
+        let value = match (module, path.name.as_str(), args) {
+            // A zero-byte read is invalid before it is a cancellation point.
+            (Some("stdin"), "read", [_, _, OpValue::Bits { bits: 0, .. }]) => return None,
+            (Some("stdin"), "read", _) => OpValue::Variant {
+                tag: 1,
+                value: Box::new(OpValue::Variant {
+                    tag: 1,
+                    value: Box::new(OpValue::Variant {
+                        tag: cause,
+                        value: Box::new(OpValue::Unit),
+                    }),
+                }),
+            },
+            (Some("out"), "print", _) => {
+                let canceled = UnitResult::of(Err(hirsel_rt::io::IoError::Canceled(cause)));
+                let mut bytes = Vec::with_capacity(12);
+                for word in [canceled.tag, canceled.error, canceled.code] {
+                    bytes.extend_from_slice(&word.to_le_bytes());
+                }
+                OpValue::Plain(bytes)
+            }
+            (Some("err"), "print", _) => {
+                let mut bytes = 1u32.to_le_bytes().to_vec();
+                bytes.extend_from_slice(&cause.to_le_bytes());
+                OpValue::Variant {
+                    tag: 1,
+                    value: Box::new(OpValue::Plain(bytes)),
+                }
+            }
+            (module, name, _) => net::canceled(module, name, cause)?,
+        };
+        self.yielded = true;
+        Some(OpOutcome::Value(value))
+    }
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome {
         let path = &op.definition.0;
         if !path.package.name_is("core") {

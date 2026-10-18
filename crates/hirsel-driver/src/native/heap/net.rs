@@ -241,6 +241,19 @@ fn error(e: NetError) -> OpValue {
     };
     v(1, v(tag, payload))
 }
+/// The `Canceled(cause)` a canceled network request that can wait completes with
+/// (`hirsel-rt/src/host_waits.rs`), or None for any other operation.
+pub(super) fn canceled(module: Option<&str>, name: &str, cause: u32) -> Option<OpValue> {
+    match (module, name) {
+        (
+            Some("net"),
+            "resolve" | "connect" | "connect_addr" | "accept" | "read" | "read_into" | "write"
+            | "write_all",
+        )
+        | (Some("$intrinsic"), "NetReadInto") => Some(error(NetError::Canceled(cause))),
+        _ => None,
+    }
+}
 fn result<T>(r: Result<T, NetError>, value: impl FnOnce(T) -> OpValue) -> OpValue {
     match r {
         Ok(x) => io_ok(value(x)),

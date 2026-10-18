@@ -7197,7 +7197,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                 other => return fail(V::Unsupported, format!("operation operand {other:?}")),
             });
         }
-        let outcome = self.ops.call(&id, &args, &mut self.output);
+        let shielded = self.shielded(f);
+        let cause = self.tasks.as_deref().and_then(|s| s.canceled(shielded));
+        let outcome = match cause.and_then(|cause| self.ops.canceled(&id, &args, cause)) {
+            Some(outcome) => outcome,
+            None => self.ops.call(&id, &args, &mut self.output),
+        };
         // Every capability operation is a scheduling point (CONC-1).
         if self.ops.yielded() {
             self.task_yield()?;

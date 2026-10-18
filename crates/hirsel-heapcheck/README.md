@@ -342,6 +342,9 @@ schedule (`hirsel-rt/src/tasks.rs`), with one activity stack per task in place o
 - A waiting task parks; parked tasks are polled in park order at every yield and whenever the
   running task stops, and a task due to park after its operation's yield parks at the front.
 - A capability operation (`Operations::yielded`) is a scheduling point.
+- A canceled, unshielded task's cancellation point (`Operations::canceled`: a stdin read, a print
+  or a network request that can wait, as `hirsel-rt/src/host_waits.rs` lists them) completes
+  `Canceled` with no effect instead of being called.
 - A task running destruction (a drain, a finalizer frame, or an inline drop body between
   `FinalizeBegin` and `FinalizeEnd`) is shielded, as the runtime's finalizer shield makes it:
   no cancellation check (check_canceled, send, receive, spawn) observes its cancellation. The
