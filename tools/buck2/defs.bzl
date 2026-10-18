@@ -12,7 +12,7 @@ names the crate from any package directory, locally or on the pool, and so do
 CARGO_TARGET_TMPDIR and CARGO_BIN_EXE_<name>.
 """
 
-load(":platforms.bzl", "CLIPPY_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "pool_budget_name", "test_budget_name", "test_executor", "test_request")
+load(":platforms.bzl", "CLIPPY_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "pool_budget_name", "test_budget_name", "test_executor", "test_request")
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS")
 load(":profile.bzl", "workspace_profile_flags")
 load("@prelude//linking:link_info.bzl", "ArchiveLinkable", "LinkStrategy", "ObjectsLinkable")
@@ -163,6 +163,7 @@ def hirsel_library(name, crate, crate_root, srcs, features, deps, manifest_dir, 
         rustc_flags = _flags(manifest_dir, target = name, opt_level = opt_level),
         exec_compatible_with = _compile_constraints(name),
         doctests = doctests,
+        doc_remote_execution = doctest_properties() if doctests else None,
         labels = ["doctest"] if doctests else [],
         visibility = ["PUBLIC"],
     )
@@ -491,7 +492,7 @@ def _workspace_build_script_run_impl(ctx):
             "set -eu",
             'tree="$(cd "$1" && pwd)"; script="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; mkdir -p "$3"; out="$(cd "$3" && pwd)"',
             'cd "$tree/{}"'.format(ctx.attrs.manifest_dir),
-            'CARGO_MANIFEST_DIR="$tree/{}" OUT_DIR="$out" "$script" > "$out/.build-script-output"'.format(ctx.attrs.manifest_dir),
+            'CARGO_MANIFEST_DIR="$tree/{}" OUT_DIR="$out" "$script" > /dev/null'.format(ctx.attrs.manifest_dir),
         ],
     )
     ctx.actions.run(
@@ -504,6 +505,7 @@ def _workspace_build_script_run_impl(ctx):
             "PROFILE": "debug",
         } | {"CARGO_FEATURE_" + f.upper().replace("-", "_"): "1" for f in ctx.attrs.features},
         category = "build_script_run",
+        allow_cache_upload = True,
     )
     return [DefaultInfo(default_output = out_dir)]
 
@@ -522,9 +524,10 @@ _workspace_build_script_run = rule(
 def hirsel_build_script(name, crate_root, srcs, deps, inputs, features, manifest_dir, package_name, version, edition):
     """A Cargo build script: compiled once, then run over its declared inputs.
 
-    Its output directory is the library's OUT_DIR. The script's stdout (its
-    `cargo:` directives) is kept beside it; a script whose directives matter
-    beyond OUT_DIR needs them translated here.
+    Its output directory is the library's OUT_DIR. Cargo rerun directives are
+    discarded: they contain sandbox paths and directory traversal order, and
+    Buck2 already tracks the declared inputs. Any other directives a script
+    needs must be translated here.
     """
     _rust(
         native.rust_binary,

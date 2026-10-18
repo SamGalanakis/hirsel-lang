@@ -37,7 +37,8 @@ DEFAULT_TEST_REQUEST = [1, 2097152, ""]
 # test run books one CPU (with its binary's measured memory). The pool's scheduler reserves nothing for a multi-CPU action, so
 # behind a stream of one-CPU actions a four-CPU run of a single case waited up
 # to minutes for one worker to free four CPUs at once, then ran for a second.
-FOCUS = read_root_config("hirsel", "tests", "pool") == "focus"
+TEST_MODE = read_root_config("hirsel", "tests", "pool")
+FOCUS = TEST_MODE == "focus"
 
 def _test_request(cpu, memory_kb, cpu_class):
     """A test request's budget name and effective `[cpu, memory_kb, cpu_class]`."""
@@ -61,6 +62,18 @@ def test_executor(cpu, memory_kb, cpu_class):
         remote_execution_properties = pool_properties(cpu, memory_kb, cpu_class),
         remote_execution_use_case = "hirsel",
     )
+
+def doctest_properties():
+    """Rustdoc's explicit executor uses the libtest priority and a single CPU."""
+    local = LOCAL or TEST_MODE == "host"
+    return {
+        "capabilities": pool_properties(1, 524288, ""),
+        "use_case": "hirsel",
+        "local_enabled": local,
+        "remote_enabled": not local,
+        "remote_cache_enabled": not local,
+        "priority": PRIORITY,
+    }
 
 # The request of a compile no measurement sized.
 DEFAULT_REQUEST = [1, 1048576]

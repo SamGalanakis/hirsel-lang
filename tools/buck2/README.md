@@ -235,6 +235,11 @@ the old copy.
   compiles against the pinned headers and binaries link the pinned libLLVM
   (`toolchains//:libllvm`), as `force-dynamic` selects under Cargo.
 
+Workspace build scripts publish only their generated files in `OUT_DIR`.
+Their unused Cargo rerun directives are discarded: those directives contain
+absolute action-sandbox paths and filesystem traversal order, so keeping them
+would change consumer input digests under an identical build-script action key.
+
 The runtime archive rule follows Buck2's `RustLinkInfo` native link graph and
 uses LLVM ar's MRI `ADDLIB` interface to include native dependency objects in
 each `libhirsel_rt.a`. This expands ring's thin C/assembly archives on both
@@ -310,6 +315,9 @@ pool image, so rustdoc can invoke its linker without a `PATH`. The LLVM tool
 wrappers also locate their tree using shell builtins. It moves helper work off
 the pool:
 
+- `rust_library.bzl`: successful doctest verdicts are cached like libtests.
+  Their executor requests one CPU and 512 MiB at the same priority as other
+  tests, and a stable `TEST_TARGET` lets pool usage name them.
 - `failure_filter` (`rust/failure_filter.bzl`): the daemon reads a compile's
   build status; a passing compile's output is a declared copy, and only a
   failed one runs the stock action, which replays rustc's diagnostics.

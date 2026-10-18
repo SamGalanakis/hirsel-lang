@@ -14,6 +14,8 @@ CPUs x wall and memory x wall, and uses its CPU time and PSS peak x wall (an
 upper bound). The report prints the pool's reserved CPU-hours by repository,
 the repository's share of them, and its reserved and used CPU-hours and
 GiB-hours per lane and per target, a test target's shards as one row.
+Compressed gate/land logs are retained across worktrees (event_logs.py) and
+automatically joined for target attribution and repeated action-key evidence.
 It also sums execution wall seconds and CPU seconds per action category;
 queueing is excluded. With --events (exported Buck2 JSONL logs), uniquely
 matched rustc actions are split into compile and link. Rustc's link action
@@ -62,7 +64,12 @@ def operations(lines, wanted):
         row = dict(field.split('=', 1) for field in fields[1:] if '=' in field)
         op = row.get('op')
         if op in wanted:
-            found[op] = found.get(op, {}) | {key: value for key, value in row.items() if value != '-'} | {'end': int(fields[0])}
+            previous = found.get(op, {})
+            current = {key: value for key, value in row.items() if value != '-'} | {'end': int(fields[0])}
+            # Retries may move between workers. File/host order is not time
+            # order: an older killed attempt must not erase the retry's exit.
+            found[op] = (previous | current if current['end'] >= previous.get('end', 0)
+                         else current | previous)
     return found
 
 

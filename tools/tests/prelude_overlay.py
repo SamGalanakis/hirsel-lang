@@ -13,6 +13,10 @@ SPEC.loader.exec_module(overlay)
 
 # Each fixture file holds its stock anchors inside unrelated prelude text.
 STOCK = {
+    'tests/re_utils.bzl': 'def executor():\n    local_enabled = re_props_copy.pop("local_enabled", False)\n'
+                          '    default = CommandExecutorConfig(\n        remote_enabled = True,\n    )\n'
+                          '    if listing:\n        other = CommandExecutorConfig(\n            remote_enabled = True,\n        )\n',
+    'rust/rust_library.bzl': 'def doctest():\n        rustdoc_test_info = ExternalRunnerTestInfo(\n            type = "rustdoc",\n            default_executor = re_executors.default_executor,\n        )\n',
     'rust/build.bzl': ''.join((
         'def compile(ctx, compile_ctx):\n'
         '    cmd_args(\n'
@@ -57,6 +61,9 @@ class PreludeOverlayGuards(unittest.TestCase):
         self.assertNotIn('project_as_args("artifacts")', build)
         self.assertIn('ctx.actions.dynamic_output(', outputs['rust/failure_filter.bzl'].decode())
         self.assertIn('owner.package == "third-party"', outputs['rust/sources.bzl'].decode())
+        self.assertIn('supports_test_execution_caching = True', outputs['rust/rust_library.bzl'].decode())
+        self.assertEqual(outputs['tests/re_utils.bzl'].decode().count('priority = priority,'), 2)
+        self.assertIn('TEST_TARGET', outputs['rust/rust_library.bzl'].decode())
         for relative, data in outputs.items():
             self.write(relative, data.decode())
         self.assertEqual(overlay.overlaid(self.prelude, self.pins), outputs)

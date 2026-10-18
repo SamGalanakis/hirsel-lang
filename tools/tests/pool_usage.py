@@ -60,6 +60,15 @@ class Report(unittest.TestCase):
         self.assertEqual(rows['rustc'][2:5], ['1', '1.00', '0.50'])
         self.assertEqual(rows['gate'][1:3], ['2', '5.00'])
 
+    def test_worker_order_does_not_replace_a_successful_retry_with_its_old_kill(self):
+        usage = ['20\top=retry\ttest=run:1:root//:hirsel-x\texit=0\twall_ms=1000',
+                 '10\top=retry\ttest=run:1:root//:hirsel-x\texit=137\twall_ms=2000\tcategory=rustc']
+        rows = pool_usage.operations(usage, {'retry'})
+        self.assertEqual(rows['retry']['exit'], '0')
+        self.assertEqual(rows['retry']['end'], 20)
+        self.assertEqual(rows['retry']['wall_ms'], '1000')
+        self.assertEqual(rows['retry']['category'], 'rustc')
+
     def test_compile_and_link_report_execution_wall_and_cpu_without_queue_time(self):
         trace = [event('compile', 'hirsel-lang', 'gate', 2, 1024, 3, 5, 512, 103),
                  event('link', 'hirsel-lang', 'gate', 2, 1024, 2, 3, 512, 106)]

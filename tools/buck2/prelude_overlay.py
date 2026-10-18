@@ -282,10 +282,40 @@ def use_absolute_wrapper_interpreter(text: str) -> str:
     return replace_once(text, '"#!/usr/bin/env bash"', '"#!/bin/bash"', "command wrapper interpreter")
 
 
+def cache_doctest_verdicts(text: str) -> str:
+    # Like the libtest provider in defs.bzl, a rustdoc test is hermetic and
+    # uses repository-relative inputs. Failures remain uncached.
+    return replace_once(
+        text,
+        '            type = "rustdoc",\n',
+        '            type = "rustdoc",\n            supports_test_execution_caching = True,\n            env = {"TEST_TARGET": "run:-:" + str(sources.owner.raw_target())},\n',
+        "rustdoc test caching",
+    )
+
+
+def explicit_test_executor_policy(text: str) -> str:
+    text = replace_once(
+        text,
+        '    local_enabled = re_props_copy.pop("local_enabled", False)\n',
+        '    local_enabled = re_props_copy.pop("local_enabled", False)\n'
+        '    remote_enabled = re_props_copy.pop("remote_enabled", True)\n'
+        '    priority = re_props_copy.pop("priority", 0)\n',
+        "explicit test executor policy",
+    )
+    for spaces in (8, 12):
+        indent = ' ' * spaces
+        text = replace_once(text, '\n' + indent + 'remote_enabled = True,\n',
+                            '\n' + indent + 'remote_enabled = remote_enabled,\n' + indent + 'priority = priority,\n',
+                            f"test executor at indentation {spaces}")
+    return text
+
+
 TRANSFORMS = {
     "rust/build.bzl": (narrow_transitive_source_inputs, lay_out_dependency_dirs_in_daemon),
     "rust/failure_filter.bzl": (filter_failures_in_daemon,),
     "rust/sources.bzl": (add_checkout_source_projection,),
+    "rust/rust_library.bzl": (cache_doctest_verdicts,),
+    "tests/re_utils.bzl": (explicit_test_executor_policy,),
     "utils/cmd_script.bzl": (use_absolute_wrapper_interpreter,),
 }
 
