@@ -119,6 +119,7 @@ hirsel_test(
     ]) + [
         "conformance/CAP/CAP-1-bufio-stdin-run.hir",
         "conformance/CAP/CAP-1-host-inputs-run.hir",
+        "conformance/CAP/CAP-2-filesystem-breadth-host-run.hir",
         "conformance/CONC/CONC-2-await.hir",
         "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
         "conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir",
@@ -217,6 +218,7 @@ hirsel_test(
     ]) + [
         "conformance/CAP/CAP-1-bufio-stdin-run.hir",
         "conformance/CAP/CAP-1-host-inputs-run.hir",
+        "conformance/CAP/CAP-2-filesystem-breadth-host-run.hir",
         "conformance/CONC/CONC-2-await.hir",
         "conformance/CONC/CONC-2-detached-result-cleanup-run.hir",
         "conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir",

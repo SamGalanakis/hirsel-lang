@@ -37,6 +37,7 @@ pub struct FileMetadata {
     pub kind: u32,
     pub size: u64,
     pub modified_unix_ns: Option<i128>,
+    pub permissions: u32,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SimulationConfig {
@@ -166,6 +167,7 @@ pub struct Simulation {
     pub(super) mount_pins: BTreeMap<String, String>,
     pub(super) detached_mounts: BTreeSet<String>,
     pub(super) file_identities: BTreeMap<(u64, String), u64>,
+    pub(super) file_permissions: BTreeMap<(u64, String), u32>,
     next_file_identity: u64,
     pub(crate) file_contents: BTreeMap<u64, Vec<u8>>,
     pub(crate) next_id: u64,
@@ -369,6 +371,7 @@ impl Simulation {
             mount_pins: BTreeMap::new(),
             detached_mounts: BTreeSet::new(),
             file_identities: BTreeMap::new(),
+            file_permissions: BTreeMap::new(),
             next_file_identity: 1,
             file_contents: BTreeMap::new(),
             next_id: 1,
@@ -379,6 +382,13 @@ impl Simulation {
             last_monotonic: None,
         };
         simulation.identify_tree(0);
+        simulation.file_permissions.extend(
+            simulation
+                .config
+                .metadata
+                .iter()
+                .map(|(p, meta)| ((0, p.clone()), meta.permissions)),
+        );
         simulation.mount_pins = simulation
             .config
             .mounts
@@ -429,6 +439,7 @@ impl Simulation {
     /// Publication replaces the entry even when every byte is unchanged. Never
     /// recycle identities: unlink/recreate must not resurrect an opened file.
     pub(crate) fn replace_identity(&mut self, tree: u64, path: &str) {
+        self.file_permissions.remove(&(tree, path.into()));
         if tree == 0 {
             self.config.metadata.remove(path);
         }
@@ -447,8 +458,12 @@ impl Simulation {
             .filter(|(_, id)| **id == identity)
         {
             assert_eq!(*t, tree);
-            if tree == 0 {
-                self.config.metadata.remove(path);
+            if tree == 0
+                && let Some(meta) = self.config.metadata.remove(path)
+            {
+                self.file_permissions
+                    .entry((tree, path.clone()))
+                    .or_insert(meta.permissions);
             }
             self.trees
                 .get_mut(&tree)
@@ -458,20 +473,29 @@ impl Simulation {
         }
     }
     pub(crate) fn refresh_file(&mut self, tree: u64, path: &str) {
-        if tree == 0 {
-            self.config.metadata.remove(path);
+        if tree == 0
+            && let Some(meta) = self.config.metadata.remove(path)
+        {
+            self.file_permissions
+                .entry((tree, path.into()))
+                .or_insert(meta.permissions);
         }
         let identity = self.file_identity(tree, path).expect("file identity");
         self.file_contents
             .insert(identity, self.trees[&tree].1[path].clone());
     }
     pub(crate) fn unlink_identity(&mut self, tree: u64, path: &str) {
+        self.file_permissions.remove(&(tree, path.into()));
         if tree == 0 {
             self.config.metadata.remove(path);
         }
         self.file_identities.remove(&(tree, path.into()));
     }
     pub(crate) fn publish_identity(&mut self, tree: u64, from: &str, to: &str) {
+        self.file_permissions.remove(&(tree, to.into()));
+        if let Some(bits) = self.file_permissions.remove(&(tree, from.into())) {
+            self.file_permissions.insert((tree, to.into()), bits);
+        }
         if tree == 0 {
             self.config.metadata.remove(from);
             self.config.metadata.remove(to);

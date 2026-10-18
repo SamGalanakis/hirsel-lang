@@ -1,0 +1,5 @@
+// rule: CAP-1
+// expect: accept
+fn exercise(d: Dir) -> Result[(), FileError] uses {d} {
+  file.set_permissions(d, path.of("a"), 420)
+}

@@ -325,6 +325,16 @@ pub(crate) struct MemoryTree<'a> {
     pub(crate) identities: &'a mut FileIdentities,
 }
 impl MemoryTree<'_> {
+    fn invalidate_metadata(&mut self, path: &str) {
+        if let Some(meta) = self.tree.metadata.get_mut(path) {
+            meta.modified_unix_ns = None;
+            meta.size = self
+                .tree
+                .files
+                .get(path)
+                .map_or(0, |bytes| bytes.len() as u64);
+        }
+    }
     fn sync_aliases(&mut self) {
         self.tree.file_aliases.clear();
         let mut canonical = std::collections::BTreeMap::<u64, String>::new();
@@ -343,14 +353,71 @@ impl MemoryTree<'_> {
             .iter()
             .filter(|(_, id)| **id == identity)
         {
-            self.tree.metadata.remove(path);
             self.tree
                 .files
                 .insert(path.clone(), self.identities.contents[&identity].clone());
+            if let Some(meta) = self.tree.metadata.get_mut(path) {
+                meta.modified_unix_ns = None;
+                meta.size = self.identities.contents[&identity].len() as u64;
+            }
         }
     }
 }
 impl Storage for MemoryTree<'_> {
+    fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError> {
+        let mut meta = self.metadata(path)?;
+        if !matches!(meta.kind, FileKind::Regular | FileKind::Directory) {
+            return Err(IoError::Fault(1));
+        }
+        meta.permissions = permissions;
+        self.tree.metadata.insert(path.into(), meta);
+        if let Some(identity) = self.identities.reachable.get(path) {
+            let aliases: Vec<_> = self
+                .identities
+                .reachable
+                .iter()
+                .filter_map(|(p, id)| (id == identity).then_some(p.clone()))
+                .collect();
+            for alias in aliases {
+                let mut meta = self.metadata(&alias)?;
+                meta.permissions = permissions;
+                self.tree.metadata.insert(alias, meta);
+            }
+        }
+        Ok(())
+    }
+    fn remove_all(&mut self, path: &str, limit: Option<usize>) -> Result<(), IoError> {
+        let kind = self.metadata(path)?.kind;
+        if !matches!(kind, FileKind::Directory | FileKind::Symlink) {
+            return Err(IoError::NotDirectory);
+        }
+        let mut pending = vec![(path.to_owned(), false)];
+        let mut removed = 0;
+        while let Some((path, visited)) = pending.pop() {
+            if limit == Some(removed) {
+                return Ok(());
+            }
+            if self.metadata(&path)?.kind == FileKind::Directory {
+                if visited {
+                    self.remove_dir(&path)?;
+                    removed += 1;
+                } else {
+                    let children = self.read_dir(&path)?;
+                    pending.push((path.clone(), true));
+                    for entry in children.into_iter().rev() {
+                        pending.push((format!("{path}/{}", entry.path), false));
+                    }
+                }
+            } else if self.tree.links.remove(&path).is_some() {
+                self.tree.metadata.remove(&path);
+                removed += 1;
+            } else {
+                self.remove(&path)?;
+                removed += 1;
+            }
+        }
+        Ok(())
+    }
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError> {
         self.tree.resolve("", path, false)?;
         if let Some(meta) = self.tree.metadata.get(path) {
@@ -369,6 +436,11 @@ impl Storage for MemoryTree<'_> {
             kind,
             size,
             modified_unix_ns: None,
+            permissions: if kind == FileKind::Regular {
+                0o666
+            } else {
+                0o777
+            },
         })
     }
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError> {
@@ -404,7 +476,7 @@ impl Storage for MemoryTree<'_> {
         let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
         self.directory(parent, 0)?;
         self.tree.directories.insert(path.into());
-        self.tree.metadata.remove(parent);
+        self.invalidate_metadata(parent);
         Ok(())
     }
     fn remove_dir(&mut self, path: &str) -> Result<(), IoError> {
@@ -416,9 +488,7 @@ impl Storage for MemoryTree<'_> {
         }
         self.tree.directories.remove(path);
         self.tree.metadata.remove(path);
-        self.tree
-            .metadata
-            .remove(path.rsplit_once('/').map_or("", |(p, _)| p));
+        self.invalidate_metadata(path.rsplit_once('/').map_or("", |(p, _)| p));
         Ok(())
     }
     fn move_entry(&mut self, from: &str, to: &str) -> Result<(), IoError> {
@@ -485,10 +555,8 @@ impl Storage for MemoryTree<'_> {
         relocate!(self.tree.metadata);
         relocate!(self.identities.reachable);
         relocate!(self.identities.prepared);
-        self.tree.metadata.remove(parent);
-        self.tree
-            .metadata
-            .remove(from.rsplit_once('/').map_or("", |(p, _)| p));
+        self.invalidate_metadata(parent);
+        self.invalidate_metadata(from.rsplit_once('/').map_or("", |(p, _)| p));
         Ok(())
     }
 
@@ -512,8 +580,8 @@ impl Storage for MemoryTree<'_> {
             self.identities.serial
         };
         self.identities.contents.insert(identity, vec![]);
-        self.tree.metadata.remove(path);
         self.tree.files.insert(path.into(), vec![]);
+        self.invalidate_metadata(path);
         self.identities.opened.insert(id, identity);
         self.sync_contents(identity);
         self.sync_aliases();
@@ -607,7 +675,11 @@ impl Storage for MemoryTree<'_> {
                     .insert(path.into(), self.identities.serial);
             }
         }
-        self.tree.metadata.remove(path);
+        if append {
+            self.invalidate_metadata(path);
+        } else {
+            self.tree.metadata.remove(path);
+        }
         let identity = self.identities.reachable[path];
         self.identities
             .contents
@@ -765,6 +837,32 @@ impl<'a> LinkedTree<'a> {
     }
 }
 impl Storage for LinkedTree<'_> {
+    fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError> {
+        let path = self.path(path, false)?;
+        self.memory().set_permissions(&path, permissions)
+    }
+    fn remove_all(&mut self, path: &str, limit: Option<usize>) -> Result<(), IoError> {
+        let path = self.path(path, false)?;
+        self.memory().remove_all(&path, limit)?;
+        // Every removed issued descendant remains an empty detached directory.
+        let removed = |root: &str| root == path || root.starts_with(&format!("{path}/"));
+        if let Some(pins) = &mut self.mount_pins {
+            let roots: Vec<_> = pins
+                .roots
+                .values()
+                .filter(|p| removed(p) && !self.tree.directories.contains(*p))
+                .cloned()
+                .collect();
+            for root in roots {
+                pins.update(self.tree, &root, None);
+            }
+        }
+        self.detached
+            .extend(self.roots.iter().filter_map(|(id, root)| {
+                (removed(root) && !self.tree.directories.contains(root)).then_some(*id)
+            }));
+        Ok(())
+    }
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError> {
         let path = self.path(path, false)?;
         let derived = if self.detached() {
@@ -772,6 +870,7 @@ impl Storage for LinkedTree<'_> {
                 kind: FileKind::Directory,
                 size: 0,
                 modified_unix_ns: None,
+                permissions: 0o777,
             }
         } else {
             self.memory().metadata(&path)?

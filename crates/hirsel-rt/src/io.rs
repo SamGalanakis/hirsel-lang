@@ -267,6 +267,15 @@ pub enum Request {
         directory: u64,
         path: String,
     },
+    SetPermissions {
+        directory: u64,
+        path: String,
+        permissions: u32,
+    },
+    RemoveAll {
+        directory: u64,
+        path: String,
+    },
     Size {
         directory: u64,
         path: String,
@@ -534,6 +543,7 @@ pub struct Metadata {
     pub kind: FileKind,
     pub size: u64,
     pub modified_unix_ns: Option<i128>,
+    pub permissions: u32,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirEntry {
@@ -668,6 +678,8 @@ pub(crate) trait Storage {
     fn move_entry(&mut self, from: &str, to: &str) -> Result<(), IoError>;
     fn mkdir(&mut self, path: &str) -> Result<(), IoError>;
     fn remove_dir(&mut self, path: &str) -> Result<(), IoError>;
+    fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError>;
+    fn remove_all(&mut self, path: &str, limit: Option<usize>) -> Result<(), IoError>;
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError>;
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError>;
     fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError>;
@@ -768,6 +780,8 @@ impl State {
             | Request::Mkdir { directory, .. }
             | Request::Rename { directory, .. }
             | Request::RemoveDir { directory, .. }
+            | Request::RemoveAll { directory, .. }
+            | Request::SetPermissions { directory, .. }
             | Request::Create { directory, .. }
             | Request::FileWrite { directory, .. }
             | Request::FileAppend { directory, .. }
@@ -851,6 +865,8 @@ impl State {
             | Request::Mkdir { directory, .. }
             | Request::Rename { directory, .. }
             | Request::RemoveDir { directory, .. }
+            | Request::RemoveAll { directory, .. }
+            | Request::SetPermissions { directory, .. }
             | Request::Create { directory, .. }
             | Request::FileWrite { directory, .. }
             | Request::FileAppend { directory, .. }
@@ -906,6 +922,7 @@ impl State {
                 | Request::Metadata { .. }
                 | Request::Mkdir { .. }
                 | Request::RemoveDir { .. }
+                | Request::SetPermissions { .. }
                 | Request::Rename { .. }
         ) && fault.is_some_and(|f| f.partial != 0)
         {
@@ -1056,6 +1073,7 @@ impl State {
             return Ok(error);
         }
         let error = fault.map(|f| f.error.clone());
+        let partial = fault.map_or(0, |f| f.partial);
         let prefix = |bytes: &[u8]| {
             let n = match fault {
                 Some(Fault {
@@ -1445,6 +1463,10 @@ impl State {
                     | R::Metadata { directory, path }
                     | R::Mkdir { directory, path }
                     | R::RemoveDir { directory, path }
+                    | R::RemoveAll { directory, path }
+                    | R::SetPermissions {
+                        directory, path, ..
+                    }
                     | R::Read { directory, path }
                     | R::Write {
                         directory, path, ..
@@ -1504,6 +1526,24 @@ impl State {
                     } else {
                         path.and_then(|p| storage.metadata(&p))
                     })),
+                    R::SetPermissions { permissions, .. } => Ok(C::Unit(if let Some(e) = error {
+                        Err(e)
+                    } else if *permissions > 0o777 {
+                        Err(IoError::Fault(1))
+                    } else {
+                        path.and_then(|p| storage.set_permissions(&p, *permissions))
+                    })),
+                    R::RemoveAll { .. } => Ok(C::Unit(path.and_then(|p| {
+                        if p == root {
+                            return Err(IoError::Fault(1));
+                        }
+                        match error {
+                            Some(e @ IoError::Canceled(_)) => Err(e),
+                            Some(e) if partial == 0 => Err(e),
+                            Some(e) => storage.remove_all(&p, Some(partial)).and_then(|()| Err(e)),
+                            None => storage.remove_all(&p, None),
+                        }
+                    }))),
                     R::Mkdir { .. } | R::RemoveDir { .. } => Ok(C::Unit(if let Some(e) = error {
                         Err(e)
                     } else {
@@ -3106,6 +3146,38 @@ path_export!(
     UnitResult::of
 );
 
+path_export!(
+    hirsel_rt_v2_dir_remove_all,
+    RemoveAll,
+    directory,
+    Unit,
+    UnitResult,
+    UnitResult::of
+);
+
+/// # Safety
+/// Context bound, directory and path borrowed, out writable for UnitResult.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_set_permissions(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    directory: *const u64,
+    path: *const u64,
+    permissions: u32,
+) -> u8 {
+    let request = Request::SetPermissions {
+        directory: unsafe { directory.read() },
+        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        permissions,
+    };
+    let Ok(Completion::Unit(result)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(UnitResult::of(result)) };
+    crate::STATUS_OK
+}
+
 /// # Safety
 /// The bound context and borrowed handles/paths are live; out is writable.
 #[unsafe(no_mangle)]
@@ -3132,10 +3204,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_rename(
 /// Metadata result: tag at 0, Metadata at 16, Option[i128] at 32.
 #[repr(C, align(16))]
 pub struct MetadataResult {
-    pub words: [u64; 8],
+    pub words: [u64; 10],
 }
 /// # Safety
-/// Context bound; directory/Path borrowed and out writable for 64 aligned bytes.
+/// Context bound; directory/Path borrowed and out writable for 80 aligned bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_metadata(
     ctx: *mut crate::RunCtx,
@@ -3151,11 +3223,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_metadata(
     let Ok(Completion::Metadata(result)) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
-    let mut words = [0; 8];
+    let mut words = [0; 10];
     match result {
         Ok(meta) => {
             words[2] = meta.kind as u64;
             words[3] = meta.size;
+            words[8] = u64::from(meta.permissions);
             if let Some(ns) = meta.modified_unix_ns {
                 words[4] = 1;
                 words[6] = ns as u64;
@@ -3252,6 +3325,12 @@ mod filesystem_authority_tests {
         fn remove_dir(&mut self, _: &str) -> Result<(), IoError> {
             unreachable!()
         }
+        fn set_permissions(&mut self, _: &str, _: u32) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn remove_all(&mut self, _: &str, _: Option<usize>) -> Result<(), IoError> {
+            unreachable!()
+        }
         fn metadata(&mut self, _: &str) -> Result<Metadata, IoError> {
             unreachable!()
         }
@@ -3270,6 +3349,15 @@ mod filesystem_authority_tests {
             access: Access::Read,
         });
         for request in [
+            Request::SetPermissions {
+                directory,
+                path: "../outside".into(),
+                permissions: 0o777,
+            },
+            Request::RemoveAll {
+                directory,
+                path: "missing/child".into(),
+            },
             Request::Mkdir {
                 directory,
                 path: "../outside".into(),

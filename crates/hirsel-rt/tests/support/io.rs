@@ -109,6 +109,7 @@ pub fn replay_interpreter_with_fixture(
                                 kind: meta.kind as u32,
                                 size: meta.size,
                                 modified_unix_ns: meta.modified_unix_ns,
+                                permissions: meta.permissions,
                             },
                         )
                     })
@@ -305,6 +306,28 @@ pub fn replay_interpreter_with_fixture(
                 ),
                 Request::Mkdir { directory, path } => (
                     "file.mkdir",
+                    vec![handle("Dir", *directory), reference::path(path)],
+                ),
+                Request::SetPermissions {
+                    directory,
+                    path,
+                    permissions,
+                } => (
+                    "file.set_permissions",
+                    vec![
+                        handle("Dir", *directory),
+                        reference::path(path),
+                        Value::Integer(
+                            hirsel_interp::Integer::new(
+                                hirsel_types::Primitive::U32,
+                                *permissions as u128,
+                            )
+                            .unwrap(),
+                        ),
+                    ],
+                ),
+                Request::RemoveAll { directory, path } => (
+                    "dir.remove_all",
                     vec![handle("Dir", *directory), reference::path(path)],
                 ),
                 Request::RemoveDir { directory, path } => (
@@ -772,6 +795,10 @@ fn decode(schema: &Completion, value: hirsel_interp::Value) -> Completion {
                 kind,
                 size: size.bits() as u64,
                 modified_unix_ns,
+                permissions: match f.next().unwrap() {
+                    Value::Integer(n) => n.bits() as u32,
+                    _ => panic!(),
+                },
             }
         })),
         Completion::Entries(_) => Completion::Entries(result(value).map(|v| {

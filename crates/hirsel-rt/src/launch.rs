@@ -160,11 +160,12 @@ impl<A: Adapter> Adapter for Shared<A> {
 /// Faults include their committed prefix, so replay reconstructs partial effects exactly.
 fn render_metadata(meta: &crate::io::Metadata) -> String {
     format!(
-        "{},{},{}",
+        "{},{},{},{}",
         meta.kind as u32,
         meta.size,
         meta.modified_unix_ns
-            .map_or_else(|| "none".into(), |n| n.to_string())
+            .map_or_else(|| "none".into(), |n| n.to_string()),
+        meta.permissions
     )
 }
 fn parse_kind(text: &str) -> Result<crate::io::FileKind, String> {
@@ -179,10 +180,13 @@ fn parse_kind(text: &str) -> Result<crate::io::FileKind, String> {
 }
 fn parse_metadata(text: &str) -> Result<crate::io::Metadata, String> {
     let fields: Vec<_> = text.split(',').collect();
-    let [kind, size, modified] = fields.as_slice() else {
+    let [kind, size, modified, permissions] = fields.as_slice() else {
         return Err("bad metadata".into());
     };
     Ok(crate::io::Metadata {
+        permissions: permissions
+            .parse()
+            .map_err(|_| "bad metadata permissions")?,
         kind: parse_kind(kind)?,
         size: size.parse().map_err(|_| "bad metadata size")?,
         modified_unix_ns: if *modified == "none" {
@@ -260,6 +264,19 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             }
             Request::Mkdir { directory, path } => {
                 format!("mkdir {directory} {}", hex(path.as_bytes()))
+            }
+            Request::SetPermissions {
+                directory,
+                path,
+                permissions,
+            } => {
+                format!(
+                    "set_permissions {directory} {} {permissions}",
+                    hex(path.as_bytes())
+                )
+            }
+            Request::RemoveAll { directory, path } => {
+                format!("remove_all {directory} {}", hex(path.as_bytes()))
             }
             Request::RemoveDir { directory, path } => {
                 format!("remove_dir {directory} {}", hex(path.as_bytes()))
@@ -526,6 +543,15 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                     path: string(p)?,
                 },
                 ["mkdir", d, p] => Request::Mkdir {
+                    directory: number(d)?,
+                    path: string(p)?,
+                },
+                ["set_permissions", d, p, permissions] => Request::SetPermissions {
+                    directory: number(d)?,
+                    path: string(p)?,
+                    permissions: number(permissions)?,
+                },
+                ["remove_all", d, p] => Request::RemoveAll {
                     directory: number(d)?,
                     path: string(p)?,
                 },

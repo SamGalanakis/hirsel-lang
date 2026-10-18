@@ -1,0 +1,64 @@
+// rule: CAP-2
+// expect: run
+// entry: main
+// Host fixture supplies outside and tree/link symlinks; ordinary runs use a fresh tree.
+pub fn main(rt: Io) -> Result[(), FileError] {
+  let d = io.dir(rt, path.of(""))?
+  file.mkdir_all(d, path.of("tree/deep"))?
+  file.write_bytes(d, path.of("source"), b"abc")?
+  file.copy_file(d, path.of("source"), path.of("copied"))?
+  failure.check(file.read_bytes(d, path.of("copied"))? == b"abc", TextInvariant())
+  file.set_permissions(d, path.of("source"), 416)?
+  failure.check(
+    file.metadata(d, path.of("source"))?.permissions == 416,
+    TextInvariant()
+  )
+  let entries = file.list_recursive(d, path.of("tree"))?
+  for entry in entries {
+    failure.check(path.text(entry.path) != "tree/link/keep", TextInvariant())
+  }
+  match file.metadata(d, path.of("outside")) {
+    Ok(meta) => {
+      failure.check(
+        match meta.kind {
+          Symlink() => true,
+          _ => false,
+        },
+        TextInvariant()
+      )
+      failure.check(
+        match file.copy_file(d, path.of("outside/keep"), path.of("copied")) {
+          Error(FileFault(_)) => true,
+          _ => false,
+        },
+        TextInvariant()
+      )
+      failure.check(
+        match file.set_permissions(d, path.of("outside"), 0) {
+          Error(FileFault(_)) => true,
+          _ => false,
+        },
+        TextInvariant()
+      )
+      failure.check(
+        match file.list_recursive(d, path.of("outside")) {
+          Error(NotDirectory()) => true,
+          _ => false,
+        },
+        TextInvariant()
+      )
+      dir.remove_all(d, path.of("outside"))?
+    },
+    Error(NotFound()) => (),
+    Error(e) => return Error(take e),
+  }
+  dir.remove_all(d, path.of("tree"))?
+  failure.check(
+    match dir.remove_all(d, path.of(".")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -69,6 +69,8 @@ impl State {
             | R::Remove { directory, .. }
             | R::Mkdir { directory, .. }
             | R::RemoveDir { directory, .. }
+            | R::RemoveAll { directory, .. }
+            | R::SetPermissions { directory, .. }
             | R::Rename { directory, .. }
             | R::CreateAtomic { directory, .. }
             | R::WriteAll { directory, .. }
@@ -86,6 +88,8 @@ impl State {
                     | R::Remove { .. }
                     | R::Mkdir { .. }
                     | R::RemoveDir { .. }
+                    | R::RemoveAll { .. }
+                    | R::SetPermissions { .. }
                     | R::Rename { .. }
                     | R::CreateAtomic { .. }
                     | R::WriteAll { .. }
@@ -121,6 +125,10 @@ impl State {
                 }
                 false
             }
+            R::SetPermissions {
+                path, permissions, ..
+            } => *permissions > 0o777 || crate::io::relative(&root, path).is_none(),
+            R::RemoveAll { path, .. } => crate::io::relative(&root, path).is_none_or(|p| p == root),
             R::Open { path, .. }
             | R::Create { path, .. }
             | R::Read { path, .. }
@@ -197,6 +205,8 @@ pub fn cancel(
         | R::Remove { .. }
         | R::Mkdir { .. }
         | R::RemoveDir { .. }
+        | R::RemoveAll { .. }
+        | R::SetPermissions { .. }
         | R::Rename { .. }
         | R::CreateAtomic { .. }
         | R::WriteAll { .. }

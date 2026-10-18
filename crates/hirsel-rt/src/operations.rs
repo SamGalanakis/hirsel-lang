@@ -164,6 +164,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "file.mkdir"
         | "file.rename"
         | "file.remove_dir"
+        | "file.set_permissions"
+        | "dir.remove_all"
         | "file.remove"
         | "file.write_bytes"
         | "file.write_all"
@@ -316,6 +318,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "file.mkdir"
             | "file.rename"
             | "file.remove_dir"
+            | "file.set_permissions"
+            | "dir.remove_all"
             | "file.size"
             | "file.remove"
             | "file.read_bytes"
@@ -1327,7 +1331,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         caller_site: false,
         symbol: "hirsel_rt_v2_file_metadata",
         destination: true,
-        result: Some((64, 16)),
+        result: Some((80, 16)),
         parameters: &[Physical::Pointer, Physical::Pointer],
     },
     AbiExport {
@@ -1336,6 +1340,20 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: true,
         result: Some((12, 4)),
         parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_dir_remove_all",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_file_set_permissions",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I32],
     },
     AbiExport {
         caller_site: false,
@@ -1676,6 +1694,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "file.mkdir",
     "file.rename",
     "file.remove_dir",
+    "file.set_permissions",
+    "dir.remove_all",
     "file.remove",
     "file.seek",
     "file.size",

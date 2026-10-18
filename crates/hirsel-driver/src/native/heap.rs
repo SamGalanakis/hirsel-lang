@@ -29,6 +29,7 @@ struct Io {
     grants: BTreeMap<u64, IoGrant>,
     trees: BTreeMap<u64, (BTreeSet<String>, BTreeMap<String, Vec<u8>>)>,
     files: BTreeMap<(u64, String), std::sync::Arc<()>>,
+    permissions: BTreeMap<(u64, String), u32>,
     network: hirsel_rt::io_net_script::ScriptIo,
     network_handles: BTreeMap<u64, u64>,
     /// `random.splitmix64@1` from the launch's Random seed, as the reference draws.
@@ -115,6 +116,7 @@ impl Io {
             yielded: false,
             monotonic: None,
             script_clocks: BTreeMap::new(),
+            permissions: BTreeMap::new(),
             detached_directories: BTreeSet::new(),
             resolved_directories: BTreeMap::new(),
             positions: Positions::default(),
@@ -251,7 +253,7 @@ impl Operations for Io {
                 output.extend(self.network.take_report());
                 return outcome;
             }
-            (Some("file"), _, _) => {
+            (Some("file"), _, _) | (Some("dir"), "remove_all", _) => {
                 self.yielded = true;
                 return self.cancel_file(&path.name, args, cause);
             }
@@ -988,6 +990,7 @@ impl Io {
                         .files
                         .remove(&(tree, temporary))
                         .expect("atomic file identity");
+                    self.permissions.remove(&(tree, destination.clone()));
                     self.files.insert((tree, destination), identity);
                     self.grants.remove(file);
                     return Some(OpOutcome::Complete {
@@ -1141,6 +1144,7 @@ impl Io {
                         }),
                     "remove" => {
                         if self.trees.get_mut(&tree).unwrap().1.remove(&path).is_some() {
+                            self.permissions.remove(&(tree, path.clone()));
                             self.files.remove(&(tree, path));
                             io_ok(OpValue::Unit)
                         } else {
@@ -1170,6 +1174,7 @@ impl Io {
                                 .unwrap()
                                 .1
                                 .insert(path.clone(), bytes.clone());
+                            self.permissions.remove(&(tree, path.clone()));
                             self.files.insert((tree, path), std::sync::Arc::new(()));
                             io_ok(OpValue::Unit)
                         } else {

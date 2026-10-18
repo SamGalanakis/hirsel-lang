@@ -168,3 +168,10 @@ that IP. Each world allocates from 49152 upward, skips script-reserved and bound
 ports, and shares the sequence through narrowed Nets; independent worlds restart
 it. Outbound connects do not consume ports. Listen completions retain the assigned
 address for replay.
+
+Filesystem metadata includes low-nine-bit permissions without WallClock authority.
+`file.set_permissions` and `dir.remove_all` use the ordinary Dir access check before
+fault consumption. The independent model removes sorted descendants in postorder,
+unlinks symlinks as entries, preserves opened file contents, and detaches removed
+issued directories. Recursive-removal fault prefixes count deleted entries.
+`file.copy_file` and `file.list_recursive` execute ordinary std source.

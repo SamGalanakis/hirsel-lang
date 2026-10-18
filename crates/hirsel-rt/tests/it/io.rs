@@ -315,7 +315,8 @@ fn io_result_records_match_derived_layouts_on_both_targets() {
         let kind = ty.variant(&[&[], &[], &[], &[]]);
         let i128ty = ty.p(Primitive::I128);
         let timestamp = ty.variant(&[&[], &[i128ty]]);
-        let metadata = ty.record(&[kind, u64ty, timestamp]);
+        let permissions = ty.p(Primitive::U32);
+        let metadata = ty.record(&[kind, u64ty, timestamp, permissions]);
         let metadata_result = ty.variant(&[&[metadata], &[error]]);
         let mut builder = LayoutBuilder::new(&target, &owners);
         let metadata_id = builder.layout(&ty.store, metadata_result).unwrap();
@@ -2037,6 +2038,7 @@ fn filesystem_metadata_abi_preserves_negative_nanoseconds_and_initializes_inacti
                 kind: FileKind::Symlink,
                 size: 9,
                 modified_unix_ns: Some(-1),
+                permissions: 0o666,
             })))
         }
     }
@@ -2044,7 +2046,7 @@ fn filesystem_metadata_abi_preserves_negative_nanoseconds_and_initializes_inacti
     let mut binding = Box::new(Binding::new(MetadataOnly));
     let path = binding.intern_path("link");
     let mut out = MetadataResult {
-        words: [u64::MAX; 8],
+        words: [u64::MAX; 10],
     };
     unsafe {
         binding.bind(&mut *ctx.0);
@@ -2053,7 +2055,7 @@ fn filesystem_metadata_abi_preserves_negative_nanoseconds_and_initializes_inacti
             0
         );
     }
-    assert_eq!(out.words, [0, 0, 2, 9, 1, 0, u64::MAX, u64::MAX]);
+    assert_eq!(out.words, [0, 0, 2, 9, 1, 0, u64::MAX, u64::MAX, 0o666, 0]);
 }
 
 #[test]
@@ -2238,4 +2240,188 @@ fn filesystem_mount_pins_survive_rename_and_removal_before_directory_projection(
     }
     replay.finish().unwrap();
     assert_eq!(replay.tree(), &final_tree);
+}
+
+// OS-created links and inode permission state cannot be supplied by test.dir.
+// Rust std remove_dir_all's outside-link and nested vectors, plus prefix replay.
+#[test]
+fn filesystem_breadth_confines_symlinks_and_replays_partial_removal() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    let root = Disposable::new();
+    let outside = Disposable::new();
+    std::fs::write(outside.path().join("keep"), b"outside").unwrap();
+    std::fs::create_dir_all(root.path().join("tree/deep")).unwrap();
+    std::fs::write(root.path().join("tree/a"), b"a").unwrap();
+    std::fs::write(root.path().join("tree/deep/b"), b"b").unwrap();
+    symlink(outside.path(), root.path().join("escape")).unwrap();
+    symlink(outside.path(), root.path().join("tree/escape")).unwrap();
+    symlink("..", root.path().join("tree/parent")).unwrap();
+    let mut host = RealIo::grant(root.path()).unwrap();
+    let mut initial = host.snapshot().unwrap();
+    // The independent model receives this filesystem input explicitly. Ordinary
+    // content snapshots intentionally omit timestamps for readable regular files.
+    let metadata = std::fs::metadata(root.path().join("tree/a")).unwrap();
+    initial.metadata.insert(
+        "tree/a".into(),
+        Metadata {
+            kind: FileKind::Regular,
+            size: metadata.len(),
+            modified_unix_ns: Some(
+                i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
+            ),
+            permissions: metadata.mode() & 0o777,
+        },
+    );
+    let Completion::Handle(Ok(dir)) = host
+        .call(Request::Directory {
+            io: 1,
+            path: "".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    let Completion::Handle(Ok(nested)) = host
+        .call(Request::NarrowDir {
+            directory: dir,
+            path: "tree/deep".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(
+        host.call(Request::SetPermissions {
+            directory: dir,
+            path: "tree/a".into(),
+            permissions: 0o640
+        })
+        .unwrap(),
+        Completion::Unit(Ok(()))
+    );
+    let Completion::Metadata(Ok(meta)) = host
+        .call(Request::Metadata {
+            directory: dir,
+            path: "tree/a".into(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(meta.permissions, 0o640);
+    assert_eq!(meta.size, 1);
+    assert!(meta.modified_unix_ns.is_some());
+    let outside_mode = std::fs::metadata(outside.path())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(
+        host.call(Request::SetPermissions {
+            directory: dir,
+            path: "escape".into(),
+            permissions: 0
+        })
+        .unwrap(),
+        Completion::Unit(Err(IoError::Fault(1)))
+    );
+    assert_eq!(
+        std::fs::metadata(outside.path())
+            .unwrap()
+            .permissions()
+            .mode(),
+        outside_mode
+    );
+    assert_eq!(
+        host.call(Request::RemoveAll {
+            directory: dir,
+            path: "escape/keep".into()
+        })
+        .unwrap(),
+        Completion::Unit(Err(IoError::Fault(1)))
+    );
+    assert_eq!(
+        host.call(Request::RemoveAll {
+            directory: dir,
+            path: "escape".into()
+        })
+        .unwrap(),
+        Completion::Unit(Ok(()))
+    );
+    assert!(!root.path().join("escape").exists());
+    assert_eq!(
+        std::fs::read(outside.path().join("keep")).unwrap(),
+        b"outside"
+    );
+    host.inject(Fault {
+        error: IoError::Canceled(0),
+        partial: 1,
+    });
+    assert_eq!(
+        host.call(Request::RemoveAll {
+            directory: dir,
+            path: "tree".into()
+        })
+        .unwrap(),
+        Completion::Unit(Err(IoError::Canceled(0)))
+    );
+    assert!(root.path().join("tree/a").exists());
+    host.inject(Fault {
+        error: IoError::PermissionDenied,
+        partial: 1,
+    });
+    assert_eq!(
+        host.call(Request::RemoveAll {
+            directory: dir,
+            path: "tree".into()
+        })
+        .unwrap(),
+        Completion::Unit(Err(IoError::PermissionDenied))
+    );
+    assert!(!root.path().join("tree/a").exists());
+    assert!(root.path().join("tree/deep/b").exists());
+    assert_eq!(
+        host.call(Request::RemoveAll {
+            directory: dir,
+            path: "tree".into()
+        })
+        .unwrap(),
+        Completion::Unit(Ok(()))
+    );
+    assert_eq!(
+        host.call(Request::ReadDir {
+            directory: nested,
+            path: "".into()
+        })
+        .unwrap(),
+        Completion::Entries(Ok(vec![]))
+    );
+    assert_eq!(
+        host.call(Request::RemoveAll {
+            directory: dir,
+            path: "tree/..".into()
+        })
+        .unwrap(),
+        Completion::Unit(Err(IoError::Fault(1)))
+    );
+    assert_eq!(
+        std::fs::read(outside.path().join("keep")).unwrap(),
+        b"outside"
+    );
+    let final_tree = host.snapshot().unwrap();
+    let handles = host.handles().observed().clone();
+    let tape = host.tape().to_vec();
+    let text = hirsel_rt::launch::render_tape(&tape).unwrap();
+    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    drop(host);
+    drop(root);
+    drop(outside);
+    let mut replay = SimIo::new(initial.clone(), tape.clone());
+    for event in &tape {
+        assert_eq!(
+            replay.call(event.request.clone()).unwrap(),
+            event.completion
+        );
+    }
+    replay.finish().unwrap();
+    replay_interpreter(&tape, &initial, &final_tree, &handles, b"");
 }

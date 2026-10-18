@@ -292,7 +292,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "Metadata",
             "",
-            "kind: FileKind,size: u64,modified_unix_ns: Option[i128]",
+            "kind: FileKind,size: u64,modified_unix_ns: Option[i128],permissions: u32",
         ),
         ("DirEntry", "", "path: Path,kind: FileKind"),
         ("SocketAddr", "", "ip: IpAddr,port: u16"),

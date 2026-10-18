@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-826 exported definitions; 266 variants.
+830 exported definitions; 266 variants.
 
 ## Types and roots
 
@@ -576,7 +576,7 @@ Variant of IpAddr.
 
 <a id="def-core_401_2fMetadata"></a>
 
-- `type Metadata uses {} = { kind: FileKind, size: u64, modified_unix_ns: Option[i128] }`
+- `type Metadata uses {} = { kind: FileKind, size: u64, modified_unix_ns: Option[i128], permissions: u32 }`
 
 <a id="def-core_401_2fMonotonicClock"></a>
 
@@ -2180,6 +2180,10 @@ References: [`std@1/deque/Deque`](#def-std_401_2fdeque_2fDeque)
 
 - `fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]`
 
+<a id="def-core_401_2fdir_2fremove_5fall"></a>
+
+- `fn dir.remove_all(d: Dir, p: Path) -> Result[(), FileError]`
+
 
 ## duration
 
@@ -2387,6 +2391,12 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_
 
 - `fn file.commit(d: Dir, take f: AtomicFile of d) -> Result[(), FileError]`
 
+<a id="def-std_401_2ffile_2fcopy_5ffile"></a>
+
+- `pub fn file.copy_file(d: Dir, from: Path, to: Path) -> Result[(), FileError]`
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/Path`](#def-core_401_2fPath), [`core@1/Result`](#def-core_401_2fResult)
+
 <a id="def-core_401_2ffile_2fcreate"></a>
 
 - `fn file.create(d: Dir, p: Path) -> Result[File of d, FileError]`
@@ -2394,6 +2404,12 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/f64`](#def-core_
 <a id="def-core_401_2ffile_2fcreate_5fatomic"></a>
 
 - `fn file.create_atomic(d: Dir, p: Path) -> Result[AtomicFile of d, FileError]`
+
+<a id="def-std_401_2ffile_2flist_5frecursive"></a>
+
+- `pub fn file.list_recursive(d: Dir, p: Path) -> Result[unique List[DirEntry], FileError]`
+
+References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/DirEntry`](#def-core_401_2fDirEntry), [`core@1/FileError`](#def-core_401_2fFileError), [`core@1/List`](#def-core_401_2fList), [`core@1/Path`](#def-core_401_2fPath), [`core@1/Result`](#def-core_401_2fResult)
 
 <a id="def-core_401_2ffile_2fmetadata"></a>
 
@@ -2444,6 +2460,10 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 <a id="def-core_401_2ffile_2fseek"></a>
 
 - `fn file.seek(d: Dir, mut f: File of d, offset: u64) -> Result[(), FileError]`
+
+<a id="def-core_401_2ffile_2fset_5fpermissions"></a>
+
+- `fn file.set_permissions(d: Dir, p: Path, permissions: u32) -> Result[(), FileError]`
 
 <a id="def-core_401_2ffile_2fsize"></a>
 

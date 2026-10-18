@@ -94,6 +94,8 @@ fn file.metadata(d: Dir, p: Path) -> Result[Metadata, FileError]
 fn file.mkdir(d: Dir, p: Path) -> Result[(), FileError]
 fn file.rename(d: Dir, from: Path, to: Path) -> Result[(), FileError]
 fn file.remove_dir(d: Dir, p: Path) -> Result[(), FileError]
+fn file.set_permissions(d: Dir, p: Path, permissions: u32) -> Result[(), FileError]
+fn dir.remove_all(d: Dir, p: Path) -> Result[(), FileError]
 fn file.read_bytes(d: Dir, p: Path) -> Result[Bytes, FileError] in d
 fn file.write_bytes(d: Dir, p: Path, take data: Bytes) -> Result[(), FileError]
 N fn file.remove(d: Dir, p: Path) -> Result[(), FileError]
@@ -291,7 +293,7 @@ replayed as a run input; injected non-canceled errors can follow partial write e
 
 ```text
 type FileKind = Regular | Directory | Symlink | Other
-type Metadata { kind: FileKind, size: u64, modified_unix_ns: Option[i128] }
+type Metadata { kind: FileKind, size: u64, modified_unix_ns: Option[i128], permissions: u32 }
 type DirEntry { path: Path, kind: FileKind }
 ```
 
@@ -322,6 +324,29 @@ all three mutations with `NotGranted` before any storage call. Paths retain the
 existing descriptor confinement and traversal refusal. Portable host errors also
 map ENOTEMPTY to `DirectoryNotEmpty` and EXDEV to `CrossDevice`; other errors use
 the existing `FileError` contract. Successful operations do not promise durability.
+
+`Metadata.permissions` reports the low nine POSIX permission bits (`0o777`),
+without file-type, set-id or sticky bits. It is a filesystem input, not a clock
+read. Fresh simulated regular files use `0o666`, directories and symlinks `0o777`;
+host modes reflect the host (including its creation mask) and are recorded.
+`file.set_permissions` replaces those nine bits on a regular file or directory
+inside its Dir, including the grant root. Values above `0o777`, final symlinks
+and other entry kinds return `FileFault`; it never changes a symlink's target.
+A read-only grant returns `NotGranted` before any storage call. Parent resolution
+retains ordinary descriptor confinement. Permission bits do not grant authority;
+host ownership and permission failures remain filesystem inputs.
+
+`dir.remove_all` removes a directory and its descendants, or unlinks a final
+symlink as an entry even when its target lies outside the grant. It never descends
+symlinks. A non-directory, non-symlink starting entry returns `NotDirectory`;
+a missing entry returns `NotFound`. An empty/dot or normalized grant-root path
+returns `FileFault`, and a read-only grant returns `NotGranted` before storage
+activation. Parent components retain existing confined resolution; all recursive
+descents are descriptor-relative and use no-follow directory opens. The first
+error stops removal and may leave a partially removed tree. No durability or
+transactional removal is promised. Concurrent replacement can cause an error;
+it cannot make recursive descent follow a link or widen the grant. Already
+issued Dir and File handles retain their pinned identities across removal.
 
 ## Network types
 

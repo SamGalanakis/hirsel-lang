@@ -56,6 +56,8 @@ fn file.metadata(d: Dir, p: Path) -> Result[Metadata, FileError]
 fn file.mkdir(d: Dir, p: Path) -> Result[(), FileError]
 fn file.rename(d: Dir, from: Path, to: Path) -> Result[(), FileError]
 fn file.remove_dir(d: Dir, p: Path) -> Result[(), FileError]
+fn file.set_permissions(d: Dir, p: Path, permissions: u32) -> Result[(), FileError]
+fn dir.remove_all(d: Dir, p: Path) -> Result[(), FileError]
 fn file.read_bytes(d: Dir, p: Path) -> Result[Bytes, FileError] in d
 fn file.write_bytes(d: Dir, p: Path, take data: Bytes) -> Result[(), FileError]
 N fn file.remove(d: Dir, p: Path) -> Result[(), FileError]

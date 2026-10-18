@@ -625,3 +625,77 @@ fn a_streaming_cat_child_round_trips_lines_and_replays_without_spawning() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn filesystem_breadth_source_replays_across_backends_without_following_outside_links() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let fixture = Fixture::new("filesystem-breadth");
+    std::fs::write(
+        fixture.source(),
+        include_str!("../../../../conformance/CAP/CAP-2-filesystem-breadth-host-run.hir"),
+    )
+    .unwrap();
+    let outside = fixture.0.join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("keep"), b"outside").unwrap();
+    let grants = fixture.0.join("fs-grants.json");
+    std::fs::write(&grants, serde_json::json!({"io":{"dirs":[{"path":"","host":fixture.0.join("data"),"access":"read_write"}]}}).to_string()).unwrap();
+    let mut tapes = vec![];
+    for backend in [None, Some("llvm"), Some("cranelift")] {
+        let data = fixture.0.join("data");
+        std::fs::create_dir_all(data.join("tree")).unwrap();
+        symlink(&outside, data.join("tree/link")).unwrap();
+        symlink(&outside, data.join("outside")).unwrap();
+        let tape = fixture.tape(&format!("filesystem-{}.tape", backend.unwrap_or("interp")));
+        let mut command = hirsel(
+            backend.is_some(),
+            &fixture.source(),
+            &[
+                "--grants".as_ref(),
+                grants.as_os_str(),
+                "--record".as_ref(),
+                tape.as_os_str(),
+            ],
+        );
+        if let Some(backend) = backend {
+            command.args(["--backend", backend]);
+        }
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success() && output.stderr.is_empty(),
+            "{backend:?}: {output:?}"
+        );
+        assert!(!data.join("tree").exists());
+        assert!(!data.join("outside").exists());
+        assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"outside");
+        assert_eq!(
+            std::fs::metadata(data.join("source"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        tapes.push(tape);
+    }
+    std::fs::remove_dir_all(fixture.0.join("data")).unwrap();
+    std::fs::remove_dir_all(outside).unwrap();
+    for tape in tapes {
+        for backend in [None, Some("llvm"), Some("cranelift")] {
+            let mut command = hirsel(
+                backend.is_some(),
+                &fixture.source(),
+                &["--replay".as_ref(), tape.as_os_str()],
+            );
+            if let Some(backend) = backend {
+                command.args(["--backend", backend]);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success() && output.stderr.is_empty(),
+                "{} {backend:?}: {output:?}",
+                tape.display()
+            );
+        }
+    }
+}

@@ -1514,6 +1514,7 @@ fn filesystem_snapshot_metadata_survives_initialization_and_failed_create() {
                     kind: 0,
                     size: 1,
                     modified_unix_ns: Some(-1),
+                    permissions: 0o666,
                 },
             ),
             (
@@ -1522,6 +1523,7 @@ fn filesystem_snapshot_metadata_survives_initialization_and_failed_create() {
                     kind: 1,
                     size: 0,
                     modified_unix_ns: Some(-2),
+                    permissions: 0o777,
                 },
             ),
         ]),
@@ -1536,7 +1538,7 @@ fn filesystem_snapshot_metadata_survives_initialization_and_failed_create() {
         let Value::Variant {
             variant,
             mut fields,
-        } = fields.pop().unwrap().unwrap()
+        } = fields.remove(2).unwrap()
         else {
             panic!()
         };

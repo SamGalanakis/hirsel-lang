@@ -14,7 +14,7 @@ extern "C" {
 typedef struct { uint32_t tag, padding; uint64_t value; } hirsel_rt_v2_handle_result;
 typedef struct { uint32_t tag, error, code; } hirsel_rt_v2_unit_result;
 /* Metadata Result: tag at 0, Metadata at 16, Option[i128] at 32; 64 bytes. */
-typedef struct { _Alignas(16) uint64_t words[8]; } hirsel_rt_v2_metadata_result;
+typedef struct { _Alignas(16) uint64_t words[10]; } hirsel_rt_v2_metadata_result;
 typedef uint8_t (*hirsel_rt_v2_test_entry)(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*);
 int32_t hirsel_rt_v2_launch_test(hirsel_rt_v2_test_entry, uint64_t, const hirsel_rt_v2_layout *const *, uint32_t, const hirsel_rt_v2_launch_config *);
 uint8_t hirsel_rt_v2_io_close(hirsel_rt_v2_ctx*, uint64_t, uint64_t, uint64_t);
@@ -34,6 +34,8 @@ uint8_t hirsel_rt_v2_file_read_dir(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle
 uint8_t hirsel_rt_v2_file_metadata(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_metadata_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_mkdir(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_rename(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_dir_remove_all(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_file_set_permissions(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*, uint32_t);
 uint8_t hirsel_rt_v2_file_remove_dir(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_remove(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_file_narrow(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, uint64_t*);

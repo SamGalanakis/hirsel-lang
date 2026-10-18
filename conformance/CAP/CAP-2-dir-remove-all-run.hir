@@ -1,0 +1,53 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+// Rust remove_dir_all nested, empty, missing and file-root vectors, with a grant guard.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("tree/deep/file"), b"x"), (path.of("keep"), b"safe")])
+  file.mkdir(d, path.of("tree/empty"))?
+  let nested = dir.narrow(d, path.of("tree/deep"))?
+  let mut opened = file.open(d, path.of("tree/deep/file"))?
+  dir.remove_all(d, path.of("tree"))?
+  test.check(t, list.len(file.read_dir(d, path.of(""))?) == 1)
+  test.check(t, list.len(file.read_dir(nested, path.of(""))?) == 0)
+  let mut buffer: List[u8] = []
+  test.check(t, file.read(d, mut opened, mut buffer, 1)? == 1)
+  test.check(t, bytes.from_list(take buffer) == b"x")
+  test.check(
+    t,
+    match dir.remove_all(d, path.of("")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match dir.remove_all(d, path.of(".")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match dir.remove_all(d, path.of("../escape")) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match dir.remove_all(d, path.of("missing")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match dir.remove_all(d, path.of("keep")) {
+      Error(NotDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(t, file.read_bytes(d, path.of("keep"))? == b"safe")
+  Ok(())
+}

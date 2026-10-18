@@ -446,7 +446,7 @@ impl Library {
                     },
                 )
             }
-            n if n.starts_with("file.") => self.file(name, call)?,
+            n if n.starts_with("file.") || n == "dir.remove_all" => self.file(name, call)?,
             _ => return Ok(None),
         };
         let cap = if name.starts_with("io.") {
@@ -512,6 +512,8 @@ impl Library {
                     | "file.mkdir"
                     | "file.rename"
                     | "file.remove_dir"
+                    | "file.set_permissions"
+                    | "dir.remove_all"
                     | "file.create_atomic"
                     | "file.write_all"
                     | "file.commit"
@@ -526,6 +528,11 @@ impl Library {
             let invalid_path = simulation::relative(&root, path_text(arg(a, 1)?)?).is_none()
                 || (name == "file.rename"
                     && simulation::relative(&root, path_text(arg(a, 2)?)?).is_none());
+            let invalid_path = invalid_path
+                || (name == "dir.remove_all"
+                    && simulation::relative(&root, path_text(arg(a, 1)?)?).as_deref()
+                        == Some(&root))
+                || (name == "file.set_permissions" && int(arg(a, 2)?)?.bits() > 0o777);
             if invalid_path {
                 return Ok(file_fault(self.simulation.config.invalid_path_code));
             }
@@ -542,6 +549,19 @@ impl Library {
                 && *partial > 0
             {
                 match name {
+                    "dir.remove_all" => {
+                        if let Ok(p) = self.simulation.resolve_in(
+                            tree,
+                            dir,
+                            &root,
+                            path_text(arg(a, 1)?)?,
+                            false,
+                        ) && simulation::relative(&root, path_text(arg(a, 1)?)?).as_deref()
+                            != Some(&root)
+                        {
+                            let _ = self.simulation.remove_tree(tree, &p, Some(*partial));
+                        }
+                    }
                     "file.write_bytes" => {
                         if let Ok(p) = self.simulation.resolve_in(
                             tree,
@@ -754,6 +774,8 @@ impl Library {
                 | "file.metadata"
                 | "file.mkdir"
                 | "file.remove_dir"
+                | "file.set_permissions"
+                | "dir.remove_all"
                 | "file.rename"
         );
         let p = match self.simulation.resolve_in(tree, dir, &root, p, follow) {
@@ -762,7 +784,13 @@ impl Library {
         };
         if matches!(
             name,
-            "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir"
+            "file.read_dir"
+                | "file.metadata"
+                | "file.mkdir"
+                | "file.rename"
+                | "file.remove_dir"
+                | "file.set_permissions"
+                | "dir.remove_all"
         ) {
             return self.file_lifecycle(name, a, (tree, dir, &root), &logical, &p);
         }
@@ -1285,7 +1313,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();

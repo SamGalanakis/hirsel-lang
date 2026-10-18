@@ -801,6 +801,7 @@ fn entry_metadata(meta: &std::fs::Metadata) -> Metadata {
             FileKind::Other
         },
         size: meta.len(),
+        permissions: meta.mode() & 0o777,
         modified_unix_ns: Some(
             i128::from(meta.mtime()) * 1_000_000_000 + i128::from(meta.mtime_nsec()),
         ),
@@ -1190,6 +1191,117 @@ impl Storage for Disk {
             Ok(())
         }
     }
+    fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError> {
+        let pin = if self.local(path)?.is_empty() {
+            self.base()?.try_clone().map_err(error)?
+        } else {
+            let (parent, name) = self.parent(path)?;
+            open_component(
+                parent.as_raw_fd(),
+                name.to_str().map_err(|_| IoError::Fault(1))?,
+                libc::O_PATH,
+                0,
+            )?
+        };
+        let meta = pin.metadata().map_err(error)?;
+        if !meta.is_file() && !meta.is_dir() {
+            return Err(IoError::Fault(1));
+        }
+        // Like the resolver's data reopen, this trusted magic path names the pinned
+        // inode, not a mutable directory entry. O_PATH needs no file read permission.
+        let pinned = CString::new(format!("/proc/self/fd/{}", pin.as_raw_fd())).unwrap();
+        // SAFETY: pinned remains live and pinned is a terminated descriptor path.
+        if unsafe { libc::chmod(pinned.as_ptr(), permissions as libc::mode_t) } != 0 {
+            Err(error(std::io::Error::last_os_error()))
+        } else {
+            Ok(())
+        }
+    }
+    fn remove_all(&mut self, path: &str, limit: Option<usize>) -> Result<(), IoError> {
+        let (parent, name) = self.parent(path)?;
+        let pin = open_component(
+            parent.as_raw_fd(),
+            name.to_str().map_err(|_| IoError::Fault(1))?,
+            libc::O_PATH,
+            0,
+        )?;
+        let meta = pin.metadata().map_err(error)?;
+        if !meta.is_dir() && !meta.file_type().is_symlink() {
+            return Err(IoError::NotDirectory);
+        }
+        // Adapted from Rust's openat/unlinkat remove_dir_all. An explicit work
+        // stack bounds the Rust call stack; every descent opens with O_NOFOLLOW.
+        enum Work {
+            Enter(Rc<File>, CString),
+            Leave(Rc<File>, CString),
+        }
+        let mut work = vec![Work::Enter(Rc::new(parent), name)];
+        let mut removed = 0;
+        let result = (|| {
+            while let Some(item) = work.pop() {
+                if limit == Some(removed) {
+                    return Ok(());
+                }
+                let (parent, name, flags) = match item {
+                    Work::Leave(parent, name) => (parent, name, libc::AT_REMOVEDIR),
+                    Work::Enter(parent, name) => {
+                        // SAFETY: parent is pinned, name is a terminated local leaf.
+                        let fd = unsafe {
+                            libc::openat(
+                                parent.as_raw_fd(),
+                                name.as_ptr(),
+                                libc::O_RDONLY
+                                    | libc::O_DIRECTORY
+                                    | libc::O_NOFOLLOW
+                                    | libc::O_CLOEXEC,
+                            )
+                        };
+                        if fd >= 0 {
+                            // SAFETY: openat returned a fresh descriptor.
+                            let directory = Rc::new(unsafe { File::from_raw_fd(fd) });
+                            let children = std::fs::read_dir(format!(
+                                "/proc/self/fd/{}",
+                                directory.as_raw_fd()
+                            ))
+                            .map_err(error)?;
+                            work.push(Work::Leave(parent, name));
+                            let mut names = vec![];
+                            for entry in children {
+                                use std::os::unix::ffi::OsStrExt;
+                                let entry = entry.map_err(error)?;
+                                names.push(
+                                    CString::new(entry.file_name().as_bytes())
+                                        .map_err(|_| IoError::Fault(1))?,
+                                );
+                            }
+                            names.sort();
+                            for name in names.into_iter().rev() {
+                                work.push(Work::Enter(directory.clone(), name));
+                            }
+                            continue;
+                        }
+                        let e = std::io::Error::last_os_error();
+                        if !matches!(e.raw_os_error(), Some(libc::ENOTDIR | libc::ELOOP)) {
+                            return Err(error(e));
+                        }
+                        (parent, name, 0)
+                    }
+                };
+                // SAFETY: only the pinned parent and local leaf are used. unlinkat
+                // cannot follow a symlink even if the entry was concurrently replaced.
+                if unsafe { libc::unlinkat(parent.as_raw_fd(), name.as_ptr(), flags) } != 0 {
+                    return Err(error(std::io::Error::last_os_error()));
+                }
+                removed += 1;
+            }
+            Ok(())
+        })();
+        if let Err(ref failure) = result {
+            self.partial = Some((failure.clone(), removed));
+        }
+        result
+    }
+
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError> {
         let pin = if self.local(path)?.is_empty() {
             self.base()?.try_clone().map_err(error)?

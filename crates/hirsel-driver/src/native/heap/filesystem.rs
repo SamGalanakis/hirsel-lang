@@ -64,6 +64,8 @@ impl Io {
                 | "remove"
                 | "mkdir"
                 | "remove_dir"
+                | "remove_all"
+                | "set_permissions"
                 | "rename"
                 | "create_atomic"
                 | "write_all"
@@ -110,6 +112,20 @@ impl Io {
                 if io_relative(root, text).is_none() {
                     value = io_error(1);
                 }
+            }
+        }
+        if writing && *access != Access::Read {
+            if name == "set_permissions"
+                && matches!(rest.get(1), Some(OpValue::Bits { bits, .. }) if *bits > 0o777)
+            {
+                value = io_error(1);
+            }
+            if name == "remove_all"
+                && let Some(OpValue::Handle(path)) = rest.first()
+                && let Some(text) = path.checked_sub(1).and_then(|p| self.paths.get(p as usize))
+                && io_relative(root, text).as_ref() == Some(root)
+            {
+                value = io_error(1);
             }
         }
         if name == "commit" {
@@ -172,11 +188,12 @@ impl Io {
         name: &str,
         args: &[OpValue],
     ) -> Option<OpOutcome> {
-        if module != Some("file")
-            || !matches!(
-                name,
-                "read_dir" | "metadata" | "mkdir" | "rename" | "remove_dir"
-            )
+        if !(module == Some("dir") && name == "remove_all")
+            && (module != Some("file")
+                || !matches!(
+                    name,
+                    "read_dir" | "metadata" | "mkdir" | "rename" | "remove_dir" | "set_permissions"
+                ))
         {
             return None;
         }
@@ -186,7 +203,10 @@ impl Io {
         let Some(IoGrant::Dir { tree, root, access }) = self.grants.get(directory).cloned() else {
             return Some(OpOutcome::Fail("CAP-2".into()));
         };
-        let mutation = matches!(name, "mkdir" | "rename" | "remove_dir");
+        let mutation = matches!(
+            name,
+            "mkdir" | "rename" | "remove_dir" | "remove_all" | "set_permissions"
+        );
         if mutation && access == Access::Read {
             return Some(OpOutcome::Value(io_not_granted()));
         }
@@ -199,7 +219,7 @@ impl Io {
         let Some(path) = io_relative(&root, &text) else {
             return Some(OpOutcome::Value(io_error(1)));
         };
-        if mutation && path == root {
+        if mutation && name != "set_permissions" && path == root {
             return Some(OpOutcome::Value(io_error(1)));
         }
         let mut prefix = String::new();
@@ -231,6 +251,15 @@ impl Io {
                             .map_or(0, |b| b.len() as u128),
                     },
                     tag(0),
+                    OpValue::Bits {
+                        scalar: ScalarKind::U32,
+                        bits: self
+                            .permissions
+                            .get(&(tree, path.clone()))
+                            .copied()
+                            .unwrap_or(if k == 0 { 0o666 } else { 0o777 })
+                            as u128,
+                    },
                 ])),
                 None => io_portable(3),
             },
@@ -257,6 +286,49 @@ impl Io {
                 Some(_) => io_portable(7),
                 None => io_portable(3),
             },
+            "set_permissions" => {
+                let [OpValue::Bits { bits, .. }] = rest else {
+                    return Some(OpOutcome::Unsupported);
+                };
+                if *bits > 0o777 {
+                    io_error(1)
+                } else if kind(self, tree, &path).is_none() {
+                    io_portable(3)
+                } else {
+                    self.permissions.insert((tree, path.clone()), *bits as u32);
+                    io_ok(OpValue::Unit)
+                }
+            }
+            "remove_all" => match kind(self, tree, &path) {
+                Some(1) => {
+                    let removed = |p: &str| p == path || p.starts_with(&format!("{path}/"));
+                    let ids: Vec<_> = self
+                        .grants
+                        .iter()
+                        .filter_map(|(id, grant)| match grant {
+                            IoGrant::Dir { tree: t, root, .. }
+                                if *t == tree
+                                    && removed(
+                                        self.resolved_directories.get(id).unwrap_or(root),
+                                    ) =>
+                            {
+                                Some(*id)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    self.detached_directories.extend(ids);
+                    let (dirs, files) = self.trees.get_mut(&tree).unwrap();
+                    dirs.retain(|p| !removed(p));
+                    files.retain(|p, _| !removed(p));
+                    self.files.retain(|(t, p), _| *t != tree || !removed(p));
+                    self.permissions
+                        .retain(|(t, p), _| *t != tree || !removed(p));
+                    io_ok(OpValue::Unit)
+                }
+                Some(_) => io_portable(7),
+                None => io_portable(3),
+            },
             "mkdir" => {
                 if kind(self, tree, &path).is_some() {
                     io_portable(5)
@@ -271,6 +343,7 @@ impl Io {
                 Some(1) if !children(self, tree, &path).is_empty() => io_portable(8),
                 Some(1) => {
                     self.trees.get_mut(&tree).unwrap().0.remove(&path);
+                    self.permissions.remove(&(tree, path.clone()));
                     self.detached_directories
                         .extend(self.directory_at(tree, &path));
                     io_ok(OpValue::Unit)
@@ -332,6 +405,17 @@ impl Io {
                     for (t, p) in paths {
                         let id = self.files.remove(&(t, p.clone())).unwrap();
                         self.files.insert((t, dest(&p)), id);
+                    }
+                    self.permissions.remove(&(tree, to.clone()));
+                    let modes: Vec<_> = self
+                        .permissions
+                        .keys()
+                        .filter(|(t, p)| *t == tree && moved(p))
+                        .cloned()
+                        .collect();
+                    for key in modes {
+                        let bits = self.permissions.remove(&key).unwrap();
+                        self.permissions.insert((tree, dest(&key.1)), bits);
                     }
                     self.detached_directories
                         .extend(self.directory_at(tree, &to));
@@ -433,6 +517,10 @@ impl Io {
                         bits: 0,
                     },
                     tag(0),
+                    OpValue::Bits {
+                        scalar: ScalarKind::U32,
+                        bits: 0o777,
+                    },
                 ])),
                 (_, "read_dir") => io_ok(OpValue::Sequence(vec![])),
                 (_, "mkdir" | "remove_dir" | "rename") => io_error(1),

@@ -952,3 +952,13 @@ its callable with the actual spawn invocation as both codes.
 TLS argument validation uses `hirsel-run-config::tls` in every world. Adapters bind
 PEM validity and its digest to the stream until its handshake completes or closes;
 replay rederives it and keeps the existing tape identity. The host constructs its trust store with the same parser.
+
+Filesystem breadth adds the low nine permission bits to Metadata (80-byte,
+16-aligned Result ABI), `file.set_permissions` and `dir.remove_all`. Both mutations
+check read_write before storage activation. Permission changes pin and classify
+the final inode before chmod; final symlinks are refused. Recursive removal uses
+no-follow directory opens and unlinkat with an explicit work stack; final and
+nested symlinks are unlinked without accessing their targets. A failed removal
+records its sorted depth-first deletion prefix as an entry count in Fault.partial,
+which replay applies before returning the recorded error. Test trees use the same
+request policy and preserve permission bits across stream writes and renames.

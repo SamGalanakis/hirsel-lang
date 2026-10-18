@@ -1,0 +1,40 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("value"), b"abc")])
+  test.check(t, file.metadata(d, path.of("value"))?.permissions == 438)
+  file.set_permissions(d, path.of("value"), 416)?
+  let meta = file.metadata(d, path.of("value"))?
+  test.check(t, meta.permissions == 416 && meta.size == 3)
+  test.check(
+    t,
+    match meta.modified_unix_ns {
+      None() => true,
+      _ => false,
+    }
+  )
+  let mut f = file.create(d, path.of("value"))?
+  file.write(d, mut f, b"new")?
+  test.check(t, file.metadata(d, path.of("value"))?.permissions == 416)
+  file.rename(d, path.of("value"), path.of("moved"))?
+  test.check(t, file.metadata(d, path.of("moved"))?.permissions == 416)
+  file.set_permissions(d, path.of(""), 493)?
+  test.check(t, file.metadata(d, path.of(""))?.permissions == 493)
+  test.check(
+    t,
+    match file.set_permissions(d, path.of("moved"), 512) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  test.check(t, file.metadata(d, path.of("moved"))?.permissions == 416)
+  test.check(
+    t,
+    match file.set_permissions(d, path.of("../escape"), 511) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

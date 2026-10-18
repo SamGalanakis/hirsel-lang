@@ -25,6 +25,7 @@ pub(super) fn metadata_value(meta: FileMetadata) -> Value {
                     Integer::new(Primitive::I128, n as u128).unwrap(),
                 ))
             }),
+            u32_value(meta.permissions),
         ],
     )
 }
@@ -57,7 +58,11 @@ impl super::Simulation {
         if tree == 0
             && let Some(meta) = self.config.metadata.get(path)
         {
-            return Ok(meta.clone());
+            let mut meta = meta.clone();
+            if let Some(bits) = self.file_permissions.get(&(tree, path.into())) {
+                meta.permissions = *bits;
+            }
+            return Ok(meta);
         }
         let (dirs, files) = &self.trees[&tree];
         let (kind, size) = if let Some(bytes) = files.get(path) {
@@ -74,6 +79,11 @@ impl super::Simulation {
         Ok(FileMetadata {
             kind,
             size,
+            permissions: self
+                .file_permissions
+                .get(&(tree, path.into()))
+                .copied()
+                .unwrap_or(if kind == 0 { 0o666 } else { 0o777 }),
             modified_unix_ns: None,
         })
     }
@@ -91,6 +101,44 @@ impl super::Simulation {
             .into_iter()
             .filter(|p| !p.is_empty() && p.rsplit_once('/').map_or("", |(p, _)| p) == path)
             .collect())
+    }
+    pub(super) fn remove_tree(
+        &mut self,
+        tree: u64,
+        path: &str,
+        limit: Option<usize>,
+    ) -> Result<(), FileError> {
+        if !matches!(self.metadata(tree, path)?.kind, 1 | 2) {
+            return Err(FileError::NotDirectory);
+        }
+        let mut pending = vec![(path.to_owned(), false)];
+        let mut removed = 0;
+        while let Some((path, visited)) = pending.pop() {
+            if limit == Some(removed) {
+                break;
+            }
+            if self.metadata(tree, &path)?.kind == 1 && !visited {
+                let children = self.children(tree, &path)?;
+                pending.push((path, true));
+                for child in children.into_iter().rev() {
+                    pending.push((child, false));
+                }
+                continue;
+            }
+            let (dirs, files) = self.trees.get_mut(&tree).unwrap();
+            dirs.remove(&path);
+            files.remove(&path);
+            self.unlink_identity(tree, &path);
+            if tree == 0 {
+                self.config.links.remove(&path);
+                self.config.metadata.remove(&path);
+                self.update_mount_pins(&path, None);
+            }
+            self.detached_directories.extend(self.resolved_directories.iter().filter_map(|(id, root)|
+                (*root == path && matches!(self.grants.get(id), Some(super::simulation::Grant::Dir { tree: t, .. }) if *t == tree)).then_some(*id)));
+            removed += 1;
+        }
+        Ok(())
     }
     fn move_entry(&mut self, tree: u64, from: &str, to: &str) -> Result<(), FileError> {
         let kind = self.metadata(tree, from)?.kind;
@@ -162,6 +210,18 @@ impl super::Simulation {
             let value = self.file_identities.remove(&(t, path.clone())).unwrap();
             self.file_identities.insert((t, destination(&path)), value);
         }
+        self.file_permissions.remove(&(tree, to.into()));
+        let modes: Vec<_> = self
+            .file_permissions
+            .keys()
+            .filter(|(t, p)| *t == tree && moved(p))
+            .cloned()
+            .collect();
+        for key in modes {
+            let bits = self.file_permissions.remove(&key).unwrap();
+            self.file_permissions
+                .insert((tree, destination(&key.1)), bits);
+        }
         if tree == 0 {
             self.update_mount_pins(from, Some(to));
         }
@@ -199,6 +259,7 @@ impl Library {
                         kind: 1,
                         size: 0,
                         modified_unix_ns: None,
+                        permissions: 0o777,
                     })));
                 }
                 "file.read_dir" => {
@@ -247,6 +308,21 @@ impl Library {
                     arena: None,
                 }
             }),
+            "file.set_permissions" => {
+                let Value::Integer(bits) = arg(a, 2)? else { return Err(crate::invalid("permission bits")); };
+                let bits = bits.bits() as u32;
+                if bits > 0o777 { Err(FileError::Fault(self.simulation.config.invalid_path_code)) }
+                else { self.simulation.metadata(tree, path).and_then(|meta| {
+                    if !matches!(meta.kind, 0 | 1) { return Err(FileError::Fault(self.simulation.config.invalid_path_code)); }
+                    self.simulation.file_permissions.insert((tree, path.into()), bits);
+                    if let Some(identity) = self.simulation.file_identity(tree, path) {
+                        for (key, id) in &self.simulation.file_identities {
+                            if *id == identity { self.simulation.file_permissions.insert(key.clone(), bits); }
+                        }
+                    }
+                    Ok(Value::Unit)
+                }) }
+            }
             _ if logical == root => Err(FileError::Fault(self.simulation.config.invalid_path_code)),
             "file.mkdir" => match self.simulation.metadata(tree, path) {
                 Ok(_) => Err(FileError::AlreadyExists),
@@ -271,11 +347,13 @@ impl Library {
                 }
                 Err(e) => Err(e),
             },
+            "dir.remove_all" => self.simulation.remove_tree(tree, path, None).map(|()| Value::Unit),
             "file.remove_dir" => self.simulation.children(tree, path).and_then(|children| {
                 if !children.is_empty() {
                     return Err(FileError::DirectoryNotEmpty);
                 }
                 self.simulation.trees.get_mut(&tree).unwrap().0.remove(path);
+                self.simulation.file_permissions.remove(&(tree, path.into()));
                 if tree == 0 { self.simulation.update_mount_pins(path, None); }
                 self.simulation.detached_directories.extend(self.simulation.resolved_directories.iter().filter_map(|(id, root)|
                     (root == path && matches!(self.simulation.grants.get(id), Some(super::simulation::Grant::Dir { tree: t, .. }) if *t == tree)).then_some(*id)));

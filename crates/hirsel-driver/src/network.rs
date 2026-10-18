@@ -963,6 +963,15 @@ impl HostLibrary {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
             },
+            "file.set_permissions" => R::SetPermissions {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+                permissions: word(&a[2])? as u32,
+            },
+            "dir.remove_all" => R::RemoveAll {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+            },
             "file.remove_dir" => R::RemoveDir {
                 directory: self.id(&a[0])?,
                 path: path(&a[1])?,
@@ -1062,6 +1071,7 @@ impl HostLibrary {
                             || variant(0, vec![]),
                             |n| variant(1, vec![int(Primitive::I128, n as u128)]),
                         )),
+                        Some(int(Primitive::U32, meta.permissions)),
                     ],
                 }),
                 Err(e) => file_error(e),
@@ -1662,7 +1672,10 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
                 return self.storage(&name, call.arguments).map(Some);
             }
-            if (name.starts_with("file.") || name == "dir.narrow" || name.starts_with("clock."))
+            if (name.starts_with("file.")
+                || name == "dir.narrow"
+                || name == "dir.remove_all"
+                || name.starts_with("clock."))
                 && call.arguments.first().is_some_and(|v| self.id(v).is_ok())
             {
                 return self.storage(&name, call.arguments).map(Some);
