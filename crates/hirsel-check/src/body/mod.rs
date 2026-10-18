@@ -438,10 +438,18 @@ impl Checker<'_, '_> {
         row.modes.relation = row.modes.relation.union(&placement);
         self.body.types.push(row)
     }
-    // An equality operand only borrows, so the type it inherits from the
+    // A comparison operand only borrows, so the type it inherits from the
     // other side drops its `unique` qualifiers (MODE-2).
     fn compared_operand_type(&mut self, op: ast::BinaryOp, t: TypeId) -> TypeId {
-        if matches!(op, ast::BinaryOp::Eq | ast::BinaryOp::Ne) {
+        if matches!(
+            op,
+            ast::BinaryOp::Eq
+                | ast::BinaryOp::Ne
+                | ast::BinaryOp::Lt
+                | ast::BinaryOp::Le
+                | ast::BinaryOp::Gt
+                | ast::BinaryOp::Ge
+        ) {
             hirsel_types::erase_uniqueness(&mut self.body.types, t).unwrap_or(t)
         } else {
             t

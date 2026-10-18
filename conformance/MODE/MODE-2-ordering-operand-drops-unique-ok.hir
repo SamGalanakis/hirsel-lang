@@ -1,0 +1,12 @@
+// rule: MODE-2
+// expect: accept
+// An ordering operand only borrows, as an `==` one does, so a borrowed value
+// orders against the `unique` type it inherits from the other side, in either
+// order. Twin is MODE-2-ordering-operand-keeps-kind-bad.
+fn earlier(take a: unique String, b: String) -> bool uses {} {
+  a < b
+}
+
+fn later(take a: unique Bytes, b: Bytes) -> bool uses {} {
+  b >= a
+}

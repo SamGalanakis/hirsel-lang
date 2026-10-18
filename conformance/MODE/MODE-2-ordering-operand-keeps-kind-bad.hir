@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: reject LANG-7 at line 7
+// Dropping `unique` keeps the rest of the inherited type: a `String` still
+// cannot order against `Bytes`. Twin is
+// MODE-2-ordering-operand-drops-unique-ok.
+fn earlier(take a: unique Bytes, b: String) -> bool uses {} {
+  a < b
+}
