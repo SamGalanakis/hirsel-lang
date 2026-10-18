@@ -1,6 +1,8 @@
 use crate::layered::Layered;
 use crate::*;
 mod dependencies;
+mod generation;
+pub use generation::GeneratedSource;
 mod lowering;
 pub(crate) use lowering::Lowering;
 mod package_image;
@@ -126,6 +128,8 @@ pub struct QueryEngine {
     pub(crate) comptime_stack: Vec<(DefPath, hirsel_span::Span)>,
     pub(crate) staged_constants: BTreeMap<DefPath, crate::comptime::StagedConstant>,
     pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
+    /// Generated function bodies (CT-5), by declaration.
+    generated: BTreeMap<DefPath, GeneratedSource>,
     pub sources: SourceMap,
     pub symbols: Interner,
     pub environment: QueryEnvironment,
@@ -267,6 +271,7 @@ impl QueryEngine {
             comptime_stack: vec![],
             staged_constants: BTreeMap::new(),
             staged_values: BTreeMap::new(),
+            generated: BTreeMap::new(),
             sources: SourceMap::default(),
             symbols: Interner::default(),
             environment,
@@ -1019,6 +1024,10 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<TypedBody>>, QueryError> {
+        let snapshot = self.snapshot(definition)?;
+        if let Some(body) = generation::generator(&snapshot.file, snapshot.item) {
+            return self.generated_check_query(definition, snapshot, body);
+        }
         let resolution = self.resolve_query(definition)?;
         let signature = self.signature_output(definition)?;
         let key = self.key(definition, QueryKind::Check)?;

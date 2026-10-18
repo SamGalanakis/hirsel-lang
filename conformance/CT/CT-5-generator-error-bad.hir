@@ -1,0 +1,13 @@
+// rule: CT-5
+// expect: reject CT-1 at line 13
+// "`Error(message)` from a generator is CT-1 at `e`, with the message as a note".
+type Point {
+  x: u64,
+  y: u64,
+}
+
+fn refusing() -> Result[Body[fn(Point) -> u64 uses {}], String] {
+  Error("no u64 form for this type")
+}
+
+fn sum(p: Point) -> u64 uses {} = comptime refusing()

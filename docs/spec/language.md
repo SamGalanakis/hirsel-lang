@@ -201,8 +201,8 @@ and explicit dictionaries ([generics](generics.md)), size parameters `[n: size]`
 only), and `distinct` types, which inherit their base's bounds, are built as `Percent(v)`
 and read back with `let Percent(v) = p`. There is no overloading, no type class, no
 implicit conversion (including between error types), no textual macro expansion, no
-exception, no `any` and no cast. Typed compile-time generation is reserved
-([typed generation](compile-time.md#typed-generation)).
+exception, no `any` and no cast. Function bodies can be generated at compile time for headers written in source
+([CT-5](compile-time.md#ct-5-generation)).
 
 The forms are `bool`, `char`, sized integers and floats, `String`, `Bytes`, aliases `type A = B`,
 single variants `type A = Only()`, records, variants, tuples (`(x,)` for one element),

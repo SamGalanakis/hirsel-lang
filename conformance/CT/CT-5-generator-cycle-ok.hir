@@ -1,0 +1,15 @@
+// rule: CT-5
+// expect: accept
+// A generator may call another generated function: generation is acyclic here.
+fn first() -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(x: u64) -> u64 uses {} { x + 1 }"))
+}
+
+fn plus_one(n: u64) -> u64 uses {} = comptime first()
+
+fn second() -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  let _ = plus_one(1)
+  Ok(codegen.body("fn(x: u64) -> u64 uses {} { x + 2 }"))
+}
+
+fn plus_two(n: u64) -> u64 uses {} = comptime second()

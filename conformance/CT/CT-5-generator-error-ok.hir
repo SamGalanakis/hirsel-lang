@@ -1,0 +1,13 @@
+// rule: CT-5
+// expect: accept
+// The same declaration accepts once its generator returns a body.
+type Point {
+  x: u64,
+  y: u64,
+}
+
+fn accepting() -> Result[Body[fn(Point) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(p: standalone@0/Point) -> u64 uses {} { p.x }"))
+}
+
+fn sum(p: Point) -> u64 uses {} = comptime accepting()

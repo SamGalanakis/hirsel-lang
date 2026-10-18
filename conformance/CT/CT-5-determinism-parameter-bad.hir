@@ -1,0 +1,9 @@
+// rule: CT-5
+// expect: reject CT-2 at line 9
+// "`e` is inside CT-2's closed frame: it reads no parameter", so the text depends only on
+// compile-time inputs and is the same on every compile.
+fn sized(limit: u64) -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(x: u64) -> u64 uses {} { x }"))
+}
+
+fn clamp(n: u64) -> u64 uses {} = comptime sized(n)

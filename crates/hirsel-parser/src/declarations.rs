@@ -357,6 +357,7 @@ impl Parser<'_> {
             visibility,
             attributes,
             kind,
+            generated: None,
         })
     }
     /// The doc comments directly before the item starting at significant

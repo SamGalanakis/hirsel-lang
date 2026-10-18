@@ -1,0 +1,14 @@
+// rule: CT-5
+// expect: reject OWN-1 at line 2
+// "the primary span is in the generated text": line 2 writes a borrowed parameter.
+type Tag {
+  name: String,
+}
+
+fn renaming() -> Result[Body[fn(Tag) -> () uses {}], String] {
+  Ok(
+    codegen.body("fn(tag: standalone@0/Tag) -> () uses {} {\n  tag.name = \"other\"\n}")
+  )
+}
+
+fn rename(t: Tag) -> () uses {} = comptime renaming()

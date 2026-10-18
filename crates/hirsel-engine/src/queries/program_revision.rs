@@ -165,6 +165,11 @@ impl QueryEngine {
                     }
                 }
             }
+            // A generated body (CT-5) depends on what its generator executed.
+            if let Some(cache) = self.checked.get(path) {
+                dependencies.extend(cache.executed.bodies.keys().cloned());
+                dependencies.extend(cache.executed.signatures.keys().cloned());
+            }
             if let Some(cache) = self.modes.get(path) {
                 dependencies.extend(cache.representations.keys().cloned());
             }

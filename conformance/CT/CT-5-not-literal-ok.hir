@@ -1,0 +1,8 @@
+// rule: CT-5
+// expect: accept
+// One function literal, spread over lines, is a generated body.
+fn literal() -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(n: u64) -> u64 uses {} {\n  n * 2\n}"))
+}
+
+fn double(n: u64) -> u64 uses {} = comptime literal()

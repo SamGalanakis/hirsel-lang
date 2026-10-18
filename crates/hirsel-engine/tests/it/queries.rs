@@ -118,6 +118,7 @@ impl ParserPhase for Fake {
                         contract: None,
                     }),
                 },
+                generated: None,
             });
             offset += line.len();
         }

@@ -1,0 +1,10 @@
+// rule: CT-5
+// expect: accept
+// A generator argument from a constant is in the closed frame.
+const LIMIT: u64 = 10
+
+fn sized(limit: u64) -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(x: u64) -> u64 uses {} { x }"))
+}
+
+fn clamp(n: u64) -> u64 uses {} = comptime sized(LIMIT)

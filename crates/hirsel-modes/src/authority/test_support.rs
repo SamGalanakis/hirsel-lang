@@ -417,6 +417,7 @@ impl Fixture {
                 body: Some(root),
                 abi: None,
             },
+            generated: None,
         });
         let file = hirsel_syntax::SyntaxFile {
             symbols: std::sync::Arc::new(self.symbols),

@@ -168,7 +168,7 @@ for these missing or malformed declaration components, owned by their own rules:
 | Distinct payload parentheses; missing nonopaque type fields or right-hand side; malformed type, mode or growable marker | LANG-7 |
 | Leading bar where the first variant name is required | LANG-4 |
 | Drop binding parentheses | DROP-2 |
-| `comptime` after a generated-body `=` (reserved syntax) | CT-1 |
+| `comptime` after a function body's `=` ([CT-5](compile-time.md#ct-5-generation)) | CT-1 |
 
 Required identifier names in declaration and path positions use LANG-4 when absent or
 malformed; list separators, ordinary grouping delimiters and block delimiters keep LANG-1;

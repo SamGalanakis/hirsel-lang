@@ -72,6 +72,7 @@ impl Fixture {
                     body: None,
                     abi: None,
                 },
+                generated: None,
             }],
             ..Default::default()
         };

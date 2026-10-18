@@ -1,0 +1,8 @@
+// rule: CT-5
+// expect: reject CT-5 at line 1
+// "The text must be one function literal ... and nothing else, or CT-5 at its first token".
+fn not_literal() -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  Ok(codegen.body("let doubled = 2"))
+}
+
+fn double(n: u64) -> u64 uses {} = comptime not_literal()

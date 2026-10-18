@@ -936,6 +936,10 @@ pub struct Item {
     pub visibility: Visibility,
     pub attributes: Vec<Attribute>,
     pub kind: ItemKind,
+    /// A function whose body was generated (CT-5): its function literal's
+    /// parameter names and their spans, which bind the declared parameters by
+    /// position in the body. The header and its contracts keep the declared names.
+    pub generated: Option<Vec<(Symbol, Span)>>,
 }
 /// Owning AST arenas. All IDs address these Vecs; no AST node borrows source storage (LANG-1).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1132,6 +1136,7 @@ mod tests {
                 body: Some(ExprId(1)),
                 abi: None,
             },
+            generated: None,
         });
         assert_eq!(tree.expressions.len(), 2);
         assert_ne!(path("a").fingerprint(), path("b").fingerprint());
@@ -1197,6 +1202,7 @@ mod revision_tests {
                     noalloc: true,
                 }),
             },
+            generated: None,
         };
         let stated = item.clone();
         if let ItemKind::Type { bounds, .. } = &mut item.kind {

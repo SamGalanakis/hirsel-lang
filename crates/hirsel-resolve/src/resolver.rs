@@ -585,6 +585,21 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 let result = self.function_header(&signature, item.origin.span, NameSite::Item(id));
                 self.exported = false;
                 self.return_type = result.clone();
+                // CT-5: a generated body binds the declared parameters by its
+                // literal's names; the header and its contracts keep the declared ones.
+                if let Some(names) = &item.generated {
+                    let scope = self.scopes.last_mut().unwrap();
+                    let bindings: Vec<_> = signature
+                        .parameters
+                        .iter()
+                        .map(|p| p.name.and_then(|name| scope.values.remove(&name)))
+                        .collect();
+                    for (&(name, span), binding) in names.iter().zip(bindings) {
+                        if let Some(binding) = binding {
+                            self.bind(name, Binding { span, ..binding });
+                        }
+                    }
+                }
                 if let Some(body) = body
                     && !matches!(self.view, ResolveView::Header(_))
                 {

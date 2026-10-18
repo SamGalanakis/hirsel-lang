@@ -1,0 +1,16 @@
+// rule: CT-5
+// expect: accept
+// A generated body is checked against the declared modes: a `mut` parameter may be written.
+type Tag {
+  name: String,
+}
+
+fn renaming() -> Result[Body[fn(mut Tag) -> () uses {}], String] {
+  Ok(
+    codegen.body(
+      "fn(mut tag: standalone@0/Tag) -> () uses {} {\n  tag.name = \"other\"\n}"
+    )
+  )
+}
+
+fn rename(mut t: Tag) -> () uses {} = comptime renaming()

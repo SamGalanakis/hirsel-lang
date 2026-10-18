@@ -242,7 +242,7 @@ impl QueryEngine {
             Ok(())
         }
     }
-    fn prepare_values(
+    pub(crate) fn prepare_values(
         &mut self,
         analyzed: &AnalyzedBody,
         signature: &Signature,
@@ -326,6 +326,31 @@ impl QueryEngine {
         constants: &[(ExprId, Materialized)],
         sizes: &[(SizeParameterRef, u64)],
     ) -> Result<Materialized, QueryError> {
+        let (value, types, ty) =
+            self.run_evaluation(analyzed, signature, expression, child, ty, constants, sizes)?;
+        self.reify_value(
+            &signature.definition.0.package,
+            value,
+            &types,
+            ty,
+            analyzed.typed.file.tree.expressions[expression.0 as usize]
+                .origin
+                .span,
+        )
+    }
+    /// Run one checked compile-time expression to its interpreter value, with
+    /// its TIR type store and result type; evaluation failures are CT-1.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_evaluation(
+        &mut self,
+        analyzed: &AnalyzedBody,
+        signature: &Signature,
+        expression: ExprId,
+        child: ExprId,
+        ty: TypeId,
+        constants: &[(ExprId, Materialized)],
+        sizes: &[(SizeParameterRef, u64)],
+    ) -> Result<(hirsel_interp::Value, hirsel_types::TypeStore, TypeId), QueryError> {
         self.adapters
             .compiler_state
             .as_ref()
@@ -388,13 +413,7 @@ impl QueryEngine {
             other => operational(format!("{other:?}")),
         })?;
         match execution.outcome {
-            Outcome::Returned { value, .. } => self.reify_value(
-                &signature.definition.0.package,
-                value,
-                &types,
-                ty,
-                file.tree.expressions[expression.0 as usize].origin.span,
-            ),
+            Outcome::Returned { value, .. } => Ok((value, types, ty)),
             Outcome::Failed(failure) => {
                 let mut diagnostic = Diagnostic::error(
                     const { hirsel_diag::RuleId::of("CT-1") },

@@ -1,0 +1,25 @@
+// rule: CT-5
+// expect: run
+// stdout: 7
+// The generator's body type equals the declared header, so the body is generated and runs.
+type Point {
+  x: u64,
+  y: u64,
+}
+
+fn sum_body() -> Result[Body[fn(Point) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(p: standalone@0/Point) -> u64 uses {} { p.x + p.y }"))
+}
+
+fn sum(p: Point) -> u64 uses {} = comptime sum_body()
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let text = if sum(Point(x: 3, y: 4)) == 7 {
+    "7\n"
+  } else {
+    "wrong\n"
+  }
+  let _ = out.print(out, text)
+  Ok(())
+}

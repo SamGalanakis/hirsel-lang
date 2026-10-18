@@ -160,6 +160,35 @@ pub fn export_tir_path(path: &Path) -> Result<String, ToolError> {
             .map_err(|error| program.error(error))
     })
 }
+/// `hirsel expand <file>`: each generated body (CT-5) of the file's declarations, in
+/// source order, exactly as its generator wrote it, so diagnostic lines match.
+pub fn expand_path(path: &Path) -> Result<String, ToolError> {
+    hirsel_engine::with_compiler_stack(|| {
+        let mut program = load_program(path)?;
+        let output = program.check().map_err(|error| program.error(error))?;
+        if output
+            .diagnostics
+            .iter()
+            .any(|d| d.severity.as_str() == "error")
+        {
+            return Err(program.error(hirsel_engine::QueryError::Diagnostics(output.diagnostics)));
+        }
+        let mut generated: Vec<_> = program
+            .engine
+            .generated_sources()
+            .filter(|(_, g)| g.site.file == program.primary)
+            .collect();
+        generated.sort_by_key(|(_, g)| g.site.start);
+        let mut out = String::new();
+        for (definition, g) in generated {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&format!("// generated body of {definition}\n{}\n", g.text));
+        }
+        Ok(out)
+    })
+}
 /// Narrow conformance adapter returns diagnostics with revision-1 completion.
 pub fn check_file(path: &Path) -> Result<CheckOutput, NotImplemented> {
     check_path(path).map_err(|_| NotImplemented)

@@ -29,7 +29,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
+            b"usage: hirsel [--verbose] check [--json] <source|manifest.json> | test [--json] [--seed <u64>] [--native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -91,6 +91,35 @@ fn std_file(text: &str) -> std::path::PathBuf {
     std::fs::write(sidecar, format!(r#"{{"schema":1,"package":{{"name":"standalone","version":"0"}},"entry":{{"module":[],"name":"main"}},"sources":[{{"path":"{}","module":[]}}],"dependencies":[{{"manifest":"{}","package":{{"name":"std","version":"1"}},"expose":[]}}]}}"#, path.display(), manifest.display())).unwrap();
 
     path
+}
+#[test]
+fn expand_prints_generated_bodies_in_source_order_and_rejected_source_exits_one() {
+    let generator = "fn gen() -> Result[Body[fn(u64) -> u64 uses {}], String] {\n  Ok(codegen.body(\"fn(x: u64) -> u64 uses {} {\\n  x + 1\\n}\"))\n}\n";
+    let path = file(&format!(
+        "{generator}fn second(n: u64) -> u64 uses {{}} = comptime gen()\nfn first(n: u64) -> u64 uses {{}} = comptime gen()\n"
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("expand")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "// generated body of standalone@0/second\nfn(x: u64) -> u64 uses {} {\n  x + 1\n}\n\n\
+         // generated body of standalone@0/first\nfn(x: u64) -> u64 uses {} {\n  x + 1\n}\n"
+    );
+    let bad = file(&format!(
+        "{generator}fn wrong(n: u64) -> u32 uses {{}} = comptime gen()\n"
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("expand")
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("error[LANG-7]"));
 }
 #[test]
 fn export_tir_writes_the_proof_seam_export_and_rejected_source_exits_one() {

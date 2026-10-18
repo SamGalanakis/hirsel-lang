@@ -1,0 +1,14 @@
+// rule: CT-5
+// expect: reject LANG-4 at line 1
+// "checked exactly as if written in the declaring module": a short spelling of another
+// package's type does not resolve there, on line 1 of the generated text.
+fn sum_body[T](s: TypeShape[T]) -> Result[Body[fn(T) -> i64 uses {}], String] {
+  Ok(codegen.body("fn(p: Point) -> i64 uses {} { p.x + p.y }"))
+}
+
+fn sum(p: geo.api.Point) -> i64 uses {} = comptime sum_body(shape(geo.api.Point))
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, sum(geo.api.Point(x: 1, y: 2)) == 3)
+  Ok(())
+}

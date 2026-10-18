@@ -163,6 +163,7 @@ impl Fixture {
             visibility: Visibility::Private,
             attributes: vec![],
             kind,
+            generated: None,
         });
         self.file.roots.push(id);
     }

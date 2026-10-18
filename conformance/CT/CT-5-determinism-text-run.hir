@@ -1,0 +1,39 @@
+// rule: CT-5
+// expect: run
+// stdout: 6
+// stdout: 6
+// "The same inputs give the same text": two declarations from one generator and shape get
+// the same body, whatever order the generator's set iterates in.
+type Triple {
+  c: u64,
+  a: u64,
+  b: u64,
+}
+
+fn total[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] {
+  let info = type_shape.info(s)
+  let Record(fields) = info.body else {
+    return Error("total needs a record")
+  }
+  let mut names: Set[String] = set.empty()
+  for f in fields {
+    set.insert(mut names, copy f.name)
+  }
+  let mut text = f"fn(value: {info.name}) -> u64 uses {{}} {{ 0"
+  for name in names {
+    text = f"{text} + value.{name}"
+  }
+  Ok(codegen.body(f"{text} }}"))
+}
+
+fn first(t: Triple) -> u64 uses {} = comptime total(shape(Triple))
+
+fn second(t: Triple) -> u64 uses {} = comptime total(shape(Triple))
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let value = Triple(c: 3, a: 1, b: 2)
+  let _ = out.print(out, f"{first(value)}\n")
+  let _ = out.print(out, f"{second(value)}\n")
+  Ok(())
+}

@@ -1,0 +1,14 @@
+// rule: CT-5
+// expect: accept
+// The literal's parameter name may differ from the declared one; its type may not.
+type Point {
+  x: u64,
+  y: u64,
+}
+
+fn right_literal() -> Result[Body[fn(Point) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(point: standalone@0/Point) -> u64 uses {} { point.x }"))
+}
+
+fn sum(p: Point) -> u64 uses {}
+  requires p.x < 100 = comptime right_literal()

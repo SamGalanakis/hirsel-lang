@@ -53,6 +53,7 @@ impl ParserPhase for EmptyFunction {
                 body: Some(ExprId(0)),
                 abi: None,
             },
+            generated: None,
         };
         let expression = Expr {
             origin,

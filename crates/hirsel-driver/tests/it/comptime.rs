@@ -457,3 +457,53 @@ fn staged_constants_survive_proof_export_and_unrelated_item_insertion() {
         );
     });
 }
+#[test]
+fn generated_bodies_regenerate_after_shape_and_generator_edits() {
+    hirsel_engine::with_compiler_stack(
+        generated_bodies_regenerate_after_shape_and_generator_edits_on_compiler_thread,
+    );
+}
+fn generated_bodies_regenerate_after_shape_and_generator_edits_on_compiler_thread() {
+    // CT-5: the text is cached under what the generator executed and the shape it read.
+    let source = |fields: &str, three: &str| {
+        format!(
+            "type P {{ {fields} }}\n\
+             fn gen[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {{}}], String] {{\n\
+             let Record(fields) = type_shape.info(s).body else {{ return Error(\"record\") }}\n\
+             if list.len(fields) == 2 {{ Ok(codegen.body(\"fn(p: standalone@0/P) -> u64 uses {{}} {{ p.x + p.y }}\")) }}\n\
+             else {{ Ok(codegen.body(\"{three}\")) }}\n\
+             }}\n\
+             fn sum(p: P) -> u64 uses {{}} = comptime gen(shape(P))\n"
+        )
+    };
+    let text = |engine: &mut QueryEngine, source: String| {
+        let file = engine.sources.add("comptime.hir", source).unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        engine.check_definition(&path("sum")).unwrap();
+        engine.generated_source(&path("sum")).unwrap().text.clone()
+    };
+    let three = "fn(p: standalone@0/P) -> u64 uses {} { p.x + p.y + p.z }";
+    let mut edited_engine = engine(&source("x: u64, y: u64", three));
+    edited_engine.check_definition(&path("sum")).unwrap();
+    let two = edited_engine
+        .generated_source(&path("sum"))
+        .unwrap()
+        .text
+        .clone();
+    assert!(two.ends_with("{ p.x + p.y }"), "{two}");
+    assert_eq!(
+        text(&mut edited_engine, source("x: u64, y: u64, z: u64", three)),
+        three
+    );
+    let edited = "fn(q: standalone@0/P) -> u64 uses {} { q.z }";
+    assert_eq!(
+        text(&mut edited_engine, source("x: u64, y: u64, z: u64", edited)),
+        edited
+    );
+    let fresh = |source: String| {
+        let mut engine = engine(&source);
+        engine.check_definition(&path("sum")).unwrap();
+        engine.generated_source(&path("sum")).unwrap().text.clone()
+    };
+    assert_eq!(fresh(source("x: u64, y: u64, z: u64", edited)), edited);
+}

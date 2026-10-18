@@ -4,7 +4,8 @@
 to produce a value inside a body. Evaluation calls ordinary declared functions, and its
 result is materialized data. Static checking still reads only signatures. Compile-time
 code can also read a nominal type's declared fields and variants through `shape(T)`
-([CT-3](#ct-3-shapes)).
+([CT-3](#ct-3-shapes)), and a function whose header is written in source can take its body
+from a compile-time generator ([CT-5](#ct-5-generation)).
 
 ```hirsel
 fn square(x: u64) -> u64 { x * x }
@@ -26,9 +27,8 @@ comptime operation that fails during evaluation is CT-1 at the comptime expressi
 underlying failure as a note. Static errors inside comptime keep their ordinary owners.
 Static checking reads only declared signatures; evaluation executes the selected
 implementations and records them as dependencies. There is no implicit build grant, no
-reflection over function bodies or source text (CT-3 reads type declarations only) and no
-derive or body-generation API. The function body form `= comptime expression` is reserved
-for generated bodies and is not executable.
+reflection over function bodies or source text (CT-3 reads type declarations only).
+Generated function bodies are [CT-5](#ct-5-generation); no declaration is generated.
 
 ### CT-2: Materialisation
 
@@ -122,7 +122,7 @@ const USER_FIELDS: List[String] = comptime field_names(shape(User))
   CT-2 at the enclosing initializer or comptime expression, as a callable does.
   `ShapeInfo` and its parts are ordinary data and materialize like any other constant.
 - **Compile-time-only values.** `TypeShape[T]` and the generated-body type `Body[F]`
-  ([typed generation](#typed-generation)) are compile-time-only types. A definition whose
+  ([CT-5](#ct-5-generation)) are compile-time-only types. A definition whose
   signature mentions one in a parameter or result is a *compile-time-only definition*.
   An expression whose type mentions a compile-time-only type is written only in
   compile-time code or in the body of a compile-time-only definition; elsewhere it is
@@ -150,75 +150,50 @@ charges. Runtime guards and compile-time call and dependency depth safeguards ar
 operational tooling outcomes, not comparable language results. Editing the budget
 invalidates evaluated caches, so diagnostics retry.
 
-## Reserved for future compile-time features
+### CT-5: Generation
 
-Generating declarations or function bodies at compile time and compile-time evaluation of
-callable values are reserved, not excluded. Their APIs, ownership and staging contracts are
-for a future revision of this specification; [typed generation](#typed-generation) below
-is the design that revision is to adopt.
+A generated function is an ordinary declaration whose complete header is written in source
+and whose body is `= comptime e`. The header (name, generics, labelled parameters with
+modes, result, `uses`, `@noalloc`, contracts and attributes) is published exactly like a
+written one, before any generator runs, and dependents check against it. Evaluation never
+publishes a declaration: no name, signature, type or item comes out of a generator, so every
+callable an agent can use is written in source and checking stays signature-only and
+independent of topology ([PROG-5](programs.md#prog-5-topology)).
 
-- **Syntax.** The `comptime` keyword, the `= comptime expression` function body and the
-  `comptime` prefix stay syntactically reserved where unsupported, with no other meaning
-  assigned. LANG-2's rule that expressions carry no type arguments describes the current
-  language, not a prohibition on future typed compile-time forms. The `file` and `item`
-  productions govern written source, not the kinds of checked declaration a future
-  generator may publish.
-- **Evaluation and publication.** CT-2's closed frame is the eligibility rule for inline
-  expressions only; size inputs are admitted as above. It does not rule out future
-  explicit compile-time type, shape or callable inputs. The data-only boundary restricts values
-  materialized into a program, not internal callable evaluation or a future typed body or
-  declaration artifact. Any future generation publishes declared signatures before
-  dependent checking ([LANG-6](language.md#lang-6-signatures),
-  [PROG-1](programs.md#prog-1-names)), preserving signature-only checking and nominal
-  identity.
+- **Typing.** `e` has type `Result[Body[F], String]`, where `F` is the declared function
+  type: its parameter types with their modes, result and `uses`. `Body[F]` is a
+  compile-time-only core type ([CT-3](#ct-3-shapes)). Generators are ordinary functions;
+  the shaped type's parameter links shape and body, so `record_value(shape(Todo))` with
+  `fn record_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses {}], String]`
+  checks from signatures alone as a body for `fn(Todo) -> json.Value uses {}`, and a
+  declaration with any other header is LANG-7 at `e` before evaluation. `e` is inside
+  CT-2's closed frame: it reads no parameter, and a generic declaration is CT-2 at `e`
+  (generic shape inputs are reserved).
+- **Bodies.** `codegen.body(text)` builds a `Body[F]`, taking `F` from the expected type.
+  `Error(message)` from a generator is CT-1 at `e`, with the message as a note; a failing
+  evaluation is CT-1 as for any comptime expression. The text must be one function literal
+  `fn(..) -> .. uses {..} { .. }` and nothing else, or CT-5 at its first token. The literal's
+  type must equal `F`, or LANG-7 at its header. Its parameters bind the declared parameters
+  by position: the body uses the literal's names, while the header and contracts keep the
+  declared ones. Shapes spell types canonically, so a generator can write parameter and
+  field types that resolve the same way in every module.
+- **Checking.** A generated body is checked exactly as if written in the declaring module:
+  that module's names, package view and PROG-2 opacity, against the declared header, under
+  every ownership, mode, authority, allocation and contract rule. A client package cannot
+  reach an opaque representation through generated text. Diagnostics keep their ordinary
+  rule owners; the primary span is in the generated text and a secondary label marks `e`.
+  Generated bodies construct and read values only through ordinary source, so nominal
+  identities, explicit capability parameters and allocation sites stay visible in them.
+  `hirsel expand <file>` prints each generated body of a source file as source.
+- **Staging.** For each generated definition: its header is published; dependents check
+  against it; the generator call is checked from signatures and evaluated with no
+  capability and the CT-4 budget; the resulting text is cached under the implementations it
+  executed and the declarations its shapes read ([CT-2](#ct-2-materialisation)); then the
+  generated body is checked and lowered like any body. The same inputs give the same text.
+  Generation that needs its own result is a CT-4 cycle at `e`.
 
-### Typed generation
-
-This section is design, not executable language: a program that uses it is rejected today.
-
-**Declaration.** A generated function is an ordinary declaration whose complete header is
-written in source and whose body is `= comptime e`. The header (name, generics, labelled
-parameters with modes, result, `uses`, `@noalloc`, contracts and attributes) is published
-exactly like a written one, before any generator runs, and dependents check against it.
-Evaluation never publishes a declaration: no name, signature, type or item comes out of a
-generator, so every callable an agent can use is written in source and checking stays
-signature-only and independent of topology ([PROG-5](programs.md#prog-5-topology)).
-
-**Typing.** `e` has type `Result[Body[F], String]`, where `F` is the declared function type
-and `Body[F]` is a compile-time-only core type which, like `TypeShape`, is not data.
-Generators are ordinary functions; the shaped type's parameter links shape and body:
-
-```text
-fn record_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses {}], String]
-```
-
-`record_value(shape(Todo))` then checks, from signatures alone, as a body for
-`fn(Todo) -> json.Value uses {}`, and a declaration with any other header is rejected before
-evaluation. `Error(message)` from a generator is CT-1 at the generated declaration, with the
-message as a note.
-
-**Bodies.** `codegen.body(text)` builds a `Body[F]`, taking `F` from the expected type. The
-text is one function literal of type `F`; its parameters bind the declared parameters by
-position. Because shapes spell types canonically, a generator can write parameter and field
-types that resolve the same way in every module.
-
-**Checking.** A generated body is checked exactly as if written in the generating module:
-that module's names, package view and PROG-2 opacity, against the declared header, under
-every ownership, mode, authority, allocation and contract rule. A client package cannot
-reach an opaque representation through generated text. Diagnostics keep their ordinary
-rule owners; the primary span is in the generated text and a secondary label marks the
-`= comptime` site. Generated bodies construct and read values only through ordinary source,
-so nominal identities, explicit capability parameters and allocation sites stay visible in
-them.
-
-**Staging.** For each generated definition: its header is published; dependents check
-against it; the generator call is checked from signatures and evaluated with no capability
-and the CT-1 budget; the resulting text is cached under the implementations it executed and
-the declarations its shapes read ([CT-2](#ct-2-materialisation)); then the generated body is
-checked and lowered like any body. Generation that needs its own result is a CT-4 cycle.
-
-**Worked example.** This is the generator `examples/todo-api` would use instead of its
-hand-written `todo_value`:
+**Worked example.** `examples/todo-api` derives its `todo_value` this way, here with the
+generator written out:
 
 ```text
 type Todo { id: u64, title: String, done: bool }
@@ -261,8 +236,29 @@ fn(value: app@1/Todo) -> std@1/json.Value uses {} {
 ```
 
 Adding a field to `Todo` re-evaluates the generator; a field type it has no form for fails
-CT-1 at `todo_value`, naming the type. Field naming, omission and domain policy stay explicit
+CT-1 at `todo_value`'s `= comptime` expression, naming the type. Field naming, omission and domain policy stay explicit
 generator code; nothing is derived implicitly.
+
+## Reserved for future compile-time features
+
+Generating declarations at compile time and compile-time evaluation of callable values are
+reserved, not excluded. Their APIs, ownership and staging contracts are for a future
+revision of this specification. Generated function bodies are [CT-5](#ct-5-generation).
+
+- **Syntax.** The `comptime` keyword and the `comptime` prefix stay syntactically reserved
+  where unsupported, with no other meaning
+  assigned. LANG-2's rule that expressions carry no type arguments describes the current
+  language, not a prohibition on future typed compile-time forms. The `file` and `item`
+  productions govern written source, not the kinds of checked declaration a future
+  generator may publish.
+- **Evaluation and publication.** CT-2's closed frame is the eligibility rule for inline
+  expressions only; size inputs are admitted as above. It does not rule out future
+  explicit compile-time type, shape or callable inputs. The data-only boundary restricts values
+  materialized into a program, not internal callable evaluation or a future typed body or
+  declaration artifact. Any future generation publishes declared signatures before
+  dependent checking ([LANG-6](language.md#lang-6-signatures),
+  [PROG-1](programs.md#prog-1-names)), preserving signature-only checking and nominal
+  identity.
 
 ## Rationale: shapes and generation
 

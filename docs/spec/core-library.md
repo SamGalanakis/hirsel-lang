@@ -1008,7 +1008,7 @@ They grant no ambient database authority. The overview's `CliError` is
 `copyable`, `data`, `key`, `inert` and `noalloc_drop` bounds. It runs only during
 compile-time evaluation and has no run-time implementation. `codegen.body` builds the
 opaque root core type `Body[F]` (bounds `copyable`, `inert` and `noalloc_drop`, no
-authority) that [typed generation](compile-time.md#typed-generation) reads; like a
+authority) that [generated bodies](compile-time.md#ct-5-generation) return; like a
 `TypeShape` it is compile-time only ([CT-3](compile-time.md#ct-3-shapes)) and has no
 run-time implementation.
 

@@ -237,6 +237,7 @@ impl Tree {
             owned_tokens: TokenRange::default(),
             attributes: vec![],
             text_hash: ContentHash::of_bytes(name.as_bytes()),
+            generated: None,
         });
         self.file.roots.push(id);
         id

@@ -1,0 +1,12 @@
+// rule: CT-5
+// expect: accept
+// A generic generator serves a non-generic declaration once a shape fixes its parameter.
+type Count {
+  n: u64,
+}
+
+fn count_body[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(c: standalone@0/Count) -> u64 uses {} { c.n }"))
+}
+
+fn count(c: Count) -> u64 uses {} = comptime count_body(shape(Count))

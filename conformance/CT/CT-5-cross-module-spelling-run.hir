@@ -1,0 +1,18 @@
+// rule: CT-5
+// expect: run
+// "Shapes spell types canonically": the shape's name for another package's type resolves
+// the same way in the declaring module.
+fn sum_body[T](s: TypeShape[T]) -> Result[Body[fn(T) -> i64 uses {}], String] {
+  let info = type_shape.info(s)
+  Ok(codegen.body(f"fn(p: {info.name}) -> i64 uses {{}} {{ p.x + p.y }}"))
+}
+
+const POINT_NAME: String = comptime type_shape.info(shape(geo.api.Point)).name
+
+fn sum(p: geo.api.Point) -> i64 uses {} = comptime sum_body(shape(geo.api.Point))
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, POINT_NAME == "geo@1/api.Point")
+  test.check(t, sum(geo.api.Point(x: 1, y: 2)) == 3)
+  Ok(())
+}
