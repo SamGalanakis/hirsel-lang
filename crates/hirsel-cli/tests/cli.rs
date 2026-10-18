@@ -635,6 +635,16 @@ fn run_record(source: &std::path::Path, grants: serde_json::Value) -> std::path:
     record
 }
 
+/// `hirsel run <source> --run <record>`, compiled when `native`.
+fn host_run(source: &std::path::Path, record: &std::path::Path, native: bool) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    command.arg("run").arg(source).arg("--run").arg(record);
+    if native {
+        command.arg("--native");
+    }
+    command
+}
+
 #[test]
 fn hello_web_concurrent_serves_while_another_request_is_incomplete() {
     hello_web(false, true);
@@ -644,6 +654,12 @@ fn hello_web_concurrent_serves_while_another_request_is_incomplete() {
 #[ignore = "full gate"]
 fn full_gate_hello_web_answers_real_requests_native() {
     hello_web(true, false);
+}
+
+#[test]
+#[ignore = "full gate"]
+fn full_gate_hello_web_concurrent_serves_while_another_request_is_incomplete_native() {
+    hello_web(true, true);
 }
 
 fn hello_web(native: bool, concurrent: bool) {
@@ -1622,9 +1638,9 @@ fn real_host_child_await() {
         .arg("--native")
         .output()
         .unwrap();
-    assert!(!native.status.success());
+    assert!(native.status.success(), "{native:?}");
     assert!(
-        String::from_utf8_lossy(&native.stderr).contains("io.tasks"),
+        native.stdout.is_empty() && native.stderr.is_empty(),
         "{native:?}"
     );
     std::fs::remove_file(source).unwrap();
@@ -1632,11 +1648,13 @@ fn real_host_child_await() {
 }
 
 #[test]
-fn real_host_tasks_accept_and_connect_as_siblings() {
-    let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = reservation.local_addr().unwrap().port();
-    let source = file(&format!(
-        r#"
+fn real_host_tasks_accept_and_connect_as_siblings_record_and_replay_in_either_engine() {
+    // Each engine records on a fresh port: the first run's closed connection may hold its own.
+    for native in [false, true] {
+        let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        let source = file(&format!(
+            r#"
 fn grant(e: GrantError) -> () uses {{}} {{ () }}
 fn network(e: NetError) -> () uses {{}} {{ () }}
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
@@ -1670,35 +1688,51 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
   }})
 }}
 "#
-    ));
-    let record = run_record(
-        &source,
-        serde_json::json!({
-            "io": {"tasks": "tasks.cooperative@1", "dirs": [], "net": {
-                "provider": "net.stream@1", "rules": [
-                    {"address": "127.0.0.1", "service": port.to_string(), "operation": "listen"},
-                    {"address": "127.0.0.1", "service": port.to_string(), "operation": "connect"}
-                ]
-            }}, "args": []
-        }),
-    );
-    drop(reservation);
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("run")
-        .arg(&source)
-        .arg("--run")
-        .arg(&record)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
-    std::fs::remove_file(source).unwrap();
-    std::fs::remove_file(record).unwrap();
+        ));
+        let record = run_record(
+            &source,
+            serde_json::json!({
+                "io": {"tasks": "tasks.cooperative@1", "dirs": [], "net": {
+                    "provider": "net.stream@1", "rules": [
+                        {"address": "127.0.0.1", "service": port.to_string(), "operation": "listen"},
+                        {"address": "127.0.0.1", "service": port.to_string(), "operation": "connect"}
+                    ]
+                }}, "args": []
+            }),
+        );
+        drop(reservation);
+        let tape = source.with_extension("tape");
+        let output = host_run(&source, &record, native)
+            .arg("--record")
+            .arg(&tape)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "native={native}: {output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+        // The server's accept parked before the client connected, and the tape says so.
+        let recorded = std::fs::read_to_string(&tape).unwrap();
+        assert!(
+            recorded.contains(" -> blocked 0\n") && recorded.contains("\nready 0 "),
+            "native={native}: {recorded}"
+        );
+        // Replay parks where the recording parked, in either engine, with no socket.
+        for engine in [false, true] {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            command.arg("run").arg(&source).arg("--replay").arg(&tape);
+            if engine {
+                command.arg("--native");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success() && output.stdout.is_empty() && output.stderr.is_empty(),
+                "recorded native={native}, replayed native={engine}: {output:?}"
+            );
+        }
+        for path in [source, record, tape] {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
 }
 
 #[test]
@@ -1741,19 +1775,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
             {"address": "127.0.0.1", "service": "0", "operation": "listen"}
         ]}}, "args": []}),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("run")
-        .arg(&source)
-        .arg("--run")
-        .arg(&record)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stderr.is_empty());
+    for native in [false, true] {
+        let output = host_run(&source, &record, native).output().unwrap();
+        assert!(output.status.success(), "native={native}: {output:?}");
+        assert!(output.stderr.is_empty());
+    }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
 }
@@ -1777,25 +1803,19 @@ fn real_host_canceled_stdin_and_stderr_have_no_effects() {
         "tasks":"tasks.cooperative@1", "stdin":"stdin.bytes@1", "stderr":"stderr.bytes@1", "dirs":[]
     }, "args":[]}),
     );
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("run")
-        .arg(&source)
-        .arg("--run")
-        .arg(&record)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(b"x").unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty());
-    assert!(output.stderr.is_empty());
+    for native in [false, true] {
+        let mut child = host_run(&source, &record, native)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"x").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "native={native}: {output:?}");
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
+    }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
 }
@@ -1811,18 +1831,8 @@ fn real_host_detached_results_drop_before_scope_exit() {
         "tasks":"tasks.cooperative@1", "dirs":[]
     }, "args":[]}),
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("run")
-        .arg(&source)
-        .arg("--run")
-        .arg(&record)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let output = host_run(&source, &record, false).output().unwrap();
+    assert!(output.status.success(), "{output:?}");
     assert!(output.stdout.is_empty());
     assert!(output.stderr.is_empty());
     std::fs::remove_file(source).unwrap();
@@ -1924,12 +1934,8 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         let flags = info.lines().find_map(|l| l.strip_prefix("flags:")).unwrap();
         u32::from_str_radix(flags.trim(), 8).unwrap() & 0o4000 != 0
     };
-    let spawn = |stdin: Stdio| {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .arg("run")
-            .arg(&source)
-            .arg("--run")
-            .arg(&record)
+    let spawn = |stdin: Stdio, native: bool| {
+        let mut child = host_run(&source, &record, native)
             .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1954,30 +1960,32 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         assert_eq!(lines.iter().collect::<Vec<_>>(), ["read x"]);
     };
 
-    // The pipe stays open and empty until the sibling has printed.
-    let (reader, mut writer) = std::io::pipe().unwrap();
-    let observer = reader.try_clone().unwrap();
-    let (mut child, lines) = spawn(reader.into());
-    match lines.recv_timeout(std::time::Duration::from_secs(60)) {
-        Ok(line) => assert_eq!(line, "sibling"),
-        Err(e) => {
-            let _ = child.kill();
-            panic!("the parked stdin read blocked its sibling: {e}");
+    for native in [false, true] {
+        // The pipe stays open and empty until the sibling has printed.
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        let observer = reader.try_clone().unwrap();
+        let (mut child, lines) = spawn(reader.into(), native);
+        match lines.recv_timeout(std::time::Duration::from_secs(60)) {
+            Ok(line) => assert_eq!(line, "sibling"),
+            Err(e) => {
+                let _ = child.kill();
+                panic!("native={native}: the parked stdin read blocked its sibling: {e}");
+            }
         }
-    }
-    assert!(nonblocking(observer.as_raw_fd()));
-    writer.write_all(b"x").unwrap();
-    drop(writer);
-    finish(child, lines);
-    assert!(!nonblocking(observer.as_raw_fd()), "blocking mode restored");
+        assert!(nonblocking(observer.as_raw_fd()));
+        writer.write_all(b"x").unwrap();
+        drop(writer);
+        finish(child, lines);
+        assert!(!nonblocking(observer.as_raw_fd()), "blocking mode restored");
 
-    // A regular file cannot block: it is read directly and stays blocking.
-    let input = source.with_extension("stdin");
-    std::fs::write(&input, b"x").unwrap();
-    let (child, lines) = spawn(std::fs::File::open(&input).unwrap().into());
-    assert_eq!(lines.recv().unwrap(), "sibling");
-    finish(child, lines);
-    std::fs::remove_file(input).unwrap();
+        // A regular file cannot block: it is read directly and stays blocking.
+        let input = source.with_extension("stdin");
+        std::fs::write(&input, b"x").unwrap();
+        let (child, lines) = spawn(std::fs::File::open(&input).unwrap().into(), native);
+        assert_eq!(lines.recv().unwrap(), "sibling");
+        finish(child, lines);
+        std::fs::remove_file(input).unwrap();
+    }
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
 }
@@ -2026,40 +2034,38 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         "tasks":"tasks.cooperative@1", "stdin":"stdin.bytes@1", "stdout":"stdout.bytes@1", "dirs":[]
     }, "args":[]}),
     );
-    let (reader, writer) = std::io::pipe().unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("run")
-        .arg(&source)
-        .arg("--run")
-        .arg(&record)
-        .stdin(reader)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
-    let (send, lines) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for line in stdout.lines() {
-            let _ = send.send(line.unwrap());
-        }
-    });
-    for expected in ["sibling", "canceled"] {
-        match lines.recv_timeout(std::time::Duration::from_secs(60)) {
-            Ok(line) => assert_eq!(line, expected),
-            Err(e) => {
-                let _ = child.kill();
-                panic!("canceled stdin read stayed parked: {e}");
+    for native in [false, true] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        let mut child = host_run(&source, &record, native)
+            .stdin(reader)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let (send, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in stdout.lines() {
+                let _ = send.send(line.unwrap());
+            }
+        });
+        for expected in ["sibling", "canceled"] {
+            match lines.recv_timeout(std::time::Duration::from_secs(60)) {
+                Ok(line) => assert_eq!(line, expected),
+                Err(e) => {
+                    let _ = child.kill();
+                    panic!("native={native}: canceled stdin read stayed parked: {e}");
+                }
             }
         }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        drop(writer);
     }
-    let output = child.wait_with_output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    drop(writer);
     std::fs::remove_file(source).unwrap();
     std::fs::remove_file(record).unwrap();
 }

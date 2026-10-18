@@ -201,6 +201,20 @@ impl HostIo {
             Self::Replay(io) => io.tls_roots(pem),
         }
     }
+    /// The adapter's cooperative waits (`Adapter::enter` and the rest): live readiness
+    /// polls, or the recording's `blocked` and `ready` events in replay.
+    fn adapter(&mut self) -> &mut dyn Adapter {
+        match self {
+            Self::Live(io) => io,
+            Self::Replay(io) => io,
+        }
+    }
+    fn cancellable(&self, token: u64) -> bool {
+        match self {
+            Self::Live(io) => io.cancellable(token),
+            Self::Replay(io) => io.cancellable(token),
+        }
+    }
     /// The committed prefix of the last completion's fault.
     fn last_partial(&self) -> usize {
         match self {
@@ -222,7 +236,6 @@ pub(crate) struct HostLibrary {
     handles: BTreeMap<u64, u64>,
     next: u64,
     next_wait: u64,
-    readiness: hirsel_rt::readiness::Readiness,
     waits: BTreeMap<u64, HostWait>,
     yield_now: bool,
 }
@@ -235,7 +248,6 @@ impl HostLibrary {
         run: &hirsel_tir::RunConfiguration,
         admitted: &hirsel_run_config::ValidatedRun,
         io: HostIo,
-        readiness: hirsel_rt::readiness::Readiness,
     ) -> Result<Self, Error> {
         let record = admitted.record();
         let mut grants = std::collections::BTreeSet::new();
@@ -266,7 +278,6 @@ impl HostLibrary {
             ..Default::default()
         };
         Ok(Self {
-            readiness,
             next_wait: 1 << 62,
             waits: BTreeMap::new(),
             yield_now: false,
@@ -440,11 +451,11 @@ impl HostLibrary {
             stdin: self.id(&a[0])?,
             max: word(&a[2])?,
         };
-        self.readiness.enter(token);
+        self.io.adapter().enter(token);
         let completion = match self.host(request) {
             Err(Error::Blocked(_)) => return Ok(false),
             completion => {
-                self.readiness.finish(token);
+                self.io.adapter().finish(token);
                 completion?
             }
         };
@@ -813,10 +824,10 @@ impl HostLibrary {
         a: &[Value],
         token: u64,
     ) -> Result<OperationResult, Error> {
-        self.readiness.enter(token);
+        self.io.adapter().enter(token);
         let result = self.network(name, a, token);
         if !matches!(result, Err(Error::Blocked(_))) {
-            self.readiness.finish(token);
+            self.io.adapter().finish(token);
         }
         result
     }
@@ -943,7 +954,7 @@ impl HostLibrary {
         let cancellation = self
             .library
             .cancellation()
-            .filter(|_| self.readiness.cancellable(token));
+            .filter(|_| self.io.cancellable(token));
         let completion = if let Some(cause) = cancellation.filter(|_| {
             matches!(
                 name,
@@ -1085,7 +1096,8 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         self.library.take_yield() || host
     }
     fn wait(&mut self) -> Result<bool, Error> {
-        self.readiness
+        self.io
+            .adapter()
             .wait()
             .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))
     }
@@ -1097,10 +1109,11 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         let Some(wait) = self.waits.get(&token) else {
             return self.library.poll(token, cx);
         };
-        let canceled = self.library.cancellation().is_some() && self.readiness.cancellable(token);
+        let canceled = self.library.cancellation().is_some() && self.io.cancellable(token);
         if !canceled
             && !self
-                .readiness
+                .io
+                .adapter()
                 .ready(token)
                 .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))?
         {
@@ -1111,7 +1124,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         if name == "stdin.read" {
             // A canceled read consumes nothing; the library reports Canceled.
             if canceled {
-                self.readiness.finish(token);
+                self.io.adapter().finish(token);
             } else if !self.host_stdin(&arguments, token)? {
                 return Ok(None);
             }
@@ -1250,7 +1263,6 @@ mod tests {
             &run,
             &admitted,
             HostIo::Replay(SimIo::new(Default::default(), vec![])),
-            Default::default(),
         )
         .unwrap();
         let process = host.handle(1, "Proc");

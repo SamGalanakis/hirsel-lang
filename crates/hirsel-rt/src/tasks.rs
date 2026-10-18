@@ -119,6 +119,9 @@ enum Wait {
         channel: u32,
         slot: *mut *mut Header,
     },
+    /// A host request that would block, parked under its readiness token
+    /// (`crate::host_waits`); its poll re-issues the request.
+    Host { token: u64 },
 }
 
 /// A completed child's result slot, inside its parked frame.
@@ -421,6 +424,12 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32) -> bool {
                 None => false,
             }
         }
+        Some(Wait::Host { token }) => {
+            let shield = s.task(task).saved.shield;
+            let cause = s.canceled_task(task, shield);
+            // SAFETY: the context is live and `token` is this task's parked request.
+            unsafe { crate::host_waits::poll(ctx, token, cause) }
+        }
         None => fault("a parked task without a wait"),
     }
 }
@@ -443,6 +452,10 @@ unsafe fn run_next(ctx: *mut RunCtx) {
 unsafe fn next_task(ctx: *mut RunCtx) -> u32 {
     // SAFETY: the context is live.
     unsafe { poll_parked(ctx) };
+    // With nothing runnable, sleep until a parked host request may complete, then poll again.
+    while scheduler(ctx).runnable.is_empty() && unsafe { crate::host_waits::wait(ctx) } {
+        unsafe { poll_parked(ctx) };
+    }
     let Some(next) = scheduler(ctx).runnable.pop_front() else {
         // CONC-8: no task can run and nothing outside the run can wake one.
         crate::environmental("every task of the run is blocked (CONC-8)");
@@ -493,6 +506,16 @@ unsafe fn block(ctx: *mut RunCtx, wait: Wait, yielded: bool) {
     s.parked.push(current);
     // SAFETY: the context is live; a poll makes this task runnable again.
     unsafe { run_next(ctx) };
+}
+
+/// Park the running task on host request `token` until a poll completes it (`crate::host_waits`).
+/// `yielded`: the request yields first, and the task parks when it is next at the front.
+///
+/// # Safety
+/// `ctx` is live and no borrow of its Io adapter or scheduler is held.
+pub(crate) unsafe fn park_host(ctx: *mut RunCtx, token: u64, yielded: bool) {
+    // SAFETY: the context is live; the request outlives the wait.
+    unsafe { block(ctx, Wait::Host { token }, yielded) };
 }
 
 /// Resume `child` directly (a join delivered its result, or its result is discarded) and

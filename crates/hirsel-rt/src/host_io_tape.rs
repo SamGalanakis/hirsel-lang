@@ -21,6 +21,7 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         Request::PrintStderr { stderr, bytes } => format!("stderr_print {stderr} {}", hex(bytes)),
         Request::EnvGet { env, name } => format!("env_get {env} {}", hex(name.as_bytes())),
         Request::Process { io } => format!("process {io}"),
+        Request::Ready { wait, polls } => format!("ready {wait} {polls}"),
         Request::TestProcess { test, runs } => format!(
             "test_process {test} {}",
             hex(&hirsel_run_config::encode_process_runs(runs))
@@ -59,6 +60,8 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         Completion::Input(Err(InputError::InvalidUtf8)) => "input invalid_utf8".into(),
         Completion::Env(Ok(Some(value))) => format!("env some {}", hex(value.as_bytes())),
         Completion::Env(Ok(None)) => "env none".into(),
+        Completion::Blocked { committed } => format!("blocked {}", u8::from(*committed)),
+        Completion::Ready => "ready".into(),
         Completion::Env(Err(EnvError::NotGranted)) => "env not_granted".into(),
         Completion::Env(Err(EnvError::InvalidUtf8)) => "env invalid_utf8".into(),
         Completion::Process(ProcessOutcome::Output {
@@ -120,6 +123,10 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             name: text(name)?,
         },
         ["process", io] => Request::Process { io: number(io)? },
+        ["ready", wait, polls] => Request::Ready {
+            wait: number(wait)?,
+            polls: number(polls)?,
+        },
         ["test_process", test, runs] => Request::TestProcess {
             test: number(test)?,
             runs: hirsel_run_config::decode_process_runs(&bytes(runs)?)
@@ -162,6 +169,9 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["input", "invalid_utf8"] => Completion::Input(Err(InputError::InvalidUtf8)),
         ["env", "some", s] => Completion::Env(Ok(Some(text(s)?))),
         ["env", "none"] => Completion::Env(Ok(None)),
+        ["blocked", "0"] => Completion::Blocked { committed: false },
+        ["blocked", "1"] => Completion::Blocked { committed: true },
+        ["ready"] => Completion::Ready,
         ["env", "not_granted"] => Completion::Env(Err(EnvError::NotGranted)),
         ["env", "invalid_utf8"] => Completion::Env(Err(EnvError::InvalidUtf8)),
         [

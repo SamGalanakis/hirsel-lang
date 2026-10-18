@@ -252,8 +252,6 @@ pub(crate) enum HostRun {
     Live {
         admitted: hirsel_run_config::AdmittedRun,
         io: hirsel_rt::io_real::RealIo,
-        /// Present for cooperative (interpreter) admission.
-        readiness: Option<hirsel_rt::readiness::Readiness>,
     },
     Replay {
         run: hirsel_run_config::ValidatedRun,
@@ -315,16 +313,12 @@ pub(crate) fn bind_host_run(
                 admission_time()?,
             )
             .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
-            let (mut io, readiness) = host.into_parts();
+            let mut io = host.into_io();
             if let Some(tape) = record {
                 hirsel_rt::host_launch::record(&mut io, &admitted, tape, &[])
                     .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
             }
-            Ok(HostRun::Live {
-                admitted,
-                io,
-                readiness,
-            })
+            Ok(HostRun::Live { admitted, io })
         }
         HostLaunch::Replay(tape) => {
             let refused = |e: hirsel_run_config::RunRefusal| {
@@ -354,22 +348,10 @@ pub fn run_path_on_host(
     program.refuse_foreign_interpretation()?;
     let signature = launch_signature(&mut program)?;
     let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
-    let (run, io, readiness) = match bind_host_run(&mut program, launch, host)? {
-        HostRun::Live {
-            admitted,
-            io,
-            readiness,
-        } => (
-            admitted.run().clone(),
-            network::HostIo::Live(io),
-            readiness.expect("cooperative admission"),
-        ),
-        // A replay never parks: its completions are recorded.
-        HostRun::Replay { run, io } => (
-            run,
-            network::HostIo::Replay(io),
-            hirsel_rt::readiness::Readiness::default(),
-        ),
+    let (run, io) = match bind_host_run(&mut program, launch, host)? {
+        HostRun::Live { admitted, io } => (admitted.run().clone(), network::HostIo::Live(io)),
+        // A replay parks where the recording parked (its `blocked` and `ready` events).
+        HostRun::Replay { run, io } => (run, network::HostIo::Replay(io)),
     };
     let tir_run = hirsel_tir::RunConfiguration {
         entry: program.entry.clone(),
@@ -381,7 +363,7 @@ pub fn run_path_on_host(
         .runtime_types()
         .map_err(|e| program.error(e))?;
     runtime.trace_mode = hirsel_interp::TraceMode::Effects;
-    let mut operations = network::HostLibrary::new(&tir_run, &run, io, readiness)
+    let mut operations = network::HostLibrary::new(&tir_run, &run, io)
         .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
     let args = operations
         .library

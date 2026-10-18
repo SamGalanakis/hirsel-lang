@@ -332,6 +332,12 @@ pub enum Request {
         net: u64,
         listener: u64,
     },
+    /// A scheduling input of cooperative runs, never a capability request: the parked
+    /// request of wait `wait` (creation ordinal) became ready after `polls` failed polls.
+    Ready {
+        wait: u64,
+        polls: u64,
+    },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClockError {
@@ -365,6 +371,13 @@ pub enum Completion {
     Address(Result<SocketAddr, NetError>),
     Accepted(Result<(u64, SocketAddr), NetError>),
     Process(hirsel_run_config::ProcessOutcome),
+    /// The request would block and its task parked; `committed` when it already made part
+    /// of its effect, so cancellation no longer completes it.
+    Blocked {
+        committed: bool,
+    },
+    /// The completion of `Request::Ready`.
+    Ready,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Fault {
@@ -1466,14 +1479,34 @@ pub trait Adapter {
         vec![]
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError>;
+    /// Cooperative waits (`crate::host_waits`, DET-1). Select the readiness token of the
+    /// request about to be issued; a `Blocked` answer parks it under that token.
+    fn enter(&mut self, _token: u64) {}
+    /// The request under `token` completed or was canceled.
+    fn finish(&mut self, _token: u64) {}
+    /// Whether the request parked under `token` has committed no effect yet.
+    fn cancellable(&self, _token: u64) -> bool {
+        true
+    }
+    /// A poll of the request parked under `token`: whether to re-issue it.
+    fn ready(&mut self, _token: u64) -> Result<bool, AdapterError> {
+        Ok(true)
+    }
+    /// With no runnable task, wait until some parked request may be ready. False when no
+    /// source can make one ready.
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        Ok(false)
+    }
 }
 
 /// Stable address owned by launch, bound explicitly to RunCtx for generated thunks.
 /// The binding outlives every release and cannot be accessed while a thunk runs.
 pub struct Binding {
-    adapter: Box<dyn Adapter>,
+    pub(crate) adapter: Box<dyn Adapter>,
     paths: Vec<String>,
     arguments: Vec<String>,
+    /// The requests parked because their adapter answered `Blocked`.
+    pub(crate) waits: crate::host_waits::Waits,
 }
 impl Binding {
     pub(crate) fn tls_roots(&mut self, pem: &[u8]) {
@@ -1484,6 +1517,7 @@ impl Binding {
             adapter: Box::new(adapter),
             paths: Vec::new(),
             arguments: Vec::new(),
+            waits: Default::default(),
         }
     }
     pub(crate) fn from_box(adapter: Box<dyn Adapter>) -> Self {
@@ -1491,6 +1525,7 @@ impl Binding {
             adapter,
             paths: Vec::new(),
             arguments: Vec::new(),
+            waits: Default::default(),
         }
     }
     /// Explicit launch argument table; Path identities belong to this binding only.
@@ -1689,12 +1724,12 @@ fn error_word(error: IoError) -> u64 {
 }
 unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
     let operation = !matches!(request, Request::Close { .. });
-    let binding = unsafe { Binding::get(ctx) };
-    let completion = match binding.adapter.call(request) {
+    let (completion, parked) = unsafe { crate::host_waits::issue(ctx, request) };
+    let completion = match completion {
         Ok(value) => value,
-        Err(error) => adapter_refusal(binding, error),
+        Err(error) => adapter_refusal(unsafe { Binding::get(ctx) }, error),
     };
-    if operation {
+    if operation && !parked {
         unsafe { crate::tasks::yield_now(ctx) };
     }
     completion
@@ -1702,19 +1737,20 @@ unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
 /// A refused typed capability is CAP-2. The compiled caller records its anchor.
 ///
 /// Every capability operation is a scheduling point (CONC-1): after its effect the running
-/// task yields to the runnable queue. A handle's implicit close at its drop is not one.
+/// task yields to the runnable queue. A request that parked yielded or parked there instead
+/// (`crate::host_waits`). A handle's implicit close at its drop is not one.
 pub(crate) unsafe fn capability_call(
     ctx: *mut crate::RunCtx,
     request: Request,
 ) -> Result<Completion, ()> {
     let operation = !matches!(request, Request::Close { .. });
-    let binding = unsafe { Binding::get(ctx) };
-    let completion = match binding.adapter.call(request) {
+    let (completion, parked) = unsafe { crate::host_waits::issue(ctx, request) };
+    let completion = match completion {
         Ok(value) => Ok(value),
         Err(AdapterError::InvalidHandle(_)) => Err(()),
-        Err(error) => adapter_refusal(binding, error),
+        Err(error) => adapter_refusal(unsafe { Binding::get(ctx) }, error),
     };
-    if operation {
+    if operation && !parked {
         unsafe { crate::tasks::yield_now(ctx) };
     }
     completion
@@ -2659,7 +2695,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_path_compare(ctx: *mut crate::RunCtx, a: u
 }
 
 /// A replay refusal is a tool outcome, even when it happens in cleanup.
-fn adapter_refusal(binding: &mut Binding, error: AdapterError) -> ! {
+pub(crate) fn adapter_refusal(binding: &mut Binding, error: AdapterError) -> ! {
     use std::io::Write;
     let mut stdout = std::io::stdout();
     let output = binding.adapter.replay_stdout();

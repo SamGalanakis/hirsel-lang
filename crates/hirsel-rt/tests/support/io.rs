@@ -158,6 +158,9 @@ pub fn replay_interpreter_with_fixture(
                 | Request::ProcessRun { .. } => {
                     panic!("process tapes replay through tests/it/process.rs")
                 }
+                Request::Ready { .. } => {
+                    panic!("the interpreter oracle runs no cooperative host scheduler")
+                }
                 Request::MonotonicClock { io } => ("io.monotonic_clock", vec![handle("Io", *io)]),
                 Request::WallClock { io } => ("io.wall_clock", vec![handle("Io", *io)]),
                 Request::Monotonic { clock } => {

@@ -238,7 +238,17 @@ port, timeout, `max` and every byte written) and the completion (handle, address
 the bytes a read delivered, accepted counts, or the error). Elapsed host time is never
 recorded: a timeout is the outcome `TimedOut()`, and a read's chunking is the exact count it
 delivered. Under concurrency, the order in which network completions resume tasks is part
-of the recorded scheduling order.
+of the recorded scheduling order. Under `tasks.cooperative@1` the scheduler's only host
+inputs are whether an issued request must wait and when a waiting request becomes ready,
+and both are recorded, for network requests, stdin reads and timer waits alike. A request
+whose task parks completes `blocked`, noting whether it had already made part of its effect,
+which keeps it from completing `Canceled`. Each poll that finds a parked request ready is a
+`ready` event naming the wait by its creation ordinal (waits are numbered in the order their
+requests first parked) and the number of polls that found it not ready since it parked or
+was last ready; polls that find nothing are not recorded. Replay parks a task where its
+request recorded `blocked`, finds a wait ready exactly at its recorded poll and never waits
+for the host, so a recorded schedule replays in either engine. Cancellation is derived from
+the schedule and is not recorded.
 
 TLS is recorded as plaintext and as the `tls.connect` outcome, never as TLS records. The
 request records the server name and the identity of the root set: `webpki:` and the

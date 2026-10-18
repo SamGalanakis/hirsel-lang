@@ -88,27 +88,29 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
 }
 
 pub struct HostGrants {
-    /// Present for cooperative admission: host net and stdin park on it.
-    readiness: Option<Readiness>,
+    /// Admit cooperative providers even when the record grants no tasks (the interpreter).
+    always_cooperative: bool,
     revocations: Option<hirsel_run_config::Revocations>,
     io: Option<RealIo>,
     output: Option<Box<dyn std::io::Write>>,
 }
 impl HostGrants {
+    /// Native admission: a record that grants `io.tasks` gets the cooperative providers, so a
+    /// request that would block parks its task (`crate::host_waits`); without tasks host
+    /// requests block the thread.
     pub fn new(output: impl std::io::Write + 'static) -> Self {
         Self {
-            readiness: None,
+            always_cooperative: false,
             revocations: None,
             io: None,
             output: Some(Box::new(output)),
         }
     }
     /// Interpreter admission for the cooperative scheduler: sockets and stdin are
-    /// nonblocking and record their interest in one Readiness. Native callers keep
-    /// the default refusal until their own task contexts are implemented.
+    /// nonblocking and record their interest in one Readiness, with or without tasks.
     pub fn cooperative(output: impl std::io::Write + 'static) -> Self {
         Self {
-            readiness: Some(Readiness::default()),
+            always_cooperative: true,
             ..Self::new(output)
         }
     }
@@ -120,19 +122,13 @@ impl HostGrants {
     pub fn into_io(self) -> RealIo {
         self.io.expect("successful host admission")
     }
-    /// The admitted io and, for cooperative admission, the readiness its providers share.
-    pub fn into_parts(self) -> (RealIo, Option<Readiness>) {
-        let readiness = self.readiness.clone();
-        (self.into_io(), readiness)
-    }
 }
 impl HostAuthority for HostGrants {
     fn authorize(&mut self, record: &RunConfig) -> Result<(), RunRefusal> {
-        if record.io.as_ref().is_some_and(|io| io.tasks.is_some()) && self.readiness.is_none() {
-            return Err(RunRefusal::Unsupported {
-                field: "io.tasks".into(),
-            });
-        }
+        // Cooperative providers share one readiness, which the RealIo polls and records.
+        let readiness = (self.always_cooperative
+            || record.io.as_ref().is_some_and(|io| io.tasks.is_some()))
+        .then(Readiness::default);
         let mounts = record
             .io
             .as_ref()
@@ -156,7 +152,7 @@ impl HostAuthority for HostGrants {
             .as_ref()
             .is_some_and(|grants| grants.stdin.is_some())
         {
-            match &self.readiness {
+            match &readiness {
                 Some(readiness) => {
                     io.set_cooperative_stdin(CooperativeStdin::pin(readiness.clone()).map_err(
                         |error| RunRefusal::Unauthorized {
@@ -167,7 +163,8 @@ impl HostAuthority for HostGrants {
                 None => io.set_stdin(std::io::stdin()),
             }
         }
-        if let Some(readiness) = &self.readiness {
+        if let Some(readiness) = &readiness {
+            io.set_cooperative(readiness.clone());
             io.set_net_provider(CooperativeNet::new(readiness.clone()));
         }
         if record

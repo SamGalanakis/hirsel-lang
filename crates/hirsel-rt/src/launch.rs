@@ -90,8 +90,13 @@ pub type Entry = unsafe extern "C" fn(
     args: *const u64,
 ) -> u8;
 
-/// The tape file's first line.
-pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 6";
+/// The tape file's first line. Version 7 adds the cooperative scheduling inputs (`blocked`
+/// completions and `ready` events); a version 6 tape, which has none, reads as version 7.
+pub(crate) const TAPE_HEADER: &str = "hirsel-io-tape 7";
+const TAPE_HEADER_6: &str = "hirsel-io-tape 6";
+fn tape_header(line: Option<&str>) -> bool {
+    line.is_some_and(|line| line == TAPE_HEADER || line == TAPE_HEADER_6)
+}
 
 /// An adapter the launcher still holds after binding it.
 struct Shared<A>(Rc<RefCell<A>>);
@@ -108,6 +113,21 @@ impl<A: Adapter> Adapter for Shared<A> {
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
         self.0.borrow_mut().call(request)
+    }
+    fn enter(&mut self, token: u64) {
+        self.0.borrow_mut().enter(token);
+    }
+    fn finish(&mut self, token: u64) {
+        self.0.borrow_mut().finish(token);
+    }
+    fn cancellable(&self, token: u64) -> bool {
+        self.0.borrow().cancellable(token)
+    }
+    fn ready(&mut self, token: u64) -> Result<bool, AdapterError> {
+        self.0.borrow_mut().ready(token)
+    }
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        self.0.borrow_mut().wait()
     }
 }
 
@@ -377,7 +397,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
         }
     }
     let mut lines = text.lines();
-    if lines.next() != Some(TAPE_HEADER) {
+    if !tape_header(lines.next()) {
         return Err(format!(
             "not an Io tape: the first line is not `{TAPE_HEADER}`"
         ));
@@ -763,7 +783,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
         .split_once("\nevents\n")
         .ok_or("recording without events delimiter")?;
     let mut lines = metadata.lines();
-    if lines.next() != Some(TAPE_HEADER) {
+    if !tape_header(lines.next()) {
         return Err(format!(
             "not a recording: the first line is not `{TAPE_HEADER}`"
         ));

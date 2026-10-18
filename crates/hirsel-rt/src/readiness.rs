@@ -122,3 +122,54 @@ impl Readiness {
 fn errno() -> libc::c_int {
     std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
 }
+
+/// The deterministic identity of cooperative waits, kept alike by live recording (`RealIo`)
+/// and replay (`SimIo`): the request that first blocks under a token gets the run's next
+/// creation ordinal, and the failed polls since it parked or was last ready are counted.
+/// Tapes carry `blocked` completions and `ready <ordinal> <polls>` events from it (DET-1).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WaitLog {
+    current: u64,
+    next: u64,
+    rows: BTreeMap<u64, WaitRow>,
+}
+#[derive(Clone, Debug)]
+pub(crate) struct WaitRow {
+    pub(crate) ordinal: u64,
+    pub(crate) polls: u64,
+    pub(crate) committed: bool,
+}
+impl WaitLog {
+    pub(crate) fn enter(&mut self, token: u64) {
+        self.current = token;
+    }
+    pub(crate) fn finish(&mut self, token: u64) {
+        self.rows.remove(&token);
+    }
+    pub(crate) fn current(&self) -> u64 {
+        self.current
+    }
+    /// The entered request blocked: its row, created with the next ordinal the first time.
+    pub(crate) fn park(&mut self, committed: bool) -> &mut WaitRow {
+        let next = &mut self.next;
+        let row = self.rows.entry(self.current).or_insert_with(|| {
+            *next += 1;
+            WaitRow {
+                ordinal: *next - 1,
+                polls: 0,
+                committed,
+            }
+        });
+        row.committed = committed;
+        row
+    }
+    pub(crate) fn rows_of(&self, token: u64) -> Option<&WaitRow> {
+        self.rows.get(&token)
+    }
+    pub(crate) fn row(&mut self, token: u64) -> Option<&mut WaitRow> {
+        self.rows.get_mut(&token)
+    }
+    pub(crate) fn rows(&self) -> impl Iterator<Item = &WaitRow> {
+        self.rows.values()
+    }
+}

@@ -127,7 +127,7 @@ fn loopback_recording_replays_without_sockets() {
     let (rules, port, tape, chunks) = record_exchange();
     // The server is gone: replay must not touch the network at all.
     let text = render_tape(&tape).unwrap();
-    assert!(text.starts_with("hirsel-io-tape 6\n"));
+    assert!(text.starts_with("hirsel-io-tape 7\n"));
     let parsed = parse_tape(&text).unwrap();
     assert_eq!(parsed, tape);
     let mut sim = replay(&rules, parsed);
@@ -712,7 +712,7 @@ fn listeners_accept_under_a_listen_rule() {
 }
 
 #[test]
-fn tape_v6_round_trips_every_network_event_and_other_versions_are_refused() {
+fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versions_are_refused() {
     let a4 = loopback(8080);
     let a6 = SocketAddr {
         ip: "2001:db8::1".parse().unwrap(),
@@ -875,17 +875,44 @@ fn tape_v6_round_trips_every_network_event_and_other_versions_are_refused() {
             fault: None,
         })
         .collect();
+    // Cooperative scheduling inputs: a parked request and a ready poll.
+    let mut events = events;
+    events.extend([
+        Event {
+            request: requests[0].clone(),
+            completion: Completion::Blocked { committed: false },
+            fault: None,
+        },
+        Event {
+            request: requests[1].clone(),
+            completion: Completion::Blocked { committed: true },
+            fault: None,
+        },
+        Event {
+            request: Request::Ready { wait: 1, polls: 7 },
+            completion: Completion::Ready,
+            fault: None,
+        },
+    ]);
     let text = render_tape(&events).unwrap();
+    assert!(text.contains(" -> blocked 0\n") && text.contains("\nready 1 7 -> ready\n"));
     assert_eq!(parse_tape(&text).unwrap(), events);
+    // A version 6 tape holds no scheduling inputs and reads unchanged.
+    let six = text.replacen("hirsel-io-tape 7", "hirsel-io-tape 6", 1);
+    assert_eq!(parse_tape(&six).unwrap(), events);
 
     assert!(parse_tape("hirsel-io-tape 5\n").is_err());
-    assert!(parse_tape("hirsel-io-tape 7\n").is_err());
+    assert!(parse_tape("hirsel-io-tape 8\n").is_err());
     // Exactly one spelling of each value.
     for bad in [
         "hirsel-io-tape 6\nnet_read 2 3 01 -> net_bytes ok \n",
         "hirsel-io-tape 6\nlisten 2 [0::1]:80 -> net_handle ok 3\n",
         "hirsel-io-tape 6\nnet_read 2 3 1 -> net_bytes err not_granted\n",
         "hirsel-io-tape 6\nnet_read 2 3 1 -> net_unit ok x\n",
+        "hirsel-io-tape 7\nnet_read 2 3 1 -> blocked 2\n",
+        "hirsel-io-tape 7\nnet_read 2 3 1 -> blocked\n",
+        "hirsel-io-tape 7\nready 1 -> ready\n",
+        "hirsel-io-tape 7\nready 1 x -> ready\n",
     ] {
         assert!(parse_tape(bad).is_err(), "{bad}");
     }

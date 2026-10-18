@@ -344,6 +344,17 @@ single-threaded, with the reference interpreter's schedule:
 - parked tasks are polled in park order at every yield and whenever the running task stops;
 - a successful poll performs the wait's effect (a join's poll moves the result) and queues the task.
 
+Host requests park too (`host_waits.rs`). Every capability request goes through
+`host_waits::issue`. A canceled task's stdin read, print or waiting network request
+(resolve, connect, accept, read, write, TLS) completes `Canceled` without reaching the
+adapter (CONC-3), as the interpreter's HostLibrary does. A stdin or network request that the
+adapter answers `AdapterError::Blocked` parks its task (`Wait::Host`): a network request after
+its yield, a stdin read at once, as the interpreter parks them. Its poll re-issues it when the
+task is canceled before the request committed an effect, or when the adapter finds it ready,
+so the effect and its tape event happen at the poll, and the resumed operation does not yield
+again. With nothing runnable the scheduler sleeps in the adapter's `wait` on every parked
+descriptor and the earliest deadline, then polls again.
+
 All tasks of a run share its one heap. A value crossing tasks moves by copying its root, and
 the checker's sendability rules keep each counted value owned by one task. What is a task's own
 in `RunCtx` is swapped at each switch:
@@ -401,7 +412,7 @@ language failure and 3 for a refused launch. With `HIRSEL_RT_OBSERVATION` it
 writes the observation record (`hirsel-observation 1`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
 audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape
-(`hirsel-io-tape 6`: run identity digest, independent hash/Random/Test seeds, for production recordings the canonical run record and its admission time, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
+(`hirsel-io-tape 7`, which also reads version 6: run identity digest, independent hash/Random/Test seeds, for production recordings the canonical run record and its admission time, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
 Io that accepts exactly a recorded tape and refuses a mismatch, a missing event
 and an unconsumed one. Each completion is appended and flushed before delivery; an abort preserves its confirmed prefix. A missing trailer marks an unknown suffix and refuses complete replay or any resumability claim. Native stdout uses raw OS writes, so EPIPE and EBADF become recorded OutputError outcomes; generated main ignores SIGPIPE before entry. Replay divergence exits 3 with confirmed stdout, including during handle cleanup.
 
@@ -734,9 +745,15 @@ ready; a closed descriptor 0 reads as end of input.
 DNS runs outside the evaluator and signals a descriptor; relative timeouts retain one
 deadline across readiness retries. Partially published writes/TLS exchanges cannot be
 reported as effect-free cancellation. HostNet remains the native blocking provider.
-`HostGrants::cooperative` admits `tasks.cooperative@1` for the interpreter and installs
-CooperativeNet and CooperativeStdin over one Readiness (`into_parts`);
-`HostGrants::new` refuses Tasks until native scheduling supports that contract.
+`HostGrants::cooperative` (the interpreter, always) and `HostGrants::new` (native, when the
+record grants `io.tasks`) install CooperativeNet and CooperativeStdin over one Readiness,
+which `RealIo::set_cooperative` also receives; without tasks a native run keeps the blocking
+providers. RealIo answers the `Adapter` wait methods from that Readiness and records a
+`blocked` completion for every request that parks (with whether it already committed part
+of its effect) and a `ready <wait> <polls>` event for every ready poll: the wait's creation
+ordinal and the failed polls since it parked or was last ready (`readiness::WaitLog`).
+SimIo serves both forms, so replay parks and readies tasks as the recording did and never
+waits; an idle replay whose next event is not a parked wait's `ready` is missing input.
 
 `HostGrants::read_revocations` installs an explicit immutable revocation-list
 snapshot before admission. Without it a grant requiring revocation evidence refuses.

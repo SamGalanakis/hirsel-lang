@@ -19,6 +19,7 @@ pub mod exit_report;
 mod host_io_tape;
 pub mod host_paths;
 pub mod host_stdin;
+mod host_waits;
 pub mod io;
 pub mod io_net_script;
 pub mod io_real;

@@ -11,6 +11,8 @@ pub struct SimIo {
     identities: FileIdentities,
     detached_roots: std::collections::BTreeSet<u64>,
     mount_pins: MountPins,
+    /// The requests the tape records as `blocked`, parked again in replay.
+    waits: crate::readiness::WaitLog,
 }
 impl SimIo {
     pub fn set_env(&mut self, env: std::collections::BTreeMap<String, Option<String>>) {
@@ -46,6 +48,7 @@ impl SimIo {
             tape,
             position: 0,
             roots: Default::default(),
+            waits: Default::default(),
         }
     }
     /// Configure only the virtual selectors and rights; replay acquires no host authority.
@@ -135,6 +138,56 @@ impl SimIo {
     }
 }
 impl Adapter for SimIo {
+    fn enter(&mut self, token: u64) {
+        self.waits.enter(token);
+    }
+    fn finish(&mut self, token: u64) {
+        self.waits.finish(token);
+    }
+    fn cancellable(&self, token: u64) -> bool {
+        self.waits.rows_of(token).is_none_or(|row| !row.committed)
+    }
+    /// Ready exactly at the poll the recording made ready: the next event is its `ready`
+    /// with this many failed polls.
+    fn ready(&mut self, token: u64) -> Result<bool, AdapterError> {
+        let next = self.tape.get(self.position).map(|event| &event.request);
+        let Some(row) = self.waits.row(token) else {
+            return Ok(true);
+        };
+        if next
+            == Some(&Request::Ready {
+                wait: row.ordinal,
+                polls: row.polls,
+            })
+        {
+            row.polls = 0;
+            self.position += 1;
+            return Ok(true);
+        }
+        row.polls += 1;
+        Ok(false)
+    }
+    /// No host wait: idle polls continue only toward the next recorded `ready`, which must
+    /// belong to a parked request that has not been polled past it.
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        if self.waits.rows().next().is_none() {
+            return Ok(false);
+        }
+        let Some(Request::Ready { wait, polls }) =
+            self.tape.get(self.position).map(|event| &event.request)
+        else {
+            return Err(AdapterError::MissingInput(self.position));
+        };
+        if self
+            .waits
+            .rows()
+            .any(|row| row.ordinal == *wait && row.polls <= *polls)
+        {
+            Ok(true)
+        } else {
+            Err(AdapterError::ReplayMismatch(self.position))
+        }
+    }
     fn replay_stderr(&self) -> Vec<u8> {
         self.state.stderr.clone()
     }
@@ -148,6 +201,12 @@ impl Adapter for SimIo {
             .ok_or(AdapterError::MissingInput(self.position))?;
         if event.request != request {
             return Err(AdapterError::ReplayMismatch(self.position));
+        }
+        // The recorded run parked this request: its task parks again (DET-1).
+        if let Completion::Blocked { committed } = event.completion {
+            self.position += 1;
+            self.waits.park(committed);
+            return Err(AdapterError::Blocked);
         }
         let mut state = self.state.clone();
         let mut tree = self.tree.clone();

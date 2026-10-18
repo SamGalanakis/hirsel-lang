@@ -90,10 +90,11 @@ projection, stdout and stderr writes, stdin and Env reads, and filesystem, clock
 network calls to the runtime's typed Request/Completion protocol, which owns grant
 enforcement, in the order native code issues them, so one tape replays in either engine.
 The interpreter has no host effects: live stdout and stderr are written by the runtime
-adapter, and a replay copies its recorded output to the process's streams. A replay never
-parks on readiness; the order in which ready sockets resume cooperative tasks is not yet
-recorded, so a run whose tasks interleave host requests by readiness may refuse its own
-replay as a divergence (never replay differently). Pure calls and
+adapter, and a replay copies its recorded output to the process's streams. HostLibrary
+drives cooperative waits only through the adapter (`Adapter::enter`, `finish`,
+`cancellable`, `ready` and `wait`): live, RealIo polls its Readiness and records each park
+and ready poll; in replay, SimIo parks and readies tasks exactly where the tape says, so a
+run whose tasks interleave host requests by readiness replays its own schedule. Pure calls and
 recorded Args/Env snapshots use the ordinary Library. `run_path`, `run_path_with_simulation` and `run_file` are the fake-provider
 entry points for semantic fixtures. Production native runs pass the same validated record
 to linking and launch; explicit host runs have streaming stdout and no harness wall-time limit.
@@ -127,7 +128,7 @@ HostLibrary implements OperationsAdapter, whose forwarding implementation is gen
 from the same inventory as Operations. Scheduler and cleanup hooks therefore cannot
 silently inherit no-op defaults. Host sockets use CooperativeNet: parked operations
 retain typed snapshots while the evaluator retains owners and mutable loans. A
-`stdin.read` with no available byte parks its task on the same Readiness and resumes
+`stdin.read` with no available byte parks its task under its token and resumes
 through `Library::read_stdin`. Socket and stdin readiness and relative timeouts are
 polled at scheduling points; the scheduler waits only when no task is runnable. Effect-free waits observe level-triggered cancellation.
 

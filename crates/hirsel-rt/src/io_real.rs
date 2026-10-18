@@ -21,6 +21,8 @@ pub struct RealIo {
     recording: Option<crate::launch::RecordingWriter<File>>,
     retain_history: bool,
     net: Box<dyn NetProvider>,
+    /// Cooperative admission: the readiness its providers park on and the waits it records.
+    cooperative: Option<(crate::readiness::Readiness, crate::readiness::WaitLog)>,
 }
 enum Input {
     Blocking(Box<dyn Read>),
@@ -64,6 +66,11 @@ impl RealIo {
     /// root Net permits nothing.
     pub fn set_net_rules(&mut self, rules: std::collections::BTreeSet<NetRule>) {
         self.state.net_rules = rules;
+    }
+    /// Cooperative admission: a request whose provider parks on `readiness` answers
+    /// `AdapterError::Blocked`, and the tape records it and each ready poll (DET-1).
+    pub fn set_cooperative(&mut self, readiness: crate::readiness::Readiness) {
+        self.cooperative = Some((readiness, Default::default()));
     }
     /// Replace the host network provider, e.g. to count provider calls in tests.
     pub fn set_net_provider(&mut self, provider: impl NetProvider + 'static) {
@@ -138,6 +145,7 @@ impl RealIo {
             recording: None,
             retain_history: true,
             net: Box::new(crate::net_host::HostNet::new()),
+            cooperative: None,
         })
     }
     /// Borrow the original admitted pins for every recorder check, without reopening paths.
@@ -399,6 +407,74 @@ impl Adapter for RealIo {
         self.net.tls_roots(pem);
     }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        if self.cooperative.is_none() || !crate::host_waits::may_park(&request) {
+            return self.perform(request);
+        }
+        let retry = request.clone();
+        match self.perform(request) {
+            Err(AdapterError::Blocked) => {
+                let (readiness, log) = self.cooperative.as_mut().unwrap();
+                let committed = !readiness.cancellable(log.current());
+                log.park(committed);
+                self.record(Event {
+                    request: retry,
+                    completion: Completion::Blocked { committed },
+                    fault: None,
+                })?;
+                Err(AdapterError::Blocked)
+            }
+            result => result,
+        }
+    }
+    fn enter(&mut self, token: u64) {
+        if let Some((readiness, log)) = &mut self.cooperative {
+            readiness.enter(token);
+            log.enter(token);
+        }
+    }
+    fn finish(&mut self, token: u64) {
+        if let Some((readiness, log)) = &mut self.cooperative {
+            readiness.finish(token);
+            log.finish(token);
+        }
+    }
+    fn cancellable(&self, token: u64) -> bool {
+        self.cooperative
+            .as_ref()
+            .is_none_or(|(readiness, _)| readiness.cancellable(token))
+    }
+    fn ready(&mut self, token: u64) -> Result<bool, AdapterError> {
+        let Some((readiness, log)) = &mut self.cooperative else {
+            return Ok(true);
+        };
+        let ready = readiness.ready(token)?;
+        let Some(row) = log.row(token) else {
+            return Ok(ready);
+        };
+        if !ready {
+            row.polls += 1;
+            return Ok(false);
+        }
+        let event = Event {
+            request: Request::Ready {
+                wait: row.ordinal,
+                polls: std::mem::take(&mut row.polls),
+            },
+            completion: Completion::Ready,
+            fault: None,
+        };
+        self.record(event)?;
+        Ok(true)
+    }
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        match &self.cooperative {
+            Some((readiness, _)) => readiness.wait(),
+            None => Ok(false),
+        }
+    }
+}
+impl RealIo {
+    fn perform(&mut self, request: Request) -> Result<Completion, AdapterError> {
         let fake = self.state.is_fake_request(&request);
         let mut fault = if self.state.denied_projection(&request)
             || crate::net::is_net_request(&request)
