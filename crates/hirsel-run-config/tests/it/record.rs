@@ -739,3 +739,65 @@ fn relative_grant_hosts_resolve_beside_the_template_and_records_remain_strict() 
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn launch_inputs_select_inline_json_without_widening_validation() {
+    use std::ffi::OsStr;
+    let template = r#"{"args":["λ","","--flag"]}"#;
+    let run = RunConfig::grants_input(
+        OsStr::new(template),
+        [0; 32],
+        "probe@1/main".into(),
+        LaunchKind::Main,
+    )
+    .unwrap();
+    assert_eq!(run.record().args.as_ref().unwrap(), &["λ", "", "--flag"]);
+    assert!(run.record().io.is_none());
+    assert!(run.record().env.is_none());
+    let record = String::from_utf8(run.canonical().to_vec()).unwrap();
+    assert_eq!(
+        RunConfig::record_input(OsStr::new(&record))
+            .unwrap()
+            .identity(),
+        run.identity()
+    );
+    for input in [
+        "{",
+        r#"{"args":[],"args":[]}"#,
+        r#"{"unknown":true}"#,
+        r#"{"io":true}"#,
+    ] {
+        assert!(
+            RunConfig::grants_input(
+                OsStr::new(input),
+                [0; 32],
+                "probe@1/main".into(),
+                LaunchKind::Main
+            )
+            .is_err()
+        );
+        assert!(RunConfig::record_input(OsStr::new(input)).is_err());
+    }
+    assert!(
+        RunConfig::grants_input(
+            OsStr::new(r#"{"io":{"dirs":[{"path":"","host":"relative","access":"read"}]}}"#),
+            [0; 32],
+            "probe@1/main".into(),
+            LaunchKind::Main
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        RunConfig::record_input(OsStr::new("run.json")),
+        Err(RunRefusal::Invalid { .. })
+    ));
+    assert!(matches!(
+        RunConfig::record_input(OsStr::new(" {}")),
+        Err(RunRefusal::Invalid { .. })
+    ));
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        assert!(RunConfig::record_input(OsStr::from_bytes(b"{\xff}")).is_err());
+    }
+}

@@ -333,6 +333,30 @@ impl RunConfig {
         record.validated()
     }
 
+    /// Select inline JSON only when the argument starts with `{`; otherwise read a path.
+    /// Inline templates have no file location, so directory hosts must be absolute.
+    pub fn grants_input(
+        input: &std::ffi::OsStr,
+        program: [u8; 32],
+        entry: String,
+        launch: LaunchKind,
+    ) -> Result<ValidatedRun, RunRefusal> {
+        if input.as_encoded_bytes().starts_with(b"{") {
+            Self::bind_grants(input.as_encoded_bytes(), program, entry, launch)
+        } else {
+            Self::read_grants(std::path::Path::new(input), program, entry, launch)
+        }
+    }
+
+    /// Select an inline bound record or an explicit absolute record path.
+    pub fn record_input(input: &std::ffi::OsStr) -> Result<ValidatedRun, RunRefusal> {
+        if input.as_encoded_bytes().starts_with(b"{") {
+            Self::validate(input.as_encoded_bytes())
+        } else {
+            Self::read_path(std::path::Path::new(input))
+        }
+    }
+
     /// Read the explicitly selected template. Relative template paths are tooling inputs.
     pub fn read_grants(
         path: &std::path::Path,

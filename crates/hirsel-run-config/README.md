@@ -116,3 +116,9 @@ that IP. Each world allocates from 49152 upward, skips script-reserved and bound
 ports, and shares the sequence through narrowed Nets; independent worlds restart
 it. Outbound connects do not consume ports. Listen completions retain the assigned
 address for replay.
+
+`record_input` and `grants_input` select inline JSON when the explicit OS argument
+starts with `{`; otherwise they use `read_path` and `read_grants`. Inline templates
+have no file directory and require absolute directory hosts. Both forms use the
+same schema validator and denial defaults; malformed inline input never falls
+back to reading a file.
