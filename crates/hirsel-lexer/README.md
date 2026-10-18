@@ -48,7 +48,8 @@ count and every reject whose first lexer diagnostic matches its rule and line
 with `cargo test -p hirsel-lexer --test conformance -- --nocapture`.
 
 Single-quoted character literals denote one Unicode scalar and produce a Character
-token retaining its source spelling. Malformed spellings recover through their
+token retaining its source spelling; `b'...'` byte literals denote one ASCII scalar
+(with `\xNN` up to 7F) and produce a Byte token the same way. Malformed spellings recover through their
 closing quote or the next physical newline as one Invalid token and one LANG-1
 diagnostic. The complete original tape is retained.
 

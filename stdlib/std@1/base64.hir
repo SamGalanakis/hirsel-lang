@@ -52,13 +52,13 @@ pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique Strin
       let third: u64 = core@1/int.widen(value / 64u32 % 64u32)
       core@1/list.push(mut out, table[third])
     } else if padding == Required() {
-      core@1/list.push(mut out, core@1/int.narrow('='))
+      core@1/list.push(mut out, b'=')
     }
     if remaining > 2 {
       let fourth: u64 = core@1/int.widen(value % 64u32)
       core@1/list.push(mut out, table[fourth])
     } else if padding == Required() {
-      core@1/list.push(mut out, core@1/int.narrow('='))
+      core@1/list.push(mut out, b'=')
     }
     i += if remaining > 2 {
       3
@@ -77,20 +77,20 @@ pub fn encode(data: Bytes, alphabet: Alphabet, padding: Padding) -> unique Strin
 
 @noalloc
 fn sextet(byte: u8, alphabet: Alphabet) -> u32 uses {} {
-  let cp: u32 = core@1/int.widen(byte)
-  if std@1/ascii.is_upper(cp) {
-    cp - 'A'
-  } else if std@1/ascii.is_lower(cp) {
-    cp - 'a' + 26u32
-  } else if std@1/ascii.is_digit(cp) {
-    cp - '0' + 52u32
-  } else if alphabet == Standard() && cp == '+' || alphabet == UrlSafe() && cp == '-' {
+  let value: u8 = if std@1/ascii.is_upper(byte) {
+    byte - b'A'
+  } else if std@1/ascii.is_lower(byte) {
+    byte - b'a' + 26
+  } else if std@1/ascii.is_digit(byte) {
+    byte - b'0' + 52
+  } else if alphabet == Standard() && byte == b'+' || alphabet == UrlSafe() && byte == b'-' {
     62
-  } else if alphabet == Standard() && cp == '/' || alphabet == UrlSafe() && cp == '_' {
+  } else if alphabet == Standard() && byte == b'/' || alphabet == UrlSafe() && byte == b'_' {
     63
   } else {
     64
   }
+  core@1/int.widen(value)
 }
 
 pub fn decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[
@@ -102,7 +102,7 @@ pub fn decode(text: String, alphabet: Alphabet, padding: Padding) -> Result[
   let mut end = len
   let mut i: u64 = 0
   while i < len {
-    if core@1/int.widen(data[i]) == '=' {
+    if data[i] == b'=' {
       if padding == Omitted() {
         return Error(InvalidPadding(i))
       }

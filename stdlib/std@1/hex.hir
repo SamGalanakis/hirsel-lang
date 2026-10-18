@@ -23,14 +23,14 @@ pub fn decode(text: String) -> Result[unique Bytes, DecodeError] uses {} {
   let mut out: List[u8] = []
   let mut i: u64 = 0
   while i < len {
-    let high: u8 = match std@1/ascii.digit_value_radix(core@1/int.widen(data[i]), 16) {
+    let high: u8 = match std@1/ascii.digit_value_radix(data[i], 16) {
       Some(digit) => core@1/int.narrow(digit),
       None() => return Error(InvalidDigit(i)),
     }
     if len - i == 1 {
       return Error(OddLength())
     }
-    let low: u8 = match std@1/ascii.digit_value_radix(core@1/int.widen(data[i + 1]), 16) {
+    let low: u8 = match std@1/ascii.digit_value_radix(data[i + 1], 16) {
       Some(digit) => core@1/int.narrow(digit),
       None() => return Error(InvalidDigit(i + 1)),
     }

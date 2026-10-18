@@ -5,13 +5,13 @@ fn specs() -> List[std@1/cli.Flag] {
   [
     std@1/cli.Flag(
       name: "verbose",
-      short: Some(core@1/int.narrow('v')),
+      short: Some(b'v'),
       kind: Switch(),
       help: "verbose output"
     ),
     std@1/cli.Flag(
       name: "output",
-      short: Some(core@1/int.narrow('o')),
+      short: Some(b'o'),
       kind: Value(),
       help: "output path"
     )
@@ -70,18 +70,8 @@ pub fn main() -> Result[(), ()] {
     _ => failure.check(false, TextInvariant()),
   }
   let short_duplicates: List[std@1/cli.Flag] = [
-    std@1/cli.Flag(
-      name: "a",
-      short: Some(core@1/int.narrow('x')),
-      kind: Switch(),
-      help: ""
-    ),
-    std@1/cli.Flag(
-      name: "b",
-      short: Some(core@1/int.narrow('x')),
-      kind: Value(),
-      help: ""
-    )
+    std@1/cli.Flag(name: "a", short: Some(b'x'), kind: Switch(), help: ""),
+    std@1/cli.Flag(name: "b", short: Some(b'x'), kind: Value(), help: "")
   ]
   match std@1/cli.parse([], short_duplicates) {
     Error(InvalidSpec()) => (),

@@ -952,6 +952,7 @@ fn literal(l: &Literal) -> Doc {
         Literal::Integer(s)
         | Literal::Float(s)
         | Literal::Character(s)
+        | Literal::Byte(s)
         | Literal::String(s)
         | Literal::Bytes(s) => token(s),
         Literal::Bool(b) => token(b.to_string()),

@@ -123,7 +123,9 @@ byte-escape  = "\\", ( "\\" | '"' | "n" | "r" | "t" | "0" )
 character    = "'", ( character-scalar | character-escape ), "'" ;
 character-escape = "\\", ( "n" | "t" | "r" | "0" | "\\" | "'" )
                  | "\\u{", hex-digit, { hex-digit }, "}" ;
-literal      = integer | float | character | string | bytes | "true" | "false" ; (* LANG-2, SEM-1/2/3 *)
+byte         = "b'", ( ascii-character-scalar | character-escape
+                     | "\\x", hex-digit, hex-digit ), "'" ;     (* LANG-1 *)
+literal      = integer | float | character | byte | string | bytes | "true" | "false" ; (* LANG-2, SEM-1/2/3 *)
 f-string     = 'f"', f-text, { "{", expression, [ ":", format-spec ], "}", f-text }, '"' ; (* SEM-3 *)
 f-text       = { f-scalar | escape | "{{" | "}}" } ;      (* SEM-3 *)
 format-spec  = [ [ fill ], align ], [ "+" | "-" ], [ "#" ], [ "0" ],
@@ -141,7 +143,11 @@ nothing above 10FFFF). A character literal denotes exactly one Unicode scalar;
 `character-scalar` excludes apostrophe, backslash, raw controls U+0000–U+001F
 and U+007F, newlines and `Bidi_Control`. Its Unicode escape has the same one-to-six
 hex-digit scalar restriction. Malformed, unterminated, empty or multi-scalar
-character literals are LANG-1. Character literals have no suffix.
+character literals are LANG-1. Character literals have no suffix. A byte literal
+(`b'a'`, `b'\n'`, `b'\x7f'`) is a character literal of one ASCII scalar prefixed by
+`b`: `ascii-character-scalar` is a `character-scalar` below U+0080, and its escapes,
+including `\xNN` and `\u{...}`, must denote a value from 00 to 7F. A byte literal
+that is empty, has more than one scalar, or denotes a non-ASCII value is LANG-1.
 `f-scalar` is a `string-scalar` other than `{` and `}`.
 There are no escape line continuations, raw or triple-quoted
 strings, hexadecimal floats, leading or trailing decimal

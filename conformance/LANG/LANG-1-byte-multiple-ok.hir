@@ -1,0 +1,6 @@
+// rule: LANG-1
+// expect: accept
+// Accepted twin: one byte, escaped.
+fn byte() -> u8 {
+  b'\''
+}

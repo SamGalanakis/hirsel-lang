@@ -25,18 +25,12 @@ pub opaque type Reader: copyable + inert + noalloc_drop uses {} {
 }
 
 pub fn default_config() -> Config uses {} {
-  Config(
-    delimiter: core@1/int.narrow(','),
-    fields_per_record: None(),
-    max_record_bytes: 1048576
-  )
+  Config(delimiter: b',', fields_per_record: None(), max_record_bytes: 1048576)
 }
 
 @noalloc
 fn delimiter_valid(delimiter: u8) -> bool uses {} {
-  delimiter > 0 && delimiter < 128 && core@1/int.widen(delimiter) != '"' && core@1/int.widen(
-    delimiter
-  ) != '\n' && core@1/int.widen(delimiter) != '\r'
+  delimiter > 0 && delimiter < 128 && delimiter != b'"' && delimiter != b'\n' && delimiter != b'\r'
 }
 
 pub fn reader(config: Config) -> Result[Reader, CsvError] uses {} {
@@ -97,16 +91,14 @@ fn step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] uses 
   r.offset += 1
   if r.skip_lf {
     r.skip_lf = false
-    if core@1/int.widen(byte) == '\n' {
+    if byte == b'\n' {
       r.record_start = r.offset
       return Ok(None())
     }
   }
-  let terminator = r.mode != 2 && (core@1/int.widen(byte) == '\n' || core@1/int.widen(
-    byte
-  ) == '\r')
+  let terminator = r.mode != 2 && (byte == b'\n' || byte == b'\r')
   if terminator {
-    r.skip_lf = core@1/int.widen(byte) == '\r'
+    r.skip_lf = byte == b'\r'
     return finish_row(mut r)
   }
   if r.record_bytes == r.config.max_record_bytes {
@@ -114,13 +106,13 @@ fn step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] uses 
   }
   r.record_bytes += 1
   if r.mode == 2 {
-    if core@1/int.widen(byte) == '"' {
+    if byte == b'"' {
       r.mode = 3
     } else {
       core@1/list.push(mut r.field, byte)
     }
   } else if r.mode == 3 {
-    if core@1/int.widen(byte) == '"' {
+    if byte == b'"' {
       core@1/list.push(mut r.field, byte)
       r.mode = 2
     } else if byte == r.config.delimiter {
@@ -130,7 +122,7 @@ fn step(mut r: Reader, byte: u8) -> Result[Option[List[String]], CsvError] uses 
     }
   } else if byte == r.config.delimiter {
     finish_field(mut r)?
-  } else if core@1/int.widen(byte) == '"' {
+  } else if byte == b'"' {
     if r.mode != 0 {
       return Error(Syntax(at))
     }
@@ -267,29 +259,27 @@ pub fn write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> R
     let mut i: u64 = 0
     while i < core@1/bytes.len(data) {
       let byte = data[i]
-      if byte == delimiter || core@1/int.widen(byte) == '"' || core@1/int.widen(byte) == '\n' || core@1/int.widen(
-        byte
-      ) == '\r' {
+      if byte == delimiter || byte == b'"' || byte == b'\n' || byte == b'\r' {
         quoted = true
       }
       i += 1
     }
     if quoted {
-      core@1/list.push(mut out, core@1/int.narrow('"'))
+      core@1/list.push(mut out, b'"')
     }
     i = 0
     while i < core@1/bytes.len(data) {
-      if core@1/int.widen(data[i]) == '"' {
-        core@1/list.push(mut out, core@1/int.narrow('"'))
+      if data[i] == b'"' {
+        core@1/list.push(mut out, b'"')
       }
       core@1/list.push(mut out, data[i])
       i += 1
     }
     if quoted {
-      core@1/list.push(mut out, core@1/int.narrow('"'))
+      core@1/list.push(mut out, b'"')
     }
     field_index += 1
   }
-  core@1/list.push(mut out, core@1/int.narrow('\n'))
+  core@1/list.push(mut out, b'\n')
   Ok(())
 }

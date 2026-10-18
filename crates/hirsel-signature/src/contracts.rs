@@ -154,6 +154,10 @@ impl Normalizer<'_, '_> {
                         e.tag("character");
                         e.tag(s);
                     }
+                    ast::Literal::Byte(s) => {
+                        e.tag("byte");
+                        e.tag(s);
+                    }
                     ast::Literal::String(s) => {
                         e.tag("string");
                         e.tag(s);
@@ -496,6 +500,10 @@ impl Normalizer<'_, '_> {
                     }
                     ast::Literal::Character(s) => {
                         e.tag("character");
+                        e.tag(s);
+                    }
+                    ast::Literal::Byte(s) => {
+                        e.tag("byte");
                         e.tag(s);
                     }
                     ast::Literal::String(s) => {

@@ -1,0 +1,6 @@
+// rule: LANG-2
+// expect: accept
+// Accepted twin: widen the byte explicitly.
+fn code() -> u32 {
+  int.widen(b'a')
+}

@@ -153,15 +153,10 @@ fn convert[S](
 
 fn specs() -> List[std@1/cli.Flag] {
   [
-    std@1/cli.Flag(
-      name: "help",
-      short: Some(core@1/int.narrow('h')),
-      kind: Switch(),
-      help: "show usage"
-    ),
+    std@1/cli.Flag(name: "help", short: Some(b'h'), kind: Switch(), help: "show usage"),
     std@1/cli.Flag(
       name: "base64-field",
-      short: Some(core@1/int.narrow('b')),
+      short: Some(b'b'),
       kind: Value(),
       help: "decode/re-encode this field and add its _sha256 digest"
     )

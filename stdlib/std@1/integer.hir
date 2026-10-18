@@ -18,7 +18,7 @@ pub fn read_radix(text: String, radix: u8, signed: bool, positive_limit: u128, n
   let mut overflow: bool = false
   while i < length {
     let byte = bytes[i]
-    let digit: u128 = match std@1/ascii.digit_value_radix(core@1/int.widen(byte), radix) {
+    let digit: u128 = match std@1/ascii.digit_value_radix(byte, radix) {
       Some(digit_value) => core@1/int.widen(digit_value),
       None() => return Error(Invalid),
     }

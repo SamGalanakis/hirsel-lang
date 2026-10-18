@@ -26,11 +26,12 @@ unclassified host error code; it is not an application input-validation error.
 See the [file I/O tour](../tour.md)
 for reading and atomic write-then-commit replacement.
 
-`ascii` accepts the `u32` scalars produced by string iteration and character
-literals. Digits are `'0'`–`'9'`, letters are `'A'`–`'Z'` and `'a'`–`'z'`,
-and alphanumeric is their union. Space means ASCII space or U+0009–U+000D,
-including vertical tab and form feed. Predicates are false outside ASCII;
-case conversion preserves every nonletter, including non-ASCII values.
+`ascii` classifies and maps bytes (`u8`), as Rust's `u8::is_ascii_*` do; byte
+literals such as `b'a'` spell its arguments, and `Bytes` iteration produces them.
+Digits are `b'0'`–`b'9'`, letters are `b'A'`–`b'Z'` and `b'a'`–`b'z'`, and
+alphanumeric is their union. Space means ASCII space or 0x09–0x0D, including
+vertical tab and form feed. Predicates are false for bytes above 0x7F; case
+conversion preserves every nonletter, including those bytes.
 `digit_value` returns `Some(0)` through `Some(9)` for decimal digits and `None()`
 otherwise. These are pure, nonallocating algorithms adapted from Zig's ASCII module.
 
@@ -40,15 +41,15 @@ These declarations are normative: the source package must declare exactly these
 signatures. `N` keeps the ledger's meaning of an explicit `@noalloc` promise.
 
 ```text
-N fn ascii.is_digit(c: u32) -> bool uses {}
-N fn ascii.is_alpha(c: u32) -> bool uses {}
-N fn ascii.is_alnum(c: u32) -> bool uses {}
-N fn ascii.is_space(c: u32) -> bool uses {}
-N fn ascii.is_upper(c: u32) -> bool uses {}
-N fn ascii.is_lower(c: u32) -> bool uses {}
-N fn ascii.to_upper(c: u32) -> u32 uses {}
-N fn ascii.to_lower(c: u32) -> u32 uses {}
-N fn ascii.digit_value(c: u32) -> Option[u32] uses {}
+N fn ascii.is_digit(c: u8) -> bool uses {}
+N fn ascii.is_alpha(c: u8) -> bool uses {}
+N fn ascii.is_alnum(c: u8) -> bool uses {}
+N fn ascii.is_space(c: u8) -> bool uses {}
+N fn ascii.is_upper(c: u8) -> bool uses {}
+N fn ascii.is_lower(c: u8) -> bool uses {}
+N fn ascii.to_upper(c: u8) -> u8 uses {}
+N fn ascii.to_lower(c: u8) -> u8 uses {}
+N fn ascii.digit_value(c: u8) -> Option[u8] uses {}
 N fn char.from_ascii(byte: u8) -> Option[char] uses {}
 @preserves_unique(out) fn char.format_into(value: char, mut out: List[u8]) -> () uses {}
 fn char.to_string(value: char) -> unique String uses {}
@@ -907,14 +908,14 @@ digest, without password-hashing or signature operations.
 
 ## ASCII radix digits
 
-`ascii.digit_value_radix(cp: u32, radix: u8) -> Option[u32] uses {}` accepts
+`ascii.digit_value_radix(c: u8, radix: u8) -> Option[u8] uses {}` accepts
 radices 2 through 36 and decimal ASCII digits plus both ASCII letter cases.
-Values outside the radix, invalid radices, and non-ASCII scalars return None.
+Values outside the radix, invalid radices, and non-ASCII bytes return None.
 It shares the decimal `digit_value` and ASCII case kernel; the existing decimal
 helper retains its signature. `ascii.is_space` remains the sole ASCII-whitespace
 predicate (space and HT/LF/VT/FF/CR); split_ascii_whitespace retains its documented
 exclusion of VT. Hex/JSON/URI/network parsing and string ASCII helpers reuse these
-scalar kernels rather than retaining private digit/classification copies.
+byte kernels rather than retaining private digit/classification copies.
 
 ## Common string helpers
 

@@ -2,24 +2,24 @@
 // expect: run
 // Zig ascii.zig ASCII character classes and whitespace test vectors.
 pub fn main(t: Test) -> Result[(), ()] {
-  test.check(t, ascii.to_upper('c') == 'C')
-  test.check(t, ascii.to_upper(':') == ':')
-  test.check(t, ascii.to_upper(0xabu32) == 0xabu32)
-  test.check(t, ascii.to_lower('C') == 'c')
-  test.check(t, ascii.to_lower(':') == ':')
-  test.check(t, ascii.to_lower(0xabu32) == 0xabu32)
-  test.check(t, !ascii.is_upper('z') && !ascii.is_lower('Z'))
-  test.check(t, ascii.is_alnum('Z') && ascii.is_alnum('z') && ascii.is_alnum('5'))
-  test.check(t, ascii.is_alnum('a') && !ascii.is_alnum('!'))
-  test.check(t, !ascii.is_alpha('5') && ascii.is_alpha('c'))
-  test.check(t, !ascii.is_alpha('@') && ascii.is_alpha('Z'))
-  test.check(t, !ascii.is_space('.') && !ascii.is_space(0x1fu32))
-  test.check(t, !ascii.is_digit('~') && ascii.is_digit('0') && ascii.is_digit('9'))
-  let whitespace: List[u32] = [' ', '\t', '\n', '\r', '\u{b}', '\u{c}']
+  test.check(t, ascii.to_upper(b'c') == b'C')
+  test.check(t, ascii.to_upper(b':') == b':')
+  test.check(t, ascii.to_upper(0xab) == 0xab)
+  test.check(t, ascii.to_lower(b'C') == b'c')
+  test.check(t, ascii.to_lower(b':') == b':')
+  test.check(t, ascii.to_lower(0xab) == 0xab)
+  test.check(t, !ascii.is_upper(b'z') && !ascii.is_lower(b'Z'))
+  test.check(t, ascii.is_alnum(b'Z') && ascii.is_alnum(b'z') && ascii.is_alnum(b'5'))
+  test.check(t, ascii.is_alnum(b'a') && !ascii.is_alnum(b'!'))
+  test.check(t, !ascii.is_alpha(b'5') && ascii.is_alpha(b'c'))
+  test.check(t, !ascii.is_alpha(b'@') && ascii.is_alpha(b'Z'))
+  test.check(t, !ascii.is_space(b'.') && !ascii.is_space(0x1f))
+  test.check(t, !ascii.is_digit(b'~') && ascii.is_digit(b'0') && ascii.is_digit(b'9'))
+  let whitespace: List[u8] = [b' ', b'\t', b'\n', b'\r', b'\x0b', b'\x0c']
   for c in whitespace {
     test.check(t, ascii.is_space(c))
   }
-  for c in 0u32..128u32 {
+  for c in 0u8..128u8 {
     let mut found = false
     for space in whitespace {
       if c == space {
@@ -28,24 +28,22 @@ pub fn main(t: Test) -> Result[(), ()] {
     }
     test.check(t, ascii.is_space(c) == found)
   }
-  let outside: List[u32] = [0x80u32, 0xffu32, 'é', '🐑', 0x10ffffu32, 0xffffffffu32]
-  for c in outside {
+  for c in 128u8..=255u8 {
     test.check(t, !ascii.is_alpha(c) && !ascii.is_alnum(c) && !ascii.is_digit(c))
     test.check(t, !ascii.is_upper(c) && !ascii.is_lower(c) && !ascii.is_space(c))
     test.check(t, ascii.to_upper(c) == c && ascii.to_lower(c) == c)
     test.check(t, ascii.digit_value(c) == None())
   }
-  let mut expected = 0u32
-  let digits = "0123456789"
-  for c in string.scalars(digits) {
+  let mut expected = 0u8
+  for c in b"0123456789" {
     test.check(t, ascii.digit_value(c) == Some(expected))
     expected += 1
   }
-  let nondigits: List[u32] = ['/', ':', 'a', '\0']
+  let nondigits: List[u8] = [b'/', b':', b'a', b'\0']
   for c in nondigits {
     test.check(t, ascii.digit_value(c) == None())
   }
-  let pairs: List[(u32, u32)] = [('a', 'A'), ('m', 'M'), ('z', 'Z')]
+  let pairs: List[(u8, u8)] = [(b'a', b'A'), (b'm', b'M'), (b'z', b'Z')]
   for (lower, upper) in pairs {
     test.check(t, ascii.is_lower(lower) && ascii.is_upper(upper))
     test.check(t, ascii.to_upper(lower) == upper && ascii.to_lower(upper) == lower)

@@ -1,0 +1,6 @@
+// rule: LANG-1
+// expect: reject LANG-1 at line 5
+// A byte literal's \x escape is 00 to 7F.
+fn byte() -> u8 {
+  b'\x80'
+}

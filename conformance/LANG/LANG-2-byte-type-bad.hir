@@ -1,0 +1,6 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 5
+// A byte literal has type u8; it is not a char or a wider integer.
+fn code() -> u32 {
+  b'a'
+}

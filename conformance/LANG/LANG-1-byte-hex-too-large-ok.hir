@@ -1,0 +1,6 @@
+// rule: LANG-1
+// expect: accept
+// Accepted twin: the largest ASCII escape.
+fn byte() -> u8 {
+  b'\x7f'
+}

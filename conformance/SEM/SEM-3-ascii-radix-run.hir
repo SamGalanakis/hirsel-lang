@@ -2,41 +2,29 @@
 // expect: run
 // Zig ASCII radix boundaries and shared codec/parser regression controls.
 pub fn main() -> Result[(), ()] {
-  failure.check(std@1/ascii.digit_value('9') == Some(9u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value('a') == None(), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('0', 2) == Some(0u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('1', 2) == Some(1u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('2', 2) == None(), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('9', 10) == Some(9u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('a', 10) == None(), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('A', 11) == Some(10u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('f', 16) == Some(15u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('F', 16) == Some(15u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('g', 16) == None(), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('z', 35) == None(), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('Z', 36) == Some(35u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('z', 36) == Some(35u32), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('0', 0) == None(), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('0', 1) == None(), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('0', 37) == None(), TextInvariant())
-  failure.check(std@1/ascii.digit_value_radix('0', 255) == None(), TextInvariant())
-  let rejected: List[u32] = [
-    '/',
-    ':',
-    '@',
-    '[',
-    '`',
-    '{',
-    'é',
-    '９',
-    0xd800u32,
-    0x110000u32,
-    0xffffffffu32
-  ]
+  failure.check(std@1/ascii.digit_value(b'9') == Some(9u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value(b'a') == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'0', 2) == Some(0u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'1', 2) == Some(1u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'2', 2) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'9', 10) == Some(9u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'a', 10) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'A', 11) == Some(10u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'f', 16) == Some(15u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'F', 16) == Some(15u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'g', 16) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'z', 35) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'Z', 36) == Some(35u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'z', 36) == Some(35u8), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'0', 0) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'0', 1) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'0', 37) == None(), TextInvariant())
+  failure.check(std@1/ascii.digit_value_radix(b'0', 255) == None(), TextInvariant())
+  let rejected: List[u8] = [b'/', b':', b'@', b'[', b'`', b'{', 0x80, 0xc3, 0xff]
   for cp in rejected {
     failure.check(std@1/ascii.digit_value_radix(cp, 36) == None(), TextInvariant())
   }
-  failure.check(std@1/ascii.is_space('\u{b}'), TextInvariant())
+  failure.check(std@1/ascii.is_space(b'\x0b'), TextInvariant())
   failure.check(
     string.split_ascii_whitespace("a\u{b}b") == ["a\u{b}b"],
     TextInvariant()

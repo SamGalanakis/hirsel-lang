@@ -48,6 +48,11 @@ pub(super) fn constant(literal: &Literal, ty: &TypeKind, span: Span) -> Result<C
             hirsel_syntax::character_value(spelling)
                 .ok_or_else(|| bad(span, "invalid checked character"))? as u128,
         ),
+        Literal::Byte(spelling) => Constant::Integer(
+            hirsel_syntax::byte_value(spelling)
+                .ok_or_else(|| bad(span, "invalid checked byte"))?
+                .into(),
+        ),
         Literal::Integer(spelling) => {
             // Negative literals occur in patterns; expression negatives are Unary.
             let negative = spelling.starts_with('-');

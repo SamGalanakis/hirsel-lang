@@ -1,77 +1,77 @@
 // Adapted from Zig lib/std/ascii.zig; see third-party/NOTICES.md.
 @noalloc
-pub fn is_digit(c: u32) -> bool uses {} {
-  c >= '0' && c <= '9'
+pub fn is_digit(c: u8) -> bool uses {} {
+  c >= b'0' && c <= b'9'
 }
 
 @noalloc
-pub fn is_alpha(c: u32) -> bool uses {} {
+pub fn is_alpha(c: u8) -> bool uses {} {
   is_upper(c) || is_lower(c)
 }
 
 @noalloc
-pub fn is_alnum(c: u32) -> bool uses {} {
+pub fn is_alnum(c: u8) -> bool uses {} {
   is_alpha(c) || is_digit(c)
 }
 
 @noalloc
-pub fn is_space(c: u32) -> bool uses {} {
-  c == ' ' || c >= '\t' && c <= '\r'
+pub fn is_space(c: u8) -> bool uses {} {
+  c == b' ' || c >= b'\t' && c <= b'\r'
 }
 
 @noalloc
-pub fn is_upper(c: u32) -> bool uses {} {
-  c >= 'A' && c <= 'Z'
+pub fn is_upper(c: u8) -> bool uses {} {
+  c >= b'A' && c <= b'Z'
 }
 
 @noalloc
-pub fn is_lower(c: u32) -> bool uses {} {
-  c >= 'a' && c <= 'z'
+pub fn is_lower(c: u8) -> bool uses {} {
+  c >= b'a' && c <= b'z'
 }
 
 @noalloc
-pub fn to_upper(c: u32) -> u32 uses {} {
+pub fn to_upper(c: u8) -> u8 uses {} {
   if is_lower(c) {
-    c - ('a' - 'A')
+    c - (b'a' - b'A')
   } else {
     c
   }
 }
 
 @noalloc
-pub fn to_lower(c: u32) -> u32 uses {} {
+pub fn to_lower(c: u8) -> u8 uses {} {
   if is_upper(c) {
-    c + ('a' - 'A')
+    c + (b'a' - b'A')
   } else {
     c
   }
 }
 
 @noalloc
-pub fn digit_value(c: u32) -> Option[u32] uses {} {
+pub fn digit_value(c: u8) -> Option[u8] uses {} {
   if is_digit(c) {
-    Some(c - '0')
+    Some(c - b'0')
   } else {
     None()
   }
 }
 
-// Zig ascii.charToDigit, extended to an explicit radix without narrowing cp.
+// Zig ascii.charToDigit, extended to an explicit radix.
 @noalloc
-pub fn digit_value_radix(cp: u32, radix: u8) -> Option[u32] uses {} {
+pub fn digit_value_radix(c: u8, radix: u8) -> Option[u8] uses {} {
   if radix < 2 || radix > 36 {
     return None()
   }
-  let value = if cp >= '0' && cp <= '9' {
-    cp - '0'
+  let value = if is_digit(c) {
+    c - b'0'
   } else {
-    let lower = cp | 32u32
-    if lower < 'a' || lower > 'z' {
+    let lower = c | 0x20
+    if lower < b'a' || lower > b'z' {
       return None()
     }
-    lower - 'a' + 10u32
+    lower - b'a' + 10
   }
-  if value < core@1/int.widen(radix) {
+  if value < radix {
     Some(value)
   } else {
     None()

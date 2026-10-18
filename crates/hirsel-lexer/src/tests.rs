@@ -395,8 +395,17 @@ fn escaped_newline_reports_one_error_and_recovers_through_the_quote() {
 }
 
 #[test]
-fn malformed_character_literals_recover_as_one_token() {
-    for literal in ["'ab'", "''", "'\\u{d800}'", "'\\x41'"] {
+fn malformed_character_and_byte_literals_recover_as_one_token() {
+    for (literal, noun) in [
+        ("'ab'", "character literal"),
+        ("''", "character literal"),
+        ("'\\u{d800}'", "character literal"),
+        ("'\\x41'", "character literal"),
+        ("b'ab'", "byte literal"),
+        ("b''", "byte literal"),
+        ("b'é'", "byte literal"),
+        ("b'\\x80'", "byte literal"),
+    ] {
         let (sources, _, output) = fixture(&format!("let scalar = {literal}\nfn later() {{}}"));
         assert_eq!(
             output.diagnostics.len(),
@@ -406,10 +415,7 @@ fn malformed_character_literals_recover_as_one_token() {
         );
         let diagnostic = &output.diagnostics[0];
         assert_eq!(diagnostic.rule.as_str(), "LANG-1");
-        assert!(
-            diagnostic.message.contains("character literal"),
-            "{diagnostic:?}"
-        );
+        assert!(diagnostic.message.contains(noun), "{diagnostic:?}");
         let invalid: Vec<_> = output
             .tokens
             .iter()
@@ -441,5 +447,21 @@ fn character_literals_preserve_source_spellings() {
         "'\\u{10ffff}'",
     ] {
         single(literal, TokenKind::Character);
+    }
+}
+
+#[test]
+fn byte_literals_preserve_source_spellings() {
+    for literal in [
+        "b'a'",
+        "b'~'",
+        "b'\\n'",
+        "b'\\0'",
+        "b'\\\\'",
+        "b'\\''",
+        "b'\\x7f'",
+        "b'\\u{41}'",
+    ] {
+        single(literal, TokenKind::Byte);
     }
 }

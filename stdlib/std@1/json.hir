@@ -43,11 +43,11 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
   let first = json_peek(data, pos)
   if first == 48 {
     pos += 1
-    if std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
+    if std@1/ascii.is_digit(json_peek(data, pos)) {
       return Error(Syntax(pos))
     }
-  } else if std@1/ascii.is_digit(core@1/int.widen(first)) {
-    while std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
+  } else if std@1/ascii.is_digit(first) {
+    while std@1/ascii.is_digit(json_peek(data, pos)) {
       pos += 1
     }
   } else {
@@ -55,10 +55,10 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
   }
   if json_peek(data, pos) == 46 {
     pos += 1
-    if !std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
+    if !std@1/ascii.is_digit(json_peek(data, pos)) {
       return Error(Syntax(pos))
     }
-    while std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
+    while std@1/ascii.is_digit(json_peek(data, pos)) {
       pos += 1
     }
   }
@@ -67,10 +67,10 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
     if json_peek(data, pos) == 43 || json_peek(data, pos) == 45 {
       pos += 1
     }
-    if !std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
+    if !std@1/ascii.is_digit(json_peek(data, pos)) {
       return Error(Syntax(pos))
     }
-    while std@1/ascii.is_digit(core@1/int.widen(json_peek(data, pos))) {
+    while std@1/ascii.is_digit(json_peek(data, pos)) {
       pos += 1
     }
   }
@@ -103,7 +103,7 @@ fn json_hex4(data: Bytes, mut pos: u64) -> Result[u64, JsonError] uses {} {
   let mut i: u64 = 0
   while i < 4 {
     let c = json_peek(data, pos)
-    let d: u64 = match std@1/ascii.digit_value_radix(core@1/int.widen(c), 16) {
+    let d: u64 = match std@1/ascii.digit_value_radix(c, 16) {
       Some(digit) => core@1/int.widen(digit),
       None() => return Error(Syntax(pos)),
     }
@@ -224,7 +224,7 @@ fn json_node(data: Bytes, mut pos: u64, depth: u64) -> Result[Value, JsonError] 
   if c == 34 {
     return Ok(Text(json_quoted(data, mut pos)?))
   }
-  if c == 45 || std@1/ascii.is_digit(core@1/int.widen(c)) {
+  if c == 45 || std@1/ascii.is_digit(c) {
     let start = pos
     json_number_end(data, mut pos)?
     return Ok(Number(json_owned_text(data, start, pos)))

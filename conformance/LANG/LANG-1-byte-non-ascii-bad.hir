@@ -1,0 +1,6 @@
+// rule: LANG-1
+// expect: reject LANG-1 at line 5
+// A byte literal spells one ASCII scalar.
+fn byte() -> u8 {
+  b'é'
+}

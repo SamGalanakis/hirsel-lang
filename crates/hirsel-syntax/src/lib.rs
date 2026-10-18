@@ -249,6 +249,7 @@ pub enum TokenKind {
     Integer,
     Float,
     Character,
+    Byte,
     String,
     Bytes,
     /// One piece of an f-string literal (SEM-3); hole expressions are ordinary tokens.
@@ -332,6 +333,7 @@ pub enum Literal {
     Integer(String),
     Float(String),
     Character(String),
+    Byte(String),
     String(String),
     Bytes(String),
     Bool(bool),
@@ -339,7 +341,18 @@ pub enum Literal {
 /// Decode a single-quoted Unicode scalar spelling, retaining no source state.
 /// Invalid delimiters, escapes and scalar counts return None.
 pub fn character_value(spelling: &str) -> Option<char> {
-    let body = spelling.strip_prefix('\'')?.strip_suffix('\'')?;
+    quoted_scalar(spelling.strip_prefix('\'')?.strip_suffix('\'')?, false)
+}
+/// Decode a `b'...'` byte spelling: one ASCII scalar, spelled as a character
+/// literal's is, or a `\xNN` escape from 00 to 7F. Anything else returns None.
+pub fn byte_value(spelling: &str) -> Option<u8> {
+    let body = spelling.strip_prefix("b'")?.strip_suffix('\'')?;
+    u8::try_from(quoted_scalar(body, true)?)
+        .ok()
+        .filter(u8::is_ascii)
+}
+/// The one scalar a quoted literal's body denotes; `hex` admits `\xNN`.
+fn quoted_scalar(body: &str, hex: bool) -> Option<char> {
     let mut chars = body.chars();
     let first = chars.next()?;
     let value = if first == '\\' {
@@ -350,6 +363,11 @@ pub fn character_value(spelling: &str) -> Option<char> {
             '0' => '\0',
             '\\' => '\\',
             '\'' => '\'',
+            'x' if hex => {
+                let high = chars.next()?.to_digit(16)?;
+                let low = chars.next()?.to_digit(16)?;
+                char::from_u32(high * 16 + low)?
+            }
             'u' => {
                 if chars.next()? != '{' {
                     return None;

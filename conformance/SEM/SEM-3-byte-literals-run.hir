@@ -1,0 +1,29 @@
+// rule: SEM-3
+// expect: run
+// A byte literal is the u8 value of one ASCII scalar, spelled as a character
+// literal is, or with a \x escape from 00 to 7F; byte literal patterns match it.
+fn kind(b: u8) -> u8 {
+  match b {
+    b'a' => 1,
+    b'\n' => 2,
+    b'\x7f' => 3,
+    _ => 0,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(b'a' == 97u8 && b'A' == 65u8 && b'~' == 126u8, TextInvariant())
+  failure.check(b'\n' == 10u8 && b'\t' == 9u8 && b'\r' == 13u8, TextInvariant())
+  failure.check(b'\\' == 92u8 && b'\'' == 39u8 && b'\0' == 0u8, TextInvariant())
+  failure.check(
+    b'\x41' == b'A' && b'\x7f' == 127u8 && b'\u{41}' == b'A',
+    TextInvariant()
+  )
+  failure.check(
+    kind(b'a') == 1 && kind(10) == 2 && kind(127) == 3 && kind(b'b') == 0,
+    TextInvariant()
+  )
+  let data = b"a\"b"
+  failure.check(data[1] == b'"' && data[0] < data[2], TextInvariant())
+  Ok(())
+}

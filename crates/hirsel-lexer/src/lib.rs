@@ -159,7 +159,8 @@ impl<'a> Scanner<'a> {
                 self.unclosed_hole()
             }
             b'"' => self.string(false),
-            b'\'' => self.character_literal(),
+            b'\'' => self.character_literal(false),
+            b'b' if self.starts(b"b'") => self.character_literal(true),
             b'b' if self.starts(b"b\"") => self.string(true),
             b'f' if self.starts(b"f\"") => self.format_text(true),
             b'0'..=b'9' => self.number(),
@@ -219,9 +220,10 @@ impl<'a> Scanner<'a> {
         self.emit(start, kind);
     }
     // Keep malformed spellings together through a quote or physical newline.
-    fn character_literal(&mut self) -> TokenKind {
+    // A byte literal (`byte`) is `b` and a character literal spelling one ASCII scalar.
+    fn character_literal(&mut self, byte: bool) -> TokenKind {
         let start = self.pos;
-        self.pos += 1;
+        self.pos += 1 + usize::from(byte);
         while let Some(&byte) = self.bytes.get(self.pos) {
             if matches!(byte, b'\n' | b'\r') {
                 break;
@@ -239,18 +241,24 @@ impl<'a> Scanner<'a> {
                 self.pos += 1;
             }
         }
-        let value = std::str::from_utf8(&self.bytes[start..self.pos])
-            .ok()
-            .and_then(hirsel_syntax::character_value);
-        if value.is_none() {
-            self.error(
-                const { RuleId::of("LANG-1") },
-                start,
-                self.pos,
+        let spelling = std::str::from_utf8(&self.bytes[start..self.pos]).ok();
+        let (valid, kind, message) = if byte {
+            (
+                spelling.and_then(hirsel_syntax::byte_value).is_some(),
+                TokenKind::Byte,
+                "byte literal must denote exactly one ASCII scalar with a valid escape",
+            )
+        } else {
+            (
+                spelling.and_then(hirsel_syntax::character_value).is_some(),
+                TokenKind::Character,
                 "character literal must denote exactly one Unicode scalar with a valid escape",
-            );
+            )
+        };
+        if !valid {
+            self.error(const { RuleId::of("LANG-1") }, start, self.pos, message);
         }
-        TokenKind::Character
+        kind
     }
     // Validate a source scalar while traversing a comment, including bare CR.
     fn comment_scalar(&mut self) {

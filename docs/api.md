@@ -288,16 +288,16 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## ascii
 
-- `@noalloc pub fn ascii.digit_value(c: u32) -> Option[u32] uses {}` <!-- std@1/ascii/digit_value -->
-- `@noalloc pub fn ascii.digit_value_radix(cp: u32, radix: u8) -> Option[u32] uses {}` — Zig ascii.charToDigit, extended to an explicit radix without narrowing cp. <!-- std@1/ascii/digit_value_radix -->
-- `@noalloc pub fn ascii.is_alnum(c: u32) -> bool uses {}` <!-- std@1/ascii/is_alnum -->
-- `@noalloc pub fn ascii.is_alpha(c: u32) -> bool uses {}` <!-- std@1/ascii/is_alpha -->
-- `@noalloc pub fn ascii.is_digit(c: u32) -> bool uses {}` — Adapted from Zig lib/std/ascii.zig; see third-party/NOTICES.md. <!-- std@1/ascii/is_digit -->
-- `@noalloc pub fn ascii.is_lower(c: u32) -> bool uses {}` <!-- std@1/ascii/is_lower -->
-- `@noalloc pub fn ascii.is_space(c: u32) -> bool uses {}` <!-- std@1/ascii/is_space -->
-- `@noalloc pub fn ascii.is_upper(c: u32) -> bool uses {}` <!-- std@1/ascii/is_upper -->
-- `@noalloc pub fn ascii.to_lower(c: u32) -> u32 uses {}` <!-- std@1/ascii/to_lower -->
-- `@noalloc pub fn ascii.to_upper(c: u32) -> u32 uses {}` <!-- std@1/ascii/to_upper -->
+- `@noalloc pub fn ascii.digit_value(c: u8) -> Option[u8] uses {}` <!-- std@1/ascii/digit_value -->
+- `@noalloc pub fn ascii.digit_value_radix(c: u8, radix: u8) -> Option[u8] uses {}` — Zig ascii.charToDigit, extended to an explicit radix. <!-- std@1/ascii/digit_value_radix -->
+- `@noalloc pub fn ascii.is_alnum(c: u8) -> bool uses {}` <!-- std@1/ascii/is_alnum -->
+- `@noalloc pub fn ascii.is_alpha(c: u8) -> bool uses {}` <!-- std@1/ascii/is_alpha -->
+- `@noalloc pub fn ascii.is_digit(c: u8) -> bool uses {}` — Adapted from Zig lib/std/ascii.zig; see third-party/NOTICES.md. <!-- std@1/ascii/is_digit -->
+- `@noalloc pub fn ascii.is_lower(c: u8) -> bool uses {}` <!-- std@1/ascii/is_lower -->
+- `@noalloc pub fn ascii.is_space(c: u8) -> bool uses {}` <!-- std@1/ascii/is_space -->
+- `@noalloc pub fn ascii.is_upper(c: u8) -> bool uses {}` <!-- std@1/ascii/is_upper -->
+- `@noalloc pub fn ascii.to_lower(c: u8) -> u8 uses {}` <!-- std@1/ascii/to_lower -->
+- `@noalloc pub fn ascii.to_upper(c: u8) -> u8 uses {}` <!-- std@1/ascii/to_upper -->
 
 ## atomic
 

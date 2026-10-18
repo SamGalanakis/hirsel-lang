@@ -34,19 +34,19 @@ fn piece(text: String, begin: u64, end: u64) -> unique String uses {} {
 // Preserve its optional sign, including -0, rather than silently tightening it.
 @noalloc
 fn hex_pair(a: u8, b: u8) -> u16 uses {} {
-  let first = std@1/ascii.digit_value_radix(core@1/int.widen(a), 16)
-  let second = std@1/ascii.digit_value_radix(core@1/int.widen(b), 16)
-  if core@1/int.widen(a) == '+' {
+  let first = std@1/ascii.digit_value_radix(a, 16)
+  let second = std@1/ascii.digit_value_radix(b, 16)
+  if a == b'+' {
     match second {
-      Some(digit) => return core@1/int.narrow(digit),
+      Some(digit) => return core@1/int.widen(digit),
       None() => (),
     }
   }
-  if core@1/int.widen(a) == '-' && core@1/int.widen(b) == '0' {
+  if a == b'-' && b == b'0' {
     return 0
   }
   match (first, second) {
-    (Some(high), Some(low)) => core@1/int.narrow(high * 16u32 + low),
+    (Some(high), Some(low)) => core@1/int.widen(high * 16 + low),
     _ => 256,
   }
 }
@@ -69,7 +69,7 @@ fn parse_port(data: Bytes, start: u64, end: u64) -> Result[u16, UriError] uses {
   while i < end {
     let byte = data[i]
     if byte != 95 {
-      let next: u64 = match std@1/ascii.digit_value(core@1/int.widen(byte)) {
+      let next: u64 = match std@1/ascii.digit_value(byte) {
         Some(digit) => core@1/int.widen(digit),
         None() => return Error(InvalidPort()),
       }
@@ -103,7 +103,7 @@ pub fn percent_decode(text: String) -> unique Bytes uses {} {
 
 @noalloc
 fn unreserved(byte: u8) -> bool uses {} {
-  std@1/ascii.is_alnum(core@1/int.widen(byte)) || byte == 45 || byte == 46 || byte == 95 || byte == 126
+  std@1/ascii.is_alnum(byte) || byte == 45 || byte == 46 || byte == 95 || byte == 126
 }
 
 @noalloc
@@ -181,13 +181,13 @@ pub fn component_encoded(component: Component, part: Part) -> unique String uses
 
 @noalloc
 fn valid_scheme(data: Bytes, end: u64) -> bool uses {} {
-  if end == 0 || !std@1/ascii.is_alpha(core@1/int.widen(data[0])) {
+  if end == 0 || !std@1/ascii.is_alpha(data[0]) {
     return false
   }
   let mut i: u64 = 1
   while i < end {
     let byte = data[i]
-    if !std@1/ascii.is_alnum(core@1/int.widen(byte)) && byte != 43 && byte != 45 && byte != 46 {
+    if !std@1/ascii.is_alnum(byte) && byte != 43 && byte != 45 && byte != 46 {
       return false
     }
     i += 1
@@ -553,10 +553,10 @@ fn query_piece(data: Bytes, start: u64, end: u64) -> Result[unique String, Query
       if end - i < 3 {
         return Error(InvalidEscape(i))
       }
-      let high = std@1/ascii.digit_value_radix(core@1/int.widen(data[i + 1]), 16)
-      let low = std@1/ascii.digit_value_radix(core@1/int.widen(data[i + 2]), 16)
+      let high = std@1/ascii.digit_value_radix(data[i + 1], 16)
+      let low = std@1/ascii.digit_value_radix(data[i + 2], 16)
       match (high, low) {
-        (Some(a), Some(b)) => core@1/list.push(mut out, core@1/int.narrow(a * 16u32 + b)),
+        (Some(a), Some(b)) => core@1/list.push(mut out, a * 16 + b),
         _ => return Error(InvalidEscape(i)),
       }
       i += 3
