@@ -1,0 +1,571 @@
+// RFC 7693 BLAKE2B-512, from golang.org/x/crypto/blake2b blake2b_generic.go and
+// blake2b.go (BSD-3-Clause): unkeyed, or keyed with up to 64 key bytes as a MAC.
+pub opaque type State: plain + inert uses {} {
+  words: Inline[u64, 8],
+  block: Inline[u8, 128],
+  used: u64,
+  count: u64,
+}
+
+const IV: Inline[u64, 8] = [
+  0x6a09e667f3bcc908u64,
+  0xbb67ae8584caa73bu64,
+  0x3c6ef372fe94f82bu64,
+  0xa54ff53a5f1d36f1u64,
+  0x510e527fade682d1u64,
+  0x9b05688c2b3e6c1fu64,
+  0x1f83d9abfb41bd6bu64,
+  0x5be0cd19137e2179u64
+]
+
+// The message schedule; rounds past the tenth reuse its rows from the start.
+const SIGMA: Inline[u64, 160] = [
+  0,
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14,
+  15,
+  14,
+  10,
+  4,
+  8,
+  9,
+  15,
+  13,
+  6,
+  1,
+  12,
+  0,
+  2,
+  11,
+  7,
+  5,
+  3,
+  11,
+  8,
+  12,
+  0,
+  5,
+  2,
+  15,
+  13,
+  10,
+  14,
+  3,
+  6,
+  7,
+  1,
+  9,
+  4,
+  7,
+  9,
+  3,
+  1,
+  13,
+  12,
+  11,
+  14,
+  2,
+  6,
+  5,
+  10,
+  4,
+  0,
+  15,
+  8,
+  9,
+  0,
+  5,
+  7,
+  2,
+  4,
+  10,
+  15,
+  14,
+  1,
+  11,
+  12,
+  6,
+  8,
+  3,
+  13,
+  2,
+  12,
+  6,
+  10,
+  0,
+  11,
+  8,
+  3,
+  4,
+  13,
+  7,
+  5,
+  15,
+  14,
+  1,
+  9,
+  12,
+  5,
+  1,
+  15,
+  14,
+  13,
+  4,
+  10,
+  0,
+  7,
+  6,
+  3,
+  9,
+  2,
+  8,
+  11,
+  13,
+  11,
+  7,
+  14,
+  12,
+  1,
+  3,
+  9,
+  5,
+  0,
+  15,
+  4,
+  8,
+  6,
+  2,
+  10,
+  6,
+  15,
+  14,
+  9,
+  11,
+  3,
+  0,
+  8,
+  12,
+  2,
+  13,
+  7,
+  1,
+  4,
+  10,
+  5,
+  10,
+  2,
+  8,
+  4,
+  7,
+  6,
+  1,
+  5,
+  15,
+  11,
+  9,
+  14,
+  3,
+  12,
+  13,
+  0
+]
+
+@noalloc
+pub fn new() -> State uses {} {
+  start(0)
+}
+
+// A keyed BLAKE2B MAC. The key is at most 64 bytes, otherwise SEM-3; an empty key
+// is the unkeyed hash.
+@noalloc
+pub fn new_keyed(key: Bytes) -> State uses {} {
+  let len = core@1/bytes.len(key)
+  core@1/failure.check(len <= 64, TextInvariant())
+  let mut state = start(len)
+  if len > 0 {
+    let mut i: u64 = 0
+    while i < len {
+      state.block[i] = key[i]
+      i += 1
+    }
+    state.used = 128
+  }
+  state
+}
+
+// The parameter block: digest length 64, the key length, fanout and depth 1.
+@noalloc
+fn start(key_len: u64) -> State uses {} {
+  let mut words = IV
+  let param: u64 = core@1/int.narrow(0x01010000u64 | key_len << 8 | 64)
+  words[0] = words[0] ^ param
+  State(
+    words: words,
+    block: [
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8,
+      0u8
+    ],
+    used: 0,
+    count: 0
+  )
+}
+
+@noalloc
+fn rotate(value: u64, bits: u64) -> u64 uses {} {
+  value >> bits | value << 64u64 - bits
+}
+
+@noalloc
+fn add(a: u64, b: u64) -> u64 uses {} {
+  core@1/int.wrapping_add(a, b)
+}
+
+// The G function on four state words and two message words.
+@noalloc
+fn mix(mut v: Inline[u64, 16], a: u64, b: u64, c: u64, d: u64, x: u64, y: u64) -> () uses {} {
+  v[a] = add(add(v[a], v[b]), x)
+  v[d] = rotate(v[d] ^ v[a], 32)
+  v[c] = add(v[c], v[d])
+  v[b] = rotate(v[b] ^ v[c], 24)
+  v[a] = add(add(v[a], v[b]), y)
+  v[d] = rotate(v[d] ^ v[a], 16)
+  v[c] = add(v[c], v[d])
+  v[b] = rotate(v[b] ^ v[c], 63)
+}
+
+// Compresses the buffered block; `state.count` already includes its bytes.
+@noalloc
+fn compress(mut state: State, last: bool) -> () uses {} {
+  let mut m: Inline[u64, 16] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  let mut i: u64 = 0
+  while i < 16 {
+    let mut word: u64 = 0
+    let mut j: u64 = 8
+    while j > 0 {
+      j -= 1
+      let byte: u64 = core@1/int.widen(state.block[i * 8 + j])
+      word = word << 8 | byte
+    }
+    m[i] = word
+    i += 1
+  }
+  let mut v: Inline[u64, 16] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  i = 0
+  while i < 8 {
+    v[i] = state.words[i]
+    v[i + 8] = IV[i]
+    i += 1
+  }
+  v[12] = v[12] ^ state.count
+  if last {
+    v[14] = ~v[14]
+  }
+  let mut round: u64 = 0
+  while round < 12 {
+    let s = round % 10 * 16
+    mix(mut v, 0, 4, 8, 12, m[SIGMA[s]], m[SIGMA[s + 1]])
+    mix(mut v, 1, 5, 9, 13, m[SIGMA[s + 2]], m[SIGMA[s + 3]])
+    mix(mut v, 2, 6, 10, 14, m[SIGMA[s + 4]], m[SIGMA[s + 5]])
+    mix(mut v, 3, 7, 11, 15, m[SIGMA[s + 6]], m[SIGMA[s + 7]])
+    mix(mut v, 0, 5, 10, 15, m[SIGMA[s + 8]], m[SIGMA[s + 9]])
+    mix(mut v, 1, 6, 11, 12, m[SIGMA[s + 10]], m[SIGMA[s + 11]])
+    mix(mut v, 2, 7, 8, 13, m[SIGMA[s + 12]], m[SIGMA[s + 13]])
+    mix(mut v, 3, 4, 9, 14, m[SIGMA[s + 14]], m[SIGMA[s + 15]])
+    round += 1
+  }
+  i = 0
+  while i < 8 {
+    state.words[i] = state.words[i] ^ v[i] ^ v[i + 8]
+    i += 1
+  }
+}
+
+// The last block is held back until more input arrives, since finish compresses
+// it with the final flag.
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  let len = core@1/bytes.len(data)
+  core@1/failure.check(
+    len <= 18446744073709551615u64 - state.count - state.used,
+    Arithmetic()
+  )
+  let mut i: u64 = 0
+  while i < len {
+    if state.used == 128 {
+      state.count += 128
+      compress(mut state, false)
+      state.used = 0
+    }
+    state.block[state.used] = data[i]
+    state.used += 1
+    i += 1
+  }
+}
+
+@noalloc
+pub fn finish(take state: State) -> Inline[u8, 64] uses {} {
+  let mut final_state = take state
+  final_state.count += final_state.used
+  while final_state.used < 128 {
+    final_state.block[final_state.used] = 0
+    final_state.used += 1
+  }
+  compress(mut final_state, true)
+  let mut out: Inline[u8, 64] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let mut i: u64 = 0
+  while i < 64 {
+    let word = final_state.words[i / 8]
+    let shift: u64 = core@1/int.truncate(i % 8 * 8)
+    out[i] = core@1/int.truncate(word >> shift)
+    i += 1
+  }
+  take out
+}
+
+@noalloc
+pub fn digest(data: Bytes) -> Inline[u8, 64] uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state)
+}
+
+pub fn digest_hex(data: Bytes) -> unique String uses {} {
+  std@1/hex.encode(std@1/bytes.from_inline(digest(data)))
+}

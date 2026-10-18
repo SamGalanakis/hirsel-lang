@@ -1,0 +1,15 @@
+// rule: SEM-3
+// expect: run
+// A 64-byte key is the longest BLAKE2b accepts; the -fail twin adds one byte.
+pub fn main() -> Result[(), ()] {
+  let mut key: List[u8] = []
+  while list.len(key) < 64 {
+    list.push(mut key, 7)
+  }
+  let state = std@1/blake2b.new_keyed(bytes.from_list(take key))
+  failure.check(
+    std@1/hex.encode(std@1/bytes.from_inline(std@1/blake2b.finish(take state))) == "500e73fc01f6c22781f641ba4f83b321a48645ba854e73a93c4089635ba6d9136ce251fcbbfa2257b5a8e469ed9f72d5bd92560bc3ddd5e63b42acfa246a1be6",
+    TextInvariant()
+  )
+  Ok(())
+}

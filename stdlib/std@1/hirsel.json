@@ -512,6 +512,42 @@
       ]
     },
     {
+      "path": "blake2b.hir",
+      "module": [
+        "blake2b"
+      ]
+    },
+    {
+      "path": "blake2s.hir",
+      "module": [
+        "blake2s"
+      ]
+    },
+    {
+      "path": "crc32.hir",
+      "module": [
+        "crc32"
+      ]
+    },
+    {
+      "path": "crc32c.hir",
+      "module": [
+        "crc32c"
+      ]
+    },
+    {
+      "path": "adler32.hir",
+      "module": [
+        "adler32"
+      ]
+    },
+    {
+      "path": "xxhash64.hir",
+      "module": [
+        "xxhash64"
+      ]
+    },
+    {
       "path": "unicode_properties.hir",
       "module": [
         "unicode"

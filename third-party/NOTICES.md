@@ -27,6 +27,9 @@ the license named in its row; the license texts follow once each.
 | Zig standard library | `lib/std/hash/fnv.zig` FNV-1a 64 offset basis, prime, byte update and empty/"a"/"foobar" vectors | `stdlib/std@1/fnv.hir`, `std@1/derive.hash`, FNV conformance | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | Go standard library | `src/crypto/sha1/{sha1.go,sha1block.go}` and `src/crypto/md5/{md5.go,md5block.go}` generic blocks, constants and padding; `sha1_test.go`/`md5_test.go` golden vectors | `stdlib/std@1/{sha1,md5}.hir`, SHA-1 and MD5 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/crypto/internal/fips140/sha256/sha256.go` SHA-224 initial words and `src/crypto/internal/fips140/sha512/{sha512.go,sha512block.go}` constants, generic block, 128-bit length padding and SHA-384/512-256 initial words; `src/crypto/sha256/sha256_test.go` golden224 and `src/crypto/sha512/sha512_test.go` golden384/512/256 vectors | `stdlib/std@1/{sha224,sha384,sha512,sha512_256}.hir`, SHA-2 conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| Go supplementary crypto | `blake2b/{blake2b.go,blake2b_generic.go}` and `blake2s/{blake2s.go,blake2s_generic.go}` parameter block, keyed first block, held-back final block and G/round schedule; `blake2b_test.go`/`blake2s_test.go` keyed known-answer vectors | `stdlib/std@1/{blake2b,blake2s}.hir`, BLAKE2 conformance | golang/crypto `0ae6809b7559060fe62abe65e26bd18b1fcaf6b7` | BSD-3-Clause (Go) |
+| Go standard library | `src/hash/crc32/{crc32.go,crc32_generic.go}` IEEE and Castagnoli simple tables and update, `src/hash/adler32/adler32.go` nmax-batched sums; `crc32_test.go` and `adler32_test.go` golden vectors | `stdlib/std@1/{crc32,crc32c,adler32}.hir`, checksum conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| cespare/xxhash | `xxhash.go` XXH64 primes, lanes, merge rounds and tail finalization; `xxhash_test.go` TestAll seeded and unseeded vectors | `stdlib/std@1/xxhash64.hir`, xxHash64 conformance | cespare/xxhash `ab37246c889f9db16b606fda1c232d659df9271d` | MIT |
 | Go standard library | `src/flag/flag.go` FlagSet/parseOne token splitting, explicit values, terminator and error handling; adapted cases use immutable specs and retain repeated values | `stdlib/std@1/cli.hir`, CLI conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/log/slog/{record,json_handler,handler}.go` structured records, severity filtering, escaped JSON-lines and single-write convention | `stdlib/std@1/log.hir`, logging conformance and simulated sink fault tests (Hirsel uses existing JSON and explicit sinks) | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/testing/quick/quick.go` explicit MaxCount/generator loop | `stdlib/std@1/test.hir` for_all_cases shared kernel, test-helper conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
@@ -151,6 +154,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - compiler-builtins: Copyright (c) The Rust Project Contributors
 - num-bigint: Copyright (c) 2014 The Rust Project Developers
 - rust_decimal: Copyright (c) 2016 Paul Mason
+- cespare/xxhash: Copyright (c) 2016 Caleb Spare
 
 ## MIT License
 

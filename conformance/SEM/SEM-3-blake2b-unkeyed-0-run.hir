@@ -1,0 +1,33 @@
+// rule: SEM-3
+// expect: run
+// RFC 7693 Appendix A "abc" and unkeyed lengths around the 128-byte block,
+// checked against Python hashlib, one-shot and split around an empty update.
+fn check(input: String, expected: String) -> () {
+  let data = string.as_bytes(input)
+  failure.check(std@1/blake2b.digest_hex(data) == expected, TextInvariant())
+  let half = bytes.len(data) / 2
+  let mut state = std@1/blake2b.new()
+  std@1/blake2b.update(mut state, bytes.slice(data, 0, half))
+  std@1/blake2b.update(mut state, b"")
+  std@1/blake2b.update(mut state, bytes.slice(data, half, bytes.len(data)))
+  failure.check(
+    std@1/hex.encode(std@1/bytes.from_inline(std@1/blake2b.finish(take state))) == expected,
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  check(
+    "",
+    "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"
+  )
+  check(
+    "abc",
+    "ba80a53f981c4d0d6a2797b69f12f6e94c212f14685ac4b74b12bb6fdbffa2d17d87c5392aab792dc252d5de4533cc9518d38aa8dbf1925ab92386edd4009923"
+  )
+  check(
+    "abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopqrs",
+    "e22319e5e2c94d7d837fc59f175586ed11628aeedf2f1b66f26ab7ccce6382cc7706eaf8147d502286fc3e9e178883dd5a84123f8885af65d628311dc25255c9"
+  )
+  Ok(())
+}

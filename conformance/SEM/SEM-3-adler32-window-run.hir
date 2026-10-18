@@ -1,0 +1,19 @@
+// rule: SEM-3
+// expect: run
+// Go hash/adler32 vectors whose 0xff runs straddle the 5552-byte reduction window.
+fn check(ones: Bytes, run: u64, last: Bytes, expected: u32) -> () {
+  let mut state = std@1/adler32.new()
+  std@1/adler32.update(mut state, bytes.slice(ones, 0, run))
+  std@1/adler32.update(mut state, last)
+  failure.check(std@1/adler32.finish(take state) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut run: List[u8] = []
+  while list.len(run) < 5552 {
+    list.push(mut run, 255)
+  }
+  let ones = bytes.from_list(take run)
+  check(ones, 5552, b"2", 0x8d5c9bbeu32)
+  Ok(())
+}

@@ -1,0 +1,57 @@
+// Go hash/adler32 adler32.go (BSD-3-Clause): RFC 1950 Adler-32, the zlib stream
+// checksum. Sums are reduced once per 5552 bytes, the most that cannot overflow
+// 32 bits. This is an error-detecting checksum, not a cryptographic digest.
+pub opaque type State: plain + inert uses {} {
+  a: u32,
+  b: u32,
+}
+
+const MOD: u32 = 65521
+
+const NMAX: u64 = 5552
+
+@noalloc
+pub fn new() -> State uses {} {
+  State(a: 1, b: 0)
+}
+
+@noalloc
+pub fn update(mut state: State, data: Bytes) -> () uses {} {
+  let len = core@1/bytes.len(data)
+  let mut a = state.a
+  let mut b = state.b
+  let mut i: u64 = 0
+  while i < len {
+    let mut end = i + NMAX
+    if end > len {
+      end = len
+    }
+    while i < end {
+      let byte: u32 = core@1/int.widen(data[i])
+      a += byte
+      b += a
+      i += 1
+    }
+    a %= MOD
+    b %= MOD
+  }
+  state.a = a
+  state.b = b
+}
+
+@noalloc
+pub fn finish(take state: State) -> u32 uses {} {
+  state.b << 16 | state.a
+}
+
+@noalloc
+pub fn digest(data: Bytes) -> u32 uses {} {
+  let mut state = new()
+  update(mut state, data)
+  finish(take state)
+}
+
+pub fn digest_hex(data: Bytes) -> unique String uses {} {
+  let value = digest(data)
+  f"{value:08x}"
+}

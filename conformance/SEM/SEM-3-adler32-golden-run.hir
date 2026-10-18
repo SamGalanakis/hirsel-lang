@@ -1,0 +1,77 @@
+// rule: SEM-3
+// expect: run
+// Go hash/adler32 golden vectors, one-shot, hex and split around an empty update.
+fn check(input: String, expected: u32) -> () {
+  let data = string.as_bytes(input)
+  failure.check(std@1/adler32.digest(data) == expected, TextInvariant())
+  failure.check(std@1/adler32.digest_hex(data) == f"{expected:08x}", TextInvariant())
+  let half = bytes.len(data) / 2
+  let mut state = std@1/adler32.new()
+  std@1/adler32.update(mut state, bytes.slice(data, 0, half))
+  std@1/adler32.update(mut state, b"")
+  std@1/adler32.update(mut state, bytes.slice(data, half, bytes.len(data)))
+  failure.check(std@1/adler32.finish(take state) == expected, TextInvariant())
+}
+
+pub fn main() -> Result[(), ()] {
+  check("", 0x00000001u32)
+  check("a", 0x00620062u32)
+  check("ab", 0x012600c4u32)
+  check("abc", 0x024d0127u32)
+  check("abcd", 0x03d8018bu32)
+  check("abcde", 0x05c801f0u32)
+  check("abcdef", 0x081e0256u32)
+  check("abcdefg", 0x0adb02bdu32)
+  check("abcdefgh", 0x0e000325u32)
+  check("abcdefghi", 0x118e038eu32)
+  check("abcdefghij", 0x158603f8u32)
+  check("Discard medicine more than two years old.", 0x3f090f02u32)
+  check("He who has a shady past knows that nice guys finish last.", 0x46d81477u32)
+  check("I wouldn't marry him with a ten foot pole.", 0x40ee0ee1u32)
+  check("Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave", 0x16661315u32)
+  check("The days of the digital watch are numbered.  -Tom Stoppard", 0x5b2e1480u32)
+  check("Nepal premier won't resign.", 0x8c3c09eau32)
+  check(
+    "For every action there is an equal and opposite government program.",
+    0x45ac18fdu32
+  )
+  check("His money is twice tainted: 'taint yours and 'taint mine.", 0x53c61462u32)
+  check(
+    "There is no reason for any individual to have a computer in their home. -Ken Olsen, 1977",
+    0x7e511e63u32
+  )
+  check(
+    "It's a tiny change to the code and not completely disgusting. - Bob Manchek",
+    0xe4801a6au32
+  )
+  check("size:  a.out:  bad magic", 0x61b507dfu32)
+  check("The major problem is with sendmail.  -Mark Horton", 0xb8631171u32)
+  check(
+    "Give me a rock, paper and scissors and I will move the world.  CCFestoon",
+    0x8b5e1904u32
+  )
+  check("If the enemy is within range, then so are you.", 0x7cc6102bu32)
+  check(
+    "It's well we cannot hear the screams/That we create in others' dreams.",
+    0x700318e7u32
+  )
+  check(
+    "You remind me of a TV show, but that's all right: I watch it anyway.",
+    0x1e601747u32
+  )
+  check("C is as portable as Stonehedge!!", 0xb55b0b09u32)
+  check(
+    "Even if I could be Shakespeare, I think I should still choose to be Faraday. - A. Huxley",
+    0x39111dd0u32
+  )
+  check(
+    "The fugacity of a constituent in a mixture of gases at a given temperature is proportional to its mole fraction.  Lewis-Randall Rule",
+    0x91dd304fu32
+  )
+  check("How can you write a big system without C++?  -Paul Glick", 0x2e5d1316u32)
+  check(
+    "'Invariant assertions' is the most elegant programming technique!  -Tom Szymanski",
+    0xd0201df6u32
+  )
+  Ok(())
+}

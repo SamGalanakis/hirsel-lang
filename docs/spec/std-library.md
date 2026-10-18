@@ -1280,6 +1280,58 @@ words on twice the block: 0.625 rounds per byte against SHA-256's 1.0, so on a
 64-bit target SHA-512 is usually the faster kernel. Truncated variants cost exactly their
 kernel. There is no bench gate.
 
+## BLAKE2
+
+`blake2b` is RFC 7693 BLAKE2b-512 and `blake2s` BLAKE2s-256, each in the `sha256`
+shape with 64- and 32-byte digests, plus a keyed MAC form:
+
+```text
+fn blake2b.new_keyed(key: Bytes) -> State uses {}
+fn blake2s.new_keyed(key: Bytes) -> State uses {}
+```
+
+A key of at most 64 (BLAKE2b) or 32 (BLAKE2s) bytes is zero-padded into the first
+block, as RFC 7693 specifies; a longer key fails SEM-3 and an empty key is the
+unkeyed hash. Update holds the most recent block back, because finish compresses
+the last block with the final flag; the byte counter is a `u64`, so total input
+is limited to 2^64-1 bytes (SEM-1 beyond). Output words are little-endian. BLAKE2
+has no length-extension weakness, so its keyed form is a MAC by itself.
+
+Throughput: one compression per block, 12 rounds of eight G mixes over 64-bit
+words per 128-byte block (BLAKE2b) and 10 rounds over 32-bit words per 64-byte
+block (BLAKE2s). BLAKE2b runs fewer operations per byte than SHA-512 and SHA-256
+on a 64-bit target; BLAKE2s suits 32-bit ones. There is no bench gate.
+
+## Checksums
+
+`crc32` (IEEE 802.3, reflected polynomial 0xedb88320: Ethernet, gzip, zip, PNG),
+`crc32c` (Castagnoli, 0x82f63b78: iSCSI, SCTP, ext4), `adler32` (RFC 1950, zlib) and
+`xxhash64` (XXH64) detect accidental corruption; none resists an adversary. Each
+has an opaque `plain + inert` `State` and returns an integer:
+
+```text
+fn <checksum>.new() -> State uses {}
+fn <checksum>.update(mut state: State, data: Bytes) -> () uses {}
+fn <checksum>.finish(take state: State) -> u32 uses {}    // u64 for xxhash64
+fn <checksum>.digest(data: Bytes) -> u32 uses {}          // u64 for xxhash64
+fn <checksum>.digest_hex(data: Bytes) -> unique String uses {}
+fn xxhash64.new_with_seed(seed: u64) -> State uses {}
+```
+
+`digest_hex` writes the value as fixed-width lowercase hexadecimal, most
+significant digit first (8 digits, or 16 for `xxhash64`), the form `cksum`-style
+tools and the xxHash canonical representation print. `new()` of `xxhash64` is seed
+0. CRC-32C shares CRC-32's table-driven kernel with its own table. Adler-32 sums
+reduce modulo 65521 once per 5552 bytes, the longest run that cannot overflow 32
+bits. xxHash64 multiplications and additions wrap at 64 bits; its total length
+also wraps, as in the reference. Update accepts any length; none of these checks
+input size.
+
+Throughput: CRC-32 and CRC-32C do one 256-entry table lookup per byte (no
+slicing-by-8 or carry-less multiply); Adler-32 two additions per byte and two
+remainders per 5552 bytes; xxHash64 four multiply-rotate lanes per 32 bytes. They
+cost a small fraction of a cryptographic digest per byte. There is no bench gate.
+
 ## FNV-1a hashing
 
 `std@1/fnv` implements 64-bit FNV-1a in ordinary, allocation-free source, with the
