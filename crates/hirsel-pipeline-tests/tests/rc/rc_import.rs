@@ -29,6 +29,16 @@ fn a_deep_copy_in_a_loop_with_an_early_return_ends_its_loan_on_failure() {
     }
 }
 
+/// A `for` loop's element, matched on, is a view of `xs[i]` that its counter
+/// does not move while the view lives: its reads go to the element in place
+/// rather than to storage holding a borrow without credit.
+#[test]
+fn a_loop_element_matched_on_is_read_in_place() {
+    lower_valid(include_str!(
+        "../../../../conformance/LANG/LANG-13-loop-element-match-run.hir"
+    ));
+}
+
 #[test]
 fn failure_preparing_the_second_taken_argument_disposes_the_first() {
     let (_, lowered) = lower_valid(

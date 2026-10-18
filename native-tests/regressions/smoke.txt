@@ -10,6 +10,7 @@ conformance/DROP/DROP-2-mut-replacement-finalizer-failure.hir
 conformance/FACT/FACT-1-requires-false.hir
 conformance/GEN/GEN-1-borrowed-root-comparison-run.hir
 conformance/GEN/GEN-1-generic-float-ieee.hir
+conformance/LANG/LANG-13-loop-element-match-run.hir
 conformance/LANG/LANG-13-loop-tuple-payload-part-run.hir
 conformance/LANG/LANG-13-nested-match-on-binding-run.hir
 conformance/LANG/LANG-13-nested-ok-none-error-paths-run.hir

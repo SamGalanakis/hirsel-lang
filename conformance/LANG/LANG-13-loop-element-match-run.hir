@@ -1,0 +1,66 @@
+// rule: LANG-13
+// expect: run
+// stdout: 7 b d
+// A match on a loop's element reads the element in place while the loop's
+// index stays put: a list loop reads variant payloads, and a map loop moves
+// copies of them into a new map or leaves early on another arm.
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+type V = Text(String) | Num(u64)
+
+fn total(values: List[V]) -> u64 {
+  let mut n = 0u64
+  for value in values {
+    match value {
+      Text(s) => {
+        n += string.byte_len(s)
+      },
+      Num(k) => {
+        n += k
+      },
+    }
+  }
+  n
+}
+
+fn texts(fields: Map[String, V]) -> Result[Map[String, String], u64] {
+  let mut entries: Map[String, String] = map.empty()
+  for (key, value) in fields {
+    match value {
+      Text(s) => map.insert(mut entries, unique key, unique s),
+      Num(k) => return Error(k),
+    }
+  }
+  Ok(take entries)
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  let n = total([Text("ab"), Num(4u64), Text("c")])
+  let mut fields: Map[String, V] = map.empty()
+  map.insert(mut fields, unique "a", Text("b"))
+  map.insert(mut fields, unique "c", Text("d"))
+  let mut mixed: Map[String, V] = map.empty()
+  map.insert(mut mixed, unique "a", Text("b"))
+  map.insert(mut mixed, unique "n", Num(9u64))
+  let found = match texts(fields) {
+    Ok(entries) => match (map.get(entries, "a"), map.get(entries, "c")) {
+      (Some(a), Some(c)) => a == "b" && c == "d",
+      _ => false,
+    },
+    Error(_) => false,
+  }
+  let stopped = match texts(mixed) {
+    Ok(_) => false,
+    Error(k) => k == 9u64,
+  }
+  out.print(
+    output,
+    if n == 7u64 && found && stopped {
+      "7 b d\n"
+    } else {
+      "wrong\n"
+    }
+  ) ? Output
+  Ok(())
+}

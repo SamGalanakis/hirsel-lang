@@ -128,7 +128,11 @@ at each stage and H against the interpreter, and keeps the declined twins.
   and each emission pass starts with none: value ids restart every pass.
   A pattern tag already proved at the current version is not tested again,
   avoiding infeasible edges that would restore absent payload fields.
-  A temporary assigned views of places under loans on
+  A temporary assigned once a view of a place under a loan is a view
+  temporary, read through at the viewed place and never stored; one viewing an
+  element (`for` loop's element matched on: `_7 = use(Borrow xs[_5])`) is one
+  only while no path from its assignment writes an index local before its
+  storage ends. A temporary assigned views of places under loans on
   several paths is a joined view: an SSA value carried on edges and joined
   into a borrowed block parameter declaring the least of its loans, never
   stored or copied. A field of a flat value, or an element of a flat sequence, is a place at

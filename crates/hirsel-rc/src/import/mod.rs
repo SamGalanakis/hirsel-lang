@@ -1164,8 +1164,10 @@ fn node_anchors(body: &tir::Body) -> Vec<(u32, u32)> {
 
 /// Temporaries that only ever hold a view: assigned once by a borrowed use of
 /// a place under a loan (`_1 = use(Borrow _0@L0)`), never written, moved or
-/// lent mutably afterwards, and viewing no computed element (an index could
-/// change before a later read). Their reads go to the viewed place itself.
+/// lent mutably afterwards, and viewing no variant part. Their reads go to the
+/// viewed place itself. An element (`_7 = use(Borrow _0[_5]@L0)`, a loop's
+/// binding matched on) is a view only while its index stays put: no path from
+/// the assignment writes an index local before the view's storage ends.
 /// A nested `match` on a pattern binding views a part of another view
 /// temporary (`_3 = use(Borrow _1.Ok)`): that part has no loan of its own but
 /// stays under its root's, and the enclosing match proved its variant, so it
@@ -1180,6 +1182,9 @@ fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
     let mut out: Vec<Option<tir::PlaceId>> = (0..n)
         .map(|l| match single(l) {
             Some(ViewSource::Loaned(viewed)) => Some(viewed),
+            Some(ViewSource::Indexed(viewed, at)) if index_stable(body, l, viewed, at) => {
+                Some(viewed)
+            }
             _ => None,
         })
         .collect();
@@ -1354,6 +1359,9 @@ enum ViewSource {
     /// A loanless part of another local, with no index: a view only while
     /// that local is one.
     Nested(tir::PlaceId),
+    /// An element of a place under its own loan, assigned at `(block,
+    /// instruction)`: a view only while its index stays put.
+    Indexed(tir::PlaceId, (usize, usize)),
 }
 
 /// Per local, the view each assignment gives it (None: not a view), and
@@ -1371,8 +1379,8 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool
             disqualified[root(o.place)] = true;
         }
     };
-    for block in &body.blocks {
-        for i in &block.instructions {
+    for (b, block) in body.blocks.iter().enumerate() {
+        for (k, i) in block.instructions.iter().enumerate() {
             match &i.kind {
                 K::Assign { destination, value } => {
                     let r = root(*destination);
@@ -1393,6 +1401,7 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool
                                 Some(_) if !indexed && !variant => {
                                     Some(ViewSource::Loaned(o.place))
                                 }
+                                Some(_) if !variant => Some(ViewSource::Indexed(o.place, (b, k))),
                                 None if !indexed && !viewed.projection.is_empty() => {
                                     Some(ViewSource::Nested(o.place))
                                 }
@@ -1456,6 +1465,108 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool
         }
     }
     (assigned, disqualified)
+}
+
+/// Whether no path from the assignment of view `l` (at `(block,
+/// instruction)`) writes, moves, ends or lends mutably a local indexing
+/// `viewed` before `l`'s storage ends, so every read of the view reaches the
+/// element it was assigned.
+fn index_stable(body: &tir::Body, l: usize, viewed: tir::PlaceId, at: (usize, usize)) -> bool {
+    use tir::InstructionKind as K;
+    let indices: BTreeSet<usize> = body.places[viewed.0 as usize]
+        .projection
+        .iter()
+        .filter_map(|p| match p {
+            tir::Projection::Index(i) => Some(i.0 as usize),
+            _ => None,
+        })
+        .collect();
+    let root = |p: &tir::PlaceId| body.places[p.0 as usize].root.0 as usize;
+    let hit = |p: &tir::PlaceId| indices.contains(&root(p));
+    let used = |o: &tir::Operand| matches!(o.usage, UseKind::Take | UseKind::Mut) && hit(&o.place);
+    // The view's scope and its ancestors: ending any of them ends the view.
+    let mut scopes = BTreeSet::new();
+    let mut s = Some(body.locals[l].scope);
+    while let Some(id) = s {
+        if !scopes.insert(id.0) {
+            break;
+        }
+        s = body.scopes[id.0 as usize].parent;
+    }
+    let mut seen = vec![false; body.blocks.len()];
+    let mut work = vec![(at.0, at.1 + 1)];
+    while let Some((b, from)) = work.pop() {
+        let block = &body.blocks[b];
+        let mut ended = false;
+        for i in &block.instructions[from.min(block.instructions.len())..] {
+            let writes = match &i.kind {
+                K::StorageDead { place, .. } | K::Drop { place, .. } if root(place) == l => {
+                    ended = true;
+                    break;
+                }
+                K::EndScope(s) if scopes.contains(&s.0) => {
+                    ended = true;
+                    break;
+                }
+                K::Assign { destination, value } => {
+                    hit(destination)
+                        || rvalue_operands(&body.rvalues[value.0 as usize])
+                            .into_iter()
+                            .any(used)
+                }
+                K::Replace {
+                    destination,
+                    value,
+                    displaced,
+                    ..
+                } => hit(destination) || hit(displaced) || used(value),
+                K::Snapshot { destination, value } => hit(destination) || used(value),
+                K::Check { condition, .. } => used(condition),
+                K::StorageDead { place, .. } | K::Drop { place, .. } => hit(place),
+                K::BeginLoan {
+                    place,
+                    mutable: true,
+                    ..
+                } => hit(place),
+                _ => false,
+            };
+            if writes {
+                return false;
+            }
+        }
+        if ended {
+            continue;
+        }
+        let writes = match &block.terminator {
+            tir::Terminator::Call {
+                callee,
+                arguments,
+                returns,
+                ..
+            } => {
+                returns.as_ref().is_some_and(|r| hit(&r.destination))
+                    || matches!(callee, tir::Callee::Indirect { value, .. } if used(value))
+                    || arguments.iter().any(|a| used(&a.value))
+            }
+            tir::Terminator::Return { value, .. }
+            | tir::Terminator::Branch {
+                condition: value, ..
+            }
+            | tir::Terminator::Switch { value, .. } => used(value),
+            _ => false,
+        };
+        if writes {
+            return false;
+        }
+        for next in body.successors(&block.terminator) {
+            let n = next.0 as usize;
+            if !seen[n] {
+                seen[n] = true;
+                work.push((n, 0));
+            }
+        }
+    }
+    true
 }
 
 /// A joined view parameter is covered by the union of the loans of the views

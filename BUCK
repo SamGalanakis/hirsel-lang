@@ -2525,6 +2525,7 @@ hirsel_test(
         "conformance/GEN/GEN-1-captured-nested-generic-call-run.hir",
         "conformance/GEN/GEN-1-sorted-map-copyable-key.hir",
         "conformance/LANG/LANG-11-block-captured-value-run.hir",
+        "conformance/LANG/LANG-13-loop-element-match-run.hir",
         "conformance/LANG/LANG-3-kept-call-source-comparison-run.hir",
         "conformance/MEM/MEM-10-returned-temporary-content-run.hir",
         "conformance/MEM/MEM-12-flat-native-construct.hir",
