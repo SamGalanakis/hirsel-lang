@@ -67,8 +67,8 @@ pub static BOUNDED: LibraryBody = LibraryBody {
     build: bounded,
 };
 
-const RESULT_OK: u32 = 0;
-const RESULT_ERROR: u32 = 1;
+pub(super) const RESULT_OK: u32 = 0;
+pub(super) const RESULT_ERROR: u32 = 1;
 
 /// `arena.bounded[R](cap, body)` (MEM-6): `arena.with`'s shape over an arena
 /// bounded by `cap`. The callback's result is `Ok`; its failure ends the loan,
@@ -162,7 +162,7 @@ fn bounded(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
 }
 
 /// The layout of field 0 of `layout`'s variant `ordinal`.
-fn payload(b: &Body<'_, '_>, layout: LayoutId, ordinal: u32) -> Option<LayoutId> {
+pub(super) fn payload(b: &Body<'_, '_>, layout: LayoutId, ordinal: u32) -> Option<LayoutId> {
     let variant = b
         .record(layout)
         .tag
@@ -178,7 +178,7 @@ fn payload(b: &Body<'_, '_>, layout: LayoutId, ordinal: u32) -> Option<LayoutId>
 }
 
 /// Construct variant `variant` of the core type `name` at `layout`.
-fn variant(
+pub(super) fn variant(
     b: &mut Body<'_, '_>,
     layout: LayoutId,
     name: &str,

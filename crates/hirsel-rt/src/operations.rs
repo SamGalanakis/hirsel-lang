@@ -118,6 +118,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "atomic.create"
             | "atomic.load"
             | "atomic.store"
+            | "task.isolate"
     ) || MAP_BODIES.contains(&name.as_str())
     {
         row.dispositions.native = Disposition::Body;
@@ -228,6 +229,15 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "$intrinsic.AtomicCreate" => Some("hirsel_rt_v2_atomic_create".into()),
         "$intrinsic.AtomicLoad" => Some("hirsel_rt_v2_atomic_load".into()),
         "$intrinsic.AtomicStore" => Some("hirsel_rt_v2_atomic_store".into()),
+        // `task.isolate`'s compiled body reads its caught chain through these (`isolate.rs`).
+        "$intrinsic.IsolateBegin" => Some("hirsel_rt_v2_isolate_begin".into()),
+        "$intrinsic.IsolateCount" => Some("hirsel_rt_v2_isolate_count".into()),
+        "$intrinsic.IsolateKind" => Some("hirsel_rt_v2_isolate_kind".into()),
+        "$intrinsic.IsolateRule" => Some("hirsel_rt_v2_isolate_rule".into()),
+        "$intrinsic.IsolateDefinition" => Some("hirsel_rt_v2_isolate_definition".into()),
+        "$intrinsic.IsolateLine" => Some("hirsel_rt_v2_isolate_line".into()),
+        "$intrinsic.IsolateColumn" => Some("hirsel_rt_v2_isolate_column".into()),
+        "$intrinsic.IsolateSpawn" => Some("hirsel_rt_v2_isolate_spawn".into()),
         "$intrinsic.UnicodeScalars_open" => Some("hirsel_rt_v2_unicode_scalars_open".into()),
         "$intrinsic.UnicodeScalars_next" => Some("hirsel_rt_v2_unicode_scalars_next".into()),
         "$intrinsic.ScalarPositions_open" => Some("hirsel_rt_v2_scalar_positions_open".into()),
@@ -505,6 +515,54 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         destination: false,
         result: None,
         parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_isolate_begin",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_isolate_count",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_isolate_kind",
+        destination: false,
+        result: Some((4, 4)),
+        parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_isolate_rule",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_isolate_definition",
+        destination: true,
+        result: Some((24, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_isolate_line",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_isolate_column",
+        destination: false,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        symbol: "hirsel_rt_v2_isolate_spawn",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer, Physical::I64],
     },
     AbiExport {
         symbol: "hirsel_rt_v2_channel_receive",
@@ -1206,6 +1264,14 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.AtomicCreate",
     "$intrinsic.AtomicLoad",
     "$intrinsic.AtomicStore",
+    "$intrinsic.IsolateBegin",
+    "$intrinsic.IsolateCount",
+    "$intrinsic.IsolateKind",
+    "$intrinsic.IsolateRule",
+    "$intrinsic.IsolateDefinition",
+    "$intrinsic.IsolateLine",
+    "$intrinsic.IsolateColumn",
+    "$intrinsic.IsolateSpawn",
     "$intrinsic.OrderCompare_i128",
     "$intrinsic.OrderCompare_i16",
     "$intrinsic.OrderCompare_i32",

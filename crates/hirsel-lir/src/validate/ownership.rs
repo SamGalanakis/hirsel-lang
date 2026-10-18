@@ -652,6 +652,7 @@ impl<S: Stage> Walker<'_, '_, S> {
             Terminator::Branch { condition, .. } => self.borrow(site, &st, &cr, condition),
             Terminator::Switch { value, .. } => self.borrow(site, &st, &cr, value),
             Terminator::Recover { arena, .. } => self.borrow(site, &st, &cr, arena),
+            Terminator::Isolate { start, .. } => self.borrow(site, &st, &cr, start),
             Terminator::Call {
                 call,
                 normal,

@@ -37,6 +37,29 @@ struct Io {
     yielded: bool,
     detached_directories: BTreeSet<u64>,
     resolved_directories: BTreeMap<u64, String>,
+    /// Each failure site's line and column, for a program that isolates (FAIL-2).
+    positions: Positions,
+}
+
+type Positions = std::sync::Arc<BTreeMap<(DefPath, (u32, u32)), (u64, u64)>>;
+
+/// The positions `task.isolate` reports, of every site a failure can start at.
+fn positions(program: &ReadyProgram, sites: &Sites<'_>) -> Positions {
+    if !super::observe::isolates(program) {
+        return Positions::default();
+    }
+    std::sync::Arc::new(
+        super::observe::site_codes(program)
+            .into_values()
+            .filter_map(|(definition, range)| {
+                let (line, column) = sites.position(&definition, range)?;
+                Some((
+                    (definition, (range.start, range.end)),
+                    (u64::from(line), u64::from(column)),
+                ))
+            })
+            .collect(),
+    )
 }
 
 impl Io {
@@ -72,6 +95,7 @@ impl Io {
             yielded: false,
             detached_directories: BTreeSet::new(),
             resolved_directories: BTreeMap::new(),
+            positions: Positions::default(),
         }
     }
 }
@@ -82,6 +106,9 @@ impl Operations for Io {
     }
     fn fork_simulation(&self) -> Option<Box<dyn Operations>> {
         Some(Box::new(self.clone()))
+    }
+    fn failure_position(&self, definition: &DefPath, site: (u32, u32)) -> Option<(u64, u64)> {
+        self.positions.get(&(definition.clone(), site)).copied()
     }
     fn path_text(&self, id: u64) -> Option<&str> {
         self.paths
@@ -1351,13 +1378,9 @@ pub fn run_heap(
             .map(|root| Arg::Handle(super::link::root_handle(*root)))
             .collect(),
     };
-    let run = hirsel_heapcheck::run_ready(
-        &heap,
-        entry,
-        &args,
-        &mut Io::for_launch(kind, program.launch.test_seed, program.launch.random_seed),
-        &config(None, kind),
-    );
+    let mut io = Io::for_launch(kind, program.launch.test_seed, program.launch.random_seed);
+    io.positions = positions(program, sites);
+    let run = hirsel_heapcheck::run_ready(&heap, entry, &args, &mut io, &config(None, kind));
     let audit = run.result.as_ref().map_err(|v| violation(entry, v, None))?;
     Ok(HeapRun {
         observation: observation(audit, &run.output, sites)?,
@@ -1386,16 +1409,15 @@ pub fn heap_campaign(
             .map(|root| Arg::Handle(super::link::root_handle(*root)))
             .collect(),
     };
+    let positions = positions(program, sites);
     let campaign = hirsel_heapcheck::fault_campaign_ready(
         &heap,
         entry,
         &args,
         &mut || {
-            Box::new(Io::for_launch(
-                kind,
-                program.launch.test_seed,
-                program.launch.random_seed,
-            ))
+            let mut io = Io::for_launch(kind, program.launch.test_seed, program.launch.random_seed);
+            io.positions = positions.clone();
+            Box::new(io)
         },
         &config(None, kind),
     );

@@ -556,3 +556,11 @@ layout. Variable flat blocks retain their payload nodes; native codec program
 version 2 distinguishes flat fields and Packed arms, sequential active extents,
 and declaration-order SoA columns addressed by stored capacity. Decoding checks
 wire data before rebuilding native framing or allocating counted storage.
+
+LIR revision 31 (FAIL-2) adds `Terminator::Isolate { start, caught }`, the
+catch of `task.isolate`: every failure recorded since `start`, the u64 record
+count the unit read before its callback ran, is caught, and control resumes on
+`caught`. Like `Recover`, it leaves failure cleanup for ordinary code; C admits
+it only in a library body's failure cleanup, with a u64 `start` and a `Body`
+target for `caught`, and `tests/it/revision31.rs` pairs each rule with its valid
+twin. Runtime ABI 10 adds the `isolate_catch` entry.

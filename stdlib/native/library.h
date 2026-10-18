@@ -163,6 +163,19 @@ uint8_t hirsel_rt_v2_mutex_cause(hirsel_rt_v2_ctx*, const uint64_t*);
 uint8_t hirsel_rt_v2_atomic_create(hirsel_rt_v2_ctx*, void*, uint64_t*, const uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_atomic_load(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t*, uint64_t);
 uint8_t hirsel_rt_v2_atomic_store(hirsel_rt_v2_ctx*, const uint64_t*, const uint8_t*, uint64_t);
+/* task.isolate (FAIL-2): the caught chain, record by record; the link shim registers the
+   program's failure table of site positions and rule IDs. */
+typedef struct { uint64_t code; const uint8_t *definition; uint64_t definition_length, line, column; } hirsel_rt_v2_failure_site;
+typedef struct { const uint8_t *name; uint64_t length; } hirsel_rt_v2_failure_rule;
+void hirsel_rt_v2_failure_table(const hirsel_rt_v2_failure_site*, uint64_t, const hirsel_rt_v2_failure_rule*, uint64_t);
+uint8_t hirsel_rt_v2_isolate_begin(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_isolate_count(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_isolate_kind(hirsel_rt_v2_ctx*, uint32_t*, const uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_isolate_rule(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, const uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_isolate_definition(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, const uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_isolate_line(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_isolate_column(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*, uint64_t);
+uint8_t hirsel_rt_v2_isolate_spawn(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_header**, const uint64_t*, uint64_t);
 #ifdef __cplusplus
 }
 #endif

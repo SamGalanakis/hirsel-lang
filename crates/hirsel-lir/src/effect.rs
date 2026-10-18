@@ -170,6 +170,7 @@ opcodes!(
     Raise,
     Propagate,
     Recover,
+    Isolate,
     Unreachable,
     InvariantFault,
 );
@@ -259,6 +260,7 @@ impl Terminator {
             Self::Raise(_) => Opcode::Raise,
             Self::Propagate => Opcode::Propagate,
             Self::Recover { .. } => Opcode::Recover,
+            Self::Isolate { .. } => Opcode::Isolate,
             Self::Unreachable => Opcode::Unreachable,
             Self::InvariantFault { .. } => Opcode::InvariantFault,
         }

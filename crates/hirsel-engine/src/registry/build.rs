@@ -625,6 +625,45 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "a: Atomic[A], value: Option[A], size: u64",
             "()",
         ),
+        // `task.isolate`'s caught chain, read record by record to build its `Failure` (FAIL-2).
+        ("", "$intrinsic.IsolateBegin", "tasks: Tasks", "u64"),
+        ("", "$intrinsic.IsolateCount", "tasks: Tasks", "u64"),
+        (
+            "",
+            "$intrinsic.IsolateKind",
+            "tasks: Tasks, index: u64",
+            "u32",
+        ),
+        (
+            "",
+            "$intrinsic.IsolateRule",
+            "tasks: Tasks, index: u64",
+            "String",
+        ),
+        (
+            "",
+            "$intrinsic.IsolateDefinition",
+            "tasks: Tasks, index: u64",
+            "String",
+        ),
+        (
+            "",
+            "$intrinsic.IsolateLine",
+            "tasks: Tasks, index: u64",
+            "u64",
+        ),
+        (
+            "",
+            "$intrinsic.IsolateColumn",
+            "tasks: Tasks, index: u64",
+            "u64",
+        ),
+        (
+            "",
+            "$intrinsic.IsolateSpawn",
+            "tasks: Tasks, index: u64",
+            "List[u64]",
+        ),
     ] {
         let mut b = Builder::new(generics).with_declarations(&out);
         let f = b.function(params, result, false);

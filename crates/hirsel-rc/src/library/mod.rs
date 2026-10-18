@@ -18,6 +18,7 @@ pub mod channels;
 pub mod codec;
 pub mod collection;
 pub mod failure;
+pub mod isolate;
 pub mod iter;
 pub mod length;
 pub mod list;
@@ -124,6 +125,7 @@ pub const BODIES: &[&LibraryBody] = &[
     &tasks::ASYNC,
     &tasks::AWAIT,
     &tasks::MAIN,
+    &isolate::ISOLATE,
     &channels::SEND,
     &channels::RECEIVE,
     &sync::MUTEX_CREATE,
@@ -202,7 +204,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 14;
+pub const REVISION: u32 = 15;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

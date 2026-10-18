@@ -305,6 +305,13 @@ with it as the budget and calls the callback; the callback's result becomes
 arena's own `OutOfSpace` returns `Error(OutOfSpace())`, every other failure
 propagates.
 
+`isolate::ISOLATE` (FAIL-2) reads the task's failure record count, moves its
+`take` callback into a temporary and calls it: its result becomes `Ok`, and its
+failure path ends the loan and then catches (`Isolate`, LIR revision 31) every
+failure since that count. The caught chain becomes `Error(Failure)`, built in a
+loop from the last record to the primary, each record but the primary boxed as
+the cause of the one before it.
+
 `shared::FREEZE` moves its parameter into a root (`Freeze`). `shared::THAW` tests its
 owned root's count (`IsUnique`): the last root thaws (`Thaw`) into `Ok`, any other
 root is returned as `Error`. A `Shared` payload is never a reuse donor.

@@ -366,6 +366,9 @@ pub fn dump<S: Stage>(u: &LirUnit<S>) -> String {
                 edge(u, *caught),
                 edge(u, *failed)
             ),
+            Terminator::Isolate { start, caught } => {
+                format!("isolate v{} {}", start.0, edge(u, *caught))
+            }
             Terminator::Call {
                 call,
                 normal,

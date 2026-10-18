@@ -1029,6 +1029,14 @@ pub enum Terminator {
         caught: EdgeId,
         failed: EdgeId,
     },
+    /// In failure cleanup, `task.isolate`'s library body only: catch every
+    /// failure recorded since `start` (the record count the body read before
+    /// its callback ran), which the runtime keeps for the caught code to read,
+    /// and resume ordinary code on `caught` (FAIL-2, LIR schema revision 31).
+    Isolate {
+        start: ValueId,
+        caught: EdgeId,
+    },
     /// Requires proof, not an optimizer guess.
     Unreachable,
     /// Implementation limit or broken invariant. No language failure or cleanup.
@@ -2252,6 +2260,7 @@ impl Terminator {
                 .collect(),
             Terminator::Call { normal, .. } => normal.into_iter().collect(),
             Terminator::Recover { caught, failed, .. } => vec![caught, failed],
+            Terminator::Isolate { caught, .. } => vec![caught],
             Terminator::Return(_)
             | Terminator::Raise(_)
             | Terminator::Propagate
@@ -2270,6 +2279,7 @@ impl Terminator {
             | Terminator::Return(_)
             | Terminator::Propagate
             | Terminator::Recover { .. }
+            | Terminator::Isolate { .. }
             | Terminator::Unreachable
             | Terminator::InvariantFault { .. } => None,
         }
@@ -2317,6 +2327,10 @@ impl Terminator {
                 f(Ref::Value(arena));
                 f(Ref::Edge(caught));
                 f(Ref::Edge(failed));
+            }
+            Self::Isolate { start, caught } => {
+                f(Ref::Value(start));
+                f(Ref::Edge(caught));
             }
             Self::Propagate | Self::Unreachable | Self::InvariantFault { .. } => {}
         }
@@ -2846,6 +2860,7 @@ snapshot_enum!(Terminator {
         caught,
         failed
     },
+    Isolate { start, caught },
     Unreachable,
     InvariantFault { reason },
 });

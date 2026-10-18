@@ -45,3 +45,5 @@ conformance/CONC/CONC-6-receiver-child-capture.hir
 conformance/CONC/CONC-8-two-task-channel-run.hir
 conformance/CONC/CONC-5-inert-capture-and-update.hir
 conformance/FAIL/FAIL-4-mutex-normal-reacquire.hir
+conformance/FAIL/FAIL-2-isolate-failure-fields-run.hir
+conformance/FAIL/FAIL-3-drop-failure-fields.hir

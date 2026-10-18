@@ -158,6 +158,8 @@ pub(super) struct Tasks {
     switch: Option<(u32, bool)>,
     /// The running task's spawn path per failure (`Task::spawns` while it runs).
     spawns: Vec<Option<Vec<u32>>>,
+    /// The chain the last `task.isolate` caught, which its body reads.
+    pub(super) isolated: Vec<(ObservedFailure, Vec<u32>)>,
 }
 
 fn handle(index: u32, generation: u32) -> u64 {
@@ -197,6 +199,14 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         "$intrinsic.AtomicCreate",
         "$intrinsic.AtomicLoad",
         "$intrinsic.AtomicStore",
+        "$intrinsic.IsolateBegin",
+        "$intrinsic.IsolateCount",
+        "$intrinsic.IsolateKind",
+        "$intrinsic.IsolateRule",
+        "$intrinsic.IsolateDefinition",
+        "$intrinsic.IsolateLine",
+        "$intrinsic.IsolateColumn",
+        "$intrinsic.IsolateSpawn",
     ]
     .into_iter()
     .find(|n| *n == name)
@@ -213,6 +223,7 @@ impl Tasks {
             parked: Vec::new(),
             channels: Default::default(),
             sync: Default::default(),
+            isolated: Vec::new(),
             switch: None,
             spawns: Vec::new(),
         }
@@ -311,7 +322,7 @@ impl Tasks {
         self.switch = Some((child, false));
         Ok(())
     }
-    fn task_spawns(&mut self) -> &mut Vec<Option<Vec<u32>>> {
+    pub(super) fn task_spawns(&mut self) -> &mut Vec<Option<Vec<u32>>> {
         &mut self.spawns
     }
     fn vacate(&mut self, task: u32) {
@@ -516,6 +527,9 @@ impl<S: Stage> Machine<'_, S> {
                 || name.starts_with("$intrinsic.Atomic") =>
             {
                 self.sync_operation(f, site, name, &arguments, normal)
+            }
+            name if name.starts_with("$intrinsic.Isolate") => {
+                self.isolate_operation(f, site, name, &arguments, normal)
             }
             "$intrinsic.TaskScopeEnter" => {
                 let s = self.scheduler();

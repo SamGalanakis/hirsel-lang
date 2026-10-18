@@ -809,7 +809,8 @@ impl<S: Stage> Checker<'_, '_, S> {
                 // A recovery is the one way from failure cleanup back to ordinary code.
                 let recovered = matches!(
                     (out.origin, term),
-                    (Origin::Terminator, Terminator::Recover { caught, .. }) if *caught == out.edge
+                    (Origin::Terminator, Terminator::Recover { caught, .. }
+                        | Terminator::Isolate { caught, .. }) if *caught == out.edge
                 );
                 let ok = if recovered {
                     target == BlockKind::Body
@@ -835,6 +836,10 @@ impl<S: Stage> Checker<'_, '_, S> {
                 Terminator::Recover { .. } if kind != BlockKind::FailureCleanup => self.add(
                     Site::at(b, len),
                     K::BlockKind("recover outside failure cleanup"),
+                ),
+                Terminator::Isolate { .. } if kind != BlockKind::FailureCleanup => self.add(
+                    Site::at(b, len),
+                    K::BlockKind("isolate outside failure cleanup"),
                 ),
                 _ => {}
             }
@@ -2800,6 +2805,14 @@ impl<S: Stage> Checker<'_, '_, S> {
                         );
                     }
                 }
+                // FAIL-2: only `task.isolate`'s library body catches, from the
+                // record count (a u64) it read before its callback ran.
+                Terminator::Isolate { start, .. } => {
+                    self.library_only(site, Opcode::Isolate);
+                    if self.scalar(start) != Some(ScalarKind::U64) {
+                        self.add(site, K::Type("isolation start"));
+                    }
+                }
                 Terminator::Switch { value, arms, .. } => {
                     let arms = arms.get(&unit.pools.switch_arms).unwrap_or(&[]);
                     let distinct: BTreeSet<_> = arms.iter().map(|a| a.value).collect();
@@ -4391,6 +4404,7 @@ fn terminator_operands<S>(cx: &Cx<'_, S>, term: &Terminator) -> Vec<(ValueId, Us
         Terminator::Switch { value, .. } => vec![(value, Usage::Operand)],
         Terminator::Return(Some(value)) => vec![(value, Usage::Operand)],
         Terminator::Recover { arena, .. } => vec![(arena, Usage::Operand)],
+        Terminator::Isolate { start, .. } => vec![(start, Usage::Operand)],
         Terminator::Call { call, .. } => {
             let site = &unit.tables.calls[call.index()];
             let mut out = Vec::new();

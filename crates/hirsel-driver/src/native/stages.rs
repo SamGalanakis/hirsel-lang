@@ -168,6 +168,9 @@ pub struct ReadyProgram {
     pub foreign_links: Vec<hirsel_engine::LinkInput>,
     /// Executables refuse to record or replay (PROG-4).
     pub foreign_unreplayable: bool,
+    /// The failure table a program that isolates registers at launch (FAIL-2), bound with
+    /// the revisions.
+    pub(crate) failure_table: Option<super::observe::FailureTable>,
 }
 
 impl ReadyProgram {
@@ -203,6 +206,9 @@ impl ReadyProgram {
                     .map(|report| (entry.clone(), report))
             })
             .collect::<Result<_, _>>()?;
+        self.failure_table = super::observe::isolates(self).then(|| {
+            super::observe::failure_table(self, &super::observe::Sites::new(input.snapshot()))
+        });
         Ok(())
     }
     /// The Ready units, as the heap executor and dumps read them.
@@ -372,6 +378,7 @@ pub fn build_program(
         discharged,
         foreign_links: Vec::new(),
         foreign_unreplayable: false,
+        failure_table: None,
     })
 }
 

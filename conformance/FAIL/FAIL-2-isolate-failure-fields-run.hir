@@ -1,0 +1,97 @@
+// rule: FAIL-2
+// expect: run
+// stdout: SEM-1
+// stdout: standalone@0/main
+// stdout: 36 20
+// stdout: 0 spawn
+// stdout: check
+// stdout: cause SEM-1
+// stdout: drop 20
+// stdout: 1 child spawn
+// "Failure is data: its kind, rule ID, source site, the path of spawn indices
+// and an optional boxed cause"; a drop failing during unwinding is the cause.
+fn output_error[E](take e: E) -> () {}
+
+resource type Broken {
+  stdout: Stdout,
+}
+drop(x) {
+  let n: u8 = 255
+  let value = n + 1
+}
+
+fn line(stdout: Stdout, text: String) -> () {
+  let _ = out.print(stdout, text)
+  let _ = out.print(stdout, "\n")
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let tasks = io.tasks(rt) ? grant_error
+  let stdout = io.stdout(rt) ? grant_error
+  let status: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() -> () {
+      let guard = Broken(stdout: stdout)
+      let n: u8 = 255
+      let broken = n + 1
+    }
+  )
+  match status {
+    Ok(value) => line(stdout, "bad"),
+    Error(caught) => {
+      line(stdout, caught.rule)
+      line(stdout, caught.site.definition)
+      let _ = out.print(stdout, u64.to_string(caught.site.line))
+      let _ = out.print(stdout, " ")
+      line(stdout, u64.to_string(caught.site.column))
+      let _ = out.print(stdout, u64.to_string(list.len(caught.spawn)))
+      line(stdout, " spawn")
+      match caught.kind {
+        Check() => line(stdout, "check"),
+        Contract() => line(stdout, "contract"),
+        Depth() => line(stdout, "depth"),
+        OutOfSpace() => line(stdout, "out of space"),
+        DeadMutex() => line(stdout, "dead mutex"),
+      }
+      match caught.cause {
+        Some(cause) => {
+          let _ = out.print(stdout, "cause ")
+          line(stdout, cause.rule)
+          let _ = out.print(stdout, "drop ")
+          line(stdout, u64.to_string(cause.site.line))
+        },
+        None => line(stdout, "no cause"),
+      }
+    },
+  }
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let child = task.async(
+        s,
+        fn() -> u64 {
+          let inner: Result[(), Failure] = task.isolate(
+            tasks,
+            fn() -> () {
+              let n: u8 = 255
+              let broken = n + 1
+            }
+          )
+          match inner {
+            Ok(value) => 9,
+            Error(caught) => list.len(caught.spawn),
+          }
+        }
+      )
+      let depth = task.await(s, take child)
+      let _ = out.print(stdout, u64.to_string(depth))
+      line(stdout, " child spawn")
+    }
+  )
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}

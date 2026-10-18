@@ -292,6 +292,8 @@ construction tests and lowers the record's `remaining` word before its bump, and
 calls `hirsel_rt_v2_arena_exhausted` and enters the construction's cleanup without beginning
 another failure. A deep copy's `STATUS_EXHAUSTED` takes the same path; `Recover` branches on
 `hirsel_rt_v2_arena_recover`. A flat payload in such a program is `Unsupported`.
+`Isolate` (FAIL-2) calls `hirsel_rt_v2_isolate_catch` with its start count and branches to
+`caught`.
 A heap construction whose extent is a constant small request calls its pool's fast path
 (runtime ABI 4, `runtime::alloc_fast`), a private function with `hirsel_rt_v2_alloc`'s
 signature and allocator attributes that pops the pool's current page: the page pointer at the

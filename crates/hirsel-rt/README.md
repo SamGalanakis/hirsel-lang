@@ -423,6 +423,19 @@ payload with no drop (others stay M2), and an atomic's payload is a scalar. A mu
 yield, so no task observes a mutex another holds. A failing body kills its mutex, which keeps the
 failure chain; a later `mutex.with` fails FAIL-4 continued by that chain.
 
+`isolate.rs` is `task.isolate` (FAIL-2). Its compiled body reads the running task's failure
+record count (`isolate_begin`, which yields as the operation does) and calls its callback; a
+failed callback has unwound when its cleanup reaches the `Isolate` terminator, whose
+`hirsel_rt_v2_isolate_catch(ctx, start)` (runtime ABI 10) moves every record since that count
+into the caught chain, the task's own failures attributed to its spawn path. The body builds
+the `Failure` value innermost first from the `isolate_*` entries: kind (from the rule:
+MEM-3 `Depth`, MEM-6 `OutOfSpace`, FAIL-4 `DeadMutex`, else `Check`), rule ID, definition path,
+line, column and spawn path, each a fresh block. A record holds compiler codes, so a program
+that isolates registers its failure table before the entry runs
+(`hirsel_rt_v2_failure_table`, called by `main` of the launcher object from either backend):
+one pointer-free byte string holding each site code's definition path and one-based position,
+sorted by code, and each program rule code's rule ID.
+
 ## Launch and the Hirsel-ABI Io entries
 
 `hirsel_rt_v2_launch(entry, result_size, layouts, layout_count, config)` (`src/launch.rs`) binds

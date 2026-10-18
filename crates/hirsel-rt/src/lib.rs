@@ -24,6 +24,7 @@ pub mod io;
 pub mod io_net_script;
 pub mod io_real;
 pub mod io_sim;
+pub mod isolate;
 pub mod kernels;
 pub mod launch;
 pub mod net;
@@ -80,7 +81,7 @@ pub use release::{
 };
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 9;
+pub const ABI_VERSION: u32 = 10;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

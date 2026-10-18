@@ -1041,6 +1041,10 @@ impl<S: Stage> Editor<S> {
                     caught: em(caught),
                     failed: em(failed),
                 },
+                Terminator::Isolate { start, caught } => Terminator::Isolate {
+                    start,
+                    caught: em(caught),
+                },
                 Terminator::Switch {
                     value,
                     arms,
@@ -3521,6 +3525,7 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             Terminator::Branch { condition, .. } => *condition = map(*condition),
             Terminator::Switch { value, .. } => *value = map(*value),
             Terminator::Recover { arena, .. } => *arena = map(*arena),
+            Terminator::Isolate { start, .. } => *start = map(*start),
             Terminator::Return(Some(v)) => *v = map(*v),
             Terminator::Jump(_)
             | Terminator::Call { .. }

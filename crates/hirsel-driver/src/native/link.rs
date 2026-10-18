@@ -919,6 +919,8 @@ done:
             launch_config,
         )
     };
+    // A program that isolates registers its failure table before the launch.
+    let table = failure_table(program)?;
     // The launcher object comes from the backend that emitted the program's objects, so a
     // Cranelift build never runs LLVM.
     let cranelift = !objects.is_empty()
@@ -975,11 +977,31 @@ done:
             root: report_root,
             nodes: report.nodes.clone(),
         };
-        hirsel_cranelift::launch_object(target, &symbol, &words, &report, launcher, &arguments)
-            .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
+
+        let calls: Vec<_> = table
+            .into_iter()
+            .map(|bytes| {
+                let length = bytes.len() as u64;
+                (
+                    "hirsel_rt_v2_failure_table",
+                    vec![
+                        A::Bytes(bytes),
+                        A::Int {
+                            bits: 64,
+                            value: length,
+                        },
+                    ],
+                )
+            })
+            .collect();
+        hirsel_cranelift::launch_object(
+            target, &symbol, &words, &report, &calls, launcher, &arguments,
+        )
+        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
     } else {
+        let (table, register) = failure_table_ir(table.as_deref());
         let shim = format!(
-            "target triple = \"{}\"\n{registry_declaration}\n{binding}\n{declaration}\n{launcher}\ndeclare ptr @signal(i32, ptr)\ndefine i32 @main() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n %r = {call}\n ret i32 %r\n}}\n",
+            "target triple = \"{}\"\n{registry_declaration}\n{binding}\n{declaration}\n{launcher}\n{table}declare ptr @signal(i32, ptr)\ndefine i32 @main() {{\n %old_sigpipe = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))\n{register} %r = {call}\n ret i32 %r\n}}\n",
             target.triple
         );
         hirsel_llvm::compile_ir(&shim, target, OptLevel::None)
@@ -1073,6 +1095,40 @@ done:
     command.arg("-o").arg(&executable);
     checked(StageName::Link, &mut command)?;
     Ok(executable)
+}
+
+/// The encoded failure table a program that isolates registers before its entry runs
+/// (`hirsel_rt::isolate`); None for any other program.
+fn failure_table(program: &ReadyProgram) -> Result<Option<Vec<u8>>, NativeError> {
+    if !super::observe::isolates(program) {
+        return Ok(None);
+    }
+    let table = program.failure_table.as_ref().ok_or_else(|| {
+        NativeError::new(
+            StageName::Link,
+            "a program that isolates links without its failure table",
+        )
+    })?;
+    Ok(Some(table.encode()))
+}
+
+/// The LLVM module text holding an encoded failure table and the call in `main` registering
+/// it; both empty without one.
+fn failure_table_ir(table: Option<&[u8]>) -> (String, String) {
+    let Some(bytes) = table else {
+        return (String::new(), String::new());
+    };
+    let text: String = bytes.iter().map(|b| format!("\\{b:02X}")).collect();
+    (
+        format!(
+            "@hirsel.failure.table = private constant [{} x i8] c\"{text}\"\ndeclare void @hirsel_rt_v2_failure_table(ptr, i64)\n",
+            bytes.len()
+        ),
+        format!(
+            " call void @hirsel_rt_v2_failure_table(ptr @hirsel.failure.table, i64 {})\n",
+            bytes.len()
+        ),
+    )
 }
 
 /// What one launched process did, before interpretation.

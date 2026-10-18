@@ -31,6 +31,7 @@ mod fork;
 pub(crate) use fork::campaign as fork_campaign;
 mod channels;
 mod holders;
+mod isolate;
 mod sync;
 mod tasks;
 mod vector;
@@ -6732,6 +6733,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                 } else {
                     self.jump(f, failed)?;
                 }
+            }
+            Terminator::Isolate { start, caught } => {
+                self.isolate_catch(f, start)?;
+                self.jump(f, caught)?;
             }
             Terminator::InvariantFault { ref reason } => {
                 return fail(V::Malformed, format!("invariant fault: {reason}"));

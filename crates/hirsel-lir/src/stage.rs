@@ -131,6 +131,7 @@ impl StageKind {
             | Opcode::Raise
             | Opcode::Propagate
             | Opcode::Recover
+            | Opcode::Isolate
             | Opcode::Unreachable
             | Opcode::InvariantFault => true,
         }

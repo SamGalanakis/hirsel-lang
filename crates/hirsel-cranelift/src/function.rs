@@ -1496,6 +1496,15 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 self.b.ins().brif(status, caught, &[], failed, &[]);
                 self.fill_trampolines(trampolines)
             }
+            Terminator::Isolate { start, caught } => {
+                let start = self.get1(start)?;
+                let context = self.context;
+                self.rt(RuntimeEntry::IsolateCatch, &[context, start])?;
+                let mut trampolines = Vec::new();
+                let caught = self.edge_block(caught, &mut trampolines)?;
+                self.b.ins().jump(caught, &[]);
+                self.fill_trampolines(trampolines)
+            }
             Terminator::Propagate => self.return_status(1, None),
             Terminator::InvariantFault { .. } => {
                 self.rt(RuntimeEntry::InvariantFault, &[])?;

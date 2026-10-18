@@ -41,7 +41,9 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         R::Dup => (MemoryEffects::ReadWrite, false, &[0, 1]),
         // Failure bookkeeping can allocate/deallocate, hence memory(readwrite)
         // and no willreturn promise; the record's scalar contents are copied.
-        R::FailureBegin | R::FailureClear => (MemoryEffects::ReadWrite, false, &[0]),
+        R::FailureBegin | R::FailureClear | R::IsolateCatch => {
+            (MemoryEffects::ReadWrite, false, &[0])
+        }
         R::FailureAppend => (MemoryEffects::ReadWrite, false, &[0, 1]),
         // A bounded arena's bookkeeping (MEM-6): the record's words and the failure
         // state, which recording or forgetting a failure can allocate or free.

@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 9
+#define HIRSEL_RT_V2_ABI_VERSION 10
 #define HIRSEL_RT_V2_STATUS_OK 0
 #define HIRSEL_RT_V2_STATUS_FAILURE 1
 /* A deep copy into a bounded arena its budget does not cover (MEM-6): nothing is copied or
@@ -492,6 +492,7 @@ uint64_t hirsel_rt_v2_failure_cause_count(hirsel_rt_v2_ctx *ctx);
 uint8_t hirsel_rt_v2_failure_cause(hirsel_rt_v2_ctx *ctx, uint64_t index, hirsel_rt_v2_failure *out);
 void hirsel_rt_v2_failure_reanchor(hirsel_rt_v2_ctx *ctx, uint64_t site);
 void hirsel_rt_v2_failure_clear(hirsel_rt_v2_ctx *ctx);
+void hirsel_rt_v2_isolate_catch(hirsel_rt_v2_ctx *ctx, uint64_t start);
 
 /* PROG-3 host return-value descriptions. Immutable compiler data; no Io grant.
  * kind: 0 opaque text, 1 bool, 2 unsigned / 3 signed (a=bytes), 4 float

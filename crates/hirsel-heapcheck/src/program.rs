@@ -255,6 +255,12 @@ pub trait Operations {
         None
     }
 
+    /// The one-based line and column of a failure site, a byte range of
+    /// `definition`'s source, for `task.isolate`'s `Failure` (FAIL-2).
+    fn failure_position(&self, _definition: &DefPath, _site: (u32, u32)) -> Option<(u64, u64)> {
+        None
+    }
+
     fn call(&mut self, op: &OperationId, args: &[OpValue], output: &mut Vec<u8>) -> OpOutcome;
     /// Whether the last `call` was a capability operation, after which the running task
     /// yields to the next runnable one (CONC-1). Library leaves are not.

@@ -1180,6 +1180,16 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         caught: EdgeId(0),
         failed: EdgeId(1),
     });
+    u.blocks.push(Block {
+        kind: BlockKind::FailureCleanup,
+        parameters: PoolRange::EMPTY,
+        instructions: PoolRange::EMPTY,
+        anchor: SourceAnchorId(0),
+    });
+    u.terminators.push(Terminator::Isolate {
+        start: v(1),
+        caught: EdgeId(0),
+    });
     u
 }
 

@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 9;
+pub const ABI_VERSION: u32 = 10;
 
 /// Status byte of every fallible entry: 0 success, 1 language failure.
 pub const STATUS_OK: u8 = 0;
@@ -383,6 +383,7 @@ pub enum RuntimeEntry {
     FailureCause,
     FailureReanchor,
     FailureClear,
+    IsolateCatch,
     InvariantFault,
     DiagPanic,
     /// Before an extern call: the calling thread's run context, for callbacks.
@@ -462,7 +463,7 @@ const ANCHOR: CParam = p("anchor", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 59] = [
+    pub const ALL: [RuntimeEntry; 60] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -516,6 +517,7 @@ impl RuntimeEntry {
         Self::FailureCause,
         Self::FailureReanchor,
         Self::FailureClear,
+        Self::IsolateCatch,
         Self::InvariantFault,
         Self::DiagPanic,
         Self::ForeignEnter,
@@ -841,6 +843,11 @@ impl RuntimeEntry {
                 const { &[CTX, p("site", U64)] },
             ),
             Self::FailureClear => ("hirsel_rt_v2_failure_clear", VOID, const { &[CTX] }),
+            Self::IsolateCatch => (
+                "hirsel_rt_v2_isolate_catch",
+                VOID,
+                const { &[CTX, p("start", U64)] },
+            ),
             Self::InvariantFault => ("hirsel_rt_v2_invariant_fault", VOID, const { &[] }),
             Self::DiagPanic => ("hirsel_rt_v2_diag_panic", VOID, const { &[] }),
             Self::ForeignEnter => ("hirsel_rt_v2_foreign_enter", VOID, const { &[CTX] }),
@@ -966,6 +973,7 @@ snapshot_enum!(RuntimeEntry {
     FailureCause,
     FailureReanchor,
     FailureClear,
+    IsolateCatch,
     InvariantFault,
     DiagPanic,
     ForeignEnter,

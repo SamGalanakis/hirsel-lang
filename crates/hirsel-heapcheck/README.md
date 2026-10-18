@@ -353,6 +353,11 @@ receiver's close drops the messages nobody received, oldest first.
 `exec/sync.rs` is the runtime's mutex and atomic cells: each holds its payload's `Some` image,
 and a dead mutex keeps the failure chain of the body that killed it.
 
+`exec/isolate.rs` is `task.isolate` (FAIL-2): the `Isolate` terminator moves the running task's
+failures since the body's record count into the caught chain, and the `$intrinsic.Isolate*`
+entries read each record's fields, a site's line and column through
+`Operations::failure_position` (the driver's model holds the sources).
+
 `exec/views.rs` marshals Unicode cursor operations to `Operations` as slice bytes
 and relative positions, retaining the original checked owner and borrow. Open
 writes an uncounted view; next installs its exclusive position update and returns

@@ -69,6 +69,21 @@ impl FailureState {
             .collect()
     }
 
+    /// The records from the `start`-th on, in order, each of this state's own failures
+    /// attributed to `own`; they are forgotten (FAIL-2: `task.isolate` catches them).
+    pub(crate) fn split_off(&mut self, start: usize, own: &[u32]) -> Vec<Chained> {
+        if start == 0 {
+            return self.take_chain(own);
+        }
+        let causes = self.causes.split_off((start - 1).min(self.causes.len()));
+        let spawns = self.spawns.split_off(start.min(self.spawns.len()));
+        causes
+            .into_iter()
+            .zip(spawns)
+            .map(|(record, spawn)| (record, spawn.unwrap_or_else(|| own.to_vec())))
+            .collect()
+    }
+
     /// Continue the chain with a joined child's failures, in their order.
     pub(crate) fn append_chain(&mut self, chain: Vec<Chained>) {
         for (record, spawn) in chain {
@@ -252,5 +267,34 @@ pub unsafe extern "C" fn hirsel_rt_v2_failure_reanchor(ctx: *mut RunCtx, site: u
         if cause.site == 0 {
             cause.site = site;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(site: u64) -> FailureRecord {
+        FailureRecord {
+            kind: 1,
+            rule: 1,
+            site,
+        }
+    }
+
+    #[test]
+    fn an_isolation_takes_the_records_from_its_start_and_keeps_the_rest() {
+        let mut state = FailureState::default();
+        state.record(record(1));
+        state.append_chain(vec![(record(2), vec![0])]);
+        state.record(record(3));
+        let caught = state.split_off(1, &[7]);
+        assert_eq!(caught, vec![(record(2), vec![0]), (record(3), vec![7])]);
+        assert_eq!(state.count(), 1);
+        assert_eq!(state.chain(&[7]), vec![(record(1), vec![7])]);
+        // From the start: the whole chain, and no failure stays active.
+        let caught = state.split_off(0, &[7]);
+        assert_eq!(caught, vec![(record(1), vec![7])]);
+        assert!(!state.active());
     }
 }

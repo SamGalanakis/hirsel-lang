@@ -177,6 +177,8 @@ pub(crate) struct Scheduler {
     parked: Vec<u32>,
     pub(crate) channels: crate::channels::Channels,
     sync: crate::sync::Synchronizers,
+    /// The chain the last `task.isolate` caught, which its body reads (`isolate.rs`).
+    pub(crate) isolated: Vec<crate::failure::Chained>,
     idle_stacks: Vec<Stack>,
     /// The stack of a task that completed; the next task to run recycles it.
     retired: Option<Stack>,
@@ -302,7 +304,7 @@ impl Task {
 }
 
 /// The run's scheduler, created with the root task at the first scope.
-fn scheduler(ctx: *mut RunCtx) -> &'static mut Scheduler {
+pub(crate) fn scheduler(ctx: *mut RunCtx) -> &'static mut Scheduler {
     // SAFETY: the context is live for the whole run, and the scheduler is only reached
     // through it, by the one running task; no reference is kept across a switch.
     unsafe {
@@ -310,6 +312,13 @@ fn scheduler(ctx: *mut RunCtx) -> &'static mut Scheduler {
             .tasks
             .get_or_insert_with(|| Box::new(Scheduler::new()))
     }
+}
+
+/// The running task's spawn path.
+pub(crate) fn current_path(ctx: *mut RunCtx) -> Vec<u32> {
+    let s = scheduler(ctx);
+    let current = s.current;
+    s.task(current).path.clone()
 }
 
 /// Suspend the running task and run `next`. The running task must already be queued, parked

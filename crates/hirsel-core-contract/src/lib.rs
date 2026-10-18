@@ -177,6 +177,19 @@ pub struct RuleCode(pub String);
 pub const RUNTIME_RULE_BASE: u32 = 1 << 31;
 pub const RUNTIME_RULES: [&str; 2] = ["CAP-2", "LANG-9"];
 
+/// The `FailureKind` ordinal (`Check`, `Contract`, `Depth`, `OutOfSpace`, `DeadMutex`) of a
+/// failure of `rule`, as `task.isolate` reports it (FAIL-2): recursion depth (MEM-3), a
+/// bounded arena's exhaustion (MEM-6) and a dead mutex (FAIL-4) have their own kinds, and
+/// every other failure is a check.
+pub fn failure_kind(rule: &str) -> u32 {
+    match rule {
+        "MEM-3" => 2,
+        "MEM-6" => 3,
+        "FAIL-4" => 4,
+        _ => 0,
+    }
+}
+
 /// The fixed runtime code of `rule`, if the runtime may record it.
 pub fn runtime_rule_code(rule: &str) -> Option<u32> {
     RUNTIME_RULES

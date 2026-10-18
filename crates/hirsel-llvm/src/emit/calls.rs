@@ -199,6 +199,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 caught,
                 failed,
             } => self.recover(arena, caught, failed),
+            // FAIL-2: the runtime keeps the failures recorded since `start` for the
+            // caught code and forgets them; ordinary code resumes.
+            Terminator::Isolate { start, caught } => {
+                let entry = self.runtime(RuntimeEntry::IsolateCatch)?;
+                self.builder.call(entry, &[self.context, self.get(start)?]);
+                let caught = self.edge_block(caught)?;
+                self.builder.br(caught);
+                Ok(())
+            }
             Terminator::Propagate => {
                 self.flush_on_return()?;
                 self.return_status(1, None)?;

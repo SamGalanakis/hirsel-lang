@@ -9,6 +9,14 @@ $intrinsic.ChannelReceive	c6d2465b96654ce7529941af2be2f0216af06fdeeced89f7928fa1
 $intrinsic.ChannelSend	0100e4489ee541da7fb0d8e89442401c506457b91673f1cf81e14dac915751b0	0:m:[0];1:m:[0]->n
 $intrinsic.InlineConsume_next	295cc2383b56d67815e4768ac2a2d51d537bad65f84b1329a5568a4da6bb0ebc	0:m:[0]->[0]
 $intrinsic.InlineConsume_open	cad13acbad9f41a24347126f74e127d15db2badebcb541f8759e6d0dc7552f31	0:t:[0]->[0]
+$intrinsic.IsolateBegin	cba525226a93f797abb75191c14ab82ec4ea30836a30c3e25119d0e375d24787	0:b:n->n
+$intrinsic.IsolateColumn	20f85b0d40d77474f37e77f4a6ede8c388d341147c779a6bb31ed3bf6cc31127	0:b:n;1:b:n->n
+$intrinsic.IsolateCount	4b69f4b1b883d3795273a2655b04bb09b8b9717c699f76142916a99972172960	0:b:n->n
+$intrinsic.IsolateDefinition	1e25e4a0d749965440ddb94b5c73e14a9fc41cdb09c4bca8d1dbedb52dcfc170	0:b:n;1:b:n->n
+$intrinsic.IsolateKind	ed1ea77773cffa5861fa455787c5d9c6dbb9785a0d114eb113775de5f800a99d	0:b:n;1:b:n->n
+$intrinsic.IsolateLine	8b21bb365e465a1cc5034429002bc3d54806c1c13df3246d2990b67e39f58988	0:b:n;1:b:n->n
+$intrinsic.IsolateRule	25fb66f1421dbc6e10f8eec0ca9f26e39d4afef750908d93476adb1eee5375f7	0:b:n;1:b:n->n
+$intrinsic.IsolateSpawn	1d4c1db7fc6de29db1335ada052e950e6f9c41a64de0c7981f0235f091bc645d	0:b:n;1:b:n->n
 $intrinsic.ListConsume_next	857a17605340cb5d627719090f5bcb365f9d78cf7a373b2d3de6e7d4ee21f70b	0:m:[0]->[0]
 $intrinsic.ListConsume_open	f260a290764cdc1e54b78e0bd009ed693e1ecd0624b12920d3b5f02d45c233e5	0:t:[0]->[0]
 $intrinsic.MapInsertionOrder_len	287310b501ed67cdb79eea3cb00455fec483d53ac60f9c29a2608866b7e658c4	0:b:[0,1]->n
