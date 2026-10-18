@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-895 exported definitions; 266 variants.
+945 exported definitions; 280 variants.
 
 ## Types and roots
 
@@ -2150,6 +2150,174 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/csv/Config`](#def
 - `pub fn csv.write_record(fields: List[String], delimiter: u8, mut out: List[u8]) -> Result[ (), CsvError ] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8), [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError)
+
+
+## date
+
+<a id="def-std_401_2fdate_2fadd_5fdays"></a>
+
+- `@noalloc pub fn date.add_days(value: time.Date, days: i64) -> Result[time.Date, time.TimeError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i64`](#def-core_401_2fi64), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError)
+
+<a id="def-std_401_2fdate_2fadd_5fmonths"></a>
+
+- `@noalloc pub fn date.add_months(value: time.Date, months: i64, overflow: time.Overflow) -> Result[ time.Date, time.CalendarError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i64`](#def-core_401_2fi64), [`std@1/time/CalendarError`](#def-std_401_2ftime_2fCalendarError), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/Overflow`](#def-std_401_2ftime_2fOverflow)
+
+<a id="def-std_401_2fdate_2fadd_5fyears"></a>
+
+- `@noalloc pub fn date.add_years(value: time.Date, years: i64, overflow: time.Overflow) -> Result[ time.Date, time.CalendarError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i64`](#def-core_401_2fi64), [`std@1/time/CalendarError`](#def-std_401_2ftime_2fCalendarError), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/Overflow`](#def-std_401_2ftime_2fOverflow)
+
+<a id="def-std_401_2fdate_2fcompare"></a>
+
+- `@noalloc pub fn date.compare(a: time.Date, b: time.Date) -> i32 uses {}`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fday"></a>
+
+- `@noalloc pub fn date.day(value: time.Date) -> u8 uses {}`
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fdays_5fbetween"></a>
+
+- `@noalloc pub fn date.days_between(start: time.Date, end: time.Date) -> i64 uses {}`
+
+References: [`core@1/i64`](#def-core_401_2fi64), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fformat_5finto"></a>
+
+- `@preserves_unique(out) pub fn date.format_into(value: time.Date, mut out: List[u8]) -> () uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2ffrom_5fepoch_5fdays"></a>
+
+- `@noalloc pub fn date.from_epoch_days(days: i64) -> Option[time.Date] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i64`](#def-core_401_2fi64), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2ffrom_5fiso_5fweek"></a>
+
+- `@noalloc pub fn date.from_iso_week(y: i32, week: u8, day_of_week: time.Weekday) -> Option[time.Date] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/Weekday`](#def-std_401_2ftime_2fWeekday)
+
+<a id="def-std_401_2fdate_2ffrom_5fordinal"></a>
+
+- `@noalloc pub fn date.from_ordinal(y: i32, day_of_year: u16) -> Option[time.Date] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u16`](#def-core_401_2fu16), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fiso_5fweek"></a>
+
+- `@noalloc pub fn date.iso_week(value: time.Date) -> time.IsoWeek uses {}`
+
+References: [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/IsoWeek`](#def-std_401_2ftime_2fIsoWeek)
+
+<a id="def-std_401_2fdate_2fmonth"></a>
+
+- `@noalloc pub fn date.month(value: time.Date) -> u8 uses {}`
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fnew"></a>
+
+- `@noalloc pub fn date.new(y: i32, m: u8, d: u8) -> Option[time.Date] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fordinal"></a>
+
+- `@noalloc pub fn date.ordinal(value: time.Date) -> u16 uses {}`
+
+References: [`core@1/u16`](#def-core_401_2fu16), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fparse"></a>
+
+- `@noalloc pub fn date.parse(text: String) -> Result[time.Date, scalar.ParseError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fto_5fepoch_5fdays"></a>
+
+- `@noalloc pub fn date.to_epoch_days(value: time.Date) -> i64 uses {}`
+
+References: [`core@1/i64`](#def-core_401_2fi64), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fto_5fstring"></a>
+
+- `pub fn date.to_string(value: time.Date) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+<a id="def-std_401_2fdate_2fweekday"></a>
+
+- `@noalloc pub fn date.weekday(value: time.Date) -> time.Weekday uses {}`
+
+References: [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/Weekday`](#def-std_401_2ftime_2fWeekday)
+
+<a id="def-std_401_2fdate_2fyear"></a>
+
+- `@noalloc pub fn date.year(value: time.Date) -> i32 uses {}`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/Date`](#def-std_401_2ftime_2fDate)
+
+
+## date_time
+
+<a id="def-std_401_2fdate_5ftime_2fadd"></a>
+
+- `@noalloc pub fn date_time.add(value: time.DateTime, interval: time.Duration) -> Result[ time.DateTime, time.TimeError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError)
+
+<a id="def-std_401_2fdate_5ftime_2fbetween"></a>
+
+- `@noalloc pub fn date_time.between(start: time.DateTime, end: time.DateTime) -> time.Duration uses {}`
+
+References: [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
+
+<a id="def-std_401_2fdate_5ftime_2fcompare"></a>
+
+- `@noalloc pub fn date_time.compare(a: time.DateTime, b: time.DateTime) -> i32 uses {}`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime)
+
+<a id="def-std_401_2fdate_5ftime_2fformat_5finto"></a>
+
+- `@preserves_unique(out) pub fn date_time.format_into(value: time.DateTime, mut out: List[u8]) -> () uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime)
+
+<a id="def-std_401_2fdate_5ftime_2ffrom_5ftimestamp"></a>
+
+- `@noalloc pub fn date_time.from_timestamp(value: time.Timestamp, offset: i32) -> Result[ time.DateTime, time.TimeError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+<a id="def-std_401_2fdate_5ftime_2fparse"></a>
+
+- `@noalloc pub fn date_time.parse(text: String) -> Result[time.DateTime, scalar.ParseError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime)
+
+<a id="def-std_401_2fdate_5ftime_2fto_5fstring"></a>
+
+- `pub fn date_time.to_string(value: time.DateTime) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime)
+
+<a id="def-std_401_2fdate_5ftime_2fto_5ftimestamp"></a>
+
+- `@noalloc pub fn date_time.to_timestamp(value: time.DateTime, offset: i32) -> Result[ time.Timestamp, time.TimeError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
 
 
 ## deque
@@ -5714,11 +5882,93 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/char`](#def-core_401
 
 ## time
 
+<a id="def-std_401_2ftime_2fBrokenDownTime"></a>
+
+- `pub type time.BrokenDownTime { datetime: DateTime, offset: Option[i32], }`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime)
+
+<a id="def-std_401_2ftime_2fCalendarError"></a>
+
+- `pub type time.CalendarError = OutOfRange | NoSuchDay`
+
+<a id="def-std_401_2ftime_2fCalendarError_23NoSuchDay"></a>
+
+- `NoSuchDay -> time.CalendarError`
+
+Variant of time.CalendarError.
+
+<a id="def-std_401_2ftime_2fCalendarError_23OutOfRange"></a>
+
+- `OutOfRange -> time.CalendarError`
+
+Variant of time.CalendarError.
+
+<a id="def-std_401_2ftime_2fDate"></a>
+
+- `@format(date.format_into) pub opaque type time.Date: plain + key + sendable + inert + noalloc_drop uses {}`
+
+References: [`std@1/date/format_into`](#def-std_401_2fdate_2fformat_5finto)
+
+<a id="def-std_401_2ftime_2fDateTime"></a>
+
+- `@format(date_time.format_into) pub type time.DateTime { date: Date, time: TimeOfDay, }`
+
+References: [`std@1/date_time/format_into`](#def-std_401_2fdate_5ftime_2fformat_5finto), [`std@1/time/Date`](#def-std_401_2ftime_2fDate), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
 <a id="def-std_401_2ftime_2fDuration"></a>
 
 - `@serializable pub type time.Duration { nanoseconds: i128, }`
 
 References: [`core@1/i128`](#def-core_401_2fi128)
+
+<a id="def-std_401_2ftime_2fFormatError"></a>
+
+- `pub type time.FormatError = Invalid(u64) | NoOffset | OutOfRange`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftime_2fFormatError_23Invalid"></a>
+
+- `Invalid(u64) -> time.FormatError`
+
+Variant of time.FormatError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2ftime_2fFormatError_23NoOffset"></a>
+
+- `NoOffset -> time.FormatError`
+
+Variant of time.FormatError.
+
+<a id="def-std_401_2ftime_2fFormatError_23OutOfRange"></a>
+
+- `OutOfRange -> time.FormatError`
+
+Variant of time.FormatError.
+
+<a id="def-std_401_2ftime_2fIsoWeek"></a>
+
+- `pub type time.IsoWeek { year: i32, week: u8, }`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2ftime_2fOverflow"></a>
+
+- `pub type time.Overflow = Clamp | Reject`
+
+<a id="def-std_401_2ftime_2fOverflow_23Clamp"></a>
+
+- `Clamp -> time.Overflow`
+
+Variant of time.Overflow.
+
+<a id="def-std_401_2ftime_2fOverflow_23Reject"></a>
+
+- `Reject -> time.Overflow`
+
+Variant of time.Overflow.
 
 <a id="def-std_401_2ftime_2fSleepError"></a>
 
@@ -5756,17 +6006,75 @@ References: [`core@1/WaitError`](#def-core_401_2fWaitError)
 
 Variant of time.TimeError.
 
+<a id="def-std_401_2ftime_2fTimeOfDay"></a>
+
+- `@format(time_of_day.format_into) pub opaque type time.TimeOfDay: plain + key + sendable + inert + noalloc_drop uses {}`
+
+References: [`std@1/time_of_day/format_into`](#def-std_401_2ftime_5fof_5fday_2fformat_5finto)
+
 <a id="def-std_401_2ftime_2fTimestamp"></a>
 
 - `@serializable pub type time.Timestamp { unix_nanoseconds: i128, }`
 
 References: [`core@1/i128`](#def-core_401_2fi128)
 
+<a id="def-std_401_2ftime_2fWeekday"></a>
+
+- `pub type time.Weekday = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday`
+
+<a id="def-std_401_2ftime_2fWeekday_23Friday"></a>
+
+- `Friday -> time.Weekday`
+
+Variant of time.Weekday.
+
+<a id="def-std_401_2ftime_2fWeekday_23Monday"></a>
+
+- `Monday -> time.Weekday`
+
+Variant of time.Weekday.
+
+<a id="def-std_401_2ftime_2fWeekday_23Saturday"></a>
+
+- `Saturday -> time.Weekday`
+
+Variant of time.Weekday.
+
+<a id="def-std_401_2ftime_2fWeekday_23Sunday"></a>
+
+- `Sunday -> time.Weekday`
+
+Variant of time.Weekday.
+
+<a id="def-std_401_2ftime_2fWeekday_23Thursday"></a>
+
+- `Thursday -> time.Weekday`
+
+Variant of time.Weekday.
+
+<a id="def-std_401_2ftime_2fWeekday_23Tuesday"></a>
+
+- `Tuesday -> time.Weekday`
+
+Variant of time.Weekday.
+
+<a id="def-std_401_2ftime_2fWeekday_23Wednesday"></a>
+
+- `Wednesday -> time.Weekday`
+
+Variant of time.Weekday.
+
 <a id="def-std_401_2ftime_2fbetween"></a>
 
 - `@noalloc pub fn time.between(clock: MonotonicClock, start: Instant of clock, end: Instant of clock) -> Duration`
 
 References: [`core@1/Instant`](#def-core_401_2fInstant), [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
+
+<a id="def-std_401_2ftime_2fbroken_5fdown"></a>
+
+- `@noalloc pub fn time.broken_down(value: Timestamp, offset: i32) -> Result[BrokenDownTime, TimeError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/BrokenDownTime`](#def-std_401_2ftime_2fBrokenDownTime), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
 
 <a id="def-std_401_2ftime_2fcompare"></a>
 
@@ -5786,11 +6094,23 @@ References: [`core@1/Instant`](#def-core_401_2fInstant), [`core@1/MonotonicClock
 
 References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/Instant`](#def-core_401_2fInstant), [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/Result`](#def-core_401_2fResult), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
+<a id="def-std_401_2ftime_2fformat"></a>
+
+- `pub fn time.format(value: BrokenDownTime, pattern: String) -> Result[ unique String, FormatError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/time/BrokenDownTime`](#def-std_401_2ftime_2fBrokenDownTime), [`std@1/time/FormatError`](#def-std_401_2ftime_2fFormatError)
+
 <a id="def-std_401_2ftime_2fparse"></a>
 
 - `@noalloc pub fn time.parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+<a id="def-std_401_2ftime_2fparse_5fwith"></a>
+
+- `@noalloc pub fn time.parse_with(text: String, pattern: String) -> Result[ BrokenDownTime, scalar.ParseError ] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError), [`std@1/time/BrokenDownTime`](#def-std_401_2ftime_2fBrokenDownTime)
 
 <a id="def-std_401_2ftime_2fsleep"></a>
 
@@ -5803,6 +6123,75 @@ References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/
 - `pub fn time.to_string(value: Timestamp) -> Result[unique String, TimeError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+<a id="def-std_401_2ftime_2fto_5fstring_5fat"></a>
+
+- `pub fn time.to_string_at(value: Timestamp, offset: i32) -> Result[unique String, TimeError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+
+## time_of_day
+
+<a id="def-std_401_2ftime_5fof_5fday_2fcompare"></a>
+
+- `@noalloc pub fn time_of_day.compare(a: time.TimeOfDay, b: time.TimeOfDay) -> i32 uses {}`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fformat_5finto"></a>
+
+- `@preserves_unique(out) pub fn time_of_day.format_into(value: time.TimeOfDay, mut out: List[u8]) -> () uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fhour"></a>
+
+- `@noalloc pub fn time_of_day.hour(value: time.TimeOfDay) -> u8 uses {}`
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fmidnight"></a>
+
+- `@noalloc pub fn time_of_day.midnight() -> time.TimeOfDay uses {}`
+
+References: [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fminute"></a>
+
+- `@noalloc pub fn time_of_day.minute(value: time.TimeOfDay) -> u8 uses {}`
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fnanosecond"></a>
+
+- `@noalloc pub fn time_of_day.nanosecond(value: time.TimeOfDay) -> u32 uses {}`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fnew"></a>
+
+- `@noalloc pub fn time_of_day.new(h: u8, m: u8, s: u8, ns: u32) -> Option[time.TimeOfDay] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fparse"></a>
+
+- `@noalloc pub fn time_of_day.parse(text: String) -> Result[time.TimeOfDay, scalar.ParseError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fsecond"></a>
+
+- `@noalloc pub fn time_of_day.second(value: time.TimeOfDay) -> u8 uses {}`
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
+
+<a id="def-std_401_2ftime_5fof_5fday_2fto_5fstring"></a>
+
+- `pub fn time_of_day.to_string(value: time.TimeOfDay) -> unique String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/TimeOfDay`](#def-std_401_2ftime_2fTimeOfDay)
 
 
 ## tls
