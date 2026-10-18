@@ -680,9 +680,18 @@ struct TodoServer {
 
 impl TodoServer {
     fn start(manifest: &std::path::Path, grants: &std::path::Path) -> Self {
+        Self::launch(manifest, grants, false)
+    }
+
+    /// Run the server, compiled with `native`, until it prints its readiness line.
+    fn launch(manifest: &std::path::Path, grants: &std::path::Path, native: bool) -> Self {
         use std::io::BufRead;
-        let mut child = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .arg("run")
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.arg("run");
+        if native {
+            command.arg("--native");
+        }
+        let mut child = command
             .arg(manifest)
             .arg("--grants")
             .arg(grants)
@@ -697,8 +706,13 @@ impl TodoServer {
             let _ = std::io::BufReader::new(stdout).read_line(&mut line);
             let _ = send.send(line);
         });
+        // A native run compiles first, and its first build also builds the runtime.
         let line = recv
-            .recv_timeout(std::time::Duration::from_secs(90))
+            .recv_timeout(std::time::Duration::from_secs(if native {
+                300
+            } else {
+                90
+            }))
             .expect("server readiness");
         let port = line
             .strip_prefix("listening on 127.0.0.1:")
@@ -845,6 +859,22 @@ fn todo_api_serves_clients_concurrently_and_persists() {
     let listed = todo_api_concurrent_creates(&server, 1);
     drop(server);
     let server = TodoServer::start(&manifest, &grants);
+    assert_eq!(server.call("GET", "/todos", None), (200, listed));
+    drop(server);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+#[ignore = "full gate"]
+fn full_gate_todo_api_serves_clients_concurrently_and_persists_native() {
+    let (dir, manifest, grants) = todo_api_fixture();
+    // The compiled server: a task per connection, the store behind a Mutex and the writer
+    // task over a channel run on the native scheduler.
+    let server = TodoServer::launch(&manifest, &grants, true);
+    assert_eq!(server.call("GET", "/todos", None), (200, "[]".into()));
+    let listed = todo_api_concurrent_creates(&server, 1);
+    drop(server);
+    let server = TodoServer::launch(&manifest, &grants, true);
     assert_eq!(server.call("GET", "/todos", None), (200, listed));
     drop(server);
     std::fs::remove_dir_all(&dir).unwrap();
@@ -1413,8 +1443,22 @@ fn kv(server: &TodoServer, method: &str, path: &str, body: Option<&[u8]>) -> (u1
 
 #[test]
 fn kvstore_serves_clients_concurrently_and_persists() {
+    kvstore_session(false);
+}
+
+#[test]
+#[ignore = "full gate"]
+fn full_gate_kvstore_serves_clients_concurrently_and_persists_native() {
+    // The compiled server: a task per connection, the store behind a Mutex and the writer
+    // task over a channel run on the native scheduler.
+    kvstore_session(true);
+}
+
+/// Concurrent writers beside a held request, every route, and a restart, with the
+/// server run by the interpreter or compiled with `native`.
+fn kvstore_session(native: bool) {
     let (example, manifest, grants) = kvstore_fixture();
-    let server = TodoServer::start(&manifest, &grants);
+    let server = TodoServer::launch(&manifest, &grants, native);
     assert_eq!(kv(&server, "GET", "/kv", None).2, "{}");
     // An incomplete request holds its own task while two clients write.
     let mut held =
@@ -1471,6 +1515,6 @@ fn kvstore_serves_clients_concurrently_and_persists() {
     );
     // A restart serves the saved entries.
     drop(server);
-    let server = TodoServer::start(&manifest, &grants);
+    let server = TodoServer::launch(&manifest, &grants, native);
     assert_eq!(kv(&server, "GET", "/kv/caf%C3%A9", None).2, "βeta");
 }
