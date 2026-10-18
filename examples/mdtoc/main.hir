@@ -154,7 +154,7 @@ fn toc(found: List[Heading]) -> String {
       Some(n) => n + 1,
       None() => 1u64,
     }
-    map.insert(mut seen, base, count)
+    map.insert(mut seen, take base, count)
     for _ in top..h.level {
       text.append(mut out, "  ")
     }

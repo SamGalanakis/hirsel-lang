@@ -97,9 +97,9 @@ fn tally(words: List[String], mut counts: Map[String, u64], mut order: List[Stri
   for w in words {
     bytes += string.byte_len(w)
     match map.get(counts, w) {
-      Some(n) => map.insert(mut counts, w, n + 1),
+      Some(n) => map.insert(mut counts, unique w, n + 1),
       None() => {
-        map.insert(mut counts, w, 1)
+        map.insert(mut counts, unique w, 1)
         list.push(mut order, unique w)
       },
     }

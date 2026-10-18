@@ -34,7 +34,7 @@ const MAX_VALUE: u64 = 65536
 fn entries_json(entries: Map[String, String]) -> String uses {} {
   let mut fields: Map[String, box json.Value] = map.empty()
   for (key, value) in entries {
-    map.insert(mut fields, key, box Text(unique value))
+    map.insert(mut fields, unique key, box Text(unique value))
   }
   match json.stringify(Object(take fields)) {
     Ok(s) => take s,
@@ -168,7 +168,7 @@ fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
       // Inserting a String key leaves a map aliased, so insert into a deep
       // copy and store a unique copy back.
       let mut entries = unique st.entries
-      map.insert(mut entries, key, unique value)
+      map.insert(mut entries, unique key, unique value)
       st.entries = unique entries
       st.version += 1
       changed(st, status)
