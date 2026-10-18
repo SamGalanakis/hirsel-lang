@@ -16,6 +16,7 @@ pub use net::{
     validate_net_grant,
 };
 mod child;
+pub mod tls;
 pub use child::{ChildStream, ScriptChild, ScriptRead, child_mismatch, child_unmet};
 mod process;
 pub use process::{

@@ -1,7 +1,9 @@
 # hirsel-run-config
 
 Closed tooling data for PROG-3/6 and DET-1. Allowed dependencies: std, serde,
-serde_json and sha2. No compiler or execution implementation dependency.
+serde_json, sha2, and pinned pure rustls-pki-types/webpki parsers. No compiler or execution implementation dependency.
+`tls` parses verification names and PEM trust anchors without time, cryptography or Io;
+all engines use these argument checks before cancellation.
 
 Host input read failures include the selected grants, run record or revocation path. A relative directory resolution failure includes its template-relative candidate.
 

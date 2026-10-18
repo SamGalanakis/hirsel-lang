@@ -5,6 +5,7 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| rustls | RootCertStore::add trust-anchor decoding and TLS verification-name parsing, with the existing rsa-2048 ca.cert accepted control | `crates/hirsel-run-config/src/tls.rs`, TLS input conformance | rustls/rustls `f04804fa13341a9b1dc02b5d1dd8a746f2c4b7fb` (v/0.23.46) | MIT |
 | Go standard library | `src/unicode/letter.go` range binary search adapted from the existing Unicode property lookup; Unicode16 UCD supplies display-width data and P1868R2 supplies the estimate | `stdlib/std@1/display_width.hir`, display-width conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/net/http/transport_test.go` TestTransportKeepAlives, TestTransportConnectionCloseOnResponse, TestTransportRespectRequestWantsClose, TestTransportReadToEndReusesConn and stale-connection controls; adapted to scripted peers | `packages/fixtures/http_client_vectors@1`, `conformance/SEM/SEM-1-http-client-*` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Rust standard library | `library/core/src/panic/location.rs` new_location and constant_location documentation examples, adapted to caught failures and explicit task isolation | caller-attribution conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |

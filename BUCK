@@ -3050,6 +3050,8 @@ hirsel_test(
 hirsel_library(
     name = "hirsel-run-config",
     deps = [
+        "//third-party:rustls-pki-types",
+        "//third-party:rustls-webpki",
         "//third-party:serde",
         "//third-party:serde_json",
         "//third-party:sha2",
@@ -3068,6 +3070,8 @@ hirsel_library(
 hirsel_test(
     name = "hirsel-run-config-unittest",
     deps = [
+        "//third-party:rustls-pki-types",
+        "//third-party:rustls-webpki",
         "//third-party:serde",
         "//third-party:serde_json",
         "//third-party:sha2",
@@ -3087,6 +3091,8 @@ hirsel_test(
     name = "hirsel-run-config-test-it",
     deps = [
         "//:hirsel-run-config",
+        "//third-party:rustls-pki-types",
+        "//third-party:rustls-webpki",
         "//third-party:serde",
         "//third-party:serde_json",
         "//third-party:sha2",

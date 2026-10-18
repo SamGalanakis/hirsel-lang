@@ -25,6 +25,8 @@ libc = { version = "=0.2.190", default-features = false, features = ["default", 
 llvm-sys = { version = "=211.0.1", default-features = false, features = ["force-dynamic", "strict-versioning"] }
 proptest = { version = "=1.11.0", default-features = false, features = ["bit-set", "default", "fork", "regex-syntax", "rusty-fork", "std", "tempfile", "timeout"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pki-types = { version = "=1.15.1", default-features = false, features = ["alloc", "default", "std"] }
+rustls-webpki = { version = "=0.103.15", default-features = false, features = ["alloc", "ring", "std"] }
 serde = { version = "=1.0.229", default-features = false, features = ["alloc", "default", "derive", "rc", "serde_derive", "std"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["default", "std"] }
 sha2 = { version = "=0.10.9", default-features = false, features = ["default", "std"] }

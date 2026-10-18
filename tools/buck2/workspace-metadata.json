@@ -1801,6 +1801,12 @@
       "dependencies": [
         {
           "kind": null,
+          "name": "rustls-pki-types",
+          "req": "=1.15.1",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
           "name": "serde",
           "req": "^1",
           "uses_default_features": true
@@ -1816,6 +1822,12 @@
           "name": "sha2",
           "req": "^0.10",
           "uses_default_features": true
+        },
+        {
+          "kind": null,
+          "name": "rustls-webpki",
+          "req": "=0.103.15",
+          "uses_default_features": false
         }
       ],
       "name": "hirsel-run-config"
