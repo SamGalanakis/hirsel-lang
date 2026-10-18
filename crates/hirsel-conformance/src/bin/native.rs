@@ -64,6 +64,24 @@ fn listed(root: &Path, list: &str) -> Result<Vec<Case>, String> {
         .collect()
 }
 
+/// An explicit smoke selection exercises the same programs on both backends.
+/// Unfiltered smoke retains its smaller fixed Cranelift control set.
+fn smoke_cranelift_cases(
+    root: &Path,
+    filter: &Filter,
+    selected: &[Case],
+) -> Result<Vec<Case>, String> {
+    if filter.is_empty() {
+        listed(root, native::cranelift::SMOKE)
+    } else {
+        Ok(selected
+            .iter()
+            .filter(|case| filter.keeps(&case.id))
+            .cloned()
+            .collect())
+    }
+}
+
 /// Every case must agree under every configuration. A campaign that checks
 /// nothing fails: no cases, or a case run under no configuration.
 fn all_agree(what: &str, results: &[native::CaseResult]) -> bool {
@@ -225,7 +243,7 @@ fn run() -> Result<bool, String> {
             // A handful of cases as Cranelift executables.
             let cranelift = [native::cranelift::cranelift(matrix[0].options.clone())];
             let compiled = native::run_cases(
-                &listed(&root, native::cranelift::SMOKE)?,
+                &smoke_cranelift_cases(&root, &filter, &cases)?,
                 &cranelift,
                 &toolchain,
                 &native::scratch("smoke-cranelift")?,
@@ -887,6 +905,30 @@ mod tests {
                 "{runtime:?} regions {regions} {opt:?} missing from {names:?}"
             );
         }
+    }
+
+    #[test]
+    fn filtered_smoke_uses_the_callers_programs_for_cranelift() {
+        let cases = ["new-program.hir", "unrelated.hir"].map(|id| Case {
+            id: id.into(),
+            source: String::new(),
+            path: None,
+        });
+        let filter = Filter(vec!["new-program.hir".into()], None);
+        // The explicit case need not occur in the fixed smoke list. No list is
+        // read, and unrelated programs must not be compiled on this backend.
+        let selected = smoke_cranelift_cases(Path::new("no-smoke-list"), &filter, &cases).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, "new-program.hir");
+
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixed = listed(&root, native::cranelift::SMOKE).unwrap();
+        let default = smoke_cranelift_cases(&root, &Filter::default(), &cases).unwrap();
+        assert!(!default.is_empty());
+        assert_eq!(
+            default.iter().map(|c| &c.id).collect::<Vec<_>>(),
+            fixed.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -122,6 +122,22 @@ class Classification(unittest.TestCase):
         self.assertEqual((tests.campaigns, tests.crates), (set(), set()))
         self.assertEqual(tests.owned, ['crates/hirsel-lexer/tests/it/keywords.rs', 'crates/hirsel-llvm/benches/b.rs'])
 
+    def test_a_campaign_binary_does_not_select_other_commands_campaigns(self):
+        for path, campaigns in impact.SOURCE_CAMPAIGNS.items():
+            with self.subTest(path=path):
+                c = impact.classify([path], {'hirsel-conformance'}, BUCK)
+                self.assertEqual(c.campaigns, campaigns)
+                self.assertTrue(c.needs_buck2)
+        c = impact.classify(['crates/hirsel-conformance/src/lib.rs'], {'hirsel-conformance'}, BUCK)
+        self.assertEqual(c.campaigns, set(impact.CAMPAIGNS))
+
+    def test_a_crate_readme_read_by_a_test_does_not_become_library_source(self):
+        c = impact.classify(['crates/hirsel-conformance/README.md'], {'hirsel-conformance'},
+                            'data = glob(["crates/**"])')
+        self.assertEqual(c.owned, ['crates/hirsel-conformance/README.md'])
+        self.assertEqual(c.crates, set())
+        self.assertEqual(c.campaigns, set())
+
     def test_every_workspace_crate_has_a_row_and_the_repository_passes_the_policy(self):
         self.assertEqual(set(impact.CRATE_CAMPAIGNS), gating.members(REPO))
         self.assertEqual(gating.policy_errors(REPO), [])

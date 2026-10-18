@@ -429,6 +429,8 @@ including an empty prefix. Ordinary and checked interpretation must agree.
 
 `native --smoke --filter TEXT` runs selected baseline programs under the per-push
 smoke matrix, with real Io record/replay. `tools/gate` gives this and Cranelift
-parity the same changed-program filters; an empty selection fails.
+parity the same changed-program filters; filtered smoke runs those programs on
+Cranelift too, including programs outside its fixed smoke list. Unfiltered smoke
+retains that smaller control set. An empty selection fails.
 
 `// expect: test` checks and runs all `@test` functions with ordinary and checked interpretation. Native matrices run every selected test independently under every configured engine, using its stable default seed. Smoke record/replay records and replays each test independently. A suite selecting no tests fails conformance.

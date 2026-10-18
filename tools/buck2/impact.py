@@ -84,6 +84,14 @@ CRATE_CAMPAIGNS = {
     'hirsel-pipeline-tests': frozenset(),
 }
 
+# A command's implementation cannot change another command's campaign.
+# Library sources and unlisted paths retain their crate-wide classification.
+SOURCE_CAMPAIGNS = {
+    'crates/hirsel-conformance/src/main.rs': frozenset({CONFORMANCE}),
+    'crates/hirsel-conformance/src/bin/agree.rs': frozenset({AGREEMENT}),
+    'crates/hirsel-conformance/src/bin/native.rs': frozenset({NATIVE_SMOKE}),
+}
+
 # These producers must exercise both native backends with one program selection.
 NATIVE_PARITY_CRATES = frozenset({
     'hirsel-llvm', 'hirsel-cranelift', 'hirsel-lir', 'hirsel-rc', 'hirsel-rt',
@@ -217,9 +225,9 @@ def classify(paths, members, buck_text: str) -> Classified:
                 result.unknown_crates.add(crate)
                 continue
             result.owned.append(path)
-            if len(parts) > 2 and parts[2] not in CRATE_TEST_DIRS:
+            if len(parts) > 2 and parts[2] not in CRATE_TEST_DIRS and parts[2] != 'README.md':
                 result.crates.add(crate)
-                result.campaigns |= CRATE_CAMPAIGNS[crate]
+                result.campaigns |= SOURCE_CAMPAIGNS.get(path, CRATE_CAMPAIGNS[crate])
         else:
             result.owned.append(path)
     return result
