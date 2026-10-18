@@ -1428,6 +1428,8 @@ conformance/LANG/LANG-4-nested-builtin-variant-bad.hir
 conformance/LANG/LANG-4-nested-builtin-variant-run.hir
 conformance/LANG/LANG-4-nested-shadow-bad.hir
 conformance/LANG/LANG-4-nested-shadow-ok.hir
+conformance/LANG/LANG-4-nested-variant-over-type-bad.hir
+conformance/LANG/LANG-4-nested-variant-over-type-run.hir
 conformance/LANG/LANG-4-other-module-shadow-run.hir
 conformance/LANG/LANG-4-qualified-variant-bad.hir
 conformance/LANG/LANG-4-qualified-variant-ok.hir

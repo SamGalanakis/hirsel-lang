@@ -112,9 +112,13 @@ Core library roles such as `Unsafe`, `Result` and the capability types are ident
 fully qualified definition paths, never by spelling alone; a user type with the same name
 is a distinct type and cannot fill that role.
 
-A contextual variant selected by the expected type wins over a same-named function.
-This applies through nested constructor arguments: with expected `Option[V]`,
-`Some(Array(xs))` selects `V`'s `Array` variant when `V` declares it. A
+A contextual variant selected by the expected type wins over a same-named function
+or type. This applies through nested constructor arguments and patterns, whose
+expected type is the payload's declared type with the enclosing type's arguments
+substituted: with expected `Option[V]`, `Some(Array(xs))` selects `V`'s `Array`
+variant when `V` declares it, and matching a `Result[T, http.HttpError]` against
+`Error(Net(_))` selects `HttpError`'s `Net`, not core's `Net` capability type.
+Without an expected variant type, `Net` names the type. A
 versioned path consumes name and slash separators greedily up to its first dot,
 independently of whitespace; a member or numeric right operand ends the path for division.
 To divide a versioned path by a name, group the path: `(pkg@1/a) / b`. Parsing never

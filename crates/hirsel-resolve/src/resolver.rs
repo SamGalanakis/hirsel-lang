@@ -17,7 +17,12 @@ pub use hirsel_types::{
 /// No body inference is performed here; external hints can finish deferred uses.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum ExpectedType {
-    Named(DefPath),
+    /// A nominal type and its generic arguments in generic-list order; an
+    /// unwritten, unknown or size argument is `Unknown`.
+    Named {
+        definition: DefPath,
+        arguments: Vec<ExpectedType>,
+    },
     Tuple(Vec<ExpectedType>),
     Function {
         parameters: Vec<ExpectedType>,
@@ -25,6 +30,14 @@ pub enum ExpectedType {
     },
     #[default]
     Unknown,
+}
+impl ExpectedType {
+    fn nominal(definition: DefPath) -> Self {
+        Self::Named {
+            definition,
+            arguments: vec![],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -173,6 +186,7 @@ pub fn resolve_view(
         contract_kind: None,
         exported: false,
         shaping: BTreeSet::new(),
+        type_arguments: vec![],
         sibling_fields: BTreeMap::new(),
         declaring: vec![],
         deferred: vec![],
@@ -212,6 +226,8 @@ struct Resolver<'a, P: ?Sized> {
     contract_kind: Option<ContractKind>,
     exported: bool,
     shaping: BTreeSet<DefPath>,
+    /// While shaping a same-file generic type: its parameters' arguments.
+    type_arguments: Vec<(Symbol, ExpectedType)>,
     sibling_fields: BTreeMap<Symbol, (DefPath, ty::FieldId, TypeExprId)>,
     /// Names a let pattern or parameter is declaring: a relation naming one
     /// stands for that binding's own scope (MODE-1, LANG-15).
@@ -708,7 +724,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     let binding = self.local(
                         drop.binding,
                         item.origin.span,
-                        ExpectedType::Named(item.definition),
+                        ExpectedType::nominal(item.definition),
                     );
                     self.output.drop_binding = Some(binding);
                     if !matches!(self.view, ResolveView::Header(_)) {
@@ -858,12 +874,20 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 } else {
                     self.named_type(id, &path, node.origin.span)
                 };
-                for argument in arguments {
-                    if let TypeArgument::Type(ty) = argument {
-                        self.type_expr(ty);
-                    }
+                let arguments = arguments
+                    .into_iter()
+                    .map(|argument| match argument {
+                        TypeArgument::Type(ty) => self.type_expr(ty),
+                        TypeArgument::SizeLiteral(_) => ExpectedType::Unknown,
+                    })
+                    .collect();
+                match expected {
+                    ExpectedType::Named { definition, .. } => ExpectedType::Named {
+                        definition,
+                        arguments,
+                    },
+                    expected => expected,
                 }
-                expected
             }
             TypeExprKind::Tuple(elements) => {
                 ExpectedType::Tuple(elements.into_iter().map(|id| self.type_expr(id)).collect())
@@ -972,7 +996,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 if native {
                     ExpectedType::Unknown
                 } else {
-                    ExpectedType::Named(definition)
+                    ExpectedType::nominal(definition)
                 }
             }
             Err(LookupError::Missing) if native_type(path, self.symbols) => {
@@ -1013,11 +1037,15 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         ));
         let mut expected = self.syntax_expected(written_type);
         for name in &path.segments[1..] {
-            let ExpectedType::Named(owner) = expected else {
+            let ExpectedType::Named {
+                definition: owner,
+                arguments,
+            } = expected
+            else {
                 self.defer(site.clone(), *name, span);
                 return;
             };
-            let shape = self.shape(&owner);
+            let shape = self.shape(&owner, &arguments);
             let Some((i, (_, field_type))) = shape
                 .fields
                 .into_iter()
@@ -1153,23 +1181,34 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     /// Reads only a written type annotation, never an initializer/body.
     fn hint(&self, id: TypeExprId) -> ExpectedType {
         match &self.file.tree.types[id.0 as usize].kind {
-            TypeExprKind::Named { .. } => self
-                .output
-                .query
-                .value
-                .types
-                .iter()
-                .rev()
-                .find_map(|(ty, name)| {
-                    if *ty == id
-                        && let ResolvedName::Definition(d) = name
-                    {
-                        Some(ExpectedType::Named(d.clone()))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
+            TypeExprKind::Named { path, arguments } => {
+                if path.package.is_none()
+                    && let [name] = path.segments[..]
+                    && let Some((_, argument)) =
+                        self.type_arguments.iter().find(|(n, _)| *n == name)
+                {
+                    return argument.clone();
+                }
+                self.output
+                    .query
+                    .value
+                    .types
+                    .iter()
+                    .rev()
+                    .find_map(|(ty, name)| {
+                        if *ty == id
+                            && let ResolvedName::Definition(d) = name
+                        {
+                            Some(ExpectedType::Named {
+                                definition: d.clone(),
+                                arguments: self.argument_hints(arguments),
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default()
+            }
             TypeExprKind::Tuple(types) => {
                 ExpectedType::Tuple(types.iter().map(|id| self.hint(*id)).collect())
             }
@@ -1183,27 +1222,40 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             _ => ExpectedType::Unknown,
         }
     }
-    fn shape(&mut self, owner: &DefPath) -> Shape {
+    fn argument_hints(&self, arguments: &[TypeArgument]) -> Vec<ExpectedType> {
+        arguments
+            .iter()
+            .map(|argument| match argument {
+                TypeArgument::Type(ty) => self.hint(*ty),
+                TypeArgument::SizeLiteral(_) => ExpectedType::Unknown,
+            })
+            .collect()
+    }
+    /// The owner's fields and variants with `arguments` substituted for its
+    /// generic parameters, so a nested payload keeps its nominal context.
+    fn shape(&mut self, owner: &DefPath, arguments: &[ExpectedType]) -> Shape {
         if !self.shaping.insert(owner.clone()) {
             return Shape::default();
         }
-        let result = self.shape_inner(owner);
+        let result = self.shape_inner(owner, arguments);
         self.shaping.remove(owner);
         result
     }
-    fn shape_inner(&mut self, owner: &DefPath) -> Shape {
+    fn shape_inner(&mut self, owner: &DefPath, arguments: &[ExpectedType]) -> Shape {
         if let Some(signature) = self.signature(owner)
             && let ty::SignatureKind::Type(definition) = &signature.kind
             && let Some(representation) = definition.representation
         {
-            if let Some(ty::Type {
-                kind: ty::TypeKind::Named { definition, .. },
-                ..
-            }) = signature.types.get(representation)
+            if let Some(ty::TypeKind::Named { .. }) =
+                signature.types.get(representation).map(|t| &t.kind)
+                && let ExpectedType::Named {
+                    definition,
+                    arguments,
+                } = semantic_expected(&signature.types, representation, arguments, 0, 0)
             {
-                return self.shape(definition);
+                return self.shape(&definition, &arguments);
             }
-            return shape_from_type(&signature.types, representation);
+            return shape_from_type(&signature.types, representation, arguments);
         }
         if let Some(item) = self
             .file
@@ -1218,7 +1270,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             })
             .map(|(_, item)| item)
             .cloned()
-            && let ItemKind::Type { body, .. } = item.kind
+            && let ItemKind::Type { generics, body, .. } = item.kind
         {
             // Header-only adapter for written same-file signatures.
             // Type IDs here belong to this SyntaxFile, not to a foreign store.
@@ -1228,6 +1280,14 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     package: owner.0.package.clone(),
                     modules: owner.0.modules.clone(),
                 },
+            );
+            let old_arguments = std::mem::replace(
+                &mut self.type_arguments,
+                generics
+                    .iter()
+                    .enumerate()
+                    .map(|(i, g)| (g.name, arguments.get(i).cloned().unwrap_or_default()))
+                    .collect(),
             );
             let shape = match body {
                 TypeBody::Record(fields) => Shape {
@@ -1259,8 +1319,12 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     variants: vec![],
                 },
                 TypeBody::Alias(id) => {
-                    if let ExpectedType::Named(d) = self.syntax_expected(id) {
-                        self.shape(&d)
+                    if let ExpectedType::Named {
+                        definition,
+                        arguments,
+                    } = self.syntax_expected(id)
+                    {
+                        self.shape(&definition, &arguments)
                     } else {
                         Shape::default()
                     }
@@ -1268,23 +1332,41 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 TypeBody::Opaque => Shape::default(),
             };
             self.context = old_context;
+            self.type_arguments = old_arguments;
             return shape;
         }
         Shape::default()
     }
     fn syntax_expected(&mut self, id: TypeExprId) -> ExpectedType {
         let hint = self.hint(id);
-        if hint != ExpectedType::Unknown {
-            return hint;
-        }
-        // A referenced header need not itself have been resolved yet.
         match self.file.tree.types[id.0 as usize].kind.clone() {
-            TypeExprKind::Named { path, .. } => {
-                let span = self.file.tree.types[id.0 as usize].origin.span;
-                self.lookup(&path, span)
-                    .map(ExpectedType::Named)
-                    .unwrap_or_default()
+            TypeExprKind::Named { path, arguments } => {
+                let definition = match hint {
+                    ExpectedType::Named { definition, .. } => definition,
+                    // A referenced header need not itself have been resolved yet.
+                    ExpectedType::Unknown => {
+                        let span = self.file.tree.types[id.0 as usize].origin.span;
+                        let Ok(definition) = self.lookup(&path, span) else {
+                            return ExpectedType::Unknown;
+                        };
+                        definition
+                    }
+                    // A generic parameter of the type being shaped.
+                    hint => return hint,
+                };
+                let arguments = arguments
+                    .into_iter()
+                    .map(|argument| match argument {
+                        TypeArgument::Type(ty) => self.syntax_expected(ty),
+                        TypeArgument::SizeLiteral(_) => ExpectedType::Unknown,
+                    })
+                    .collect();
+                ExpectedType::Named {
+                    definition,
+                    arguments,
+                }
             }
+            _ if hint != ExpectedType::Unknown => hint,
             TypeExprKind::Tuple(types) => {
                 ExpectedType::Tuple(types.into_iter().map(|t| self.syntax_expected(t)).collect())
             }
@@ -1423,7 +1505,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         found |= self.signatures.values().flatten().any(|signature| {
             if let ty::SignatureKind::Type(definition) = &signature.kind {
                 definition.representation.is_some_and(|id| {
-                    shape_from_type(&signature.types, id)
+                    shape_from_type(&signature.types, id, &[])
                         .variants
                         .iter()
                         .any(|(variant, _)| variant == &self.spelling(name))
@@ -1441,10 +1523,14 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         site: NameSite,
         span: Span,
     ) -> Option<(ty::VariantId, Vec<(Option<String>, ExpectedType)>)> {
-        let ExpectedType::Named(owner) = expected else {
+        let ExpectedType::Named {
+            definition: owner,
+            arguments,
+        } = expected
+        else {
             return None;
         };
-        let shape = self.shape(owner);
+        let shape = self.shape(owner, arguments);
         let (i, (_, fields)) = shape
             .variants
             .into_iter()
@@ -1543,11 +1629,15 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     return self.expression_path(id, &path, expected, span);
                 }
                 let base_type = self.expr(base, ExpectedType::Unknown);
-                if let ExpectedType::Named(owner) = base_type {
+                if let ExpectedType::Named {
+                    definition: owner,
+                    arguments,
+                } = base_type
+                {
                     if !self.representation_visible(&owner, span) {
                         return ExpectedType::Unknown;
                     }
-                    let shape = self.shape(&owner);
+                    let shape = self.shape(&owner, &arguments);
                     if let Some((i, (_, field_type))) = shape
                         .fields
                         .into_iter()
@@ -1759,7 +1849,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     if !self.representation_visible(&definition, span) {
                         return ExpectedType::Unknown;
                     }
-                    return ExpectedType::Named(definition);
+                    return ExpectedType::nominal(definition);
                 }
                 if let Some(signature) = self.signature(&definition) {
                     match &signature.kind {
@@ -1768,13 +1858,19 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                                 parameters: f
                                     .parameters
                                     .iter()
-                                    .map(|p| semantic_expected(&signature.types, p.ty, 0))
+                                    .map(|p| semantic_expected(&signature.types, p.ty, &[], 0, 0))
                                     .collect(),
-                                result: Box::new(semantic_expected(&signature.types, f.result, 0)),
+                                result: Box::new(semantic_expected(
+                                    &signature.types,
+                                    f.result,
+                                    &[],
+                                    0,
+                                    0,
+                                )),
                             };
                         }
                         ty::SignatureKind::Const(ty) => {
-                            return semantic_expected(&signature.types, *ty, 0);
+                            return semantic_expected(&signature.types, *ty, &[], 0, 0);
                         }
                         _ => {}
                     }
@@ -1853,11 +1949,15 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         }
         let mut expected = binding.expected;
         for field in &path.segments[1..] {
-            if let ExpectedType::Named(owner) = expected {
+            if let ExpectedType::Named {
+                definition: owner,
+                arguments,
+            } = expected
+            {
                 if !self.representation_visible(&owner, span) {
                     return Some((binding.name, ExpectedType::Unknown));
                 }
-                let shape = self.shape(&owner);
+                let shape = self.shape(&owner, &arguments);
                 if let Some((i, (_, ty))) = shape
                     .fields
                     .into_iter()
@@ -1949,16 +2049,29 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             .find(|(site, _)| *site == NameSite::Expression(callee))
             .cloned()
         {
+            // A contextual variant was selected by the expected type, whose
+            // arguments instantiate its payload.
+            let arguments = match &expected {
+                ExpectedType::Named {
+                    definition,
+                    arguments,
+                } if *definition == owner => arguments.clone(),
+                _ => vec![],
+            };
             fields = self
-                .shape(&owner)
+                .shape(&owner, &arguments)
                 .variants
                 .get(variant.0 as usize)
                 .map(|(_, fields)| fields.clone())
                 .unwrap_or_default();
             owner_variant = Some((owner, Some(variant)));
-        } else if let ExpectedType::Named(owner) = &callee_type {
+        } else if let ExpectedType::Named {
+            definition: owner,
+            arguments,
+        } = &callee_type
+        {
             fields = self
-                .shape(owner)
+                .shape(owner, arguments)
                 .fields
                 .into_iter()
                 .map(|(n, t)| (Some(n), t))
@@ -2003,7 +2116,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         }
         match callee_type {
             ExpectedType::Function { result, .. } => *result,
-            ExpectedType::Named(owner) => ExpectedType::Named(owner),
+            named @ ExpectedType::Named { .. } => named,
             _ => expected,
         }
     }
@@ -2209,7 +2322,10 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     )
                 {
                     field_types = types;
-                    if let ExpectedType::Named(owner) = expected {
+                    if let ExpectedType::Named {
+                        definition: owner, ..
+                    } = expected
+                    {
                         identity = Some((owner, Some(variant)));
                     }
                 } else {
@@ -2227,7 +2343,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                                     ContextualName::Constructor(owner.clone()),
                                 ));
                                 field_types = self
-                                    .shape(&owner)
+                                    .shape(&owner, &[])
                                     .fields
                                     .into_iter()
                                     .map(|(n, t)| (Some(n), t))
@@ -2289,36 +2405,63 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     }
 }
 
-fn semantic_expected(store: &ty::TypeStore, id: ty::TypeId, depth: usize) -> ExpectedType {
+/// `arguments` instantiate the generic parameters bound `binders` function
+/// types outside `id`; any other parameter is unknown context.
+fn semantic_expected(
+    store: &ty::TypeStore,
+    id: ty::TypeId,
+    arguments: &[ExpectedType],
+    binders: u32,
+    depth: usize,
+) -> ExpectedType {
     if depth > store.len() {
         return ExpectedType::Unknown;
     }
+    let nested =
+        |id: ty::TypeId, binders: u32| semantic_expected(store, id, arguments, binders, depth + 1);
     match store.get(id).map(|ty| &ty.kind) {
-        Some(ty::TypeKind::Named { definition, .. }) => ExpectedType::Named(definition.clone()),
-        Some(ty::TypeKind::Tuple(types)) => ExpectedType::Tuple(
-            types
+        Some(ty::TypeKind::Named {
+            definition,
+            arguments: written,
+        }) => ExpectedType::Named {
+            definition: definition.clone(),
+            arguments: written
                 .iter()
-                .map(|t| semantic_expected(store, *t, depth + 1))
+                .map(|argument| match argument {
+                    ty::GenericArgument::Type(t) => nested(*t, binders),
+                    ty::GenericArgument::Size(_) => ExpectedType::Unknown,
+                })
                 .collect(),
-        ),
+        },
+        Some(ty::TypeKind::Parameter(ty::BinderRef::Bound {
+            depth: binder,
+            parameter,
+        })) if *binder == binders => arguments
+            .get(parameter.0 as usize)
+            .cloned()
+            .unwrap_or_default(),
+        Some(ty::TypeKind::Tuple(types)) => {
+            ExpectedType::Tuple(types.iter().map(|t| nested(*t, binders)).collect())
+        }
         Some(ty::TypeKind::Function(f)) => ExpectedType::Function {
             parameters: f
                 .parameters
                 .iter()
-                .map(|p| semantic_expected(store, p.ty, depth + 1))
+                .map(|p| nested(p.ty, binders + 1))
                 .collect(),
-            result: Box::new(semantic_expected(store, f.result, depth + 1)),
+            result: Box::new(nested(f.result, binders + 1)),
         },
-        Some(ty::TypeKind::Box(id)) => semantic_expected(store, *id, depth + 1),
+        Some(ty::TypeKind::Box(id)) => nested(*id, binders),
         _ => ExpectedType::Unknown,
     }
 }
-fn shape_from_type(store: &ty::TypeStore, id: ty::TypeId) -> Shape {
+fn shape_from_type(store: &ty::TypeStore, id: ty::TypeId, arguments: &[ExpectedType]) -> Shape {
+    let expected = |t: ty::TypeId| semantic_expected(store, t, arguments, 0, 0);
     match store.get(id).map(|t| &t.kind) {
         Some(ty::TypeKind::Record(fields)) => Shape {
             fields: fields
                 .iter()
-                .map(|f| (f.name.clone(), semantic_expected(store, f.ty, 0)))
+                .map(|f| (f.name.clone(), expected(f.ty)))
                 .collect(),
             variants: vec![],
         },
@@ -2331,7 +2474,7 @@ fn shape_from_type(store: &ty::TypeStore, id: ty::TypeId) -> Shape {
                         v.name.clone(),
                         v.fields
                             .iter()
-                            .map(|(n, t)| (n.clone(), semantic_expected(store, *t, 0)))
+                            .map(|(n, t)| (n.clone(), expected(*t)))
                             .collect(),
                     )
                 })

@@ -1,0 +1,53 @@
+// rule: LANG-4
+// expect: run
+// stdout: net
+// stdout: other
+// stdout: some net
+// stdout: held 7
+// A bare variant inside a constructor pattern or argument is resolved
+// against its payload's expected type, with the enclosing type's generic
+// arguments substituted: `Net` here names HttpError's and Signal's variant,
+// not core's Net capability type.
+type Signal = Net(u8) | Quiet
+
+type Hold[T] = Held(T) | Empty
+
+fn failed(e: NetError) -> Result[u8, http.HttpError] {
+  Error(Net(e))
+}
+
+fn describe(value: Result[u8, http.HttpError]) -> String {
+  match value {
+    Error(Net(_)) => "net\n",
+    _ => "other\n",
+  }
+}
+
+fn optional(value: Option[http.HttpError]) -> String {
+  match value {
+    Some(Net(TimedOut())) => "some net\n",
+    _ => "none\n",
+  }
+}
+
+fn held(h: Hold[Signal]) -> String {
+  match h {
+    Held(Net(n)) => if n == 7u8 {
+      "held 7\n"
+    } else {
+      "held\n"
+    },
+    _ => "empty\n",
+  }
+}
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  out.print(output, describe(failed(TimedOut()))) ? Output
+  out.print(output, describe(Ok(1u8))) ? Output
+  out.print(output, optional(Some(Net(TimedOut())))) ? Output
+  out.print(output, held(Held(Net(7u8)))) ? Output
+  Ok(())
+}
