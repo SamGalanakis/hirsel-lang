@@ -138,6 +138,10 @@ impl SimIo {
     }
 }
 impl Adapter for SimIo {
+    fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+        self.state.preflight(request)
+    }
+
     fn enter(&mut self, token: u64) {
         self.waits.enter(token);
     }

@@ -162,7 +162,9 @@ the scope, otherwise the token parks on its Readiness timer. Every poll looks at
 tokens first, by deadline with ties in entry order, and a ready one's reissued wait
 expires its scope; a scope that exited first has its token finished, recording nothing.
 The compiled runtime (`hirsel-rt/src/host_waits.rs`) arms and polls the same requests, so
-tapes replay in either engine.
+tapes replay in either engine. `HostLibrary` and H's `ScriptIo` use the runtime's
+`io_checks` preflight before completing cancellation, so program errors win while
+provider outcomes and elapsed deadlines remain after cancellation.
 
 `testing` selects checked root-package `@test` functions, generates ordinary in-memory Test/Result launch adapters in each defining module, and runs independent interpreter contexts. `native::test_path` emits one executable with all selected adapters and starts one process per test; LLVM and Cranelift share selection, seeds and results.
 

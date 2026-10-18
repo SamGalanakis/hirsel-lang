@@ -836,7 +836,7 @@ impl Library {
 }
 /// `CancelCause` ordinals (core library).
 const CANCEL_PARENT: u32 = 1;
-const CANCEL_DEADLINE: u32 = 3;
+pub(super) const CANCEL_DEADLINE: u32 = 3;
 impl Library {
     /// Cancel `scope` for its deadline (CONC-3): the scope's later blocking calls and its
     /// children see `DeadlineExceeded`, the children of scopes its owner entered inside it

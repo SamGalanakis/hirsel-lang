@@ -411,6 +411,94 @@ impl crate::io::State {
             *tls = true;
         }
     }
+    /// Program errors only: never consult or advance a provider (CONC-3).
+    pub(crate) fn net_error(
+        &self,
+        request: &crate::io::Request,
+    ) -> Result<Option<NetError>, AdapterError> {
+        use crate::io::Request as R;
+        let zero = |t: &NetTimeout| *t == NetTimeout::Nanos(0);
+        Ok(match request {
+            R::Resolve { net, host, port }
+            | R::Connect {
+                net, host, port, ..
+            } => {
+                let (rules, _) = self.net_grant(*net)?;
+                if !canonical_address(host)
+                    || matches!(request, R::Connect { timeout, .. } if zero(timeout))
+                {
+                    Some(NetError::InvalidInput)
+                } else if permits(
+                    &rules,
+                    host,
+                    *port,
+                    if matches!(request, R::Connect { .. }) {
+                        Some(NetOperation::Connect)
+                    } else {
+                        None
+                    },
+                )
+                .is_none()
+                {
+                    Some(NetError::NotGranted)
+                } else {
+                    None
+                }
+            }
+            R::ConnectAddr { net, addr, timeout } => {
+                let (rules, _) = self.net_grant(*net)?;
+                if zero(timeout) {
+                    Some(NetError::InvalidInput)
+                } else if permits(
+                    &rules,
+                    &ip_literal(addr.ip),
+                    addr.port,
+                    Some(NetOperation::Connect),
+                )
+                .is_none()
+                {
+                    Some(NetError::NotGranted)
+                } else {
+                    None
+                }
+            }
+            R::NetRead { net, stream, .. }
+            | R::NetWrite { net, stream, .. }
+            | R::NetWriteAll { net, stream, .. }
+            | R::Shutdown { net, stream, .. }
+            | R::SetTimeout { net, stream, .. }
+            | R::PeerAddr { net, stream }
+            | R::TlsConnect { net, stream, .. }
+            | R::TlsClose { net, stream } => {
+                let grant = self.stream_grant(*net, *stream)?;
+                if matches!(request, R::NetRead { max: 0, .. })
+                    || matches!(request, R::SetTimeout { timeout, .. } if zero(timeout))
+                    || matches!(request, R::TlsConnect { .. } if grant.tls)
+                {
+                    Some(NetError::InvalidInput)
+                } else if grant.operation == NetOperation::ConnectTls
+                    && (matches!(request, R::TlsConnect { server_name, .. } if *server_name != grant.address)
+                        || !grant.tls
+                            && matches!(
+                                request,
+                                R::NetRead { .. }
+                                    | R::NetWrite { .. }
+                                    | R::NetWriteAll { .. }
+                                    | R::Shutdown { .. }
+                            ))
+                {
+                    Some(NetError::NotGranted)
+                } else {
+                    None
+                }
+            }
+            R::Accept { net, listener } | R::LocalAddr { net, listener } => {
+                self.listener_grant(*net, *listener)?;
+                None
+            }
+            _ => None,
+        })
+    }
     /// Check every grant before any provider effect (CAP-1), then ask the
     /// provider of the Net's world. Input validation precedes the grant check (docs/spec/core-library.md).
     pub(crate) fn execute_net(
@@ -420,7 +508,12 @@ impl crate::io::State {
     ) -> Result<crate::io::Completion, AdapterError> {
         use crate::handles::Grant;
         use crate::io::{Completion as C, Request as R};
-        let zero = |t: &NetTimeout| *t == NetTimeout::Nanos(0);
+        if let Some(error) = self.net_error(request)? {
+            if let R::TlsConnect { stream, .. } = request {
+                self.execute_net(host, &R::Close { handle: *stream })?;
+            }
+            return Ok(crate::io_checks::net_completion(request, error));
+        }
         match request {
             R::TestNet {
                 test,
@@ -472,13 +565,7 @@ impl crate::io::State {
                 host: name,
                 port,
             } => {
-                let (rules, world) = self.net_grant(*net)?;
-                if !canonical_address(name) {
-                    return Ok(C::Addresses(Err(NetError::InvalidInput)));
-                }
-                if permits(&rules, name, *port, None).is_none() {
-                    return Ok(C::Addresses(Err(NetError::NotGranted)));
-                }
+                let (_, world) = self.net_grant(*net)?;
                 let value = provided(self.world(world, host)?.resolve(name, *port))?;
                 if let Ok(addresses) = &value
                     && addresses.iter().any(|a| a.port != *port)
@@ -494,13 +581,7 @@ impl crate::io::State {
                 timeout,
             } => {
                 let (rules, world) = self.net_grant(*net)?;
-                if !canonical_address(name) || zero(timeout) {
-                    return Ok(C::NetHandle(Err(NetError::InvalidInput)));
-                }
-                let Some(operation) = permits(&rules, name, *port, Some(NetOperation::Connect))
-                else {
-                    return Ok(C::NetHandle(Err(NetError::NotGranted)));
-                };
+                let operation = permits(&rules, name, *port, Some(NetOperation::Connect)).unwrap();
                 let id = self.handles.next();
                 let value = provided(self.world(world, host)?.connect(id, name, *port, *timeout))?;
                 Ok(C::NetHandle(value.map(|()| {
@@ -515,16 +596,9 @@ impl crate::io::State {
             }
             R::ConnectAddr { net, addr, timeout } => {
                 let (rules, world) = self.net_grant(*net)?;
-                if zero(timeout) {
-                    return Ok(C::NetHandle(Err(NetError::InvalidInput)));
-                }
-                // A host-name rule never authorizes a raw address.
                 let literal = ip_literal(addr.ip);
-                let Some(operation) =
-                    permits(&rules, &literal, addr.port, Some(NetOperation::Connect))
-                else {
-                    return Ok(C::NetHandle(Err(NetError::NotGranted)));
-                };
+                let operation =
+                    permits(&rules, &literal, addr.port, Some(NetOperation::Connect)).unwrap();
                 let id = self.handles.next();
                 let value = provided(self.world(world, host)?.connect_addr(id, *addr, *timeout))?;
                 Ok(C::NetHandle(value.map(|()| {
@@ -544,60 +618,30 @@ impl crate::io::State {
             | R::SetTimeout { net, stream, .. }
             | R::PeerAddr { net, stream } => {
                 let grant = self.stream_grant(*net, *stream)?;
-                let invalid = match request {
-                    R::NetRead { max, .. } => *max == 0,
-                    R::SetTimeout { timeout, .. } => zero(timeout),
-                    _ => false,
-                };
-                // A ConnectTls stream moves no plaintext before its handshake.
-                let denied = grant.operation == NetOperation::ConnectTls
-                    && !grant.tls
-                    && matches!(
-                        request,
-                        R::NetRead { .. }
-                            | R::NetWrite { .. }
-                            | R::NetWriteAll { .. }
-                            | R::Shutdown { .. }
-                    );
-                let refuse = if invalid {
-                    Some(NetError::InvalidInput)
-                } else if denied {
-                    Some(NetError::NotGranted)
-                } else {
-                    None
-                };
                 let provider = self.world(grant.world, host)?;
                 let completion = match request {
-                    R::NetRead { max, .. } => C::NetBytes(match refuse {
-                        Some(e) => Err(e),
-                        None => provided(provider.read(*stream, *max))?.and_then(|bytes| {
+                    R::NetRead { max, .. } => {
+                        C::NetBytes(provided(provider.read(*stream, *max))?.and_then(|bytes| {
                             if bytes.len() as u64 > *max {
                                 Err(NetError::InvalidInput)
                             } else {
                                 Ok(bytes)
                             }
-                        }),
-                    }),
-                    R::NetWrite { bytes, .. } => C::Count(match refuse {
-                        Some(e) => Err(e),
-                        None => provided(provider.write(*stream, bytes))?,
-                    }),
-                    R::NetWriteAll { bytes, .. } => C::NetUnit(match refuse {
-                        Some(e) => Err(e),
-                        None => provided(provider.write_all(*stream, bytes))?,
-                    }),
-                    R::Shutdown { how, .. } => C::NetUnit(match refuse {
-                        Some(e) => Err(e),
-                        None => provided(provider.shutdown(*stream, *how))?,
-                    }),
-                    R::SetTimeout { which, timeout, .. } => C::NetUnit(match refuse {
-                        Some(e) => Err(e),
-                        None => provided(provider.set_timeout(*stream, *which, *timeout))?,
-                    }),
-                    R::PeerAddr { .. } => C::Address(match refuse {
-                        Some(e) => Err(e),
-                        None => provided(provider.peer_addr(*stream))?,
-                    }),
+                        }))
+                    }
+                    R::NetWrite { bytes, .. } => {
+                        C::Count(provided(provider.write(*stream, bytes))?)
+                    }
+                    R::NetWriteAll { bytes, .. } => {
+                        C::NetUnit(provided(provider.write_all(*stream, bytes))?)
+                    }
+                    R::Shutdown { how, .. } => {
+                        C::NetUnit(provided(provider.shutdown(*stream, *how))?)
+                    }
+                    R::SetTimeout { which, timeout, .. } => {
+                        C::NetUnit(provided(provider.set_timeout(*stream, *which, *timeout))?)
+                    }
+                    R::PeerAddr { .. } => C::Address(provided(provider.peer_addr(*stream))?),
                     _ => unreachable!(),
                 };
                 // A write that contradicts a scripted client's Expect fails LANG-9 after
@@ -621,19 +665,11 @@ impl crate::io::State {
             } => {
                 let grant = self.stream_grant(*net, *stream)?;
                 // The stream is taken: it is closed on every failure.
-                let value = if grant.tls {
-                    Err(NetError::InvalidInput)
-                } else if grant.operation == NetOperation::ConnectTls
-                    && *server_name != grant.address
-                {
-                    Err(NetError::NotGranted)
-                } else {
-                    provided(self.world(grant.world, host)?.tls_connect(
-                        *stream,
-                        server_name,
-                        roots,
-                    ))?
-                };
+                let value = provided(self.world(grant.world, host)?.tls_connect(
+                    *stream,
+                    server_name,
+                    roots,
+                ))?;
                 if value.is_ok() {
                     self.mark_tls(*stream);
                 } else {

@@ -221,6 +221,10 @@ fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
     use std::{cell::Cell, rc::Rc};
     struct Clock(Rc<Cell<u64>>);
     impl Adapter for Clock {
+        fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+            assert!(matches!(request, Request::SleepUntil { .. }));
+            Ok(None)
+        }
         fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
             let Request::SleepUntil { deadline, .. } = request else {
                 panic!("unexpected request: {request:?}")

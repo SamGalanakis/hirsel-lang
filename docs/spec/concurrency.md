@@ -74,7 +74,17 @@ Sender, since those handles are run-owned ([MODE-4](ownership.md#mode-4-sendable
 ### CONC-3: Cancellation
 
 Cancellation is level-triggered: once a scope is cancelled, every later blocking `Io` call
-in it returns `Canceled(cause)`, and every blocking `Io` error type includes that variant.
+in it returns `Canceled(cause)` after the program checks below, and every blocking `Io`
+error type includes that variant. Each blocking call first performs its effect-free
+program checks in their specified order, then checks cancellation before any host effect,
+and only then observes deadlines and provider outcomes (including resets, I/O errors and data):
+
+- Argument validity (`InvalidInput`, including zero read limits and timeouts, repeated TLS
+  upgrades, canonical process paths and NUL-free arguments).
+- Authority (`NotGranted`, including network rule/name checks and file access rights).
+- Other effect-free program checks, including lexical path confinement, file modes and
+  seek bounds, and a child's explicitly closed stdin.
+
 Nonblocking grant projections and clock sampling introduce no cancellation check and use
 their stated grant or source error variants. Joins (`task.await`, `task.await_any`,
 `task.await_at`, `task.cancel_all`) and mutex acquisition are not cancellation points: a

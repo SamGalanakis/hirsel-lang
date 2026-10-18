@@ -607,3 +607,6 @@ continuations. Once comparison succeeds, an `OperationResult::ArenaCharge`
 checks entry growth and any shared copy before completion transfers incoming
 owners. Comparator failure charges nothing; deep copy retags entries in the
 destination arena.
+
+Blocking Io calls apply CONC-3 program validity and authority checks before cancellation;
+scripted peer transitions, faults and deadline observations follow cancellation.

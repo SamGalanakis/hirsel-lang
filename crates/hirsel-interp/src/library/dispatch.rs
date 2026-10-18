@@ -94,7 +94,7 @@ impl Library {
         let valid = match &completion {
             Ok(bytes) => max > 0 && bytes.len() as u64 <= max,
             Err((0, _)) => max > 0,
-            Err((1, cause)) => max > 0 && *cause <= 2,
+            Err((1, cause)) => max > 0 && *cause <= super::tasks::CANCEL_DEADLINE,
             Err((2, 0)) => max == 0,
             _ => false,
         };
@@ -518,6 +518,17 @@ impl Library {
             )
         {
             return Ok(error(variant(2, vec![])));
+        }
+        if !matches!(
+            name,
+            "file.narrow" | "file.walk" | "file.write_all" | "file.commit"
+        ) {
+            let invalid_path = simulation::relative(&root, path_text(arg(a, 1)?)?).is_none()
+                || (name == "file.rename"
+                    && simulation::relative(&root, path_text(arg(a, 2)?)?).is_none());
+            if invalid_path {
+                return Ok(file_fault(self.simulation.config.invalid_path_code));
+            }
         }
         let canceled = (name != "file.narrow")
             .then(|| self.tasks.canceled())

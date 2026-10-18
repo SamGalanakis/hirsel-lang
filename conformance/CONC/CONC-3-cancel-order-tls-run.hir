@@ -1,0 +1,71 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"example.com","service":"443","operation":"connect_tls"}],"peers":[{"address":"example.com","port":443,"resolves_to":[],"tls":{"certificate":["example.com"]},"connections":[{"open":[]},{"open":["reset"]},{"open":[]}]}]}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let n = io.net(rt)?
+  let first = match net.connect(n, "example.com", 443u16, Unbounded()) {
+    Ok(stream) => take stream,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let secure = match tls.connect(n, take first, "example.com", WebPki()) {
+    Ok(stream) => take stream,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let opened_reset = match net.connect(n, "example.com", 443u16, Unbounded()) {
+    Ok(stream) => take stream,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let wrong = match net.connect(n, "example.com", 443u16, Unbounded()) {
+    Ok(stream) => take stream,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) {
+      let mut reset = take opened_reset
+      let mut buffer: List[u8] = []
+      failure.check(
+        net.read(n, mut reset, mut buffer, 0u64) == Error(InvalidInput()),
+        Arithmetic()
+      )
+      failure.check(
+        net.read(n, mut reset, mut buffer, 1u64) == Error(NotGranted()),
+        Arithmetic()
+      )
+      let repeated: bool = match tls.connect(n, take secure, "example.com", WebPki()) {
+        Error(InvalidInput()) => true,
+        _ => false,
+      }
+      let denied: bool = match tls.connect(n, take wrong, "other.com", WebPki()) {
+        Error(NotGranted()) => true,
+        _ => false,
+      }
+      let canceled: bool = match tls.connect(n, take reset, "example.com", WebPki()) {
+        Error(Canceled(DeadlineExceeded())) => true,
+        _ => false,
+      }
+      failure.check(repeated && denied && canceled, Arithmetic())
+    }
+  )
+  Ok(())
+}

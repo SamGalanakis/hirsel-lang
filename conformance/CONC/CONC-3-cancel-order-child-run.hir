@@ -1,0 +1,64 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// process: {"provider":"process.script@1","rules":[{"program":"/bin/test"}],"runs":[],"children":[{"program":"/bin/test","args":[],"steps":[{"print":[97]},{"exit":{"exited":0}}]}]}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let p = io.process(rt)?
+  let opened_child = match proc.spawn(p, path.of("/bin/test"), [], None()) {
+    Ok(child) => take child,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) {
+      let mut child = take opened_child
+      let mut buffer: List[u8] = []
+      failure.check(
+        child.read_stdout(p, mut child, mut buffer, 0u64) == Error(InvalidInput()),
+        Arithmetic()
+      )
+      failure.check(
+        child.read_stdout(p, mut child, mut buffer, 1u64) == Error(
+          Canceled(DeadlineExceeded())
+        ),
+        Arithmetic()
+      )
+      failure.check(
+        child.write(p, mut child, b"x") == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      child.close_stdin(p, mut child)
+      failure.check(
+        child.write(p, mut child, b"x") == Error(InvalidInput()),
+        Arithmetic()
+      )
+      failure.check(
+        child.wait(p, take child) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      failure.check(
+        proc.run(
+          p,
+          path.of("/bin/test"),
+          [],
+          b"",
+          None(),
+          64u64,
+          Some(Deadline(clock: c, at: now))
+        ) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+    }
+  )
+  Ok(())
+}

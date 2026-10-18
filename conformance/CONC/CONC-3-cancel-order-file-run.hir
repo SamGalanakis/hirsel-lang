@@ -1,0 +1,68 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let d = match io.dir(rt, path.of(".")) {
+    Ok(d) => d,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let opened_file = match file.create(d, path.of("file")) {
+    Ok(file) => take file,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) {
+      let mut file = take opened_file
+      let mut buffer: List[u8] = []
+      failure.check(
+        file.read(d, mut file, mut buffer, 1u64) == Error(FileFault(1u32)),
+        Arithmetic()
+      )
+      failure.check(
+        file.seek(d, mut file, 18446744073709551615u64) == Error(FileFault(1u32)),
+        Arithmetic()
+      )
+      failure.check(
+        file.seek(d, mut file, 0u64) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      failure.check(
+        file.write(d, mut file, b"x") == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      failure.check(
+        file.read_bytes(d, path.of("../escape")) == Error(FileFault(1u32)),
+        Arithmetic()
+      )
+      failure.check(
+        file.read_bytes(d, path.of("missing")) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      failure.check(
+        file.write_bytes(d, path.of("../escape"), b"x") == Error(FileFault(1u32)),
+        Arithmetic()
+      )
+      failure.check(
+        file.write_bytes(d, path.of("missing"), b"x") == Error(
+          Canceled(DeadlineExceeded())
+        ),
+        Arithmetic()
+      )
+    }
+  )
+  Ok(())
+}

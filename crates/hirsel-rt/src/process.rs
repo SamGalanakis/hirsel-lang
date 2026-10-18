@@ -110,6 +110,68 @@ impl State {
             _ => Err(AdapterError::InvalidHandle(id)),
         }
     }
+    pub(crate) fn process_error(
+        &self,
+        request: &Request,
+    ) -> Result<Option<Completion>, AdapterError> {
+        let failure = match request {
+            Request::ProcessRun {
+                process,
+                program,
+                args,
+                directory,
+                ..
+            }
+            | Request::ProcessSpawn {
+                process,
+                program,
+                args,
+                directory,
+            } => {
+                let (rules, world) = self.process_grant(*process)?;
+                if let Some(d) = directory
+                    && !matches!(self.handles.rows.get(d), Some(Grant::Directory { .. }))
+                {
+                    return Err(AdapterError::InvalidHandle(*d));
+                }
+                if let Request::ProcessRun {
+                    deadline: Some(d), ..
+                } = request
+                {
+                    self.expect(d.clock, Grant::MonotonicClock)?;
+                }
+                check(program, args, &rules).err().or_else(|| {
+                    (world == ProcessWorld::Host
+                        && directory.is_some_and(|d| self.fake_directories.contains_key(&d)))
+                    .then_some(ProcessFailure::InvalidInput)
+                })
+            }
+            Request::ChildWrite { process, child, .. } => {
+                let (_, open) = self.child_grant(*process, *child)?;
+                (!open).then_some(ProcessFailure::InvalidInput)
+            }
+            Request::ChildRead {
+                process,
+                child,
+                max,
+                ..
+            } => {
+                self.child_grant(*process, *child)?;
+                (*max == 0).then_some(ProcessFailure::InvalidInput)
+            }
+            Request::ChildWait { process, child } => {
+                self.child_grant(*process, *child)?;
+                None
+            }
+            _ => None,
+        };
+        Ok(failure.map(|f| match request {
+            Request::ProcessRun { .. } => Completion::Process(ProcessOutcome::Error(f)),
+            Request::ProcessSpawn { .. } => Completion::Spawned(Err(f)),
+            Request::ChildRead { .. } => Completion::ChildBytes(Err(f)),
+            _ => Completion::ChildUnit(Err(f)),
+        }))
+    }
     /// Check the grant and inputs before any effect, serve a scripted world itself, and
     /// ask `host` only for a checked host run. `host` is the recorded completion in replay.
     pub(crate) fn execute_process(
@@ -117,6 +179,9 @@ impl State {
         host: &mut dyn FnMut(HostCall<'_>) -> Result<Completion, AdapterError>,
         request: &Request,
     ) -> Result<Completion, AdapterError> {
+        if let Some(error) = self.process_error(request)? {
+            return Ok(error);
+        }
         match request {
             Request::Process { io } => {
                 self.expect(*io, Grant::Io)?;
@@ -177,17 +242,6 @@ impl State {
                 deadline,
             } => {
                 let (rules, world) = self.process_grant(*process)?;
-                if let Some(d) = directory
-                    && !matches!(self.handles.rows.get(d), Some(Grant::Directory { .. }))
-                {
-                    return Err(AdapterError::InvalidHandle(*d));
-                }
-                if let Some(d) = deadline {
-                    self.expect(d.clock, Grant::MonotonicClock)?;
-                }
-                if let Err(failure) = check(program, args, &rules) {
-                    return Ok(Completion::Process(ProcessOutcome::Error(failure)));
-                }
                 let outcome = match world {
                     // A scripted run takes no time: only a deadline the clock's latest
                     // reading already reached times it out, before any entry is taken.
@@ -210,12 +264,6 @@ impl State {
                             Some(entry) => bounded(entry.take().unwrap().outcome, *max_output),
                             None => ProcessOutcome::Error(ProcessFailure::NotFound),
                         }
-                    }
-                    // A fake test.dir has no host directory to start in.
-                    ProcessWorld::Host
-                        if directory.is_some_and(|d| self.fake_directories.contains_key(&d)) =>
-                    {
-                        ProcessOutcome::Error(ProcessFailure::InvalidInput)
                     }
                     ProcessWorld::Host => {
                         let rule = rules.iter().find(|r| &r.program == program).unwrap();
@@ -267,14 +315,6 @@ impl State {
                 directory,
             } => {
                 let (rules, world) = self.process_grant(*process)?;
-                if let Some(d) = directory
-                    && !matches!(self.handles.rows.get(d), Some(Grant::Directory { .. }))
-                {
-                    return Err(AdapterError::InvalidHandle(*d));
-                }
-                if let Err(failure) = check(program, args, &rules) {
-                    return Ok(Completion::Spawned(Err(failure)));
-                }
                 let child = self.handles.next();
                 let spawned = match world {
                     ProcessWorld::Script(id) => {
@@ -293,11 +333,6 @@ impl State {
                             }
                             None => Err(ProcessFailure::NotFound),
                         }
-                    }
-                    ProcessWorld::Host
-                        if directory.is_some_and(|d| self.fake_directories.contains_key(&d)) =>
-                    {
-                        Err(ProcessFailure::InvalidInput)
                     }
                     ProcessWorld::Host => {
                         let rule = rules.iter().find(|r| &r.program == program).unwrap();
@@ -340,10 +375,7 @@ impl State {
                 child,
                 bytes,
             } => {
-                let (world, stdin_open) = self.child_grant(*process, *child)?;
-                if !stdin_open {
-                    return Ok(Completion::ChildUnit(Err(ProcessFailure::InvalidInput)));
-                }
+                let (world, _) = self.child_grant(*process, *child)?;
                 if bytes.is_empty() {
                     return Ok(Completion::ChildUnit(Ok(())));
                 }
@@ -391,9 +423,6 @@ impl State {
                 max,
             } => {
                 let (world, _) = self.child_grant(*process, *child)?;
-                if *max == 0 {
-                    return Ok(Completion::ChildBytes(Err(ProcessFailure::InvalidInput)));
-                }
                 match world {
                     // At an Expect only the program's own writes can make bytes available.
                     ProcessWorld::Script(_) => match self.script_child(*child)?.read(*stream, *max)

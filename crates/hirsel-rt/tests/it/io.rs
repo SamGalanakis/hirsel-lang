@@ -391,6 +391,12 @@ fn hirsel_abi_leaf_exports_consume_taken_bytes_and_handles_on_every_result() {
     use std::{cell::RefCell, rc::Rc};
     struct Shared(Rc<RefCell<RealIo>>);
     impl Adapter for Shared {
+        fn preflight(
+            &self,
+            request: &hirsel_rt::io::Request,
+        ) -> Result<Option<hirsel_rt::io::Completion>, AdapterError> {
+            self.0.borrow().preflight(request)
+        }
         fn call(&mut self, r: Request) -> Result<Completion, AdapterError> {
             self.0.borrow_mut().call(r)
         }
@@ -2019,6 +2025,10 @@ fn filesystem_mutations_deny_read_grants_before_resolving_paths_and_replay_cross
 fn filesystem_metadata_abi_preserves_negative_nanoseconds_and_initializes_inactive_bytes() {
     struct MetadataOnly;
     impl Adapter for MetadataOnly {
+        fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+            assert!(matches!(request, Request::Metadata { directory: 7, .. }));
+            Ok(None)
+        }
         fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
             assert!(matches!(request, Request::Metadata { directory: 7, .. }));
             Ok(Completion::Metadata(Ok(Metadata {

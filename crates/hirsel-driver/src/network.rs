@@ -307,7 +307,18 @@ impl HostLibrary {
     /// Every host request goes through here. A provider that would block parks the
     /// task; any other adapter error is a refusal (a replay divergence or host fault).
     fn host(&mut self, request: R) -> Result<C, Error> {
-        self.io.call(request).map_err(|e| match e {
+        self.host_cancelable(request, self.library.cancellation())
+    }
+    fn host_cancelable(&mut self, request: R, cancellation: Option<u32>) -> Result<C, Error> {
+        let result = match cancellation {
+            Some(cause) => hirsel_rt::io_checks::cancel(self.io.adapter(), &request, cause)
+                .and_then(|completion| match completion {
+                    Some(completion) => Ok(completion),
+                    None => self.io.call(request),
+                }),
+            None => self.io.call(request),
+        };
+        result.map_err(|e| match e {
             hirsel_rt::io::AdapterError::Blocked => Error::Blocked(vec![]),
             e => {
                 let message = format!("{e:?}");
@@ -567,7 +578,7 @@ impl HostLibrary {
         let token = self.next_wait;
         self.next_wait += 1;
         self.io.adapter().enter(token);
-        match self.host(request.clone()) {
+        match self.host_cancelable(request.clone(), None) {
             Err(Error::Blocked(_)) => {
                 self.armed.push((token, scope, request));
                 Ok(())
@@ -633,7 +644,7 @@ impl HostLibrary {
     /// The root Proc and its runs go to the runtime's host provider, which checks and
     /// records them; a scripted `test.process` Proc stays with the library. A run parks
     /// its task on the provider's readiness token until its child exits (CONC-1), and a
-    /// cancelled scope returns Canceled before any request (CONC-3).
+    /// cancelled scope returns Canceled after program checks (CONC-3).
     fn host_process(
         &mut self,
         name: &str,
@@ -652,11 +663,6 @@ impl HostLibrary {
         self.yield_now = true;
         if name != "proc.run" {
             return self.host_child(name, a, cx);
-        }
-        if let Some(cause) = self.library.cancellation() {
-            return Ok(OperationResult::returned(process_value(
-                ProcessOutcome::Error(ProcessFailure::Canceled(cause)),
-            )));
         }
         let token = self.next_wait;
         self.next_wait += 1;
@@ -690,11 +696,6 @@ impl HostLibrary {
         a: &[Value],
         cx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        if let Some(cause) = self.library.cancellation()
-            && let Some(result) = self.child_canceled(name, a, cause, cx)?
-        {
-            return Ok(result);
-        }
         if !matches!(
             name,
             "child.write" | "child.read_stdout" | "child.read_stderr" | "child.wait"
@@ -723,38 +724,6 @@ impl HostLibrary {
                 targets: vec![],
             },
         })
-    }
-    /// The completion of a cancelled child operation that is a cancellation point; a
-    /// cancelled wait drops the Child it took.
-    fn child_canceled(
-        &mut self,
-        name: &str,
-        a: &[Value],
-        cause: u32,
-        cx: &mut OperationContext<'_>,
-    ) -> Result<Option<OperationResult>, Error> {
-        let canceled = error(hirsel_interp::library::process::failure_value(
-            ProcessFailure::Canceled(cause),
-        ));
-        Ok(Some(match name {
-            "proc.spawn" | "child.write" => OperationResult::returned(canceled),
-            // A zero-byte read is invalid before it is a cancellation point.
-            "child.read_stdout" | "child.read_stderr" if word(&a[3])? != 0 => {
-                OperationResult::returned(canceled)
-            }
-            "child.wait" => {
-                let handle = self.id(&a[1])?;
-                if let Value::Handle { id, .. } = a[1] {
-                    self.handles.remove(&id);
-                }
-                match self.host(R::Close { handle })? {
-                    C::Unit(Ok(())) => OperationResult::returned(canceled).transferring([1]),
-                    C::Checked(false) => hirsel_interp::library::process::child_failure(cx)?,
-                    _ => return Err(invalid()),
-                }
-            }
-            _ => return Ok(None),
-        }))
     }
     /// Issue a child request, under `token` when it can park.
     fn child_request(
@@ -819,7 +788,11 @@ impl HostLibrary {
         if let Some(token) = token {
             self.io.adapter().enter(token);
         }
-        let completion = self.host(request);
+        let cancellation = self
+            .library
+            .cancellation()
+            .filter(|_| token.is_none_or(|t| self.io.cancellable(t)));
+        let completion = self.host_cancelable(request, cancellation);
         if let Some(token) = token
             && !matches!(completion, Err(Error::Blocked(_)))
         {
@@ -912,7 +885,11 @@ impl HostLibrary {
             deadline,
         };
         self.io.adapter().enter(token);
-        let completion = self.host(request);
+        let cancellation = self
+            .library
+            .cancellation()
+            .filter(|_| self.io.cancellable(token));
+        let completion = self.host_cancelable(request, cancellation);
         if !matches!(completion, Err(Error::Blocked(_))) {
             self.io.adapter().finish(token);
         }
@@ -923,33 +900,6 @@ impl HostLibrary {
     }
     fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
         self.yield_now = true;
-        if !matches!(
-            name,
-            "io.dir"
-                | "dir.narrow"
-                | "file.narrow"
-                | "io.monotonic_clock"
-                | "io.wall_clock"
-                | "clock.monotonic"
-                | "clock.wall"
-        ) && let Some(cause) = self.library.cancellation()
-        {
-            if name == "file.commit" {
-                let handle = self.id(&a[1])?;
-                self.host(R::Close { handle })?;
-                if let Value::Handle { id, .. } = a[1] {
-                    self.handles.remove(&id);
-                }
-            }
-            return Ok(
-                OperationResult::returned(file_error(hirsel_rt::io::IoError::Canceled(cause)))
-                    .transferring(if name == "file.commit" {
-                        vec![1]
-                    } else {
-                        vec![]
-                    }),
-            );
-        }
         let path = |v: &Value| text(fields(v)?[0]);
         let request = match name {
             "io.dir" => R::Directory {
@@ -1339,38 +1289,7 @@ impl HostLibrary {
             .library
             .cancellation()
             .filter(|_| self.io.cancellable(token));
-        let completion = if let Some(cause) = cancellation.filter(|_| {
-            matches!(
-                name,
-                "net.resolve"
-                    | "net.connect"
-                    | "net.connect_addr"
-                    | "net.accept"
-                    | "net.read"
-                    | "net.read_into"
-                    | "net.write"
-                    | "net.write_all"
-                    | "tls.connect"
-                    | "tls.close"
-            )
-        }) {
-            let e = NetError::Canceled(cause);
-            match name {
-                "net.resolve" => C::Addresses(Err(e)),
-                "net.connect" | "net.connect_addr" => C::NetHandle(Err(e)),
-                "net.accept" => C::Accepted(Err(e)),
-                "net.read" | "net.read_into" => C::NetBytes(Err(e)),
-                "net.write" => C::Count(Err(e)),
-                "tls.connect" | "tls.close" => {
-                    let handle = self.id(&a[1])?;
-                    self.host(R::Close { handle })?;
-                    C::NetUnit(Err(e))
-                }
-                _ => C::NetUnit(Err(e)),
-            }
-        } else {
-            self.host(request)?
-        };
+        let completion = self.host_cancelable(request, cancellation)?;
         let mut updates = vec![];
         let value = match completion {
             C::Handle(r) => match r {
@@ -1515,7 +1434,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 continue;
             }
             self.io.adapter().enter(token);
-            match self.host(request.clone()) {
+            match self.host_cancelable(request.clone(), None) {
                 Err(Error::Blocked(_)) => self.armed.push((token, scope, request)),
                 completion => {
                     self.io.adapter().finish(token);
@@ -1596,11 +1515,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             if canceled {
                 self.io.adapter().finish(token);
                 self.waits.remove(&token);
-                let cause = self.library.cancellation().unwrap();
-                return match self.child_canceled(&name, &arguments, cause, cx)? {
-                    Some(result) => Ok(Some(result)),
-                    None => Err(invalid()),
-                };
+                return self.child_request(&name, &arguments, None, cx).map(Some);
             }
             return match self.child_request(&name, &arguments, Some(token), cx) {
                 Err(Error::Blocked(_)) => Ok(None),

@@ -628,19 +628,18 @@ and returns its exit status and everything it wrote to standard output and stand
 `proc.spawn(p, program, args, dir)` starts a streaming child that the program talks to while
 it runs. Both make these checks in this order, each before any host effect:
 
-1. In a cancelled scope the call returns `Canceled(cause)`
-   ([CONC-3](concurrency.md#conc-3-cancellation)).
-2. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
+1. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
    `..` component and no trailing `/`, and no argument contains a NUL byte; otherwise
    `InvalidInput()`.
-3. `program` must equal a rule of `p` byte for byte; otherwise `NotGranted()`. No `PATH`
+2. `program` must equal a rule of `p` byte for byte; otherwise `NotGranted()`. No `PATH`
    search, link resolution or prefix match takes part in the check.
-4. With `Some(d)`, the child's working directory is `d`'s directory; a `Dir` with no host
+3. With `Some(d)`, the child's working directory is `d`'s directory; a `Dir` with no host
    directory (one from `test.dir`) is `InvalidInput()` for a host provider. With `None()`
    the working directory is `/`. A `Dir` grants the child nothing; it only names where it
    starts.
-5. For `proc.run` with `Some(d)`, a deadline `d.at` that `d.clock` has already reached is
-   `TimedOut()`, and nothing is spawned.
+Cancellation follows these program checks as specified by
+[CONC-3](concurrency.md#conc-3-cancellation). After that, for `proc.run` with `Some(d)`, a
+deadline `d.at` that `d.clock` has already reached is `TimedOut()`, and nothing is spawned.
 
 The child's argument vector is `program` followed by `args`. Its environment holds exactly
 the variables its rule lists that are set in the launcher's environment, and nothing else.

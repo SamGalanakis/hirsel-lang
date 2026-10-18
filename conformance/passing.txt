@@ -466,6 +466,11 @@ conformance/CONC/CONC-2-tour-11-concurrency-run.hir
 conformance/CONC/CONC-2-tour-11-task-all-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir
 conformance/CONC/CONC-2-unconsumed-handle-ok.hir
+conformance/CONC/CONC-3-cancel-order-child-run.hir
+conformance/CONC/CONC-3-cancel-order-file-run.hir
+conformance/CONC/CONC-3-cancel-order-net-run.hir
+conformance/CONC/CONC-3-cancel-order-stdin-timer-channel-run.hir
+conformance/CONC/CONC-3-cancel-order-tls-run.hir
 conformance/CONC/CONC-3-canceled-pure-child.hir
 conformance/CONC/CONC-3-cancellation-shields-drop-run.hir
 conformance/CONC/CONC-3-check-canceled-run.hir

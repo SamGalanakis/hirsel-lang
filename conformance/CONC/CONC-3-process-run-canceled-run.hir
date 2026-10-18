@@ -1,7 +1,7 @@
 // rule: CONC-3
 // expect: run
-// A canceled run or spawn returns Canceled before any check, so even an ungranted or
-// invalid program is Canceled; the uncanceled parent's same calls are checked as usual.
+// process: {"provider":"process.script@1","rules":[{"program":"/bin/test"}],"runs":[],"children":[]}
+// Program errors precede cancellation in both run and spawn.
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   let p = io.process(rt)?
@@ -23,7 +23,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
             64,
             None()
           ) {
-            Error(Canceled(Requested)) => true,
+            Error(NotGranted()) => true,
             _ => false,
           }
           let invalid: bool = match proc.run(
@@ -35,14 +35,30 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
             64,
             None()
           ) {
-            Error(Canceled(Requested)) => true,
+            Error(InvalidInput()) => true,
             _ => false,
           }
           let spawned: bool = match proc.spawn(p, path.of("echo"), [], None()) {
+            Error(InvalidInput()) => true,
+            _ => false,
+          }
+          let valid_run: bool = match proc.run(
+            p,
+            path.of("/bin/test"),
+            [],
+            b"",
+            None(),
+            64,
+            None()
+          ) {
             Error(Canceled(Requested)) => true,
             _ => false,
           }
-          ungranted && invalid && spawned
+          let valid_spawn: bool = match proc.spawn(p, path.of("/bin/test"), [], None()) {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          ungranted && invalid && spawned && valid_run && valid_spawn
         }
       )
       task.cancel(s, h)

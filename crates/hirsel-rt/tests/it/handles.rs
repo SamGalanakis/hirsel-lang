@@ -58,6 +58,12 @@ fn bound_runtime_close_thunk_aborts_atomic_and_closes_once_without_ambient_state
     use std::{cell::RefCell, rc::Rc};
     struct Shared(Rc<RefCell<RealIo>>);
     impl Adapter for Shared {
+        fn preflight(
+            &self,
+            request: &hirsel_rt::io::Request,
+        ) -> Result<Option<hirsel_rt::io::Completion>, AdapterError> {
+            self.0.borrow().preflight(request)
+        }
         fn call(&mut self, r: Request) -> Result<Completion, AdapterError> {
             self.0.borrow_mut().call(r)
         }

@@ -1385,7 +1385,7 @@ fn stdin_replay_rejects_oversized_chunks_and_invalid_errors_before_publication()
     too_long.extend_from_slice(&[0, 255, 1]);
     let mut invalid_cause = vec![1];
     invalid_cause.extend_from_slice(&1u32.to_le_bytes());
-    invalid_cause.extend_from_slice(&3u32.to_le_bytes());
+    invalid_cause.extend_from_slice(&4u32.to_le_bytes());
     for bad_output in [too_long, invalid_cause, vec![0]] {
         let mut h = Harness::new(Default::default());
         h.run.inputs = tape.clone();

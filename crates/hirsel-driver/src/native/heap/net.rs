@@ -241,19 +241,6 @@ fn error(e: NetError) -> OpValue {
     };
     v(1, v(tag, payload))
 }
-/// The `Canceled(cause)` a canceled network request that can wait completes with
-/// (`hirsel-rt/src/host_waits.rs`), or None for any other operation.
-pub(super) fn canceled(module: Option<&str>, name: &str, cause: u32) -> Option<OpValue> {
-    match (module, name) {
-        (
-            Some("net"),
-            "resolve" | "connect" | "connect_addr" | "accept" | "read" | "read_into" | "write"
-            | "write_all",
-        )
-        | (Some("$intrinsic"), "NetReadInto") => Some(error(NetError::Canceled(cause))),
-        _ => None,
-    }
-}
 fn result<T>(r: Result<T, NetError>, value: impl FnOnce(T) -> OpValue) -> OpValue {
     match r {
         Ok(x) => io_ok(value(x)),
@@ -290,28 +277,12 @@ impl Io {
             OpValue::Handle(external)
         }
     }
-    /// A canceled `tls.connect` or `tls.close` (`hirsel-rt/src/host_waits.rs`): the call
-    /// takes its stream, which closes, and completes `Canceled(cause)`.
-    pub(super) fn close_canceled_tls(&mut self, stream: &OpValue, cause: u32) -> OpOutcome {
-        let Some(id) = self.network_id(stream) else {
-            return OpOutcome::Unsupported;
-        };
-        if let OpValue::Handle(h) = stream {
-            self.network_handles.remove(h);
-        }
-        match self.network.call(R::Close { handle: id }) {
-            Ok(C::Unit(Ok(()))) => OpOutcome::Complete {
-                result: Ok(error(NetError::Canceled(cause))),
-                consumed: vec![1],
-            },
-            _ => OpOutcome::Unsupported,
-        }
-    }
     pub(super) fn net(
         &mut self,
         module: Option<&str>,
         name: &str,
         args: &[OpValue],
+        cancellation: Option<u32>,
     ) -> Option<OpOutcome> {
         let request = match (module, name, args) {
             (Some("test"), "net", [OpValue::Handle(test), peers, listeners])
@@ -430,7 +401,7 @@ impl Io {
             },
             _ => return None,
         };
-        let completion = match self.script(request) {
+        let completion = match self.script(request, cancellation) {
             Ok(c) => c,
             Err(outcome) => return Some(outcome),
         };
@@ -540,6 +511,7 @@ mod tests {
                 Some("test"),
                 "net",
                 &[OpValue::Handle(1), peers, OpValue::Sequence(vec![])],
+                None,
             )
             .unwrap()
         else {
@@ -558,6 +530,7 @@ mod tests {
                     bits(ScalarKind::U16, 80u16),
                     v(0, OpValue::Unit),
                 ],
+                None,
             )
             .unwrap()
         else {
@@ -569,7 +542,7 @@ mod tests {
         OpValue::Handle(h)
     }
     fn value(io: &mut Io, name: &str, args: &[OpValue]) -> OpValue {
-        let OpOutcome::Value(v) = io.net(Some("net"), name, args).unwrap() else {
+        let OpOutcome::Value(v) = io.net(Some("net"), name, args, None).unwrap() else {
             panic!()
         };
         v
@@ -612,6 +585,7 @@ mod tests {
                         },
                         bits(ScalarKind::U64, 99u64),
                     ],
+                    None,
                 )
                 .unwrap()
             else {
@@ -734,6 +708,7 @@ mod tests {
                         OpValue::Bytes(b"example.com".to_vec()),
                         v(0, OpValue::Unit),
                     ],
+                    None,
                 )
                 .unwrap();
             if success {
@@ -742,7 +717,7 @@ mod tests {
                     OpOutcome::Value(OpValue::Variant { tag: 0, .. })
                 ));
                 assert!(
-                    matches!(io.net(Some("tls"),"close",&[n,s]).unwrap(),OpOutcome::Complete {consumed,..} if consumed==[1])
+                    matches!(io.net(Some("tls"),"close",&[n,s], None).unwrap(),OpOutcome::Complete {consumed,..} if consumed==[1])
                 );
             } else {
                 assert!(matches!(outcome,OpOutcome::Complete {consumed,..} if consumed==[1]));

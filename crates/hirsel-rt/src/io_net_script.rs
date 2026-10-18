@@ -535,3 +535,15 @@ impl ScriptIo {
         )
     }
 }
+
+impl crate::io::Adapter for ScriptIo {
+    fn preflight(
+        &self,
+        request: &crate::io::Request,
+    ) -> Result<Option<crate::io::Completion>, AdapterError> {
+        self.state.preflight(request)
+    }
+    fn call(&mut self, request: crate::io::Request) -> Result<crate::io::Completion, AdapterError> {
+        ScriptIo::call(self, request)
+    }
+}

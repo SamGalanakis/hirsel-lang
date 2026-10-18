@@ -420,10 +420,12 @@ single-threaded, with the reference interpreter's schedule:
 - a successful poll performs the wait's effect (a join's poll moves the result) and queues the task.
 
 Host requests park too (`host_waits.rs`). Every capability request goes through
-`host_waits::issue`. A canceled task's stdin read, print or waiting network request
-(resolve, connect, accept, read, write, TLS) completes `Canceled` without reaching the
-adapter (CONC-3), as the interpreter's HostLibrary does. A stdin or network request that the
-adapter answers `AdapterError::Blocked` parks its task (`Wait::Host`): a network request after
+`host_waits::issue`. `io_checks` first checks arguments and authority through
+`Adapter::preflight`, then completes cancellation without a provider request.
+The same checks serve RealIo, SimIo and ScriptIo (the H model). After valid arguments,
+a canceled task's blocking request (including file, process and timer calls) completes
+`Canceled` without reaching the provider (CONC-3), as the interpreter's HostLibrary does.
+A stdin or network request that the adapter answers `AdapterError::Blocked` parks its task (`Wait::Host`): a network request after
 its yield, a stdin read at once, as the interpreter parks them. Its poll re-issues it when the
 task is canceled before the request committed an effect, or when the adapter finds it ready,
 so the effect and its tape event happen at the poll, and the resumed operation does not yield

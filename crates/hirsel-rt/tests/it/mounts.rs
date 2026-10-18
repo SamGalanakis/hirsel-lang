@@ -338,6 +338,12 @@ fn native_abi_denies_mount_acquisition_and_writes_and_consumes_owned_bytes() {
     use std::{cell::RefCell, rc::Rc};
     struct Shared(Rc<RefCell<RealIo>>);
     impl Adapter for Shared {
+        fn preflight(
+            &self,
+            request: &hirsel_rt::io::Request,
+        ) -> Result<Option<hirsel_rt::io::Completion>, AdapterError> {
+            self.0.borrow().preflight(request)
+        }
         fn call(&mut self, request: R) -> Result<C, AdapterError> {
             self.0.borrow_mut().call(request)
         }

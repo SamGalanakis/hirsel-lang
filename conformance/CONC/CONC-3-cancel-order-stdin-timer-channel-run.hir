@@ -1,0 +1,48 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+fn discard[T](take value: T) -> () {
+  ()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let input = io.stdin(rt)?
+  let c = io.monotonic_clock(rt)?
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) {
+      let mut buffer: List[u8] = []
+      failure.check(
+        stdin.read(input, mut buffer, 0u64) == Error(InvalidInput()),
+        Arithmetic()
+      )
+      failure.check(
+        stdin.read(input, mut buffer, 1u64) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      failure.check(
+        clock.sleep_until(c, now) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      discard(take sender)
+      let mut rx = take receiver
+      failure.check(
+        channel.receive(tasks, mut rx) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+    }
+  )
+  failure.check(clock.sleep_until(c, now) == Ok(()), Arithmetic())
+  let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+  discard(take sender)
+  let mut rx = take receiver
+  failure.check(channel.receive(tasks, mut rx) == Error(Closed()), Arithmetic())
+  Ok(())
+}

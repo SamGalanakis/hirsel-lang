@@ -64,17 +64,6 @@ fn failure(f: ProcessFailure) -> OpValue {
         ProcessFailure::InputClosed => v(8, OpValue::Unit),
     }
 }
-/// The `Canceled(cause)` a canceled `proc.run` completes with
-/// (`hirsel-rt/src/host_waits.rs`), or None for any other operation.
-pub(super) fn canceled(module: Option<&str>, name: &str, cause: u32) -> Option<OpValue> {
-    match (module, name) {
-        (Some("proc"), "run" | "spawn")
-        | (Some("child"), "write" | "read_stdout" | "read_stderr") => {
-            Some(v(1, failure(ProcessFailure::Canceled(cause))))
-        }
-        _ => None,
-    }
-}
 fn status_value(status: ExitStatus) -> OpValue {
     let (tag, code) = match status {
         ExitStatus::Exited(code) => (0, code),
@@ -170,6 +159,7 @@ impl Io {
         module: Option<&str>,
         name: &str,
         args: &[OpValue],
+        cancellation: Option<u32>,
     ) -> Option<OpOutcome> {
         let request = match (module, name, args) {
             (Some("test"), "process", [OpValue::Handle(test), runs, children])
@@ -226,29 +216,32 @@ impl Io {
                     deadline: deadline
                         .map(|(_, at, _, clock)| hirsel_rt::process::Deadline { clock, ticks: at }),
                 };
-                return Some(match self.process_completion(module, request) {
-                    // A run that started (its checks passed and it found its entry) before
-                    // its deadline races it.
-                    OpOutcome::Value(value)
-                        if deadline.is_some_and(|(_, at, now, _)| at > now)
-                            && !matches!(
-                                variant(&value),
-                                Some((1, OpValue::Variant { tag: 0..=2, .. }))
-                            ) =>
-                    {
-                        let (clock, at, ..) = deadline.unwrap();
-                        OpOutcome::Deadline {
-                            clock,
-                            at,
-                            completed: Box::new(OpOutcome::Value(value)),
-                            timed_out: Box::new(OpOutcome::Value(v(
-                                1,
-                                failure(ProcessFailure::TimedOut),
-                            ))),
+                return Some(
+                    match self.process_completion(module, request, cancellation) {
+                        // A run that started (its checks passed and it found its entry) before
+                        // its deadline races it.
+                        OpOutcome::Value(value)
+                            if cancellation.is_none()
+                                && deadline.is_some_and(|(_, at, now, _)| at > now)
+                                && !matches!(
+                                    variant(&value),
+                                    Some((1, OpValue::Variant { tag: 0..=2, .. }))
+                                ) =>
+                        {
+                            let (clock, at, ..) = deadline.unwrap();
+                            OpOutcome::Deadline {
+                                clock,
+                                at,
+                                completed: Box::new(OpOutcome::Value(value)),
+                                timed_out: Box::new(OpOutcome::Value(v(
+                                    1,
+                                    failure(ProcessFailure::TimedOut),
+                                ))),
+                            }
                         }
-                    }
-                    outcome => outcome,
-                });
+                        outcome => outcome,
+                    },
+                );
             }
             (Some("proc"), "spawn", [p, OpValue::Handle(path), argv, dir]) => {
                 match variant(dir)? {
@@ -287,15 +280,20 @@ impl Io {
                     ("kill", []) => R::ChildKill { process, child },
                     _ => return None,
                 };
-                return Some(self.child(name, args, request));
+                return Some(self.child(name, args, request, cancellation));
             }
             _ => return None,
         };
-        Some(self.process_completion(module, request))
+        Some(self.process_completion(module, request, cancellation))
     }
     /// A process request's outcome from the runtime's process model.
-    fn process_completion(&mut self, module: Option<&str>, request: R) -> OpOutcome {
-        let completion = match self.script(request) {
+    fn process_completion(
+        &mut self,
+        module: Option<&str>,
+        request: R,
+        cancellation: Option<u32>,
+    ) -> OpOutcome {
+        let completion = match self.script(request, cancellation) {
             Ok(c) => c,
             Err(outcome) => return outcome,
         };
@@ -335,8 +333,14 @@ impl Io {
         })
     }
     /// A child operation's outcome; `child.wait` consumes its Child on every outcome.
-    fn child(&mut self, name: &str, args: &[OpValue], request: R) -> OpOutcome {
-        let completion = match self.script(request) {
+    fn child(
+        &mut self,
+        name: &str,
+        args: &[OpValue],
+        request: R,
+        cancellation: Option<u32>,
+    ) -> OpOutcome {
+        let completion = match self.script(request, cancellation) {
             Ok(c) => c,
             Err(outcome) => return outcome,
         };
@@ -388,24 +392,6 @@ impl Io {
     fn forget(&mut self, child: &OpValue) {
         if let OpValue::Handle(h) = child {
             self.network_handles.remove(h);
-        }
-    }
-    /// A cancelled `child.wait`: the Child it took is dropped, which closes it.
-    pub(super) fn close_canceled_child(&mut self, c: &OpValue, cause: u32) -> OpOutcome {
-        let Some(child) = self.network_id(c) else {
-            return OpOutcome::Unsupported;
-        };
-        self.forget(c);
-        match self.network.call(R::Close { handle: child }) {
-            Ok(C::Unit(Ok(()))) => OpOutcome::Complete {
-                result: Ok(v(1, failure(ProcessFailure::Canceled(cause)))),
-                consumed: vec![1],
-            },
-            Ok(C::Checked(false)) => OpOutcome::Complete {
-                result: Err("LANG-9".into()),
-                consumed: vec![1],
-            },
-            _ => OpOutcome::Unsupported,
         }
     }
 }

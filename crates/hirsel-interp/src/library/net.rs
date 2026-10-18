@@ -793,12 +793,6 @@ impl Simulation {
                         }
                         return Ok(OperationResult::returned(Value::Unit).transferring([1]));
                     }
-                    if name == "tls.close" && !self.net_streams[&id].tls {
-                        if let Some(report) = self.close_net(id) {
-                            break 'operation Err(NetFault::Unmet(report));
-                        }
-                        break 'operation Ok(Value::Unit);
-                    }
                     if (name == "net.read" && index(arg(a, 3)?)? == 0)
                         || (name == "net.read_into"
                             && collection::elements(arg(a, 2)?, BuiltinType::Inline)?.is_empty())
@@ -811,39 +805,26 @@ impl Simulation {
                         break 'operation Err(e);
                     }
                     let access = {
-                        let s = self.net_streams.get_mut(&id).unwrap();
-                        if matches!(
-                            name,
-                            "tls.connect"
-                                | "net.set_read_timeout"
-                                | "net.set_write_timeout"
-                                | "net.peer_addr"
-                        ) {
-                            // Owner 385145: invalid repeated upgrades precede
-                            // grant-name checks and provider/fault inputs.
-                            if name == "tls.connect" && s.tls {
-                                Err(NetFault::InvalidInput)
-                            } else if name == "tls.connect"
-                                && s.requires_tls
-                                && text(arg(a, 2)?)? != s.host
-                            {
-                                Err(NetFault::NotGranted)
-                            } else {
-                                s.advance();
-                                if matches!(s.steps.front(), Some(NetStep::Reset)) {
-                                    Err(NetFault::ConnectionReset)
-                                } else {
-                                    Ok(())
-                                }
-                            }
+                        let s = &self.net_streams[&id];
+                        if name == "tls.connect" && s.tls {
+                            Err(NetFault::InvalidInput)
+                        } else if name == "tls.connect"
+                            && s.requires_tls
+                            && text(arg(a, 2)?)? != s.host
+                            || s.requires_tls
+                                && !s.tls
+                                && matches!(
+                                    name,
+                                    "net.read"
+                                        | "net.read_into"
+                                        | "net.write"
+                                        | "net.write_all"
+                                        | "net.shutdown"
+                                )
+                        {
+                            Err(NetFault::NotGranted)
                         } else {
-                            s.check().and_then(|()| {
-                                if matches!(name, "net.write" | "net.write_all") && s.write_closed {
-                                    Err(NetFault::BrokenPipe)
-                                } else {
-                                    Ok(())
-                                }
-                            })
+                            Ok(())
                         }
                     };
                     let blocking = matches!(
@@ -855,13 +836,6 @@ impl Simulation {
                             | "tls.connect"
                             | "tls.close"
                     );
-                    let fault = if access.is_ok() && blocking {
-                        cancellation
-                            .map(Fault::Canceled)
-                            .or_else(|| self.fault(name))
-                    } else {
-                        None
-                    };
                     if let Err(e) = access {
                         if matches!(name, "tls.connect" | "tls.close") {
                             self.net_streams.remove(&id);
@@ -869,6 +843,32 @@ impl Simulation {
                         }
                         break 'operation Err(e);
                     }
+                    if let Some(cause) = cancellation.filter(|_| blocking) {
+                        if matches!(name, "tls.connect" | "tls.close") {
+                            self.net_streams.remove(&id);
+                            self.grants.remove(&id);
+                        }
+                        break 'operation Err(NetFault::Canceled(cause));
+                    }
+                    if name == "tls.close" && !self.net_streams[&id].tls {
+                        if let Some(report) = self.close_net(id) {
+                            break 'operation Err(NetFault::Unmet(report));
+                        }
+                        break 'operation Ok(Value::Unit);
+                    }
+                    let s = self.net_streams.get_mut(&id).unwrap();
+                    s.advance();
+                    if matches!(s.steps.front(), Some(NetStep::Reset)) {
+                        if matches!(name, "tls.connect" | "tls.close") {
+                            self.net_streams.remove(&id);
+                            self.grants.remove(&id);
+                        }
+                        break 'operation Err(NetFault::ConnectionReset);
+                    }
+                    if matches!(name, "net.write" | "net.write_all") && s.write_closed {
+                        break 'operation Err(NetFault::BrokenPipe);
+                    }
+                    let fault = blocking.then(|| self.fault(name)).flatten();
                     if let Some(fault) = fault {
                         if let Fault::Fault { partial, .. } = &fault
                             && *partial > 0
@@ -894,9 +894,7 @@ impl Simulation {
                     match name {
                         "tls.connect" => {
                             let server_name = text(arg(a, 2)?)?;
-                            let outcome = if s.requires_tls && server_name != s.host {
-                                Err(NetFault::NotGranted)
-                            } else if matches!(s.steps.front(), Some(NetStep::Stall)) {
+                            let outcome = if matches!(s.steps.front(), Some(NetStep::Stall)) {
                                 Err(if s.read_timeout.is_some() {
                                     NetFault::TimedOut
                                 } else {

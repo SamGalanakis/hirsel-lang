@@ -418,6 +418,10 @@ impl RealIo {
     }
 }
 impl Adapter for RealIo {
+    fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+        self.state.preflight(request)
+    }
+
     fn tls_roots(&mut self, pem: &[u8]) {
         self.net.tls_roots(pem);
     }
@@ -491,7 +495,8 @@ impl Adapter for RealIo {
 impl RealIo {
     fn perform(&mut self, request: Request) -> Result<Completion, AdapterError> {
         let fake = self.state.is_fake_request(&request);
-        let mut fault = if self.state.denied_projection(&request)
+        let mut fault = if self.state.preflight(&request)?.is_some()
+            || self.state.denied_projection(&request)
             || crate::net::is_net_request(&request)
             || self.state.is_process(&request)
             || matches!(&request, Request::ReadStdin { stdin, .. } if self.state.expect(*stdin, crate::handles::Grant::Stdin).is_err())

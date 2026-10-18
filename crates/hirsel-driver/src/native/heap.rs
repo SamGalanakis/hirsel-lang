@@ -185,8 +185,8 @@ impl Operations for Io {
         }
     }
     /// The runtime's cancellation points (`hirsel-rt/src/host_waits.rs`): a canceled stdin
-    /// read, print or waiting network request completes `Canceled(cause)` with no effect,
-    /// before its handle is consulted, and is still a capability operation.
+    /// read, print, file or waiting network/process request checks program validity before
+    /// completing `Canceled(cause)` with no effect, and is still a capability operation.
     fn canceled(&mut self, op: &OperationId, args: &[OpValue], cause: u32) -> Option<OpOutcome> {
         let path = &op.definition.0;
         if !path.package.name_is("core") {
@@ -222,14 +222,6 @@ impl Operations for Io {
                     value: Box::new(OpValue::Plain(bytes)),
                 }
             }
-            // A zero-byte read is invalid before it is a cancellation point.
-            (
-                Some("child"),
-                "read_stdout" | "read_stderr",
-                [_, _, _, OpValue::Bits { bits: 0, .. }],
-            ) => {
-                return None;
-            }
             // WaitError::Canceled(cause).
             (Some("clock"), "sleep_until", _) => OpValue::Variant {
                 tag: 1,
@@ -241,18 +233,19 @@ impl Operations for Io {
                     }),
                 }),
             },
-            // A canceled wait drops the Child it took.
-            (Some("child"), "wait", [_, c]) => {
+            (Some("net" | "tls" | "$intrinsic"), _, _) => {
                 self.yielded = true;
-                return Some(self.close_canceled_child(c, cause));
+                return self.net(module, &path.name, args, Some(cause));
             }
-            // A canceled TLS upgrade or close still closes the stream it took.
-            (Some("tls"), "connect" | "close", [_, stream, ..]) => {
+            (Some("proc" | "child"), _, _) => {
                 self.yielded = true;
-                return Some(self.close_canceled_tls(stream, cause));
+                return self.process(module, &path.name, args, Some(cause));
             }
-            (module, name, _) => net::canceled(module, name, cause)
-                .or_else(|| process::canceled(module, name, cause))?,
+            (Some("file"), _, _) => {
+                self.yielded = true;
+                return self.cancel_file(&path.name, args, cause);
+            }
+            _ => return None,
         };
         self.yielded = true;
         Some(OpOutcome::Value(value))
@@ -276,11 +269,11 @@ impl Operations for Io {
         }
         // Everything below is a capability operation, as the runtime's Io entries are.
         self.yielded = true;
-        if let Some(outcome) = self.net(module, &path.name, args) {
+        if let Some(outcome) = self.net(module, &path.name, args, None) {
             output.extend(self.network.take_report());
             return outcome;
         }
-        if let Some(outcome) = self.process(module, &path.name, args) {
+        if let Some(outcome) = self.process(module, &path.name, args, None) {
             output.extend(self.network.take_report());
             return outcome;
         }
@@ -460,9 +453,18 @@ impl Io {
     fn script(
         &mut self,
         request: hirsel_rt::io::Request,
+        cancellation: Option<u32>,
     ) -> Result<hirsel_rt::io::Completion, OpOutcome> {
         let before = self.network.clone();
-        match self.network.call(request) {
+        let completion = match cancellation {
+            Some(cause) => hirsel_rt::io_checks::cancel(&mut self.network, &request, cause)
+                .and_then(|completion| match completion {
+                    Some(completion) => Ok(completion),
+                    None => self.network.call(request),
+                }),
+            None => self.network.call(request),
+        };
+        match completion {
             Ok(completion) => Ok(completion),
             Err(hirsel_rt::io::AdapterError::Blocked) => {
                 self.network = before;

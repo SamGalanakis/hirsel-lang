@@ -124,6 +124,9 @@ fn tape_header(line: Option<&str>) -> bool {
 struct Shared<A>(Rc<RefCell<A>>);
 
 impl<A: Adapter> Adapter for Shared<A> {
+    fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+        self.0.borrow().preflight(request)
+    }
     fn tls_roots(&mut self, pem: &[u8]) {
         self.0.borrow_mut().tls_roots(pem);
     }

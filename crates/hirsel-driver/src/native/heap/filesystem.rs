@@ -1,6 +1,6 @@
 //! Independent checked-heap model of confined directory lifecycle operations.
 use super::{Io, IoGrant, io_error, io_not_granted, io_ok, io_portable, io_relative};
-use hirsel_heapcheck::{OpOutcome, OpValue};
+use hirsel_heapcheck::{OpOutcome, OpValue, Operations};
 use hirsel_lir::layout_types::ScalarKind;
 use hirsel_run_config::Access;
 
@@ -32,6 +32,106 @@ fn children(io: &Io, tree: u64, path: &str) -> Vec<String> {
         .collect()
 }
 impl Io {
+    /// File program checks use only grants and lexical paths; filesystem observations
+    /// remain after cancellation, including a missing file or a detached directory.
+    pub(super) fn cancel_file(
+        &mut self,
+        name: &str,
+        args: &[OpValue],
+        cause: u32,
+    ) -> Option<OpOutcome> {
+        if name == "narrow" {
+            return None;
+        }
+        let [OpValue::Handle(directory), rest @ ..] = args else {
+            return Some(OpOutcome::Unsupported);
+        };
+        let Some(IoGrant::Dir { root, access, .. }) = self.grants.get(directory) else {
+            return Some(OpOutcome::Fail("CAP-2".into()));
+        };
+        let mut bytes = 1u32.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&cause.to_le_bytes());
+        let mut value = OpValue::Variant {
+            tag: 1,
+            value: Box::new(OpValue::Plain(bytes)),
+        };
+        let writing = matches!(
+            name,
+            "create"
+                | "write_bytes"
+                | "write"
+                | "append"
+                | "remove"
+                | "mkdir"
+                | "remove_dir"
+                | "rename"
+                | "create_atomic"
+                | "write_all"
+                | "commit"
+        );
+        if writing && *access == Access::Read {
+            value = io_not_granted();
+        } else if matches!(name, "read" | "write" | "append" | "seek") {
+            let Some(OpValue::Handle(file)) = rest.first() else {
+                return Some(OpOutcome::Unsupported);
+            };
+            let Some(IoGrant::File {
+                directory: owner,
+                writable,
+                ..
+            }) = self.grants.get(file)
+            else {
+                return Some(OpOutcome::Fail("CAP-2".into()));
+            };
+            if owner != directory {
+                return Some(OpOutcome::Fail("CAP-2".into()));
+            }
+            if name == "read" && *writable
+                || matches!(name, "write" | "append") && !*writable
+                || name == "seek"
+                    && matches!(rest.get(1), Some(OpValue::Bits { bits, .. }) if *bits > i64::MAX as u128)
+            {
+                value = io_error(1);
+            }
+        } else if matches!(name, "write_all" | "commit") {
+            let Some(OpValue::Handle(file)) = rest.first() else {
+                return Some(OpOutcome::Unsupported);
+            };
+            if !matches!(self.grants.get(file), Some(IoGrant::Atomic { directory: owner, .. }) if owner == directory)
+            {
+                return Some(OpOutcome::Fail("CAP-2".into()));
+            }
+        } else if name != "walk" {
+            for operand in rest.iter().take(if name == "rename" { 2 } else { 1 }) {
+                let OpValue::Handle(path) = operand else {
+                    return Some(OpOutcome::Unsupported);
+                };
+                let text = self.paths.get(path.checked_sub(1)? as usize)?;
+                if io_relative(root, text).is_none() {
+                    value = io_error(1);
+                }
+            }
+        }
+        if name == "commit" {
+            let Some(OpValue::Handle(file)) = rest.first() else {
+                return Some(OpOutcome::Unsupported);
+            };
+            if self
+                .close_handle(*file, &mut Vec::new())
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                return Some(OpOutcome::Unsupported);
+            }
+            return Some(OpOutcome::Complete {
+                result: Ok(value),
+                consumed: vec![1],
+            });
+        }
+        Some(OpOutcome::Value(value))
+    }
+
     pub(super) fn physical_path(&self, directory: u64, path: &str) -> Option<String> {
         if self.detached_directories.contains(&directory) {
             return None;

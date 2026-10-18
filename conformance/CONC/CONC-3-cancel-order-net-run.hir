@@ -1,0 +1,70 @@
+// rule: CONC-3
+// expect: run
+// grant: clock
+// net: {"provider":"net.script@2","rules":[{"address":"example.com","service":"80","operation":"connect"}],"peers":[{"address":"example.com","port":80,"resolves_to":[],"tls":"plain","connections":[{"open":["reset"]}]}]}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let c = io.monotonic_clock(rt)?
+  let n = io.net(rt)?
+  let opened_stream = match net.connect(n, "example.com", 80u16, Unbounded()) {
+    Ok(stream) => take stream,
+    Error(_) => {
+      failure.check(false, Arithmetic())
+      return Ok(())
+    },
+  }
+  let now = match clock.monotonic(c) {
+    Ok(now) => now,
+    Error(_) => return Ok(()),
+  }
+  let _ = task.scope_until(
+    tasks,
+    Deadline(clock: c, at: now),
+    fn(s: Scope) {
+      let mut stream = take opened_stream
+      let mut buffer: List[u8] = []
+      failure.check(
+        net.resolve(n, "INVALID", 80u16) == Error(InvalidInput()),
+        Arithmetic()
+      )
+      failure.check(
+        net.resolve(n, "other.com", 80u16) == Error(NotGranted()),
+        Arithmetic()
+      )
+      failure.check(
+        net.resolve(n, "example.com", 80u16) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      let invalid: bool = match net.connect(n, "example.com", 80u16, Nanos(0u64)) {
+        Error(InvalidInput()) => true,
+        _ => false,
+      }
+      let denied: bool = match net.connect(n, "other.com", 80u16, Unbounded()) {
+        Error(NotGranted()) => true,
+        _ => false,
+      }
+      let valid: bool = match net.connect(n, "example.com", 80u16, Unbounded()) {
+        Error(Canceled(DeadlineExceeded())) => true,
+        _ => false,
+      }
+      failure.check(invalid && denied && valid, Arithmetic())
+      failure.check(
+        net.read(n, mut stream, mut buffer, 0u64) == Error(InvalidInput()),
+        Arithmetic()
+      )
+      failure.check(
+        net.read(n, mut stream, mut buffer, 1u64) == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      failure.check(
+        net.write(n, mut stream, b"x") == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+      failure.check(
+        net.write_all(n, mut stream, b"x") == Error(Canceled(DeadlineExceeded())),
+        Arithmetic()
+      )
+    }
+  )
+  Ok(())
+}

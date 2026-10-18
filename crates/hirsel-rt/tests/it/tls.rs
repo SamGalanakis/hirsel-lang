@@ -442,6 +442,9 @@ fn cooperative_tls_retains_handshake_and_plaintext_across_readiness() {
         next: u64,
     }
     impl Adapter for Pump {
+        fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
+            self.io.preflight(request)
+        }
         fn tls_roots(&mut self, pem: &[u8]) {
             self.io.tls_roots(pem);
         }

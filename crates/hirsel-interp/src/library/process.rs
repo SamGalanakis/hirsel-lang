@@ -86,7 +86,7 @@ fn failure_of(ordinal: u32, code: u32) -> Option<ProcessFailure> {
         (4, 0) => ProcessFailure::OutputLimit,
         (5, code) => ProcessFailure::Fault(code),
         (6, 0) => ProcessFailure::TimedOut,
-        (7, cause) if cause <= 2 => ProcessFailure::Canceled(cause),
+        (7, cause) if cause <= super::tasks::CANCEL_DEADLINE => ProcessFailure::Canceled(cause),
         (8, 0) => ProcessFailure::InputClosed,
         _ => return None,
     })
@@ -412,11 +412,9 @@ impl Simulation {
                     return Err(invalid("expected MonotonicClock"));
                 }
                 let deadline = deadline.map(|(_, ticks)| ticks);
-                // A cancelled scope returns Canceled before any check (CONC-3).
-                let checked = match canceled {
-                    Some(cause) => Err(ProcessFailure::Canceled(cause)),
-                    None => check(&program, &args, &rules),
-                };
+                let checked = check(&program, &args, &rules).and_then(|()| {
+                    canceled.map_or(Ok(()), |cause| Err(ProcessFailure::Canceled(cause)))
+                });
                 let request = encode_arguments(a);
                 let outcome = if let Some(recorded) = self.replay_output("Proc", name, &request)? {
                     // Replay re-derives the program check; a contradicting completion refuses.
@@ -561,10 +559,9 @@ impl Simulation {
                     }
                     _ => return Err(invalid("Option[Dir] representation")),
                 }
-                let checked = match canceled {
-                    Some(cause) => Err(ProcessFailure::Canceled(cause)),
-                    None => check(&program, &args, &rules),
-                };
+                let checked = check(&program, &args, &rules).and_then(|()| {
+                    canceled.map_or(Ok(()), |cause| Err(ProcessFailure::Canceled(cause)))
+                });
                 match checked {
                     Err(failure) => error(failure_value(failure)),
                     Ok(())
@@ -608,11 +605,10 @@ impl Simulation {
             }
             "child.write" => {
                 let data = bytes(arg(a, 2)?)?.to_vec();
-                // A canceled write is Canceled before its Child is consulted (CONC-3).
-                match canceled {
+                let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
+                match canceled.filter(|_| open) {
                     Some(cause) => error(failure_value(ProcessFailure::Canceled(cause))),
                     None => {
-                        let (child, open) = self.child_grant(arg(a, 0)?, arg(a, 1)?)?;
                         if !open {
                             error(failure_value(ProcessFailure::InvalidInput))
                         } else if data.is_empty() {

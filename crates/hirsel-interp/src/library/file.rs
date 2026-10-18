@@ -32,8 +32,10 @@ impl Library {
         }
         let writing = matches!(name, "file.write" | "file.append");
         let denied = writing && !self.simulation.writable(dir);
-        let wrong_mode = (writing && !writable) || (name == "file.read" && writable);
-        let fault = if denied {
+        let wrong_mode = (writing && !writable)
+            || (name == "file.read" && writable)
+            || (name == "file.seek" && integer_u64(arg(a, 2)?)? > i64::MAX as u64);
+        let fault = if denied || wrong_mode {
             None
         } else {
             self.tasks

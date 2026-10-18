@@ -22,6 +22,7 @@ pub mod host_paths;
 pub mod host_stdin;
 mod host_waits;
 pub mod io;
+pub mod io_checks;
 pub mod io_net_script;
 pub mod io_real;
 pub mod io_sim;

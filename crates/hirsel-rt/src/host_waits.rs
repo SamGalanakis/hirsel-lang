@@ -2,8 +2,8 @@
 //! schedule (`hirsel-driver`'s HostLibrary).
 //!
 //! Every capability request goes through [`issue`]. Under a cancellation (CONC-3) a blocking
-//! request (stdin, print, and the network operations that can wait) completes `Canceled` with
-//! no host request and no tape event. Otherwise it runs under a fresh token
+//! request first checks program validity and authority through `io_checks`, then completes
+//! `Canceled` with no provider request and no tape event. Otherwise it runs under a fresh token
 //! ([`Adapter::enter`](crate::io::Adapter::enter)). An adapter that cannot complete it yet
 //! answers `AdapterError::Blocked`: under cooperative admission a host provider recorded its
 //! descriptor interest or deadline under the token, and in replay the tape recorded the park.
@@ -19,9 +19,7 @@
 use std::collections::BTreeMap;
 
 use crate::RunCtx;
-use crate::io::{AdapterError, Binding, Completion, InputError, IoError, Request, WaitError};
-use crate::net::NetError;
-use crate::process::{ProcessFailure, ProcessOutcome};
+use crate::io::{AdapterError, Binding, Completion, Request};
 
 /// The parked requests of one run.
 #[derive(Default)]
@@ -44,55 +42,9 @@ struct Parked {
 /// # Safety
 /// `ctx` is live and its Binding bound.
 unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Option<Completion> {
-    let e = NetError::Canceled(cause);
-    Some(match request {
-        // A zero-byte read is invalid before it is a cancellation point.
-        Request::ReadStdin { max: 0, .. } => Completion::Input(Err(InputError::InvalidInput)),
-        Request::ReadStdin { .. } => Completion::Input(Err(InputError::Canceled(cause))),
-        Request::Print { .. } | Request::PrintStderr { .. } => {
-            Completion::Unit(Err(IoError::Canceled(cause)))
-        }
-        Request::SleepUntil { .. } => Completion::Wait(Err(WaitError::Canceled(cause))),
-        // A parked run's child is killed and reaped when its token finishes.
-        Request::ProcessRun { .. } => {
-            Completion::Process(ProcessOutcome::Error(ProcessFailure::Canceled(cause)))
-        }
-        Request::ProcessSpawn { .. } => Completion::Spawned(Err(ProcessFailure::Canceled(cause))),
-        Request::ChildWrite { .. } => Completion::ChildUnit(Err(ProcessFailure::Canceled(cause))),
-        Request::ChildRead { max: 0, .. } => {
-            Completion::ChildBytes(Err(ProcessFailure::InvalidInput))
-        }
-        Request::ChildRead { .. } => Completion::ChildBytes(Err(ProcessFailure::Canceled(cause))),
-        // The wait took the Child: it is dropped, which kills the child.
-        Request::ChildWait { child, .. } => {
-            let binding = unsafe { Binding::get(ctx) };
-            match binding.adapter.call(Request::Close { handle: *child }) {
-                Ok(Completion::Unit(Ok(()))) => {}
-                // Closing a scripted child's input at an unmet Expect fails LANG-9.
-                Ok(Completion::Checked(false)) => return Some(Completion::Checked(false)),
-                Ok(_) => crate::fault("a canceled wait's Child close failed"),
-                Err(error) => crate::io::adapter_refusal(binding, error),
-            }
-            Completion::ChildExit(Err(ProcessFailure::Canceled(cause)))
-        }
-        Request::Resolve { .. } => Completion::Addresses(Err(e)),
-        Request::Connect { .. } | Request::ConnectAddr { .. } => Completion::NetHandle(Err(e)),
-        Request::Accept { .. } => Completion::Accepted(Err(e)),
-        Request::NetRead { .. } => Completion::NetBytes(Err(e)),
-        Request::NetWrite { .. } => Completion::Count(Err(e)),
-        Request::NetWriteAll { .. } => Completion::NetUnit(Err(e)),
-        Request::TlsConnect { stream, .. } | Request::TlsClose { stream, .. } => {
-            let binding = unsafe { Binding::get(ctx) };
-            let close = Request::Close { handle: *stream };
-            match binding.adapter.call(close) {
-                Ok(Completion::Unit(Ok(()))) => {}
-                Ok(_) => crate::fault("a canceled TLS stream's close failed"),
-                Err(error) => crate::io::adapter_refusal(binding, error),
-            }
-            Completion::NetUnit(Err(e))
-        }
-        _ => return None,
-    })
+    let binding = unsafe { Binding::get(ctx) };
+    crate::io_checks::cancel(binding.adapter.as_mut(), request, cause)
+        .unwrap_or_else(|error| crate::io::adapter_refusal(binding, error))
 }
 
 /// Whether `request` can wait for the host and so park its task: a stdin read, a timer

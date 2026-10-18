@@ -791,13 +791,13 @@ impl State {
             Some((selector.as_str(), local, *access))
         })
     }
-    fn access(&self, id: u64) -> Result<Access, AdapterError> {
+    pub(crate) fn access(&self, id: u64) -> Result<Access, AdapterError> {
         match self.handles.rows.get(&id) {
             Some(Grant::Directory { access, .. }) => Ok(*access),
             _ => Err(AdapterError::InvalidHandle(id)),
         }
     }
-    fn directory(&self, id: u64) -> Result<String, AdapterError> {
+    pub(crate) fn directory(&self, id: u64) -> Result<String, AdapterError> {
         match self.handles.rows.get(&id) {
             Some(Grant::Directory { root, .. }) => Ok(root.clone()),
             _ => Err(AdapterError::InvalidHandle(id)),
@@ -1034,6 +1034,9 @@ impl State {
     ) -> Result<Completion, AdapterError> {
         use Completion as C;
         use Request as R;
+        if let Some(error) = self.preflight(request)? {
+            return Ok(error);
+        }
         let error = fault.map(|f| f.error.clone());
         let prefix = |bytes: &[u8]| {
             let n = match fault {
@@ -1271,7 +1274,6 @@ impl State {
                 let Some(Grant::File {
                     directory: owner,
                     position,
-                    writable,
                     ..
                 }) = self.handles.rows.get(file).cloned()
                 else {
@@ -1280,9 +1282,7 @@ impl State {
                 if owner != *directory {
                     return Err(AdapterError::InvalidHandle(*file));
                 }
-                let result = if writable {
-                    Err(IoError::Fault(1))
-                } else if let Some(e) = error {
+                let result = if let Some(e) = error {
                     Err(e)
                 } else {
                     storage.read_file(*file, position, *max)
@@ -1319,42 +1319,15 @@ impl State {
                 }
                 let result = if let Some(e) = error {
                     Err(e)
-                } else if *offset > i64::MAX as u64 {
-                    Err(IoError::Fault(1))
                 } else {
                     *position = *offset;
                     Ok(())
                 };
                 Ok(C::Unit(result))
             }
-            R::FileWrite {
-                directory,
-                file,
-                bytes,
-            }
-            | R::FileAppend {
-                directory,
-                file,
-                bytes,
-            } => {
-                self.directory(*directory)?;
+            R::FileWrite { file, bytes, .. } | R::FileAppend { file, bytes, .. } => {
                 let all = matches!(request, R::FileAppend { .. });
-                let Some(Grant::File {
-                    directory: owner,
-                    writable,
-                    ..
-                }) = self.handles.rows.get(file)
-                else {
-                    return Err(AdapterError::InvalidHandle(*file));
-                };
-                if owner != directory {
-                    return Err(AdapterError::InvalidHandle(*file));
-                }
-                let result = if self.access(*directory)? == Access::Read {
-                    Err(IoError::NotGranted)
-                } else if !writable {
-                    Err(IoError::Fault(1))
-                } else if matches!(error, Some(IoError::Canceled(_)))
+                let result = if matches!(error, Some(IoError::Canceled(_)))
                     || (error.is_some() && prefix(bytes).is_empty())
                 {
                     Err(error.unwrap())
@@ -1374,9 +1347,6 @@ impl State {
             }
             | R::Commit { directory, file } => {
                 let root = self.directory(*directory)?;
-                if self.access(*directory)? == Access::Read {
-                    return Ok(C::Unit(Err(IoError::NotGranted)));
-                }
                 storage.activate(*directory, &root);
                 let Some(Grant::AtomicFile {
                     temporary,
@@ -1426,9 +1396,6 @@ impl State {
                 to,
             } => {
                 let root = self.directory(*directory)?;
-                if self.access(*directory)? == Access::Read {
-                    return Ok(C::Unit(Err(IoError::NotGranted)));
-                }
                 storage.activate(*directory, &root);
                 let result = if let Some(e) = error {
                     Err(e)
@@ -1469,20 +1436,6 @@ impl State {
                     _ => unreachable!(),
                 };
                 let root = self.directory(directory)?;
-                if self.access(directory)? == Access::Read {
-                    match request {
-                        R::Write { .. }
-                        | R::Remove { .. }
-                        | R::Mkdir { .. }
-                        | R::RemoveDir { .. } => {
-                            return Ok(C::Unit(Err(IoError::NotGranted)));
-                        }
-                        R::Create { .. } | R::CreateAtomic { .. } => {
-                            return Ok(C::Handle(Err(IoError::NotGranted)));
-                        }
-                        _ => {}
-                    }
-                }
                 storage.activate(directory, &root);
                 let path = relative(&root, path).ok_or(IoError::Fault(1));
                 match request {
@@ -1609,6 +1562,8 @@ impl State {
 }
 /// Explicit API: wrappers carry concrete operands and results, not boxed values.
 pub trait Adapter {
+    /// Check argument validity and authority without an effect or tape event.
+    fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError>;
     /// Supply the next handshake's PEM material without adding it to the tape.
     /// Replay and scripted worlds use only the digest in TlsConnect.
     fn tls_roots(&mut self, _pem: &[u8]) {}
