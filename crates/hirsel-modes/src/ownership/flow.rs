@@ -175,6 +175,11 @@ struct Value {
     /// value was read from, as finite prefix states per joined alternative. A
     /// result related to `p.a` must stay within `p.a` (#77).
     part_of: Option<(usize, BTreeSet<usize>)>,
+    /// MODE-2: aliased only by a related call result's counted shares. They
+    /// are local to this storage's borrow, so none outlives the body except
+    /// through a counted result, and the hand-back of a body returning no
+    /// counted content still finds the storage unique.
+    borrow_only: bool,
 }
 impl Value {
     fn new(modes: Modes) -> Self {
@@ -193,9 +198,21 @@ impl Value {
             uniqueness_site: None,
             fresh_receipt: false,
             part_of: None,
+            borrow_only: false,
         }
     }
+    /// A related call result holds counted shares of this storage (MODE-2).
+    fn borrow_share(&mut self) {
+        self.borrow_only |= self.modes.uniqueness == Uniqueness::Unique;
+        self.modes.uniqueness = Uniqueness::Aliased;
+        self.fresh_receipt = false;
+    }
+    /// Unique, or aliased only by borrowed shares and leaving no counted result.
+    fn unique_at_exit(&self, counted_result: bool) -> bool {
+        self.modes.uniqueness == Uniqueness::Unique || self.borrow_only && !counted_result
+    }
     fn share(&mut self) {
+        self.borrow_only = false;
         self.modes.uniqueness = Uniqueness::Aliased;
         self.fresh_receipt = false;
     }
@@ -543,6 +560,10 @@ impl Value {
             };
         }
 
+        let unique = |v: &Self| v.modes.uniqueness == Uniqueness::Unique;
+        self.borrow_only = !(unique(self) && unique(other))
+            && (self.borrow_only || unique(self))
+            && (other.borrow_only || unique(other));
         self.modes = self.modes.join(&other.modes);
         // Values aliasing different storage depend on both, and the join
         // aliases the first.
@@ -2495,7 +2516,7 @@ impl Checker<'_> {
                 _ => None,
             })
     }
-    fn mutable_crossing_exit(&mut self, state: &State, site: Span) {
+    fn mutable_crossing_exit(&mut self, state: &State, site: Span, counted_result: bool) {
         if !self.emit {
             return;
         }
@@ -2517,7 +2538,7 @@ impl Checker<'_> {
                     || self.unique_proof.is_none()
                         && self.body.types.get(binding.ty).unwrap().modes.uniqueness
                             == Uniqueness::Unique)
-                && state.slots[index].value.modes.uniqueness != Uniqueness::Unique
+                && !state.slots[index].value.unique_at_exit(counted_result)
                 && !self.properties[binding.ty.index()].plain
                 && !self.properties[binding.ty.index()].shared
                 && self.lost_handbacks.insert(index)
@@ -2576,10 +2597,10 @@ impl Checker<'_> {
             }
         }
     }
-    fn record_return_uniqueness(&mut self, state: &State) {
+    fn record_return_uniqueness(&mut self, state: &State, counted_result: bool) {
         let mut site = self.graph.nodes[self.node].span;
         site.start = site.end.saturating_sub(1);
-        self.mutable_crossing_exit(state, site);
+        self.mutable_crossing_exit(state, site, counted_result);
         if self.emit && self.graph.clause.is_none() {
             for &index in &self.parameters {
                 let ResolvedName::Parameter(parameter) = self.body.bindings[index].binding else {
@@ -3257,11 +3278,11 @@ impl Checker<'_> {
                     .any(|part| matches!(part, Projection::Elements))
             })
         {
-            self.mutable_crossing_exit(state, *operation);
+            self.mutable_crossing_exit(state, *operation, false);
         }
         match op {
             Op::Nop => {}
-            Op::ReturnUnit => self.record_return_uniqueness(state),
+            Op::ReturnUnit => self.record_return_uniqueness(state, false),
             Op::IdentityReady(site) => {
                 if self.emit {
                     for (owner, origin, ordinal) in
@@ -5767,7 +5788,7 @@ impl Checker<'_> {
                             roots.extend(source.aliased().into_iter().chain(source.sources()));
                         }
                         for root in roots {
-                            state.slots[root].value.share();
+                            state.slots[root].value.borrow_share();
                             if !self.properties[self.body.bindings[root].ty.index()]
                                 .sendable_aliased
                             {
@@ -6036,7 +6057,8 @@ impl Checker<'_> {
                     result.relation = Relation::environment();
                 }
                 let result = &result;
-                self.record_return_uniqueness(state);
+                let counted = self.property(*value).is_some_and(|p| !p.plain);
+                self.record_return_uniqueness(state, counted);
                 if self.property(*value).is_some() {
                     let actual = self.value(state, *value);
                     let cause = if result.uniqueness == Uniqueness::Unique
@@ -6210,7 +6232,7 @@ impl Checker<'_> {
             _ => None,
         };
         if let Some(expression) = failure_site {
-            self.mutable_crossing_exit(state, self.span_of(expression));
+            self.mutable_crossing_exit(state, self.span_of(expression), false);
         }
     }
     /// Project the finite parameter-prefix observations used by this frame's

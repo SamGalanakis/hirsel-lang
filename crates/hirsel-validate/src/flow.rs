@@ -81,6 +81,11 @@ pub(super) struct State {
     must: Rows<MustFacts>,
     ownership_conflicts: Rows<bool>,
     shared: Rows<bool>,
+    /// MODE-2: a shared root whose only aliases are a related call result's
+    /// counted shares. They are local to its borrow, so none outlives the
+    /// body except through a counted result: the hand-back of a body
+    /// returning no counted content still finds it unique.
+    borrow_only: Rows<bool>,
     /// Current content evidence, independent of the receiving storage contract.
     current_unique: Rows<bool>,
     crossing_parts: Rows<crossing::Parts>,
@@ -159,6 +164,14 @@ impl State {
         }
         self.places.join(&other.places, |a, b| *a |= b);
         self.loans.join(&other.loans, |a, b| *a |= b);
+        for i in 0..self.borrow_only.len() {
+            let only = (self.shared[i] || other.shared[i])
+                && (self.borrow_only[i] || !self.shared[i])
+                && (other.borrow_only[i] || !other.shared[i]);
+            if self.borrow_only[i] != only {
+                self.borrow_only.set(i, only);
+            }
+        }
         self.shared.union(&other.shared, |a, b| *a |= b);
         self.current_unique
             .join(&other.current_unique, |a, b| *a &= b);
@@ -225,6 +238,8 @@ struct Model {
     /// The failure edge being checked is a release's, which ends no uniqueness
     /// hand-back proof: source checking sees failures at evaluation sites.
     releasing: std::cell::Cell<bool>,
+    /// While a return's cleanup runs, whether it returns counted content.
+    returning_counted: std::cell::Cell<bool>,
 }
 impl Model {
     fn new(checker: &mut Checker<'_>) -> Self {
@@ -805,6 +820,7 @@ impl Model {
             depth,
             unique_proof: None,
             releasing: std::cell::Cell::new(false),
+            returning_counted: std::cell::Cell::new(false),
         }
     }
     fn refresh_cleanup(&self, state: &mut State, root: usize) {
@@ -984,6 +1000,8 @@ impl Model {
             ownership_conflicts: Rows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             shared: Rows::new(false, body.locals.len())
+                .with_copy_counter(Counter::ValidateCopiedRows),
+            borrow_only: Rows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             current_unique: Rows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
@@ -1209,6 +1227,11 @@ impl Model {
 
 /// Backward demand follows only value transfers into the result, killing
 /// overwritten slots. Calls and captures never grant the result-read permission.
+/// The root may now share counted storage with another value (MODE-2).
+fn share_root(state: &mut State, root: usize) {
+    state.shared[root] = true;
+    state.borrow_only[root] = false;
+}
 fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
     let mut incoming = vec![BTreeSet::new(); body.blocks.len()];
     let graph: Vec<Vec<usize>> = body
@@ -2926,7 +2949,7 @@ impl Checker<'_> {
         )
         .unwrap_or_else(|error| self.proof_failure(error, hirsel_types::Sendability::NotSendable))
             == hirsel_types::Sendability::Sendable;
-        state.shared[access.root.0 as usize] = true;
+        share_root(state, access.root.0 as usize);
         if !independent {
             let path = crossing::path(&access.projection);
             let mut parts = state.crossing_parts[access.root.0 as usize].project(&path);
@@ -2953,14 +2976,17 @@ impl Checker<'_> {
         let mut source = operand.clone();
         source.usage = UseKind::Borrow;
         for root in self.sources(model, state, &source) {
-            state.shared[root] = true;
+            share_root(state, root);
             if !independent && root != access.root.0 as usize {
                 state.crossing_parts[root].set(&[], false);
                 state.must[root].set(MustFacts::SENDABLE, false);
             }
         }
         for loan in self.dependencies(model, state, &source) {
-            state.shared[self.body.places[model.loans[loan].1.0 as usize].root.0 as usize] = true;
+            share_root(
+                state,
+                self.body.places[model.loans[loan].1.0 as usize].root.0 as usize,
+            );
         }
     }
     fn result_read_permission(&self, model: &Model, state: &State, operand: &Operand) -> bool {
@@ -4166,7 +4192,9 @@ impl Checker<'_> {
                 && !model.releasing.get()
                 && needs_release(self, ty, &self.definition.types)
                 && !super::handle_root(&self.definition.types, ty)
-                && (state.shared[root] || !state.current_unique[root])
+                && (state.shared[root]
+                    && !(state.borrow_only[root] && !model.returning_counted.get())
+                    || !state.current_unique[root])
             {
                 self.flow_error(
                     report,
@@ -5376,7 +5404,20 @@ impl Checker<'_> {
                             Callee::Definition { .. } => None,
                         });
                         for operand in result_arguments.iter().copied().chain(environment) {
+                            let restorable: Vec<bool> = (0..state.shared.len())
+                                .map(|r| {
+                                    state.borrow_only[r]
+                                        || !state.shared[r] && state.current_unique[r]
+                                })
+                                .collect();
                             self.mark_shared(model, state, operand);
+                            if matches!(callee, Callee::Definition { .. }) {
+                                for (r, restorable) in restorable.into_iter().enumerate() {
+                                    if restorable && state.shared[r] {
+                                        state.borrow_only.set(r, true);
+                                    }
+                                }
+                            }
                             if matches!(callee, Callee::Indirect { value, .. } if value.place == operand.place)
                             {
                                 for place in self.environment(model, state, operand.place).sharing()
@@ -5441,8 +5482,10 @@ impl Checker<'_> {
                         && !self.mut_requires_unique(callee, a.parameter)
                         && !(unique_inputs && self.callee_preserves_unique(callee, a.parameter))
                     {
-                        state.shared[self.body.places[a.value.place.0 as usize].root.0 as usize] =
-                            true;
+                        share_root(
+                            state,
+                            self.body.places[a.value.place.0 as usize].root.0 as usize,
+                        );
                     }
                     self.read(model, state, &a.value, report);
                 }
@@ -5835,7 +5878,14 @@ impl Checker<'_> {
                     })
                     .collect();
                 self.read(model, state, value, report);
+                // MODE-2: a counted result may keep a borrow-only share.
+                model.returning_counted.set(needs_release(
+                    self,
+                    self.place_type(value.place),
+                    &self.definition.types,
+                ));
                 self.cleanup(model, state, *cleanup, true, report, true);
+                model.returning_counted.set(false);
                 if model
                     .contents(returned_origin)
                     .any(|i| !state.origins.expired[i].is_empty())

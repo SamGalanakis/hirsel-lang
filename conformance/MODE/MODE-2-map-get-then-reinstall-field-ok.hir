@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: accept
+// A map.get borrow of a unique root's field ends before the field is replaced, so
+// the root is unique at the exit. Twin is MODE-2-map-get-borrow-live-bad.
+type Store {
+  version: u64,
+  entries: Map[String, String],
+}
+
+fn put(mut st: unique Store, key: String, value: String) -> u16 {
+  let status = match map.get(st.entries, key) {
+    Some(_) => 200u16,
+    None() => 201u16,
+  }
+  let mut entries = unique st.entries
+  map.insert(mut entries, unique key, unique value)
+  st.entries = unique entries
+  status
+}

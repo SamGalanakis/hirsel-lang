@@ -321,3 +321,94 @@ fn an_unretained_borrowed_argument_is_exempt_from_the_core_clause() {
     // Marking another parameter leaves `y` under the clause.
     handback_error(&borrowing_call(true, &[0]), "preserved unique hand-back");
 }
+
+/// `fn main(mut x: unique String)` calling `view(x) -> String in x`, whose
+/// counted result holds a share of `x`: dropped before the return, or returned.
+fn viewing_call(escape: bool) -> Fixture {
+    let (mut f, x) = handback(true);
+    let string = TypeKind::Primitive(Primitive::String);
+    let entry = f.cleanup(vec![]);
+    f.emit(InstructionKind::BeginLoan {
+        id: LoanId(0),
+        place: PlaceId(x),
+        mutable: false,
+        if_inactive: false,
+    });
+    f.body().blocks[0]
+        .instructions
+        .last_mut()
+        .unwrap()
+        .on_failure = CleanupId(entry);
+    let via = f.through_loan(x, 0);
+    let held = f.cleanup(vec![CleanupAction::EndLoan {
+        loan: LoanId(0),
+        if_active: false,
+    }]);
+    // The result relates to `x`, an owned parameter, so this frame sees it global.
+    let destination = if escape {
+        0
+    } else {
+        f.slot(string.clone(), Storage::Temporary)
+    };
+    if escape {
+        // The call writes the return slot, so the unit initialization goes.
+        f.body().blocks[0].instructions.remove(0);
+        f.body().rvalues.clear();
+        let row = f.definition.types.push(ty(string.clone()));
+        f.body().result = row;
+        f.body().locals[0].ty = row;
+        f.body().places[0].ty = row;
+    }
+    f.body().blocks[0].terminator = Terminator::Call {
+        callee: Callee::Definition {
+            path: path("view"),
+            arguments: vec![],
+        },
+        arguments: vec![CallArgument {
+            parameter: ParamId(0),
+            value: operand(via, UseKind::Borrow),
+        }],
+        returns: Some(CallReturn {
+            destination: PlaceId(destination),
+            next: BlockId(1),
+        }),
+        on_failure: CleanupId(held),
+    };
+    let exit = if escape {
+        held
+    } else {
+        f.cleanup(vec![
+            drop(destination),
+            CleanupAction::EndLoan {
+                loan: LoanId(0),
+                if_active: false,
+            },
+        ])
+    };
+    f.body().blocks.push(block(vec![], ret(0, exit)));
+    finish(&mut f);
+    let mut callee =
+        function_signature("view", vec![(PassingMode::Borrow, string.clone())], string);
+    let SignatureKind::Function(fun) = &mut callee.kind else {
+        panic!()
+    };
+    let mut result = callee.types.get(fun.result).unwrap().clone();
+    result.modes.relation = Relation::parameters([ParameterRef::bound(ParamId(0))]);
+    fun.result = callee.types.push(result);
+    f.signatures.insert(path("view"), callee);
+    f
+}
+
+#[test]
+fn a_related_result_share_ends_with_the_result() {
+    // The result's share of `x` dies before the return: `x` leaves unique.
+    viewing_call(false).valid();
+    // The returned result keeps it, so `x` cannot be handed back unique.
+    let kinds = viewing_call(true).kinds();
+    assert!(
+        kinds.contains(&ViolationKind::TypeMismatch {
+            entity: "mutable unique hand-back"
+        }),
+        "{kinds:?}"
+    );
+}

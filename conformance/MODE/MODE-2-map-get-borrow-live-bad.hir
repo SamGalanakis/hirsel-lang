@@ -1,0 +1,15 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 13
+// `r` still holds its share of the map when `need` requires it unique. Twin is
+// MODE-2-map-get-then-reinstall-field-ok.
+fn need(mut m: unique Map[String, String]) -> () {}
+
+fn look(mut m: unique Map[String, String], k: String) -> u64 {
+  let r = map.get(m, k)
+  let n = match r {
+    Some(v) => string.byte_len(v),
+    None() => 0,
+  }
+  need(mut m)
+  n
+}

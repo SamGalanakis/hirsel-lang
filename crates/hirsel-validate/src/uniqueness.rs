@@ -1023,6 +1023,7 @@ impl Checker<'_> {
         let place = &self.body.places[destination.0 as usize];
         if place.projection.is_empty() {
             state.shared[place.root.0 as usize] = false;
+            state.borrow_only[place.root.0 as usize] = false;
         }
     }
     pub(super) fn mut_requires_unique(

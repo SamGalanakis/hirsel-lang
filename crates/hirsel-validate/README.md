@@ -364,7 +364,9 @@ counted taken and `mut` argument currently unique; the same promise on a taken
 parameter makes the call's destination currently unique. A `mut` use of a part of a
 currently unique root is unique. `mutable_storage_exit` requires a `mut x: unique T`
 parameter to be unique at each exit and at each evaluation failure edge, but not on
-a release's failure edge, where source checking sees no evaluation. A
+a release's failure edge, where source checking sees no evaluation. A root shared
+only by a related call result's counted shares is `borrow_only`, which a failure edge or
+a return of no counted content accepts (`returning_counted`). A
 `@preserves_unique` body is re-proved by a second flow run (`flow_with`) whose entry
 makes the selected and taken or `mut` parameters current-unique; a selected `mut`
 parameter is held to the same exits and a selected `take` parameter's returned value

@@ -489,7 +489,9 @@ Shared, since a ledger operation may store a share of it, unless the
 promise lists it `unretained` (`callee_unretained`: `sorted_map.insert`'s `by`); that
 result uniqueness is flow evidence only, so the published call row stays the
 declared one, as V derives it. A `mut x: unique T` parameter must be unique at every
-return and evaluation failure site (`mutable_crossing_exit`). A `@preserves_unique`
+return and evaluation failure site (`mutable_crossing_exit`); a related call result's
+counted shares only mark it `borrow_only`, which a failure site or a return of no counted
+content accepts (`unique_at_exit`). A `@preserves_unique`
 body is checked a second time (`flow::check` with a proof parameter) with its
 selected and taken or `mut` parameters entering unique; a selected `mut` parameter
 must be unique at the same sites, a selected `take` parameter's result at every
