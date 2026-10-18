@@ -423,6 +423,13 @@ fn normalize_inner(
             }
             let alias =
                 matches!(body, ast::TypeBody::Alias(_)) && *flavor != ast::TypeFlavor::Distinct;
+            // An opaque declaration publishes its declared bounds, so its private
+            // representation's declarations stay out of its public hash inputs.
+            if (attrs.serializable || alias) && !opaque {
+                if let Some(root) = repr {
+                    n.load_schema_nominals(root)?;
+                }
+            }
             let serializable = (attrs.serializable || alias)
                 && authority == AuthoritySummary::inert()
                 && repr.is_some_and(|root| n.satisfies(root, Bound::Serializable));
@@ -1287,6 +1294,50 @@ impl Normalizer<'_, '_> {
             .lookup(self.input.context, p, self.input.symbols)
             .result
     }
+    /// A SER-1 proof expands every nominal representation its schema reaches, not
+    /// only the declarations this item names, so load (and depend on) those first.
+    /// A declaration that cannot be read stays absent and the proof conservative.
+    fn load_schema_nominals(&mut self, root: TypeId) -> Result<(), QueryError> {
+        let own = self.input.tree.items[self.input.item.0 as usize]
+            .definition
+            .clone();
+        let mut seen = BTreeSet::new();
+        let mut pending: Vec<(Option<SignatureRef>, TypeId)> = vec![(None, root)];
+        while let Some((owner, id)) = pending.pop() {
+            if !seen.insert((owner.as_ref().map(|s| s.definition.clone()), id)) {
+                continue;
+            }
+            let store = owner.as_ref().map_or(&self.types, |s| &s.types);
+            let Some(row) = store.get(id) else { continue };
+            if matches!(row.kind, TypeKind::Function(_)) {
+                continue;
+            }
+            let named = match &row.kind {
+                TypeKind::Named { definition, .. } if *definition != own => {
+                    Some(definition.clone())
+                }
+                _ => None,
+            };
+            pending.extend(
+                row.kind
+                    .value_parts()
+                    .into_iter()
+                    .map(|t| (owner.clone(), t)),
+            );
+            let Some(definition) = named else { continue };
+            let s = match self.snapshot(&definition) {
+                Ok(s) => s,
+                Err(e @ QueryError::Operational(_)) => return Err(e),
+                Err(_) => continue,
+            };
+            if let SignatureKind::Type(d) = &s.kind
+                && let Some(representation) = d.representation
+            {
+                pending.push((Some(s.clone()), representation));
+            }
+        }
+        Ok(())
+    }
     fn snapshot(&mut self, d: &ast::DefPath) -> Result<SignatureRef, QueryError> {
         if let Some(s) = self.snapshots.get(d) {
             self.dependencies.insert(d.clone(), s.fingerprint);
@@ -1598,10 +1649,17 @@ impl Normalizer<'_, '_> {
         }
     }
     fn check_arguments(
-        &self,
+        &mut self,
         gs: &[GenericParameter],
         args: &[GenericArgument],
     ) -> Result<(), QueryError> {
+        for (g, a) in gs.iter().zip(args) {
+            if let (GenericParameter::Type { bounds, .. }, GenericArgument::Type(t)) = (g, a)
+                && bounds.contains(&Bound::Serializable)
+            {
+                self.load_schema_nominals(*t)?;
+            }
+        }
         if gs.len() != args.len() {
             return Err(diagnostic(
                 const { RuleId::of("GEN-1") },

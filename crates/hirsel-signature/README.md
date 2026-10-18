@@ -76,6 +76,8 @@ of Flat and Sendable. Generic declarations and uses require exact lexical
 Serializable evidence. Transparent aliases preserve their target's decision;
 opaque/refined domain types use ordinary DTO conversion and validating factories.
 Ineligible declarations and generic schema uses report SER-1 before dependent uses.
+Before a SER-1 proof the normalizer loads, and depends on, every declaration whose
+representation the schema reaches, not only those the item names.
 
 Stage two (`protocol.rs`) validates associations after headers publish, including
 unused ones: `validate_loop_source` for `@loop_source(open, next)` (SEM-4) and

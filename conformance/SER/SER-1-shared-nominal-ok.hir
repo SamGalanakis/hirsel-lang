@@ -1,0 +1,18 @@
+// rule: SER-1
+// expect: accept
+// One nominal type reached along two paths of a schema is admitted once.
+@serializable
+type Cause = Requested | Parent
+
+@serializable
+type Left = L(Cause)
+
+@serializable
+type Right = R(Cause)
+
+@serializable
+type Both = A(Left) | B(Right)
+
+fn use_codec(x: Both) -> Bytes {
+  codec.encode(x)
+}

@@ -451,6 +451,8 @@ callables and unsupported runtime constructors fail closed at every depth.
 `structural_serializable` is the boolean form. Source consumers use checked
 snapshots; V independently replays admission rather than trusting this descriptor.
 Serializable generic evidence implies Inert and supplies no crossing proof.
+A nominal instantiation reached again, by recursion or along another path,
+references its first node.
 
 `wire` implements SER-2 version 1 over concrete `serialization` schema graphs.
 Its explicit envelope binds codec version and the complete canonical descriptor;

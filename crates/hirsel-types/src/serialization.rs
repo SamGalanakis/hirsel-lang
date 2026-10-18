@@ -97,11 +97,12 @@ fn schema_inner(
     }
     child(root, &mut schema, &mut memo, &mut pending);
     let mut expansions = NominalExpansions::default();
-    let mut active = vec![];
+    // Every nominal instantiation entered so far, on the current path (recursion) or
+    // another one (a type reached twice); a later equal one references its node.
+    let mut entered = vec![];
     while let Some((id, exit)) = pending.pop() {
         if exit {
             expansions.leave(id, 0);
-            active.pop();
             continue;
         }
         let Some(row) = store.get(id).cloned() else {
@@ -210,22 +211,21 @@ fn schema_inner(
                 let Some(root) = d.representation else {
                     return Ok(None);
                 };
-                if let Some(previous) = active
+                if let Some(previous) = entered
                     .iter()
                     .copied()
                     .find(|previous| store.equal(*previous, id))
                 {
                     SchemaNode::Reference(memo[&previous])
                 } else {
-                    if !expansions.enter(
+                    let fresh = expansions.enter(
                         id,
                         0,
                         |a, b| store.equal(a, b),
                         |a, b| nominal_arguments_grow(store.store(a), a, store.store(b), b),
-                    )? {
-                        return Ok(None);
-                    }
-                    active.push(id);
+                    )?;
+                    debug_assert!(fresh, "an entered nominal is referenced above");
+                    entered.push(id);
                     pending.push((id, true));
                     let Ok(root) = store.expand(
                         &signature.types,
@@ -468,6 +468,22 @@ mod tests {
             Ok(declaration.clone().map(Arc::new))
         })
         .unwrap()
+    }
+    #[test]
+    fn a_nominal_reached_along_two_paths_is_admitted_once() {
+        let mut s = TypeStore::default();
+        let named = || {
+            row(TypeKind::Named {
+                definition: path("Row"),
+                arguments: vec![].into(),
+            })
+        };
+        let (a, b) = (s.push(named()), s.push(named()));
+        let pair = s.push(row(TypeKind::Tuple(vec![a, b].into())));
+        let declaration = nominal(TypeKind::Primitive(Primitive::U64));
+        let shared = schema(&s, pair, Some(declaration.clone())).expect("admitted");
+        let single = s.push(row(TypeKind::Tuple(vec![a, a].into())));
+        assert_eq!(shared, schema(&s, single, Some(declaration)).unwrap());
     }
     #[test]
     fn descriptors_have_schema_ids_and_declaration_order_without_native_layout() {
