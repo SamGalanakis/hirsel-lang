@@ -360,12 +360,13 @@ A `mut` call argument marks its root shared unless the callee declares the param
 from an unproved closure) with every
 counted taken and `mut` argument currently unique; the same promise on a taken
 parameter makes the call's destination currently unique. A `mut` use of a part of a
-currently unique root is unique. A `@preserves_unique` body is re-proved by a
-second flow run (`flow_with`) whose entry makes the selected and taken or `mut`
-parameters current-unique; `mutable_storage_exit` then requires a selected `mut`
+currently unique root is unique. `mutable_storage_exit` requires a `mut x: unique T`
 parameter to be unique at each exit and at each evaluation failure edge, but not on
-a release's failure edge, where source checking sees no evaluation, and a selected
-`take` parameter's returned value must be unique. Only its "preserved unique
+a release's failure edge, where source checking sees no evaluation. A
+`@preserves_unique` body is re-proved by a second flow run (`flow_with`) whose entry
+makes the selected and taken or `mut` parameters current-unique; a selected `mut`
+parameter is held to the same exits and a selected `take` parameter's returned value
+must be unique. Only its "preserved unique
 hand-back" violations are kept. Hand-built controls are in
 `tests/it/unique_handback_controls.rs`.
 

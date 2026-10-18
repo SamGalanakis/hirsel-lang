@@ -2489,11 +2489,15 @@ impl Checker<'_> {
             if self.parameter_passing(&binding.owner, parameter) != PassingMode::Mut {
                 continue;
             }
-            // MODE-2: a `@preserves_unique` proof hands its selection back unique.
+            // MODE-2: a `mut x: unique T` parameter, or a `@preserves_unique` proof's
+            // selection, is handed back unique at every exit and failure site.
             let promised = self.unique_proof == Some(parameter);
             if self.graph.clause.is_none()
                 && state.slots[index].available == LIVE
-                && promised
+                && (promised
+                    || self.unique_proof.is_none()
+                        && self.body.types.get(binding.ty).unwrap().modes.uniqueness
+                            == Uniqueness::Unique)
                 && state.slots[index].value.modes.uniqueness != Uniqueness::Unique
                 && !self.properties[binding.ty.index()].plain
                 && !self.properties[binding.ty.index()].shared
@@ -2502,7 +2506,11 @@ impl Checker<'_> {
                 self.report(
                     const { RuleId::of("MODE-2") },
                     site,
-                    UNIQUE_PROOF_FAILED,
+                    if promised {
+                        UNIQUE_PROOF_FAILED
+                    } else {
+                        "mutable hand-back requires a unique value"
+                    },
                     |c| {
                         let (name, declaration) = c.binding_site(index);
                         Explanation::default()

@@ -1,0 +1,11 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+// The caller keeps treating a `mut x: unique T` argument as unique, so it must be
+// handed back unique, here `plain_mut` may have installed a share of `C`.
+const C: List[u64] = [1, 2, 3]
+
+fn plain_mut(mut x: List[u64]) -> () {}
+
+fn f(mut x: unique List[u64]) -> () {
+  plain_mut(mut x)
+}

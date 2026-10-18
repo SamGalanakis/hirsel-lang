@@ -170,7 +170,11 @@ argument ends a binding's uniqueness; borrowing does not, including a borrow-onl
 part of any type ([OWN-8](#own-8-parts)). A plain `mut` argument that is a part ends its
 owner's uniqueness, since the callee may install a share there. A `mut x: unique T` parameter
 accepts only unique arguments and only unique whole-value assignments, so its root is
-updated in place. Without `unique`,
+updated in place, and it hands back a unique value: on every return and at every
+evaluation that may fail, `x` must be unique, or MODE-2 is reported there. The caller
+keeps treating `x` as unique after a failure too: a `mutex.with` body that fails after
+a plain `mut` call installed a share in its unique payload would leave that share in
+the mutex, and the next holder would update it in place. Without `unique`,
 in-place update still happens whenever the run-time count allows
 ([OWN-7](#own-7-uniqueness-test)).
 

@@ -1,0 +1,9 @@
+// rule: MODE-2
+// expect: accept
+// Uniqueness lost by a copy is restored by a unique whole replacement before any
+// exit, failure exits included. Twin is MODE-2-unique-mut-handback-lost-bad.
+fn f(mut x: unique List[u64], take y: unique List[u64]) -> u64 {
+  let kept = copy x
+  x = take y
+  list.len(kept)
+}

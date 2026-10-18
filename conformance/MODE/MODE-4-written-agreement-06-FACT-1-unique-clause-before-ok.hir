@@ -5,11 +5,8 @@ fn inspect(x: sendable (unique Bytes)) -> bool {
   true
 }
 
-fn weaken(mut x: Bytes) {
-  ()
-}
-
-fn probe(mut x: unique Bytes) -> ()
+fn probe(mut x: unique Bytes, take y: unique Bytes) -> ()
   ensures before(inspect(x)) {
-  weaken(mut x)
+  let kept = copy x
+  x = take y
 }

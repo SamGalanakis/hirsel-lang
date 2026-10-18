@@ -4139,9 +4139,16 @@ impl Checker<'_> {
                 continue;
             }
             let place = model.body_roots[root].unwrap();
-            // MODE-2: a `@preserves_unique` re-proof hands its selection back unique.
+            // MODE-2: the caller still holds a `mut x: unique T` argument, or a
+            // `@preserves_unique` re-proof's selection, as unique.
             let ty = self.place_type(place);
-            let promised = model.unique_proof == Some(root);
+            let promised = match model.unique_proof {
+                Some(selected) => selected == root,
+                None => {
+                    self.definition.types.get(ty).unwrap().modes.uniqueness
+                        == hirsel_types::Uniqueness::Unique
+                }
+            };
             if promised
                 && !model.releasing.get()
                 && needs_release(self, ty, &self.definition.types)
@@ -4151,7 +4158,11 @@ impl Checker<'_> {
                 self.flow_error(
                     report,
                     ViolationKind::TypeMismatch {
-                        entity: UNIQUE_PROOF_FAILED,
+                        entity: if model.unique_proof.is_some() {
+                            UNIQUE_PROOF_FAILED
+                        } else {
+                            "mutable unique hand-back"
+                        },
                     },
                 );
             }

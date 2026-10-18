@@ -1,7 +1,7 @@
 // rule: FACT-1
 // expect: run
 // stdout: append
-fn append[T](mut xs: unique List[T], take x: T) -> ()
+fn append[T](mut xs: unique List[T], take x: unique T) -> ()
   ensures list.len(xs) == before(list.len(xs)) + 1 {
   list.push(mut xs, take x)
 }

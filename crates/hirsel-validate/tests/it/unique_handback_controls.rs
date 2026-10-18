@@ -1,5 +1,5 @@
-//! Hand-built MODE-2 hand-back controls: a `@preserves_unique` selection must
-//! leave unique; a preserving call keeps it.
+//! Hand-built MODE-2 hand-back controls: a `mut x: unique T` parameter and a
+//! `@preserves_unique` selection must leave unique; a preserving call keeps it.
 use super::*;
 
 /// `fn main(mut x: String)`, with `x` declared unique when `unique`.
@@ -20,8 +20,8 @@ fn finish(f: &mut Fixture) {
     owner_signature(f, PassingMode::Mut);
 }
 /// The body shares `x` into a local that is dropped before the return.
-fn sharing() -> Fixture {
-    let (mut f, x) = handback(false);
+fn sharing(unique: bool) -> Fixture {
+    let (mut f, x) = handback(unique);
     let kept = f.slot(TypeKind::Primitive(Primitive::String), Storage::Local);
     let c = f.cleanup(vec![drop(kept)]);
     f.assign(kept, Rvalue::Use(copy(x)), 0);
@@ -55,8 +55,17 @@ fn handback_error(f: &Fixture, entity: &'static str) {
 }
 
 #[test]
+fn a_unique_mut_parameter_must_be_handed_back_unique() {
+    sharing(false).valid(); // The same body, for a plain `mut` parameter.
+    handback_error(&sharing(true), "mutable unique hand-back");
+    let (mut f, _) = handback(true);
+    finish(&mut f);
+    f.valid();
+}
+
+#[test]
 fn a_preserves_unique_body_is_proved_with_its_selection_entering_unique() {
-    let mut f = sharing();
+    let mut f = sharing(false);
     f.valid(); // Without the promise.
     promise(&mut f);
     handback_error(&f, "preserved unique hand-back");
@@ -66,11 +75,10 @@ fn a_preserves_unique_body_is_proved_with_its_selection_entering_unique() {
     f.valid();
 }
 
-/// `@preserves_unique(x) fn main(mut x: unique String)` calling
-/// `callee(mut x, take s)`, where `s` is a fresh literal or, when `aliased`, a
-/// copy of a parameter `y`.
+/// `@preserves_unique(x) fn main(mut x: String)` calling `callee(mut x, take s)`,
+/// where `s` is a fresh literal or, when `aliased`, a copy of a parameter `y`.
 fn preserving_call(preserves: bool, aliased: bool) -> Fixture {
-    let (mut f, x) = handback(true);
+    let (mut f, x) = handback(false);
     let y = param(&mut f, TypeKind::Primitive(Primitive::String));
     let s = f.slot(TypeKind::Primitive(Primitive::String), Storage::Temporary);
     if aliased {

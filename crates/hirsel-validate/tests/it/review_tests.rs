@@ -7716,12 +7716,16 @@ fn postcondition_formals_cannot_claim_uniqueness_lost_by_the_parent() {
         let mut f = contract_clause_fixture(PassingMode::Borrow);
         let mut row = ty(string_kind());
         row.modes.uniqueness = Uniqueness::Unique;
-        let unique = f.definition.types.push(row.clone());
-        let source = add_capture(f.body(), unique);
+        let unique = f.definition.types.push(row);
+        // MODE-2: a weakened `mut x: unique` parameter fails its hand-back at
+        // the next failure edge, so the parent's `x` is a plain `mut` one,
+        // aliased once `weaken` may have shared it.
+        let plain = f.definition.types.push(ty(string_kind()));
+        let source = add_capture(f.body(), plain);
         f.body().locals[source as usize].storage = Storage::Parameter;
         f.body().parameters.push(LocalId(source));
         let mut signature = function_signature("main", vec![], TypeKind::Tuple(vec![].into()));
-        let formal = signature.types.push(row);
+        let formal = signature.types.push(ty(string_kind()));
         let SignatureKind::Function(header) = &mut signature.kind else {
             unreachable!()
         };

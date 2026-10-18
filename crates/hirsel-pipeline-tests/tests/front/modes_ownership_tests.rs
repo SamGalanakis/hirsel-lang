@@ -72,7 +72,7 @@ fn scoped_callback_results_retain_their_borrowed_captures_and_callee_storage() {
     for unique_receiver in [false, true] {
         let receiver = if unique_receiver { "unique " } else { "" };
         let source = format!(
-            "fn invoke(f:fn()->Bytes in env uses{{}})->Bytes in f uses{{}}{{f()}}\nfn need(mut x:{receiver}Bytes){{}}\nfn example(mut x:unique Bytes){{{{let v=invoke(fn()->Bytes in env uses{{}}{{x}});()}};need(mut x)}}"
+            "fn invoke(f:fn()->Bytes in env uses{{}})->Bytes in f uses{{}}{{f()}}\nfn need(mut x:{receiver}Bytes){{}}\nfn example(mut x:{receiver}Bytes){{{{let v=invoke(fn()->Bytes in env uses{{}}{{x}});()}};need(mut x)}}"
         );
         let mut engine = hirsel_engine::QueryEngine::new(
             hirsel_engine::default_environment(),

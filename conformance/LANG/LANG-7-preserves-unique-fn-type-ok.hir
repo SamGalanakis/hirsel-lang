@@ -4,7 +4,7 @@
 // LANG-7-preserves-unique-fn-type-bad.
 fn plain_mut(mut xs: List[u64]) -> () {}
 
-fn f(mut ys: unique List[u64]) -> () {
+fn f(mut ys: List[u64]) -> () {
   let step: fn(mut xs: List[u64]) -> () = fn(mut xs: List[u64]) -> () {
     plain_mut(mut xs)
   }

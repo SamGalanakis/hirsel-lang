@@ -4,7 +4,7 @@ fn inspect(x: unique Bytes) -> bool {
   true
 }
 
-fn weaken(mut x: Bytes) {
+fn weaken(mut x: unique Bytes) {
   ()
 }
 

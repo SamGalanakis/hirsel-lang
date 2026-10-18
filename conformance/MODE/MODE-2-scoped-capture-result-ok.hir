@@ -8,7 +8,7 @@ fn need(mut x: Bytes) -> () {
   ()
 }
 
-fn example(mut x: unique Bytes) -> () {
+fn example(mut x: Bytes) -> () {
   {
     let v = invoke(
       fn() -> Bytes in env uses {} {

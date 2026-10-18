@@ -4,11 +4,8 @@ fn inspect(x: unique Bytes) -> bool {
   true
 }
 
-fn weaken(mut x: Bytes) {
-  ()
-}
-
-fn probe(mut x: unique Bytes) -> ()
+fn probe(mut x: unique Bytes, take y: unique Bytes) -> ()
   requires inspect(x) {
-  weaken(mut x)
+  let kept = copy x
+  x = take y
 }

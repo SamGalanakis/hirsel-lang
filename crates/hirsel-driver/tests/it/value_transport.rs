@@ -89,7 +89,7 @@ fn entry_snapshots_check_call_modes_and_keep_contract_parameters_read_only() {
                 other => panic!("expected {rule}: {source}\n{other:?}"),
             }
         }
-        checked("fn inspect(x:unique Bytes)->bool{true}\nfn weaken(mut x:Bytes){()}\nfn probe(mut x:unique Bytes)->() ensures before(inspect(x)){weaken(mut x)}", "probe").unwrap();
+        checked("fn inspect(x:unique Bytes)->bool{true}\nfn probe(mut x:unique Bytes,take y:unique Bytes)->() ensures before(inspect(x)){let kept=copy x;x=take y}", "probe").unwrap();
     });
 }
 

@@ -485,11 +485,12 @@ keeps the root unique. A directly called declaration with `@preserves_unique(p)`
 `mut` argument back unique, or returns a unique result for a selected `take`
 parameter, when every non-plain taken and `mut` argument is unique at the call; that
 result uniqueness is flow evidence only, so the published call row stays the
-declared one, as V derives it. A `@preserves_unique` body is checked a second time
-(`flow::check` with a proof parameter) with its selected and taken or `mut` parameters
-entering unique; a selected `mut` parameter must be unique at every return and
-evaluation failure site (`mutable_crossing_exit`), a selected `take` parameter's
-result at every return, and only the promise's own diagnostic is kept from that run.
+declared one, as V derives it. A `mut x: unique T` parameter must be unique at every
+return and evaluation failure site (`mutable_crossing_exit`). A `@preserves_unique`
+body is checked a second time (`flow::check` with a proof parameter) with its
+selected and taken or `mut` parameters entering unique; a selected `mut` parameter
+must be unique at the same sites, a selected `take` parameter's result at every
+return, and only the promise's own diagnostic is kept from that run.
 
 Projected replacement preserves the root's uniqueness for Plain bits and Shared
 boundaries. Storing aliased counted contents weakens that evidence, so a later
