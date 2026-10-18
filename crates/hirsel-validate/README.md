@@ -807,7 +807,8 @@ signature (including unused declarations) and generic use. It opens transparent
 representations and checks brands, authority, opacity, refinements, resources and
 the admitted constructor list without consuming Source schema descriptors.
 Regular recursion uses declaration applications; nonregular expansion exhaustion
-remains operational. Hand-built unused signature and generic controls accompany
+remains operational. Only a root core declaration marked serializable may leave its
+parameters unbounded; its representation is proved with them admitted. Hand-built unused signature and generic controls accompany
 Source accept/reject twins.
 
 Call validation replays every declared schema constraint through `schema_failure`,

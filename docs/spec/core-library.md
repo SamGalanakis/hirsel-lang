@@ -297,6 +297,11 @@ FloatIntError = NotFinite | OutOfRange
 OutOfSpace    = OutOfSpace()
 ```
 
+Every error type in this block is `serializable`
+([SER-1](serialization.md#ser-1-serializable-schemas)), as are `FileKind`, `Metadata` and
+the network, process and failure errors and outcomes below, so a stored or remote result
+can carry them.
+
 A missing configured projection returns `GrantError::NotGranted`; a missing mount, or an
 operation outside the granted file rights, returns `FileError::NotGranted` before any host
 effect. File providers report portable `NotFound`, `PermissionDenied`, `AlreadyExists`,
@@ -397,7 +402,8 @@ NetError     = NotGranted() | Canceled(CancelCause) | InvalidInput() | UnknownHo
              | TimedOut() | Tls(TlsFailure) | Fault(u32)
 ```
 
-`Fault` codes, like `FileFault` codes, are capability inputs, not OS error numbers. One error
+`IpAddr`, `SocketAddr`, `UdpReceived`, `TlsFailure` and `NetError` are `serializable`;
+the rule and scripted-peer types are not. `Fault` codes, like `FileFault` codes, are capability inputs, not OS error numbers. One error
 type serves the whole network stack, so `connect`, `tls.connect`, `tls.accept`, `read` and `write` compose
 with plain `?`. Interrupted and would-block conditions never surface: the provider retries
 interrupted calls, and every operation blocks.
@@ -567,7 +573,7 @@ waits due at it resume.
 `{ kind: FailureKind, rule: String, site: SourceSite, spawn: List[u64], cause: Option[box Failure] }`,
 where `SourceSite` is `{ definition: String, line: u64, column: u64 }`, using a fully
 qualified definition path and one-based source coordinates, and `FailureKind` is
-`Check | Contract | Depth | OutOfSpace | DeadMutex`. The site follows the failing
+`Check | Contract | Depth | OutOfSpace | DeadMutex`; all three are `serializable`. The site follows the failing
 operation and [`@track_caller`](failure.md#fail-1-kinds), rather than the isolation
 boundary. Tooling additionally retains the original operation and the complete file
 identity for human and JSON reports.
@@ -858,7 +864,8 @@ ChildScript   = { program: String, args: List[String], steps: List[ChildStep] }
 ChildStep     = Print(Bytes) | PrintErr(Bytes) | Expect(Bytes) | Exit(ExitStatus)
 ```
 
-A `Command` describes one child: the program to run, its arguments, its working directory
+`ExitStatus`, `ProcessOutput`, `PipelineOutput` and `ProcessError` are `serializable`;
+`Deadline` holds a clock and `Command` a `Dir`, so neither is. A `Command` describes one child: the program to run, its arguments, its working directory
 and its environment. `proc.run(p, cmd, stdin, max_output, deadline)` runs one child to
 completion and returns its exit status and everything it wrote to standard output and
 standard error. `proc.pipeline(p, stages, stdin, max_output, deadline)` runs commands
@@ -1220,7 +1227,7 @@ O(n) movement on successful removal; no second ordered container is introduced.
 The `reserve` example of [the first look](index.md#a-first-look) uses these signature-only
 fixtures: `Db` (a global capability), `Tx` (a scoped capability), an inert plain `Sku`,
 `Reservation { sku: Sku, count: u32 }`, `StockError = OutOfStock(Sku)` and
-`TxFailure[E] = Aborted(E) | Canceled(CancelCause)`, with
+`TxFailure[E] = Aborted(E) | Canceled(CancelCause)` (serializable when `E` is), with
 
 ```text
 store.transact[R: inert, E: inert](db: Db, body: fn(tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
@@ -1244,5 +1251,5 @@ run-time implementation.
 
 `codec.encode` and `codec.decode` use the [canonical codec](serialization.md#ser-2-canonical-codec).
 `DecodeError` is the nullary variant `Version | SchemaMismatch | Truncated |
-Trailing | Scalar | Utf8 | Tag | Length | Duplicate | Order`; these are expected
+Trailing | Scalar | Utf8 | Tag | Length | Duplicate | Order`, itself `serializable`; these are expected
 validation failures with no partially decoded value. Operational refusal is separate.

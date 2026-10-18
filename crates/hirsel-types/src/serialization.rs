@@ -180,23 +180,22 @@ fn schema_inner(
                 let SignatureKind::Type(d) = &signature.kind else {
                     return Ok(None);
                 };
-                // SER-1 enumerates these transparent core data constructors;
-                // their ordinary generic declarations must still accept File,
+                // A generic core type declared serializable (Option, Result, ...) bounds
+                // none of its parameters, so its ordinary declaration still accepts File,
                 // resources, etc. Eligibility is proved after substitution.
-                let builtin = definition.package_is("core", "1")
+                let conditional = d.serializable
+                    && definition.package_is("core", "1")
                     && definition.0.modules.is_empty()
-                    && matches!(definition.0.name.as_str(), "Option" | "Result");
-                let data_authority = d.authority == AuthoritySummary::inert()
-                    || builtin
-                        && matches!(&d.authority, AuthoritySummary::Known(terms)
+                    && matches!(&d.authority, AuthoritySummary::Known(terms)
                         if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
+                let data_authority = d.authority == AuthoritySummary::inert() || conditional;
                 if d.capability.is_some()
                     || d.resource
                     || d.drop.is_some()
                     || d.fact.is_some()
                     || signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
                     || !data_authority
-                    || (!signature.metadata.alias && !d.serializable && !builtin)
+                    || (!signature.metadata.alias && !d.serializable)
                     || d.generics.len() != arguments.len()
                     || !d.generics.iter().zip(&arguments).all(|(g, a)| {
                         matches!(

@@ -5121,6 +5121,10 @@ conformance/SER/SER-1-codec-nominal-decode-bad.hir
 conformance/SER/SER-1-codec-nominal-decode-ok.hir
 conformance/SER/SER-1-codec-nominal-encode-bad.hir
 conformance/SER/SER-1-codec-nominal-encode-ok.hir
+conformance/SER/SER-1-core-capability-holder-bad.hir
+conformance/SER/SER-1-core-capability-holder-ok.hir
+conformance/SER/SER-1-core-error-field-bad.hir
+conformance/SER/SER-1-core-error-field-ok.hir
 conformance/SER/SER-1-distinct-opt-in-ok.hir
 conformance/SER/SER-1-dto-factory-ok.hir
 conformance/SER/SER-1-duration-ok.hir
@@ -5146,10 +5150,13 @@ conformance/SER/SER-1-recursive-schema-ok.hir
 conformance/SER/SER-1-refinement-opt-in-bad.hir
 conformance/SER/SER-1-resource-field-bad.hir
 conformance/SER/SER-1-resource-field-ok.hir
+conformance/SER/SER-1-shared-nominal-ok.hir
 conformance/SER/SER-2-bad-magic-run.hir
 conformance/SER/SER-2-bad-tag-run.hir
 conformance/SER/SER-2-bad-version-run.hir
 conformance/SER/SER-2-char-run.hir
+conformance/SER/SER-2-core-error-vectors-run.hir
+conformance/SER/SER-2-core-errors-run.hir
 conformance/SER/SER-2-duplicate-map-run.hir
 conformance/SER/SER-2-duplicate-set-run.hir
 conformance/SER/SER-2-flat-zero-stride-list-run.hir

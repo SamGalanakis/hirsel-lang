@@ -294,6 +294,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         if name == "ShapeBody" {
             t.bounds = shape_data_bounds();
         }
+        serializable_core(name, &mut t);
         publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
     }
     for (name, generic, fields) in [
@@ -428,6 +429,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 .into(),
             );
         }
+        serializable_core(name, &mut t);
         publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
     }
     for (name, fields) in [("File", ""), ("AtomicFile", "dir: Dir,tmp: Path,dst: Path")] {
@@ -943,6 +945,55 @@ fn shape_data_bounds() -> Vec<Bound> {
         Bound::Inert,
         Bound::NoallocDrop,
     ]
+}
+/// SER-1: the core errors and outcomes that can cross a runner call or be stored, and the
+/// data they carry. A generic one (`Option`, `Result`, `TxFailure`, `Bounded`) admits no
+/// bound on its parameters, so it is serializable exactly when its arguments are, proved
+/// after substitution. Capability holders (`Deadline`, `Command`), resources, opaque types
+/// (`Path`, `Sku`, so `DirEntry` and `StockError`) and test-script inputs stay out.
+fn serializable_core(name: &str, t: &mut TypeDefinition) {
+    if matches!(
+        name,
+        "Option"
+            | "Result"
+            | "TxFailure"
+            | "Bounded"
+            | "DecodeError"
+            | "CancelCause"
+            | "CancelError"
+            | "ChannelError"
+            | "FileError"
+            | "FileKind"
+            | "Metadata"
+            | "IpAddr"
+            | "SocketAddr"
+            | "UdpReceived"
+            | "TlsFailure"
+            | "NetError"
+            | "GrantError"
+            | "ExitStatus"
+            | "ProcessOutput"
+            | "PipelineOutput"
+            | "ProcessError"
+            | "InputError"
+            | "EnvError"
+            | "OutputError"
+            | "ClockError"
+            | "RandomError"
+            | "WaitError"
+            | "ArgError"
+            | "FloatIntError"
+            | "OutOfSpace"
+            | "CliError"
+            | "FailureKind"
+            | "SourceSite"
+            | "Failure"
+    ) {
+        t.serializable = true;
+        if t.generics.is_empty() {
+            t.bounds.push(Bound::Serializable);
+        }
+    }
 }
 fn type_definition(
     generics: Vec<GenericParameter>,

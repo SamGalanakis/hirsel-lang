@@ -11,8 +11,8 @@ Capabilities, resources, handles, functions, raw pointers, owner brands, scoped 
 opaque types and refinement-constrained types cannot occur in a serializable schema. The
 supported schemas are those the canonical codec enumerates: `bool`, the fixed-width
 integers and floats, `char`, `String`, `Bytes`, unit, tuples, records, variants, `box`,
-`Array`, `List`, `Inline`, `Simd`, `Packed`, `Map`, `Set`, and exactly the core `Option`
-and `Result`. Every owned payload qualifies independently; no unsupported constructor
+`Array`, `List`, `Inline`, `Simd`, `Packed`, `Map`, `Set`, and exactly the serializable
+core types below. Every owned payload qualifies independently; no unsupported constructor
 inherits a codec.
 
 User records, variants, unconstrained distinct types and flat types may opt in with
@@ -27,6 +27,21 @@ converts explicitly to a serializable data type and validates again on reconstru
 @serializable
 type Point { x: i32, y: i32 }
 ```
+
+The serializable core types are the errors and outcomes that can cross a call or be
+stored, and the data they carry. `Option`, `Result`, `TxFailure` and `Bounded` bound none
+of their parameters, so each is serializable exactly when its arguments are, proved after
+substitution. `DecodeError`, `CancelCause`, `CancelError`, `ChannelError`, `FileError`,
+`FileKind`, `Metadata`, `IpAddr`, `SocketAddr`, `UdpReceived`, `TlsFailure`, `NetError`,
+`GrantError`, `ExitStatus`, `ProcessOutput`, `PipelineOutput`, `ProcessError`,
+`InputError`, `EnvError`, `OutputError`, `ClockError`, `RandomError`, `WaitError`,
+`ArgError`, `FloatIntError`, `OutOfSpace`, `CliError`, `FailureKind`, `SourceSite` and
+`Failure` are serializable. Each encodes as its record or variant schema under a nominal
+node for package `core`, version `1`. No other core type is serializable: those that hold
+a capability (`Deadline`, `Command`), resources, opaque types (`Path`, `Instant`, `Sku`,
+and so `DirEntry` and `StockError`), scripted-provider inputs and compile-time shapes
+convert through a data type. The exact core identity matters: a same-spelled user type
+gets no exemption.
 
 Schema admission and opt-in failures are SER-1 at the declaration or at the encoding use.
 

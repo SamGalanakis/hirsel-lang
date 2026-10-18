@@ -452,7 +452,9 @@ callables and unsupported runtime constructors fail closed at every depth.
 snapshots; V independently replays admission rather than trusting this descriptor.
 Serializable generic evidence implies Inert and supplies no crossing proof.
 A nominal instantiation reached again, by recursion or along another path,
-references its first node.
+references its first node. A core declaration marked serializable whose authority
+is only its type parameters (`Option`, `Result`, `TxFailure`, `Bounded`) is
+admitted with unbounded parameters; each use proves its arguments.
 
 `wire` implements SER-2 version 1 over concrete `serialization` schema graphs.
 Its explicit envelope binds codec version and the complete canonical descriptor;

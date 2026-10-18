@@ -873,6 +873,28 @@ fn serializable_ir_templates_need_their_own_generic_schema_bound() {
 }
 
 #[test]
+fn only_core_ir_is_serializable_over_unbounded_parameters() {
+    // A core declaration marked serializable bounds none of its parameters (Option,
+    // TxFailure); its uses prove the arguments. Without the core-identity check in
+    // serialization::declaration the user twin is accepted.
+    let parameter = TypeParameterRef::bound(TypeParamId(0));
+    let mut user = serializable_declaration(TypeKind::Parameter(parameter));
+    let SignatureKind::Type(d) = &mut user.kind else {
+        unreachable!()
+    };
+    d.bounds.clear();
+    d.generics = vec![GenericParameter::Type {
+        name: "T".into(),
+        bounds: vec![].into(),
+    }];
+    d.authority = AuthoritySummary::Known(vec![AuthorityTerm::TypeParameter(parameter)].into());
+    let mut core = user.clone();
+    core.definition = hirsel_syntax::DefPath::core("Data");
+    verdict(core, true);
+    verdict(user, false);
+}
+
+#[test]
 fn refined_distinct_ir_cannot_opt_in_but_unconstrained_data_can() {
     let mut s = serializable_declaration(TypeKind::Primitive(Primitive::U64));
     let SignatureKind::Type(d) = &mut s.kind else {

@@ -1,0 +1,117 @@
+// rule: SER-2
+// expect: run
+// Every serializable core error and outcome round-trips through the canonical codec.
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: T = read()?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let decode_error: DecodeError = SchemaMismatch()
+  round(t, decode_error)?
+  let cause: CancelCause = DeadlineExceeded()
+  round(t, cause)?
+  let cancel: CancelError = Canceled(Parent())
+  round(t, cancel)?
+  let channel: ChannelError = Canceled(ChildFailed())
+  round(t, channel)?
+  let file_fault: FileError = FileFault(5)
+  round(t, file_fault)?
+  let file_canceled: FileError = Canceled(Requested())
+  round(t, file_canceled)?
+  let file_missing: FileError = NotFound()
+  round(t, file_missing)?
+  let kind: FileKind = Symlink()
+  round(t, kind)?
+  round(
+    t,
+    Metadata(
+      kind: Directory(),
+      size: 4096,
+      modified_unix_ns: Some(-1i128),
+      permissions: 493
+    )
+  )?
+  round(t, Metadata(kind: Regular(), size: 0, modified_unix_ns: None, permissions: 0))?
+  let v4: IpAddr = V4([127, 0, 0, 1])
+  round(t, v4)?
+  let v6: IpAddr = V6([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+  round(t, SocketAddr(ip: v6, port: 8443))?
+  round(t, UdpReceived(count: 512, peer: SocketAddr(ip: v4, port: 53), truncated: true))?
+  let tls: TlsFailure = AlertReceived(40)
+  round(t, tls)?
+  let net_tls: NetError = Tls(NameMismatch())
+  round(t, net_tls)?
+  let net_fault: NetError = Fault(111)
+  round(t, net_fault)?
+  let net_canceled: NetError = Canceled(Requested())
+  round(t, net_canceled)?
+  let grant: GrantError = NotGranted()
+  round(t, grant)?
+  let status: ExitStatus = Signaled(9)
+  round(t, status)?
+  round(t, ProcessOutput(status: Exited(0), stdout: b"out\n", stderr: b""))?
+  round(
+    t,
+    PipelineOutput(statuses: [Exited(0), Exited(1)], stdout: b"", stderr: b"err")
+  )?
+  let process: ProcessError = Canceled(DeadlineExceeded())
+  round(t, process)?
+  let process_closed: ProcessError = InputClosed()
+  round(t, process_closed)?
+  let input: InputError = InputFault(4)
+  round(t, input)?
+  let env: EnvError = InvalidUtf8()
+  round(t, env)?
+  let output: OutputError = OutputFault(32)
+  round(t, output)?
+  let clock: ClockError = OutOfRange()
+  round(t, clock)?
+  let random: RandomError = Unavailable()
+  round(t, random)?
+  let wait: WaitError = Clock(Unavailable())
+  round(t, wait)?
+  let arg: ArgError = MissingArgument()
+  round(t, arg)?
+  let float_int: FloatIntError = NotFinite()
+  round(t, float_int)?
+  let space: OutOfSpace = OutOfSpace()
+  round(t, space)?
+  let cli: CliError = Files(PermissionDenied())
+  round(t, cli)?
+  let failure_kind: FailureKind = DeadMutex()
+  round(t, failure_kind)?
+  let site = SourceSite(definition: "app@1::main", line: 3, column: 7)
+  round(t, site)?
+  let inner = Failure(
+    kind: Check(),
+    rule: "Arithmetic",
+    site: copy site,
+    spawn: [],
+    cause: None
+  )
+  round(
+    t,
+    Failure(
+      kind: Contract(),
+      rule: "",
+      site: site,
+      spawn: [2, 0],
+      cause: Some(box inner)
+    )
+  )?
+  let aborted: TxFailure[FileError] = Aborted(NotFound())
+  round(t, aborted)?
+  let tx_canceled: TxFailure[String] = Canceled(Parent())
+  round(t, tx_canceled)?
+  let finished: Bounded[Result[u8, NetError]] = Finished(Ok(3))
+  round(t, finished)?
+  let expired: Bounded[Result[u8, NetError]] = Expired(Error(TimedOut()))
+  round(t, expired)?
+  Ok(())
+}

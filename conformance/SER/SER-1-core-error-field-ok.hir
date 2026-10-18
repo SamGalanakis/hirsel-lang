@@ -1,0 +1,4 @@
+// rule: SER-1
+// expect: accept
+@serializable
+type AppError = Files(FileError) | Late(CancelCause) | Crashed(Failure)
