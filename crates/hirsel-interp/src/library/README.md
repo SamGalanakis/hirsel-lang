@@ -186,3 +186,7 @@ fault consumption. The independent model removes sorted descendants in postorder
 unlinks symlinks as entries, preserves opened file contents, and detaches removed
 issued directories. Recursive-removal fault prefixes count deleted entries.
 `file.copy_file` and `file.list_recursive` execute ordinary std source.
+Each `test.dir` tree keeps a durable state (`hirsel_kernels::disk::Durable`, shared with the
+runtime's test trees): writes note the last write, `file.sync` and `file.put_new(Durable())`
+record the file's bytes and its directory chain, and `test.crash` rebuilds the tree from it
+and marks the tree's open File and AtomicFile handles stale.

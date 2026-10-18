@@ -152,6 +152,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "FileFault(u32)|Canceled(CancelCause)|NotGranted()|NotFound()|PermissionDenied()|AlreadyExists()|IsDirectory()|NotDirectory()|DirectoryNotEmpty()|CrossDevice()",
         ),
         ("FileKind", "", "Regular()|Directory()|Symlink()|Other()"),
+        ("Durability", "", "Durable()|Volatile()"),
         ("IpAddr", "", "V4(Inline[u8, 4])|V6(Inline[u8, 16])"),
         (
             "NetOperation",

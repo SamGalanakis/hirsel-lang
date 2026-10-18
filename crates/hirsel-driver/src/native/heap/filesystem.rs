@@ -70,10 +70,11 @@ impl Io {
                 | "create_atomic"
                 | "write_all"
                 | "commit"
+                | "put_new"
         );
         if writing && *access == Access::Read {
             value = io_not_granted();
-        } else if matches!(name, "read" | "write" | "append" | "seek") {
+        } else if matches!(name, "read" | "write" | "append" | "seek" | "sync") {
             let Some(OpValue::Handle(file)) = rest.first() else {
                 return Some(OpOutcome::Unsupported);
             };

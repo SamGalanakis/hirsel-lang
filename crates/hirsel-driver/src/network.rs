@@ -1176,6 +1176,16 @@ impl HostLibrary {
                 directory: self.id(&a[0])?,
                 file: self.id(&a[1])?,
             },
+            "file.sync" => R::Sync {
+                directory: self.id(&a[0])?,
+                file: self.id(&a[1])?,
+            },
+            "file.put_new" => R::PutNew {
+                directory: self.id(&a[0])?,
+                path: path(&a[1])?,
+                bytes: bytes(&a[2])?,
+                durable: matches!(a[3], Value::Variant { variant: 0, .. }),
+            },
             "io.monotonic_clock" => R::MonotonicClock { io: 1 },
             "io.wall_clock" => R::WallClock { io: 1 },
             "clock.monotonic" => R::Monotonic {

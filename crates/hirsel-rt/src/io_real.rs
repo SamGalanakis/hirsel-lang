@@ -915,7 +915,134 @@ impl Disk {
         Ok((files, dirs))
     }
 }
+impl Disk {
+    /// fsync every directory from the parent of tree path `path` up to its mount's root.
+    fn sync_directories(&self, path: &str) -> Result<(), IoError> {
+        let (selector, mount) = self
+            .mounts
+            .iter()
+            .filter(|(selector, _)| {
+                selector.is_empty()
+                    || path == selector.as_str()
+                    || path.starts_with(&format!("{selector}/"))
+            })
+            .max_by_key(|(selector, _)| selector.len())
+            .ok_or(IoError::NotGranted)?;
+        let mut directory = path.rsplit_once('/').map_or("", |(p, _)| p);
+        loop {
+            let local = if selector.is_empty() {
+                directory
+            } else if directory.len() <= selector.len() {
+                ""
+            } else {
+                &directory[selector.len() + 1..]
+            };
+            open_beneath(
+                mount.descriptor().as_raw_fd(),
+                local,
+                libc::O_RDONLY | libc::O_DIRECTORY,
+                0,
+            )?
+            .sync_all()
+            .map_err(error)?;
+            if local.is_empty() {
+                return Ok(());
+            }
+            directory = directory.rsplit_once('/').map_or("", |(p, _)| p);
+        }
+    }
+    /// Whether `name` in `parent` is a regular file holding exactly `bytes`.
+    fn holds(parent: &File, name: &str, bytes: &[u8]) -> Result<bool, IoError> {
+        let mut existing = match open_component(
+            parent.as_raw_fd(),
+            name,
+            libc::O_RDONLY | libc::O_NONBLOCK,
+            0,
+        ) {
+            Ok(fd) => fd,
+            // A final symlink (ELOOP) or a special entry is an existing non-equal entry.
+            Err(IoError::NotFound) => return Err(IoError::NotFound),
+            Err(_) => return Ok(false),
+        };
+        if !existing.metadata().map_err(error)?.is_file() {
+            return Ok(false);
+        }
+        let mut current = vec![];
+        existing.read_to_end(&mut current).map_err(error)?;
+        Ok(current == bytes)
+    }
+}
 impl Storage for Disk {
+    fn sync_file(&mut self, id: u64, path: &str) -> Result<(), IoError> {
+        self.files
+            .get(&id)
+            .ok_or(IoError::Fault(1))?
+            .sync_all()
+            .map_err(error)?;
+        self.sync_directories(path)
+    }
+    fn put_new(&mut self, path: &str, bytes: &[u8], durable: bool) -> Result<(), IoError> {
+        // The Dir's own root always exists.
+        if self.local(path)?.is_empty() {
+            return Err(IoError::AlreadyExists);
+        }
+        let (parent, name) = self.parent(path)?;
+        let name = name.into_string().map_err(|_| IoError::Fault(1))?;
+        // A hidden temporary in the destination's directory, whole before it is linked.
+        let (temporary, mut fd) = loop {
+            let serial = self.next_write;
+            self.next_write = serial.checked_add(1).expect("write names exhausted");
+            let temporary = format!(".hirsel-put-{serial}");
+            match open_component(
+                parent.as_raw_fd(),
+                &temporary,
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            ) {
+                Ok(fd) => break (CString::new(temporary).expect("NUL-free name"), fd),
+                Err(IoError::AlreadyExists) => {}
+                Err(e) => return Err(e),
+            }
+        };
+        let unlink = |temporary: &CString| {
+            // SAFETY: a live directory fd and a NUL-terminated local name.
+            unsafe { libc::unlinkat(parent.as_raw_fd(), temporary.as_ptr(), 0) };
+        };
+        let written = fd
+            .write_all(bytes)
+            .and_then(|()| if durable { fd.sync_all() } else { Ok(()) });
+        drop(fd);
+        if let Err(e) = written {
+            unlink(&temporary);
+            return Err(error(e));
+        }
+        let target = CString::new(name.as_str()).map_err(|_| IoError::Fault(1))?;
+        // SAFETY: live directory fds and NUL-terminated local names; linkat never replaces
+        // an existing entry and, without AT_SYMLINK_FOLLOW, never follows the source.
+        let linked = unsafe {
+            libc::linkat(
+                parent.as_raw_fd(),
+                temporary.as_ptr(),
+                parent.as_raw_fd(),
+                target.as_ptr(),
+                0,
+            )
+        };
+        let link_error = (linked != 0).then(std::io::Error::last_os_error);
+        unlink(&temporary);
+        match link_error {
+            None if durable => self.sync_directories(path),
+            None => Ok(()),
+            Some(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                match Self::holds(&parent, &name, bytes)? {
+                    true if durable => self.sync_directories(path),
+                    true => Ok(()),
+                    false => Err(IoError::AlreadyExists),
+                }
+            }
+            Some(e) => Err(error(e)),
+        }
+    }
     fn destination(&mut self, path: &str) -> Result<(), IoError> {
         if self.local(path)?.is_empty() {
             return Err(IoError::IsDirectory);

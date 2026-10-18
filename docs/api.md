@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1275 exported definitions; 406 variants.
+1279 exported definitions; 408 variants.
 
 ## Types and roots
 
@@ -305,6 +305,22 @@ Variant of DecodeError.
 <a id="def-core_401_2fDirEntry"></a>
 
 - `type DirEntry uses {} = { path: Path, kind: FileKind }`
+
+<a id="def-core_401_2fDurability"></a>
+
+- `type Durability: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Durable() | Volatile()`
+
+<a id="def-core_401_2fDurability_23Durable"></a>
+
+- `Durable() -> Durability`
+
+Variant of Durability.
+
+<a id="def-core_401_2fDurability_23Volatile"></a>
+
+- `Volatile() -> Durability`
+
+Variant of Durability.
 
 <a id="def-core_401_2fEnv"></a>
 
@@ -4043,6 +4059,10 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 
 - `fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]`
 
+<a id="def-core_401_2ffile_2fput_5fnew"></a>
+
+- `fn file.put_new(d: Dir, p: Path, take data: Bytes, mode: Durability) -> Result[(), FileError]`
+
 <a id="def-core_401_2ffile_2fread"></a>
 
 - `fn file.read(d: Dir, mut f: File of d, mut buffer: List[u8], max: u64) -> Result[u64, FileError]`
@@ -4078,6 +4098,10 @@ References: [`core@1/Dir`](#def-core_401_2fDir), [`core@1/FileError`](#def-core_
 <a id="def-core_401_2ffile_2fsize"></a>
 
 - `fn file.size(d: Dir, p: Path) -> Result[u64, FileError]`
+
+<a id="def-core_401_2ffile_2fsync"></a>
+
+- `fn file.sync(d: Dir, mut f: File of d) -> Result[(), FileError]`
 
 <a id="def-core_401_2ffile_2fwalk"></a>
 
@@ -7898,6 +7922,10 @@ References: [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
 - `pub fn test.choice(mut s: Source, max: u64) -> u64 uses {}`
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
+
+<a id="def-core_401_2ftest_2fcrash"></a>
+
+- `fn test.crash(t: Test, d: Dir, seed: u64) -> ()`
 
 <a id="def-core_401_2ftest_2fdir"></a>
 

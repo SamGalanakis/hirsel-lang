@@ -78,7 +78,9 @@ impl State {
             | R::Rename { directory, .. }
             | R::CreateAtomic { directory, .. }
             | R::WriteAll { directory, .. }
-            | R::Commit { directory, .. } => *directory,
+            | R::Commit { directory, .. }
+            | R::Sync { directory, .. }
+            | R::PutNew { directory, .. } => *directory,
             _ => return Ok(None),
         };
         let root = self.directory(directory)?;
@@ -98,6 +100,7 @@ impl State {
                     | R::CreateAtomic { .. }
                     | R::WriteAll { .. }
                     | R::Commit { .. }
+                    | R::PutNew { .. }
             )
         {
             return Ok(Some(IoError::NotGranted));
@@ -106,7 +109,8 @@ impl State {
             R::FileRead { file, .. }
             | R::FileWrite { file, .. }
             | R::FileAppend { file, .. }
-            | R::FileSeek { file, .. } => {
+            | R::FileSeek { file, .. }
+            | R::Sync { file, .. } => {
                 let Some(Grant::File {
                     directory: owner,
                     writable,
@@ -143,7 +147,8 @@ impl State {
             | R::Remove { path, .. }
             | R::Mkdir { path, .. }
             | R::RemoveDir { path, .. }
-            | R::CreateAtomic { path, .. } => crate::io::relative(&root, path).is_none(),
+            | R::CreateAtomic { path, .. }
+            | R::PutNew { path, .. } => crate::io::relative(&root, path).is_none(),
             R::Rename { from, to, .. } => {
                 crate::io::relative(&root, from).is_none()
                     || crate::io::relative(&root, to).is_none()
@@ -222,7 +227,9 @@ pub fn cancel(
         | R::Rename { .. }
         | R::CreateAtomic { .. }
         | R::WriteAll { .. }
-        | R::Commit { .. } => file_completion(request, IoError::Canceled(cause)),
+        | R::Commit { .. }
+        | R::Sync { .. }
+        | R::PutNew { .. } => file_completion(request, IoError::Canceled(cause)),
         _ => return Ok(None),
     };
     let completion = adapter.preflight(request)?.unwrap_or(canceled);

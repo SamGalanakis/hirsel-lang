@@ -2425,3 +2425,62 @@ fn filesystem_breadth_confines_symlinks_and_replays_partial_removal() {
     replay.finish().unwrap();
     replay_interpreter(&tape, &initial, &final_tree, &handles, b"");
 }
+
+#[test]
+fn put_new_and_sync_on_a_host_tree_record_round_trip_as_text_and_replay() {
+    let (temp, io) = setup();
+    let mut real = Library(io);
+    let dir = real.directory(Io(1), "").unwrap().unwrap();
+    let put = |path: &str, bytes: &[u8], durable| Request::PutNew {
+        directory: dir.0,
+        path: path.into(),
+        bytes: bytes.to_vec(),
+        durable,
+    };
+    let unit = |result| Ok(Completion::Unit(result));
+    assert_eq!(real.0.call(put("sub/new", b"new", true)), unit(Ok(())));
+    assert_eq!(real.0.call(put("sub/new", b"new", false)), unit(Ok(())));
+    assert_eq!(real.0.call(put("sub/volatile", b"v", false)), unit(Ok(())));
+    assert_eq!(
+        real.0.call(put("sub/new", b"other", true)),
+        unit(Err(IoError::AlreadyExists))
+    );
+    assert_eq!(
+        real.0.call(put("sub", b"", true)),
+        unit(Err(IoError::AlreadyExists))
+    );
+    assert_eq!(
+        real.0.call(put("missing/x", b"", true)),
+        unit(Err(IoError::NotFound))
+    );
+    // The hidden temporaries are gone: only the objects remain beside the originals.
+    let mut names: Vec<_> = std::fs::read_dir(temp.path().join("sub"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a", "new", "volatile", "é"]);
+    assert_eq!(std::fs::read(temp.path().join("sub/new")).unwrap(), b"new");
+    let file = real.open(dir, "old").unwrap().unwrap();
+    assert_eq!(
+        real.0.call(Request::Sync {
+            directory: dir.0,
+            file: file.0,
+        }),
+        unit(Ok(()))
+    );
+    real.close_file(file).unwrap().unwrap();
+    let tape = real.0.tape().to_vec();
+    let text = hirsel_rt::launch::render_tape(&tape).unwrap();
+    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    let mut sim = SimIo::new(initial(), tape.clone());
+    for event in &tape {
+        assert_eq!(
+            sim.call(event.request.clone()),
+            Ok(event.completion.clone())
+        );
+    }
+    sim.finish().unwrap();
+    assert_eq!(sim.tree(), &real.0.snapshot().unwrap());
+    replay_interpreter(&tape, &initial(), sim.tree(), sim.handles().observed(), &[]);
+}

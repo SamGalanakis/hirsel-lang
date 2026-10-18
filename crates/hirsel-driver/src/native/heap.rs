@@ -13,6 +13,7 @@ use hirsel_run_config::Access;
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod durability;
 mod env;
 mod filesystem;
 mod net;
@@ -44,6 +45,11 @@ struct Io {
     script_clocks: BTreeMap<u64, u64>,
     detached_directories: BTreeSet<u64>,
     resolved_directories: BTreeMap<u64, String>,
+    /// What a crash of each `test.dir` tree keeps (core-library.md, Durability).
+    durable: BTreeMap<u64, durability::Durable>,
+    /// File and AtomicFile handles opened before their tree's last crash.
+    stale: BTreeSet<u64>,
+    serials: durability::Serials,
     /// Each failure site's line and column, for a program that isolates (FAIL-2).
     positions: Positions,
 }
@@ -123,6 +129,9 @@ impl Io {
             permissions: BTreeMap::new(),
             detached_directories: BTreeSet::new(),
             resolved_directories: BTreeMap::new(),
+            durable: BTreeMap::new(),
+            stale: BTreeSet::new(),
+            serials: Default::default(),
             positions: Positions::default(),
         }
     }
@@ -799,7 +808,7 @@ impl Io {
                 if owner != directory {
                     return Some(OpOutcome::Fail("CAP-2".into()));
                 }
-                if *writable {
+                if *writable || self.stale.contains(file) {
                     return Some(OpOutcome::Value(io_error(1)));
                 }
                 let mut bytes = match buffer {
@@ -890,7 +899,7 @@ impl Io {
                 }
                 if access == Access::Read {
                     io_not_granted()
-                } else if !writable {
+                } else if !writable || self.stale.contains(file) {
                     io_error(1)
                 } else {
                     let path = self
@@ -898,6 +907,7 @@ impl Io {
                         .iter()
                         .find(|(_, id)| std::sync::Arc::ptr_eq(id, &identity))
                         .map(|((_, path), _)| path.clone());
+                    self.durable_write(tree, &identity, contents.len(), bytes);
                     let mut data = contents;
                     data.extend_from_slice(bytes);
                     if let Some(path) = path {
@@ -930,6 +940,7 @@ impl Io {
                         }),
                     ) => {
                         let fits = tree == old
+                            && !self.stale.contains(file)
                             && !self.detached_directories.contains(directory)
                             && (root.is_empty() || path.starts_with(&format!("{root}/")))
                             && self
@@ -993,6 +1004,15 @@ impl Io {
                 if tree != owner || *directory != grant {
                     return Some(OpOutcome::Fail("CAP-2".into()));
                 }
+                if self.stale.contains(file) {
+                    if name == "commit" {
+                        self.grants.remove(file);
+                    }
+                    return Some(OpOutcome::Complete {
+                        result: Ok(io_error(1)),
+                        consumed: if name == "commit" { vec![1] } else { vec![] },
+                    });
+                }
                 let Some(temporary) = self.physical_path(*directory, &temporary) else {
                     if name == "commit" {
                         self.grants.remove(file);
@@ -1046,6 +1066,8 @@ impl Io {
                 let [OpValue::Bytes(bytes)] = rest else {
                     return Some(OpOutcome::Unsupported);
                 };
+                let start = self.trees[&tree].1.get(&temporary)?.len();
+                self.durable_write(tree, &identity, start, bytes);
                 self.trees
                     .get_mut(&tree)
                     .unwrap()
@@ -1079,7 +1101,7 @@ impl Io {
             (
                 Some("file"),
                 kind @ ("open" | "create" | "size" | "read_bytes" | "write_bytes" | "remove"
-                | "create_atomic"),
+                | "create_atomic" | "put_new"),
                 [OpValue::Handle(directory), OpValue::Handle(path), rest @ ..],
             ) => {
                 let Some(IoGrant::Dir { tree, root, access }) = self.grants.get(directory).cloned()
@@ -1087,7 +1109,10 @@ impl Io {
                     return Some(OpOutcome::Fail("CAP-2".into()));
                 };
                 if access == Access::Read
-                    && matches!(kind, "create" | "write_bytes" | "remove" | "create_atomic")
+                    && matches!(
+                        kind,
+                        "create" | "write_bytes" | "remove" | "create_atomic" | "put_new"
+                    )
                 {
                     return Some(OpOutcome::Value(io_not_granted()));
                 }
@@ -1116,6 +1141,13 @@ impl Io {
                     }
                 }
                 match kind {
+                    "put_new" => {
+                        let [OpValue::Bytes(bytes), OpValue::Variant { tag, .. }] = rest else {
+                            return Some(OpOutcome::Unsupported);
+                        };
+                        let (bytes, durable) = (bytes.clone(), *tag == 0);
+                        self.put_new(tree, &path, &bytes, durable)
+                    }
                     "open" if self.trees[&tree].1.contains_key(&path) => {
                         io_ok(OpValue::OpenHandle(self.grant(IoGrant::File {
                             identity: self.files[&(tree, path.clone())].clone(),
@@ -1220,7 +1252,9 @@ impl Io {
                                 .1
                                 .insert(path.clone(), bytes.clone());
                             self.permissions.remove(&(tree, path.clone()));
-                            self.files.insert((tree, path), std::sync::Arc::new(()));
+                            let identity = std::sync::Arc::new(());
+                            self.files.insert((tree, path), identity.clone());
+                            self.durable_write(tree, &identity, 0, bytes);
                             io_ok(OpValue::Unit)
                         } else {
                             let mut serial = self.next;
@@ -1285,11 +1319,29 @@ impl Io {
                         .insert((tree, path.clone()), std::sync::Arc::new(()));
                 }
                 self.trees.insert(tree, (directories, files));
+                self.durable_start(tree);
                 OpValue::Handle(self.grant(IoGrant::Dir {
                     tree,
                     root: String::new(),
                     access: Access::ReadWrite,
                 }))
+            }
+            (
+                Some("test"),
+                "crash",
+                [
+                    OpValue::Handle(test),
+                    OpValue::Handle(directory),
+                    OpValue::Bits {
+                        scalar: ScalarKind::U64,
+                        bits: seed,
+                    },
+                ],
+            ) if matches!(self.grants.get(test), Some(IoGrant::Test)) => {
+                return self.crash(*directory, *seed as u64);
+            }
+            (Some("file"), "sync", [OpValue::Handle(directory), OpValue::Handle(file)]) => {
+                return self.sync(*directory, *file);
             }
             (
                 Some("test"),

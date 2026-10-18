@@ -109,6 +109,7 @@ file.metadata	dfb7cd8f4981fe2861e269f6417facc00c46e0e9064402ecd175de4b1d169fff	0
 file.mkdir	4cf25ca5e7eef003f3dd85903c3997c2ce29f393d4fdedb0eb257a7e65368bf4	0:b:n;1:b:n->n
 file.narrow	ae5b604912af5870cde8592e7bbafd1a96a2f694beba4cc579d6d4811e51a393	0:b:n;1:t:n->n
 file.open	d08ea0a1a0dc3afab76e66772383d84670bebfc14a6787f0c2cbe5f34e84cacb	0:b:n;1:b:n->n
+file.put_new	eea5bc13bc33af9d5683d7b40a8d0512ac84d469eb909169d6809b5b78cd1368	0:b:n;1:b:n;2:t:n;3:b:n->n
 file.read	630b772c4da09fb34c0f69471ca80052a71efc45afb3d34a89ba978d1cdc9b2e	0:b:n;1:m:n;2:m:n;3:b:n->n
 file.read_bytes	615e93baa5a386069763225acf76823c6d61d55fc057a7464e36ee5bd5b44636	0:b:n;1:b:n->n
 file.read_dir	463937f3c7c4297b71e1b28ce8c315e2a072bb2398d3c4bcbff2b186d7e11fcf	0:b:n;1:b:n->n
@@ -118,6 +119,7 @@ file.rename	b76a958f3439f0bf38e5d19c442ae9df0dbf8d972e9639321526213837da4321	0:b
 file.seek	2cd4c688a2e3a59af103957c603ea5799c11ac68b421f0856a80ea68af0747db	0:b:n;1:m:n;2:b:n->n
 file.set_permissions	eaf2eab56488b07e056b4ebd95ee45c8f6256a7ff65d8d28495cd5848b3a78fe	0:b:n;1:b:n;2:b:n->n
 file.size	98e4563f5a997d2136e08687b93bf5ddf3d337ca7dff529e6c1c97f33ef3e142	0:b:n;1:b:n->n
+file.sync	db1449fc840d9375316e4f58c3ac5165380215fd8b0546d8c5c508e88ace418c	0:b:n;1:m:n->n
 file.walk	9d4a6e7f3cc40a8d91873085ffba113395181aa88f83b9aa64eb5810af203038	0:b:n->a
 file.write	73706fd0f02c4b71c81c854132f066bceb7b6b5c1422a622d2b189a79c95d017	0:b:n;1:m:n;2:b:n->n
 file.write_all	2e018947add8654616ff6086147f81207ddbf2882f98e15c74de24946439e8b8	0:b:n;1:m:n;2:b:n->n
@@ -253,6 +255,7 @@ task.scope_until	3610954ed70fdba0cd5d5638ce3a438a27b8ddf359ce90e90954cd8e8fb0e40
 task.set	ad75d5df1e06d29042fed53b0205cec33b4cbb06106d4b5440da087cf1e252d4	0:b:n->n
 test.check	e018d5aa18ef1e13cde863a0d0d0269a03e6e2920765dec59f296fc15e962b9e	0:b:n;1:b:n->n
 test.check_case	9be1ff429c99fecda725999f5ba741ca3ab225badd3237ecaa12ff647b0ef4d9	0:b:n;1:b:n;2:b:n->n
+test.crash	61c0fa6cb8d4d9b162acbe70c2fc3cc9c908d37d4f267ba96efed9c90c177e60	0:b:n;1:b:n;2:b:n->n
 test.dir	c9b080d958e72c8c2b5b1fd90b69c6c921ce756da50987b9ffc568e9ae330328	0:b:n;1:b:n->n
 test.expect_snapshot	47fc3930b4f70f0cb70467fb209dcd138b77a651516375a3c5e097bfe2c92895	0:b:n;1:b:n;2:b:n->n
 test.fail	845423d7b2ac1918189c228ba99472f98d317f35562d537d6e295b904afad903	0:b:n->n

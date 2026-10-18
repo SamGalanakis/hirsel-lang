@@ -1,0 +1,48 @@
+// rule: CAP-2
+// expect: run
+// entry: main
+// A native run puts and syncs real files: linkat without replacement, fsync of the chain.
+pub fn main(rt: Io) -> Result[(), FileError] {
+  let d = io.dir(rt, path.of(""))?
+  file.mkdir(d, path.of("store"))?
+  let store = dir.narrow(d, path.of("store"))?
+  file.mkdir(store, path.of("log"))?
+  file.put_new(store, path.of("log/1"), b"one", Durable())?
+  file.put_new(store, path.of("log/1"), b"one", Durable())?
+  file.put_new(store, path.of("log/2"), b"two", Volatile())?
+  failure.check(
+    match file.put_new(store, path.of("log/1"), b"other", Volatile()) {
+      Error(AlreadyExists()) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match file.put_new(store, path.of("log"), b"", Durable()) {
+      Error(AlreadyExists()) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match file.put_new(store, path.of("missing/1"), b"", Durable()) {
+      Error(NotFound()) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(file.read_bytes(store, path.of("log/1"))? == b"one", TextInvariant())
+  failure.check(file.read_bytes(store, path.of("log/2"))? == b"two", TextInvariant())
+  // Only the two objects: no temporary survives a put.
+  failure.check(
+    list.len(file.read_dir(store, path.of("log"))?) == 2u64,
+    TextInvariant()
+  )
+  let mut f = file.create(store, path.of("notes"))?
+  file.append(store, mut f, b"synced")?
+  file.sync(store, mut f)?
+  let mut r = file.open(store, path.of("log/2"))?
+  file.sync(store, mut r)?
+  failure.check(file.read_bytes(store, path.of("notes"))? == b"synced", TextInvariant())
+  Ok(())
+}

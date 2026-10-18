@@ -84,6 +84,7 @@ N fn test.expect_snapshot(t: Test, name: String, text: String) -> ()
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
 fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc
+fn test.crash(t: Test, d: Dir, seed: u64) -> ()
 
 // CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
@@ -108,6 +109,8 @@ N fn file.remove(d: Dir, p: Path) -> Result[(), FileError]
 fn file.create_atomic(d: Dir, p: Path) -> Result[AtomicFile of d, FileError]
 fn file.write_all(d: Dir, mut f: AtomicFile of d, data: Bytes) -> Result[(), FileError]
 fn file.commit(d: Dir, take f: AtomicFile of d) -> Result[(), FileError]
+fn file.sync(d: Dir, mut f: File of d) -> Result[(), FileError]
+fn file.put_new(d: Dir, p: Path, take data: Bytes, mode: Durability) -> Result[(), FileError]
 
 // CAP-1/2/3, PROV-1/3, DROP-2/3/4, CONC-3/8, DET-1
 fn net.narrow(n: Net, rules: List[NetRule]) -> Result[Net, NetError]
@@ -381,6 +384,40 @@ error stops removal and may leave a partially removed tree. No durability or
 transactional removal is promised. Concurrent replacement can cause an error;
 it cannot make recursive descent follow a link or widen the grant. Already
 issued Dir and File handles retain their pinned identities across removal.
+
+## Durability
+
+```text
+type Durability = Durable() | Volatile()
+```
+
+Other file operations promise nothing across a crash; these two do. `file.sync(d, f)` returns
+once `f`'s bytes, and the listing of every directory from the parent of the path `f` was
+opened or created at up to its mount's root, are durable: a crash keeps them. A rename is
+durable once a sync covers both directories it changed. A read-only `Dir` may sync a file it
+opened. `file.put_new(d, p, data, mode)` creates `p` holding exactly `data`, never partial
+to a reader: an existing entry at `p` returns `AlreadyExists()`, unless it is a regular file
+with equal bytes, which returns `Ok(())` with no other effect; missing parents return
+`NotFound()`. With `Durable()` it returns once the file and its directory chain are durable,
+as `file.sync` would leave them, the equal-bytes case included. With `Volatile()` a crash may
+leave `p` absent, empty or holding a prefix of `data`. A host writes and, for `Durable()`,
+synchronizes a hidden temporary in `p`'s directory, links it at `p` without replacement and
+removes it; a crash can leave such a temporary behind, never a partial `p`. Both are
+recorded effects: the request records the handles, `put_new` its path, every byte and the
+mode, and the completion the result.
+
+A simulated directory (`test.dir`) keeps a durable state beside its live tree. Its entries
+start durable; writes, creations, renames, removals and directory changes are live only
+until a sync covers them. `test.crash(t, d, seed)` crashes the whole tree `d` belongs to: it
+becomes its durable state, so unsynced bytes, names, renames and removals are lost, except
+that the most recent unsynced write of `n` bytes keeps its first `m mod (n + 1)` bytes,
+where `m` is the first `random.splitmix64@1` output from state `seed`, when every earlier
+byte of its file is durable. Directories a sync named but never
+listed come back empty; permission bits survive with their entry. Every `File` and
+`AtomicFile` opened in the tree before the crash is stale: reads, writes, `file.sync` and
+`file.commit` return `FileFault(1)` and `file.narrow` returns `None()`; seeking and dropping
+still succeed. A `Dir` outside every `test.dir` tree fails LANG-9 with no effect. The crash is
+recorded like any other Test operation and replays to the same tree.
 
 ## Network types
 

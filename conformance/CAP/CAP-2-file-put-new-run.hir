@@ -1,0 +1,68 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("log/0"), b"zero")])
+  file.put_new(d, path.of("log/1"), b"one", Durable())?
+  test.check(t, file.read_bytes(d, path.of("log/1"))? == b"one")
+  // Equal bytes succeed again in either mode; anything else at the path is AlreadyExists.
+  file.put_new(d, path.of("log/1"), b"one", Volatile())?
+  file.put_new(d, path.of("log/1"), b"one", Durable())?
+  test.check(
+    t,
+    match file.put_new(d, path.of("log/1"), b"two", Durable()) {
+      Error(AlreadyExists()) => true,
+      _ => false,
+    }
+  )
+  test.check(t, file.read_bytes(d, path.of("log/1"))? == b"one")
+  test.check(
+    t,
+    match file.put_new(d, path.of("log"), b"", Volatile()) {
+      Error(AlreadyExists()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.put_new(d, path.of(""), b"", Volatile()) {
+      Error(AlreadyExists()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.put_new(d, path.of("missing/x"), b"x", Durable()) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.put_new(d, path.of("log/0/x"), b"x", Durable()) {
+      Error(NotDirectory()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.put_new(d, path.of("../escape"), b"x", Durable()) {
+      Error(FileFault(_)) => true,
+      _ => false,
+    }
+  )
+  file.put_new(d, path.of("log/empty"), b"", Volatile())?
+  test.check(t, file.read_bytes(d, path.of("log/empty"))? == b"")
+  // A narrowed Dir creates beneath its own root.
+  let log = dir.narrow(d, path.of("log"))?
+  file.put_new(log, path.of("2"), b"two", Durable())?
+  test.check(t, file.read_bytes(d, path.of("log/2"))? == b"two")
+  // file.sync accepts a read handle and a written one.
+  let mut r = file.open(d, path.of("log/1"))?
+  file.sync(d, mut r)?
+  let mut w = file.create(d, path.of("log/3"))?
+  file.append(d, mut w, b"three")?
+  file.sync(d, mut w)?
+  test.check(t, file.read_bytes(d, path.of("log/3"))? == b"three")
+  Ok(())
+}

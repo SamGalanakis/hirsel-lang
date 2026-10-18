@@ -32,6 +32,7 @@ impl Library {
         }
         let writing = matches!(name, "file.write" | "file.append");
         let denied = writing && !self.simulation.writable(dir);
+        let stale = self.simulation.stale.contains(&id) && name != "file.seek";
         let wrong_mode = (writing && !writable)
             || (name == "file.read" && writable)
             || (name == "file.seek" && integer_u64(arg(a, 2)?)? > i64::MAX as u64);
@@ -46,6 +47,8 @@ impl Library {
         let mut updates = vec![];
         let value = if denied {
             error(variant(2, vec![]))
+        } else if stale && fault.is_none() {
+            file_fault(1)
         } else if wrong_mode {
             file_fault(self.simulation.config.invalid_path_code)
         } else if writing {
@@ -58,12 +61,12 @@ impl Library {
                 None => bytes.len(),
             };
             if n > 0 {
-                self.simulation
-                    .file_contents
-                    .get_mut(&identity)
-                    .unwrap()
-                    .extend_from_slice(&bytes[..n]);
+                let contents = self.simulation.file_contents.get_mut(&identity).unwrap();
+                let start = contents.len();
+                contents.extend_from_slice(&bytes[..n]);
                 self.simulation.sync_file(tree, identity);
+                self.simulation
+                    .durable_write(tree, identity, start, &bytes[..n]);
             }
             if let Some(f) = fault {
                 fault_result(f)

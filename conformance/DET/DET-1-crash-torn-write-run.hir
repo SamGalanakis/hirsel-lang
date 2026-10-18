@@ -1,0 +1,43 @@
+// rule: DET-1
+// expect: run
+// entry: exercise
+// A crash keeps a seeded prefix of the last unsynced write, and only after a durable prefix.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let whole = b"headrecord"
+  let mut dropped = false
+  let mut torn = false
+  let mut kept_all = false
+  for seed in 0u64..24 {
+    let d = test.dir(t, [])
+    let mut f = file.create(d, path.of("journal"))?
+    file.append(d, mut f, b"head")?
+    file.sync(d, mut f)?
+    file.append(d, mut f, b"record")?
+    test.crash(t, d, seed)
+    let kept = file.read_bytes(d, path.of("journal"))?
+    let n = bytes.len(kept)
+    test.check(t, n >= 4u64 && kept == bytes.slice(whole, 0u64, n))
+    dropped = dropped || n == 4u64
+    torn = torn || n > 4u64 && n < 10u64
+    kept_all = kept_all || n == 10u64
+    // The same seed tears the same way.
+    let e = test.dir(t, [])
+    let mut g = file.create(e, path.of("journal"))?
+    file.append(e, mut g, b"head")?
+    file.sync(e, mut g)?
+    file.append(e, mut g, b"record")?
+    test.crash(t, e, seed)
+    test.check(t, file.read_bytes(e, path.of("journal"))? == kept)
+  }
+  test.check(t, dropped && torn && kept_all)
+  // A write after unsynced bytes cannot survive in part.
+  let d = test.dir(t, [])
+  let mut f = file.create(d, path.of("journal"))?
+  file.append(d, mut f, b"head")?
+  file.sync(d, mut f)?
+  file.append(d, mut f, b"gap")?
+  file.append(d, mut f, b"record")?
+  test.crash(t, d, 3u64)
+  test.check(t, file.read_bytes(d, path.of("journal"))? == b"head")
+  Ok(())
+}

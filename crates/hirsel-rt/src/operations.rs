@@ -171,6 +171,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "file.remove"
         | "file.write_bytes"
         | "file.write_all"
+        | "file.sync"
+        | "file.put_new"
         | "io.monotonic_clock"
         | "io.wall_clock"
         | "clock.monotonic"
@@ -187,6 +189,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "test.expect_snapshot"
         | "test.dir"
         | "test.net"
+        | "test.crash"
         | "file.read_bytes"
         | "file.walk"
         | "io.stdin"
@@ -356,6 +359,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "file.write_bytes"
             | "file.write_all"
             | "file.walk"
+            | "file.sync"
+            | "file.put_new"
     ) || NET_EXPORTS.contains(&name.as_str())
         || name == "$intrinsic.NetReadInto"
     {
@@ -384,7 +389,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
     }
     if matches!(
         name.as_str(),
-        "test.check" | "test.check_case" | "test.fail" | "test.expect_snapshot"
+        "test.check" | "test.check_case" | "test.fail" | "test.expect_snapshot" | "test.crash"
     ) {
         row.failure = Some(hirsel_core_contract::RuleCode("LANG-9".into()));
     }
@@ -1327,6 +1332,34 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_test_crash",
+        destination: false,
+        result: None,
+        parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_file_sync",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[Physical::Pointer, Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_file_put_new",
+        destination: true,
+        result: Some((12, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+            Physical::Pointer,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_test_fail",
         destination: false,
         result: None,
@@ -1872,6 +1905,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "file.write",
     "file.write_all",
     "file.write_bytes",
+    "file.sync",
+    "file.put_new",
     "f32.bits",
     "f32.from_bits",
     "f32.from_f64",
@@ -2002,6 +2037,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "task.set",
     "test.check",
     "test.check_case",
+    "test.crash",
     "test.dir",
     "test.expect_snapshot",
     "test.fail",

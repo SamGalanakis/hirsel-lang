@@ -414,6 +414,39 @@ pub fn replay_interpreter_with_fixture(
                     "file.commit",
                     vec![handle("Dir", *directory), handle("AtomicFile", *file)],
                 ),
+                Request::Sync { directory, file } => (
+                    "file.sync",
+                    vec![handle("Dir", *directory), handle("File", *file)],
+                ),
+                Request::PutNew {
+                    directory,
+                    path,
+                    bytes,
+                    durable,
+                } => (
+                    "file.put_new",
+                    vec![
+                        handle("Dir", *directory),
+                        reference::path(path),
+                        Value::Bytes(bytes.clone()),
+                        Value::Variant {
+                            variant: u32::from(!*durable),
+                            fields: vec![],
+                        },
+                    ],
+                ),
+                Request::TestCrash {
+                    test,
+                    directory,
+                    seed,
+                } => (
+                    "test.crash",
+                    vec![
+                        handle("Test", *test),
+                        handle("Dir", *directory),
+                        reference::u64_value(*seed),
+                    ],
+                ),
                 Request::UdpBind { .. }
                 | Request::UdpSend { .. }
                 | Request::UdpRecv { .. }

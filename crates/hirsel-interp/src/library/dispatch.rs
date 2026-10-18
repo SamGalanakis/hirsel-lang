@@ -467,6 +467,27 @@ impl Library {
                 context.stdout.extend_from_slice(&record);
                 Value::Unit
             }
+            "test.crash" => {
+                self.simulation.id(arg(a, 0)?, "Test")?;
+                let (tree, _, _) = self.simulation.directory(arg(a, 1)?)?;
+                let Value::Integer(seed) = arg(a, 2)? else {
+                    return Err(invalid("test.crash seed"));
+                };
+                let seed = u64::try_from(seed.bits()).map_err(|_| invalid("test.crash seed"))?;
+                if !self.simulation.durable.contains_key(&tree) {
+                    let failure = fail(call, context, "LANG-9", "test.crash");
+                    self.simulation.record(
+                        "Test",
+                        name,
+                        encode_arguments(a),
+                        b"failure:LANG-9".to_vec(),
+                        context,
+                    )?;
+                    return Ok(Some(OperationResult::Failed(failure)));
+                }
+                self.simulation.crash(tree, seed);
+                Value::Unit
+            }
             "test.dir" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;
                 let entries = collection::elements(arg(a, 1)?, BuiltinType::List)?;
@@ -493,6 +514,7 @@ impl Library {
                 let tree = self.simulation.trees.keys().next_back().unwrap() + 1;
                 self.simulation.trees.insert(tree, (dirs, files));
                 self.simulation.identify_tree(tree);
+                self.simulation.durable_start(tree);
                 self.simulation.handle(
                     "Dir",
                     Grant::Dir {
@@ -573,13 +595,14 @@ impl Library {
                     | "file.create_atomic"
                     | "file.write_all"
                     | "file.commit"
+                    | "file.put_new"
             )
         {
             return Ok(error(variant(2, vec![])));
         }
         if !matches!(
             name,
-            "file.narrow" | "file.walk" | "file.write_all" | "file.commit"
+            "file.narrow" | "file.walk" | "file.write_all" | "file.commit" | "file.sync"
         ) {
             let invalid_path = simulation::relative(&root, path_text(arg(a, 1)?)?).is_none()
                 || (name == "file.rename"
@@ -635,13 +658,16 @@ impl Library {
                             if tree == 0 {
                                 self.simulation.config.links.remove(&p);
                             }
+                            let prefix = b[..(*partial).min(b.len())].to_vec();
                             self.simulation
                                 .trees
                                 .get_mut(&tree)
                                 .unwrap()
                                 .1
-                                .insert(p.clone(), b[..(*partial).min(b.len())].to_vec());
+                                .insert(p.clone(), prefix.clone());
                             self.simulation.replace_identity(tree, &p);
+                            let identity = self.simulation.file_identity(tree, &p).unwrap();
+                            self.simulation.durable_write(tree, identity, 0, &prefix);
                         }
                     }
                     "file.write_all" => {
@@ -663,15 +689,20 @@ impl Library {
                             .resolve_stored(tree, dir, temp, false)
                             .map_err(|_| invalid("invalid atomic path"))?;
                         let b = bytes(arg(a, 2)?)?;
-                        self.simulation
+                        let prefix = &b[..(*partial).min(b.len())];
+                        let file = self
+                            .simulation
                             .trees
                             .get_mut(&tree)
                             .unwrap()
                             .1
                             .get_mut(&temp)
-                            .unwrap()
-                            .extend_from_slice(&b[..(*partial).min(b.len())]);
+                            .unwrap();
+                        let start = file.len();
+                        file.extend_from_slice(prefix);
                         self.simulation.refresh_file(tree, &temp);
+                        let identity = self.simulation.file_identity(tree, &temp).unwrap();
+                        self.simulation.durable_write(tree, identity, start, prefix);
                     }
                     _ => {}
                 }
@@ -723,6 +754,7 @@ impl Library {
                 return Err(invalid("wrong file grant"));
             };
             let fits = t == tree
+                && !self.simulation.stale.contains(&id)
                 && (root.is_empty() || p.starts_with(&format!("{root}/")))
                 && self
                     .simulation
@@ -746,6 +778,32 @@ impl Library {
                 none()
             });
         }
+        if name == "file.sync" {
+            let id = self.simulation.id(arg(a, 1)?, "File")?;
+            let Some(Grant::File {
+                tree: t,
+                dir: d,
+                identity,
+                path: open,
+                ..
+            }) = self.simulation.grants.get(&id).cloned()
+            else {
+                return Err(invalid("wrong file grant"));
+            };
+            if t != tree || d != dir {
+                return Err(invalid("wrong file directory"));
+            }
+            if self.simulation.stale.contains(&id) {
+                return Ok(file_fault(1));
+            }
+            // A detached or unresolvable open path still syncs the file's bytes.
+            let open = self
+                .simulation
+                .resolve_stored(tree, dir, &open, true)
+                .unwrap_or_default();
+            self.simulation.durable_sync(tree, identity, &open);
+            return Ok(ok(Value::Unit));
+        }
         if matches!(name, "file.write_all" | "file.commit") {
             let id = self.simulation.id(arg(a, 1)?, "AtomicFile")?;
             let Some(Grant::Atomic {
@@ -763,6 +821,9 @@ impl Library {
             }
             if name == "file.commit" {
                 self.simulation.grants.remove(&id);
+            }
+            if self.simulation.stale.contains(&id) {
+                return Ok(file_fault(1));
             }
             let local = |p: &str| -> String {
                 if root.is_empty() {
@@ -805,11 +866,13 @@ impl Library {
             let files = &mut self.simulation.trees.get_mut(&tree).unwrap().1;
             if name == "file.write_all" {
                 let data = bytes(arg(a, 2)?)?;
-                files
+                let file = files
                     .get_mut(&temp)
-                    .ok_or_else(|| invalid("dead atomic temporary"))?
-                    .extend_from_slice(data);
+                    .ok_or_else(|| invalid("dead atomic temporary"))?;
+                let start = file.len();
+                file.extend_from_slice(data);
                 self.simulation.refresh_file(tree, &temp);
+                self.simulation.durable_write(tree, identity, start, data);
             } else {
                 let data = files
                     .remove(&temp)
@@ -826,6 +889,7 @@ impl Library {
         let follow = !matches!(
             name,
             "file.write_bytes"
+                | "file.put_new"
                 | "file.remove"
                 | "file.metadata"
                 | "file.mkdir"
@@ -927,8 +991,50 @@ impl Library {
                     .get_mut(&tree)
                     .unwrap()
                     .1
-                    .insert(p.clone(), data);
+                    .insert(p.clone(), data.clone());
                 self.simulation.replace_identity(tree, &p);
+                let identity = self.simulation.file_identity(tree, &p).unwrap();
+                self.simulation.durable_write(tree, identity, 0, &data);
+                Ok(ok(Value::Unit))
+            }
+            "file.put_new" => {
+                let data = bytes(arg(a, 2)?)?.to_vec();
+                let durable = matches!(arg(a, 3)?, Value::Variant { variant: 0, .. });
+                let (dirs, files) = &self.simulation.trees[&tree];
+                if dirs.contains(&p)
+                    || (tree == 0
+                        && (self.simulation.config.links.contains_key(&p)
+                            || (self.simulation.config.metadata.contains_key(&p)
+                                && !files.contains_key(&p))))
+                {
+                    return Ok(file_error(FileError::AlreadyExists));
+                }
+                if let Err(error) = self.simulation.file_destination(tree, &p) {
+                    return Ok(file_error(error));
+                }
+                if let Some(existing) = files.get(&p) {
+                    if *existing != data {
+                        return Ok(file_error(FileError::AlreadyExists));
+                    }
+                    if durable {
+                        let identity = self.simulation.file_identity(tree, &p).unwrap();
+                        self.simulation.durable_sync(tree, identity, &p);
+                    }
+                    return Ok(ok(Value::Unit));
+                }
+                self.simulation
+                    .trees
+                    .get_mut(&tree)
+                    .unwrap()
+                    .1
+                    .insert(p.clone(), data.clone());
+                self.simulation.replace_identity(tree, &p);
+                let identity = self.simulation.file_identity(tree, &p).unwrap();
+                if durable {
+                    self.simulation.durable_sync(tree, identity, &p);
+                } else {
+                    self.simulation.durable_write(tree, identity, 0, &data);
+                }
                 Ok(ok(Value::Unit))
             }
             "file.remove" if tree == 0 && self.simulation.config.links.remove(&p).is_some() => {
@@ -1381,7 +1487,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();

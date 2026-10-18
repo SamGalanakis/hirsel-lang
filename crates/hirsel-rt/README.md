@@ -1037,3 +1037,11 @@ nested symlinks are unlinked without accessing their targets. A failed removal
 records its sorted depth-first deletion prefix as an entry count in Fault.partial,
 which replay applies before returning the recorded error. Test trees use the same
 request policy and preserve permission bits across stream writes and renames.
+File durability (core-library.md, Durability): `file.sync` fsyncs the file, then every
+directory from its open path's parent up to the mount root; `file.put_new` writes a hidden
+`.hirsel-put-N` temporary beside the destination, fsyncs it under `Durable()`, links it at
+the destination with linkat (never replacing), unlinks it and fsyncs the directory chain,
+and compares the existing file's bytes on EEXIST. Test trees keep their durable state in
+`FileIdentities` (`hirsel_kernels::disk::Durable`): stream and whole-file writes note the
+last write, syncs and `put_new(Durable())` record listings and bytes, and `test.crash`
+rebuilds the tree from it and marks every File and AtomicFile of the tree stale.

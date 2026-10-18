@@ -176,6 +176,10 @@ pub struct Simulation {
     pub(super) file_permissions: BTreeMap<(u64, String), u32>,
     next_file_identity: u64,
     pub(crate) file_contents: BTreeMap<u64, Vec<u8>>,
+    /// What a crash of each `test.dir` tree keeps (core-library.md, Durability).
+    pub(crate) durable: BTreeMap<u64, hirsel_kernels::disk::Durable>,
+    /// File and AtomicFile handles opened before their tree's last crash.
+    pub(crate) stale: BTreeSet<u64>,
     pub(crate) next_id: u64,
     state: u64,
     supplied_random: Option<Result<Vec<u8>, ()>>,
@@ -387,6 +391,8 @@ impl Simulation {
             file_permissions: BTreeMap::new(),
             next_file_identity: 1,
             file_contents: BTreeMap::new(),
+            durable: BTreeMap::new(),
+            stale: BTreeSet::new(),
             next_id: 1,
             state: random_seed,
             supplied_random: None,
@@ -445,6 +451,76 @@ impl Simulation {
                 }
             }
         }
+    }
+    /// A `test.dir` tree starts durable as created.
+    pub(crate) fn durable_start(&mut self, tree: u64) {
+        let files = self
+            .file_identities
+            .iter()
+            .filter(|((t, _), _)| *t == tree)
+            .map(|((_, path), id)| (path.clone(), (*id, self.file_contents[id].clone())))
+            .collect();
+        self.durable.insert(
+            tree,
+            hirsel_kernels::disk::Durable::of(&self.trees[&tree].0, &files),
+        );
+    }
+    /// Note an unsynced write to file `identity` of a `test.dir` tree.
+    pub(crate) fn durable_write(&mut self, tree: u64, identity: u64, start: usize, bytes: &[u8]) {
+        if let Some(durable) = self.durable.get_mut(&tree)
+            && !bytes.is_empty()
+        {
+            durable.wrote(identity, start, bytes);
+        }
+    }
+    /// Make file `identity` and the directory chain above `path` durable.
+    pub(crate) fn durable_sync(&mut self, tree: u64, identity: u64, path: &str) {
+        let Some(durable) = self.durable.get_mut(&tree) else {
+            return;
+        };
+        let files = self
+            .file_identities
+            .iter()
+            .filter(|((t, _), _)| *t == tree)
+            .map(|((_, path), id)| (path.clone(), *id))
+            .collect();
+        durable.sync(
+            identity,
+            &self.file_contents[&identity],
+            path,
+            &self.trees[&tree].0,
+            &files,
+        );
+    }
+    /// `test.crash`: the tree becomes its durable state; its open files go stale.
+    pub(crate) fn crash(&mut self, tree: u64, seed: u64) {
+        let crashed = self
+            .durable
+            .get_mut(&tree)
+            .expect("a test.dir tree")
+            .crashed(seed);
+        self.file_identities.retain(|(t, _), _| *t != tree);
+        self.file_permissions.retain(|(t, path), _| {
+            *t != tree || crashed.directories.contains(path) || crashed.files.contains_key(path)
+        });
+        let mut files = BTreeMap::new();
+        for (path, (identity, bytes)) in crashed.files {
+            self.file_identities.insert((tree, path.clone()), identity);
+            self.file_contents.insert(identity, bytes.clone());
+            files.insert(path, bytes);
+        }
+        self.trees.insert(tree, (crashed.directories, files));
+        let stale: Vec<u64> = self
+            .grants
+            .iter()
+            .filter_map(|(id, grant)| match grant {
+                Grant::File { tree: t, .. } | Grant::Atomic { tree: t, .. } if *t == tree => {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect();
+        self.stale.extend(stale);
     }
     pub(crate) fn file_identity(&self, tree: u64, path: &str) -> Option<u64> {
         self.file_identities.get(&(tree, path.into())).copied()

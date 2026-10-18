@@ -240,6 +240,12 @@ pub enum Request {
         test: u64,
         entries: Vec<(String, Vec<u8>)>,
     },
+    /// `test.crash`: the simulated tree of `directory` becomes its durable state.
+    TestCrash {
+        test: u64,
+        directory: u64,
+        seed: u64,
+    },
     Stdout {
         io: u64,
     },
@@ -353,6 +359,18 @@ pub enum Request {
     Commit {
         directory: u64,
         file: u64,
+    },
+    /// `file.sync`: the file's bytes and its directory chain become durable.
+    Sync {
+        directory: u64,
+        file: u64,
+    },
+    /// `file.put_new`: create-if-absent, never partial to a reader.
+    PutNew {
+        directory: u64,
+        path: String,
+        bytes: Vec<u8>,
+        durable: bool,
     },
     Close {
         handle: u64,
@@ -754,6 +772,15 @@ pub(crate) trait Storage {
     fn mkdir(&mut self, path: &str) -> Result<(), IoError>;
     fn remove_dir(&mut self, path: &str) -> Result<(), IoError>;
     fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError>;
+    /// Make open file `id`'s bytes, and every directory from the parent of `path` (where it
+    /// was opened) up to the mount root, durable.
+    fn sync_file(&mut self, id: u64, path: &str) -> Result<(), IoError>;
+    /// Create `path` holding exactly `bytes` unless an entry exists; equal bytes succeed.
+    fn put_new(&mut self, path: &str, bytes: &[u8], durable: bool) -> Result<(), IoError>;
+    /// Whether open handle `id` predates its simulated tree's last crash.
+    fn stale(&self, _id: u64) -> bool {
+        false
+    }
     fn remove_all(&mut self, path: &str, limit: Option<usize>) -> Result<(), IoError>;
     fn metadata(&mut self, path: &str) -> Result<Metadata, IoError>;
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError>;
@@ -870,7 +897,8 @@ impl State {
             | Request::FileAppend { directory, .. }
             | Request::CreateAtomic { directory, .. }
             | Request::WriteAll { directory, .. }
-            | Request::Commit { directory, .. } => {
+            | Request::Commit { directory, .. }
+            | Request::PutNew { directory, .. } => {
                 return matches!(
                     self.handles.rows.get(directory),
                     Some(Grant::Directory {
@@ -964,7 +992,9 @@ impl State {
             | Request::FileAppend { directory, .. }
             | Request::CreateAtomic { directory, .. }
             | Request::WriteAll { directory, .. }
-            | Request::Commit { directory, .. } => *directory,
+            | Request::Commit { directory, .. }
+            | Request::Sync { directory, .. }
+            | Request::PutNew { directory, .. } => *directory,
             Request::Close { handle } => match self.handles.rows.get(handle) {
                 Some(Grant::File { directory, .. } | Grant::AtomicFile { directory, .. }) => {
                     *directory
@@ -1016,6 +1046,8 @@ impl State {
                 | Request::RemoveDir { .. }
                 | Request::SetPermissions { .. }
                 | Request::Rename { .. }
+                | Request::Sync { .. }
+                | Request::PutNew { .. }
         ) && fault.is_some_and(|f| f.partial != 0)
         {
             return Err(AdapterError::InvalidCompletion);
@@ -1285,8 +1317,9 @@ impl State {
                     root: String::new(),
                     access: Access::ReadWrite,
                 });
-                self.fake_files
-                    .insert(id, crate::io_sim::FileIdentities::new(&tree));
+                let mut files = crate::io_sim::FileIdentities::new(&tree);
+                files.durable_start(&tree);
+                self.fake_files.insert(id, files);
                 self.fake_trees.insert(id, tree);
                 self.fake_directories.insert(id, id);
                 Ok(C::Handle(Ok(id)))
@@ -1505,6 +1538,62 @@ impl State {
                     C::Size(result)
                 })
             }
+            R::Sync { directory, file } => {
+                let root = self.directory(*directory)?;
+                let Some(Grant::File {
+                    path,
+                    directory: owner,
+                    ..
+                }) = self.handles.rows.get(file).cloned()
+                else {
+                    return Err(AdapterError::InvalidHandle(*file));
+                };
+                if owner != *directory {
+                    return Err(AdapterError::InvalidHandle(*file));
+                }
+                storage.activate(*directory, &root);
+                Ok(C::Unit(match error {
+                    Some(e) => Err(e),
+                    None if storage.stale(*file) => Err(IoError::Fault(1)),
+                    None => storage.sync_file(*file, &path),
+                }))
+            }
+            R::TestCrash {
+                test,
+                directory,
+                seed,
+            } => {
+                if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
+                    return Err(AdapterError::InvalidHandle(*test));
+                }
+                self.directory(*directory)?;
+                let Some(&tree) = self.fake_directories.get(directory) else {
+                    return Ok(C::Checked(false));
+                };
+                let stale: Vec<u64> = self
+                    .handles
+                    .rows
+                    .iter()
+                    .filter_map(|(id, grant)| match grant {
+                        Grant::File { directory, .. } | Grant::AtomicFile { directory, .. }
+                            if self.fake_directories.get(directory) == Some(&tree) =>
+                        {
+                            Some(*id)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let files = self
+                    .fake_files
+                    .get_mut(&tree)
+                    .expect("fake file identities");
+                files.crash(
+                    self.fake_trees.get_mut(&tree).expect("fake tree"),
+                    *seed,
+                    stale.into_iter(),
+                );
+                Ok(C::Checked(true))
+            }
             R::WriteAll {
                 directory, file, ..
             }
@@ -1522,9 +1611,12 @@ impl State {
                 if owner != *directory {
                     return Err(AdapterError::InvalidHandle(*file));
                 }
+                let stale = storage.stale(*file);
                 let result = if matches!(request, R::Commit { .. }) {
                     self.handles.rows.remove(file);
-                    if let Some(e) = error {
+                    if stale {
+                        Err(IoError::Fault(1))
+                    } else if let Some(e) = error {
                         let _ = storage.remove(&temporary);
                         Err(e)
                     } else {
@@ -1543,6 +1635,8 @@ impl State {
                     let data = prefix(bytes);
                     if matches!(error, Some(IoError::Canceled(_))) {
                         Err(error.unwrap())
+                    } else if stale {
+                        Err(IoError::Fault(1))
                     } else if error.is_some() && data.is_empty() {
                         Err(error.unwrap())
                     } else {
@@ -1599,7 +1693,10 @@ impl State {
                         directory, path, ..
                     }
                     | R::Remove { directory, path }
-                    | R::CreateAtomic { directory, path } => (*directory, path),
+                    | R::CreateAtomic { directory, path }
+                    | R::PutNew {
+                        directory, path, ..
+                    } => (*directory, path),
                     _ => unreachable!(),
                 };
                 let root = self.directory(directory)?;
@@ -1699,6 +1796,11 @@ impl State {
                         Err(e)
                     } else {
                         path.and_then(|p| storage.remove(&p))
+                    })),
+                    R::PutNew { bytes, durable, .. } => Ok(C::Unit(if let Some(e) = error {
+                        Err(e)
+                    } else {
+                        path.and_then(|p| storage.put_new(&p, bytes, *durable))
                     })),
                     R::Write { bytes, .. } => {
                         let result = if matches!(error, Some(IoError::Canceled(_)))
@@ -2401,6 +2503,65 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_write_bytes(
     crate::STATUS_OK
 }
 /// # Safety
+/// Context bound, directory/file live, out writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_sync(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    directory: *const u64,
+    file: *mut u64,
+) -> u8 {
+    let request = Request::Sync {
+        directory: unsafe { directory.read() },
+        file: unsafe { file.read() },
+    };
+    let Ok(Completion::Unit(value)) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(UnitResult::of(value)) };
+    crate::STATUS_OK
+}
+/// # Safety
+/// Directory/Path/Durability are borrowed, the slice transfers one owner credit, out is
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_file_put_new(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut UnitResult,
+    directory: *const u64,
+    path: *const u64,
+    owner: *mut crate::Header,
+    start: u64,
+    len: u64,
+    mode: *const u32,
+) -> u8 {
+    let durable = match unsafe { mode.read() } {
+        0 => true,
+        1 => false,
+        _ => crate::fault("Durability tag out of range"),
+    };
+    let request = Request::PutNew {
+        directory: unsafe { directory.read() },
+        path: unsafe { Binding::get(ctx) }.path(unsafe { path.read() }),
+        bytes: unsafe { slice_bytes(owner, start, len) }.to_vec(),
+        durable,
+    };
+    let completion = unsafe { capability_call(ctx, request) };
+    unsafe {
+        crate::release::hirsel_rt_v2_release(ctx, owner, (*owner).index(), std::ptr::null(), 0, 0)
+    };
+    let Ok(Completion::Unit(value)) = completion else {
+        if completion.is_err() {
+            return crate::STATUS_FAILURE;
+        }
+        crate::fault("Io completion type mismatch");
+    };
+    unsafe { out.write(UnitResult::of(value)) };
+    crate::STATUS_OK
+}
+/// # Safety
 /// Directory is borrowed, file is an exclusive address, the slice is borrowed, out writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_write_all(
@@ -2879,6 +3040,32 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_fail(ctx: *mut crate::RunCtx, test: *
     crate::STATUS_FAILURE
 }
 
+/// # Safety
+/// A live Test grant and Dir are borrowed. A Dir that `test.dir` did not make fails LANG-9.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_test_crash(
+    ctx: *mut crate::RunCtx,
+    test: *const u64,
+    directory: *const u64,
+    seed: u64,
+) -> u8 {
+    let request = Request::TestCrash {
+        test: unsafe { test.read() },
+        directory: unsafe { directory.read() },
+        seed,
+    };
+    let Ok(completion) = (unsafe { capability_call(ctx, request) }) else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Checked(simulated) = completion else {
+        crate::fault("Test completion mismatch");
+    };
+    if simulated {
+        crate::STATUS_OK
+    } else {
+        crate::STATUS_FAILURE
+    }
+}
 /// # Safety
 /// A live Test grant is borrowed and out is writable scalar storage.
 #[unsafe(no_mangle)]
@@ -3618,6 +3805,12 @@ mod filesystem_authority_tests {
         fn set_permissions(&mut self, _: &str, _: u32) -> Result<(), IoError> {
             unreachable!()
         }
+        fn sync_file(&mut self, _: u64, _: &str) -> Result<(), IoError> {
+            unreachable!()
+        }
+        fn put_new(&mut self, _: &str, _: &[u8], _: bool) -> Result<(), IoError> {
+            unreachable!()
+        }
         fn remove_all(&mut self, _: &str, _: Option<usize>) -> Result<(), IoError> {
             unreachable!()
         }
@@ -3660,6 +3853,12 @@ mod filesystem_authority_tests {
                 directory,
                 from: "missing".into(),
                 to: "/outside".into(),
+            },
+            Request::PutNew {
+                directory,
+                path: "../outside".into(),
+                bytes: b"x".to_vec(),
+                durable: true,
             },
         ] {
             assert_eq!(

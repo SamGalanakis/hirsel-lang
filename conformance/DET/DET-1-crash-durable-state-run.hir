@@ -1,0 +1,82 @@
+// rule: DET-1
+// expect: run
+// entry: exercise
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("kept"), b"start"), (path.of("gone"), b"old")])
+  // Durable: a put_new(Durable) object and a created file once synced, with their names.
+  file.mkdir(d, path.of("log"))?
+  file.put_new(d, path.of("log/1"), b"one", Durable())?
+  let mut synced = file.create(d, path.of("synced"))?
+  file.append(d, mut synced, b"data")?
+  file.sync(d, mut synced)?
+  // Volatile from here: bytes, objects, a removal, a rename and new directories.
+  file.append(d, mut synced, b"-more")?
+  file.put_new(d, path.of("log/2"), b"two", Volatile())?
+  file.remove(d, path.of("gone"))?
+  file.rename(d, path.of("kept"), path.of("moved"))?
+  file.mkdir(d, path.of("tmp"))?
+  let mut late = file.create(d, path.of("tmp/late"))?
+  file.append(d, mut late, b"late")?
+  test.crash(t, d, 7u64)
+  test.check(t, file.read_bytes(d, path.of("log/1"))? == b"one")
+  test.check(t, file.read_bytes(d, path.of("synced"))? == b"data")
+  test.check(t, file.read_bytes(d, path.of("gone"))? == b"old")
+  test.check(t, file.read_bytes(d, path.of("kept"))? == b"start")
+  test.check(
+    t,
+    match file.metadata(d, path.of("moved")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.metadata(d, path.of("log/2")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.metadata(d, path.of("tmp")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  // Handles opened before the crash are stale; seeking still succeeds.
+  test.check(
+    t,
+    match file.append(d, mut synced, b"x") {
+      Error(FileFault(1u32)) => true,
+      _ => false,
+    }
+  )
+  test.check(
+    t,
+    match file.sync(d, mut synced) {
+      Error(FileFault(1u32)) => true,
+      _ => false,
+    }
+  )
+  file.seek(d, mut synced, 0u64)?
+  test.check(
+    t,
+    match file.narrow(d, take late) {
+      None() => true,
+      _ => false,
+    }
+  )
+  // After a crash the surviving tree is durable as it stands.
+  let mut again = file.create(d, path.of("fresh"))?
+  file.append(d, mut again, b"new")?
+  test.crash(t, d, 8u64)
+  test.check(t, file.read_bytes(d, path.of("synced"))? == b"data")
+  test.check(
+    t,
+    match file.metadata(d, path.of("fresh")) {
+      Error(NotFound()) => true,
+      _ => false,
+    }
+  )
+  Ok(())
+}

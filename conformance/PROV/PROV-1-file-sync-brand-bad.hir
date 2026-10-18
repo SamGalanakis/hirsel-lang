@@ -1,0 +1,5 @@
+// rule: PROV-1
+// expect: reject PROV-1 at line 4
+fn exercise(d: Dir, e: Dir, mut f: File of e) -> Result[(), FileError] uses {d, e} {
+  file.sync(d, mut f)
+}

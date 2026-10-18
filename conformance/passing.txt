@@ -25,6 +25,8 @@ conformance/CAP/CAP-1-file-copy-authority-bad.hir
 conformance/CAP/CAP-1-file-copy-authority-ok.hir
 conformance/CAP/CAP-1-file-list-recursive-authority-bad.hir
 conformance/CAP/CAP-1-file-list-recursive-authority-ok.hir
+conformance/CAP/CAP-1-file-put-new-authority-bad.hir
+conformance/CAP/CAP-1-file-put-new-authority-ok.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-bad.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-ok.hir
 conformance/CAP/CAP-1-hello-web-scripted-run.hir
@@ -129,6 +131,7 @@ conformance/CAP/CAP-2-drop-authority-explicit-union-ok.hir
 conformance/CAP/CAP-2-external-opaque-inert-bad.hir
 conformance/CAP/CAP-2-external-opaque-inert-ok.hir
 conformance/CAP/CAP-2-file-copy-run.hir
+conformance/CAP/CAP-2-file-durability-host-run.hir
 conformance/CAP/CAP-2-file-errors-already-exists-run.hir
 conformance/CAP/CAP-2-file-errors-is-directory-run.hir
 conformance/CAP/CAP-2-file-errors-not-directory-run.hir
@@ -138,6 +141,7 @@ conformance/CAP/CAP-2-file-list-recursive-run.hir
 conformance/CAP/CAP-2-file-operation-authority-bad.hir
 conformance/CAP/CAP-2-file-operation-authority-ok.hir
 conformance/CAP/CAP-2-file-permissions-run.hir
+conformance/CAP/CAP-2-file-put-new-run.hir
 conformance/CAP/CAP-2-file-stream-dir-bad.hir
 conformance/CAP/CAP-2-file-stream-dir-ok.hir
 conformance/CAP/CAP-2-filesystem-breadth-host-run.hir
@@ -762,6 +766,8 @@ conformance/CT/CT-5-std-derive-unsupported-bad.hir
 conformance/CT/CT-5-std-derive-unsupported-ok.hir
 conformance/CT/CT-5-unique-result-bad.hir
 conformance/CT/CT-5-unique-result-run.hir
+conformance/DET/DET-1-crash-durable-state-run.hir
+conformance/DET/DET-1-crash-torn-write-run.hir
 conformance/DET/DET-1-explicit-output.hir
 conformance/DET/DET-1-file-stream-read-run.hir
 conformance/DET/DET-1-file-stream-write-run.hir
@@ -3960,6 +3966,8 @@ conformance/PROV/PROV-1-field-path-bad.hir
 conformance/PROV/PROV-1-field-path-ok.hir
 conformance/PROV/PROV-1-file-stream-dir-bad.hir
 conformance/PROV/PROV-1-file-stream-dir-ok.hir
+conformance/PROV/PROV-1-file-sync-brand-bad.hir
+conformance/PROV/PROV-1-file-sync-brand-ok.hir
 conformance/PROV/PROV-1-for-item-find-reject.hir
 conformance/PROV/PROV-1-for-item-find-run.hir
 conformance/PROV/PROV-1-for-mut-container-bad.hir

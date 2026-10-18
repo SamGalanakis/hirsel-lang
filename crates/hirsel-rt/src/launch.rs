@@ -359,6 +359,23 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 bytes,
             } => format!("write_all {directory} {file} {}", hex(bytes)),
             Request::Commit { directory, file } => format!("commit {directory} {file}"),
+            Request::Sync { directory, file } => format!("sync {directory} {file}"),
+            Request::PutNew {
+                directory,
+                path,
+                bytes,
+                durable,
+            } => format!(
+                "put_new {directory} {} {} {}",
+                hex(path.as_bytes()),
+                hex(bytes),
+                u8::from(*durable)
+            ),
+            Request::TestCrash {
+                test,
+                directory,
+                seed,
+            } => format!("test_crash {test} {directory} {seed}"),
             Request::Close { handle } => format!("close {handle}"),
             Request::TestCheck { test, condition } => {
                 format!("check {test} {}", u8::from(*condition))
@@ -649,6 +666,21 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 ["commit", d, f] => Request::Commit {
                     directory: number(d)?,
                     file: number(f)?,
+                },
+                ["sync", d, f] => Request::Sync {
+                    directory: number(d)?,
+                    file: number(f)?,
+                },
+                ["put_new", d, p, b, durable] => Request::PutNew {
+                    directory: number(d)?,
+                    path: string(p)?,
+                    bytes: bytes(b)?,
+                    durable: boolean(durable)?,
+                },
+                ["test_crash", t, d, seed] => Request::TestCrash {
+                    test: number(t)?,
+                    directory: number(d)?,
+                    seed: number(seed)?,
                 },
                 ["close", h] => Request::Close { handle: number(h)? },
                 ["check", t, c] => Request::TestCheck {

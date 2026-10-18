@@ -302,6 +302,10 @@ pub(crate) struct FileIdentities {
     opened: std::collections::BTreeMap<u64, u64>,
     prepared: std::collections::BTreeMap<String, u64>,
     contents: std::collections::BTreeMap<u64, Vec<u8>>,
+    /// What a crash of this tree keeps (core-library.md, Durability).
+    durable: hirsel_kernels::disk::Durable,
+    /// File and AtomicFile handles opened before the tree's last crash.
+    stale: std::collections::BTreeSet<u64>,
 }
 impl FileIdentities {
     pub(crate) fn new(tree: &Tree) -> Self {
@@ -319,6 +323,50 @@ impl FileIdentities {
             }
         }
         files
+    }
+    /// A `test.dir` tree starts durable as created.
+    pub(crate) fn durable_start(&mut self, tree: &Tree) {
+        let files = self
+            .reachable
+            .iter()
+            .map(|(path, id)| (path.clone(), (*id, self.contents[id].clone())))
+            .collect();
+        self.durable = hirsel_kernels::disk::Durable::of(&tree.directories, &files);
+    }
+    /// The tree becomes its durable state. Every handle opened before is stale.
+    pub(crate) fn crash(&mut self, tree: &mut Tree, seed: u64, stale: impl Iterator<Item = u64>) {
+        let crashed = self.durable.crashed(seed);
+        let surviving =
+            |p: &String| crashed.directories.contains(p) || crashed.files.contains_key(p);
+        tree.metadata.retain(|p, _| surviving(p));
+        tree.links.clear();
+        tree.file_aliases.clear();
+        tree.directories = crashed.directories.clone();
+        tree.files = crashed
+            .files
+            .iter()
+            .map(|(p, (_, bytes))| (p.clone(), bytes.clone()))
+            .collect();
+        self.reachable = crashed
+            .files
+            .iter()
+            .map(|(p, (id, _))| (p.clone(), *id))
+            .collect();
+        let mut canonical = std::collections::BTreeMap::<u64, &String>::new();
+        for (path, (id, bytes)) in &crashed.files {
+            self.contents.insert(*id, bytes.clone());
+            match canonical.get(id) {
+                Some(first) => {
+                    tree.file_aliases.insert(path.clone(), (*first).clone());
+                }
+                None => {
+                    canonical.insert(*id, path);
+                }
+            }
+        }
+        self.opened.clear();
+        self.prepared.clear();
+        self.stale.extend(stale);
     }
     fn publish(&mut self, path: &str) {
         self.serial = self
@@ -357,6 +405,16 @@ impl MemoryTree<'_> {
             }
         }
     }
+    /// Make file `identity` and the directory chain above `path` durable.
+    fn sync_durable(&mut self, identity: u64, path: &str) {
+        self.identities.durable.sync(
+            identity,
+            &self.identities.contents[&identity],
+            path,
+            &self.tree.directories,
+            &self.identities.reachable,
+        );
+    }
     fn sync_contents(&mut self, identity: u64) {
         for (path, _) in self
             .identities
@@ -375,6 +433,44 @@ impl MemoryTree<'_> {
     }
 }
 impl Storage for MemoryTree<'_> {
+    fn stale(&self, id: u64) -> bool {
+        self.identities.stale.contains(&id)
+    }
+    fn sync_file(&mut self, id: u64, path: &str) -> Result<(), IoError> {
+        let identity = *self.identities.opened.get(&id).ok_or(IoError::Fault(1))?;
+        self.sync_durable(identity, path);
+        Ok(())
+    }
+    fn put_new(&mut self, path: &str, bytes: &[u8], durable: bool) -> Result<(), IoError> {
+        if self.tree.directories.contains(path)
+            || self.tree.links.contains_key(path)
+            || (self.tree.metadata.contains_key(path) && !self.tree.files.contains_key(path))
+        {
+            self.tree.resolve("", path, false)?;
+            return Err(IoError::AlreadyExists);
+        }
+        self.destination(path)?;
+        if let Some(existing) = self.tree.files.get(path) {
+            if existing != bytes {
+                return Err(IoError::AlreadyExists);
+            }
+            if durable {
+                self.sync_durable(self.identities.reachable[path], path);
+            }
+            return Ok(());
+        }
+        self.tree.files.insert(path.into(), bytes.to_vec());
+        self.identities.publish(path);
+        let identity = self.identities.serial;
+        self.identities.contents.insert(identity, bytes.to_vec());
+        self.invalidate_metadata(path.rsplit_once('/').map_or("", |(p, _)| p));
+        if durable {
+            self.sync_durable(identity, path);
+        } else {
+            self.identities.durable.wrote(identity, 0, bytes);
+        }
+        Ok(())
+    }
     fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError> {
         let mut meta = self.metadata(path)?;
         if !matches!(meta.kind, FileKind::Regular | FileKind::Directory) {
@@ -607,11 +703,13 @@ impl Storage for MemoryTree<'_> {
     }
     fn write_file(&mut self, id: u64, bytes: &[u8], _all: bool) -> Result<u64, IoError> {
         let identity = *self.identities.opened.get(&id).ok_or(IoError::Fault(1))?;
-        self.identities
-            .contents
-            .get_mut(&identity)
-            .unwrap()
-            .extend_from_slice(bytes);
+        let contents = self.identities.contents.get_mut(&identity).unwrap();
+        if !bytes.is_empty() {
+            self.identities
+                .durable
+                .wrote(identity, contents.len(), bytes);
+        }
+        contents.extend_from_slice(bytes);
         self.sync_contents(identity);
         Ok(bytes.len() as u64)
     }
@@ -671,6 +769,11 @@ impl Storage for MemoryTree<'_> {
             return Err(IoError::AlreadyExists);
         }
         self.destination(path)?;
+        let start = if append {
+            self.tree.files.get(path).map_or(0, Vec::len)
+        } else {
+            0
+        };
         if append {
             self.tree
                 .files
@@ -695,6 +798,9 @@ impl Storage for MemoryTree<'_> {
         self.identities
             .contents
             .insert(identity, self.tree.files[path].clone());
+        if !bytes.is_empty() {
+            self.identities.durable.wrote(identity, start, bytes);
+        }
         self.sync_aliases();
         Ok(())
     }
@@ -848,6 +954,21 @@ impl<'a> LinkedTree<'a> {
     }
 }
 impl Storage for LinkedTree<'_> {
+    fn stale(&self, id: u64) -> bool {
+        self.identities.stale.contains(&id)
+    }
+    fn sync_file(&mut self, id: u64, path: &str) -> Result<(), IoError> {
+        // A detached or unresolvable open path still syncs the file's bytes.
+        let path = self.path(path, true).unwrap_or_default();
+        self.memory().sync_file(id, &path)
+    }
+    fn put_new(&mut self, path: &str, bytes: &[u8], durable: bool) -> Result<(), IoError> {
+        let path = self.path(path, false)?;
+        if self.detached() {
+            return Err(IoError::IsDirectory);
+        }
+        self.memory().put_new(&path, bytes, durable)
+    }
     fn set_permissions(&mut self, path: &str, permissions: u32) -> Result<(), IoError> {
         let path = self.path(path, false)?;
         self.memory().set_permissions(&path, permissions)

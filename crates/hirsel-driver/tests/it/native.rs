@@ -384,7 +384,7 @@ fn every_runtime_primitive_row_matches_its_export() {
             }
         }
         assert_eq!(
-            primitives, 149,
+            primitives, 152,
             "Io, Args, Env, Test, host streams, text, scalar/position cursors, network streams, listeners and datagrams, processes, streaming children and groups, random draws, timer waits, and the task (scope deadlines and task sets included), channel, mutex, atomic and isolation runtime entries"
         );
         // Calls of each, with each float family, on both targets.

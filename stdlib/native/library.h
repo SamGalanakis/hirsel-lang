@@ -43,6 +43,9 @@ uint8_t hirsel_rt_v2_file_narrow(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_r
 uint8_t hirsel_rt_v2_file_commit(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, uint64_t*);
 uint8_t hirsel_rt_v2_file_write_all(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_file_write_bytes(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
+uint8_t hirsel_rt_v2_file_sync(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, uint64_t*);
+/* Durability: tag 0 is Durable(), 1 is Volatile(). */
+uint8_t hirsel_rt_v2_file_put_new(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_unit_result*, const uint64_t*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, const uint32_t*);
 uint8_t hirsel_rt_v2_path_of(hirsel_rt_v2_ctx*, void*, uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_arg_path(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_handle_result*, const uint64_t*, uint64_t);
 
@@ -60,6 +63,7 @@ uint8_t hirsel_rt_v2_io_random(hirsel_rt_v2_ctx*, void*, void*, const uint64_t*)
 uint8_t hirsel_rt_v2_test_check(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t);
 uint8_t hirsel_rt_v2_test_check_case(hirsel_rt_v2_ctx*, const uint64_t*, uint8_t, uint64_t);
 uint8_t hirsel_rt_v2_test_fail(hirsel_rt_v2_ctx*, const uint64_t*);
+uint8_t hirsel_rt_v2_test_crash(hirsel_rt_v2_ctx*, const uint64_t*, const uint64_t*, uint64_t);
 uint8_t hirsel_rt_v2_test_seed(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_test_log(hirsel_rt_v2_ctx*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t);
 uint8_t hirsel_rt_v2_test_expect_snapshot(hirsel_rt_v2_ctx*, const uint64_t*, hirsel_rt_v2_header*, uint64_t, uint64_t, hirsel_rt_v2_header*, uint64_t, uint64_t);
