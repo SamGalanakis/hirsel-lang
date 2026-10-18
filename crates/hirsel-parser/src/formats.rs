@@ -318,22 +318,22 @@ fn parse_spec(spelling: &str) -> Result<FormatSpec, String> {
         _ => None,
     };
     let mut look = chars.clone();
-    if let (Some(fill), Some(align)) = (look.next(), look.next()) {
-        if let Some(align) = alignment(align) {
-            if matches!(fill, '{' | '}') {
-                return Err("a format fill cannot be a brace".into());
-            }
-            spec.fill = fill as u64;
-            spec.align = align;
-            chars.next();
-            chars.next();
+    if let (Some(fill), Some(align)) = (look.next(), look.next())
+        && let Some(align) = alignment(align)
+    {
+        if matches!(fill, '{' | '}') {
+            return Err("a format fill cannot be a brace".into());
         }
+        spec.fill = fill as u64;
+        spec.align = align;
+        chars.next();
+        chars.next();
     }
-    if spec.align == 0 {
-        if let Some(align) = chars.peek().and_then(|&c| alignment(c)) {
-            spec.align = align;
-            chars.next();
-        }
+    if spec.align == 0
+        && let Some(align) = chars.peek().and_then(|&c| alignment(c))
+    {
+        spec.align = align;
+        chars.next();
     }
     if chars.peek() == Some(&'+') {
         spec.flags |= 1;

@@ -4,6 +4,10 @@
     "name": "application",
     "version": "1"
   },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
   "sources": [
     {
       "path": "SEM-3-fstring-spec-newline-bad.hir",
