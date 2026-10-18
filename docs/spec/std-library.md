@@ -183,6 +183,90 @@ to that clock, and `time.between` subtracts nanosecond ticks.
 error is `Wait(e)`. `time.SleepError` is `NegativeDuration() | OutOfRange() |
 Wait(WaitError)`. Retrying with a delay is a loop around `time.sleep`; nothing polls.
 
+## Civil dates and times
+
+Civil values carry no time zone. They are ordinary algorithms adapted from jiff's
+`civil` module: no clock authority, locale or time-zone database, and no implicit local
+zone. Each type keeps one module of functions named after it, as `time.Duration` keeps
+`duration`: `date`, `time_of_day` and `date_time`.
+
+`time.Date` is a proleptic Gregorian date of years -9999 through 9999 (jiff's range);
+`time.TimeOfDay` is an hour 0–23, minute 0–59, second 0–59 and nanosecond 0–999999999,
+with no leap second. Both are opaque, `plain + key`, so `==` compares them and they are
+map keys; every value is valid because `date.new(y, m, d)` and
+`time_of_day.new(h, m, s, ns)` return `None()` for impossible fields (month 13, February
+29 of a common year, hour 24). `time.DateTime { date, time }` is a transparent record of
+the two. The type is `TimeOfDay`, not `Time`, because a Go-trained reader takes `time.Time`
+for an instant. Accessors read the fields (`date.year`, `date.month`, `date.day`,
+`time_of_day.hour` and so on), and `time_of_day.midnight()` is 00:00:00.
+
+Day counts use Howard Hinnant's `days_from_civil` and `civil_from_days`, so
+`date.to_epoch_days` is days since 1970-01-01 and `date.from_epoch_days` inverts it
+within the range (`None()` outside). A year is a leap year when divisible by 4 and not by
+100, or divisible by 400; year 0 is a leap year. `date.weekday` returns `time.Weekday`
+(`Monday` through `Sunday`). `date.ordinal` is the day of the year, 1 through 365 or 366,
+and `date.from_ordinal(y, n)` inverts it. `date.iso_week` returns the ISO 8601
+`time.IsoWeek { year, week }`: week 1 holds the year's first Thursday, so a date in early
+January can belong to the previous ISO year and late December to the next; a year has 53
+weeks when it starts on a Thursday, or on a Wednesday in a leap year.
+`date.from_iso_week(y, week, weekday)` inverts it and is `None()` for a week the year lacks.
+
+Arithmetic is checked. `date.add_days(d, n)` is `TimeError.OutOfRange` past the range.
+`date.add_months(d, n, overflow)` and `date.add_years(d, n, overflow)` move the calendar
+month (twelve per year) and keep the day of the month; when that day is past the target
+month's end, `time.Overflow` decides: `Clamp` uses the month's last day (January 31 plus
+one month is February 28 or 29; February 29 plus one year is February 28), and `Reject`
+returns `CalendarError.NoSuchDay`. A target year outside the range is
+`CalendarError.OutOfRange` under either policy. Adding months then days is not adding days
+then months; nothing reorders the steps. `date.days_between(start, end)` is `end - start` in
+days. `date.compare`, `time_of_day.compare` and `date_time.compare` return -1, 0 or 1 in
+chronological order.
+
+`date.to_string` writes ISO 8601 `YYYY-MM-DD` for years 0000–9999 and otherwise the
+expanded form with a sign and six year digits (`-000044-03-15`); `date.parse` accepts
+exactly those two forms (a `+` six-digit form included), rejecting `-000000`, and a year
+beyond 9999 is `scalar.ParseError.OutOfRange`. `time_of_day.to_string` writes `HH:MM:SS`
+with a dot and the fraction's digits when it is nonzero, trailing zeros trimmed;
+`time_of_day.parse` accepts `HH:MM` or `HH:MM:SS` with an optional dot and one to nine
+fraction digits. `date_time.to_string` joins them with `T`, and `date_time.parse` accepts
+`T` or `t` there and no offset. All three types format through `@format`, so f-string holes
+render the same text. Any other text is `Invalid`.
+
+A fixed offset is `i32` seconds east of UTC, valid strictly inside ±26 hours (jiff's
+±25:59:59); any other offset is `TimeError.OutOfRange`. `date_time.from_timestamp(ts, offset)`
+is the civil datetime of `ts` at `offset`, `OutOfRange` when that lies outside the date
+range, and `date_time.to_timestamp(dt, offset)` is its inverse. `date_time.add(dt, d)` and
+`date_time.between(start, end)` work on the zone-free civil timeline, where every day has
+86400 seconds. `time.to_string_at(ts, offset)` is RFC 3339 with that offset written
+`±HH:MM` (`+00:00` for zero) and the time written as `time.to_string` does; the offset must
+be whole minutes under 24 hours and the local year 0000–9999, otherwise `OutOfRange`, so
+the text always parses back to `ts` with `time.parse`.
+
+`time.format(value, pattern)` and `time.parse_with(text, pattern)` adapt jiff's
+`strtime` over `time.BrokenDownTime { datetime, offset: Option[i32] }`; `time.broken_down(ts,
+offset)` builds one from a timestamp. As std names it, `format` always takes a pattern as
+its second argument and `to_string` takes none. Pattern bytes other than `%` are copied or,
+when parsing, matched exactly. The directives are:
+
+| Directive | Formats | Parses |
+|---|---|---|
+| `%Y` | year, zero-padded to four characters including a `-` sign (`0024`, `-024`, `-2025`) | optional sign and one to four digits |
+| `%m` `%d` `%H` `%M` `%S` | two digits | one or two digits; `%S` 60 reads as 59 |
+| `%j` | day of the year, three digits | one to three digits |
+| `%f` | fraction digits without the dot, trailing zeros trimmed, `0` for zero | one to nine digits |
+| `%z` | `±HHMM`, then `SS` when the offset has seconds | `±HHMM` or `±HHMMSS`, hours at most 25 |
+| `%a` `%b` | English weekday and month abbreviation (`Sun`, `Jul`) | the same, in any ASCII case |
+| `%%` | `%` | `%` |
+
+`time.format` returns `FormatError.Invalid(i)` for an unknown or unterminated directive at
+pattern byte `i`, `NoOffset` for `%z` without an offset and `OutOfRange` for an offset
+outside the valid range. `time.parse_with` returns `scalar.ParseError.Invalid` for a pattern
+error or input that does not match, including trailing input. Its date needs `%Y` with `%m`
+and `%d`, or `%Y` with `%j`; when several are present they must agree, as must `%a`. Absent
+time fields are zero, but a minute needs an hour, a second a minute and a fraction a second.
+The offset is `Some` exactly when the pattern has `%z`. Flags, widths and other directives
+are not supported.
+
 ## JSON
 
 ```text

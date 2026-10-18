@@ -1,0 +1,152 @@
+// rule: SEM-1
+// expect: run
+// Civil dates: Go time_test.go yearDayTests and isoWeekTests, jiff civil::Date
+// weekdays, epoch days and validation.
+fn day(t: Test, y: i32, m: u8, d: u8) -> time.Date {
+  let Some(value) = date.new(y, m, d) else {
+    test.fail(t)
+  }
+  value
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let year_days: List[(i32, u8, u8, u16)] = [
+    (2007, 1, 1, 1),
+    (2007, 1, 15, 15),
+    (2007, 2, 1, 32),
+    (2007, 2, 15, 46),
+    (2007, 3, 1, 60),
+    (2007, 3, 15, 74),
+    (2007, 4, 1, 91),
+    (2007, 12, 31, 365),
+    (2008, 1, 1, 1),
+    (2008, 1, 15, 15),
+    (2008, 2, 1, 32),
+    (2008, 2, 15, 46),
+    (2008, 3, 1, 61),
+    (2008, 3, 15, 75),
+    (2008, 4, 1, 92),
+    (2008, 12, 31, 366),
+    (1900, 1, 1, 1),
+    (1900, 1, 15, 15),
+    (1900, 2, 1, 32),
+    (1900, 2, 15, 46),
+    (1900, 3, 1, 60),
+    (1900, 3, 15, 74),
+    (1900, 4, 1, 91),
+    (1900, 12, 31, 365),
+    (1, 1, 1, 1),
+    (1, 1, 15, 15),
+    (1, 2, 1, 32),
+    (1, 2, 15, 46),
+    (1, 3, 1, 60),
+    (1, 3, 15, 74),
+    (1, 4, 1, 91),
+    (1, 12, 31, 365),
+    (-1, 1, 1, 1),
+    (-1, 1, 15, 15),
+    (-1, 2, 1, 32),
+    (-1, 2, 15, 46),
+    (-1, 3, 1, 60),
+    (-1, 3, 15, 74),
+    (-1, 4, 1, 91),
+    (-1, 12, 31, 365),
+    (-400, 1, 1, 1),
+    (-400, 1, 15, 15),
+    (-400, 2, 1, 32),
+    (-400, 2, 15, 46),
+    (-400, 3, 1, 61),
+    (-400, 3, 15, 75),
+    (-400, 4, 1, 92),
+    (-400, 12, 31, 366),
+    (1582, 10, 4, 277),
+    (1582, 10, 15, 288)
+  ]
+  for (y, m, d, n) in year_days {
+    let value = day(t, y, m, d)
+    test.equal(t, date.ordinal(value), n)
+    test.equal(t, date.from_ordinal(y, n), Some(value))
+  }
+  let iso_weeks: List[(i32, u8, u8, i32, u8)] = [
+    (1981, 1, 1, 1981, 1),
+    (1982, 1, 1, 1981, 53),
+    (1983, 1, 1, 1982, 52),
+    (1984, 1, 1, 1983, 52),
+    (1985, 1, 1, 1985, 1),
+    (1988, 1, 1, 1987, 53),
+    (1993, 1, 1, 1992, 53),
+    (1995, 1, 1, 1994, 52),
+    (1995, 1, 2, 1995, 1),
+    (1996, 1, 7, 1996, 1),
+    (1996, 1, 8, 1996, 2),
+    (1999, 1, 1, 1998, 53),
+    (2000, 1, 1, 1999, 52),
+    (2005, 1, 1, 2004, 53),
+    (2010, 1, 1, 2009, 53),
+    (2011, 1, 2, 2010, 52),
+    (2011, 1, 3, 2011, 1),
+    (2011, 1, 9, 2011, 1),
+    (2011, 1, 10, 2011, 2),
+    (2011, 6, 12, 2011, 23),
+    (2011, 6, 13, 2011, 24),
+    (2011, 12, 25, 2011, 51),
+    (2011, 12, 26, 2011, 52),
+    (2011, 12, 31, 2011, 52),
+    (2012, 1, 1, 2011, 52),
+    (2012, 1, 2, 2012, 1),
+    (2012, 12, 24, 2012, 52),
+    (2012, 12, 30, 2012, 52),
+    (2012, 12, 31, 2013, 1),
+    (2013, 12, 29, 2013, 52),
+    (2013, 12, 30, 2014, 1),
+    (2014, 1, 5, 2014, 1),
+    (2014, 1, 6, 2014, 2),
+    (2016, 1, 1, 2015, 53),
+    (2021, 1, 1, 2020, 53),
+    (2027, 1, 1, 2026, 53),
+    (2033, 1, 1, 2032, 53),
+    (2038, 1, 1, 2037, 53),
+    (2040, 1, 1, 2039, 52)
+  ]
+  for (y, m, d, week_year, week) in iso_weeks {
+    let value = day(t, y, m, d)
+    test.equal(t, date.iso_week(value), time.IsoWeek(year: week_year, week: week))
+    test.equal(t, date.from_iso_week(week_year, week, date.weekday(value)), Some(value))
+  }
+  test.equal(t, date.to_epoch_days(day(t, 1970, 1, 1)), 0)
+  test.equal(t, date.to_epoch_days(day(t, 2000, 3, 1)), 11017)
+  test.equal(t, date.to_epoch_days(day(t, -9999, 1, 1)), -4371587)
+  test.equal(t, date.to_epoch_days(day(t, 9999, 12, 31)), 2932896)
+  test.equal(t, date.from_epoch_days(-4371588), None())
+  test.equal(t, date.from_epoch_days(2932897), None())
+  test.equal(t, date.weekday(day(t, 1970, 1, 1)), Thursday())
+  test.equal(t, date.weekday(day(t, 2000, 1, 1)), Saturday())
+  test.equal(t, date.weekday(day(t, 2024, 2, 29)), Thursday())
+  test.equal(t, date.weekday(day(t, -9999, 1, 1)), Monday())
+  test.equal(t, date.weekday(day(t, 9999, 12, 31)), Friday())
+  test.equal(t, date.iso_week(day(t, -9999, 1, 1)), time.IsoWeek(year: -9999, week: 1))
+  test.equal(t, date.iso_week(day(t, 9999, 12, 31)), time.IsoWeek(year: 9999, week: 52))
+  // Leap years: every fourth year, except centuries not divisible by 400.
+  test.equal(t, date.new(2000, 2, 29) == None(), false)
+  test.equal(t, date.new(2024, 2, 29) == None(), false)
+  test.equal(t, date.new(-400, 2, 29) == None(), false)
+  test.equal(t, date.new(0, 2, 29) == None(), false)
+  test.equal(t, date.new(1900, 2, 29), None())
+  test.equal(t, date.new(2023, 2, 29), None())
+  test.equal(t, date.new(-100, 2, 29), None())
+  test.equal(t, date.new(2024, 4, 31), None())
+  test.equal(t, date.new(2024, 13, 1), None())
+  test.equal(t, date.new(2024, 0, 1), None())
+  test.equal(t, date.new(2024, 1, 0), None())
+  test.equal(t, date.new(10000, 1, 1), None())
+  test.equal(t, date.new(-10000, 12, 31), None())
+  test.equal(t, date.from_ordinal(2023, 366), None())
+  test.equal(t, date.from_ordinal(2024, 0), None())
+  test.equal(t, date.from_iso_week(2021, 53, Monday()), None())
+  test.equal(t, date.from_iso_week(2020, 53, Sunday()), Some(day(t, 2021, 1, 3)))
+  let value = day(t, 2024, 7, 14)
+  test.equal(t, date.year(value), 2024)
+  test.equal(t, date.month(value), 7)
+  test.equal(t, date.day(value), 14)
+  Ok(())
+}

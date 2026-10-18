@@ -1,0 +1,158 @@
+// rule: SEM-1
+// expect: run
+// time.format and time.parse_with over %Y %m %d %H %M %S %f %z %a %b %j %%,
+// with jiff fmt::strtime printer and parser vectors.
+fn civil(t: Test, text: String) -> time.DateTime {
+  test.expect_ok(t, date_time.parse(text))
+}
+
+fn at(t: Test, text: String, offset: Option[i32]) -> time.BrokenDownTime {
+  time.BrokenDownTime(datetime: civil(t, text), offset: offset)
+}
+
+fn shown(t: Test, value: time.BrokenDownTime, pattern: String) -> String {
+  test.expect_ok(t, time.format(value, pattern))
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let sunday = at(t, "2024-07-14T17:31:59.123456789", Some(-14400))
+  test.equal(t, shown(t, sunday, "%Y-%m-%d %H:%M:%S"), "2024-07-14 17:31:59")
+  test.equal(t, shown(t, sunday, "%a %b %d %j"), "Sun Jul 14 196")
+  test.equal(t, shown(t, sunday, "%f"), "123456789")
+  test.equal(t, shown(t, sunday, "%z"), "-0400")
+  test.equal(t, shown(t, sunday, "100%% at %H"), "100% at 17")
+  test.equal(t, shown(t, sunday, "λ %Y λ"), "λ 2024 λ")
+  test.equal(t, shown(t, sunday, ""), "")
+  test.equal(
+    t,
+    shown(t, at(t, "0024-07-14T09:00:09.123", None()), "%Y %H %S %f"),
+    "0024 09 09 123"
+  )
+  test.equal(t, shown(t, at(t, "-000024-07-14T00:00:00", None()), "%Y %f"), "-024 0")
+  test.equal(t, shown(t, at(t, "-002025-01-13T00:00:00", None()), "%Y %j"), "-2025 013")
+  test.equal(
+    t,
+    shown(t, at(t, "2024-12-31T00:00:00", None()), "%j %a %b"),
+    "366 Tue Dec"
+  )
+  test.equal(t, shown(t, at(t, "2024-01-01T00:00:00", Some(0)), "%z"), "+0000")
+  test.equal(t, shown(t, at(t, "2024-01-01T00:00:00", Some(19815)), "%z"), "+053015")
+  test.equal(t, shown(t, at(t, "2024-01-01T00:00:00", Some(18015)), "%z"), "+050015")
+  test.equal(t, shown(t, at(t, "2024-01-01T00:00:00", Some(-93599)), "%z"), "-255959")
+  test.equal(t, time.format(sunday, "%Y %"), Error(Invalid(3)))
+  test.equal(t, time.format(sunday, "%q"), Error(Invalid(0)))
+  test.equal(t, time.format(sunday, "ok %E"), Error(Invalid(3)))
+  test.equal(
+    t,
+    time.format(at(t, "2024-01-01T00:00:00", None()), "%Y%z"),
+    Error(NoOffset())
+  )
+  test.equal(
+    t,
+    time.format(at(t, "2024-01-01T00:00:00", Some(93600)), "%z"),
+    Error(OutOfRange())
+  )
+  // Parsing.
+  test.equal(
+    t,
+    time.parse_with("1/1/0099", "%m/%d/%Y"),
+    Ok(at(t, "0099-01-01T00:00:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("12/31/9999", "%m/%d/%Y"),
+    Ok(at(t, "9999-12-31T00:00:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("01/01/-9999", "%m/%d/%Y"),
+    Ok(at(t, "-009999-01-01T00:00:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("sun 7/14/2024", "%a %m/%d/%Y"),
+    Ok(at(t, "2024-07-14T00:00:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("Jul 14 2024", "%b %d %Y"),
+    Ok(at(t, "2024-07-14T00:00:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("JUL 14 2024", "%b %d %Y"),
+    Ok(at(t, "2024-07-14T00:00:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("2024 196", "%Y %j"),
+    Ok(at(t, "2024-07-14T00:00:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 196", "%Y-%m-%d %j"),
+    Ok(at(t, "2024-07-14T00:00:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:48", "%Y-%m-%d %H:%M"),
+    Ok(at(t, "2024-07-14T15:48:00", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("2024-07-14 15:48:60", "%Y-%m-%d %H:%M:%S"),
+    Ok(at(t, "2024-07-14T15:48:59", None()))
+  )
+  test.equal(
+    t,
+    time.parse_with("2024-07-14T17:31:59.5+0530", "%Y-%m-%dT%H:%M:%S.%f%z"),
+    Ok(at(t, "2024-07-14T17:31:59.5", Some(19800)))
+  )
+  test.equal(
+    t,
+    time.parse_with("20240714 173159 -053015 100%", "%Y%m%d %H%M%S %z 100%%"),
+    Ok(at(t, "2024-07-14T17:31:59", Some(-19815)))
+  )
+  let rendered = shown(t, sunday, "%a, %d %b %Y %H:%M:%S.%f %z (%j)")
+  test.equal(t, rendered, "Sun, 14 Jul 2024 17:31:59.123456789 -0400 (196)")
+  test.equal(
+    t,
+    time.parse_with(rendered, "%a, %d %b %Y %H:%M:%S.%f %z (%j)"),
+    Ok(sunday)
+  )
+  let invalid: List[(String, String)] = [
+    ("", "%M"),
+    ("a", "%M"),
+    ("15", "%M%S"),
+    ("2024", "%Y"),
+    ("7", "%m"),
+    ("2024-7", "%Y-%m"),
+    ("2024-25", "%Y-%d"),
+    ("7-25", "%m-%d"),
+    ("2024 6/31", "%Y %m/%d"),
+    ("2023 2/29", "%Y %m/%d"),
+    ("Mon 7/14/2024", "%a %m/%d/%Y"),
+    ("2024 Bad 1", "%Y %b %d"),
+    ("2024-01-01 24", "%Y-%m-%d %H"),
+    ("2024-01-01 00:60", "%Y-%m-%d %H:%M"),
+    ("2024-01-01 00:00:61", "%Y-%m-%d %H:%M:%S"),
+    ("2024-01-01 15:59", "%Y-%m-%d %H:%S"),
+    ("2024-01-01 59", "%Y-%m-%d %M"),
+    ("2024-01-01 5", "%Y-%m-%d %f"),
+    ("2024-01-01 +05:30", "%Y-%m-%d %z"),
+    ("2024-01-01 +05", "%Y-%m-%d %z"),
+    ("2024-01-01 +0530:15", "%Y-%m-%d %z"),
+    ("2024-01-01 +2600", "%Y-%m-%d %z"),
+    ("10000-01-01", "%Y-%m-%d"),
+    ("2024-01-01x", "%Y-%m-%d"),
+    ("2024-01-01", "%Y-%m-%d%"),
+    ("2024-01-01", "%Y-%m-%Q"),
+    ("2024 366", "%Y-%j"),
+    ("2023 366", "%Y %j"),
+    ("2024-07-14 197", "%Y-%m-%d %j")
+  ]
+  for (input, pattern) in invalid {
+    test.equal(t, time.parse_with(input, pattern), Error(Invalid()))
+  }
+  Ok(())
+}

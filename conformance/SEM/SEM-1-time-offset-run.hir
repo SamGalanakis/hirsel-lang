@@ -1,0 +1,148 @@
+// rule: SEM-1
+// expect: run
+// Timestamps at fixed UTC offsets: civil datetimes both ways, RFC 3339 with an
+// offset and civil timeline arithmetic (jiff t_from_unix and Offset vectors).
+fn stamp(nanos: i128) -> time.Timestamp {
+  time.Timestamp(unix_nanoseconds: nanos)
+}
+
+fn moment(t: Test, text: String) -> time.DateTime {
+  test.expect_ok(t, date_time.parse(text))
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let cases: List[(i128, i32, String)] = [
+    (0, 0, "1970-01-01T00:00:00"),
+    (-1000000000, 0, "1969-12-31T23:59:59"),
+    (-86400000000000, 0, "1969-12-31T00:00:00"),
+    (-86401000000000, 0, "1969-12-30T23:59:59"),
+    (-1, 0, "1969-12-31T23:59:59.999999999"),
+    (1700000000123000000, -18000, "2023-11-14T17:13:20.123"),
+    (1700000000123000000, 19800, "2023-11-15T03:43:20.123"),
+    (1700000000000000000, 93599, "2023-11-16T00:13:19"),
+    (1700000000000000000, -93599, "2023-11-13T20:13:21"),
+    (951782400000000000, 3600, "2000-02-29T01:00:00"),
+    (-377705116800000000000, 0, "-009999-01-01T00:00:00"),
+    (253402300799999999999, 0, "9999-12-31T23:59:59.999999999")
+  ]
+  for (nanos, offset, text) in cases {
+    let civil = moment(t, text)
+    test.equal(t, date_time.from_timestamp(stamp(nanos), offset), Ok(civil))
+    test.equal(t, date_time.to_timestamp(civil, offset), Ok(stamp(nanos)))
+  }
+  test.equal(
+    t,
+    date_time.from_timestamp(stamp(253402300800000000000), 0),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    date_time.from_timestamp(stamp(253402300799000000000), 1),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    date_time.from_timestamp(stamp(-377705116800000000001), 0),
+    Error(OutOfRange())
+  )
+  test.equal(t, date_time.from_timestamp(stamp(0), 93600), Error(OutOfRange()))
+  test.equal(t, date_time.from_timestamp(stamp(0), -93600), Error(OutOfRange()))
+  test.equal(
+    t,
+    date_time.from_timestamp(stamp(-170141183460469231731687303715884105728), 0),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    date_time.from_timestamp(stamp(170141183460469231731687303715884105727), -3600),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    date_time.to_timestamp(moment(t, "2024-01-01T00:00:00"), 93600),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    time.to_string_at(stamp(1700000000123000000), -18000),
+    Ok("2023-11-14T17:13:20.123-05:00")
+  )
+  test.equal(
+    t,
+    time.to_string_at(stamp(1700000000000000000), 19800),
+    Ok("2023-11-15T03:43:20+05:30")
+  )
+  test.equal(t, time.to_string_at(stamp(0), 0), Ok("1970-01-01T00:00:00+00:00"))
+  test.equal(t, time.to_string_at(stamp(0), 86340), Ok("1970-01-01T23:59:00+23:59"))
+  test.equal(t, time.to_string_at(stamp(0), -17762), Error(OutOfRange()))
+  test.equal(t, time.to_string_at(stamp(0), 86400), Error(OutOfRange()))
+  test.equal(
+    t,
+    time.to_string_at(stamp(-62167219200000000000), 60),
+    Ok("0000-01-01T00:01:00+00:01")
+  )
+  test.equal(
+    t,
+    time.to_string_at(stamp(-62167219200000000000), -60),
+    Error(OutOfRange())
+  )
+  match time.to_string_at(stamp(1700000000123000000), -18000) {
+    Ok(text) => test.equal(t, time.parse(text), Ok(stamp(1700000000123000000))),
+    Error(_) => test.fail(t),
+  }
+  test.equal(
+    t,
+    time.broken_down(stamp(1700000000000000000), 3600),
+    Ok(
+      time.BrokenDownTime(
+        datetime: moment(t, "2023-11-14T23:13:20"),
+        offset: Some(3600)
+      )
+    )
+  )
+  let late = moment(t, "2024-12-31T23:59:59.5")
+  test.equal(
+    t,
+    date_time.add(late, time.Duration(nanoseconds: 500000000)),
+    Ok(moment(t, "2025-01-01T00:00:00"))
+  )
+  test.equal(
+    t,
+    date_time.add(late, time.Duration(nanoseconds: -86400000000000)),
+    Ok(moment(t, "2024-12-30T23:59:59.5"))
+  )
+  test.equal(
+    t,
+    date_time.add(
+      moment(t, "9999-12-31T23:59:59"),
+      time.Duration(nanoseconds: 1000000000)
+    ),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    date_time.add(
+      late,
+      time.Duration(nanoseconds: 170141183460469231731687303715884105727)
+    ),
+    Error(OutOfRange())
+  )
+  test.equal(
+    t,
+    date_time.between(
+      moment(t, "2024-03-10T01:00:00"),
+      moment(t, "2024-03-10T03:30:00")
+    ),
+    time.Duration(nanoseconds: 9000000000000)
+  )
+  test.equal(t, date_time.compare(late, moment(t, "2024-12-31T23:59:59.4")), 1)
+  test.equal(
+    t,
+    date_time.compare(
+      moment(t, "2024-12-31T23:59:59"),
+      moment(t, "2025-01-01T00:00:00")
+    ),
+    -1
+  )
+  Ok(())
+}

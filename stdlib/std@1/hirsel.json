@@ -103,6 +103,36 @@
       ]
     },
     {
+      "path": "time_civil.hir",
+      "module": [
+        "time"
+      ]
+    },
+    {
+      "path": "time_format.hir",
+      "module": [
+        "time"
+      ]
+    },
+    {
+      "path": "date.hir",
+      "module": [
+        "date"
+      ]
+    },
+    {
+      "path": "time_of_day.hir",
+      "module": [
+        "time_of_day"
+      ]
+    },
+    {
+      "path": "date_time.hir",
+      "module": [
+        "date_time"
+      ]
+    },
+    {
       "path": "sample.hir",
       "module": [
         "internal",

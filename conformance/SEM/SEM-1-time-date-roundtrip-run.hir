@@ -1,0 +1,32 @@
+// rule: SEM-1
+// expect: run
+// Go TestISOWeek's January 4 invariant and jiff all_days_to_date_roundtrip,
+// sampled every 1999 days.
+fn day(t: Test, y: i32, m: u8, d: u8) -> time.Date {
+  let Some(value) = date.new(y, m, d) else {
+    test.fail(t)
+  }
+  value
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // The invariant Go checks: January 4 is always in week 1.
+  let mut year: i32 = 1950
+  while year < 2100 {
+    test.equal(t, date.iso_week(day(t, year, 1, 4)), time.IsoWeek(year: year, week: 1))
+    year += 1
+  }
+  // jiff all_days_to_date_roundtrip, sampled, and consecutive days.
+  let mut n: i64 = -100000
+  while n <= 100000 {
+    let Some(value) = date.from_epoch_days(n) else {
+      test.fail(t)
+    }
+    test.equal(t, date.to_epoch_days(value), n)
+    let next = test.expect_ok(t, date.add_days(value, 1))
+    test.equal(t, date.days_between(value, next), 1)
+    test.equal(t, date.compare(value, next), -1)
+    n += 1999
+  }
+  Ok(())
+}

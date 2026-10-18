@@ -40,28 +40,6 @@ pub type Timestamp {
 
 pub type TimeError = OutOfRange()
 
-// Adapted from Zig lib/std/time/epoch.zig isLeapYear/getDaysInMonth.
-// Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
-@noalloc
-fn leap_year(year: i128) -> bool uses {} {
-  year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
-}
-
-@noalloc
-fn month_days(year: i128, month: i128) -> i128 uses {} {
-  if month == 2 {
-    if leap_year(year) {
-      29
-    } else {
-      28
-    }
-  } else if month == 4 || month == 6 || month == 9 || month == 11 {
-    30
-  } else {
-    31
-  }
-}
-
 @noalloc
 fn read_digits(bytes: Bytes, begin: u64, count: u64) -> Result[i128, scalar.ParseError] uses {} {
   let mut value: i128 = 0
@@ -78,22 +56,8 @@ fn read_digits(bytes: Bytes, begin: u64, count: u64) -> Result[i128, scalar.Pars
   Ok(value)
 }
 
-// Inverse of Zig epoch.zig's year/month subtraction: count completed years,
-// then completed months. Year zero is the base; whole 400-year cycles are exact.
-@noalloc
-fn civil_days(year: i128, month: i128, day: i128) -> i128 uses {} {
-  let leaps = (year + 3) / 4 - (year + 99) / 100 + (year + 399) / 400
-  let mut days = year * 365 + leaps + day - 1
-  let mut m: i128 = 1
-  while m < month {
-    days += month_days(year, m)
-    m += 1
-  }
-  days - 719528
-}
-
 // Contract-specific RFC3339 scanner; neither Zig epoch nor Rust std exposes one.
-// Date validation adapts Zig lib/std/time/epoch.zig at bff490a23889750de7096d9057c0a432efc929a8.
+// Date validation and day counts are the civil helpers of time_civil.hir.
 @noalloc
 pub fn parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {} {
   let bytes = core@1/string.as_bytes(text)
@@ -110,7 +74,13 @@ pub fn parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {} {
   let hour = read_digits(bytes, 11, 2)?
   let minute = read_digits(bytes, 14, 2)?
   let second = read_digits(bytes, 17, 2)?
-  if month < 1 || month > 12 || day < 1 || day > month_days(year, month) || hour > 23 || minute > 59 || second > 59 {
+  if month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59 {
+    return Error(Invalid())
+  }
+  let civil_year: i32 = core@1/int.narrow(year)
+  let civil_month: u8 = core@1/int.narrow(month)
+  let civil_day: u8 = core@1/int.narrow(day)
+  if !valid_date(civil_year, civil_month, civil_day) {
     return Error(Invalid())
   }
   let mut i: u64 = 19
@@ -159,7 +129,8 @@ pub fn parse(text: String) -> Result[Timestamp, scalar.ParseError] uses {} {
   } else {
     return Error(Invalid())
   }
-  let seconds = civil_days(year, month, day) * 86400 + hour * 3600 + minute * 60 + second - offset
+  let days: i128 = core@1/int.widen(days_from_civil(civil_year, civil_month, civil_day))
+  let seconds = days * 86400 + hour * 3600 + minute * 60 + second - offset
   Ok(Timestamp(unix_nanoseconds: seconds * 1000000000 + fraction))
 }
 
@@ -180,72 +151,17 @@ fn write_digits(mut builder: List[u8], value: i128, width: u64) -> () uses {} {
   }
 }
 
-// Adapted from Zig lib/std/time/epoch.zig EpochDay.calculateYearDay,
-// YearAndDay.calculateMonthDay and DaySeconds, commit bff490a23889750de7096d9057c0a432efc929a8.
-// Offset from year zero and skip whole Gregorian cycles for signed bounded UTC.
+// RFC 3339 in UTC; the date comes from civil_from_days (time_civil.hir).
 pub fn to_string(value: Timestamp) -> Result[unique String, TimeError] uses {} {
   // Range before division keeps all arithmetic bounded even at i128 MIN/MAX.
   if value.unix_nanoseconds < -62167219200000000000i128 || value.unix_nanoseconds > 253402300799999999999i128 {
     return Error(OutOfRange())
   }
-  let seconds = core@1/int.div_floor(value.unix_nanoseconds, 1000000000)
-  let mut fraction = core@1/int.mod(value.unix_nanoseconds, 1000000000)
-  let days = core@1/int.div_floor(seconds, 86400)
-  let daytime = core@1/int.mod(seconds, 86400)
-  let absolute_days = days + 719528
-  let cycles = absolute_days / 146097
-  let mut year = cycles * 400
-  let mut remaining = absolute_days % 146097
-  let mut year_size: i128 = if leap_year(year) {
-    366
-  } else {
-    365
-  }
-  while remaining >= year_size {
-    remaining -= year_size
-    year += 1
-    year_size = if leap_year(year) {
-      366
-    } else {
-      365
-    }
-  }
-  let mut month: i128 = 1
-  while remaining >= month_days(year, month) {
-    remaining -= month_days(year, month)
-    month += 1
-  }
-  let day = remaining + 1
+  let utc = datetime_from_local_nanos(value.unix_nanoseconds)?
   let mut builder: List[u8] = []
-  write_digits(mut builder, year, 4)
-  core@1/list.push(mut builder, 45)
-  write_digits(mut builder, month, 2)
-  core@1/list.push(mut builder, 45)
-  write_digits(mut builder, day, 2)
-  core@1/list.push(mut builder, 84)
-  write_digits(mut builder, daytime / 3600, 2)
-  core@1/list.push(mut builder, 58)
-  write_digits(mut builder, daytime / 60 % 60, 2)
-  core@1/list.push(mut builder, 58)
-  write_digits(mut builder, daytime % 60, 2)
-  if fraction != 0 {
-    core@1/list.push(mut builder, 46)
-    let mut divisor: i128 = 100000000
-    while fraction != 0 {
-      let digit: u8 = core@1/int.narrow(fraction / divisor)
-      core@1/list.push(mut builder, digit + 48)
-      fraction %= divisor
-      divisor /= 10
-    }
-  }
-  core@1/list.push(mut builder, 90)
-  match text.finish(take builder) {
-    Ok(text) => Ok(take text),
-    Error(_) => {
-      core@1/failure.check(false, TextInvariant())
-      Error(OutOfRange())
-    },
-  }
+  date_time.format_into(utc, mut builder)
+  core@1/list.push(mut builder, b'Z')
+  Ok(text.finish_valid(take builder))
 }
 
 pub type SleepError = NegativeDuration | OutOfRange | Wait(WaitError)

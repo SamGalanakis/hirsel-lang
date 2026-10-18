@@ -1,0 +1,95 @@
+// Civil datetime operations and fixed-offset conversions, adapted from jiff
+// civil::DateTime and tz::Offset (third-party/NOTICES.md).
+// The civil datetime at `offset` seconds east of UTC (|offset| at most 25:59:59).
+@noalloc
+pub fn from_timestamp(value: time.Timestamp, offset: i32) -> Result[
+  time.DateTime,
+  time.TimeError
+] uses {} {
+  if !time.valid_offset(offset) {
+    return Error(OutOfRange())
+  }
+  let limit = 170141183460469231731687303715884105727i128 - 93600 * time.NANOS_PER_SECOND
+  if value.unix_nanoseconds > limit || value.unix_nanoseconds < -limit {
+    return Error(OutOfRange())
+  }
+  time.datetime_from_local_nanos(value.unix_nanoseconds + time.offset_nanos(offset))
+}
+
+// The instant whose civil datetime at `offset` seconds east of UTC is `value`.
+@noalloc
+pub fn to_timestamp(value: time.DateTime, offset: i32) -> Result[
+  time.Timestamp,
+  time.TimeError
+] uses {} {
+  if !time.valid_offset(offset) {
+    return Error(OutOfRange())
+  }
+  Ok(
+    time.Timestamp(
+      unix_nanoseconds: time.local_nanos(value) - time.offset_nanos(offset)
+    )
+  )
+}
+
+// The datetime `interval` later on the same zone-free civil timeline.
+@noalloc
+pub fn add(value: time.DateTime, interval: time.Duration) -> Result[
+  time.DateTime,
+  time.TimeError
+] uses {} {
+  let limit = 1000000000000000000000000i128
+  if interval.nanoseconds > limit || interval.nanoseconds < -limit {
+    return Error(OutOfRange())
+  }
+  time.datetime_from_local_nanos(time.local_nanos(value) + interval.nanoseconds)
+}
+
+// end minus start on the zone-free civil timeline.
+@noalloc
+pub fn between(start: time.DateTime, end: time.DateTime) -> time.Duration uses {} {
+  time.Duration(nanoseconds: time.local_nanos(end) - time.local_nanos(start))
+}
+
+@noalloc
+pub fn compare(a: time.DateTime, b: time.DateTime) -> i32 uses {} {
+  let first = time.local_nanos(a)
+  let second = time.local_nanos(b)
+  if first < second {
+    -1
+  } else if first > second {
+    1
+  } else {
+    0
+  }
+}
+
+// The date, a `T` and the time of day.
+@preserves_unique(out)
+pub fn format_into(value: time.DateTime, mut out: List[u8]) -> () uses {} {
+  date.format_into(value.date, mut out)
+  core@1/list.push(mut out, b'T')
+  time_of_day.format_into(value.time, mut out)
+}
+
+pub fn to_string(value: time.DateTime) -> unique String uses {} {
+  let mut out: List[u8] = []
+  format_into(value, mut out)
+  text.finish_valid(take out)
+}
+
+// A date, `T` or `t`, and a time of day, with no offset.
+@noalloc
+pub fn parse(text: String) -> Result[time.DateTime, scalar.ParseError] uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let (day, after_date) = time.scan_date(bytes, 0)?
+  let len = core@1/bytes.len(bytes)
+  if after_date >= len || bytes[after_date] != b'T' && bytes[after_date] != b't' {
+    return Error(Invalid())
+  }
+  let (clock, end) = time.scan_time(bytes, after_date + 1)?
+  if end != len {
+    return Error(Invalid())
+  }
+  Ok(time.DateTime(date: day, time: clock))
+}

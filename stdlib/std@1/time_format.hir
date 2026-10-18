@@ -1,0 +1,410 @@
+// strftime/strptime-style patterns over a small directive set, adapted from
+// jiff fmt::strtime (third-party/NOTICES.md): %Y %m %d %H %M %S %f %z %a %b %j %%.
+// A civil datetime and, when known, its offset in seconds east of UTC: what
+// time.format renders and time.parse_with produces.
+pub type BrokenDownTime {
+  datetime: DateTime,
+  offset: Option[i32],
+}
+
+// Invalid carries the byte index of the pattern's offending `%`.
+pub type FormatError = Invalid(u64) | NoOffset | OutOfRange
+
+const MONTH_NAMES: Bytes = b"JanFebMarAprMayJunJulAugSepOctNovDec"
+
+const WEEKDAY_NAMES: Bytes = b"MonTueWedThuFriSatSun"
+
+// The datetime at `offset` seconds east of UTC, carrying that offset.
+@noalloc
+pub fn broken_down(value: Timestamp, offset: i32) -> Result[BrokenDownTime, TimeError] uses {} {
+  let datetime = date_time.from_timestamp(value, offset)?
+  Ok(BrokenDownTime(datetime: datetime, offset: Some(offset)))
+}
+
+// RFC 3339 at a whole-minute offset under 24 hours, written ±HH:MM.
+pub fn to_string_at(value: Timestamp, offset: i32) -> Result[unique String, TimeError] uses {} {
+  if offset % 60 != 0 || offset <= -86400 || offset >= 86400 {
+    return Error(OutOfRange())
+  }
+  let datetime = date_time.from_timestamp(value, offset)?
+  if datetime.date.year < 0 || datetime.date.year > 9999 {
+    return Error(OutOfRange())
+  }
+  let mut out: List[u8] = []
+  date_time.format_into(datetime, mut out)
+  write_offset(mut out, offset, true)
+  Ok(text.finish_valid(take out))
+}
+
+@preserves_unique(out)
+fn write_offset(mut out: List[u8], offset: i32, colon: bool) -> () uses {} {
+  let magnitude: i128 = if offset < 0 {
+    core@1/int.widen(-offset)
+  } else {
+    core@1/int.widen(offset)
+  }
+  if offset < 0 {
+    core@1/list.push(mut out, b'-')
+  } else {
+    core@1/list.push(mut out, b'+')
+  }
+  write_digits(mut out, magnitude / 3600, 2)
+  if colon {
+    core@1/list.push(mut out, b':')
+  }
+  write_digits(mut out, magnitude / 60 % 60, 2)
+  if !colon && magnitude % 60 != 0 {
+    write_digits(mut out, magnitude % 60, 2)
+  }
+}
+
+@preserves_unique(out)
+fn write_name(mut out: List[u8], names: Bytes, index: u64) -> () uses {} {
+  let mut i: u64 = 0
+  while i < 3 {
+    core@1/list.push(mut out, names[index * 3 + i])
+    i += 1
+  }
+}
+
+// %Y pads to four characters, a sign included, as jiff's strtime printer does.
+@preserves_unique(out)
+fn write_year(mut out: List[u8], year: i32) -> () uses {} {
+  let wide: i128 = core@1/int.widen(year)
+  if wide < 0 {
+    core@1/list.push(mut out, b'-')
+    let magnitude = -wide
+    let width: u64 = if magnitude > 999 {
+      4
+    } else {
+      3
+    }
+    write_digits(mut out, magnitude, width)
+  } else {
+    write_digits(mut out, wide, 4)
+  }
+}
+
+// Renders `value` by `pattern`: other bytes are copied, `%` introduces a directive.
+pub fn format(value: BrokenDownTime, pattern: String) -> Result[
+  unique String,
+  FormatError
+] uses {} {
+  let spec = core@1/string.as_bytes(pattern)
+  let len = core@1/bytes.len(spec)
+  let civil = value.datetime.date
+  let wall = value.datetime.time
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < len {
+    let byte = spec[i]
+    if byte != b'%' {
+      core@1/list.push(mut out, byte)
+      i += 1
+      continue
+    }
+    if i + 1 == len {
+      return Error(Invalid(i))
+    }
+    match spec[i + 1] {
+      b'Y' => write_year(mut out, civil.year),
+      b'm' => write_digits(mut out, core@1/int.widen(civil.month), 2),
+      b'd' => write_digits(mut out, core@1/int.widen(civil.day), 2),
+      b'H' => write_digits(mut out, core@1/int.widen(wall.hour), 2),
+      b'M' => write_digits(mut out, core@1/int.widen(wall.minute), 2),
+      b'S' => write_digits(mut out, core@1/int.widen(wall.second), 2),
+      b'j' => write_digits(mut out, core@1/int.widen(ordinal_of(civil)), 3),
+      b'f' => {
+        if wall.nanosecond == 0 {
+          core@1/list.push(mut out, b'0')
+        } else {
+          write_fraction_digits(mut out, wall.nanosecond)
+        }
+      },
+      b'z' => {
+        let Some(offset) = value.offset else {
+          return Error(NoOffset())
+        }
+        if !valid_offset(offset) {
+          return Error(OutOfRange())
+        }
+        write_offset(mut out, offset, false)
+      },
+      b'a' => {
+        let number: u64 = core@1/int.narrow(iso_weekday(epoch_day(civil)))
+        write_name(mut out, WEEKDAY_NAMES, number - 1)
+      },
+      b'b' => write_name(mut out, MONTH_NAMES, core@1/int.widen(civil.month - 1)),
+      b'%' => core@1/list.push(mut out, b'%'),
+      _ => return Error(Invalid(i)),
+    }
+    i += 2
+  }
+  Ok(text.finish_valid(take out))
+}
+
+// One to `most` ASCII digits at `start`.
+@noalloc
+fn scan_number(bytes: Bytes, start: u64, most: u64) -> Result[
+  (i128, u64),
+  scalar.ParseError
+] uses {} {
+  let len = core@1/bytes.len(bytes)
+  let mut value: i128 = 0
+  let mut i = start
+  while i < len && i - start < most && bytes[i] >= b'0' && bytes[i] <= b'9' {
+    let digit: i128 = core@1/int.widen(bytes[i] - b'0')
+    value = value * 10 + digit
+    i += 1
+  }
+  if i == start {
+    return Error(Invalid())
+  }
+  Ok((value, i))
+}
+
+// The index of the three-letter name at `start`, compared without ASCII case.
+@noalloc
+fn scan_name(bytes: Bytes, start: u64, names: Bytes) -> Result[
+  (u64, u64),
+  scalar.ParseError
+] uses {} {
+  if core@1/bytes.len(bytes) - start < 3 {
+    return Error(Invalid())
+  }
+  let count = core@1/bytes.len(names) / 3
+  let mut index: u64 = 0
+  while index < count {
+    let mut k: u64 = 0
+    while k < 3 && ascii.to_lower(bytes[start + k]) == ascii.to_lower(
+      names[index * 3 + k]
+    ) {
+      k += 1
+    }
+    if k == 3 {
+      return Ok((index, start + 3))
+    }
+    index += 1
+  }
+  Error(Invalid())
+}
+
+@noalloc
+fn small(value: Option[i128]) -> u8 uses {} {
+  match value {
+    Some(number) => core@1/int.narrow(number),
+    None() => 0,
+  }
+}
+
+// Reads `text` by `pattern`. Literal bytes match exactly; %Y takes an optional
+// sign and up to four digits, %m %d %H %M %S up to two, %j up to three, %f one
+// to nine, %z is ±HHMM[SS], %a and %b are English abbreviations in any case.
+// A second of 60 reads as 59.
+// The date needs %Y with %m and %d or %j; absent time fields are zero.
+@noalloc
+pub fn parse_with(text: String, pattern: String) -> Result[
+  BrokenDownTime,
+  scalar.ParseError
+] uses {} {
+  let input = core@1/string.as_bytes(text)
+  let spec = core@1/string.as_bytes(pattern)
+  let input_len = core@1/bytes.len(input)
+  let spec_len = core@1/bytes.len(spec)
+  let mut year: Option[i128] = None()
+  let mut month: Option[i128] = None()
+  let mut day: Option[i128] = None()
+  let mut ordinal: Option[i128] = None()
+  let mut weekday: Option[u64] = None()
+  let mut hour: Option[i128] = None()
+  let mut minute: Option[i128] = None()
+  let mut second: Option[i128] = None()
+  let mut fraction: Option[i128] = None()
+  let mut offset: Option[i32] = None()
+  let mut i: u64 = 0
+  let mut at: u64 = 0
+  while i < spec_len {
+    let byte = spec[i]
+    if byte != b'%' || i + 1 < spec_len && spec[i + 1] == b'%' {
+      if at >= input_len || input[at] != byte {
+        return Error(Invalid())
+      }
+      at += 1
+      i += if byte == b'%' {
+        2
+      } else {
+        1
+      }
+      continue
+    }
+    if i + 1 == spec_len {
+      return Error(Invalid())
+    }
+    match spec[i + 1] {
+      b'Y' => {
+        let negative = at < input_len && input[at] == b'-'
+        if negative || at < input_len && input[at] == b'+' {
+          at += 1
+        }
+        let (number, next) = scan_number(input, at, 4)?
+        year = Some(
+          if negative {
+            -number
+          } else {
+            number
+          }
+        )
+        at = next
+      },
+      b'm' => {
+        let (number, next) = scan_number(input, at, 2)?
+        month = Some(number)
+        at = next
+      },
+      b'd' => {
+        let (number, next) = scan_number(input, at, 2)?
+        day = Some(number)
+        at = next
+      },
+      b'j' => {
+        let (number, next) = scan_number(input, at, 3)?
+        ordinal = Some(number)
+        at = next
+      },
+      b'H' => {
+        let (number, next) = scan_number(input, at, 2)?
+        hour = Some(number)
+        at = next
+      },
+      b'M' => {
+        let (number, next) = scan_number(input, at, 2)?
+        minute = Some(number)
+        at = next
+      },
+      b'S' => {
+        let (number, next) = scan_number(input, at, 2)?
+        second = Some(number)
+        at = next
+      },
+      b'f' => {
+        let (number, next) = scan_number(input, at, 9)?
+        let mut scaled = number
+        let mut digits = next - at
+        while digits < 9 {
+          scaled *= 10
+          digits += 1
+        }
+        fraction = Some(scaled)
+        at = next
+      },
+      b'z' => {
+        if at >= input_len || input[at] != b'+' && input[at] != b'-' || input_len - at < 5 {
+          return Error(Invalid())
+        }
+        let hours = read_digits(input, at + 1, 2)?
+        let minutes = read_digits(input, at + 3, 2)?
+        let mut seconds: i128 = 0
+        let mut next = at + 5
+        if input_len - next >= 2 && input[next] >= b'0' && input[next] <= b'9' {
+          seconds = read_digits(input, next, 2)?
+          next += 2
+        }
+        if hours > 25 || minutes > 59 || seconds > 59 {
+          return Error(Invalid())
+        }
+        let magnitude: i32 = core@1/int.narrow(hours * 3600 + minutes * 60 + seconds)
+        offset = Some(
+          if input[at] == b'-' {
+            -magnitude
+          } else {
+            magnitude
+          }
+        )
+        at = next
+      },
+      b'a' => {
+        let (index, next) = scan_name(input, at, WEEKDAY_NAMES)?
+        weekday = Some(index + 1)
+        at = next
+      },
+      b'b' => {
+        let (index, next) = scan_name(input, at, MONTH_NAMES)?
+        let number: i128 = core@1/int.widen(index + 1)
+        month = Some(number)
+        at = next
+      },
+      _ => return Error(Invalid()),
+    }
+    i += 2
+  }
+  if at != input_len {
+    return Error(Invalid())
+  }
+  let Some(full_year) = year else {
+    return Error(Invalid())
+  }
+  if full_year < -9999 || full_year > 9999 {
+    return Error(OutOfRange())
+  }
+  let narrow_year: i32 = core@1/int.narrow(full_year)
+  let civil = match (month, day, ordinal) {
+    (Some(m), Some(d), _) => {
+      if m < 1 || m > 12 || d < 1 || d > 31 {
+        return Error(Invalid())
+      }
+      let Some(value) = date.new(
+        narrow_year,
+        core@1/int.narrow(m),
+        core@1/int.narrow(d)
+      ) else {
+        return Error(Invalid())
+      }
+      value
+    },
+    (None(), None(), Some(n)) => {
+      if n < 1 || n > 366 {
+        return Error(Invalid())
+      }
+      let Some(value) = date.from_ordinal(narrow_year, core@1/int.narrow(n)) else {
+        return Error(Invalid())
+      }
+      value
+    },
+    _ => return Error(Invalid()),
+  }
+  if let Some(n) = ordinal {
+    let actual: i128 = core@1/int.widen(ordinal_of(civil))
+    if actual != n {
+      return Error(Invalid())
+    }
+  }
+  if let Some(w) = weekday {
+    let actual: u64 = core@1/int.narrow(iso_weekday(epoch_day(civil)))
+    if actual != w {
+      return Error(Invalid())
+    }
+  }
+  if minute != None() && hour == None() || second != None() && minute == None() || fraction != None() && second == None() {
+    return Error(Invalid())
+  }
+  // A leap second 60 reads as 59, as jiff's strtime parser does.
+  if small(hour) > 23 || small(minute) > 59 || small(second) > 60 {
+    return Error(Invalid())
+  }
+  let whole_second: u8 = if small(second) == 60 {
+    59
+  } else {
+    small(second)
+  }
+  let nanosecond: u32 = match fraction {
+    Some(n) => core@1/int.narrow(n),
+    None() => 0,
+  }
+  let wall = TimeOfDay(
+    hour: small(hour),
+    minute: small(minute),
+    second: whole_second,
+    nanosecond: nanosecond
+  )
+  Ok(BrokenDownTime(datetime: DateTime(date: civil, time: wall), offset: offset))
+}

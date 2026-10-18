@@ -1,0 +1,202 @@
+// Civil date operations, adapted from jiff civil::Date (third-party/NOTICES.md).
+@noalloc
+pub fn new(y: i32, m: u8, d: u8) -> Option[time.Date] uses {} {
+  if time.valid_date(y, m, d) {
+    Some(time.Date(year: y, month: m, day: d))
+  } else {
+    None()
+  }
+}
+
+@noalloc
+pub fn year(value: time.Date) -> i32 uses {} {
+  value.year
+}
+
+@noalloc
+pub fn month(value: time.Date) -> u8 uses {} {
+  value.month
+}
+
+@noalloc
+pub fn day(value: time.Date) -> u8 uses {} {
+  value.day
+}
+
+@noalloc
+pub fn weekday(value: time.Date) -> time.Weekday uses {} {
+  time.weekday_of(time.iso_weekday(time.epoch_day(value)))
+}
+
+// The day of the year, 1 through 365 or 366.
+@noalloc
+pub fn ordinal(value: time.Date) -> u16 uses {} {
+  time.ordinal_of(value)
+}
+
+@noalloc
+pub fn from_ordinal(y: i32, day_of_year: u16) -> Option[time.Date] uses {} {
+  if y < time.MIN_YEAR || y > time.MAX_YEAR || day_of_year < 1 || day_of_year > time.days_in_year(
+    y
+  ) {
+    return None()
+  }
+  let offset: i64 = core@1/int.widen(day_of_year)
+  Some(time.civil_from_days(time.days_from_civil(y, 1, 1) + offset - 1))
+}
+
+// ISO 8601 week date (jiff civil::ISOWeekDate::from_date): week 1 holds the year's first Thursday.
+@noalloc
+pub fn iso_week(value: time.Date) -> time.IsoWeek uses {} {
+  let iso_day = time.iso_weekday(time.epoch_day(value))
+  let day_of_year: i64 = core@1/int.widen(time.ordinal_of(value))
+  let week = (day_of_year - iso_day + 10) / 7
+  if week < 1 {
+    let previous = value.year - 1
+    return time.IsoWeek(year: previous, week: time.iso_weeks_in_year(previous))
+  }
+  let weeks: i64 = core@1/int.widen(time.iso_weeks_in_year(value.year))
+  if week > weeks {
+    return time.IsoWeek(year: value.year + 1, week: 1)
+  }
+  time.IsoWeek(year: value.year, week: core@1/int.narrow(week))
+}
+
+// The date of an ISO week date; January 4 always lies in week 1.
+@noalloc
+pub fn from_iso_week(y: i32, week: u8, day_of_week: time.Weekday) -> Option[time.Date] uses {} {
+  if y < time.MIN_YEAR || y > time.MAX_YEAR || week < 1 || week > time.iso_weeks_in_year(
+    y
+  ) {
+    return None()
+  }
+  let fourth = time.days_from_civil(y, 1, 4)
+  let monday = fourth - time.iso_weekday(fourth) + 1
+  let weeks: i64 = core@1/int.widen(week)
+  time.date_from_days(monday + (weeks - 1) * 7 + time.weekday_number(day_of_week) - 1)
+}
+
+// Days since 1970-01-01, negative before it.
+@noalloc
+pub fn to_epoch_days(value: time.Date) -> i64 uses {} {
+  time.epoch_day(value)
+}
+
+@noalloc
+pub fn from_epoch_days(days: i64) -> Option[time.Date] uses {} {
+  time.date_from_days(days)
+}
+
+@noalloc
+pub fn add_days(value: time.Date, days: i64) -> Result[time.Date, time.TimeError] uses {} {
+  if days < time.MIN_EPOCH_DAY - time.MAX_EPOCH_DAY || days > time.MAX_EPOCH_DAY - time.MIN_EPOCH_DAY {
+    return Error(OutOfRange())
+  }
+  match time.date_from_days(time.epoch_day(value) + days) {
+    Some(date) => Ok(date),
+    None() => Error(OutOfRange()),
+  }
+}
+
+// Calendar months, keeping the day of the month; a day past the target month's
+// end clamps to its last day or is NoSuchDay under Reject.
+@noalloc
+pub fn add_months(value: time.Date, months: i64, overflow: time.Overflow) -> Result[
+  time.Date,
+  time.CalendarError
+] uses {} {
+  if months < -240000 || months > 240000 {
+    return Error(OutOfRange())
+  }
+  let wide_year: i64 = core@1/int.widen(value.year)
+  let wide_month: i64 = core@1/int.widen(value.month)
+  let total = wide_year * 12 + wide_month - 1 + months
+  let narrowed: Option[i32] = core@1/int.try_narrow(core@1/int.div_floor(total, 12))
+  let Some(new_year) = narrowed else {
+    return Error(OutOfRange())
+  }
+  if new_year < time.MIN_YEAR || new_year > time.MAX_YEAR {
+    return Error(OutOfRange())
+  }
+  let new_month: u8 = core@1/int.narrow(core@1/int.mod(total, 12) + 1)
+  let last = time.days_in_month(new_year, new_month)
+  if value.day <= last {
+    return Ok(time.Date(year: new_year, month: new_month, day: value.day))
+  }
+  match overflow {
+    Clamp => Ok(time.Date(year: new_year, month: new_month, day: last)),
+    Reject => Error(NoSuchDay()),
+  }
+}
+
+@noalloc
+pub fn add_years(value: time.Date, years: i64, overflow: time.Overflow) -> Result[
+  time.Date,
+  time.CalendarError
+] uses {} {
+  if years < -20000 || years > 20000 {
+    return Error(OutOfRange())
+  }
+  add_months(value, years * 12, overflow)
+}
+
+// end minus start, in days.
+@noalloc
+pub fn days_between(start: time.Date, end: time.Date) -> i64 uses {} {
+  time.epoch_day(end) - time.epoch_day(start)
+}
+
+@noalloc
+pub fn compare(a: time.Date, b: time.Date) -> i32 uses {} {
+  let first = time.epoch_day(a)
+  let second = time.epoch_day(b)
+  if first < second {
+    -1
+  } else if first > second {
+    1
+  } else {
+    0
+  }
+}
+
+// ISO 8601 calendar date: YYYY-MM-DD for years 0000 through 9999, otherwise
+// the expanded form with a sign and six year digits (jiff's Temporal printer).
+@preserves_unique(out)
+pub fn format_into(value: time.Date, mut out: List[u8]) -> () uses {} {
+  let wide_year: i128 = core@1/int.widen(value.year)
+  if wide_year >= 0 && wide_year <= 9999 {
+    time.write_digits(mut out, wide_year, 4)
+  } else {
+    if wide_year < 0 {
+      core@1/list.push(mut out, b'-')
+    } else {
+      core@1/list.push(mut out, b'+')
+    }
+    let magnitude = if wide_year < 0 {
+      -wide_year
+    } else {
+      wide_year
+    }
+    time.write_digits(mut out, magnitude, 6)
+  }
+  core@1/list.push(mut out, b'-')
+  time.write_digits(mut out, core@1/int.widen(value.month), 2)
+  core@1/list.push(mut out, b'-')
+  time.write_digits(mut out, core@1/int.widen(value.day), 2)
+}
+
+pub fn to_string(value: time.Date) -> unique String uses {} {
+  let mut out: List[u8] = []
+  format_into(value, mut out)
+  text.finish_valid(take out)
+}
+
+@noalloc
+pub fn parse(text: String) -> Result[time.Date, scalar.ParseError] uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let (value, end) = time.scan_date(bytes, 0)?
+  if end != core@1/bytes.len(bytes) {
+    return Error(Invalid())
+  }
+  Ok(value)
+}

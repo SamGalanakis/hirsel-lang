@@ -53,7 +53,10 @@ the license named in its row; the license texts follow once each.
 | Zig standard library | `lib/std/http/Client.zig`, `HeaderIterator.zig`, `ChunkParser.zig`, `http.zig`, `ascii.zig` | `stdlib/std@1/http_wire.hir`, `stdlib/std@1/http.hir`, `crates/hirsel-driver/tests/it-stdlib/stdlib_http_wire.rs`, `crates/hirsel-driver/tests/it/stdlib_http.rs` | same | MIT |
 | Zig standard library | `lib/std/ascii.zig` character classes, whitespace and case-conversion vectors | `stdlib/std@1/ascii.hir`, `conformance/SEM/SEM-3-ascii-run.hir` | same | MIT |
 | Zig standard library | `lib/std/unicode.zig` utf8Decode2/3/4 | `stdlib/std@1/graphemes.hir` | same | MIT |
-| Zig standard library | `lib/std/fs/path.zig`, `lib/std/time/epoch.zig` | std@1 path and calendar sources and tests | same | MIT |
+| Zig standard library | `lib/std/fs/path.zig`, `lib/std/time/epoch.zig` | std@1 path sources and tests; epoch.zig RFC 3339 test vectors | same | MIT |
+| jiff | `crates/jiff/src/civil/{date,time,datetime}.rs` validation, month arithmetic with day clamping, ISO week dates and the expanded six-digit year form; `crates/jiff/src/fmt/strtime/{printer,parse}.rs` directive semantics (%Y sign padding, %f trimming, %z seconds, case-insensitive names, leap second 60 read as 59) and their test vectors | `stdlib/std@1/time_civil.hir`, `date.hir`, `time_of_day.hir`, `date_time.hir`, `time_format.hir`, civil and strftime conformance | BurntSushi/jiff `fff640d47f72ca6d3a122678315bbd76488306fe` | MIT |
+| Howard Hinnant date algorithms | `days_from_civil` and `civil_from_days` from "chrono-Compatible Low-Level Date Algorithms" | `stdlib/std@1/time_civil.hir` | howardhinnant.github.io/date_algorithms.html | Public domain (author's dedication) |
+| Go standard library | `src/time/time_test.go` isoWeekTests, yearDayTests and the January 4 week-1 invariant | `conformance/SEM/SEM-1-time-date-calendar-run.hir` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Zig standard library | `lib/std/mem.zig` eqlBytes bounded overlapping loads and eql unequal-byte vectors | `crates/hirsel-llvm/src/compare.rs`, `conformance/SEM/SEM-5-short-byte-equality-run.hir` | same | MIT |
 | Zig standard library | `lib/std/heap/ArenaAllocator.zig` alloc | `crates/hirsel-rt/src/region.rs` | same | MIT |
 | Zig standard library | `lib/std/Io/Threaded.zig` netLookup, `lib/std/Io/net.zig` ListenOptions | `crates/hirsel-rt/src/net_host.rs` | same | MIT |
@@ -116,6 +119,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - lexopt: Copyright (c) 2021 Jan Verbeek
 - Cranelift: Copyright (c) the Bytecode Alliance and Cranelift contributors
 - Zig standard library: Copyright (c) Zig contributors
+- jiff: Copyright (c) 2015 Andrew Gallant
 - Rust standard library: Copyright (c) The Rust Project Contributors
 - unicode-segmentation: Copyright (c) 2015 The Rust Project Developers
 - serde_json: Copyright (c) Serde project contributors

@@ -1,0 +1,74 @@
+// Civil time-of-day operations, adapted from jiff civil::Time (third-party/NOTICES.md).
+@noalloc
+pub fn new(h: u8, m: u8, s: u8, ns: u32) -> Option[time.TimeOfDay] uses {} {
+  if h > 23 || m > 59 || s > 59 || ns > 999999999 {
+    None()
+  } else {
+    Some(time.TimeOfDay(hour: h, minute: m, second: s, nanosecond: ns))
+  }
+}
+
+@noalloc
+pub fn midnight() -> time.TimeOfDay uses {} {
+  time.TimeOfDay(hour: 0, minute: 0, second: 0, nanosecond: 0)
+}
+
+@noalloc
+pub fn hour(value: time.TimeOfDay) -> u8 uses {} {
+  value.hour
+}
+
+@noalloc
+pub fn minute(value: time.TimeOfDay) -> u8 uses {} {
+  value.minute
+}
+
+@noalloc
+pub fn second(value: time.TimeOfDay) -> u8 uses {} {
+  value.second
+}
+
+@noalloc
+pub fn nanosecond(value: time.TimeOfDay) -> u32 uses {} {
+  value.nanosecond
+}
+
+@noalloc
+pub fn compare(a: time.TimeOfDay, b: time.TimeOfDay) -> i32 uses {} {
+  let first = time.seconds_of_day(a)
+  let last = time.seconds_of_day(b)
+  if first < last || first == last && a.nanosecond < b.nanosecond {
+    -1
+  } else if first > last || a.nanosecond > b.nanosecond {
+    1
+  } else {
+    0
+  }
+}
+
+// HH:MM:SS with the fraction's trailing zeros trimmed.
+@preserves_unique(out)
+pub fn format_into(value: time.TimeOfDay, mut out: List[u8]) -> () uses {} {
+  time.write_digits(mut out, core@1/int.widen(value.hour), 2)
+  core@1/list.push(mut out, b':')
+  time.write_digits(mut out, core@1/int.widen(value.minute), 2)
+  core@1/list.push(mut out, b':')
+  time.write_digits(mut out, core@1/int.widen(value.second), 2)
+  time.write_fraction(mut out, value.nanosecond)
+}
+
+pub fn to_string(value: time.TimeOfDay) -> unique String uses {} {
+  let mut out: List[u8] = []
+  format_into(value, mut out)
+  text.finish_valid(take out)
+}
+
+@noalloc
+pub fn parse(text: String) -> Result[time.TimeOfDay, scalar.ParseError] uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let (value, end) = time.scan_time(bytes, 0)?
+  if end != core@1/bytes.len(bytes) {
+    return Error(Invalid())
+  }
+  Ok(value)
+}

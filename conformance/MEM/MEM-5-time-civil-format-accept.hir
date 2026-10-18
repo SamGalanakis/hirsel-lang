@@ -1,0 +1,14 @@
+// rule: MEM-5
+// expect: accept
+// Allocating pattern formatter permitted; the civil parsers allocate nothing.
+fn example(value: time.BrokenDownTime) {
+  time.format(value, "%Y-%m-%d")
+  ()
+}
+
+@noalloc
+fn parsed(text: String) {
+  date.parse(text)
+  time.parse_with(text, "%Y-%m-%d")
+  ()
+}
