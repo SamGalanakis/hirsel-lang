@@ -89,11 +89,16 @@ impl Heights {
     pub fn statement(&self, kind: &StmtKind) -> usize {
         let child = match kind {
             StmtKind::Let {
-                pattern, ty, value, ..
+                pattern,
+                ty,
+                value,
+                otherwise,
+                ..
             } => self
                 .pattern(*pattern)
                 .max(ty.map_or(0, |id| self.ty(id)))
-                .max(self.expr(*value)),
+                .max(self.expr(*value))
+                .max(otherwise.map_or(0, |id| self.expr(id))),
             StmtKind::Assign { place, value, .. } => self.expr(*place).max(self.expr(*value)),
             StmtKind::Expr(id) => return self.expr(*id), // statement wrapper is transparent
             StmtKind::While {

@@ -1,0 +1,10 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 8
+// A let-else that takes its payload moves the scrutinee, as match does.
+fn size(take x: Option[String]) -> u64 {
+  let Some(s) = take x else {
+    return 0
+  }
+  let again = x
+  string.byte_len(s)
+}

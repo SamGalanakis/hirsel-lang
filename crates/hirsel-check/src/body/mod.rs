@@ -1617,12 +1617,20 @@ impl Checker<'_, '_> {
         use ast::StmtKind as S;
         let stmt = self.input.tree.statements[id.0 as usize].clone();
         match stmt.kind {
-            S::Let { ty, value, .. } => {
+            S::Let {
+                ty,
+                value,
+                otherwise,
+                ..
+            } => {
                 if let Some(t) = ty {
                     self.environment_relation(t, "a binding");
                 }
                 let e = ty.map(|t| self.syntax_type(t, frame)).transpose()?;
                 self.work.push(Work::AfterChild(After::Let(id, frame)));
+                if let Some(otherwise) = otherwise {
+                    self.work.push(Work::Enter(otherwise, None, frame));
+                }
                 self.work.push(Work::Enter(value, e, frame));
             }
             S::Assign { place, .. } => {
@@ -1700,12 +1708,27 @@ impl Checker<'_, '_> {
                     pattern,
                     value,
                     ty: annotation,
+                    otherwise,
                 } = self.input.tree.statements[id.0 as usize].kind
                 else {
                     unreachable!()
                 };
                 let t = self.value(value);
-                let usage = self.binding_use(value, t, frame)?;
+                // LANG-13: a let-else borrows or takes as match does, so an
+                // unmarked binding place is inspected in place, not moved.
+                let inspected = otherwise.is_some()
+                    && !matches!(
+                        self.input.tree.expressions[value.0 as usize].kind,
+                        ast::ExprKind::Unary { .. }
+                    )
+                    && self
+                        .source_place(value)
+                        .is_some_and(|p| matches!(p.root, SourceRoot::Binding { .. }));
+                let usage = if inspected && !self.bound(t, ast::Bound::Plain)? {
+                    UseKind::Borrow
+                } else {
+                    self.binding_use(value, t, frame)?
+                };
                 let written = if let Some(annotation) = annotation {
                     let mut written = self.written_modes(annotation);
                     let declared = self.syntax_type(annotation, frame)?;
@@ -1735,8 +1758,19 @@ impl Checker<'_, '_> {
                 }
                 // The initializer retains its current modes; written locality
                 // belongs to the receiving binding and its checked storage.
-                self.pattern(pattern, received, usage, mutable, true, written, frame)?;
+                self.pattern(
+                    pattern,
+                    received,
+                    usage,
+                    mutable,
+                    otherwise.is_none(),
+                    written,
+                    frame,
+                )?;
                 self.joined_bindings_own(pattern);
+                if let Some(otherwise) = otherwise {
+                    self.let_else(pattern, received, otherwise)?;
+                }
                 // LANG-15/OWN-8: only a borrowed receipt aliases the parameter.
                 // Plain reads have already selected Copy in binding_use.
                 if usage == UseKind::Borrow

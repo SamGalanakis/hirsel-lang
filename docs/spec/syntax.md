@@ -422,7 +422,8 @@ tuple type needs a comma except for unit. Raw pointers are `Ptr[T]`; their opera
 ```ebnf
 block        = "{", { statement, END }, [ expression, [ END ] ], "}" ; (* LANG-1/11 *)
 statement    = let-stmt | assignment | for-stmt | while-stmt | local-fn | expression ; (* LANG-1/10/11 *)
-let-stmt     = "let", [ "mut" ], pattern, [ ":", type ], "=", expression ; (* LANG-5/13/15 *)
+let-stmt     = "let", [ "mut" ], pattern, [ ":", type ], "=", expression,
+               [ "else", block ] ;                       (* LANG-5/13/15 *)
 assignment   = expression, assign-op, expression ;       (* LANG-5 *)
 assign-op    = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "<<=" | ">>=" | "&=" | "|=" | "^=" ; (* LANG-1, SEM-1 *)
 loop-label   = "'", name ; (* one token; separate from character literals *)
@@ -480,8 +481,9 @@ bare name that resolves to a nullary variant; parsing never guesses from capital
 Labels and payload arity are checked against the expected type. A record rest pattern is
 last and needs a comma after preceding fields (`Rec(x: x, ..)`). A range pattern is
 closed (`a..=b`) and its bounds are literals. A parenthesized alternation inside an
-alternation is the same alternation (`(A | B) | C` is `A | B | C`). There is no
-`if let`, no `let .. else` and no qualified variant constructor.
+alternation is the same alternation (`(A | B) | C` is `A | B | C`). A `let` with `else` takes a refutable
+pattern; its initializer cannot end in a block. There is no `if let` and no qualified
+variant constructor.
 
 A statement expression becomes the block's tail exactly when it is last and not followed
 by a semicolon. An assignment's left side parses as an expression and must check as a

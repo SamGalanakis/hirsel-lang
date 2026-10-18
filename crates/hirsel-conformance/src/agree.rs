@@ -1103,8 +1103,12 @@ impl Catalogue<'_> {
                             pattern,
                             ty,
                             value,
+                            otherwise,
                         } => {
                             self.expr(value, &nested);
+                            if let Some(otherwise) = otherwise {
+                                self.expr(otherwise, &nested);
+                            }
                             self.sequence_holder(stmt.origin.span, mutable, pattern, ty, value);
                             let pattern_span =
                                 self.file.tree.patterns[pattern.0 as usize].origin.span;

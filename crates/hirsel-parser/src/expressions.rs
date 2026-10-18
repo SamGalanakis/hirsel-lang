@@ -382,6 +382,21 @@ impl Parser<'_> {
         }
         Ok(self.push_expr(start, ExprKind::Block { statements, tail }))
     }
+    /// Whether an expression's last token closes a block, closure or match:
+    /// parentheses are not retained, so `(if ..)` ends in one too.
+    fn ends_in_block(&self, mut e: ExprId) -> bool {
+        loop {
+            match &self.tree.expressions[e.0 as usize].kind {
+                ExprKind::Block { .. }
+                | ExprKind::If { .. }
+                | ExprKind::Match { .. }
+                | ExprKind::Closure { .. } => return true,
+                ExprKind::Unary { value, .. } | ExprKind::Return(Some(value)) => e = *value,
+                ExprKind::Binary { right, .. } => e = *right,
+                _ => return false,
+            }
+        }
+    }
     fn block_valued(&self, e: ExprId) -> bool {
         matches!(
             self.tree.expressions[e.0 as usize].kind,
@@ -427,17 +442,24 @@ impl Parser<'_> {
             };
             self.expect("=", const { RuleId::of("LANG-5") })?;
             let value = self.expr(0)?;
-            if self.at("else") {
-                return self.fail(
-                    const { RuleId::of("LANG-13") },
-                    "let else is excluded; use match",
-                );
-            }
+            let otherwise = if self.at("else") {
+                if self.ends_in_block(value) {
+                    return self.fail(
+                        const { RuleId::of("LANG-13") },
+                        "a let-else initializer cannot end in a block; bind it first",
+                    );
+                }
+                self.pos += 1;
+                Some(self.block()?)
+            } else {
+                None
+            };
             return Ok(StmtKind::Let {
                 mutable,
                 pattern,
                 ty,
                 value,
+                otherwise,
             });
         }
         if self.eat("for") {

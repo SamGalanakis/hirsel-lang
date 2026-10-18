@@ -575,6 +575,9 @@ pub enum StmtKind {
         pattern: PatternId,
         ty: Option<TypeExprId>,
         value: ExprId,
+        /// `else { .. }` of a refutable let: a block that diverges, run when
+        /// the pattern does not match; the bindings are not in scope there (LANG-13).
+        otherwise: Option<ExprId>,
     },
     Assign {
         place: ExprId,

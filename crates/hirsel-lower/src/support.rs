@@ -251,6 +251,7 @@ impl Fixture {
                     pattern,
                     ty: None,
                     value,
+                    otherwise: None,
                 },
                 1,
             ),

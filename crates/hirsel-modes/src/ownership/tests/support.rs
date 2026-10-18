@@ -283,6 +283,7 @@ impl Fixture {
             pattern,
             ty: None,
             value,
+            otherwise: None,
         });
         self.statements.push(stmt);
         index

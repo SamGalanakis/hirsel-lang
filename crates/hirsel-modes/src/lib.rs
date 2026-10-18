@@ -39,7 +39,10 @@ pub(crate) fn expression_children(tree: &SyntaxTree, e: ExprId) -> Vec<ExprId> {
         ExprKind::Block { statements, tail } => statements
             .iter()
             .flat_map(|s| match &tree.statements[s.0 as usize].kind {
-                StmtKind::Let { value, .. } | StmtKind::Expr(value) => vec![*value],
+                StmtKind::Let {
+                    value, otherwise, ..
+                } => std::iter::once(*value).chain(*otherwise).collect(),
+                StmtKind::Expr(value) => vec![*value],
                 StmtKind::Assign { place, value, .. } => vec![*place, *value],
                 StmtKind::While {
                     condition, body, ..

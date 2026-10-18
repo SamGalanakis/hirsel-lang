@@ -360,8 +360,18 @@ fn caller() -> u32 { span(to: 9, from: 2) }
 A structural or literal pattern on `box T` inspects `T` through an implicit payload
 projection, recursively through nested boxes. A binding or `_` keeps or ignores the whole
 value; a contextual nullary variant name is a structural pattern. `let` accepts only
-irrefutable patterns (tuples, records, `distinct` types, `_`). Refutable patterns appear
-only in `match`; there is no `if let` and no `let .. else`.
+irrefutable patterns (tuples, records, `distinct` types, `_`), unless it has an else
+block. Other refutable patterns appear only in `match`; there is no `if let`.
+
+`let P = e else { .. }` binds `P` in the enclosing block when `e` matches, and otherwise
+runs the else block, which must diverge: its type is `Never`, through `return`,
+`break`, `continue` or a call that never returns. `P` must be refutable, and the
+bindings are not in scope in the else block. The pattern is checked as a match arm is:
+an unmarked binding place is inspected in place and its parts borrowed, while `take e`
+or a computed value is taken, so its bindings borrow or take exactly as `match` binds
+them. The scrutinee and the scopes the else block leaves release under the ordinary
+cleanup rules. The initializer cannot end in a block (`if`, `match`, a block or a
+closure literal); bind such a value first.
 
 ```hirsel
 type Figure = Circle(radius: u32) | Rect(w: u32, h: u32) | Empty

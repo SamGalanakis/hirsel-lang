@@ -377,8 +377,13 @@ impl Normalizer<'_, '_> {
                 pattern,
                 ty,
                 value,
+                otherwise,
             } => {
-                e.tag("let");
+                e.tag(if otherwise.is_some() {
+                    "let-else"
+                } else {
+                    "let"
+                });
                 e.boolean(*mutable);
                 e.boolean(ty.is_some());
                 if let Some(t) = ty {
@@ -392,6 +397,9 @@ impl Normalizer<'_, '_> {
                     })?;
                 }
                 self.expression(*value, e, active, locals)?;
+                if let Some(otherwise) = otherwise {
+                    self.expression(*otherwise, e, active, locals)?;
+                }
                 self.pattern(*pattern, e, locals, &mut BTreeSet::new())?;
             }
             ast::StmtKind::Assign { place, op, value } => {

@@ -1,0 +1,12 @@
+// rule: OWN-2
+// expect: accept
+// A let-else that takes its payload moves the scrutinee, as match does; one
+// that borrows leaves it to move once the binding is done.
+fn size(take x: Option[String]) -> u64 {
+  let Some(s) = x else {
+    return 0
+  }
+  let n = string.byte_len(s)
+  let again = x
+  n
+}

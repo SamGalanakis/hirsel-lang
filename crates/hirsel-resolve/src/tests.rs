@@ -218,6 +218,7 @@ impl Tree {
                 pattern,
                 ty,
                 value,
+                otherwise: None,
             },
             line,
         )

@@ -1118,7 +1118,12 @@ conformance/LANG/LANG-13-if-let-bad.hir
 conformance/LANG/LANG-13-if-let-ok.hir
 conformance/LANG/LANG-13-irrefutable-patterns.hir
 conformance/LANG/LANG-13-let-else-bad.hir
+conformance/LANG/LANG-13-let-else-initializer-bad.hir
+conformance/LANG/LANG-13-let-else-initializer-ok.hir
+conformance/LANG/LANG-13-let-else-irrefutable-bad.hir
+conformance/LANG/LANG-13-let-else-irrefutable-ok.hir
 conformance/LANG/LANG-13-let-else-ok.hir
+conformance/LANG/LANG-13-let-else-run.hir
 conformance/LANG/LANG-13-loop-element-match-run.hir
 conformance/LANG/LANG-13-loop-tuple-payload-part-run.hir
 conformance/LANG/LANG-13-nested-match-on-binding-run.hir
@@ -1303,6 +1308,8 @@ conformance/LANG/LANG-2-later-local-bad.hir
 conformance/LANG/LANG-2-later-local-ok.hir
 conformance/LANG/LANG-2-later-parameter-bad.hir
 conformance/LANG/LANG-2-later-parameter-ok.hir
+conformance/LANG/LANG-2-let-else-scope-bad.hir
+conformance/LANG/LANG-2-let-else-scope-ok.hir
 conformance/LANG/LANG-2-nested-call-failure-site.hir
 conformance/LANG/LANG-2-nested-call-recursive-cycle-run.hir
 conformance/LANG/LANG-2-nested-call-size-capture-run.hir
@@ -3048,6 +3055,8 @@ conformance/OWN/OWN-1-borrowed-take-capture-nested-bad.hir
 conformance/OWN/OWN-1-borrowed-take-capture-ok.hir
 conformance/OWN/OWN-1-caller-keeps-on-error.hir
 conformance/OWN/OWN-1-cursor-borrowed-item-take.hir
+conformance/OWN/OWN-1-let-else-take-bad.hir
+conformance/OWN/OWN-1-let-else-take-ok.hir
 conformance/OWN/OWN-1-local-result-annotated-closure-bad.hir
 conformance/OWN/OWN-1-local-result-annotated-closure-ok.hir
 conformance/OWN/OWN-1-local-result-closure-bad.hir
@@ -3105,6 +3114,8 @@ conformance/OWN/OWN-2-json-write-accept.hir
 conformance/OWN/OWN-2-json-write-reject.hir
 conformance/OWN/OWN-2-labelled-move-bad.hir
 conformance/OWN/OWN-2-labelled-move-ok.hir
+conformance/OWN/OWN-2-let-else-take-bad.hir
+conformance/OWN/OWN-2-let-else-take-ok.hir
 conformance/OWN/OWN-2-local-result-propagation-bad.hir
 conformance/OWN/OWN-2-local-result-propagation-ok.hir
 conformance/OWN/OWN-2-moved-storage-compound-write-bad.hir

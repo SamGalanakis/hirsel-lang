@@ -1,0 +1,79 @@
+// rule: LANG-13
+// expect: run
+// A refutable let binds into the enclosing block and runs its diverging
+// else block otherwise: it borrows or takes as match does, leaves loops with
+// break or continue, and combines with alternatives and ranges.
+type Token = Plus | Number(u8) | Name(String)
+
+fn read(value: Option[u64]) -> Result[u64, String] {
+  let Some(n) = value else {
+    return Error("missing number")
+  }
+  Ok(n + 1)
+}
+
+fn name_len(t: Token) -> u64 {
+  let Name(s) = t else {
+    return 0
+  }
+  string.byte_len(s)
+}
+
+fn owned(take t: Token) -> String {
+  let Name(s) = take t else {
+    return "none"
+  }
+  s
+}
+
+fn digits(xs: List[Token]) -> u32 {
+  let mut total = 0u32
+  for x in xs {
+    let Number(0..=9) = x else {
+      continue
+    }
+    total += 1
+  }
+  total
+}
+
+fn prefix(xs: List[Option[u32]]) -> u32 {
+  let mut total = 0u32
+  for x in xs {
+    let Some(n) = x else {
+      break
+    }
+    total += n
+  }
+  total
+}
+
+fn either(x: Option[Result[u32, u32]]) -> u32 {
+  let Some(Ok(n) | Error(n)) = x else {
+    return 99
+  }
+  n
+}
+
+fn small(r: Result[u8, u8]) -> bool {
+  let Ok(0..=9) | Error(0) = r else {
+    return false
+  }
+  true
+}
+
+pub fn main(t: Test) -> Result[(), String] {
+  test.check(t, read(Some(3)) == Ok(4))
+  test.check(t, read(None) == Error("missing number"))
+  test.check(t, name_len(Name("abc")) == 3)
+  test.check(t, name_len(Plus()) == 0)
+  test.check(t, owned(Name("x")) == "x")
+  test.check(t, owned(Plus()) == "none")
+  test.check(t, digits([Number(1), Plus(), Number(12), Number(9)]) == 2)
+  test.check(t, prefix([Some(1), Some(2), None, Some(5)]) == 3)
+  test.check(t, either(Some(Error(4))) == 4)
+  test.check(t, either(None) == 99)
+  test.check(t, small(Ok(7)))
+  test.check(t, !small(Error(7)))
+  Ok(())
+}

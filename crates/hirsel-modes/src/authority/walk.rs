@@ -1806,8 +1806,19 @@ impl<'a> Checker<'a> {
                         break;
                     }
                     let flow = match &self.tree.statements[statement.0 as usize].kind {
-                        StmtKind::Expr(value) | StmtKind::Let { value, .. } => {
-                            self.loop_control(*value, target, nesting)
+                        StmtKind::Expr(value) => self.loop_control(*value, target, nesting),
+                        StmtKind::Let {
+                            value, otherwise, ..
+                        } => {
+                            let flow = self.loop_control(*value, target, nesting);
+                            match otherwise {
+                                // A let-else continues past a matched pattern.
+                                Some(otherwise) if flow.0 => {
+                                    let refused = self.loop_control(*otherwise, target, nesting);
+                                    (true, flow.1 || refused.1)
+                                }
+                                _ => flow,
+                            }
                         }
                         StmtKind::Assign { place, value, .. } => {
                             sequence(self, target, nesting, [*place, *value])
@@ -1845,7 +1856,11 @@ impl<'a> Checker<'a> {
         let stmt = self.tree.statements[s.0 as usize].clone();
         match stmt.kind {
             StmtKind::Let {
-                pattern, ty, value, ..
+                pattern,
+                ty,
+                value,
+                otherwise,
+                ..
             } => {
                 let written_locality = self
                     .pattern_row(pattern)
@@ -1891,6 +1906,10 @@ impl<'a> Checker<'a> {
                     ))
                 };
                 self.expr(value, context);
+                // LANG-13: the else block runs before any binding exists.
+                if let Some(otherwise) = otherwise {
+                    self.expr(otherwise, None);
+                }
                 if let Some(actual) = self.ty(value) {
                     if ty.is_some() {
                         if let Some(expected) = expected {
@@ -2018,7 +2037,10 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                self.used(value)
+                match otherwise {
+                    Some(otherwise) => self.used(value).join(self.used(otherwise)),
+                    None => self.used(value),
+                }
             }
             StmtKind::Assign { place, value, .. } => {
                 self.unread.insert(place);

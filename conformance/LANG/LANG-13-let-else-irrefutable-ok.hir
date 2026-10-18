@@ -1,0 +1,7 @@
+// rule: LANG-13
+// expect: accept
+// A let-else pattern can fail to match; an irrefutable one needs no else.
+fn sum(pair: (u32, u32)) -> u32 {
+  let (a, b) = pair
+  a + b
+}

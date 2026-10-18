@@ -214,8 +214,23 @@ impl Checker<'_, '_> {
                         continue;
                     }
                     match self.input.tree.statements[id.0 as usize].kind.clone() {
-                        ast::StmtKind::Let { pattern, value, .. } => {
+                        ast::StmtKind::Let {
+                            pattern,
+                            value,
+                            otherwise,
+                            ..
+                        } => {
                             todo.push(Visit::Introduce(pattern, state));
+                            if let Some(otherwise) = otherwise {
+                                // LANG-13: a refused value runs the else block.
+                                todo.push(Visit::Fork(
+                                    vec![
+                                        Branch::expression(otherwise, false, barrier),
+                                        Branch::unchanged(),
+                                    ],
+                                    state,
+                                ));
+                            }
                             todo.push(Visit::Expression(value, false, barrier, state));
                         }
                         ast::StmtKind::Expr(value) => {

@@ -1448,7 +1448,11 @@ pub(super) fn build(
                             env,
                         }),
                         StmtKind::Let {
-                            pattern, value, ty, ..
+                            pattern,
+                            value,
+                            ty,
+                            otherwise,
+                            ..
                         } => {
                             let bind = bind(
                                 &mut nodes,
@@ -1460,14 +1464,37 @@ pub(super) fn build(
                                 next,
                                 stmt.origin.span,
                             );
+                            // LANG-13: a value the pattern misses runs the
+                            // else block, which never reaches the bindings.
+                            let matched = if let Some(otherwise) = otherwise {
+                                let refused = reserve(&mut nodes, stmt.origin.span);
+                                jobs.push(Job::Expr {
+                                    entry: refused,
+                                    expression: *otherwise,
+                                    context: Context::Read,
+                                    operation: *otherwise,
+                                    escaping: false,
+                                    owning: false,
+                                    next: exit,
+                                    env: env.clone(),
+                                });
+                                node(&mut nodes, Op::Nop, vec![bind, refused], stmt.origin.span)
+                            } else {
+                                bind
+                            };
                             jobs.push(Job::Expr {
                                 entry,
                                 expression: *value,
-                                context: Context::Own,
+                                // A let-else reads its scrutinee as match does.
+                                context: if otherwise.is_some() {
+                                    Context::Read
+                                } else {
+                                    Context::Own
+                                },
                                 operation: *value,
                                 escaping: ty.is_some(),
                                 owning: false,
-                                next: bind,
+                                next: matched,
                                 env,
                             });
                         }
@@ -1780,7 +1807,10 @@ fn entry_snapshots(tree: &SyntaxTree, owner: NameSite) -> Vec<ExprId> {
                 pending.extend(tail);
                 for statement in statements {
                     match &tree.statements[statement.0 as usize].kind {
-                        StmtKind::Let { value, .. } | StmtKind::Expr(value) => pending.push(*value),
+                        StmtKind::Let {
+                            value, otherwise, ..
+                        } => pending.extend(std::iter::once(*value).chain(*otherwise)),
+                        StmtKind::Expr(value) => pending.push(*value),
                         StmtKind::Assign { place, value, .. } => pending.extend([*place, *value]),
                         StmtKind::While {
                             condition, body, ..

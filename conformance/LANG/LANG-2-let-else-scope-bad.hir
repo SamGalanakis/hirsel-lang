@@ -1,0 +1,9 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 6
+// A let-else binding is not in scope in its else block.
+fn first(x: Option[u32]) -> u32 {
+  let Some(n) = x else {
+    return n
+  }
+  n
+}

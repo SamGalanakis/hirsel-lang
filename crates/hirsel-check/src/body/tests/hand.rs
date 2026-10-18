@@ -241,6 +241,7 @@ fn recovery_is_absorbing_and_retains_nested_binders() {
         pattern,
         ty: None,
         value,
+        otherwise: None,
     });
     let root = f.block(vec![stmt], None);
     let (out, _) = f.finish(root);

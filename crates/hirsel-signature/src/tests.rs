@@ -760,6 +760,7 @@ fn contract_code_hashes_nested_blocks_patterns_and_bound_variables() {
             pattern: bind,
             ty: None,
             value,
+            otherwise: None,
         },
     });
     let tail = f.expression(ast::ExprKind::Path(ast::Path {

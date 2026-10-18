@@ -638,6 +638,7 @@ impl<'a> Printer<'a> {
                 pattern,
                 ty,
                 value,
+                otherwise,
             } => {
                 let mut ds = vec![token("let"), Space];
                 if *mutable {
@@ -648,6 +649,9 @@ impl<'a> Printer<'a> {
                     ds.extend([token(":"), Space, self.ty(*t)?]);
                 }
                 ds.extend([Space, token("="), Space, self.expr(*value, 0)?]);
+                if let Some(otherwise) = otherwise {
+                    ds.extend([Space, token("else"), Space, self.expr(*otherwise, 0)?]);
+                }
                 cat(ds)
             }
             StmtKind::Assign { place, op, value } => cat([

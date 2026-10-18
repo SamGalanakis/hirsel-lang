@@ -1,0 +1,9 @@
+// rule: LANG-13
+// expect: reject LANG-13 at line 5
+// A let-else initializer cannot end in a block, which would take the else.
+fn pick(fresh: bool, x: Option[u32]) -> u32 {
+  let Some(n) = if fresh { x } else { None } else {
+    return 0
+  }
+  n
+}

@@ -41,6 +41,7 @@ impl Fixture {
             pattern,
             ty,
             value,
+            otherwise: None,
         })
     }
     fn app(&mut self, name: &str, args: Vec<TypeExprId>) -> TypeExprId {
@@ -604,6 +605,7 @@ fn build(name: &str) -> Fixture {
                 pattern,
                 ty: None,
                 value: remove,
+                otherwise: None,
             });
             let body = f.block(vec![let_], None);
             let drop = DropSyntax {

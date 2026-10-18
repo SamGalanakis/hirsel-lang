@@ -2017,7 +2017,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         let statement = self.file.tree.statements[id.0 as usize].clone();
         match statement.kind {
             StmtKind::Let {
-                pattern, ty, value, ..
+                pattern,
+                ty,
+                value,
+                otherwise,
+                ..
             } => {
                 let names = self.pattern_names(pattern);
                 let declaring = std::mem::replace(&mut self.declaring, names);
@@ -2025,6 +2029,10 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 self.declaring = declaring;
                 let own = std::mem::take(&mut self.deferred);
                 let value_type = self.expr(value, expected.clone());
+                // LANG-13: the else block runs where the pattern bound nothing.
+                if let Some(otherwise) = otherwise {
+                    self.expr(otherwise, ExpectedType::Unknown);
+                }
                 self.pattern(
                     pattern,
                     if expected == ExpectedType::Unknown {

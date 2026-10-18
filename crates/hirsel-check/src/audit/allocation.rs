@@ -515,13 +515,19 @@ impl<'a> Audit<'a, '_> {
                 ast::ExprKind::Block { statements, .. } => {
                     for (index, statement) in statements.iter().enumerate() {
                         match &self.input.tree.statements[statement.0 as usize].kind {
-                            ast::StmtKind::Let { pattern, value, .. } => {
+                            ast::StmtKind::Let {
+                                pattern,
+                                value,
+                                otherwise,
+                                ..
+                            } => {
                                 let mut patterns = vec![*pattern];
                                 while let Some(p) = patterns.pop() {
                                     lets.insert(p, (e, index));
                                     patterns.extend(self.input.tree.pattern_children(p));
                                 }
                                 todo.push(*value);
+                                todo.extend(*otherwise);
                             }
                             ast::StmtKind::Expr(value) => todo.push(*value),
                             ast::StmtKind::Assign { place, value, .. } => {
@@ -760,8 +766,14 @@ impl<'a> Audit<'a, '_> {
                     for statement in statements {
                         match &self.input.tree.statements[statement.0 as usize].kind {
                             ast::StmtKind::Expr(value) => todo.push((*value, true)),
-                            ast::StmtKind::Let { pattern, value, .. } => {
-                                todo.push((*value, self.discards(*pattern)))
+                            ast::StmtKind::Let {
+                                pattern,
+                                value,
+                                otherwise,
+                                ..
+                            } => {
+                                todo.push((*value, self.discards(*pattern)));
+                                todo.extend(otherwise.map(|o| (o, true)));
                             }
                             ast::StmtKind::Assign { place, value, .. } => {
                                 todo.push((*place, false));
@@ -1140,11 +1152,19 @@ impl<'a> Audit<'a, '_> {
                         match &statement.kind {
                             // A binding written `in heap` receives a global value
                             // that may outlive this frame (MEM-5, MEM-10).
-                            ast::StmtKind::Let { value, ty, .. } => todo.push((
-                                *value,
-                                prohibited,
-                                ty.is_some_and(|ty| self.written_heap(ty)),
-                            )),
+                            ast::StmtKind::Let {
+                                value,
+                                ty,
+                                otherwise,
+                                ..
+                            } => {
+                                todo.push((
+                                    *value,
+                                    prohibited,
+                                    ty.is_some_and(|ty| self.written_heap(ty)),
+                                ));
+                                todo.extend(otherwise.map(|o| (o, prohibited, false)));
+                            }
                             ast::StmtKind::Expr(value) => todo.push((*value, prohibited, false)),
                             ast::StmtKind::Assign { place, value, .. } => {
                                 if prohibited && self.input.allocating_mutations.contains(place) {

@@ -79,9 +79,10 @@ impl Builder<'_, '_> {
                     pending.extend(tail);
                     for statement in statements {
                         match &self.input.tree.statements[statement.0 as usize].kind {
-                            StmtKind::Let { value, .. } | StmtKind::Expr(value) => {
-                                pending.push(*value)
-                            }
+                            StmtKind::Let {
+                                value, otherwise, ..
+                            } => pending.extend(std::iter::once(*value).chain(*otherwise)),
+                            StmtKind::Expr(value) => pending.push(*value),
                             StmtKind::Assign { place, value, .. } => {
                                 // Unknown storage is not a proof of disjointness.
                                 let Ok(target) = self.resolved_place(*place) else {

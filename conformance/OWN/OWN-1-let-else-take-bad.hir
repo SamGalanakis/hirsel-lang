@@ -1,0 +1,9 @@
+// rule: OWN-1
+// expect: reject OWN-1 at line 5
+// A let-else can take its payload only from a value it owns.
+fn size(x: Option[String]) -> String {
+  let Some(s) = take x else {
+    return ""
+  }
+  s
+}

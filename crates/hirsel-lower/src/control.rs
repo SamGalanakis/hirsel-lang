@@ -325,7 +325,12 @@ impl Builder<'_, '_> {
         };
         let span = statement.origin.span;
         match statement.kind {
-            StmtKind::Let { pattern, value, .. } => {
+            StmtKind::Let {
+                pattern,
+                value,
+                otherwise,
+                ..
+            } => {
                 // A taken value, and a copy of a computed value that ends
                 // with this statement, make the binding a new owner (PROV-1).
                 // Blocks are transparent (spec #50): `{take x}` is `take x`.
@@ -375,7 +380,7 @@ impl Builder<'_, '_> {
                     } else {
                         let _ = self.loan(&mut value, span);
                     }
-                    self.bind_refutable(pattern, value.place, fresh, None, span, bodies)?;
+                    self.bind_refutable(pattern, value.place, fresh, otherwise, span, bodies)?;
                     if matches!(
                         self.input.tree.patterns[pattern.0 as usize].kind,
                         hirsel_syntax::PatternKind::Wildcard

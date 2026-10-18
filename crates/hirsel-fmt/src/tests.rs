@@ -804,6 +804,7 @@ fn all_statements_and_final_expression_discard() {
             pattern: p,
             ty: Some(ty),
             value: zero,
+            otherwise: None,
         }),
         f.st(StmtKind::Assign {
             place: x,
@@ -1660,6 +1661,7 @@ fn hand_tree_comment_layout_is_a_fixed_point() {
         pattern,
         ty: None,
         value: one,
+        otherwise: None,
     });
     let tail = f.value("x");
     let body = f.block(vec![s], Some(tail));

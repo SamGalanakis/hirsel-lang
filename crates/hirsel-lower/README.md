@@ -239,6 +239,9 @@ TIR has no or-pattern: each way an arm's alternatives match
 its guard and body once per way, so every copy keeps match's own views and takes.
 `let` and `for` alternatives become a table whose arms move or copy each binding
 into one slot per name (`Builder::joining`) and join; H rejects a borrowed one.
+A let-else (`Builder::bind_refutable`) is the same table plus a wildcard arm that
+lowers the diverging else block; with one way to match, its bindings are the arm's
+own views or takes, made in the enclosing scope.
 The independent V matrix proof and direct table evaluator preserve correlated
 variant/Boolean products; generated matrices and retained-size gates cover the
 cutover. See the R4 match addendum.

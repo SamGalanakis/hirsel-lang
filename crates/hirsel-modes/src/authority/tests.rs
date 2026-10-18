@@ -342,6 +342,7 @@ fn task_handle_consumption_is_required_on_every_reachable_branch() {
             ty: None,
             value: launch,
             mutable: false,
+            otherwise: None,
         });
         let first = consume_handle(&mut f, local, ty, false);
         let second = if both {
@@ -541,6 +542,7 @@ fn loop_control_cannot_consume_a_task_handle_in_unreachable_code() {
                 ty: None,
                 value: launch,
                 mutable: false,
+                otherwise: None,
             });
             let control = f.expr(
                 if breaks {

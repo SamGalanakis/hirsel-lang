@@ -339,6 +339,32 @@ impl Checker<'_, '_> {
         }
         Ok(())
     }
+    /// LANG-13: a let-else pattern can fail to match, and its else block
+    /// diverges (return, break, continue or a call that never returns).
+    pub(super) fn let_else(
+        &mut self,
+        pattern: ast::PatternId,
+        ty: TypeId,
+        otherwise: ast::ExprId,
+    ) -> Result<(), QueryError> {
+        if !self.invalid(ty) && !self.useful(ty, vec![vec![Some(pattern)]], vec![None])? {
+            self.report(
+                const { RuleId::of("LANG-13") },
+                self.input.tree.patterns[pattern.0 as usize].origin.span,
+                "a let-else pattern matches every value; remove the else",
+            );
+        }
+        let block = self.value(otherwise);
+        if !self.invalid(block) && !self.bottom(block) {
+            self.report(
+                const { RuleId::of("LANG-13") },
+                self.span(otherwise),
+                "a let-else block must diverge: end it with return, break, continue \
+                 or a call that never returns",
+            );
+        }
+        Ok(())
+    }
     /// LANG-13: outside match, every way a pattern's alternatives match moves
     /// or copies its bindings into one slot per name, so no binding is a view.
     pub(super) fn joined_bindings_own(&mut self, root: ast::PatternId) {

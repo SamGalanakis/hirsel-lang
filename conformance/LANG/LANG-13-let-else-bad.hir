@@ -1,8 +1,10 @@
 // rule: LANG-13
 // expect: reject LANG-13 at line 6
-// Shows "Refutable patterns appear only in match"
+// Shows "the else block must diverge"
 @noalloc
 fn example(x: Option[u32]) -> u32 {
-  let Some(n) = x else { return 0 }
+  let Some(n) = x else {
+    0u32
+  }
   n
 }

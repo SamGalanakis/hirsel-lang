@@ -59,6 +59,7 @@ impl Parser<'_> {
                 pattern,
                 ty: Some(list),
                 value: empty,
+                otherwise: None,
             },
         )];
         for (i, (position, spelling)) in pieces.iter().enumerate() {
@@ -241,6 +242,7 @@ impl Parser<'_> {
                     pattern,
                     ty: None,
                     value: length,
+                    otherwise: None,
                 },
             );
             let append = self.format_step(origin, builder, FormatStep::Append, vec![hole]);
