@@ -3398,16 +3398,33 @@ impl Checker<'_> {
                 self.log_move(index, expression);
                 value.modes.multiplicity = Multiplicity::Once;
             } else if escaping {
-                if !specialized && !self.properties[ty.index()].copyable {
+                // A task closure copies its other free uses too (CLO-3), so a
+                // noncopyable capture must be taken there as well.
+                let task = metadata.is_some_and(|m| m.context == CaptureContext::Task);
+                if !self.properties[ty.index()].scoped_capability
+                    && !self.properties[ty.index()].copyable
+                {
                     self.report(
                         const { RuleId::of("OWN-5") },
                         closure,
-                        "this escaping capture must be taken",
+                        if task {
+                            "this task capture must be taken"
+                        } else {
+                            "this escaping capture must be taken"
+                        },
                         |c| {
                             c.binding_explanation(
                                 index,
                                 Some(Cause::Noncopyable),
-                                Fact::new(Requirement::EscapingCapture, closure, &[]),
+                                Fact::new(
+                                    if task {
+                                        Requirement::TaskCapture
+                                    } else {
+                                        Requirement::EscapingCapture
+                                    },
+                                    closure,
+                                    &[],
+                                ),
                             )
                         },
                     );

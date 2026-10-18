@@ -3454,6 +3454,8 @@ conformance/OWN/OWN-5-sequence-resource-copy-bad.hir
 conformance/OWN/OWN-5-sequence-resource-copy-ok.hir
 conformance/OWN/OWN-5-task-copy-bad.hir
 conformance/OWN/OWN-5-task-copy-ok.hir
+conformance/OWN/OWN-5-task-sender-free-use-bad.hir
+conformance/OWN/OWN-5-task-sender-free-use-run.hir
 conformance/OWN/OWN-6-counted-child-borrow-bad.hir
 conformance/OWN/OWN-6-counted-child-borrow-ok.hir
 conformance/OWN/OWN-6-shared-children.hir

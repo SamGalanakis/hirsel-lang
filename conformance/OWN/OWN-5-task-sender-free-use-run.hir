@@ -1,0 +1,29 @@
+// rule: OWN-5
+// expect: run
+// "Noncopyable ... Moved or borrowed only."
+// The accepted twin of OWN-5-task-sender-free-use-bad: the task closure takes the
+// parent's Sender and sends through it.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let received = task.scope(
+    tasks,
+    fn(s: Scope) -> u8 {
+      let (tx, rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let child = task.async(
+        s,
+        fn() {
+          let mut owned = take tx
+          let _ = channel.send(tasks, mut owned, 9u8)
+        }
+      )
+      task.await(s, take child)
+      let mut r = take rx
+      match channel.receive(tasks, mut r) {
+        Ok(v) => v,
+        Error(_) => 0u8,
+      }
+    }
+  )
+  failure.check(received == 9u8, Arithmetic())
+  Ok(())
+}

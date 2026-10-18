@@ -1,0 +1,22 @@
+// rule: OWN-5
+// expect: reject OWN-5 at line 14
+// "Noncopyable ... Moved or borrowed only."
+// A task closure copies a free use it does not take (CLO-3), and a Sender cannot be
+// copied, so naming the parent's Sender without `take` is rejected.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (tx, rx): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let child = task.async(
+        s,
+        fn() {
+          let _ = tx
+        }
+      )
+      task.await(s, take child)
+    }
+  )
+  Ok(())
+}
