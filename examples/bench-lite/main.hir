@@ -74,18 +74,11 @@ fn by_count(a: Ranked, b: Ranked) -> i32 uses {} {
   string.compare(a.word, b.word)
 }
 
-// std@1's u64.wrapping_mul is a shift-and-add loop; one u128 product is cheaper.
-fn wrapping_mul(a: u64, b: u64) -> u64 {
-  let wide_a: u128 = int.widen(a)
-  let wide_b: u128 = int.widen(b)
-  int.truncate(wide_a * wide_b)
-}
-
 // FNV-1a over each distinct word and its count, in first-seen order.
 fn mix(hash: u64, data: Bytes) -> u64 {
   let mut h = hash
   for i in 0u64..bytes.len(data) {
-    h = wrapping_mul(h ^ int.widen(data[i]), 1099511628211u64)
+    h = u64.wrapping_mul(h ^ int.widen(data[i]), 1099511628211u64)
   }
   h
 }

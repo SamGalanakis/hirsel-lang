@@ -11,6 +11,8 @@ fn integer_policies_and_radices_are_ordinary_source_native_units() {
         for name in [
             "SEM-1-std-integer-policy-extrema-run.hir",
             "SEM-1-std-integer-radix-run.hir",
+            "SEM-1-std-integer-add-policies-run.hir",
+            "SEM-1-std-integer-wide-products-run.hir",
         ] {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../conformance/SEM")
@@ -43,6 +45,9 @@ fn integer_policies_and_radices_are_ordinary_source_native_units() {
             "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
         ] {
             for name in [
+                "checked_add",
+                "saturating_add",
+                "wrapping_add",
                 "checked_sub",
                 "checked_mul",
                 "saturating_sub",

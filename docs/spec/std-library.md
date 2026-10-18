@@ -230,6 +230,9 @@ Every integer module (`u8`, `u16`, `u32`, `u64`, `u128`, `i8`, `i16`, `i32`,
 `T` below denotes that module's scalar type, rather than a source generic:
 
 ```text
+N fn T.checked_add(a: T, b: T) -> Option[T] uses {}
+N fn T.saturating_add(a: T, b: T) -> T uses {}
+N fn T.wrapping_add(a: T, b: T) -> T uses {}
 N fn T.checked_sub(a: T, b: T) -> Option[T] uses {}
 N fn T.checked_mul(a: T, b: T) -> Option[T] uses {}
 N fn T.saturating_sub(a: T, b: T) -> T uses {}
@@ -243,7 +246,9 @@ fn T.format_radix(value: T, radix: u8) -> Result[unique String, scalar.ParseErro
 Checked operations return `None` exactly when the mathematical result is outside
 that type's range. Saturation clamps to its minimum or maximum, according to the
 mathematical result; wrapping computes modulo the type's bit width. These are
-ordinary source kernels, including u128 multiplication without a wider scalar.
+ordinary source kernels; the add helpers delegate to core `int.*`. Wrapping
+multiplication uses a double-width product below 128 bits and three 64-bit limb
+products at 128 bits, with no bit-by-bit loop or wider-than-u128 scalar.
 Radices are 2 through 36, with case-insensitive ASCII digits on input and lowercase
 output. Only signed types accept a leading minus. No plus, whitespace, underscore
 or implicit radix prefix is accepted. Invalid radix or grammar yields `Invalid`,

@@ -12,13 +12,6 @@ pub opaque type Generator: inert + noalloc_drop uses {} {
 }
 
 @noalloc
-fn wrapping_mul(a: u64, b: u64) -> u64 uses {} {
-  let wide_a: u128 = core@1/int.widen(a)
-  let wide_b: u128 = core@1/int.widen(b)
-  core@1/int.truncate(wide_a * wide_b)
-}
-
-@noalloc
 fn rotl(x: u64, k: u64) -> u64 uses {} {
   x << k | x >> 64 - k
 }
@@ -28,8 +21,8 @@ fn rotl(x: u64, k: u64) -> u64 uses {} {
 fn splitmix(mut state: u64) -> u64 uses {} {
   state = core@1/int.wrapping_add(state, 0x9e3779b97f4a7c15)
   let mut z = state
-  z = wrapping_mul(z ^ z >> 30, 0xbf58476d1ce4e5b9)
-  z = wrapping_mul(z ^ z >> 27, 0x94d049bb133111eb)
+  z = u64.wrapping_mul(z ^ z >> 30, 0xbf58476d1ce4e5b9)
+  z = u64.wrapping_mul(z ^ z >> 27, 0x94d049bb133111eb)
   z ^ z >> 31
 }
 
