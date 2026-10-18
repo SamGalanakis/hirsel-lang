@@ -108,9 +108,8 @@ fn u64_field(fields: Map[String, box json.Value], key: String) -> Option[u64] us
 }
 
 fn parse_object(body: Bytes) -> Option[Map[String, box json.Value]] uses {} {
-  let text = match string.from_bytes(unique body) {
-    Ok(s) => take s,
-    Error(_) => return None(),
+  let Ok(text) = string.from_bytes(unique body) else {
+    return None()
   }
   match json.parse(take text) {
     Ok(Object(fields)) => Some(copy fields),
@@ -119,35 +118,28 @@ fn parse_object(body: Bytes) -> Option[Map[String, box json.Value]] uses {} {
 }
 
 fn parse_store(take text: String) -> Result[unique Store, ServerError] uses {} {
-  let fields = match json.parse(take text) {
-    Ok(Object(fields)) => copy fields,
-    _ => return Error(Corrupt("state is not a JSON object")),
+  let Ok(Object(fields)) = json.parse(take text) else {
+    return Error(Corrupt("state is not a JSON object"))
   }
-  let next_id = match u64_field(fields, "next_id") {
-    Some(n) => n,
-    None() => return Error(Corrupt("next_id")),
+  let Some(next_id) = u64_field(fields, "next_id") else {
+    return Error(Corrupt("next_id"))
   }
-  let items = match map.get(fields, "todos") {
-    Some(Array(xs)) => copy xs,
-    _ => return Error(Corrupt("todos")),
+  let Some(Array(items)) = map.get(fields, "todos") else {
+    return Error(Corrupt("todos"))
   }
   let mut todos: List[Todo] = []
   for item in items {
-    let entry = match item {
-      Object(xs) => copy xs,
-      _ => return Error(Corrupt("todo")),
+    let Object(entry) = item else {
+      return Error(Corrupt("todo"))
     }
-    let id = match u64_field(entry, "id") {
-      Some(n) => n,
-      None() => return Error(Corrupt("todo id")),
+    let Some(id) = u64_field(entry, "id") else {
+      return Error(Corrupt("todo id"))
     }
-    let title = match text_field(entry, "title") {
-      Some(s) => take s,
-      None() => return Error(Corrupt("todo title")),
+    let Some(title) = text_field(entry, "title") else {
+      return Error(Corrupt("todo title"))
     }
-    let done = match bool_field(entry, "done") {
-      Some(b) => b,
-      None() => return Error(Corrupt("todo done")),
+    let Some(done) = bool_field(entry, "done") else {
+      return Error(Corrupt("todo done"))
     }
     list.push(mut todos, Todo(id: id, title: take title, done: done))
   }
@@ -158,9 +150,8 @@ fn parse_store(take text: String) -> Result[unique Store, ServerError] uses {} {
 fn load(dir: Dir) -> Result[unique Store, ServerError] {
   match file.read_bytes(dir, path.of(STATE)) {
     Ok(data) => {
-      let text = match string.from_bytes(copy data) {
-        Ok(s) => take s,
-        Error(_) => return Error(Corrupt("state is not UTF-8")),
+      let Ok(text) = string.from_bytes(copy data) else {
+        return Error(Corrupt("state is not UTF-8"))
       }
       parse_store(take text)
     },

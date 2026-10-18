@@ -131,7 +131,8 @@ The mistakes to avoid first:
   a final `return` is rejected (LANG-6, LANG-11).
 - Functions are module-qualified, not methods. Build records with labelled
   fields; write variants bare, such as `Ok(())`, never `Result.Ok(())`.
-  Match refutable patterns; there is no `if let` (LANG-4, LANG-12, LANG-13).
+  Match refutable patterns or bind one with `let P = e else { return .. }`;
+  there is no `if let` (LANG-4, LANG-12, LANG-13).
 - Reading a parameter borrows it. `let y = x` moves counted data;
   `copy x` shares it; `unique x` deep-copies when necessary. `copy` does not
   extend local lifetimes. Match `mut` and `take` at the declaration and call.
@@ -428,6 +429,67 @@ pub fn main() -> Result[(), String] {
     Error(_) => return Error("bad input: expected one decimal number"),
   }
   failure.check(number == 42, Arithmetic())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
+## Patterns: let-else, alternatives and ranges
+
+`let P = e else { ... }` binds a refutable pattern into the enclosing block;
+the else block must diverge with `return`, `break`, `continue` or a call that
+never returns. It borrows or takes exactly as `match` does. `P | Q` matches
+either alternative wherever a pattern may appear; every alternative binds the
+same names with the same types. `a..=b` matches a closed integer, `char` or
+byte range with literal bounds, and ranges count toward exhaustiveness, so
+`0..=127` and `128..=255` cover `u8` without a wildcard. There is no `if let`
+and no half-open range pattern (LANG-13).
+
+<!-- tour: conformance/LANG/LANG-13-tour-patterns-run.hir -->
+[Runnable source](../conformance/LANG/LANG-13-tour-patterns-run.hir)
+
+```hirsel
+fn class(c: char) -> u64 {
+  match c {
+    'a'..='z' | 'A'..='Z' | '_' => 1,
+    '0'..='9' => 2,
+    ' ' | '\t' => 3,
+    _ => 0,
+  }
+}
+
+fn ascii(byte: u8) -> bool {
+  match byte {
+    0..=127 => true,
+    128..=255 => false,
+  }
+}
+
+fn number(line: String) -> Result[u64, String] {
+  let Ok(n) = u64.parse(string.trim(line)) else {
+    return Error("bad input: expected one decimal number")
+  }
+  Ok(n)
+}
+
+pub fn main() -> Result[(), String] {
+  failure.check(class('q') == 1 && class('7') == 2 && class('\t') == 3, TextInvariant())
+  failure.check(ascii(0x41) && !ascii(0xE9), TextInvariant())
+  let n = number(" 42\n")?
+  failure.check(n == 42, Arithmetic())
+  let words: List[String] = ["3", "x", "4"]
+  let mut total = 0u64
+  for word in words {
+    let Ok(v) = u64.parse(word) else {
+      continue
+    }
+    total += v
+  }
+  failure.check(total == 7, Arithmetic())
   Ok(())
 }
 ```

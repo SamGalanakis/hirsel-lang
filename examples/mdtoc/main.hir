@@ -13,10 +13,12 @@ fn slug(title: String) -> String {
   let mut out: List[u8] = []
   for scalar in string.scalars(unicode.normalize_nfc(title)) {
     let c = unicode.simple_lower(scalar)
-    if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c >= '\u{80}' {
-      char.format_into(c, mut out)
-    } else if c == ' ' {
-      char.format_into('-', mut out)
+    match c {
+      'a'..='z' | '0'..='9' | '-' | '_' | '\u{80}'..='\u{10FFFF}' => {
+        char.format_into(c, mut out)
+      },
+      ' ' => char.format_into('-', mut out),
+      _ => (),
     }
   }
   match text.finish(take out) {
@@ -36,18 +38,18 @@ fn heading(line: String) -> Option[Heading] {
   if level == 0 || level > 6 {
     return None()
   }
-  if level < bytes.len(bytes) && bytes[level] != 0x20 && bytes[level] != 0x09 {
+  if level < bytes.len(bytes) && !blank(bytes[level]) {
     return None()
   }
   let mut end = bytes.len(bytes)
-  while end > level && (bytes[end - 1] == 0x20 || bytes[end - 1] == 0x09) {
+  while end > level && blank(bytes[end - 1]) {
     end -= 1
   }
   let mut closing = end
   while closing > level && bytes[closing - 1] == 0x23 {
     closing -= 1
   }
-  if closing == level || bytes[closing - 1] == 0x20 || bytes[closing - 1] == 0x09 {
+  if closing == level || blank(bytes[closing - 1]) {
     end = closing
   }
   let raw = match string.from_bytes(bytes.from_list(slice_bytes(bytes, level, end))) {
@@ -55,6 +57,14 @@ fn heading(line: String) -> Option[Heading] {
     Error(_) => return None(),
   }
   Some(Heading(level: level, title: unique string.trim(raw)))
+}
+
+// A space or a tab.
+fn blank(byte: u8) -> bool {
+  match byte {
+    0x20 | 0x09 => true,
+    _ => false,
+  }
 }
 
 fn slice_bytes(data: Bytes, start: u64, end: u64) -> List[u8] {

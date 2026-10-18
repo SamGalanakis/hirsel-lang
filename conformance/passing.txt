@@ -1159,6 +1159,7 @@ conformance/LANG/LANG-13-range-type-bad.hir
 conformance/LANG/LANG-13-range-type-ok.hir
 conformance/LANG/LANG-13-refutable-let-bad.hir
 conformance/LANG/LANG-13-refutable-let-ok.hir
+conformance/LANG/LANG-13-tour-patterns-run.hir
 conformance/LANG/LANG-14-keyword-before-bad.hir
 conformance/LANG/LANG-14-keyword-before-ok.hir
 conformance/LANG/LANG-14-keyword-box-bad.hir
