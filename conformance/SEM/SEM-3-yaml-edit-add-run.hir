@@ -1,0 +1,35 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.set adds a missing key after its mapping's last entry, at its
+// indentation, and creates missing parent mappings.
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.document(
+    "# CI\nname: CI  # the name\non:\n  push:\n    branches: [main]\njobs:\n  test:\n    steps:\n      - uses: checkout\n      # run the tests\n      - run: make\n"
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = copy doc
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("jobs"), Key("test"), Key("timeout-minutes")], Integer(10)),
+      a,
+      "# CI\nname: CI  # the name\non:\n  push:\n    branches: [main]\njobs:\n  test:\n    steps:\n      - uses: checkout\n      # run the tests\n      - run: make\n    timeout-minutes: 10\n"
+    ),
+    TextInvariant()
+  )
+  let mut b = copy doc
+  failure.check(
+    edits(
+      yaml.set(mut b, [Key("env"), Key("RUST_LOG")], Text("debug")),
+      b,
+      "# CI\nname: CI  # the name\non:\n  push:\n    branches: [main]\njobs:\n  test:\n    steps:\n      - uses: checkout\n      # run the tests\n      - run: make\nenv:\n  RUST_LOG: debug\n"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

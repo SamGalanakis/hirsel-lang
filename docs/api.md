@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1242 exported definitions; 384 variants.
+1250 exported definitions; 388 variants.
 
 ## Types and roots
 
@@ -9606,6 +9606,10 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/xxhash64/State`](#d
 
 ## yaml
 
+<a id="def-std_401_2fyaml_2fDocument"></a>
+
+- `pub opaque type yaml.Document: copyable + inert + noalloc_drop uses {}`
+
 <a id="def-std_401_2fyaml_2fMAX_5fALIAS_5fNODES"></a>
 
 - `pub const yaml.MAX_ALIAS_NODES: u64`
@@ -9623,6 +9627,28 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 - `pub type yaml.Position { line: u64, column: u64, }`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fyaml_2fSegment"></a>
+
+- `pub type yaml.Segment = Key(String) | Index(u64)`
+
+References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fyaml_2fSegment_23Index"></a>
+
+- `Index(u64) -> yaml.Segment`
+
+Variant of yaml.Segment.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fyaml_2fSegment_23Key"></a>
+
+- `Key(String) -> yaml.Segment`
+
+Variant of yaml.Segment.
+
+References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fyaml_2fValue"></a>
 
@@ -9686,7 +9712,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fyaml_2fYamlError"></a>
 
-- `pub type yaml.YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases( Position ) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue`
+- `pub type yaml.YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases( Position ) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue | NotFound | NotCollection`
 
 References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
 
@@ -9736,6 +9762,18 @@ Variant of yaml.YamlError.
 
 References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
 
+<a id="def-std_401_2fyaml_2fYamlError_23NotCollection"></a>
+
+- `NotCollection -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+<a id="def-std_401_2fyaml_2fYamlError_23NotFound"></a>
+
+- `NotFound -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
 <a id="def-std_401_2fyaml_2fYamlError_23Syntax"></a>
 
 - `Syntax(Position) -> yaml.YamlError`
@@ -9752,6 +9790,18 @@ Variant of yaml.YamlError.
 
 References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
 
+<a id="def-std_401_2fyaml_2fdocument"></a>
+
+- `pub fn yaml.document(take text: String) -> Result[Document, YamlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+<a id="def-std_401_2fyaml_2fget"></a>
+
+- `pub fn yaml.get(doc: Document, path: List[Segment]) -> Option[Value] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yaml/Segment`](#def-std_401_2fyaml_2fSegment), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue)
+
 <a id="def-std_401_2fyaml_2fparse"></a>
 
 - `pub fn yaml.parse(take text: String) -> Result[Value, YamlError] uses {}`
@@ -9763,6 +9813,30 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `pub fn yaml.parse_all(take text: String) -> Result[List[Value], YamlError] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+<a id="def-std_401_2fyaml_2fremove"></a>
+
+- `pub fn yaml.remove(mut doc: Document, path: List[Segment]) -> Result[(), YamlError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yaml/Segment`](#def-std_401_2fyaml_2fSegment), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+<a id="def-std_401_2fyaml_2froot"></a>
+
+- `pub fn yaml.root(doc: Document) -> Value uses {}`
+
+References: [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue)
+
+<a id="def-std_401_2fyaml_2fset"></a>
+
+- `pub fn yaml.set(mut doc: Document, path: List[Segment], value: Value) -> Result[(), YamlError] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yaml/Segment`](#def-std_401_2fyaml_2fSegment), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+<a id="def-std_401_2fyaml_2fsource"></a>
+
+- `pub fn yaml.source(doc: Document) -> String in doc uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument)
 
 <a id="def-std_401_2fyaml_2fstringify"></a>
 

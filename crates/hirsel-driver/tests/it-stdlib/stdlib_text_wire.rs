@@ -318,3 +318,12 @@ fn yaml_is_ordinary_source() {
 fn toml_is_ordinary_source() {
     source_codec("toml-edit-cargo", "toml", &["document", "set", "source"]);
 }
+
+#[test]
+fn yaml_documents_are_ordinary_source() {
+    source_codec(
+        "yaml-edit-remove",
+        "yaml",
+        &["document", "source", "remove"],
+    );
+}

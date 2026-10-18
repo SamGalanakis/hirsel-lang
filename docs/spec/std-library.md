@@ -81,6 +81,12 @@ fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 fn yaml.parse(take text: String) -> Result[yaml.Value, yaml.YamlError] uses {}
 fn yaml.parse_all(take text: String) -> Result[List[yaml.Value], yaml.YamlError] uses {}
 fn yaml.stringify(value: yaml.Value) -> Result[unique String, yaml.YamlError] uses {}
+fn yaml.document(take text: String) -> Result[yaml.Document, yaml.YamlError] uses {}
+fn yaml.source(doc: yaml.Document) -> String in doc uses {}
+fn yaml.root(doc: yaml.Document) -> yaml.Value uses {}
+fn yaml.get(doc: yaml.Document, path: List[yaml.Segment]) -> Option[yaml.Value] uses {}
+fn yaml.set(mut doc: yaml.Document, path: List[yaml.Segment], value: yaml.Value) -> Result[(), yaml.YamlError] uses {}
+fn yaml.remove(mut doc: yaml.Document, path: List[yaml.Segment]) -> Result[(), yaml.YamlError] uses {}
 fn toml.parse(take text: String) -> Result[toml.Value, toml.TomlError] uses {}
 fn toml.stringify(value: toml.Value) -> Result[unique String, toml.TomlError] uses {}
 fn toml.document(take text: String) -> Result[toml.Document, toml.TomlError] uses {}
@@ -374,7 +380,8 @@ Value     = Null() | Bool(bool) | Integer(i64) | Float(f64) | Text(String)
 Position  = { line: u64, column: u64 }
 YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position)
           | Aliases(Position) | Tag(Position) | ComplexKey(Position)
-          | Documents(Position) | InvalidValue()
+          | Documents(Position) | InvalidValue() | NotFound() | NotCollection()
+Segment   = Key(String) | Index(u64)
 ```
 
 `yaml.parse_all` takes a UTF-8 `String` holding a YAML 1.2.2 stream and returns its
@@ -447,6 +454,42 @@ DEL as `\xXX`, C1 controls as `\xXX` (NEL as `\N`), U+2028 and U+2029 as `\L` an
 written (plain or quoted) becomes an explicit `? key` entry, with its `:` on the next
 line. A collection that would be level 129 is
 `InvalidValue`; nothing else fails. The output parses to an equal value, NaN to NaN.
+
+`yaml.document` parses a one-document stream like `yaml.parse` and keeps its text;
+`yaml.source` returns the current text, `yaml.root` the value and `yaml.get` the value
+at a path, if any. A path's `Key` selects a mapping member and `Index` a sequence item.
+Edits never re-render the document: each splices the text and reparses it, so every
+byte outside the edited span (comments, blank lines, key order, quoting, number
+spellings, anchors and tags on kept nodes) is unchanged, and added lines use the
+document's first line break (LF when it has none). An edit whose result does not parse,
+or does not hold the requested value at `path` (removing an anchor that an alias still
+uses, say), is `InvalidValue`; a failed edit leaves the document unchanged.
+
+`yaml.set(mut doc, path, value)` with an empty path, or on an empty document, replaces
+the text with `yaml.stringify(value)`. Otherwise:
+
+- an existing node is replaced from its content on, keeping its anchor and tag. In a
+  flow collection the value is written in flow style (`[a, b]`, `{k: v}`, scalars plain
+  when that is safe there, else double-quoted). In a block collection a scalar or empty
+  collection is written on the node's line, keeping any comment after it, and a
+  non-empty collection is written in canonical block style below its key or dash,
+  indented two spaces further, the comment staying on the key's line; multi-line text
+  is a literal block unless something other than blanks follows the replaced node on
+  its line, when it is double-quoted;
+- a missing key of a block mapping becomes `key: value` on a new line after the
+  mapping's last entry, at its entries' indentation; `Index(len)` on a block sequence
+  adds `- value` the same way; in flow collections the entry is added after the last
+  one (`, key: value`) or inside empty brackets; other missing indices are `NotFound`;
+- missing mappings along the path are created by adding their first key as a mapping
+  holding the rest of the path; a missing `Index` along the path is `NotFound`.
+
+A path through a scalar or an alias, a `Key` on a sequence or an `Index` on a mapping is
+`NotCollection`. `yaml.remove(mut doc, path)` removes the value at `path`, or returns
+`NotFound` (always for the empty path). A block entry takes its lines and, after the
+first entry, the comment and blank lines back to the previous entry; the first entry
+takes the text up to the second, so a compact `- a: 1` entry keeps its dash. A flow
+entry takes the comma after it, or the last one the comma before it. Removing the only
+entry of a collection leaves it empty, written `{}` or `[]` in its place.
 
 ## TOML
 

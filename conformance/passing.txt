@@ -4853,6 +4853,16 @@ conformance/SEM/SEM-3-yaml-aliases-laughs-run.hir
 conformance/SEM/SEM-3-yaml-aliases-limit-run.hir
 conformance/SEM/SEM-3-yaml-aliases-over-run.hir
 conformance/SEM/SEM-3-yaml-compose-run.hir
+conformance/SEM/SEM-3-yaml-document-run.hir
+conformance/SEM/SEM-3-yaml-edit-add-run.hir
+conformance/SEM/SEM-3-yaml-edit-append-run.hir
+conformance/SEM/SEM-3-yaml-edit-crlf-run.hir
+conformance/SEM/SEM-3-yaml-edit-explicit-run.hir
+conformance/SEM/SEM-3-yaml-edit-flow-remove-run.hir
+conformance/SEM/SEM-3-yaml-edit-flow-run.hir
+conformance/SEM/SEM-3-yaml-edit-quoted-run.hir
+conformance/SEM/SEM-3-yaml-edit-remove-run.hir
+conformance/SEM/SEM-3-yaml-edit-replace-run.hir
 conformance/SEM/SEM-3-yaml-errors-run.hir
 conformance/SEM/SEM-3-yaml-key-errors-run.hir
 conformance/SEM/SEM-3-yaml-kubernetes-run.hir

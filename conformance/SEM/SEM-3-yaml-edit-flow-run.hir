@@ -1,0 +1,44 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml edits flow collections inline: appends after the last entry, adds
+// keys before the closing brace and removes an entry with one comma.
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.document("services: {api: {ports: [80, 443]}, db: {}}\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = copy doc
+  failure.check(
+    edits(
+      yaml.set(
+        mut a,
+        [Key("services"), Key("api"), Key("ports"), Index(2)],
+        Integer(8080)
+      ),
+      a,
+      "services: {api: {ports: [80, 443, 8080]}, db: {}}\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("services"), Key("db"), Key("image")], Text("postgres:16")),
+      a,
+      "services: {api: {ports: [80, 443, 8080]}, db: {image: postgres:16}}\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.remove(mut a, [Key("services"), Key("api"), Key("ports"), Index(0)]),
+      a,
+      "services: {api: {ports: [443, 8080]}, db: {image: postgres:16}}\n"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

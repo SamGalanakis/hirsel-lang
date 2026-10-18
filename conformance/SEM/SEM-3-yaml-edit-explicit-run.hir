@@ -1,0 +1,23 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml edits a mapping with explicit `? key` entries from each entry's `?`.
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.document("a: 4.2\n? d\n: 23\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = copy doc
+  failure.check(
+    edits(yaml.remove(mut a, [Key("a")]), a, "? d\n: 23\n"),
+    TextInvariant()
+  )
+  failure.check(
+    edits(yaml.set(mut a, [Key("e")], Integer(1)), a, "? d\n: 23\ne: 1\n"),
+    TextInvariant()
+  )
+  Ok(())
+}

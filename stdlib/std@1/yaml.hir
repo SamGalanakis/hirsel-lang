@@ -1,4 +1,4 @@
-// YAML 1.2 contracts: STD-OP-yaml.* and TYPE-ROW-Value/Position/YamlError.
+// YAML 1.2 contracts: STD-OP-yaml.* and TYPE-ROW-Value/Position/YamlError/Segment/Document.
 // The scanner and parser port saphyr-rs/saphyr parser/src/{scanner,parser}.rs at
 // b8205d5f60ea44f757f7d075fe4f3704bbe5dccc (MIT/Apache-2.0), itself a port of libyaml,
 // as exercised by yaml/yaml-test-suite data-2022-01-17. Scalars resolve by the YAML
@@ -14,7 +14,9 @@ pub type Position {
 
 pub type YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases(
   Position
-) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue
+) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue | NotFound | NotCollection
+
+pub type Segment = Key(String) | Index(u64)
 
 // Policy counts open sequences and mappings; scalars do not consume a level.
 pub const MAX_NESTING: u64 = 128
@@ -1680,7 +1682,9 @@ const E_MAPPING_END: u8 = 8
 
 // A parse event: `text` is a scalar value or alias name; `tag` is the resolved tag
 // with `tagged` telling an empty verbatim tag from none. A node's span starts at
-// its first property.
+// its first property; `content` is where it starts after its properties, and
+// `entry` is the block sequence `-` or mapping `:` that introduced it (NONE when
+// none did).
 type Event {
   kind: u8,
   style: u8,
@@ -1689,7 +1693,9 @@ type Event {
   tag: String,
   tagged: bool,
   start: u64,
+  content: u64,
   end: u64,
+  entry: u64,
 }
 
 type Parser {
@@ -1698,6 +1704,7 @@ type Parser {
   states: unique List[u8],
   tags: Map[String, String],
   events: List[Event],
+  entry: u64,
 }
 
 fn event(kind: u8, start: u64, end: u64) -> unique Event uses {} {
@@ -1709,12 +1716,18 @@ fn event(kind: u8, start: u64, end: u64) -> unique Event uses {} {
     tag: "",
     tagged: false,
     start: start,
-    end: end
+    content: start,
+    end: end,
+    entry: NONE
   )
 }
 
+// The next event emitted after a block `-` or `:` records its position.
 fn emit(mut p: unique Parser, take e: unique Event) -> () uses {} {
-  core@1/list.push(mut p.events, take e)
+  let mut emitted = take e
+  emitted.entry = p.entry
+  p.entry = NONE
+  core@1/list.push(mut p.events, take emitted)
 }
 
 fn empty_scalar(mut p: unique Parser, pos: u64) -> () uses {} {
@@ -1905,6 +1918,7 @@ fn parse_node(mut p: unique Parser, data: Bytes, tokens: List[Token], block: boo
   let t = tokens[p.at]
   let k = t.kind
   let mut e = event(E_SCALAR, start, t.end)
+  e.content = t.start
   e.anchor = take anchor
   e.tag = take tag
   e.tagged = tagged
@@ -1937,6 +1951,7 @@ fn parse_node(mut p: unique Parser, data: Bytes, tokens: List[Token], block: boo
     // An empty scalar can follow node properties (example 7.2).
     pop_state(mut p)
     e.end = tokens[p.at - 1].end
+    e.content = e.end
   } else {
     return Error(syntax(data, t.start))
   }
@@ -1986,6 +2001,7 @@ fn block_mapping_value(mut p: unique Parser, data: Bytes, tokens: List[Token]) -
 ] uses {} {
   let t = tokens[p.at]
   if t.kind == T_VALUE {
+    p.entry = t.start
     p.at += 1
     let k = kind_at(tokens, p.at)
     if k == T_KEY || k == T_VALUE || k == T_BLOCK_END {
@@ -2108,6 +2124,7 @@ fn indentless_sequence_entry(mut p: unique Parser, data: Bytes, tokens: List[Tok
     emit(mut p, event(E_SEQUENCE_END, t.start, t.start))
     return Ok(())
   }
+  p.entry = t.start
   p.at += 1
   let k = kind_at(tokens, p.at)
   if k == T_BLOCK_ENTRY || k == T_KEY || k == T_VALUE || k == T_BLOCK_END {
@@ -2136,6 +2153,7 @@ fn block_sequence_entry(mut p: unique Parser, data: Bytes, tokens: List[Token], 
   if t.kind != T_BLOCK_ENTRY {
     return Error(syntax(data, t.start))
   }
+  p.entry = t.start
   p.at += 1
   let k = kind_at(tokens, p.at)
   if k == T_BLOCK_ENTRY || k == T_BLOCK_END {
@@ -2244,7 +2262,8 @@ fn parse_events(data: Bytes) -> Result[List[Event], YamlError] uses {} {
     state: S_STREAM_START,
     states: [],
     tags: core@1/map.empty(),
-    events: []
+    events: [],
+    entry: NONE
   )
   while p.state != S_END {
     step(mut p, data, tokens)?
@@ -2637,9 +2656,12 @@ fn compose_node(mut c: Composer, data: Bytes, events: List[Event], depth: u64) -
   Ok(Composed(value: take value, nodes: nodes, height: height))
 }
 
-// Every document of a stream, with each one's start; anchors are per document.
-fn compose_stream(data: Bytes, mut starts: List[u64]) -> Result[List[Value], YamlError] uses {} {
-  let events = parse_events(data)?
+// Every document of an event stream, with each one's start; anchors are per
+// document.
+fn compose_stream(data: Bytes, events: List[Event], mut starts: List[u64]) -> Result[
+  List[Value],
+  YamlError
+] uses {} {
   let mut documents: List[Value] = []
   let mut at: u64 = 0
   while events[at].kind == E_DOCUMENT_START {
@@ -2655,8 +2677,13 @@ fn compose_stream(data: Bytes, mut starts: List[u64]) -> Result[List[Value], Yam
 // Parses a YAML stream holding at most one document; an empty stream is Null.
 pub fn parse(take text: String) -> Result[Value, YamlError] uses {} {
   let data = core@1/string.as_bytes(text)
+  only_document(data, parse_events(data)?)
+}
+
+// The only document of an event stream, Null for none.
+fn only_document(data: Bytes, events: List[Event]) -> Result[Value, YamlError] uses {} {
   let mut starts: List[u64] = []
-  let documents = compose_stream(data, mut starts)?
+  let documents = compose_stream(data, events, mut starts)?
   if core@1/list.len(documents) > 1 {
     return Error(Documents(position_of(data, starts[1])))
   }
@@ -2668,8 +2695,9 @@ pub fn parse(take text: String) -> Result[Value, YamlError] uses {} {
 
 // Parses every document of a YAML stream, in order.
 pub fn parse_all(take text: String) -> Result[List[Value], YamlError] uses {} {
+  let data = core@1/string.as_bytes(text)
   let mut starts: List[u64] = []
-  compose_stream(core@1/string.as_bytes(text), mut starts)
+  compose_stream(data, parse_events(data)?, mut starts)
 }
 
 // Emitter: canonical block style, two-space indentation.
@@ -3119,4 +3147,757 @@ pub fn stringify(value: Value) -> Result[unique String, YamlError] uses {} {
   let mut out: List[u8] = []
   write_node(value, 0, ROOT, mut out, 0)?
   Ok(text.finish_valid(take out))
+}
+
+// Documents: the source text, its node spans and its value. Edits splice the text
+// and reparse it, so every byte outside the edited span is kept.
+const N_SCALAR: u8 = 0
+
+const N_SEQUENCE: u8 = 1
+
+const N_MAPPING: u8 = 2
+
+const N_ALIAS: u8 = 3
+
+// A member of a collection: a mapping key's text and span, or a sequence item
+// (empty key, span of the item). `marker` is the block `-` or `:` before the
+// value, NONE in flow context or without one.
+type Member {
+  key: String,
+  key_start: u64,
+  key_end: u64,
+  marker: u64,
+  node: u64,
+}
+
+// A node's span runs from its first property (`start`) or its content
+// (`content`) to the end of its last scalar or closing bracket (`end`).
+type Node {
+  kind: u8,
+  block: bool,
+  start: u64,
+  content: u64,
+  end: u64,
+  members: List[Member],
+}
+
+type Tree {
+  nodes: List[Node],
+  root: u64,
+}
+
+pub opaque type Document: copyable + inert + noalloc_drop uses {} {
+  text: String,
+  tree: Tree,
+  value: Value,
+}
+
+fn new_node(e: Event, kind: u8) -> Node uses {} {
+  Node(
+    kind: kind,
+    block: e.style == BLOCK,
+    start: e.start,
+    content: e.content,
+    end: e.end,
+    members: []
+  )
+}
+
+// The node at `at` and those below it, appended after their children; returns
+// its id and the position after its events. `scalars` maps anchors of scalars to
+// their text, for alias keys.
+fn build_node(
+  mut tree: Tree,
+  data: Bytes,
+  events: List[Event],
+  at: u64,
+  mut scalars: Map[String, String]
+) -> (
+  u64,
+  u64
+) uses {} {
+  let e = events[at]
+  if e.kind == E_ALIAS {
+    core@1/list.push(mut tree.nodes, new_node(e, N_ALIAS))
+    return (core@1/list.len(tree.nodes) - 1, at + 1)
+  }
+  if e.kind == E_SCALAR {
+    if e.anchor != "" {
+      core@1/map.insert(mut scalars, unique e.anchor, unique e.text)
+    }
+    core@1/list.push(mut tree.nodes, new_node(e, N_SCALAR))
+    return (core@1/list.len(tree.nodes) - 1, at + 1)
+  }
+  let mapping = e.kind == E_MAPPING_START
+  let mut node = new_node(
+    e,
+    if mapping {
+      N_MAPPING
+    } else {
+      N_SEQUENCE
+    }
+  )
+  let mut next = at + 1
+  let mut end = e.end
+  while events[next].kind != E_SEQUENCE_END && events[next].kind != E_MAPPING_END {
+    let mut key: String = ""
+    let mut key_start = events[next].start
+    let mut key_end = events[next].end
+    if mapping {
+      let k = events[next]
+      key = if k.kind == E_ALIAS {
+        match core@1/map.get(scalars, k.text) {
+          Some(text) => unique text,
+          None() => "",
+        }
+      } else {
+        unique k.text
+      }
+      // An explicit key's entry starts at its `?`.
+      let mut question = key_start
+      while question > 0 && is_blank(data[question - 1]) {
+        question -= 1
+      }
+      if question > 0 && data[question - 1] == b'?' {
+        key_start = question - 1
+      }
+      let (_, after_key) = build_node(mut tree, data, events, next, mut scalars)
+      next = after_key
+    }
+    let marker = events[next].entry
+    if !mapping && marker != NONE {
+      key_start = marker
+      key_end = marker + 1
+    }
+    let (child, after) = build_node(mut tree, data, events, next, mut scalars)
+    next = after
+    if tree.nodes[child].end > end {
+      end = tree.nodes[child].end
+    }
+    if key_end > end {
+      end = key_end
+    }
+    core@1/list.push(
+      mut node.members,
+      Member(key: take key, key_start: key_start, key_end: key_end, marker: marker, node: child)
+    )
+  }
+  // A flow collection ends at its closing bracket; a block one at its last content.
+  if !node.block {
+    end = events[next].end
+  }
+  node.end = end
+  core@1/list.push(mut tree.nodes, take node)
+  (core@1/list.len(tree.nodes) - 1, next + 1)
+}
+
+// Parses a one-document stream like parse, keeping its text for edits.
+pub fn document(take text: String) -> Result[Document, YamlError] uses {} {
+  let data = core@1/string.as_bytes(text)
+  let events = parse_events(data)?
+  let value = only_document(data, events)?
+  let mut tree = Tree(nodes: [], root: NONE)
+  let mut scalars: Map[String, String] = core@1/map.empty()
+  if events[0].kind == E_DOCUMENT_START {
+    let (top, _) = build_node(mut tree, data, events, 1, mut scalars)
+    tree.root = top
+  }
+  Ok(Document(text: take text, tree: take tree, value: take value))
+}
+
+// The document's current text.
+pub fn source(doc: Document) -> String in doc uses {} {
+  doc.text
+}
+
+// The document's value.
+pub fn root(doc: Document) -> Value uses {} {
+  unique doc.value
+}
+
+fn value_at(value: Value, path: List[Segment]) -> Option[Value] uses {} {
+  let mut current = unique value
+  for segment in path {
+    let next: Value = match (current, segment) {
+      (Object(entries), Key(k)) => match core@1/map.get(entries, k) {
+        Some(found) => unique found,
+        None() => return None(),
+      },
+      (Array(items), Index(i)) => if i < core@1/list.len(items) {
+        unique items[i]
+      } else {
+        return None()
+      },
+      _ => return None(),
+    }
+    current = take next
+  }
+  Some(take current)
+}
+
+// The value at `path`, if any.
+pub fn get(doc: Document, path: List[Segment]) -> Option[Value] uses {} {
+  value_at(doc.value, path)
+}
+
+// Equality with NaN equal to NaN.
+fn same(a: Value, b: Value) -> bool uses {} {
+  match (a, b) {
+    (Float(x), Float(y)) => x == y || x != x && y != y,
+    (Array(xs), Array(ys)) => {
+      if core@1/list.len(xs) != core@1/list.len(ys) {
+        return false
+      }
+      let mut i: u64 = 0
+      while i < core@1/list.len(xs) {
+        if !same(xs[i], ys[i]) {
+          return false
+        }
+        i += 1
+      }
+      true
+    },
+    (Object(xs), Object(ys)) => {
+      if core@1/map.len(xs) != core@1/map.len(ys) {
+        return false
+      }
+      for (k, x) in xs {
+        let Some(y) = core@1/map.get(ys, k) else {
+          return false
+        }
+        if !same(x, y) {
+          return false
+        }
+      }
+      true
+    },
+    _ => a == b,
+  }
+}
+
+// Where a path leads: `found` segments exist; `parent` holds the next one, as
+// member `member`, or NONE when that segment is missing (then found < len).
+type Place {
+  parent: u64,
+  member: u64,
+  found: u64,
+}
+
+fn member_of(tree: Tree, id: u64, segment: Segment) -> Result[u64, YamlError] uses {} {
+  let node = tree.nodes[id]
+  match segment {
+    Key(k) => {
+      if node.kind != N_MAPPING {
+        return Error(NotCollection())
+      }
+      let mut i: u64 = 0
+      while i < core@1/list.len(node.members) {
+        if node.members[i].key == k {
+          return Ok(i)
+        }
+        i += 1
+      }
+      Ok(NONE)
+    },
+    Index(index) => {
+      if node.kind != N_SEQUENCE {
+        return Error(NotCollection())
+      }
+      if index < core@1/list.len(node.members) {
+        Ok(index)
+      } else {
+        Ok(NONE)
+      }
+    },
+  }
+}
+
+// A path through a scalar or alias, a Key on a sequence or an Index on a mapping
+// is NotCollection.
+fn locate(tree: Tree, path: List[Segment]) -> Result[Place, YamlError] uses {} {
+  let mut parent = NONE
+  let mut member = NONE
+  let mut current = tree.root
+  let mut i: u64 = 0
+  while i < core@1/list.len(path) {
+    let index = member_of(tree, current, path[i])?
+    parent = current
+    member = index
+    if index == NONE {
+      return Ok(Place(parent: parent, member: NONE, found: i))
+    }
+    current = tree.nodes[current].members[index].node
+    i += 1
+  }
+  Ok(Place(parent: parent, member: member, found: i))
+}
+
+// The text's first line break, LF when it has none.
+fn line_break(data: Bytes) -> String uses {} {
+  let n = core@1/bytes.len(data)
+  let mut i: u64 = 0
+  while i < n {
+    if data[i] == b'\r' && peek(data, i + 1) == b'\n' {
+      return "\r\n"
+    }
+    if data[i] == b'\n' {
+      return "\n"
+    }
+    if data[i] == b'\r' {
+      return "\r"
+    }
+    i += 1
+  }
+  "\n"
+}
+
+// The position after the line break ending the line that holds `pos`, or the
+// end of the text.
+fn after_line(data: Bytes, pos: u64) -> u64 uses {} {
+  let n = core@1/bytes.len(data)
+  let mut i = pos
+  while i < n && !is_break(data[i]) {
+    i += 1
+  }
+  if i < n && data[i] == b'\r' && peek(data, i + 1) == b'\n' {
+    return i + 2
+  }
+  if i < n {
+    return i + 1
+  }
+  n
+}
+
+// The position of the line break ending the line that holds `pos`, or the end.
+fn line_end(data: Bytes, pos: u64) -> u64 uses {} {
+  let n = core@1/bytes.len(data)
+  let mut i = pos
+  while i < n && !is_break(data[i]) {
+    i += 1
+  }
+  i
+}
+
+// Whether [start, end) holds only blanks.
+@noalloc
+fn blanks_only(data: Bytes, start: u64, end: u64) -> bool uses {} {
+  let mut i = start
+  while i < end {
+    if !is_blank(data[i]) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+// The column (in bytes from the line start) of `pos`; indentation is spaces.
+fn column_of(data: Bytes, pos: u64) -> u64 uses {} {
+  let mut i = pos
+  while i > 0 && !is_break(data[i - 1]) {
+    i -= 1
+  }
+  pos - i
+}
+
+// `text` with each LF written as `nl`.
+fn with_breaks(take text: String, nl: String) -> unique String uses {} {
+  if nl == "\n" {
+    return unique text
+  }
+  let data = core@1/string.as_bytes(text)
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    if data[i] == b'\n' {
+      text.append(mut out, nl)
+    } else {
+      core@1/list.push(mut out, data[i])
+    }
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+// `data` with [start, end) replaced by `insert`.
+fn splice(data: Bytes, start: u64, end: u64, insert: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < start {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  text.append(mut out, insert)
+  i = end
+  while i < core@1/bytes.len(data) {
+    core@1/list.push(mut out, data[i])
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+@noalloc
+fn has_flow_indicator(data: Bytes) -> bool uses {} {
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    if is_flow(data[i]) {
+      return true
+    }
+    i += 1
+  }
+  false
+}
+
+// A scalar or key in flow context: plain when safe there, else double-quoted.
+@preserves_unique(out)
+fn write_flow_text(s: String, mut out: List[u8]) -> () uses {} {
+  if plain_safe(s) && !has_flow_indicator(core@1/string.as_bytes(s)) {
+    text.append(mut out, s)
+  } else {
+    write_quoted(s, mut out)
+  }
+}
+
+// A value in flow style (`[a, b]`, `{k: v}`), within MAX_NESTING levels.
+@preserves_unique(out)
+fn write_flow(value: Value, mut out: List[u8], depth: u64) -> Result[(), YamlError] uses {} {
+  match value {
+    Null() => text.append(mut out, "null"),
+    Bool(b) => text.append(mut out, if b {
+      "true"
+    } else {
+      "false"
+    }),
+    Integer(n) => std@1/i64.format_into(n, mut out),
+    Float(f) => write_float(f, mut out),
+    Text(s) => write_flow_text(s, mut out),
+    Array(items) => {
+      if depth == MAX_NESTING {
+        return Error(InvalidValue())
+      }
+      core@1/list.push(mut out, b'[')
+      let mut first = true
+      for item in items {
+        if !first {
+          text.append(mut out, ", ")
+        }
+        first = false
+        write_flow(item, mut out, depth + 1)?
+      }
+      core@1/list.push(mut out, b']')
+    },
+    Object(entries) => {
+      if depth == MAX_NESTING {
+        return Error(InvalidValue())
+      }
+      core@1/list.push(mut out, b'{')
+      let mut first = true
+      for (key, item) in entries {
+        if !first {
+          text.append(mut out, ", ")
+        }
+        first = false
+        write_flow_text(key, mut out)
+        text.append(mut out, ": ")
+        write_flow(item, mut out, depth + 1)?
+      }
+      core@1/list.push(mut out, b'}')
+    },
+  }
+  Ok(())
+}
+
+// Whether `value` is written on one line in block context: a scalar that is not a
+// literal block, or an empty collection.
+fn inline_block(value: Value) -> bool uses {} {
+  match value {
+    Array(items) => core@1/list.len(items) == 0,
+    Object(entries) => core@1/map.len(entries) == 0,
+    Text(s) => plain_safe(s) || !literal_safe(s),
+    _ => true,
+  }
+}
+
+// `value` written by write_node after a `-` or `:` at column `indent`, without the
+// final line break.
+fn block_value(value: Value, indent: u64, context: u8, depth: u64) -> Result[
+  unique String,
+  YamlError
+] uses {} {
+  let mut out: List[u8] = []
+  if context == SEQ_ITEM {
+    core@1/list.push(mut out, b' ')
+  }
+  write_node(value, indent, context, mut out, depth)?
+  let _ = core@1/list.pop(mut out)
+  Ok(text.finish_valid(take out))
+}
+
+// The nesting depth of a node, counting collections above it.
+fn depth_of(tree: Tree, target: u64) -> u64 uses {} {
+  let mut depth: u64 = 0
+  let mut current = target
+  while current != tree.root {
+    let mut parent: u64 = 0
+    while parent < core@1/list.len(tree.nodes) {
+      let mut found = false
+      for m in tree.nodes[parent].members {
+        if m.node == current {
+          found = true
+        }
+      }
+      if found {
+        break
+      }
+      parent += 1
+    }
+    current = parent
+    depth += 1
+  }
+  depth
+}
+
+// Replaces node `id`, member `index` of `parent` (NONE for the root), with `value`;
+// its properties and the text around it stay.
+fn replaced(doc: Document, parent: u64, index: u64, id: u64, value: Value) -> Result[
+  unique String,
+  YamlError
+] uses {} {
+  let data = core@1/string.as_bytes(doc.text)
+  let nl = line_break(data)
+  let node = doc.tree.nodes[id]
+  let depth = depth_of(doc.tree, id)
+  let block_parent = parent != NONE && doc.tree.nodes[parent].block
+  let collection = node.kind == N_SEQUENCE || node.kind == N_MAPPING
+  if parent == NONE && (node.block || !collection && !inline_block(value)) {
+    // A block root is rewritten from its content on.
+    let written = block_value(value, 0, ROOT, depth)?
+    return Ok(splice(data, node.content, node.end, with_breaks(take written, nl)))
+  }
+  if !block_parent {
+    let mut out: List[u8] = []
+    write_flow(value, mut out, depth)?
+    return Ok(splice(data, node.content, node.end, text.finish_valid(take out)))
+  }
+  let member = doc.tree.nodes[parent].members[index]
+  let context = if doc.tree.nodes[parent].kind == N_MAPPING {
+    MAP_VALUE
+  } else {
+    SEQ_ITEM
+  }
+  let indent = column_of(data, member.key_start)
+  // A literal block would take in a comment after the node: quote instead.
+  let eol = line_end(data, node.end)
+  let rest_blank = blanks_only(data, node.end, eol)
+  let literal = match value {
+    Text(s) => !plain_safe(s) && literal_safe(s),
+    _ => false,
+  }
+  if literal && !rest_blank && !(collection && node.block) {
+    let Text(s) = value else {
+      return Error(InvalidValue())
+    }
+    let mut out: List[u8] = []
+    if node.content > 0 && (data[node.content - 1] == b':' || data[node.content - 1] == b'-') {
+      core@1/list.push(mut out, b' ')
+    }
+    write_quoted(s, mut out)
+    return Ok(splice(data, node.content, node.end, text.finish_valid(take out)))
+  }
+  if inline_block(value) && !(collection && node.block) {
+    let mut out: List[u8] = []
+    if node.content > 0 && (data[node.content - 1] == b':' || data[node.content - 1] == b'-') {
+      core@1/list.push(mut out, b' ')
+    }
+    write_node(value, indent, SEQ_ITEM, mut out, depth)?
+    let _ = core@1/list.pop(mut out)
+    return Ok(splice(data, node.content, node.end, text.finish_valid(take out)))
+  }
+  // A block value starts after its `-` or `:`, or after its properties.
+  let from = if node.start < node.content {
+    node.content
+  } else if member.marker != NONE {
+    member.marker + 1
+  } else {
+    node.content
+  }
+  let written = if node.start < node.content && context == SEQ_ITEM {
+    block_value(value, indent, MAP_VALUE, depth)?
+  } else {
+    block_value(value, indent, context, depth)?
+  }
+  let starts_on_next_line = core@1/bytes.len(core@1/string.as_bytes(written)) > 0 && core@1/string.as_bytes(
+    written
+  )[0] == b'\n'
+  if starts_on_next_line && !(collection && node.block) {
+    // A comment after the replaced scalar stays on the key's line.
+    let moved = splice(data, eol, eol, with_breaks(take written, nl))
+    return Ok(splice(core@1/string.as_bytes(moved), from, node.end, ""))
+  }
+  Ok(splice(data, from, node.end, with_breaks(take written, nl)))
+}
+
+// Adds `key` (or an item, for a sequence) with `value` to collection `id`.
+fn added(doc: Document, id: u64, key: String, value: Value) -> Result[unique String, YamlError] uses {} {
+  let data = core@1/string.as_bytes(doc.text)
+  let nl = line_break(data)
+  let node = doc.tree.nodes[id]
+  let depth = depth_of(doc.tree, id) + 1
+  let count = core@1/list.len(node.members)
+  let mapping = node.kind == N_MAPPING
+  if !node.block {
+    let mut out: List[u8] = []
+    let at = if count == 0 {
+      node.end - 1
+    } else {
+      text.append(mut out, ", ")
+      doc.tree.nodes[node.members[count - 1].node].end
+    }
+    if mapping {
+      write_flow_text(key, mut out)
+      text.append(mut out, ": ")
+    }
+    write_flow(value, mut out, depth)?
+    return Ok(splice(data, at, at, text.finish_valid(take out)))
+  }
+  let indent = column_of(data, node.members[0].key_start)
+  let at = after_line(data, node.end)
+  let mut out: List[u8] = []
+  if at > 0 && !is_break(data[at - 1]) {
+    text.append(mut out, "\n")
+  }
+  push_spaces(mut out, indent)
+  if mapping {
+    write_key(key, indent, mut out)
+    write_node(value, indent, MAP_VALUE, mut out, depth)?
+  } else {
+    text.append(mut out, "- ")
+    write_node(value, indent, SEQ_ITEM, mut out, depth)?
+  }
+  Ok(splice(data, at, at, with_breaks(text.finish_valid(take out), nl)))
+}
+
+// Reparses an edit; it must leave `path` at `expected` (None: absent).
+fn commit(mut doc: Document, take edited: String, path: List[Segment], expected: Option[Value]) -> Result[
+  (),
+  YamlError
+] uses {} {
+  let Ok(fresh) = document(take edited) else {
+    return Error(InvalidValue())
+  }
+  let landed = match (get(fresh, path), expected) {
+    (Some(actual), Some(wanted)) => same(actual, wanted),
+    (None(), None()) => true,
+    _ => false,
+  }
+  if !landed {
+    return Error(InvalidValue())
+  }
+  doc = fresh
+  Ok(())
+}
+
+// Sets the value at `path`, keeping every byte of the document outside the edited
+// span. Missing mapping keys along the path are created.
+pub fn set(mut doc: Document, path: List[Segment], value: Value) -> Result[(), YamlError] uses {} {
+  if core@1/list.len(path) == 0 || doc.tree.root == NONE {
+    let written = stringify(value)?
+    return commit(mut doc, take written, path, Some(unique value))
+  }
+  let place = locate(doc.tree, path)?
+  let n = core@1/list.len(path)
+  if place.found == n {
+    let id = doc.tree.nodes[place.parent].members[place.member].node
+    let edited = replaced(doc, place.parent, place.member, id, value)?
+    return commit(mut doc, take edited, path, Some(unique value))
+  }
+  // The first missing segment holds the rest of the path.
+  let mut nested = unique value
+  let mut i = n
+  while i > place.found + 1 {
+    i -= 1
+    let Key(k) = path[i] else {
+      return Error(NotFound())
+    }
+    let mut entries: Map[String, Value] = core@1/map.empty()
+    core@1/map.insert(mut entries, unique k, take nested)
+    nested = Object(take entries)
+  }
+  let key = match path[place.found] {
+    Key(k) => unique k,
+    Index(index) => {
+      if index != core@1/list.len(doc.tree.nodes[place.parent].members) {
+        return Error(NotFound())
+      }
+      ""
+    },
+  }
+  let edited = added(doc, place.parent, key, nested)?
+  commit(mut doc, take edited, path, Some(unique value))
+}
+
+// Removes the value at `path`. A block entry takes its lines and the comment and
+// blank lines above it back to the previous entry; a flow entry takes one comma;
+// the last entry of a collection leaves it empty (`[]` or `{}`).
+pub fn remove(mut doc: Document, path: List[Segment]) -> Result[(), YamlError] uses {} {
+  if core@1/list.len(path) == 0 || doc.tree.root == NONE {
+    return Error(NotFound())
+  }
+  let place = locate(doc.tree, path)?
+  if place.found != core@1/list.len(path) {
+    return Error(NotFound())
+  }
+  let data = core@1/string.as_bytes(doc.text)
+  let parent = doc.tree.nodes[place.parent]
+  let count = core@1/list.len(parent.members)
+  let i = place.member
+  let member = parent.members[i]
+  let removed_node = doc.tree.nodes[member.node]
+  let edited = if count == 1 {
+    let empty: Value = if parent.kind == N_MAPPING {
+      Object(core@1/map.empty())
+    } else {
+      Array([])
+    }
+    let mut grand = NONE
+    let mut slot = NONE
+    let mut g: u64 = 0
+    while g < core@1/list.len(doc.tree.nodes) {
+      let mut s: u64 = 0
+      for m in doc.tree.nodes[g].members {
+        if m.node == place.parent {
+          grand = g
+          slot = s
+        }
+        s += 1
+      }
+      g += 1
+    }
+    replaced(doc, grand, slot, place.parent, empty)?
+  } else if parent.block {
+    if i == 0 {
+      splice(data, member.key_start, parent.members[1].key_start, "")
+    } else {
+      let previous = doc.tree.nodes[parent.members[i - 1].node]
+      splice(data, after_line(data, previous.end), after_line(data, removed_node.end), "")
+    }
+  } else if i + 1 < count {
+    splice(data, member.key_start, parent.members[i + 1].key_start, "")
+  } else {
+    let previous = doc.tree.nodes[parent.members[i - 1].node]
+    splice(data, previous.end, removed_node.end, "")
+  }
+  // Removing a sequence item shifts the ones after it into its index.
+  let expected: Option[Value] = if parent.kind == N_SEQUENCE && i + 1 < count {
+    let mut next = unique path
+    let _ = core@1/list.pop(mut next)
+    let after: Option[Value] = value_at(doc.value, next)
+    match after {
+      Some(Array(items)) => Some(unique items[i + 1]),
+      _ => None(),
+    }
+  } else {
+    None()
+  }
+  commit(mut doc, take edited, path, expected)
 }

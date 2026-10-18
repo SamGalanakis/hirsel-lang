@@ -1,0 +1,40 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.set writes multi-line text double-quoted when a comment follows the
+// replaced scalar, and an empty path replaces the whole document.
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.document("name: CI  # the name\nrun: echo\nbuild:\n  os: linux\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = copy doc
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("name")], Text("a\nb")),
+      a,
+      "name: \"a\\nb\"  # the name\nrun: echo\nbuild:\n  os: linux\n"
+    ),
+    TextInvariant()
+  )
+  let mut b = copy doc
+  failure.check(
+    edits(yaml.set(mut b, [], Array([Integer(1)])), b, "- 1\n"),
+    TextInvariant()
+  )
+  // An edit that would leave the document invalid fails and changes nothing.
+  let Ok(anchored) = yaml.document("base: &b {x: 1}\nuse: *b\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut c = copy anchored
+  failure.check(
+    yaml.remove(mut c, [Key("base")]) == Error(InvalidValue()),
+    TextInvariant()
+  )
+  failure.check(yaml.source(c) == "base: &b {x: 1}\nuse: *b\n", TextInvariant())
+  Ok(())
+}

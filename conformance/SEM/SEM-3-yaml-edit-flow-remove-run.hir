@@ -1,0 +1,40 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.remove takes the last flow entry with the comma before it and leaves an
+// emptied flow collection as [].
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.document("services: {api: {ports: [80, 443]}, db: {}}\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = copy doc
+  failure.check(
+    edits(
+      yaml.remove(mut a, [Key("services"), Key("db")]),
+      a,
+      "services: {api: {ports: [80, 443]}}\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.remove(mut a, [Key("services"), Key("api"), Key("ports"), Index(1)]),
+      a,
+      "services: {api: {ports: [80]}}\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.remove(mut a, [Key("services"), Key("api"), Key("ports"), Index(0)]),
+      a,
+      "services: {api: {ports: []}}\n"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

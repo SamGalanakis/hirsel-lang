@@ -1,0 +1,41 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.set replaces a scalar with a block collection below its key (a comment
+// after the scalar stays on the key's line), a block collection with a scalar, and
+// multi-line text with a literal block unless a comment follows on its line.
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.document("name: CI  # the name\nrun: echo\nbuild:\n  os: linux\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = copy doc
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("name")], Array([Text("a"), Text("b")])),
+      a,
+      "name:  # the name\n  - a\n  - b\nrun: echo\nbuild:\n  os: linux\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("build")], Text("none")),
+      a,
+      "name:  # the name\n  - a\n  - b\nrun: echo\nbuild: none\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("run")], Text("make\nmake test\n")),
+      a,
+      "name:  # the name\n  - a\n  - b\nrun: |\n  make\n  make test\nbuild: none\n"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

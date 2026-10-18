@@ -1,0 +1,31 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml edits keep a document's CRLF line breaks in the lines they add.
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.document("a: 1\r\nb:\r\n  c: 2\r\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = copy doc
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("b"), Key("d")], Array([Integer(3)])),
+      a,
+      "a: 1\r\nb:\r\n  c: 2\r\n  d:\r\n    - 3\r\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.remove(mut a, [Key("b"), Key("c")]),
+      a,
+      "a: 1\r\nb:\r\n  d:\r\n    - 3\r\n"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}
