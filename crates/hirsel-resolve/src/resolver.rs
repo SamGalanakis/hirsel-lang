@@ -297,7 +297,21 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         }
         result
     }
-    fn lookup_diagnostic(&mut self, result: &LookupError, span: Span) {
+    fn lookup_diagnostic(&mut self, result: &LookupError, path: &Path, span: Span) {
+        let segments = path
+            .segments
+            .iter()
+            .map(|s| self.spelling(*s))
+            .collect::<Vec<_>>();
+        let name = match &path.package {
+            Some(package) => format!(
+                "{}@{}/{}",
+                package.name,
+                package.version,
+                segments.join("/")
+            ),
+            None => segments.join("."),
+        };
         match result {
             LookupError::Provider(diagnostics) => {
                 self.output
@@ -308,14 +322,16 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         d
                     }))
             }
-            LookupError::Missing => {
-                self.diagnostic(const { RuleId::of("LANG-4") }, span, "unresolved name")
-            }
+            LookupError::Missing => self.diagnostic(
+                const { RuleId::of("LANG-4") },
+                span,
+                format!("unresolved name `{name}`"),
+            ),
             LookupError::MissingMember(candidates) => self.diagnostic(
                 const { RuleId::of("LANG-4") },
                 span,
                 format!(
-                    "unresolved module member; looked for {}",
+                    "unresolved module member `{name}`; looked for {}",
                     candidates
                         .iter()
                         .map(ToString::to_string)
@@ -327,7 +343,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 const { RuleId::of("LANG-4") },
                 span,
                 format!(
-                    "ambiguous module head: {}; write a full package/version path",
+                    "ambiguous module head in `{name}`: {}; write a full package/version path",
                     candidates
                         .iter()
                         .map(ToString::to_string)
@@ -600,7 +616,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                                 .output
                                 .paths
                                 .push((NameSite::Item(id), ResolvedName::Definition(definition))),
-                            Err(e) => self.lookup_diagnostic(&e, span),
+                            Err(e) => self.lookup_diagnostic(&e, path, span),
                         }
                     }
                 }
@@ -967,7 +983,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 ExpectedType::Unknown
             }
             Err(e) => {
-                self.lookup_diagnostic(&e, span);
+                self.lookup_diagnostic(&e, path, span);
                 ExpectedType::Unknown
             }
         }
@@ -1086,7 +1102,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 {
                     self.defer(site, path.segments[0], span);
                 } else {
-                    self.lookup_diagnostic(&e, span);
+                    self.lookup_diagnostic(&e, path, span);
                 }
             }
         }
@@ -1131,7 +1147,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     .paths
                     .push((site, ResolvedName::Definition(definition)));
             }
-            Err(e) => self.lookup_diagnostic(&e, span),
+            Err(e) => self.lookup_diagnostic(&e, path, span),
         }
     }
     /// Reads only a written type annotation, never an initializer/body.
@@ -1816,7 +1832,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     self.diagnostic(const { RuleId::of("LANG-4") }, span,
                         &format!("before `.`, `{head}` names a module; rename the local `{head}` to access its fields"));
                 } else {
-                    self.lookup_diagnostic(&e, span);
+                    self.lookup_diagnostic(&e, path, span);
                 }
                 ExpectedType::Unknown
             }
@@ -2232,7 +2248,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                                     node.origin.span,
                                 );
                             } else {
-                                self.lookup_diagnostic(&e, node.origin.span);
+                                self.lookup_diagnostic(&e, &path, node.origin.span);
                             }
                         }
                     }

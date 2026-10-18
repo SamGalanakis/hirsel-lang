@@ -945,3 +945,8 @@ with actual generic authority before receipt. J proves sendable/inert bounds at
 creation and substitutes authority/uses throughout parameters and results. Indirect
 calls retain the declared modes, allocation and relations; preserves_unique stays
 direct-call only.
+
+Diagnostic repairs with a known mechanical edit carry `Diagnostic.fix`: last-use
+ownership inserts `take`, a counted part leaving its owner's block inserts `copy`,
+and a redundant last-use copy is replaced by its local binding. Insertions retain
+the original expression text, including qualification, labels and comments.

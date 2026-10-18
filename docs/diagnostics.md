@@ -135,3 +135,9 @@ Typical fix: Remove the prohibited capture or operation from the callback, or pe
 The escaping closure's captures or authority do not satisfy its declared contract.
 
 Typical fix: Own the escaping captures and keep them global. If the callback is permitted to use capability `net`, include `uses {net}` in its signature and pass the capability explicitly; otherwise remove that capture.
+
+## OWN-4: Counted copies
+
+A counted copy shares storage; a warning identifies an unnecessary copy at a borrowing call's last use.
+
+Typical fix: To keep a copyable counted value available while passing an owned argument, write `copy x`. For the redundant-copy warning, pass `x` directly to the borrowing callee at its last use.

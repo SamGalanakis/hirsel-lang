@@ -3282,6 +3282,7 @@ conformance/OWN/OWN-4-heap-capacity-set-append-run.hir
 conformance/OWN/OWN-4-heap-capacity-sorted-closure-run.hir
 conformance/OWN/OWN-4-nested-markers-run.hir
 conformance/OWN/OWN-4-plain-implicit-copy.hir
+conformance/OWN/OWN-4-redundant-copy-repair-ok.hir
 conformance/OWN/OWN-4-static-copy-write-run.hir
 conformance/OWN/OWN-4-static-map-copy-insert-run.hir
 conformance/OWN/OWN-4-tour-02-modes-run.hir

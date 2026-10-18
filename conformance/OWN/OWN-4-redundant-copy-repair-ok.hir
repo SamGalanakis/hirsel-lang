@@ -1,0 +1,14 @@
+// rule: OWN-4
+// expect: accept
+// A borrowed read needs no extra count; “copy” is redundant at the last use.
+fn read(xs: Bytes) -> u64 {
+  bytes.len(xs)
+}
+
+fn example(take xs: Bytes) -> u64 {
+  read(copy xs)
+}
+
+fn control(take xs: Bytes) -> u64 {
+  read(xs)
+}

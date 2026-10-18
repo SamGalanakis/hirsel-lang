@@ -429,7 +429,8 @@ impl Checker<'_> {
         if !self.emit {
             return None;
         }
-        let pending = explain(self);
+        let mut pending = explain(self);
+        pending.explanation.name_values(self.sites());
         self.diagnostics
             .push(Diagnostic::error(rule, site, message));
         self.explanations
@@ -608,6 +609,11 @@ impl Checker<'_> {
             "this `copy` is redundant",
         );
         diagnostic.severity = hirsel_diag::Severity::Warning;
+        diagnostic.fix = Some(hirsel_diag::Fix {
+            span,
+            replacement: name.clone(),
+            message: "pass the last use directly to the borrowed parameter".into(),
+        });
         Explanation {
             repairs: vec![Repair::PassBorrowed(name.clone())],
             ..Explanation::default()

@@ -2980,7 +2980,7 @@ impl Checker<'_> {
                     |c| {
                         let (name, declaration) = c.binding_site(index);
                         Explanation::default()
-                            .provided(Fact::new(Cause::Aliased, site, &[]))
+                            .provided(Fact::new(Cause::Aliased, site, &[&name]))
                             .required(Fact::new(Requirement::Unique, declaration, &[&name]))
                             .into()
                     },
@@ -3683,6 +3683,14 @@ impl Checker<'_> {
                 let part = c.spelled(tail).unwrap_or_else(|| name.clone());
                 Explanation {
                     repairs: vec![crate::explain::Repair::CopyPart(part.clone())],
+                    fix: Some(hirsel_diag::Fix {
+                        span: Span {
+                            end: c.span_of(tail).start,
+                            ..c.span_of(tail)
+                        },
+                        replacement: "copy ".into(),
+                        message: "share the counted part before its owner's block ends".into(),
+                    }),
                     root: Some(crate::explain::root_key(
                         &c.own.definition,
                         ("block part", tail.0),
@@ -5841,6 +5849,11 @@ impl Checker<'_> {
                                             && c.unused_after(p.binding, lent_at).is_some()
                                     }) {
                                         let (name, _) = c.binding_site(lent.binding);
+                                        explanation.fix = Some(hirsel_diag::Fix {
+                                            span: Span { end: operand.start, ..operand },
+                                            replacement: "take ".into(),
+                                            message: format!("move `{name}` at its last use"),
+                                        });
                                         explanation
                                             .repairs
                                             .push(crate::explain::Repair::TakeAtLastUse(name));

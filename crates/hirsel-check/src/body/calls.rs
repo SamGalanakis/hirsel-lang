@@ -140,10 +140,21 @@ impl Checker<'_, '_> {
             result.push(slot);
         }
         if bad {
+            let slots = |labels: &[Option<String>]| {
+                labels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| match label {
+                        Some(label) => format!("`{label}: ...`"),
+                        None => format!("positional argument {}", i + 1),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
             self.report(
                 const { RuleId::of("LANG-12") },
                 span,
-                "arguments must provide each required label and positional slot exactly once",
+                &format!("arguments must provide each required label and positional slot exactly once; declared: ({}); supplied: ({})", slots(declared), slots(actual)),
             );
         }
         result
@@ -627,7 +638,7 @@ impl Checker<'_, '_> {
                     if type_contract {
                         self.calls[call].type_contracts.insert(parameter.0 as usize);
                     }
-                    if let Some(GenericParameter::Type { bounds, .. }) =
+                    if let Some(GenericParameter::Type { name, bounds }) =
                         bounds.get(parameter.0 as usize)
                     {
                         for b in bounds {
@@ -638,6 +649,18 @@ impl Checker<'_, '_> {
                                 continue;
                             }
                             if !self.bound(actual, *b)? {
+                                let bound = match b {
+                                    ast::Bound::Plain => "plain",
+                                    ast::Bound::Flat => "flat",
+                                    ast::Bound::Data => "data",
+                                    ast::Bound::Key => "key",
+                                    ast::Bound::Sendable => "sendable",
+                                    ast::Bound::Inert => "inert",
+                                    ast::Bound::Copyable => "copyable",
+                                    ast::Bound::NoallocDrop => "noalloc_drop",
+                                    ast::Bound::Serializable => "serializable",
+                                };
+                                let provided = self.type_spelling(actual);
                                 self.report(
                                     if *b == ast::Bound::Serializable {
                                         const { RuleId::of("SER-1") }
@@ -645,8 +668,17 @@ impl Checker<'_, '_> {
                                         const { RuleId::of("GEN-1") }
                                     },
                                     self.span(id),
-                                    "actual generic argument lacks a required structural bound",
+                                    &format!("type `{provided}` for generic parameter `{name}` lacks the required `{bound}` bound"),
                                 );
+                                let operand = self.span(expression);
+                                let diagnostic = self.diagnostics.last_mut().unwrap();
+                                diagnostic.secondary.push(hirsel_diag::Label {
+                                    span: operand,
+                                    message: format!(
+                                        "this argument supplies `{provided}` for `{name}: {bound}`"
+                                    ),
+                                });
+                                diagnostic.notes.push(format!("help: use an argument satisfying `{bound}`; if `{provided}` is a type parameter, add `{bound}` to its declared bounds"));
                                 bad = true;
                             }
                         }

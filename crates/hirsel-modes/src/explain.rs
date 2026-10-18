@@ -239,12 +239,12 @@ impl Cause {
                 "a once function: it takes a capture, captures once, or is declared `once`",
             ),
             Aliased => (
-                "the value is aliased",
-                "a counted alias: its storage is shared with another binding",
+                "`{0}` is not proved unique",
+                "`{0}` may share counted storage; its current contract does not prove uniqueness",
             ),
             Noncopyable => (
-                "the value cannot be copied",
-                "its type is noncopyable: it holds a resource, handle, once function or arena",
+                "`{0}` cannot be copied",
+                "`{0}` has a noncopyable type: it holds a resource, handle, once function or arena",
             ),
             ScopedClosure => (
                 "the closure borrows its environment",
@@ -255,8 +255,8 @@ impl Cause {
                 "a scoped capability is valid only inside its callback (MODE-6)",
             ),
             NotSendable => (
-                "the value is not sendable",
-                "it cannot cross a task boundary",
+                "`{0}` is not proved sendable",
+                "`{0}` cannot cross a task boundary under its current type and ownership contract",
             ),
             Sendable => (
                 "the storage is `sendable`",
@@ -796,6 +796,8 @@ pub(crate) struct Explanation {
     pub repairs: Vec<Repair>,
     pub cautions: Vec<Caution>,
     pub root: Option<u64>,
+    /// A mechanical edit whose source expression is known by the producer.
+    pub fix: Option<hirsel_diag::Fix>,
 }
 /// A name that is a description, not source text: it is not quoted.
 pub(crate) fn prose(text: &str) -> String {
@@ -804,6 +806,8 @@ pub(crate) fn prose(text: &str) -> String {
 const PROSE: char = '\u{1}';
 fn fill(template: &str, names: &[String]) -> String {
     let mut out = template.to_owned();
+    let unnamed = [prose("the value")];
+    let names = if names.is_empty() { &unnamed } else { names };
     for (i, name) in names.iter().enumerate() {
         match name.strip_prefix(PROSE) {
             Some(text) => {
@@ -816,6 +820,30 @@ fn fill(template: &str, names: &[String]) -> String {
     out
 }
 impl Explanation {
+    /// Recover expression names only for otherwise anonymous value facts. This
+    /// uses syntax on the error path and cannot change a flow judgment.
+    pub fn name_values(&mut self, sites: Sites<'_>) {
+        for fact in &mut self.provided {
+            if fact.names.is_empty()
+                && matches!(
+                    fact.kind,
+                    Cause::Aliased | Cause::NotSendable | Cause::Noncopyable
+                )
+            {
+                let name = sites
+                    .tree
+                    .expressions
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, e)| {
+                        (e.origin.span == fact.span)
+                            .then(|| spell(sites.tree, sites.symbols, ExprId(i as u32)))
+                            .flatten()
+                    });
+                fact.names.push(name.unwrap_or_else(|| prose("the value")));
+            }
+        }
+    }
     pub fn provided(mut self, fact: Fact<Cause>) -> Self {
         self.provided.push(fact);
         self
@@ -830,6 +858,9 @@ impl Explanation {
     }
     /// Two-sided message and labels; the rule and primary span never change.
     pub fn render(mut self, diagnostic: &mut Diagnostic) {
+        if diagnostic.fix.is_none() {
+            diagnostic.fix = self.fix.take();
+        }
         let provided = self.cause().map(|f| fill(f.kind.text().0, &f.names));
         let required = self
             .required

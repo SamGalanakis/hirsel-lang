@@ -203,8 +203,9 @@ impl Checker<'_> {
         rule: RuleId,
         span: Span,
         message: &str,
-        explanation: Explanation,
+        mut explanation: Explanation,
     ) {
+        explanation.name_values(self.sites());
         let before = self.out.diagnostics.len();
         self.error(rule.clone(), span, message);
         if self.out.diagnostics.len() > before {
