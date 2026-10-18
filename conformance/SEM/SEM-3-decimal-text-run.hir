@@ -1,0 +1,62 @@
+// rule: SEM-3
+// expect: run
+// stdout: [   -1.50] [-1.50   ] 120000 0.007
+// Decimal text keeps every written fractional digit, has no exponent form and pads in
+// f-string holes like a string.
+fn invalid(text: String) {
+  failure.check(decimal.parse(text) == Error(Invalid()), TextInvariant())
+}
+
+fn same(text: String) {
+  let Ok(value) = decimal.parse(text) else {
+    failure.check(false, TextInvariant())
+    return
+  }
+  failure.check(decimal.to_string(value) == text, TextInvariant())
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  invalid("")
+  invalid("-")
+  invalid(".5")
+  invalid("5.")
+  invalid("-.5")
+  invalid("1e5")
+  invalid("1.5E-3")
+  invalid("+1")
+  invalid(" 1")
+  invalid("1 ")
+  invalid("1,000.00")
+  invalid("1_000")
+  invalid("1.2.3")
+  invalid("--1")
+  invalid("0x1")
+  same("0")
+  same("0.00")
+  same("-1.50")
+  same("123456789012345678901234567890.123456789012345678901234567890")
+  same("-0.000000000000000000000000000000000000001")
+  let Ok(negative_zero) = decimal.parse("-0.00") else {
+    return Ok(())
+  }
+  failure.check(decimal.to_string(negative_zero) == "0.00", TextInvariant())
+  failure.check(
+    decimal.scale(negative_zero) == 2 && decimal.is_zero(negative_zero),
+    TextInvariant()
+  )
+  let Ok(leading) = decimal.parse("007.50") else {
+    return Ok(())
+  }
+  failure.check(decimal.to_string(leading) == "7.50", TextInvariant())
+  failure.check(decimal.coefficient(leading) == bigint.from_u64(750), TextInvariant())
+  let x = decimal.new(bigint.from_i64(-150), 2)
+  let wide = decimal.new(bigint.from_u64(12), -4)
+  let small = decimal.new(bigint.from_u64(7), 3)
+  failure.check(
+    decimal.to_string(decimal.new(bigint.zero(), -3)) == "0",
+    TextInvariant()
+  )
+  let o = io.stdout(rt)?
+  let _ = out.print(o, f"[{x:>8}] [{x:8}] {wide} {small}\n")
+  Ok(())
+}

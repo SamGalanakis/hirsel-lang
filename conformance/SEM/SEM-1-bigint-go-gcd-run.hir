@@ -1,0 +1,42 @@
+// rule: SEM-1
+// expect: run
+// Copyright 2009 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
+// Go math/big int_test.go gcdTests: the divisor column (this API has no Bezout cofactors),
+// in both argument orders.
+fn n(text: String) -> bigint.BigInt {
+  let Ok(v) = bigint.parse(text) else {
+    failure.check(false, TextInvariant())
+    return bigint.zero()
+  }
+  v
+}
+
+fn gcd(d: String, a: String, b: String) {
+  let x = n(a)
+  let y = n(b)
+  let expected = n(d)
+  failure.check(
+    bigint.gcd(x, y) == expected && bigint.gcd(y, x) == expected,
+    Arithmetic()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  gcd("0", "0", "0")
+  gcd("7", "0", "7")
+  gcd("7", "0", "-7")
+  gcd("11", "11", "0")
+  gcd("7", "-77", "35")
+  gcd("935", "64515", "24310")
+  gcd("935", "64515", "-24310")
+  gcd("935", "-64515", "-24310")
+  gcd("1", "120", "23")
+  gcd("7", "77", "35")
+  gcd("935000000000000000", "64515000000000000000", "24310000000000000000")
+  gcd(
+    "1",
+    "98920366548084643601728869055592650835572950932266967461790948584315647051443",
+    "991"
+  )
+  Ok(())
+}

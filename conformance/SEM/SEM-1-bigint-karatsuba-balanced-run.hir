@@ -1,0 +1,26 @@
+// rule: SEM-1
+// expect: run
+// Karatsuba on two seeded 33-limb operands, checked by dividing the product back.
+// A value of exactly `limbs` u64 limbs.
+fn random(mut g: prng.Generator, limbs: u64) -> bigint.BigInt {
+  let mut value = bigint.from_u64(prng.u64(mut g) | 1u64 << 63)
+  for _ in 1u64..limbs {
+    value = bigint.add(bigint.shl(value, 64), bigint.from_u64(prng.u64(mut g)))
+  }
+  value
+}
+
+// A product divided by one factor gives back the other with no remainder; division is
+// Knuth D, independent of the multiplication.
+fn exact(a: bigint.BigInt, b: bigint.BigInt) {
+  failure.check(
+    bigint.div_rem(bigint.mul(a, b), a) == (copy b, bigint.zero()),
+    Arithmetic()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut g = prng.seed(0xb16_ca75)
+  exact(random(mut g, 33), random(mut g, 33))
+  Ok(())
+}

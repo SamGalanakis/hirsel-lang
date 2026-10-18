@@ -1,0 +1,66 @@
+// rule: SEM-3
+// expect: run
+// stdout: [  -12345] [-12345  ] [*-12345**] 1267650600228229401496703205376
+// BigInt text: the integer parse grammar without an upper bound, radix 2 through 36
+// in either letter case, canonical output and f-string holes padded like strings.
+fn invalid(text: String, radix: u8) {
+  failure.check(bigint.parse_radix(text, radix) == Error(Invalid()), TextInvariant())
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  invalid("", 10)
+  invalid("-", 10)
+  invalid("+1", 10)
+  invalid(" 1", 10)
+  invalid("1 ", 10)
+  invalid("1_000", 10)
+  invalid("0x10", 16)
+  invalid("12a", 10)
+  invalid("--1", 10)
+  invalid("2", 2)
+  invalid("z", 35)
+  invalid("1", 1)
+  invalid("1", 37)
+  failure.check(bigint.parse("-0") == Ok(bigint.zero()), TextInvariant())
+  failure.check(bigint.parse("-000") == Ok(bigint.zero()), TextInvariant())
+  failure.check(bigint.parse("000123") == Ok(bigint.from_u64(123)), TextInvariant())
+  failure.check(
+    bigint.parse_radix("DeadBeef", 16) == Ok(bigint.from_u64(0xdeadbeef)),
+    TextInvariant()
+  )
+  failure.check(
+    bigint.parse_radix("-Zz", 36) == Ok(bigint.from_i64(-1295)),
+    TextInvariant()
+  )
+  failure.check(
+    bigint.format_radix(bigint.from_u64(7), 1) == Error(Invalid()),
+    TextInvariant()
+  )
+  failure.check(
+    bigint.format_radix(bigint.from_u64(7), 37) == Error(Invalid()),
+    TextInvariant()
+  )
+  failure.check(bigint.to_string(bigint.zero()) == "0", TextInvariant())
+  failure.check(bigint.format_radix(bigint.zero(), 2) == Ok("0"), TextInvariant())
+  let power = bigint.pow(bigint.from_u64(2), 1000)
+  let power_text = "10715086071862673209484250490600018105614048117055336074437503883703510511249361224931983788156958581275946729175531468251871452856923140435984577574698574803934567774824230985421074605062371141877954182153046474983581941267398767559165543946077062914571196477686542167660429831652624386837205668069376"
+  failure.check(bigint.to_string(power) == power_text, TextInvariant())
+  failure.check(bigint.parse(power_text) == Ok(power), TextInvariant())
+  let third = bigint.neg(bigint.pow(bigint.from_u64(3), 200))
+  failure.check(
+    bigint.to_string(third) == "-265613988875874769338781322035779626829233452653394495974574961739092490901302182994384699044001",
+    TextInvariant()
+  )
+  failure.check(
+    bigint.format_radix(third, 16) == Ok(
+      "-1fd5863c3eb0469ec21a937a76f3432ffd73d97e447606b683ecf6f6e4a7ae225bfaff1eaaf8b0a1"
+    ),
+    TextInvariant()
+  )
+  let x = bigint.from_i64(-12345)
+  let big = bigint.shl(bigint.from_u64(1), 100)
+  let line = f"[{x:>8}] [{x:8}] [{x:*^9}] {big}\n"
+  let o = io.stdout(rt)?
+  let _ = out.print(o, line)
+  Ok(())
+}

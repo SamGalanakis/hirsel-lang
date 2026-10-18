@@ -1,0 +1,65 @@
+// rule: SEM-1
+// expect: run
+// Copyright 2009 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
+// Go math/big int_test.go bitLenTests, the unmodded expTests rows and notTests.
+fn n(text: String) -> bigint.BigInt {
+  let Ok(v) = bigint.parse(text) else {
+    failure.check(false, TextInvariant())
+    return bigint.zero()
+  }
+  v
+}
+
+fn h(text: String) -> bigint.BigInt {
+  let Ok(v) = bigint.parse_radix(text, 16) else {
+    failure.check(false, TextInvariant())
+    return bigint.zero()
+  }
+  v
+}
+
+fn bit_length(input: bigint.BigInt, bits: u64) {
+  failure.check(bigint.bit_length(input) == bits, Arithmetic())
+}
+
+fn power(x: String, y: u64, output: bigint.BigInt) {
+  failure.check(bigint.pow(n(x), y) == output, Arithmetic())
+}
+
+fn complement(input: String, output: String) {
+  failure.check(bigint.bit_not(n(input)) == n(output), Arithmetic())
+  failure.check(bigint.bit_not(n(output)) == n(input), Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  bit_length(n("-1"), 1)
+  bit_length(n("0"), 0)
+  bit_length(n("1"), 1)
+  bit_length(n("2"), 2)
+  bit_length(n("4"), 3)
+  bit_length(h("abc"), 12)
+  bit_length(h("8000"), 16)
+  bit_length(h("80000000"), 32)
+  bit_length(h("800000000000"), 48)
+  bit_length(h("8000000000000000"), 64)
+  bit_length(h("80000000000000000000"), 80)
+  bit_length(h("-4000000000000000000000"), 87)
+  power("0", 0, n("1"))
+  power("1", 0, n("1"))
+  power("-10", 0, n("1"))
+  power("5", 0, n("1"))
+  power("-5", 0, n("1"))
+  power("5", 1, n("5"))
+  power("-5", 1, n("-5"))
+  power("5", 2, n("25"))
+  power("9223372036854775808", 2, h("40000000000000000000000000000000"))
+  complement("0", "-1")
+  complement("1", "-2")
+  complement("7", "-8")
+  complement("-81910", "81909")
+  complement(
+    "298472983472983471903246121093472394872319615612417471234712061",
+    "-298472983472983471903246121093472394872319615612417471234712062"
+  )
+  Ok(())
+}

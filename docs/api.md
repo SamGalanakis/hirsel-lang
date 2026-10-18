@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1009 exported definitions; 299 variants.
+1075 exported definitions; 305 variants.
 
 ## Types and roots
 
@@ -1635,6 +1635,348 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString), [`std@1/base64/Alphabet`](#def-std_401_2fbase64_2fAlphabet), [`std@1/base64/Padding`](#def-std_401_2fbase64_2fPadding)
 
 
+## bigint
+
+<a id="def-std_401_2fbigint_2fBigInt"></a>
+
+- `@format(format_into) pub opaque type bigint.BigInt: copyable + data + key + inert + noalloc_drop uses {}`
+
+An exact integer of any size. Its representation is canonical (no high zero
+limbs, and zero is never negative), so `==` and hashing compare values.
+
+References: [`std@1/bigint/format_into`](#def-std_401_2fbigint_2fformat_5finto)
+
+<a id="def-std_401_2fbigint_2fabs"></a>
+
+- `pub fn bigint.abs(value: BigInt) -> BigInt uses {}`
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fadd"></a>
+
+- `pub fn bigint.add(a: BigInt, b: BigInt) -> BigInt uses {}`
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fbit_5fand"></a>
+
+- `pub fn bigint.bit_and(a: BigInt, b: BigInt) -> BigInt uses {}`
+
+Bitwise and.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fbit_5flength"></a>
+
+- `pub fn bigint.bit_length(value: BigInt) -> u64 uses {}`
+
+The number of bits in the magnitude; zero has none.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fbit_5fnot"></a>
+
+- `pub fn bigint.bit_not(value: BigInt) -> BigInt uses {}`
+
+Bitwise complement, -value - 1.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fbit_5for"></a>
+
+- `pub fn bigint.bit_or(a: BigInt, b: BigInt) -> BigInt uses {}`
+
+Bitwise inclusive or.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fbit_5fxor"></a>
+
+- `pub fn bigint.bit_xor(a: BigInt, b: BigInt) -> BigInt uses {}`
+
+Bitwise exclusive or.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fcompare"></a>
+
+- `pub fn bigint.compare(a: BigInt, b: BigInt) -> i32 uses {}`
+
+-1, 0 or 1 as `a` is less than, equal to or greater than `b`.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fdiv_5fmod_5ffloor"></a>
+
+- `pub fn bigint.div_mod_floor(a: BigInt, b: BigInt) -> (BigInt, BigInt) uses {}`
+
+The quotient rounded toward negative infinity and the remainder with the divisor's
+sign, as `int.div_floor` and `int.mod`. A zero divisor fails SEM-1.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fdiv_5frem"></a>
+
+- `pub fn bigint.div_rem(a: BigInt, b: BigInt) -> (BigInt, BigInt) uses {}`
+
+The quotient truncated toward zero and the remainder with the dividend's sign, as
+integer `/` and `%`. A zero divisor fails SEM-1.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fformat_5finto"></a>
+
+- `@preserves_unique(out) pub fn bigint.format_into(value: BigInt, mut out: List[u8]) -> () uses {}`
+
+Appends the decimal text `to_string` returns.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fformat_5fradix"></a>
+
+- `pub fn bigint.format_radix(value: BigInt, radix: u8) -> Result[ unique String, scalar.ParseError ] uses {}`
+
+Text in `radix` 2 through 36 with lowercase letters, a minus for negative values and
+no prefix; an invalid radix is `Invalid`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
+
+<a id="def-std_401_2fbigint_2ffrom_5fi128"></a>
+
+- `pub fn bigint.from_i128(value: i128) -> BigInt uses {}`
+
+The value of a signed 128-bit integer; the narrower widths widen to it.
+
+References: [`core@1/i128`](#def-core_401_2fi128), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fi16"></a>
+
+- `pub fn bigint.from_i16(value: i16) -> BigInt uses {}`
+
+References: [`core@1/i16`](#def-core_401_2fi16), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fi32"></a>
+
+- `pub fn bigint.from_i32(value: i32) -> BigInt uses {}`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fi64"></a>
+
+- `pub fn bigint.from_i64(value: i64) -> BigInt uses {}`
+
+References: [`core@1/i64`](#def-core_401_2fi64), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fi8"></a>
+
+- `pub fn bigint.from_i8(value: i8) -> BigInt uses {}`
+
+References: [`core@1/i8`](#def-core_401_2fi8), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fu128"></a>
+
+- `pub fn bigint.from_u128(value: u128) -> BigInt uses {}`
+
+The value of an unsigned 128-bit integer; the narrower widths widen to it.
+
+References: [`core@1/u128`](#def-core_401_2fu128), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fu16"></a>
+
+- `pub fn bigint.from_u16(value: u16) -> BigInt uses {}`
+
+References: [`core@1/u16`](#def-core_401_2fu16), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fu32"></a>
+
+- `pub fn bigint.from_u32(value: u32) -> BigInt uses {}`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fu64"></a>
+
+- `pub fn bigint.from_u64(value: u64) -> BigInt uses {}`
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2ffrom_5fu8"></a>
+
+- `pub fn bigint.from_u8(value: u8) -> BigInt uses {}`
+
+References: [`core@1/u8`](#def-core_401_2fu8), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fgcd"></a>
+
+- `pub fn bigint.gcd(a: BigInt, b: BigInt) -> BigInt uses {}`
+
+The nonnegative greatest common divisor; gcd(0, 0) is 0. Stein's binary algorithm.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fis_5fnegative"></a>
+
+- `pub fn bigint.is_negative(value: BigInt) -> bool uses {}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fis_5fzero"></a>
+
+- `pub fn bigint.is_zero(value: BigInt) -> bool uses {}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fmul"></a>
+
+- `pub fn bigint.mul(a: BigInt, b: BigInt) -> BigInt uses {}`
+
+The product; operands longer than 32 limbs multiply by Karatsuba.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fneg"></a>
+
+- `pub fn bigint.neg(value: BigInt) -> BigInt uses {}`
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fparse"></a>
+
+- `pub fn bigint.parse(text: String) -> Result[BigInt, scalar.ParseError] uses {}`
+
+Parses `-?[0-9]+` in decimal, as `parse_radix(text, 10)`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
+
+<a id="def-std_401_2fbigint_2fparse_5fradix"></a>
+
+- `pub fn bigint.parse_radix(text: String, radix: u8) -> Result[BigInt, scalar.ParseError] uses {}`
+
+Parses an optional minus and one or more digits of `radix` (2 through 36, either
+letter case). Leading zeros are accepted; a plus, whitespace, underscores and radix
+prefixes are `Invalid`, as is an invalid radix. No value is out of range.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
+
+<a id="def-std_401_2fbigint_2fpow"></a>
+
+- `pub fn bigint.pow(base: BigInt, exponent: u64) -> BigInt uses {}`
+
+`base` raised to `exponent`, by binary exponentiation; zero to the zero is one.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fshl"></a>
+
+- `pub fn bigint.shl(value: BigInt, bits: u64) -> BigInt uses {}`
+
+`value` times 2 to the `bits`.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fshr"></a>
+
+- `pub fn bigint.shr(value: BigInt, bits: u64) -> BigInt uses {}`
+
+`value` divided by 2 to the `bits`, rounded toward negative infinity, as an
+arithmetic shift of the two's-complement value.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fsignum"></a>
+
+- `pub fn bigint.signum(value: BigInt) -> i32 uses {}`
+
+-1, 0 or 1 by the sign of `value`.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fsub"></a>
+
+- `pub fn bigint.sub(a: BigInt, b: BigInt) -> BigInt uses {}`
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fi128"></a>
+
+- `pub fn bigint.to_i128(value: BigInt) -> Option[i128] uses {}`
+
+The value as an i128, or None when it is out of range.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i128`](#def-core_401_2fi128), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fi16"></a>
+
+- `pub fn bigint.to_i16(value: BigInt) -> Option[i16] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i16`](#def-core_401_2fi16), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fi32"></a>
+
+- `pub fn bigint.to_i32(value: BigInt) -> Option[i32] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fi64"></a>
+
+- `pub fn bigint.to_i64(value: BigInt) -> Option[i64] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i64`](#def-core_401_2fi64), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fi8"></a>
+
+- `pub fn bigint.to_i8(value: BigInt) -> Option[i8] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i8`](#def-core_401_2fi8), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fstring"></a>
+
+- `pub fn bigint.to_string(value: BigInt) -> unique String uses {}`
+
+Decimal text: a minus for negative values, then digits without leading zeros.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fu128"></a>
+
+- `pub fn bigint.to_u128(value: BigInt) -> Option[u128] uses {}`
+
+The value as a u128, or None when it is negative or too large.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u128`](#def-core_401_2fu128), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fu16"></a>
+
+- `pub fn bigint.to_u16(value: BigInt) -> Option[u16] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u16`](#def-core_401_2fu16), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fu32"></a>
+
+- `pub fn bigint.to_u32(value: BigInt) -> Option[u32] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u32`](#def-core_401_2fu32), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fu64"></a>
+
+- `pub fn bigint.to_u64(value: BigInt) -> Option[u64] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fto_5fu8"></a>
+
+- `pub fn bigint.to_u8(value: BigInt) -> Option[u8] uses {}`
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u8`](#def-core_401_2fu8), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+<a id="def-std_401_2fbigint_2fzero"></a>
+
+- `pub fn bigint.zero() -> BigInt uses {}`
+
+Zero.
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
+
+
 ## bool
 
 <a id="def-std_401_2fbool_2fformat_5finline"></a>
@@ -2466,6 +2808,195 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/DateTime`](#
 - `@noalloc pub fn date_time.to_timestamp(value: time.DateTime, offset: i32) -> Result[ time.Timestamp, time.TimeError ] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/DateTime`](#def-std_401_2ftime_2fDateTime), [`std@1/time/TimeError`](#def-std_401_2ftime_2fTimeError), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
+
+
+## decimal
+
+<a id="def-std_401_2fdecimal_2fDecimal"></a>
+
+- `@format(format_into) pub opaque type decimal.Decimal: copyable + data + key + inert + noalloc_drop uses {}`
+
+The exact value coefficient * 10^-scale. `==` compares representations, so 1.0 and
+1.00 differ; `compare` compares values.
+
+References: [`std@1/decimal/format_into`](#def-std_401_2fdecimal_2fformat_5finto)
+
+<a id="def-std_401_2fdecimal_2fRoundingMode"></a>
+
+- `pub type decimal.RoundingMode = HalfEven | HalfUp | Down | Up | Floor | Ceiling`
+
+How a result that is not exact at its scale is rounded. `HalfEven` and `HalfUp`
+round to the nearest value, breaking ties to an even last digit and away from zero
+respectively; `Down` rounds toward zero, `Up` away from zero, `Floor` toward
+negative infinity and `Ceiling` toward positive infinity.
+
+<a id="def-std_401_2fdecimal_2fRoundingMode_23Ceiling"></a>
+
+- `Ceiling -> decimal.RoundingMode`
+
+Variant of decimal.RoundingMode.
+
+<a id="def-std_401_2fdecimal_2fRoundingMode_23Down"></a>
+
+- `Down -> decimal.RoundingMode`
+
+Variant of decimal.RoundingMode.
+
+<a id="def-std_401_2fdecimal_2fRoundingMode_23Floor"></a>
+
+- `Floor -> decimal.RoundingMode`
+
+Variant of decimal.RoundingMode.
+
+<a id="def-std_401_2fdecimal_2fRoundingMode_23HalfEven"></a>
+
+- `HalfEven -> decimal.RoundingMode`
+
+Variant of decimal.RoundingMode.
+
+<a id="def-std_401_2fdecimal_2fRoundingMode_23HalfUp"></a>
+
+- `HalfUp -> decimal.RoundingMode`
+
+Variant of decimal.RoundingMode.
+
+<a id="def-std_401_2fdecimal_2fRoundingMode_23Up"></a>
+
+- `Up -> decimal.RoundingMode`
+
+Variant of decimal.RoundingMode.
+
+<a id="def-std_401_2fdecimal_2fabs"></a>
+
+- `pub fn decimal.abs(value: Decimal) -> Decimal uses {}`
+
+References: [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fadd"></a>
+
+- `pub fn decimal.add(a: Decimal, b: Decimal) -> Decimal uses {}`
+
+The exact sum, at the larger of the two scales.
+
+References: [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fcoefficient"></a>
+
+- `pub fn decimal.coefficient(value: Decimal) -> bigint.BigInt uses {}`
+
+References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fcompare"></a>
+
+- `pub fn decimal.compare(a: Decimal, b: Decimal) -> i32 uses {}`
+
+-1, 0 or 1 as `a` is less than, equal to or greater than `b`, by value.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fdiv"></a>
+
+- `pub fn decimal.div(a: Decimal, b: Decimal, places: i32, mode: RoundingMode) -> Decimal uses {}`
+
+`a / b` rounded to `places` fractional digits by `mode`. A zero divisor fails SEM-1.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal), [`std@1/decimal/RoundingMode`](#def-std_401_2fdecimal_2fRoundingMode)
+
+<a id="def-std_401_2fdecimal_2fformat_5finto"></a>
+
+- `@preserves_unique(out) pub fn decimal.format_into(value: Decimal, mut out: List[u8]) -> () uses {}`
+
+Appends the text `to_string` returns.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fis_5fzero"></a>
+
+- `pub fn decimal.is_zero(value: Decimal) -> bool uses {}`
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fmul"></a>
+
+- `pub fn decimal.mul(a: Decimal, b: Decimal) -> Decimal uses {}`
+
+The exact product, at the sum of the scales; a sum outside i32 fails SEM-1.
+
+References: [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fneg"></a>
+
+- `pub fn decimal.neg(value: Decimal) -> Decimal uses {}`
+
+References: [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fnew"></a>
+
+- `pub fn decimal.new(unscaled: bigint.BigInt, places: i32) -> Decimal uses {}`
+
+The decimal unscaled * 10^-places.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fnormalize"></a>
+
+- `pub fn decimal.normalize(value: Decimal) -> Decimal uses {}`
+
+The same value without trailing fractional zeros: zero has scale 0, and the scale
+does not fall below zero unless it already was negative.
+
+References: [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fparse"></a>
+
+- `pub fn decimal.parse(text: String) -> Result[Decimal, scalar.ParseError] uses {}`
+
+Parses `-?[0-9]+(\.[0-9]+)?`, keeping every written fractional digit as the scale:
+"1.50" has coefficient 150 and scale 2, and "-0.0" is zero at scale 1. A plus,
+exponent, whitespace or missing digit is `Invalid`; a scale beyond i32 is `OutOfRange`.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal), [`std@1/scalar/ParseError`](#def-std_401_2fscalar_2fParseError)
+
+<a id="def-std_401_2fdecimal_2frescale"></a>
+
+- `pub fn decimal.rescale(value: Decimal, places: i32, mode: RoundingMode) -> Decimal uses {}`
+
+`value` at `places` fractional digits: exact when the scale grows, rounded by `mode`
+when it shrinks. A negative count rounds to a multiple of a power of ten.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal), [`std@1/decimal/RoundingMode`](#def-std_401_2fdecimal_2fRoundingMode)
+
+<a id="def-std_401_2fdecimal_2fscale"></a>
+
+- `pub fn decimal.scale(value: Decimal) -> i32 uses {}`
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fsignum"></a>
+
+- `pub fn decimal.signum(value: Decimal) -> i32 uses {}`
+
+-1, 0 or 1 by the sign of `value`.
+
+References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fsub"></a>
+
+- `pub fn decimal.sub(a: Decimal, b: Decimal) -> Decimal uses {}`
+
+The exact difference, at the larger of the two scales.
+
+References: [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
+
+<a id="def-std_401_2fdecimal_2fto_5fstring"></a>
+
+- `pub fn decimal.to_string(value: Decimal) -> unique String uses {}`
+
+Plain decimal text without an exponent: a minus for negative values, the integer
+digits (at least one), and exactly `scale` fractional digits after a point when the
+scale is positive. A negative scale appends that many zeros to a nonzero coefficient.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/decimal/Decimal`](#def-std_401_2fdecimal_2fDecimal)
 
 
 ## deque

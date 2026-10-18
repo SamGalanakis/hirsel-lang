@@ -1,0 +1,44 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2016 Paul Mason. MIT; third-party/NOTICES.md.
+// rust_decimal tests/decimal_tests/arithmetic.rs it_subtracts_decimals: a difference
+// takes the larger scale, exactly. Inputs like ".1" are spelled "0.1".
+fn d(text: String) -> decimal.Decimal {
+  let Ok(v) = decimal.parse(text) else {
+    failure.check(false, TextInvariant())
+    return decimal.new(bigint.zero(), 0)
+  }
+  v
+}
+
+fn difference(a: String, b: String, c: String) {
+  failure.check(decimal.to_string(decimal.sub(d(a), d(b))) == c, Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  difference("0", "0", "0")
+  difference("0", "-0", "0")
+  difference("-0", "0", "0")
+  difference("-0", "-0", "0")
+  difference("2", "3", "-1")
+  difference("3451204593", "2323322332", "1127882261")
+  difference("24544.95034", "0.3451204593", "24544.6052195407")
+  difference("0.1", "0.1", "0.0")
+  difference("0.1", "-0.1", "0.2")
+  difference("1.001", "0", "1.001")
+  difference("2", "-3", "5")
+  difference("-2", "3", "-5")
+  difference("-2", "-3", "1")
+  difference("3", "-2", "5")
+  difference("-3", "2", "-5")
+  difference("1.234", "2.4567", "-1.2227")
+  difference("844.13000000", "843.65000000", "0.48000000")
+  difference("79228162514264337593543950335", "79228162514264337593543950335", "0")
+  difference("79228162514264337593543950335", "0", "79228162514264337593543950335")
+  difference("79228162514264337593543950335", "79228162514264337593543950333", "2")
+  difference("4951760157141521099596496896", "1", "4951760157141521099596496895")
+  difference("79228162514264337593543950334", "79228162514264337593543950335", "-1")
+  difference("1", "4951760157141521099596496895", "-4951760157141521099596496894")
+  difference("18446744073709551615", "-18446744073709551615", "36893488147419103230")
+  Ok(())
+}

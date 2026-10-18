@@ -1,0 +1,22 @@
+// rule: SEM-1
+// expect: run
+// A 33-limb operand times one twice as long multiplies chunk by chunk, each chunk
+// product by Karatsuba.
+// 2^(64 n) - 1, n limbs of ones.
+fn ones(n: u64) -> bigint.BigInt {
+  bigint.sub(bigint.shl(bigint.from_u64(1), 64 * n), bigint.from_u64(1))
+}
+
+// (2^(64m) - 1)(2^(64n) - 1) = 2^(64(m + n)) - 2^(64m) - 2^(64n) + 1.
+fn ones_product(m: u64, n: u64) {
+  let one = bigint.from_u64(1)
+  let top = bigint.shl(one, 64 * (m + n))
+  let middle = bigint.add(bigint.shl(one, 64 * m), bigint.shl(one, 64 * n))
+  let expected = bigint.add(bigint.sub(top, middle), one)
+  failure.check(bigint.mul(ones(m), ones(n)) == expected, Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  ones_product(33, 66)
+  Ok(())
+}

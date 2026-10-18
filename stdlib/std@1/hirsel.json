@@ -548,6 +548,18 @@
       ]
     },
     {
+      "path": "bigint.hir",
+      "module": [
+        "bigint"
+      ]
+    },
+    {
+      "path": "bigdecimal.hir",
+      "module": [
+        "decimal"
+      ]
+    },
+    {
       "path": "glob.hir",
       "module": [
         "glob"

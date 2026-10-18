@@ -1,0 +1,19 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2014 The Rust Project Developers. MIT; third-party/NOTICES.md.
+// num-bigint tests/biguint.rs test_div_rem_burnikel_ziegler_u1_equals_d's shape, scaled to
+// a 17-limb divisor: u = (d << 2048) + 42 has d itself as its top block, and Knuth D
+// returns quotient 2^2048 and remainder 42.
+fn one() -> bigint.BigInt {
+  bigint.from_u64(1)
+}
+
+pub fn main() -> Result[(), ()] {
+  let d = bigint.add(bigint.shl(one(), 1087), one())
+  let u = bigint.add(bigint.shl(d, 2048), bigint.from_u64(42))
+  failure.check(
+    bigint.div_rem(u, d) == (bigint.shl(one(), 2048), bigint.from_u64(42)),
+    Arithmetic()
+  )
+  Ok(())
+}

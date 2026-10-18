@@ -1,0 +1,273 @@
+// Exact decimals: a BigInt coefficient scaled by a power of ten. Rounding modes and
+// the scale rules of addition, multiplication and division follow Rust rust_decimal
+// (src/ops/{add,mul,div}.rs, src/decimal.rs round_dp_with_strategy), without its
+// 96-bit coefficient limit.
+// Copyright (c) 2016 Paul Mason. MIT; third-party/NOTICES.md.
+/// How a result that is not exact at its scale is rounded. `HalfEven` and `HalfUp`
+/// round to the nearest value, breaking ties to an even last digit and away from zero
+/// respectively; `Down` rounds toward zero, `Up` away from zero, `Floor` toward
+/// negative infinity and `Ceiling` toward positive infinity.
+pub type RoundingMode = HalfEven | HalfUp | Down | Up | Floor | Ceiling
+
+/// The exact value coefficient * 10^-scale. `==` compares representations, so 1.0 and
+/// 1.00 differ; `compare` compares values.
+@format(format_into)
+pub opaque type Decimal: copyable + data + key + inert + noalloc_drop uses {} {
+  coefficient: bigint.BigInt,
+  scale: i32,
+}
+
+fn power_of_ten(exponent: u64) -> bigint.BigInt uses {} {
+  if exponent > 19 {
+    return bigint.pow(bigint.from_u64(10), exponent)
+  }
+  let mut power: u64 = 1
+  for _ in 0u64..exponent {
+    power *= 10
+  }
+  bigint.from_u64(power)
+}
+
+// The coefficient of `value` at `places` fractional digits, at least `value.scale`.
+fn widened(value: Decimal, places: i32) -> bigint.BigInt uses {} {
+  let extra: i64 = core@1/int.widen(places)
+  let current: i64 = core@1/int.widen(value.scale)
+  bigint.mul(value.coefficient, power_of_ten(core@1/int.narrow(extra - current)))
+}
+
+// n / d rounded to an integer by `mode`; d is nonzero.
+fn divide_rounded(n: bigint.BigInt, d: bigint.BigInt, mode: RoundingMode) -> bigint.BigInt uses {} {
+  let (q, r) = bigint.div_rem(n, d)
+  if bigint.is_zero(r) {
+    return q
+  }
+  let negative = bigint.is_negative(n) != bigint.is_negative(d)
+  let half = bigint.compare(bigint.shl(bigint.abs(r), 1), bigint.abs(d))
+  let odd = !bigint.is_zero(bigint.bit_and(q, bigint.from_u64(1)))
+  let away = match mode {
+    HalfEven() => half > 0 || half == 0 && odd,
+    HalfUp() => half >= 0,
+    Down() => false,
+    Up() => true,
+    Floor() => negative,
+    Ceiling() => !negative,
+  }
+  if !away {
+    return q
+  }
+  if negative {
+    bigint.sub(q, bigint.from_u64(1))
+  } else {
+    bigint.add(q, bigint.from_u64(1))
+  }
+}
+
+/// The decimal unscaled * 10^-places.
+pub fn new(unscaled: bigint.BigInt, places: i32) -> Decimal uses {} {
+  Decimal(coefficient: unique unscaled, scale: places)
+}
+
+pub fn coefficient(value: Decimal) -> bigint.BigInt uses {} {
+  unique value.coefficient
+}
+
+pub fn scale(value: Decimal) -> i32 uses {} {
+  value.scale
+}
+
+pub fn is_zero(value: Decimal) -> bool uses {} {
+  bigint.is_zero(value.coefficient)
+}
+
+/// -1, 0 or 1 by the sign of `value`.
+pub fn signum(value: Decimal) -> i32 uses {} {
+  bigint.signum(value.coefficient)
+}
+
+/// -1, 0 or 1 as `a` is less than, equal to or greater than `b`, by value.
+pub fn compare(a: Decimal, b: Decimal) -> i32 uses {} {
+  if a.scale < b.scale {
+    bigint.compare(widened(a, b.scale), b.coefficient)
+  } else if a.scale > b.scale {
+    bigint.compare(a.coefficient, widened(b, a.scale))
+  } else {
+    bigint.compare(a.coefficient, b.coefficient)
+  }
+}
+
+pub fn neg(value: Decimal) -> Decimal uses {} {
+  Decimal(coefficient: bigint.neg(value.coefficient), scale: value.scale)
+}
+
+pub fn abs(value: Decimal) -> Decimal uses {} {
+  Decimal(coefficient: bigint.abs(value.coefficient), scale: value.scale)
+}
+
+/// The exact sum, at the larger of the two scales.
+pub fn add(a: Decimal, b: Decimal) -> Decimal uses {} {
+  if a.scale < b.scale {
+    Decimal(coefficient: bigint.add(widened(a, b.scale), b.coefficient), scale: b.scale)
+  } else if a.scale > b.scale {
+    Decimal(coefficient: bigint.add(a.coefficient, widened(b, a.scale)), scale: a.scale)
+  } else {
+    Decimal(coefficient: bigint.add(a.coefficient, b.coefficient), scale: a.scale)
+  }
+}
+
+/// The exact difference, at the larger of the two scales.
+pub fn sub(a: Decimal, b: Decimal) -> Decimal uses {} {
+  add(a, neg(b))
+}
+
+/// The exact product, at the sum of the scales; a sum outside i32 fails SEM-1.
+pub fn mul(a: Decimal, b: Decimal) -> Decimal uses {} {
+  Decimal(
+    coefficient: bigint.mul(a.coefficient, b.coefficient),
+    scale: a.scale + b.scale
+  )
+}
+
+/// `a / b` rounded to `places` fractional digits by `mode`. A zero divisor fails SEM-1.
+pub fn div(a: Decimal, b: Decimal, places: i32, mode: RoundingMode) -> Decimal uses {} {
+  core@1/failure.check(!bigint.is_zero(b.coefficient), Arithmetic())
+  // a / b * 10^places = a.coefficient * 10^(places - a.scale + b.scale) / b.coefficient.
+  let target: i64 = core@1/int.widen(places)
+  let a_scale: i64 = core@1/int.widen(a.scale)
+  let b_scale: i64 = core@1/int.widen(b.scale)
+  let exponent = target - a_scale + b_scale
+  let quotient = if exponent >= 0 {
+    let n = bigint.mul(a.coefficient, power_of_ten(core@1/int.narrow(exponent)))
+    divide_rounded(n, b.coefficient, mode)
+  } else {
+    let d = bigint.mul(b.coefficient, power_of_ten(core@1/int.narrow(-exponent)))
+    divide_rounded(a.coefficient, d, mode)
+  }
+  Decimal(coefficient: quotient, scale: places)
+}
+
+/// `value` at `places` fractional digits: exact when the scale grows, rounded by `mode`
+/// when it shrinks. A negative count rounds to a multiple of a power of ten.
+pub fn rescale(value: Decimal, places: i32, mode: RoundingMode) -> Decimal uses {} {
+  if places >= value.scale {
+    return Decimal(coefficient: widened(value, places), scale: places)
+  }
+  let target: i64 = core@1/int.widen(places)
+  let current: i64 = core@1/int.widen(value.scale)
+  let d = power_of_ten(core@1/int.narrow(current - target))
+  Decimal(coefficient: divide_rounded(value.coefficient, d, mode), scale: places)
+}
+
+/// The same value without trailing fractional zeros: zero has scale 0, and the scale
+/// does not fall below zero unless it already was negative.
+pub fn normalize(value: Decimal) -> Decimal uses {} {
+  let ten = bigint.from_u64(10)
+  let mut unscaled = unique value.coefficient
+  let mut places = value.scale
+  while places > 0 && !bigint.is_zero(unscaled) {
+    let (q, r) = bigint.div_rem(unscaled, ten)
+    if !bigint.is_zero(r) {
+      break
+    }
+    unscaled = q
+    places -= 1
+  }
+  if bigint.is_zero(unscaled) && places > 0 {
+    places = 0
+  }
+  Decimal(coefficient: unscaled, scale: places)
+}
+
+/// Parses `-?[0-9]+(\.[0-9]+)?`, keeping every written fractional digit as the scale:
+/// "1.50" has coefficient 150 and scale 2, and "-0.0" is zero at scale 1. A plus,
+/// exponent, whitespace or missing digit is `Invalid`; a scale beyond i32 is `OutOfRange`.
+pub fn parse(text: String) -> Result[Decimal, scalar.ParseError] uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let length = core@1/bytes.len(bytes)
+  let mut digits: List[u8] = []
+  core@1/list.reserve(mut digits, length)
+  let mut i: u64 = 0
+  if length > 0 && bytes[0] == 45 {
+    core@1/list.push(mut digits, 45)
+    i = 1
+  }
+  let integer_start = i
+  while i < length && std@1/ascii.is_digit(bytes[i]) {
+    core@1/list.push(mut digits, bytes[i])
+    i += 1
+  }
+  if i == integer_start {
+    return Error(Invalid)
+  }
+  let mut fraction: u64 = 0
+  if i < length && bytes[i] == 46 {
+    i += 1
+    while i < length && std@1/ascii.is_digit(bytes[i]) {
+      core@1/list.push(mut digits, bytes[i])
+      i += 1
+      fraction += 1
+    }
+    if fraction == 0 {
+      return Error(Invalid)
+    }
+  }
+  if i != length {
+    return Error(Invalid)
+  }
+  let narrowed: Option[i32] = core@1/int.try_narrow(fraction)
+  let Some(places) = narrowed else {
+    return Error(OutOfRange)
+  }
+  let unscaled = bigint.parse(text.finish_valid(take digits))?
+  Ok(Decimal(coefficient: unscaled, scale: places))
+}
+
+/// Appends the text `to_string` returns.
+@preserves_unique(out)
+pub fn format_into(value: Decimal, mut out: List[u8]) -> () uses {} {
+  if bigint.is_negative(value.coefficient) {
+    core@1/list.push(mut out, 45)
+  }
+  let mut digits: List[u8] = []
+  bigint.format_into(bigint.abs(value.coefficient), mut digits)
+  let count = core@1/list.len(digits)
+  if value.scale <= 0 {
+    for d in digits {
+      core@1/list.push(mut out, d)
+    }
+    if !bigint.is_zero(value.coefficient) {
+      let zeros: i64 = core@1/int.widen(value.scale)
+      for _ in 0i64..-zeros {
+        core@1/list.push(mut out, 48)
+      }
+    }
+    return
+  }
+  let fraction: u64 = core@1/int.narrow(value.scale)
+  if count > fraction {
+    for k in 0u64..count - fraction {
+      core@1/list.push(mut out, digits[k])
+    }
+    core@1/list.push(mut out, 46)
+    for k in count - fraction..count {
+      core@1/list.push(mut out, digits[k])
+    }
+  } else {
+    core@1/list.push(mut out, 48)
+    core@1/list.push(mut out, 46)
+    for _ in count..fraction {
+      core@1/list.push(mut out, 48)
+    }
+    for d in digits {
+      core@1/list.push(mut out, d)
+    }
+  }
+}
+
+/// Plain decimal text without an exponent: a minus for negative values, the integer
+/// digits (at least one), and exactly `scale` fractional digits after a point when the
+/// scale is positive. A negative scale appends that many zeros to a nonzero coefficient.
+pub fn to_string(value: Decimal) -> unique String uses {} {
+  let mut out: List[u8] = []
+  format_into(value, mut out)
+  text.finish_valid(take out)
+}

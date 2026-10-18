@@ -1,0 +1,102 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2014 The Rust Project Developers. MIT; third-party/NOTICES.md.
+// num-bigint tests/bigint.rs test_convert_{i64,i128,u64,u128}, extended to every width's
+// bounds: conversions in are total, conversions out return None exactly off range.
+fn n(text: String) -> bigint.BigInt {
+  let Ok(v) = bigint.parse(text) else {
+    failure.check(false, TextInvariant())
+    return bigint.zero()
+  }
+  v
+}
+
+pub fn main() -> Result[(), ()] {
+  // BigUint::new(vec![1, 2, 3, 4, 5]) and vec![1, 0, 0, 1 << 31] in u32 digits.
+  let five_digits = n("1701411834921604967429270619762735448065")
+  let top_bit = bigint.add(bigint.shl(bigint.from_u64(1), 127), bigint.from_u64(1))
+  let i64_min: i64 = -9223372036854775807 - 1
+  let i128_min: i128 = -170141183460469231731687303715884105727 - 1
+  failure.check(bigint.to_i64(bigint.zero()) == Some(0i64), Arithmetic())
+  failure.check(bigint.to_i64(bigint.from_u64(1)) == Some(1i64), Arithmetic())
+  failure.check(bigint.to_i64(bigint.from_i64(i64_min)) == Some(i64_min), Arithmetic())
+  failure.check(bigint.from_i64(i64_min) == n("-9223372036854775808"), Arithmetic())
+  failure.check(
+    bigint.to_i64(n("9223372036854775807")) == Some(9223372036854775807i64),
+    Arithmetic()
+  )
+  failure.check(bigint.to_i64(n("9223372036854775808")) == None(), Arithmetic())
+  failure.check(bigint.to_i64(n("-9223372036854775809")) == None(), Arithmetic())
+  failure.check(bigint.to_i64(five_digits) == None(), Arithmetic())
+  failure.check(bigint.to_i64(bigint.neg(top_bit)) == None(), Arithmetic())
+  failure.check(bigint.to_i64(bigint.neg(five_digits)) == None(), Arithmetic())
+  failure.check(
+    bigint.to_i128(bigint.from_i128(i128_min)) == Some(i128_min),
+    Arithmetic()
+  )
+  failure.check(
+    bigint.from_i128(i128_min) == bigint.neg(bigint.shl(bigint.from_u64(1), 127)),
+    Arithmetic()
+  )
+  let i128_max = bigint.sub(bigint.shl(bigint.from_u64(1), 127), bigint.from_u64(1))
+  failure.check(
+    bigint.to_i128(i128_max) == Some(170141183460469231731687303715884105727i128),
+    Arithmetic()
+  )
+  failure.check(
+    bigint.to_i128(bigint.add(i128_max, bigint.from_u64(1))) == None(),
+    Arithmetic()
+  )
+  failure.check(bigint.to_i128(five_digits) == None(), Arithmetic())
+  failure.check(bigint.to_i128(bigint.neg(top_bit)) == None(), Arithmetic())
+  failure.check(bigint.to_i128(bigint.neg(five_digits)) == None(), Arithmetic())
+  failure.check(bigint.to_u64(bigint.zero()) == Some(0u64), Arithmetic())
+  failure.check(
+    bigint.to_u64(bigint.from_u64(18446744073709551615)) == Some(
+      18446744073709551615u64
+    ),
+    Arithmetic()
+  )
+  failure.check(bigint.to_u64(n("18446744073709551616")) == None(), Arithmetic())
+  failure.check(bigint.to_u64(five_digits) == None(), Arithmetic())
+  failure.check(bigint.to_u64(n("-18446744073709551615")) == None(), Arithmetic())
+  failure.check(bigint.to_u64(bigint.from_i64(-1)) == None(), Arithmetic())
+  let u128_max = bigint.sub(bigint.shl(bigint.from_u64(1), 128), bigint.from_u64(1))
+  failure.check(
+    bigint.from_u128(340282366920938463463374607431768211455) == u128_max,
+    Arithmetic()
+  )
+  failure.check(
+    bigint.to_u128(u128_max) == Some(340282366920938463463374607431768211455u128),
+    Arithmetic()
+  )
+  failure.check(
+    bigint.to_u128(bigint.add(u128_max, bigint.from_u64(1))) == None(),
+    Arithmetic()
+  )
+  failure.check(bigint.to_u128(five_digits) == None(), Arithmetic())
+  failure.check(bigint.to_u128(bigint.neg(u128_max)) == None(), Arithmetic())
+  failure.check(bigint.to_u8(bigint.from_u8(255)) == Some(255u8), Arithmetic())
+  failure.check(bigint.to_u8(bigint.from_u16(256)) == None(), Arithmetic())
+  failure.check(bigint.to_u16(bigint.from_u16(65535)) == Some(65535u16), Arithmetic())
+  failure.check(bigint.to_u16(bigint.from_u32(65536)) == None(), Arithmetic())
+  failure.check(
+    bigint.to_u32(bigint.from_u32(4294967295)) == Some(4294967295u32),
+    Arithmetic()
+  )
+  failure.check(bigint.to_u32(bigint.from_u64(4294967296)) == None(), Arithmetic())
+  failure.check(bigint.to_u32(bigint.from_i32(-1)) == None(), Arithmetic())
+  failure.check(bigint.to_i8(bigint.from_i8(-128)) == Some(-128i8), Arithmetic())
+  failure.check(bigint.to_i8(bigint.from_i8(127)) == Some(127i8), Arithmetic())
+  failure.check(bigint.to_i8(bigint.from_i16(128)) == None(), Arithmetic())
+  failure.check(bigint.to_i8(bigint.from_i16(-129)) == None(), Arithmetic())
+  failure.check(bigint.to_i16(bigint.from_i16(-32768)) == Some(-32768i16), Arithmetic())
+  failure.check(bigint.to_i16(bigint.from_i32(32768)) == None(), Arithmetic())
+  failure.check(
+    bigint.to_i32(bigint.from_i32(-2147483648)) == Some(-2147483648i32),
+    Arithmetic()
+  )
+  failure.check(bigint.to_i32(bigint.from_i64(2147483648)) == None(), Arithmetic())
+  failure.check(bigint.to_i32(bigint.from_i64(-2147483649)) == None(), Arithmetic())
+  Ok(())
+}

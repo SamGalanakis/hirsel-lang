@@ -1,0 +1,54 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2016 Paul Mason. MIT; third-party/NOTICES.md.
+// rust_decimal tests/decimal_tests/scale.rs it_can_normalize and it_can_rescale (half-
+// up), without rust_decimal's cap of 28 fractional digits.
+fn d(text: String) -> decimal.Decimal {
+  let Ok(v) = decimal.parse(text) else {
+    failure.check(false, TextInvariant())
+    return decimal.new(bigint.zero(), 0)
+  }
+  v
+}
+
+fn round(value: String, places: i32, mode: decimal.RoundingMode, expected: String) {
+  failure.check(
+    decimal.to_string(decimal.rescale(d(value), places, mode)) == expected,
+    Arithmetic()
+  )
+}
+
+fn normal(value: String, expected: String) {
+  failure.check(
+    decimal.to_string(decimal.normalize(d(value))) == expected,
+    Arithmetic()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  normal("1.00000000000000000000", "1")
+  normal("1.10000000000000000000000", "1.1")
+  normal("1.00010000000000000000000", "1.0001")
+  normal("1", "1")
+  normal("1.1", "1.1")
+  normal("1.0001", "1.0001")
+  normal("-0", "0")
+  normal("-0.0", "0")
+  normal("-0.010", "-0.01")
+  normal("0.0", "0")
+  round("0", 6, HalfUp(), "0.000000")
+  round("0.000000", 2, HalfUp(), "0.00")
+  round("0.12345600000", 6, HalfUp(), "0.123456")
+  round("0.123456", 12, HalfUp(), "0.123456000000")
+  round("0.123456", 0, HalfUp(), "0")
+  round("0.000001", 4, HalfUp(), "0.0000")
+  round("1233456", 4, HalfUp(), "1233456.0000")
+  round("1.2", 30, HalfUp(), "1.200000000000000000000000000000")
+  round("79228162514264337593543950335", 0, HalfUp(), "79228162514264337593543950335")
+  round("4951760157141521099596496895", 1, HalfUp(), "4951760157141521099596496895.0")
+  round("4951760157141521099596496896", 1, HalfUp(), "4951760157141521099596496896.0")
+  round("18446744073709551615", 6, HalfUp(), "18446744073709551615.000000")
+  round("-18446744073709551615", 6, HalfUp(), "-18446744073709551615.000000")
+  round("11.76470588235294", 28, HalfUp(), "11.7647058823529400000000000000")
+  Ok(())
+}

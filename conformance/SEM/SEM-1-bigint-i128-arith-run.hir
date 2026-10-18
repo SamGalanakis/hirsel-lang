@@ -1,0 +1,69 @@
+// rule: SEM-1
+// expect: run
+// BigInt agrees with i128 checked arithmetic, order and both divisions wherever the
+// exact result fits, on 60 seeded operand pairs of every magnitude from one bit to the
+// full width, plus the bounds.
+fn draw(mut g: prng.Generator) -> i128 {
+  let choice = prng.u64(mut g) % 16
+  if choice == 0 {
+    return -170141183460469231731687303715884105727 - 1
+  }
+  if choice == 1 {
+    return 170141183460469231731687303715884105727
+  }
+  if choice == 2 {
+    return 0
+  }
+  let high: u128 = int.widen(prng.u64(mut g))
+  let low: u128 = int.widen(prng.u64(mut g))
+  let shift: u128 = int.widen(prng.u64(mut g) % 127 + 1)
+  let magnitude: i128 = int.narrow((high << 64 | low) >> shift)
+  if prng.u64(mut g) % 2 == 0 {
+    -magnitude
+  } else {
+    magnitude
+  }
+}
+
+fn agrees(exact: Option[i128], value: bigint.BigInt) -> bool {
+  match exact {
+    Some(v) => bigint.to_i128(value) == Some(v) && value == bigint.from_i128(v),
+    None() => bigint.to_i128(value) == None(),
+  }
+}
+
+fn check_pair(a: i128, b: i128) {
+  let ba = bigint.from_i128(a)
+  let bb = bigint.from_i128(b)
+  failure.check(agrees(i128.checked_add(a, b), bigint.add(ba, bb)), Arithmetic())
+  failure.check(agrees(i128.checked_sub(a, b), bigint.sub(ba, bb)), Arithmetic())
+  failure.check(agrees(i128.checked_mul(a, b), bigint.mul(ba, bb)), Arithmetic())
+  let order = if a < b {
+    -1i32
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+  failure.check(bigint.compare(ba, bb) == order, Arithmetic())
+  if b != 0 && !(b == -1 && a == -170141183460469231731687303715884105727 - 1) {
+    let (q, r) = bigint.div_rem(ba, bb)
+    failure.check(
+      q == bigint.from_i128(a / b) && r == bigint.from_i128(a % b),
+      Arithmetic()
+    )
+    let (d, m) = bigint.div_mod_floor(ba, bb)
+    let floor_q = bigint.from_i128(int.div_floor(a, b))
+    failure.check(d == floor_q && m == bigint.from_i128(int.mod(a, b)), Arithmetic())
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut g = prng.seed(0x5eed_b16_1)
+  for _ in 0u64..60 {
+    let a = draw(mut g)
+    let b = draw(mut g)
+    check_pair(a, b)
+  }
+  Ok(())
+}

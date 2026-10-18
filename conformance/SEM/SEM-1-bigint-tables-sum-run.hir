@@ -1,0 +1,70 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2014 The Rust Project Developers. MIT; third-party/NOTICES.md.
+// num-bigint tests/consts SUM_TRIPLES and MUL_TRIPLES (u32 digits), with each product
+// also divided back.
+fn digits(xs: List[u32]) -> bigint.BigInt {
+  let mut value = bigint.zero()
+  let mut i = list.len(xs)
+  while i > 0 {
+    i -= 1
+    value = bigint.add(bigint.shl(value, 32), bigint.from_u32(xs[i]))
+  }
+  value
+}
+
+fn sum(a: List[u32], b: List[u32], c: List[u32]) {
+  let x = digits(a)
+  let y = digits(b)
+  let z = digits(c)
+  failure.check(bigint.add(x, y) == z && bigint.add(y, x) == z, Arithmetic())
+  failure.check(bigint.sub(z, x) == y, Arithmetic())
+}
+
+fn product(a: List[u32], b: List[u32], c: List[u32]) {
+  let x = digits(a)
+  let y = digits(b)
+  let z = digits(c)
+  failure.check(bigint.mul(x, y) == z && bigint.mul(y, x) == z, Arithmetic())
+  if !bigint.is_zero(x) {
+    failure.check(bigint.div_rem(z, x) == (copy y, bigint.zero()), Arithmetic())
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let n1: u32 = 4294967295
+  let n2: u32 = 4294967294
+  let half: u32 = 2147483648
+  sum([], [], [])
+  sum([], [1], [1])
+  sum([1], [1], [2])
+  sum([1], [1, 1], [2, 1])
+  sum([1], [n1], [0, 1])
+  sum([1], [n1, n1], [0, 0, 1])
+  sum([n1, n1], [n1, n1], [n2, n1, 1])
+  sum([1, 1, 1], [n1, n1], [0, 1, 2])
+  sum([2, 2, 1], [n1, n2], [1, 1, 2])
+  sum([1, 2, 2, 1], [n1, n2], [0, 1, 3, 1])
+  product([], [], [])
+  product([], [1], [])
+  product([2], [], [])
+  product([1], [1], [1])
+  product([2], [3], [6])
+  product([1], [1, 1, 1], [1, 1, 1])
+  product([1, 2, 3], [3], [3, 6, 9])
+  product([1, 1, 1], [n1], [n1, n1, n1])
+  product([1, 2, 3], [n1], [n1, n2, n2, 2])
+  product([1, 2, 3, 4], [n1], [n1, n2, n2, n2, 3])
+  product([n1], [n1], [1, n2])
+  product([n1, n1], [n1], [1, n1, n2])
+  product([n1, n1, n1], [n1], [1, n1, n1, n2])
+  product([n1, n1, n1, n1], [n1], [1, n1, n1, n1, n2])
+  product([half], [2], [0, 1])
+  product([0, half], [2], [0, 0, 1])
+  product([1, 2], [1, 2, 3], [1, 4, 7, 6])
+  product([n1, n1], [n1, n1, n1], [1, 0, n1, n2, n1])
+  product([n1, n1, n1], [n1, n1, n1, n1], [1, 0, 0, n1, n2, n1, n1])
+  product([0, 0, 1], [1, 2, 3], [0, 0, 1, 2, 3])
+  product([0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 0, 0, 1])
+  Ok(())
+}

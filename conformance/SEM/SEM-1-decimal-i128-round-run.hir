@@ -1,0 +1,65 @@
+// rule: SEM-1
+// expect: run
+// Decimal rounding agrees with i128 floor-division formulas for every mode, rounding 30
+// seeded cent amounts to whole units.
+fn cents(value: i128) -> decimal.Decimal {
+  decimal.new(bigint.from_i128(value), 2)
+}
+
+fn units(value: i128) -> decimal.Decimal {
+  decimal.new(bigint.from_i128(value), 0)
+}
+
+fn draw(mut g: prng.Generator) -> i128 {
+  let magnitude: i128 = int.widen(prng.u64(mut g) >> prng.u64(mut g) % 62 + 2)
+  if prng.u64(mut g) % 2 == 0 {
+    -magnitude
+  } else {
+    magnitude
+  }
+}
+
+// a / 100 rounded to an integer by each mode, from floor division.
+fn check_rounding(a: i128) {
+  let x = cents(a)
+  let floor = int.div_floor(a, 100)
+  let rest = int.mod(a, 100)
+  let truncated = a / 100
+  let inexact = rest != 0
+  let ceiling = if inexact {
+    floor + 1
+  } else {
+    floor
+  }
+  let up = if !inexact {
+    truncated
+  } else if a > 0 {
+    truncated + 1
+  } else {
+    truncated - 1
+  }
+  let half_up = if rest > 50 || rest == 50 && a > 0 {
+    floor + 1
+  } else {
+    floor
+  }
+  let half_even = if rest > 50 || rest == 50 && int.mod(floor, 2) == 1 {
+    floor + 1
+  } else {
+    floor
+  }
+  failure.check(decimal.rescale(x, 0, Floor()) == units(floor), Arithmetic())
+  failure.check(decimal.rescale(x, 0, Ceiling()) == units(ceiling), Arithmetic())
+  failure.check(decimal.rescale(x, 0, Down()) == units(truncated), Arithmetic())
+  failure.check(decimal.rescale(x, 0, Up()) == units(up), Arithmetic())
+  failure.check(decimal.rescale(x, 0, HalfUp()) == units(half_up), Arithmetic())
+  failure.check(decimal.rescale(x, 0, HalfEven()) == units(half_even), Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut g = prng.seed(0xdec1_a2)
+  for _ in 0u64..30 {
+    check_rounding(draw(mut g))
+  }
+  Ok(())
+}

@@ -1,0 +1,96 @@
+// rule: SEM-1
+// expect: run
+// Copyright 2009 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
+// Go math/big int_test.go bitwiseTests, with hex spelled through parse_radix and andNot as
+// and(x, not(y)), and natconv_test.go strTests below radix 37.
+fn h(text: String) -> bigint.BigInt {
+  let Ok(v) = bigint.parse_radix(text, 16) else {
+    failure.check(false, TextInvariant())
+    return bigint.zero()
+  }
+  v
+}
+
+// Go's andNot(x, y) is and(x, not(y)).
+fn bitwise(x: String, y: String, and: String, or: String, xor: String, and_not: String) {
+  let bx = h(x)
+  let by = h(y)
+  let both = h(and)
+  let either = h(or)
+  let one = h(xor)
+  failure.check(
+    bigint.bit_and(bx, by) == both && bigint.bit_and(by, bx) == both,
+    Arithmetic()
+  )
+  failure.check(
+    bigint.bit_or(bx, by) == either && bigint.bit_or(by, bx) == either,
+    Arithmetic()
+  )
+  failure.check(
+    bigint.bit_xor(bx, by) == one && bigint.bit_xor(by, bx) == one,
+    Arithmetic()
+  )
+  failure.check(bigint.bit_and(bx, bigint.bit_not(by)) == h(and_not), Arithmetic())
+}
+
+fn radix(value: u64, base: u8, text: String) {
+  failure.check(
+    bigint.format_radix(bigint.from_u64(value), base) == Ok(text),
+    TextInvariant()
+  )
+  failure.check(
+    bigint.parse_radix(text, base) == Ok(bigint.from_u64(value)),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  bitwise("00", "00", "00", "00", "00", "00")
+  bitwise("00", "01", "00", "01", "01", "00")
+  bitwise("01", "00", "00", "01", "01", "01")
+  bitwise("-01", "00", "00", "-01", "-01", "-01")
+  bitwise("-af", "-50", "-f0", "-0f", "e1", "41")
+  bitwise("00", "-01", "00", "-01", "-01", "00")
+  bitwise("01", "01", "01", "01", "00", "00")
+  bitwise("-01", "-01", "-01", "-01", "00", "00")
+  bitwise("07", "08", "00", "0f", "0f", "07")
+  bitwise("05", "0f", "05", "0f", "0a", "00")
+  bitwise("ff", "-0a", "f6", "-01", "-f7", "09")
+  bitwise("013ff6", "9a4e", "1a46", "01bffe", "01a5b8", "0125b0")
+  bitwise("-013ff6", "9a4e", "800a", "-0125b2", "-01a5bc", "-01c000")
+  bitwise("-013ff6", "-9a4e", "-01bffe", "-1a46", "01a5b8", "8008")
+  bitwise(
+    "1000009dc6e3d9822cba04129bcbe3401",
+    "b9bd7d543685789d57cb918e833af352559021483cdb05cc21fd",
+    "1000001186210100001000009048c2001",
+    "b9bd7d543685789d57cb918e8bfeff7fddb2ebe87dfbbdfe35fd",
+    "b9bd7d543685789d57ca918e8ae69d6fcdb2eae87df2b97215fc",
+    "8c40c2d8822caa04120b8321400"
+  )
+  bitwise(
+    "1000009dc6e3d9822cba04129bcbe3401",
+    "-b9bd7d543685789d57cb918e833af352559021483cdb05cc21fd",
+    "8c40c2d8822caa04120b8321401",
+    "-b9bd7d543685789d57ca918e82229142459020483cd2014001fd",
+    "-b9bd7d543685789d57ca918e8ae69d6fcdb2eae87df2b97215fe",
+    "1000001186210100001000009048c2000"
+  )
+  bitwise(
+    "-1000009dc6e3d9822cba04129bcbe3401",
+    "-b9bd7d543685789d57cb918e833af352559021483cdb05cc21fd",
+    "-b9bd7d543685789d57cb918e8bfeff7fddb2ebe87dfbbdfe35fd",
+    "-1000001186210100001000009048c2001",
+    "b9bd7d543685789d57ca918e8ae69d6fcdb2eae87df2b97215fc",
+    "b9bd7d543685789d57ca918e82229142459020483cd2014001fc"
+  )
+  radix(0, 2, "0")
+  radix(1, 2, "1")
+  radix(0xc5, 2, "11000101")
+  radix(0o3271, 8, "3271")
+  radix(10, 10, "10")
+  radix(1234567890, 10, "1234567890")
+  radix(0xdeadbeef, 16, "deadbeef")
+  radix(0x229be7, 17, "1a2b3c")
+  radix(0x309663e6, 32, "o9cov6")
+  Ok(())
+}

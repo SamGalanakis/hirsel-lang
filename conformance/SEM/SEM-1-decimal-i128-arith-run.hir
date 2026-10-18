@@ -1,0 +1,50 @@
+// rule: SEM-1
+// expect: run
+// Decimal agrees with i128 fixed-point arithmetic on 35 seeded pairs of cent amounts:
+// exact sums, differences and products, value order across scales, and division
+// rounded down to three places.
+fn cents(value: i128) -> decimal.Decimal {
+  decimal.new(bigint.from_i128(value), 2)
+}
+
+fn units(value: i128) -> decimal.Decimal {
+  decimal.new(bigint.from_i128(value), 0)
+}
+
+fn draw(mut g: prng.Generator) -> i128 {
+  let magnitude: i128 = int.widen(prng.u64(mut g) >> prng.u64(mut g) % 62 + 2)
+  if prng.u64(mut g) % 2 == 0 {
+    -magnitude
+  } else {
+    magnitude
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut g = prng.seed(0xdec1_a1)
+  for _ in 0u64..35 {
+    let a = draw(mut g)
+    let b = draw(mut g)
+    failure.check(decimal.add(cents(a), cents(b)) == cents(a + b), Arithmetic())
+    failure.check(decimal.sub(cents(a), cents(b)) == cents(a - b), Arithmetic())
+    let product = decimal.new(bigint.from_i128(a * b), 4)
+    failure.check(decimal.mul(cents(a), cents(b)) == product, Arithmetic())
+    failure.check(decimal.add(cents(a), units(b)) == cents(a + b * 100), Arithmetic())
+    let order = if a < b {
+      -1i32
+    } else if a > b {
+      1
+    } else {
+      0
+    }
+    failure.check(decimal.compare(cents(a), cents(b)) == order, Arithmetic())
+    let tenths = decimal.new(bigint.from_i128(a), 1)
+    failure.check(decimal.compare(cents(a * 10), tenths) == 0, Arithmetic())
+    if b != 0 {
+      let q = decimal.div(cents(a), cents(b), 3, Floor())
+      let expected = decimal.new(bigint.from_i128(int.div_floor(a * 1000, b)), 3)
+      failure.check(q == expected, Arithmetic())
+    }
+  }
+  Ok(())
+}

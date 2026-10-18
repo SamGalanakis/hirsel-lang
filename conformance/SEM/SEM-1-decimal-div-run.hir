@@ -1,0 +1,57 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2016 Paul Mason. MIT; third-party/NOTICES.md.
+// rust_decimal tests/decimal_tests/arithmetic.rs it_divides_decimals: each quotient
+// rounds half-even to the scale of rust_decimal's result and matches its text.
+fn d(text: String) -> decimal.Decimal {
+  let Ok(v) = decimal.parse(text) else {
+    failure.check(false, TextInvariant())
+    return decimal.new(bigint.zero(), 0)
+  }
+  v
+}
+
+fn quotient(a: String, b: String, places: i32, c: String) {
+  failure.check(
+    decimal.to_string(decimal.div(d(a), d(b), places, HalfEven())) == c,
+    Arithmetic()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  quotient("6", "3", 0, "2")
+  quotient("10", "2", 0, "5")
+  quotient("2.2", "1.1", 0, "2")
+  quotient("-2.2", "-1.1", 0, "2")
+  quotient("12.88", "5.6", 1, "2.3")
+  quotient("1023427554493", "43432632", 24, "23563.562864276795382789603909")
+  quotient("10000", "3", 25, "3333.3333333333333333333333333")
+  quotient("2", "3", 28, "0.6666666666666666666666666667")
+  quotient("1", "3", 28, "0.3333333333333333333333333333")
+  quotient("-2", "3", 28, "-0.6666666666666666666666666667")
+  quotient("2", "-3", 28, "-0.6666666666666666666666666667")
+  quotient("-2", "-3", 28, "0.6666666666666666666666666667")
+  quotient("1234.5678", "0.1234567890123456", 23, "9999.99926999999982999953127")
+  quotient("1234.567890123456789012345678", "1.234567890123456789012345678", 0, "1000")
+  quotient(
+    "32.91625929004387114334488",
+    "3.27629537",
+    27,
+    "10.046792359274942644546996384"
+  )
+  quotient("5000", "1000.26957490549", 28, "4.9986524887277738570721416846")
+  quotient("6142.6941216127122745222131114", "2", 25, "3071.3470608063561372611065557")
+  quotient(
+    "3071.3470608063561372611065557",
+    "1228.87000756",
+    28,
+    "2.4993262443638869285360708423"
+  )
+  quotient(
+    "590.3274854004009467754255123",
+    "53.68997202826239",
+    27,
+    "10.995116277759516850521689988"
+  )
+  Ok(())
+}

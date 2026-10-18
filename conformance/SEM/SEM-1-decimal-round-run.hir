@@ -1,0 +1,94 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2016 Paul Mason. MIT; third-party/NOTICES.md.
+// rust_decimal tests/decimal_tests/rounding.rs it_can_round_using_basic_midpoint_rules
+// (without the half-down mode), it_can_round_using_bankers_rounding and
+// it_can_round_using_round_half_up. rescale sets the scale exactly, so a value with
+// fewer digits gains zeros ("6.1" at 2 places is "6.10").
+fn d(text: String) -> decimal.Decimal {
+  let Ok(v) = decimal.parse(text) else {
+    failure.check(false, TextInvariant())
+    return decimal.new(bigint.zero(), 0)
+  }
+  v
+}
+
+fn round(value: String, places: i32, mode: decimal.RoundingMode, expected: String) {
+  failure.check(
+    decimal.to_string(decimal.rescale(d(value), places, mode)) == expected,
+    Arithmetic()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  round("3.5", 0, HalfUp(), "4")
+  round("2.8", 0, HalfUp(), "3")
+  round("2.5", 0, HalfUp(), "3")
+  round("2.1", 0, HalfUp(), "2")
+  round("-2.1", 0, HalfUp(), "-2")
+  round("-2.5", 0, HalfUp(), "-3")
+  round("-2.8", 0, HalfUp(), "-3")
+  round("-3.5", 0, HalfUp(), "-4")
+  round("3.5", 0, HalfEven(), "4")
+  round("2.8", 0, HalfEven(), "3")
+  round("2.5", 0, HalfEven(), "2")
+  round("2.1", 0, HalfEven(), "2")
+  round("-2.1", 0, HalfEven(), "-2")
+  round("-2.5", 0, HalfEven(), "-2")
+  round("-2.8", 0, HalfEven(), "-3")
+  round("-3.5", 0, HalfEven(), "-4")
+  round("2.8", 0, Floor(), "2")
+  round("2.5", 0, Floor(), "2")
+  round("2.1", 0, Floor(), "2")
+  round("-2.1", 0, Floor(), "-3")
+  round("-2.5", 0, Floor(), "-3")
+  round("-2.8", 0, Floor(), "-3")
+  round("2.8", 0, Ceiling(), "3")
+  round("2.5", 0, Ceiling(), "3")
+  round("2.1", 0, Ceiling(), "3")
+  round("-2.1", 0, Ceiling(), "-2")
+  round("-2.5", 0, Ceiling(), "-2")
+  round("-2.8", 0, Ceiling(), "-2")
+  round("2.8", 0, Down(), "2")
+  round("2.5", 0, Down(), "2")
+  round("2.1", 0, Down(), "2")
+  round("-2.1", 0, Down(), "-2")
+  round("-2.5", 0, Down(), "-2")
+  round("-2.8", 0, Down(), "-2")
+  round("2.8", 0, Up(), "3")
+  round("2.5", 0, Up(), "3")
+  round("2.1", 0, Up(), "3")
+  round("-2.1", 0, Up(), "-3")
+  round("-2.5", 0, Up(), "-3")
+  round("-2.8", 0, Up(), "-3")
+  round("6.12345", 2, HalfEven(), "6.12")
+  round("6.126", 2, HalfEven(), "6.13")
+  round("-6.126", 2, HalfEven(), "-6.13")
+  round("6.5", 0, HalfEven(), "6")
+  round("7.5", 0, HalfEven(), "8")
+  round("1.2250", 2, HalfEven(), "1.22")
+  round("1.2252", 2, HalfEven(), "1.23")
+  round("1.2249", 2, HalfEven(), "1.22")
+  round("6.1", 2, HalfEven(), "6.10")
+  round("0.0000", 2, HalfEven(), "0.00")
+  round("0.6666666666666666666666666666", 2, HalfEven(), "0.67")
+  round("1.40", 0, HalfEven(), "1")
+  round("2.60", 0, HalfEven(), "3")
+  round(
+    "2.1234567890123456789012345678",
+    27,
+    HalfEven(),
+    "2.123456789012345678901234568"
+  )
+  round("0", 0, HalfUp(), "0")
+  round("1.234", 3, HalfUp(), "1.234")
+  round("1.12", 5, HalfUp(), "1.12000")
+  round("6.34567", 2, HalfUp(), "6.35")
+  round("6.5", 0, HalfUp(), "7")
+  round("12.49", 0, HalfUp(), "12")
+  round("0.6666666666666666666666666666", 2, HalfUp(), "0.67")
+  round("1.40", 0, HalfUp(), "1")
+  round("2.60", 0, HalfUp(), "3")
+  round("2.1234567890123456789012345678", 27, HalfUp(), "2.123456789012345678901234568")
+  Ok(())
+}

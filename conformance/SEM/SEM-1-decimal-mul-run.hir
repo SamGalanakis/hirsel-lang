@@ -1,0 +1,70 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2016 Paul Mason. MIT; third-party/NOTICES.md.
+// rust_decimal tests/decimal_tests/arithmetic.rs it_multiplies_decimals inputs, in both
+// orders. A product takes the sum of the scales, exactly: where rust_decimal rounds to
+// its 96-bit coefficient or 28-digit scale, the expectation is the exact product. Inputs
+// like ".1" are spelled "0.1".
+fn d(text: String) -> decimal.Decimal {
+  let Ok(v) = decimal.parse(text) else {
+    failure.check(false, TextInvariant())
+    return decimal.new(bigint.zero(), 0)
+  }
+  v
+}
+
+fn product(a: String, b: String, c: String) {
+  let x = d(a)
+  let y = d(b)
+  let forward = decimal.to_string(decimal.mul(x, y))
+  failure.check(forward == c && decimal.mul(y, x) == decimal.mul(x, y), Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  product("2", "3", "6")
+  product("2454495034", "3451204593", "8470964534836491162")
+  product("24544.95034", "0.3451204593", "8470.964534836491162")
+  product("0.1", "0.1", "0.01")
+  product("0", "1.001", "0.000")
+  product("2", "-3", "-6")
+  product("-2", "3", "-6")
+  product("-2", "-3", "6")
+  product("1", "2.01", "2.01")
+  product("1.0", "2.01", "2.010")
+  product(
+    "0.00000000000000001",
+    "0.00000000000000001",
+    "0.0000000000000000000000000000000001"
+  )
+  product(
+    "0.0000000000000000000000000001",
+    "0.0000000000000000000000000001",
+    "0.00000000000000000000000000000000000000000000000000000001"
+  )
+  product(
+    "0.6386554621848739495798319328",
+    "11.815126050420168067226890757",
+    "7.5457947885036367488171739291580538097591977967657651296"
+  )
+  product(
+    "2123456789012345678901234567.8",
+    "11.815126050420168067226890757",
+    "25088909624801327937270048760.5298059956976864819227098246"
+  )
+  product(
+    "2123456789012345678901234567.8",
+    "-11.815126050420168067226890757",
+    "-25088909624801327937270048760.5298059956976864819227098246"
+  )
+  product(
+    "2.1234567890123456789012345678",
+    "2.1234567890123456789012345678",
+    "4.50906873480262155235543362274031397676527968299765279684"
+  )
+  product(
+    "0.48000000",
+    "0.1818181818181818181818181818",
+    "0.087272727272727272727272727264000000"
+  )
+  Ok(())
+}

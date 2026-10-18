@@ -1,0 +1,19 @@
+// rule: SEM-1
+// expect: run
+// Karatsuba squares above the 32-limb threshold, odd and even splits:
+// (2^(64n) - 1)^2 = 2^(128n) - 2^(64n + 1) + 1 carries through every limb.
+fn one() -> bigint.BigInt {
+  bigint.from_u64(1)
+}
+
+fn all_ones_square(n: u64) {
+  let m = bigint.sub(bigint.shl(one(), 64 * n), one())
+  let high = bigint.sub(bigint.shl(one(), 128 * n), bigint.shl(one(), 64 * n + 1))
+  failure.check(bigint.mul(m, m) == bigint.add(high, one()), Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  all_ones_square(33)
+  all_ones_square(40)
+  Ok(())
+}

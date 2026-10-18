@@ -1,0 +1,82 @@
+// rule: SEM-1
+// expect: run
+// stdout: subtotal 202.17, tax 16.68, total 218.85
+// stdout: 33.33 33.33 33.34
+// The money use case: exact sums of cents, tax rounded half-even once at the end, an
+// even split whose remainder cents go to the last share, and compounding kept exact
+// until one final rounding.
+fn d(text: String) -> decimal.Decimal {
+  let Ok(v) = decimal.parse(text) else {
+    failure.check(false, TextInvariant())
+    return decimal.new(bigint.zero(), 0)
+  }
+  v
+}
+
+type Line {
+  quantity: u64,
+  price: String,
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let lines: List[Line] = [
+    Line(quantity: 3, price: "19.99"),
+    Line(quantity: 2, price: "4.50"),
+    Line(quantity: 1, price: "129.00"),
+    Line(quantity: 12, price: "0.35")
+  ]
+  let mut subtotal = d("0.00")
+  for line in lines {
+    let quantity = decimal.new(bigint.from_u64(line.quantity), 0)
+    subtotal = decimal.add(subtotal, decimal.mul(quantity, d(line.price)))
+  }
+  failure.check(decimal.to_string(subtotal) == "202.17", Arithmetic())
+  let exact_tax = decimal.mul(subtotal, d("0.0825"))
+  failure.check(decimal.to_string(exact_tax) == "16.679025", Arithmetic())
+  let tax = decimal.rescale(exact_tax, 2, HalfEven())
+  let total = decimal.add(subtotal, tax)
+  let o = io.stdout(rt)?
+  let _ = out.print(o, f"subtotal {subtotal}, tax {tax}, total {total}\n")
+  // Split 100.00 three ways: two shares round down, the last takes the remainder.
+  let amount = d("100.00")
+  let share = decimal.div(amount, decimal.new(bigint.from_u64(3), 0), 2, Down())
+  let last = decimal.sub(amount, decimal.mul(share, decimal.new(bigint.from_u64(2), 0)))
+  failure.check(decimal.add(decimal.add(share, share), last) == amount, Arithmetic())
+  let _ = out.print(o, f"{share} {share} {last}\n")
+  // Ten dimes are exactly one unit; the representation keeps the cents scale.
+  let mut dimes = d("0.00")
+  for _ in 0u64..10 {
+    dimes = decimal.add(dimes, d("0.10"))
+  }
+  failure.check(dimes == d("1.00") && decimal.compare(dimes, d("1")) == 0, Arithmetic())
+  failure.check(dimes != d("1"), Arithmetic())
+  let converted = decimal.mul(d("1234.56"), d("0.918273"))
+  failure.check(decimal.to_string(converted) == "1133.66311488", Arithmetic())
+  failure.check(decimal.rescale(converted, 2, HalfEven()) == d("1133.66"), Arithmetic())
+  let growth = decimal.new(bigint.pow(bigint.from_u64(10425), 12), 48)
+  let balance = decimal.mul(d("10000.00"), growth)
+  failure.check(
+    decimal.to_string(balance) == "16478.31360223647885118902642021238803863525390625000000",
+    Arithmetic()
+  )
+  failure.check(decimal.rescale(balance, 2, HalfEven()) == d("16478.31"), Arithmetic())
+  failure.check(decimal.compare(decimal.normalize(balance), balance) == 0, Arithmetic())
+  failure.check(decimal.scale(decimal.normalize(balance)) == 44, Arithmetic())
+  // A JSON number without an exponent parses as a decimal, and to_string is valid JSON.
+  let Ok(Object(fields)) = json.parse("{\"price\": 19.990}") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let Some(Number(spelling)) = map.get(fields, "price") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let doubled = decimal.mul(d(spelling), decimal.new(bigint.from_u64(2), 0))
+  let mut object: Map[String, json.Value] = map.empty()
+  map.insert(mut object, "price", Number(decimal.to_string(doubled)))
+  failure.check(
+    json.stringify(Object(object)) == Ok("{\"price\":39.980}"),
+    TextInvariant()
+  )
+  Ok(())
+}

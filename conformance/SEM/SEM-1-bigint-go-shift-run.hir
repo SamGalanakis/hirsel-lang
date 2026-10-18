@@ -1,0 +1,70 @@
+// rule: SEM-1
+// expect: run
+// Copyright 2009 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
+// Go math/big int_test.go rshTests and lshTests, each also round-tripped through shl then shr.
+fn n(text: String) -> bigint.BigInt {
+  let Ok(v) = bigint.parse(text) else {
+    failure.check(false, TextInvariant())
+    return bigint.zero()
+  }
+  v
+}
+
+fn shift_right(input: String, bits: u64, output: String) {
+  let x = n(input)
+  failure.check(bigint.shr(x, bits) == n(output), Arithmetic())
+  failure.check(bigint.shr(bigint.shl(x, bits), bits) == x, Arithmetic())
+}
+
+fn shift_left(input: String, bits: u64, output: String) {
+  let x = n(input)
+  failure.check(bigint.shl(x, bits) == n(output), Arithmetic())
+  failure.check(bigint.shr(bigint.shl(x, bits), bits) == x, Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  shift_right("0", 0, "0")
+  shift_right("-0", 0, "0")
+  shift_right("0", 1, "0")
+  shift_right("0", 2, "0")
+  shift_right("1", 0, "1")
+  shift_right("1", 1, "0")
+  shift_right("1", 2, "0")
+  shift_right("2", 0, "2")
+  shift_right("2", 1, "1")
+  shift_right("-1", 0, "-1")
+  shift_right("-1", 1, "-1")
+  shift_right("-1", 10, "-1")
+  shift_right("-100", 2, "-25")
+  shift_right("-100", 3, "-13")
+  shift_right("-100", 100, "-1")
+  shift_right("4294967296", 0, "4294967296")
+  shift_right("4294967296", 1, "2147483648")
+  shift_right("4294967296", 2, "1073741824")
+  shift_right("18446744073709551616", 0, "18446744073709551616")
+  shift_right("18446744073709551616", 1, "9223372036854775808")
+  shift_right("18446744073709551616", 2, "4611686018427387904")
+  shift_right("18446744073709551616", 64, "1")
+  shift_right("340282366920938463463374607431768211456", 64, "18446744073709551616")
+  shift_right("340282366920938463463374607431768211456", 128, "1")
+  shift_left("0", 0, "0")
+  shift_left("0", 1, "0")
+  shift_left("0", 2, "0")
+  shift_left("1", 0, "1")
+  shift_left("1", 1, "2")
+  shift_left("1", 2, "4")
+  shift_left("2", 0, "2")
+  shift_left("2", 1, "4")
+  shift_left("2", 2, "8")
+  shift_left("-87", 1, "-174")
+  shift_left("4294967296", 0, "4294967296")
+  shift_left("4294967296", 1, "8589934592")
+  shift_left("4294967296", 2, "17179869184")
+  shift_left("18446744073709551616", 0, "18446744073709551616")
+  shift_left("9223372036854775808", 1, "18446744073709551616")
+  shift_left("4611686018427387904", 2, "18446744073709551616")
+  shift_left("1", 64, "18446744073709551616")
+  shift_left("18446744073709551616", 64, "340282366920938463463374607431768211456")
+  shift_left("1", 128, "340282366920938463463374607431768211456")
+  Ok(())
+}

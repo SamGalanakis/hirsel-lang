@@ -1,0 +1,27 @@
+// rule: SEM-1
+// expect: run
+// The three signs of Karatsuba's middle term at 34 limbs (split 17): x = 2^(64*33) +
+// 2^(64*17) - 1 has its high half below its low half, so x1 - x0 < 0; against
+// 2^(64*34) - 1 the other difference is zero, and against 2^(64*34) + 2^(64*33) - 1 it is
+// positive, so the cross product is added. x * x subtracts it.
+// 2^(64 n) - 1, n limbs of ones.
+fn ones(n: u64) -> bigint.BigInt {
+  bigint.sub(bigint.shl(bigint.from_u64(1), 64 * n), bigint.from_u64(1))
+}
+
+pub fn main() -> Result[(), ()] {
+  let b33 = bigint.shl(bigint.from_u64(1), 64 * 33)
+  let x = bigint.add(b33, ones(17))
+  let shifted = bigint.shl(x, 64 * 34)
+  failure.check(bigint.mul(x, ones(34)) == bigint.sub(shifted, x), Arithmetic())
+  let y = bigint.add(ones(34), b33)
+  let expected = bigint.add(bigint.sub(shifted, x), bigint.shl(x, 64 * 33))
+  failure.check(bigint.mul(x, y) == expected, Arithmetic())
+  failure.check(bigint.mul(bigint.neg(x), y) == bigint.neg(expected), Arithmetic())
+  let square = bigint.add(
+    bigint.add(bigint.shl(b33, 64 * 33), bigint.shl(ones(17), 64 * 33 + 1)),
+    bigint.mul(ones(17), ones(17))
+  )
+  failure.check(bigint.mul(x, x) == square, Arithmetic())
+  Ok(())
+}

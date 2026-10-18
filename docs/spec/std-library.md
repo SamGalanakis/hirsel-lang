@@ -1631,3 +1631,132 @@ cookie value bytes is `InvalidValue`, and an empty path or a control character o
 is `InsecureSameSiteNone()`, since clients reject it (RFC 6265bis section 4.1.2.7).
 Domain, Expires and Partitioned attributes, Set-Cookie parsing and cookie jars are
 not provided.
+
+## Arbitrary-precision integers
+
+`bigint` is exact integer arithmetic of any size, in ordinary std source:
+
+```text
+pub opaque type bigint.BigInt: copyable + data + key + inert + noalloc_drop uses {}
+fn bigint.zero() -> bigint.BigInt uses {}
+fn bigint.from_T(value: T) -> bigint.BigInt uses {}
+fn bigint.to_T(value: bigint.BigInt) -> Option[T] uses {}
+fn bigint.is_zero(value: bigint.BigInt) -> bool uses {}
+fn bigint.is_negative(value: bigint.BigInt) -> bool uses {}
+fn bigint.signum(value: bigint.BigInt) -> i32 uses {}
+fn bigint.compare(a: bigint.BigInt, b: bigint.BigInt) -> i32 uses {}
+fn bigint.neg(value: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.abs(value: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.add(a: bigint.BigInt, b: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.sub(a: bigint.BigInt, b: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.mul(a: bigint.BigInt, b: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.div_rem(a: bigint.BigInt, b: bigint.BigInt) -> (bigint.BigInt, bigint.BigInt) uses {}
+fn bigint.div_mod_floor(a: bigint.BigInt, b: bigint.BigInt) -> (bigint.BigInt, bigint.BigInt) uses {}
+fn bigint.pow(base: bigint.BigInt, exponent: u64) -> bigint.BigInt uses {}
+fn bigint.gcd(a: bigint.BigInt, b: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.bit_length(value: bigint.BigInt) -> u64 uses {}
+fn bigint.shl(value: bigint.BigInt, bits: u64) -> bigint.BigInt uses {}
+fn bigint.shr(value: bigint.BigInt, bits: u64) -> bigint.BigInt uses {}
+fn bigint.bit_and(a: bigint.BigInt, b: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.bit_or(a: bigint.BigInt, b: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.bit_xor(a: bigint.BigInt, b: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.bit_not(value: bigint.BigInt) -> bigint.BigInt uses {}
+fn bigint.parse(text: String) -> Result[bigint.BigInt, scalar.ParseError] uses {}
+fn bigint.parse_radix(text: String, radix: u8) -> Result[bigint.BigInt, scalar.ParseError] uses {}
+@preserves_unique(out) fn bigint.format_into(value: bigint.BigInt, mut out: List[u8]) -> () uses {}
+fn bigint.to_string(value: bigint.BigInt) -> unique String uses {}
+fn bigint.format_radix(value: bigint.BigInt, radix: u8) -> Result[unique String, scalar.ParseError] uses {}
+```
+
+`T` ranges over `u8` to `u128` and `i8` to `i128`, one concrete function per width.
+`from_T` is total; `to_T` returns `None` exactly when the value is outside `T`.
+The representation is a sign and a little-endian magnitude of `u64` limbs with no
+high zero limb, and zero is never negative, so `==` and hashing compare values and
+`BigInt` is a map key. `compare` and `signum` return -1, 0 or 1.
+
+`div_rem` truncates toward zero and gives the remainder the dividend's sign, as
+integer `/` and `%` do; `div_mod_floor` rounds toward negative infinity and gives
+the remainder the divisor's sign, as `int.div_floor` and `int.mod` do. A zero
+divisor fails SEM-1 at std's check, as integer division by zero does; nothing else
+fails except allocation. `pow(x, 0)` is 1, including for zero. `gcd` is nonnegative and
+`gcd(0, 0)` is 0. `bit_length` counts the magnitude's bits, 0 for zero.
+`shl` multiplies by a power of two; `shr` divides by one, rounding toward negative
+infinity. The bitwise functions act on the infinite two's-complement value, so
+`bit_not(x)` is `-x - 1` and `bit_and(-1, x)` is `x`.
+
+`parse_radix` accepts the integer grammar of [scalars](#scalars): an optional
+leading minus and one or more digits of radix 2 through 36 in either letter case.
+Leading zeros and `-0` are accepted; a plus, whitespace, underscores, radix
+prefixes, an empty digit string and an invalid radix are `Invalid`; no value is
+`OutOfRange`. `parse` is radix 10. Output has a minus for negative values, no
+leading zeros (zero is `0`), lowercase letters and no prefix; `format_radix` with
+an invalid radix is `Invalid`. `BigInt` declares `@format(bigint.format_into)`, so
+an f-string hole prints its decimal text and takes fill, alignment and width as a
+string does.
+
+Magnitudes multiply by schoolbook when the shorter operand has at most 32 limbs and
+by Karatsuba splitting otherwise, cutting an operand at least twice as long as the
+other into chunks of the shorter one's length (num-bigint's `mac3` structure and
+threshold). Division by one limb divides 128 by 64 bits per
+limb; longer divisors use Knuth's algorithm D with the normalized two-limb quotient
+estimate and its add-back correction. Radix conversion moves one limb's worth of
+digits per multiply or divide (Go's `natconv`). These are ordinary source over
+`List[u64]` with `u128` intermediates; there is no core hook.
+
+## Exact decimals
+
+`decimal` holds the exact value `coefficient * 10^-scale`, for amounts such as money
+that must not round implicitly:
+
+```text
+pub type decimal.RoundingMode = HalfEven | HalfUp | Down | Up | Floor | Ceiling
+pub opaque type decimal.Decimal: copyable + data + key + inert + noalloc_drop uses {}
+fn decimal.new(unscaled: bigint.BigInt, places: i32) -> decimal.Decimal uses {}
+fn decimal.coefficient(value: decimal.Decimal) -> bigint.BigInt uses {}
+fn decimal.scale(value: decimal.Decimal) -> i32 uses {}
+fn decimal.is_zero(value: decimal.Decimal) -> bool uses {}
+fn decimal.signum(value: decimal.Decimal) -> i32 uses {}
+fn decimal.compare(a: decimal.Decimal, b: decimal.Decimal) -> i32 uses {}
+fn decimal.neg(value: decimal.Decimal) -> decimal.Decimal uses {}
+fn decimal.abs(value: decimal.Decimal) -> decimal.Decimal uses {}
+fn decimal.add(a: decimal.Decimal, b: decimal.Decimal) -> decimal.Decimal uses {}
+fn decimal.sub(a: decimal.Decimal, b: decimal.Decimal) -> decimal.Decimal uses {}
+fn decimal.mul(a: decimal.Decimal, b: decimal.Decimal) -> decimal.Decimal uses {}
+fn decimal.div(a: decimal.Decimal, b: decimal.Decimal, places: i32, mode: decimal.RoundingMode) -> decimal.Decimal uses {}
+fn decimal.rescale(value: decimal.Decimal, places: i32, mode: decimal.RoundingMode) -> decimal.Decimal uses {}
+fn decimal.normalize(value: decimal.Decimal) -> decimal.Decimal uses {}
+fn decimal.parse(text: String) -> Result[decimal.Decimal, scalar.ParseError] uses {}
+@preserves_unique(out) fn decimal.format_into(value: decimal.Decimal, mut out: List[u8]) -> () uses {}
+fn decimal.to_string(value: decimal.Decimal) -> unique String uses {}
+```
+
+The scale is part of the value's representation: `==` and hashing compare
+coefficient and scale, so `1.0` and `1.00` differ under `==`, while `compare`
+orders by value and returns 0 for them. `add` and `sub` are exact at the larger
+scale, and `mul` is exact at the sum of the scales; a scale sum outside `i32` fails
+SEM-1. Nothing else rounds implicitly. `div` returns `a / b` at exactly `places`
+fractional digits, rounded by `mode`, and a zero divisor fails SEM-1. `rescale`
+sets the scale to `places`: exact when it grows (`6.1` at 2 places is `6.10`) and
+rounded by `mode` when it shrinks; a negative `places` rounds to a multiple of a
+power of ten. `normalize` removes trailing fractional zeros, never lowering a
+nonnegative scale below 0, and gives zero scale 0.
+
+`HalfEven` and `HalfUp` round to the nearest value at the target scale, breaking a
+tie to an even last digit and away from zero respectively. `Down` rounds toward
+zero, `Up` away from zero, `Floor` toward negative infinity and `Ceiling` toward
+positive infinity. Ties are exact comparisons of the discarded remainder; nothing
+is rounded twice.
+
+`parse` accepts `-?[0-9]+(\.[0-9]+)?` and keeps every written fractional digit as
+the scale: `1.50` has coefficient 150 and scale 2, and `-0.00` is zero at scale 2.
+A plus, exponent, whitespace, grouping, leading or trailing point and empty digit
+string are `Invalid`; more than `i32` fractional digits are `OutOfRange`. Text has
+a minus for negative values, at least one integer digit, and exactly `scale`
+fractional digits after a point when the scale is positive; a negative scale
+appends that many zeros to a nonzero coefficient. Text never has an exponent, so
+`to_string(parse(s)) == s` for every accepted `s` without redundant leading zeros
+or a negative zero. That text is also a valid JSON number: `json.Number(decimal.to_string(d))`
+writes a decimal, and `decimal.parse` reads a JSON number lexeme that has no
+exponent. `Decimal` declares `@format(decimal.format_into)` with the same padding
+rules as `BigInt`. Scale rules and rounding modes follow rust_decimal, without its
+96-bit coefficient or 28-digit scale limits.

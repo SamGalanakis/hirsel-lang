@@ -1,0 +1,9 @@
+// rule: SEM-1
+// expect: fail SEM-1 at line 132
+// Decimal division by a zero divisor fails SEM-1 in std's div, as integer division does.
+pub fn main(args: Args) -> Result[(), ()] {
+  let divisor = decimal.new(bigint.from_u64(arg.count(args)), 2)
+  let q = decimal.div(decimal.new(bigint.from_u64(7), 0), divisor, 2, HalfEven())
+  failure.check(decimal.is_zero(q), Arithmetic())
+  Ok(())
+}

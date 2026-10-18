@@ -1,0 +1,61 @@
+// rule: SEM-1
+// expect: run
+// BigInt agrees with i128 two's-complement bitwise ops, arithmetic shifts and decimal
+// and radix text on 20 seeded operand pairs of every magnitude from one bit to the full
+// width, plus the bounds.
+fn draw(mut g: prng.Generator) -> i128 {
+  let choice = prng.u64(mut g) % 16
+  if choice == 0 {
+    return -170141183460469231731687303715884105727 - 1
+  }
+  if choice == 1 {
+    return 170141183460469231731687303715884105727
+  }
+  if choice == 2 {
+    return 0
+  }
+  let high: u128 = int.widen(prng.u64(mut g))
+  let low: u128 = int.widen(prng.u64(mut g))
+  let shift: u128 = int.widen(prng.u64(mut g) % 127 + 1)
+  let magnitude: i128 = int.narrow((high << 64 | low) >> shift)
+  if prng.u64(mut g) % 2 == 0 {
+    -magnitude
+  } else {
+    magnitude
+  }
+}
+
+fn check_pair(a: i128, b: i128) {
+  let ba = bigint.from_i128(a)
+  let bb = bigint.from_i128(b)
+  failure.check(bigint.bit_and(ba, bb) == bigint.from_i128(a & b), Arithmetic())
+  failure.check(bigint.bit_or(ba, bb) == bigint.from_i128(a | b), Arithmetic())
+  failure.check(bigint.bit_xor(ba, bb) == bigint.from_i128(a ^ b), Arithmetic())
+  failure.check(bigint.bit_not(ba) == bigint.from_i128(~a), Arithmetic())
+  let bits: i128 = int.mod(b, 128)
+  failure.check(
+    bigint.shr(ba, int.narrow(bits)) == bigint.from_i128(a >> bits),
+    Arithmetic()
+  )
+  failure.check(bigint.to_i128(ba) == Some(a), Arithmetic())
+  let text = i128.to_string(a)
+  failure.check(
+    bigint.to_string(ba) == text && bigint.parse(text) == Ok(copy ba),
+    TextInvariant()
+  )
+  let radix: u8 = int.narrow(int.mod(b, 35) + 2)
+  failure.check(
+    bigint.format_radix(ba, radix) == i128.format_radix(a, radix),
+    TextInvariant()
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut g = prng.seed(0x5eed_b16_2)
+  for _ in 0u64..20 {
+    let a = draw(mut g)
+    let b = draw(mut g)
+    check_pair(a, b)
+  }
+  Ok(())
+}

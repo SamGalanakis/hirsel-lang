@@ -1,0 +1,40 @@
+// rule: SEM-1
+// expect: run
+// Copyright (c) 2016 Paul Mason. MIT; third-party/NOTICES.md.
+// rust_decimal tests/decimal_tests/arithmetic.rs it_adds_decimals, its short rows, in
+// both orders: a sum takes the larger scale. Inputs like ".1" are spelled "0.1".
+fn d(text: String) -> decimal.Decimal {
+  let Ok(v) = decimal.parse(text) else {
+    failure.check(false, TextInvariant())
+    return decimal.new(bigint.zero(), 0)
+  }
+  v
+}
+
+fn sum(a: String, b: String, c: String) {
+  let x = d(a)
+  let y = d(b)
+  let forward = decimal.to_string(decimal.add(x, y))
+  failure.check(forward == c && decimal.add(y, x) == decimal.add(x, y), Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  sum("0", "0", "0")
+  sum("0", "-0", "0")
+  sum("-0", "0", "0")
+  sum("-0", "-0", "0")
+  sum("2", "3", "5")
+  sum("2454495034", "3451204593", "5905699627")
+  sum("24544.95034", "0.3451204593", "24545.2954604593")
+  sum("0.1", "0.1", "0.2")
+  sum("0.10", "0.1", "0.20")
+  sum("0.1", "-0.1", "0.0")
+  sum("0", "1.001", "1.001")
+  sum("2", "-3", "-1")
+  sum("-2", "3", "1")
+  sum("-2", "-3", "-5")
+  sum("3", "-2", "1")
+  sum("-3", "2", "-1")
+  sum("1.234", "2.4567", "3.6907")
+  Ok(())
+}

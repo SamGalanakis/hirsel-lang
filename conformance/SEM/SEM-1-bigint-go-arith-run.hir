@@ -1,0 +1,80 @@
+// rule: SEM-1
+// expect: run
+// Copyright 2009 The Go Authors. BSD-3-Clause; third-party/NOTICES.md.
+// Go math/big int_test.go sumZZ, prodZZ, divisionSignsTests and quoTests. Go's DivMod is
+// Euclidean; div_mod_floor floors, so the two negative-divisor rows expect floored pairs.
+fn n(text: String) -> bigint.BigInt {
+  let Ok(v) = bigint.parse(text) else {
+    failure.check(false, TextInvariant())
+    return bigint.zero()
+  }
+  v
+}
+
+fn sum(z: i64, x: i64, y: i64) {
+  let bz = bigint.from_i64(z)
+  let bx = bigint.from_i64(x)
+  let by = bigint.from_i64(y)
+  failure.check(bigint.add(bx, by) == bz && bigint.add(by, bx) == bz, Arithmetic())
+  failure.check(bigint.sub(bz, bx) == by && bigint.sub(bz, by) == bx, Arithmetic())
+  failure.check(bigint.signum(bz) == bigint.compare(bz, bigint.zero()), Arithmetic())
+}
+
+fn product(z: i64, x: i64, y: i64) {
+  let bz = bigint.from_i64(z)
+  let bx = bigint.from_i64(x)
+  let by = bigint.from_i64(y)
+  failure.check(bigint.mul(bx, by) == bz && bigint.mul(by, bx) == bz, Arithmetic())
+  if x != 0 {
+    let (q, r) = bigint.div_rem(bz, bx)
+    failure.check(q == by && bigint.is_zero(r), Arithmetic())
+  }
+}
+
+// Truncated (q, r) from Go; (d, m) floored, matching Go's Euclidean pair when y > 0.
+fn signs(x: i64, y: i64, q: i64, r: i64, d: i64, m: i64) {
+  let bx = bigint.from_i64(x)
+  let by = bigint.from_i64(y)
+  let (bq, br) = bigint.div_rem(bx, by)
+  failure.check(bq == bigint.from_i64(q) && br == bigint.from_i64(r), Arithmetic())
+  let (bd, bm) = bigint.div_mod_floor(bx, by)
+  failure.check(bd == bigint.from_i64(d) && bm == bigint.from_i64(m), Arithmetic())
+}
+
+fn quotient(x: String, y: String, q: String, r: String) {
+  let (bq, br) = bigint.div_rem(n(x), n(y))
+  failure.check(bq == n(q) && br == n(r), Arithmetic())
+  failure.check(bigint.add(bigint.mul(bq, n(y)), br) == n(x), Arithmetic())
+}
+
+pub fn main() -> Result[(), ()] {
+  sum(0, 0, 0)
+  sum(1, 1, 0)
+  sum(1111111110, 123456789, 987654321)
+  sum(-1, -1, 0)
+  sum(864197532, -123456789, 987654321)
+  sum(-1111111110, -123456789, -987654321)
+  product(0, 0, 0)
+  product(0, 1, 0)
+  product(1, 1, 1)
+  product(-991 * 991, 991, -991)
+  signs(5, 3, 1, 2, 1, 2)
+  signs(-5, 3, -1, -2, -2, 1)
+  signs(5, -3, -1, 2, -2, -1)
+  signs(-5, -3, 1, -2, 1, -2)
+  signs(1, 2, 0, 1, 0, 1)
+  signs(8, 4, 2, 0, 2, 0)
+  quotient(
+    "476217953993950760840509444250624797097991362735329973741718102894495832294430498335824897858659711275234906400899559094370964723884706254265559534144986498357",
+    "9353930466774385905609975137998169297361893554149986716853295022578535724979483772383667534691121982974895531435241089241440253066816724367338287092081996",
+    "50911",
+    "1"
+  )
+  quotient(
+    "11510768301994997771168",
+    "1328165573307167369775",
+    "8",
+    "885443715537658812968"
+  )
+  Ok(())
+}
