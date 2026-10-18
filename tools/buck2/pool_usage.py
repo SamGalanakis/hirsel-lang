@@ -27,7 +27,8 @@ from pathlib import Path
 import re
 import subprocess
 
-from action_sizes_from_log import events as rustc_events, join
+from action_sizes_from_log import join
+import event_logs
 
 TRACE_DIR = '/var/lib/kiln-resource-hints/trace'
 USAGE_LOGS = ('/workspace/kiln-executor/usage/actions.log.1', '/workspace/kiln-executor/usage/actions.log')
@@ -91,19 +92,33 @@ def categories(rows):
     return found
 
 
-def attribute_rustc(paths, rows, operation_names, operation_categories):
-    """Use the sizing tool's conservative join; leave ambiguous phases unknown."""
+def attribute_actions(commands, rows, operation_names, operation_categories):
+    """Use the sizing tool's conservative join for named compile phases."""
     records = {op: row for op, row in rows.items()
                if row.get('category') == 'rustc' and row.get('exit') == '0'
                and all(row.get(key, '-').isdigit() for key in
                        ('wall_ms', 'cpu_usec', 'peak_bytes', 'requested_cpu', 'requested_kb'))}
-    for path in paths:
-        for action, row in join(rustc_events(Path(path)), records):
-            if row is None:
-                continue
-            op = row['op']
-            operation_names[op] = f"rustc {action['profile']} {action['target']} {action['phase']}"
-            operation_categories[op] = 'rustc link' if action['phase'].split()[0] == 'link' else 'rustc compile'
+    actions = [c for c in commands if c['category'] == 'rustc' and not c['cached'] and not c['failed']]
+    for action, row in join(actions, records):
+        if row is None:
+            continue
+        op = row['op']
+        operation_names[op] = f"rustc {action['profile']} {action['display']} {action['phase']}"
+        operation_categories[op] = 'rustc link' if action['phase'].split()[0] == 'link' else 'rustc compile'
+
+
+def repeated_actions(commands, newest, hours, top):
+    """Repeated real executions, excluding hits and merged/copy event records."""
+    groups = defaultdict(list)
+    for command in commands:
+        if not command['cached'] and newest - hours * 3600 <= command['end'] <= newest:
+            groups[(command['display'], command['digest'])].append(command)
+    repeated = {key: runs for key, runs in groups.items() if len(runs) > 1}
+    lines = [f'repeated action keys: {len(repeated)} (retained logs only; failed attempts are not cached)']
+    for (target, digest), runs in sorted(repeated.items(), key=lambda row: -len(row[1]))[:top]:
+        successes = sum(not run['failed'] for run in runs)
+        lines.append(f'  {target}: {len(runs)} executions, {successes} successful; {digest}')
+    return '\n'.join(lines)
 
 
 def field(identity, key):
@@ -162,12 +177,12 @@ def main():
     parser.add_argument('--top', type=int, default=40, help='rows per table')
     parser.add_argument('--trace', nargs='*', default=[], help='copies of the scheduler\'s usage-event trace files')
     parser.add_argument('--usage', nargs='*', default=[], help='copies of the workers\' actions.log')
-    parser.add_argument('--events', nargs='*', default=[], help='Buck2 JSONL logs exported with buck2 log show; attribute rustc compile/link phases')
+    parser.add_argument('--events', nargs='*', default=[], help='Buck2 JSONL or compressed .pb.zst logs')
+    parser.add_argument('--event-dir', type=Path, default=event_logs.directory(),
+                        help='shared retained logs (default: HIRSEL_BUCK2_LOG_DIR or ~/.cache/hirsel-buck2/event-logs)')
     parser.add_argument('--ssh-cache', help=f'read {TRACE_DIR} on this host with ssh and sudo -n')
     parser.add_argument('--ssh-workers', nargs='*', default=[], help='read the usage logs on these hosts')
     args = parser.parse_args()
-    if any(path.endswith('.pb.zst') for path in args.events):
-        parser.error('--events takes JSONL: export binary logs with buck2 log show first')
     trace = [line for path in args.trace for line in Path(path).read_text().splitlines()]
     if args.ssh_cache:
         trace += ssh_cat(args.ssh_cache, f'cd {TRACE_DIR} && sudo -n cat *.jsonl').splitlines()
@@ -179,8 +194,13 @@ def main():
         parser.error('no usage events: pass --trace or --ssh-cache')
     rows = operations(usage, {event['operation'] for event in events if field(event['identity'], 'repo') == args.repo})
     operation_names, operation_categories = names(rows), categories(rows)
-    attribute_rustc(args.events, rows, operation_names, operation_categories)
+    paths = sorted({Path(p).resolve() for p in args.events} |
+                   set(event_logs.discover(args.event_dir, args.hours)))
+    commands = list(event_logs.commands(paths))
+    attribute_actions(commands, rows, operation_names, operation_categories)
     print(report(events, operation_names, operation_categories, args.repo, args.hours, args.top))
+    print(f'event-log coverage: {len(paths)} files, {len(commands)} distinct remote command records')
+    print(repeated_actions(commands, max(e['end_s'] for e in events), args.hours, args.top))
 
 
 if __name__ == '__main__':

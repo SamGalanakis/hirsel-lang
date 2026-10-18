@@ -381,17 +381,29 @@ pool's reserved CPU-hours by repository and hirsel's reserved against used
 CPU-hours and GiB-hours per lane and target over the last N hours.
 
 It also sums execution wall seconds and CPU seconds per action category,
-excluding queue time. For rustc compile/link phases and first-party target
-names, add exported Buck2 event logs:
+excluding queue time. For rustc compile/link phases and target names, it joins
+the shared retained Buck2 event logs. `tools/gate` and `tools/land` retain their
+compressed `.pb.zst` logs, including failed runs, under
+`$HIRSEL_BUCK2_LOG_DIR` (default `~/.cache/hirsel-buck2/event-logs`, shared across
+worktrees). The full gate's helpers use the same recorder. Rotation keeps at
+most three days and 4 GiB, oldest first; running writers and audit readers keep
+their files locked until finished, so active logs may temporarily exceed the
+size bound. A new run rotates completed logs after it finishes.
+
+Select another archive with `--event-dir`, or add individual compressed or
+JSONL logs with `--events`:
 
 ```sh
-.buck2/bin/buck2 log show /tmp/build.pb.zst > /tmp/build.jsonl
 python3 tools/buck2/pool_usage.py --hours 6 --trace /tmp/trace-*.jsonl \
-  --usage /tmp/usage-*.log --events /tmp/build.jsonl
+  --usage /tmp/usage-*.log --events /tmp/build.pb.zst
 ```
 
 This reuses the compile-sizing tool's unique time/request match; unmatched or
-ambiguous rustc measurements stay in `rustc (phase unknown)`. Rustc's link
+ambiguous rustc measurements stay in `rustc (phase unknown)`. It also reports
+repeated target/action-digest executions from retained compile and test events;
+cache hits and copies of the same merged execution do not count as reruns.
+The report states its log coverage; rotated history cannot be reconstructed.
+Rustc's link
 action includes compiling the executable, so its time is not linker-only.
 
 ## Measured compile requests

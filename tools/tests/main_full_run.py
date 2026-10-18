@@ -250,7 +250,7 @@ class GateCommands(unittest.TestCase):
             (self.root / directory).mkdir(parents=True)
         for test in ('main_full_run', 'buck2_sync', 'gate'):
             (self.root / f'tools/tests/{test}.py').write_text('# fixture gate tests\n')
-        for helper in ('gating', 'impact'):
+        for helper in ('gating', 'impact', 'event_logs'):
             (self.root / f'tools/buck2/{helper}.py').write_text((RUNNER.parent / f'buck2/{helper}.py').read_text())
         for helper in ('prepare', 'sync', 'clippy', 'fmt', 'conformance', 'agree'):
             (self.root / f'tools/buck2/{helper}.py').write_text(f'''import os, sys
@@ -275,11 +275,13 @@ sys.exit(subprocess.call(sys.argv[sys.argv.index("--run") + 1:]))
         gate.write_text((RUNNER.parent / 'gate').read_text())
         gate.chmod(0o755)
         self.commands = self.root / 'commands'
-        self.env = os.environ | {'COMMANDS': str(self.commands), 'HIRSEL_TEST_SEED': '7'}
+        self.env = os.environ | {'COMMANDS': str(self.commands), 'HIRSEL_TEST_SEED': '7',
+                                 'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
         # Scratch gates must not acquire a slot held by the gate running this test.
         self.env.pop('HIRSEL_GATE_SLOTS', None)
         buck2 = self.root / '.buck2/bin/buck2'
         buck2.write_text('''#!/usr/bin/env bash
+if [[ ${2:-} == --event-log ]]; then command=$1; shift 3; set -- "$command" "$@"; fi
 if [[ $1 == uquery ]]; then
   printf 'root//:a-unittest\\nroot//:b-test-it\\n'
   if [[ $* == *doctest* ]]; then printf 'root//:doclib\\n'; fi
@@ -357,10 +359,13 @@ class NativeGate(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.commands = self.root / 'commands'
-        self.env = os.environ | {'COMMANDS': str(self.commands)}
+        self.env = os.environ | {'COMMANDS': str(self.commands),
+                                 'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
         self.env.pop('HIRSEL_GATE_SLOTS', None)
         (self.root / 'tools').mkdir()
         (self.root / 'tools/check-native.sh').write_text((RUNNER.parent / 'check-native.sh').read_text())
+        (self.root / 'tools/buck2').mkdir()
+        (self.root / 'tools/buck2/event_logs.py').write_text((RUNNER.parent / 'buck2/event_logs.py').read_text())
         for tool in ('.buck2/bin/buck2', 'proofs/rc/audit.sh', 'proofs/rc/check-vectors.sh'):
             path = self.root / tool
             path.parent.mkdir(parents=True, exist_ok=True)

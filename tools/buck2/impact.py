@@ -131,7 +131,7 @@ TOOL_PATHS = (
     'tools/gate', 'tools/land', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py', 'tools/tests/*',
     *(f'tools/buck2/{name}.py' for name in (
         'action_sizes_from_log', 'agree', 'clippy', 'conformance', 'fmt', 'full_gate_counts',
-        'gating', 'impact', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
+        'event_logs', 'gating', 'impact', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
     'tools/buck2/test-sizes.json',
     'tools/buck2/test_sizes.bzl',
 )

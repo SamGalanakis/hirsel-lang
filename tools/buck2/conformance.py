@@ -18,7 +18,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
+
+import event_logs
 
 ROOT = Path(__file__).resolve().parents[2]
 BUCK2 = ROOT / '.buck2/bin/buck2'
@@ -95,8 +96,7 @@ def main():
         print(__doc__, file=sys.stderr)
         return 2
     targets = [f'//:gate-conformance-shard-{index}' for index in range(1, CONFORMANCE_SHARDS + 1)]
-    with tempfile.TemporaryDirectory() as scratch:
-        event_log = Path(scratch) / 'events.pb.zst'
+    with event_logs.recorded('conformance') as event_log:
         status = subprocess.call([str(BUCK2), 'test', *CONFIG, '--event-log', str(event_log), *targets,
                                   '--', '--timeout', '1800'], cwd=ROOT)
         if status != 0:

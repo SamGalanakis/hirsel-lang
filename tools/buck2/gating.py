@@ -19,6 +19,7 @@ import time
 import tomllib
 
 import impact
+import event_logs
 from sync import AGREE_SHARDS, CONFORMANCE_SHARDS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -305,7 +306,7 @@ def owned_paths(paths, root=ROOT):
 # ---------------------------------------------------------------- Buck2
 
 def buck2(command, *arguments, **kwargs):
-    return subprocess.run([str(BUCK2), command, *CONFIG, *arguments], cwd=ROOT, **kwargs)
+    return event_logs.run([command, *CONFIG, *arguments], buck2=BUCK2, cwd=ROOT, **kwargs)
 
 
 def uquery(expression) -> list[str]:

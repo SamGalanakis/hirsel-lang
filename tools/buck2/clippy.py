@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
+
+import event_logs
 import sys
 
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
@@ -27,8 +29,8 @@ def main():
     targets = subprocess.run(
         [str(BUCK2), 'uquery', *CONFIG, 'attrregexfilter(name, "-clippy$", kind("^rust_(library|binary)$", root//:))'],
         cwd=ROOT, check=True, capture_output=True, text=True).stdout.split()
-    report = subprocess.run(
-        [str(BUCK2), 'build', *CONFIG, '--show-full-json-output', *[t + '[clippy.txt]' for t in targets]],
+    report = event_logs.run(
+        ['build', *CONFIG, '--show-full-json-output', *[t + '[clippy.txt]' for t in targets]],
         cwd=ROOT, capture_output=True, text=True)
     sys.stderr.write(report.stderr if report.returncode else '')
     if report.returncode:

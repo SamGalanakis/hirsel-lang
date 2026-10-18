@@ -546,7 +546,12 @@ class Summary(unittest.TestCase):
 
 
 FAKE_BUCK2 = '''#!/usr/bin/env bash
-printf '%s\\n' "$*" >> "$COMMANDS"
+if [[ ${2:-} == --event-log ]]; then
+  printf '{}' > "$3"
+  printf '%s\\n' "$1 ${*:4}" >> "$COMMANDS"
+else
+  printf '%s\\n' "$*" >> "$COMMANDS"
+fi
 case $1 in
   uquery) [[ $* == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit 0 ;;
   build)
@@ -615,7 +620,7 @@ class Scripts(unittest.TestCase):
                  '.gitignore': (REPO / '.gitignore').read_text()}
         for name in ('gate', 'land'):
             files[f'tools/{name}'] = (TOOLS / name).read_text()
-        for name in ('gating', 'impact', 'clippy', 'agree', 'conformance'):
+        for name in ('gating', 'impact', 'clippy', 'agree', 'conformance', 'event_logs'):
             files[f'tools/buck2/{name}.py'] = (TOOLS / 'buck2' / f'{name}.py').read_text()
         for name in ('sync', 'prepare', 'fmt'):
             files[f'tools/buck2/{name}.py'] = FAKE_SCRIPT.replace('{name}', f'{name}.py').replace('{upper}', name.upper())
@@ -636,7 +641,8 @@ class Scripts(unittest.TestCase):
         git(self.root, 'fetch', '-q', 'origin')
         git(self.root, 'branch', '-q', '--set-upstream-to=origin/main')
         self.commands = top / 'commands'
-        self.env = os.environ | {'COMMANDS': str(self.commands)}
+        self.env = os.environ | {'COMMANDS': str(self.commands),
+                                 'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
         # Scratch gates must not acquire a slot held by the gate running this test.
         self.env.pop('HIRSEL_GATE_SLOTS', None)
         # A sibling's clone, to move main.
@@ -691,6 +697,7 @@ class Scripts(unittest.TestCase):
         self.assertIn('sync.py --check', logged)
         self.assertFalse(any(c.startswith('test') for c in logged))
         self.assertNotIn('Regenerate the API index.', git(self.root, 'log', '--format=%s'))
+        self.assertGreaterEqual(len(list((self.root / '.buck2/event-logs').glob('*.pb.zst'))), 2)
 
     def test_land_commits_the_index_generated_from_the_rebased_sources(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')

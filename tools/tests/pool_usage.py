@@ -18,6 +18,20 @@ def event(op, repo, lane, cpu, memory_kb, wall_s, cpu_s, peak_kb, end_s, attempt
 
 
 class Report(unittest.TestCase):
+    def test_repeated_keys_exclude_cache_hits_and_merged_execution_records(self):
+        with tempfile.TemporaryDirectory() as temp:
+            first, copy = Path(temp) / 'one.jsonl', Path(temp) / 'copy.jsonl'
+            first.write_text('\n'.join([action('target', 'rlib [pic]', 100, 1),
+                                        action('target', 'rlib [pic]', 105, 1),
+                                        action('target', 'rlib [pic]', 110, 1, cached=True)]))
+            copy.write_bytes(first.read_bytes())
+            commands = list(pool_usage.event_logs.commands([first, copy]))
+        self.assertEqual(len(commands), 3)
+        text = pool_usage.repeated_actions(commands, 111, 1, 20)
+        self.assertIn('repeated action keys: 1', text)
+        self.assertIn('target: 2 executions, 2 successful; target-digest', text)
+        self.assertIn('repeated action keys: 0', pool_usage.repeated_actions(commands, 10000, 1, 20))
+
     def test_shares_targets_and_the_window(self):
         trace = [
             event('t1', 'hirsel-lang', 'gate', 4, 1 << 21, 3600, 3600, 1 << 20, 10_000),
@@ -58,7 +72,7 @@ class Report(unittest.TestCase):
             path.write_text('\n'.join([action('cached', 'rlib [pic]', 100, 3, cached=True),
                                        action('library', 'rlib [pic]', 100, 3),
                                        action('harness', 'link [pic]', 104, 2)]))
-            pool_usage.attribute_rustc([path], rows, names, categories)
+            pool_usage.attribute_actions(list(pool_usage.event_logs.commands([path])), rows, names, categories)
         self.assertEqual(categories, {'compile': 'rustc compile', 'link': 'rustc link'})
         self.assertEqual(names['compile'], 'rustc dev library rlib [pic]')
         self.assertEqual(names['link'], 'rustc dev harness link [pic]')
@@ -75,7 +89,7 @@ class Report(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / 'events.jsonl'
             path.write_text(action('library', 'rlib [pic]', 100, 3))
-            pool_usage.attribute_rustc([path], rows, names, categories)
+            pool_usage.attribute_actions(list(pool_usage.event_logs.commands([path])), rows, names, categories)
         self.assertEqual(set(categories.values()), {'rustc (phase unknown)'})
 
 
@@ -86,7 +100,7 @@ def action(target, phase, start, wall, cached=False):
         'name': {'category': 'rustc', 'identifier': phase}, 'failed': False,
         'commands': [{'details': {
             'command_kind': {'command': {'RemoteCommand': {
-                'cache_hit': cached, 'queue_time_us': 999_000_000,
+                'cache_hit': cached, 'action_digest': target + '-digest', 'queue_time_us': 999_000_000,
                 'details': {'platform': {'properties': [{'name': 'cpu_count', 'value': '2'},
                                                        {'name': 'memory_kb', 'value': '1024'}]}}}}},
             'metadata': {'execution_time_us': wall * 1_000_000, 'start_time': [start, 0]},

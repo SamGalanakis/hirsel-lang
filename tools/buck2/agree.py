@@ -11,7 +11,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
+
+import event_logs
 
 from conformance import BUCK2, CONFIG, ROOT, shard_outputs
 from sync import (AGREE_FULL_SHARDS, AGREE_FULL_TIMEOUT, AGREE_LIMIT, AGREE_NATIVE_FULL_SHARDS,
@@ -149,8 +150,7 @@ def native_full():
     """The native shards in one Buck2 run; a shard that failed or stopped still
     contributes what its output holds."""
     targets = [f'//:gate-agree-native-full-shard-{index}' for index in range(1, AGREE_NATIVE_FULL_SHARDS + 1)]
-    with tempfile.TemporaryDirectory() as scratch:
-        event_log = Path(scratch) / 'events.pb.zst'
+    with event_logs.recorded('agree') as event_log:
         status = subprocess.call([str(BUCK2), 'test', *CONFIG, '--event-log', str(event_log), *targets,
                                   '--', '--timeout', str(AGREE_NATIVE_FULL_TIMEOUT)], cwd=ROOT)
         outputs = shard_outputs(event_log) if event_log.exists() else {}
@@ -172,8 +172,7 @@ def main():
     else:
         name, shards, limit, timeout = 'gate-agree-shard', AGREE_SHARDS, AGREE_LIMIT, 300
     targets = [f'//:{name}-{index}' for index in range(1, shards + 1)]
-    with tempfile.TemporaryDirectory() as scratch:
-        event_log = Path(scratch) / 'events.pb.zst'
+    with event_logs.recorded('agree') as event_log:
         status = subprocess.call([str(BUCK2), 'test', *CONFIG, '--event-log', str(event_log), *targets,
                                   '--', '--timeout', str(timeout)], cwd=ROOT)
         if status:

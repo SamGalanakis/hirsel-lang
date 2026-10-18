@@ -36,19 +36,15 @@ from collections import defaultdict
 import json
 import math
 from pathlib import Path
-import subprocess
+
+import event_logs
 
 ROOT = Path(__file__).resolve().parents[2]
 BUCK2 = ROOT / '.buck2/bin/buck2'
 
 
 def events(path):
-    if path.name.endswith('.pb.zst'):
-        command = [str(BUCK2), '--isolation-dir', 'log-reader', 'log', 'show', str(path.resolve())]
-        lines = subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True).stdout.splitlines()
-    else:
-        lines = path.read_text().splitlines()
-    for line in lines:
+    for line in event_logs.lines(path, buck2=BUCK2):
         if '"ActionExecution"' not in line or '"SpanEnd"' not in line:
             continue
         action = json.loads(line)['Event']['data']['SpanEnd']['data']['ActionExecution']

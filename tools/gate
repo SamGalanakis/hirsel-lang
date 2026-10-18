@@ -262,8 +262,8 @@ def push_gate(base_ref):
             f'{len(selection.tests)} test targets, campaigns: '
             + (', '.join(c for c in impact.CAMPAIGNS if c in selection.campaigns) or 'none'))
         say(f'gate: Buck2 output: {log}')
-        with tempfile.TemporaryDirectory() as scratch:
-            event_log, build_report = Path(scratch) / 'events.pb.zst', Path(scratch) / 'build.json'
+        with tempfile.TemporaryDirectory() as scratch, gating.event_logs.recorded('gate') as event_log:
+            build_report = Path(scratch) / 'build.json'
             with gating.gate_slot(), open(log, 'w') as out:
                 invoked = time.monotonic()
                 status = gating.buck2('test', *native_config, '--event-log', str(event_log), '--build-report', str(build_report),
@@ -347,7 +347,7 @@ def full_gate():
     # The campaign stages are targets only under hirsel.full (tools/buck2/defs.bzl).
     config = ['-c', 'hirsel.full=true', '-c', f'hirsel.test_seed={seed}']
     os.environ['HIRSEL_BUCK2_CONFIG'] = ' '.join(config)
-    buck2 = [str(ROOT / '.buck2/bin/buck2')]
+    buck2 = [PY, str(ROOT / 'tools/buck2/event_logs.py')]
     release = ['--target-platforms', '//tools/buck2:release']
     # Buck2's test runner allows a test ten minutes; the campaigns take hours.
     timeout, long = ['--timeout', '1800'], ['--timeout', '14400']
