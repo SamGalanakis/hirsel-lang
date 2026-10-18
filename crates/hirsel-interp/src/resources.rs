@@ -5,7 +5,7 @@ use hirsel_tir::CleanupAction;
 pub(crate) enum Work {
     Action(CleanupAction, Anchor),
     Chain(hirsel_tir::CleanupNodeId, Anchor),
-    Release(Value, Anchor),
+    Release(Value, Anchor, Option<crate::frame::CallerSite>),
     Resume(crate::OperationResult, Callback),
 }
 pub(crate) enum Ending {
@@ -15,6 +15,7 @@ pub(crate) enum Ending {
 
 #[derive(Debug)]
 pub(crate) struct OperationState {
+    pub caller: Option<crate::frame::CallerSite>,
     pub arguments: Vec<Value>,
     pub owned: Vec<Value>,
     /// Incoming owners remain live until a completion explicitly transfers them.

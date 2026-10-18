@@ -971,3 +971,67 @@ fn caller_body_sets_follow_entry_contract_producers_and_exclude_nested_contracts
     f.definition.caller_bodies.push(BodyId(1));
     f.broken(mismatch("caller attribution"));
 }
+
+#[test]
+fn only_contract_function_values_forward_the_caller() {
+    fn build(contract: bool, forward_caller: bool) -> Fixture {
+        let mut f = Fixture::unit();
+        let boolean = f
+            .definition
+            .types
+            .push(ty(TypeKind::Primitive(Primitive::Bool)));
+        let mut clause = empty_body(&mut f);
+        clause.locals[0].ty = boolean;
+        clause.places[0].ty = boolean;
+        clause.result = boolean;
+        clause.rvalues[0] = Rvalue::Constant(Constant::Bool(true));
+        f.definition.bodies.push(clause);
+        if contract {
+            f.definition.contracts.push((0, BodyId(1)));
+        }
+        let function = f.slot(TypeKind::Function(fn_type(vec![], boolean)), Storage::Local);
+        f.assign(
+            function,
+            Rvalue::Closure {
+                body: BodyId(1),
+                captures: vec![],
+                destination: Destination::Inferred,
+            },
+            0,
+        );
+        f.emit(InstructionKind::BeginLoan {
+            id: LoanId(0),
+            place: PlaceId(function),
+            mutable: false,
+            if_inactive: false,
+        });
+        let via = f.through_loan(function, 0);
+        let cleanup = f.cleanup(vec![
+            CleanupAction::EndLoan {
+                loan: LoanId(0),
+                if_active: false,
+            },
+            drop(function),
+        ]);
+        let result = f.slot(TypeKind::Primitive(Primitive::Bool), Storage::Temporary);
+        f.body().blocks[0].terminator = Terminator::Call {
+            callee: Callee::Indirect {
+                forward_caller,
+                value: operand(via, UseKind::Borrow),
+                arguments: vec![],
+            },
+            arguments: vec![],
+            returns: Some(CallReturn {
+                destination: PlaceId(result),
+                next: BlockId(1),
+            }),
+            on_failure: CleanupId(cleanup),
+        };
+        f.body().blocks.push(block(vec![], ret(0, cleanup)));
+        f
+    }
+    build(false, false).valid();
+    build(false, true).broken(mismatch("caller forwarding"));
+    build(true, true).valid();
+    build(true, false).broken(mismatch("caller forwarding"));
+}

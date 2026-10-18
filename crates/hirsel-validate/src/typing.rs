@@ -2053,10 +2053,28 @@ impl<'a> Checker<'a> {
                 (&s.types, f, arguments.as_slice())
             }
             Callee::Indirect {
-                forward_caller: _,
+                forward_caller,
                 value: o,
                 arguments: generics,
             } => {
+                // Only generated contract invocations are transparent function-value calls.
+                // Reconstruct the target from all possible producers, including overwrites.
+                let clause = !self.definition.contracts.is_empty()
+                    && self
+                        .local_callable_bodies(self.site.body, o.place)
+                        .is_some_and(|bodies| {
+                            bodies.iter().all(|body| {
+                                self.definition
+                                    .contracts
+                                    .iter()
+                                    .any(|(_, clause)| clause == body)
+                            })
+                        });
+                if *forward_caller != clause {
+                    self.error(ViolationKind::TypeMismatch {
+                        entity: "caller forwarding",
+                    });
+                }
                 let row = self.definition.types.get(self.place_type(o.place)).unwrap();
                 if row.modes.multiplicity == Multiplicity::Once && o.usage != UseKind::Take {
                     self.error(ViolationKind::InvalidUse(o.place));

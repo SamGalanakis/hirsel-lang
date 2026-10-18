@@ -590,3 +590,14 @@ ordinary roots, so this transport cannot erase a genuine borrowed lifetime.
 
 Failure observations retain and compare the original operation site independently
 of the primary attribution. Tooling reports render both complete locations.
+
+Caller attribution travels as an immutable definition handle, body and source span,
+with no per-call allocation to discover a site. Marked named bodies inherit their
+caller's site through direct calls and generated contract invocations. Ordinary
+function-value invocations, callbacks and spawned tasks establish their actual
+invocation as the boundary. A marked entry with no language caller retains no
+inherited site and reports its own operation. Primitive continuations and release
+work carry the selected policy explicitly, so temporary cleanup cannot recover a
+surrounding marked frame's attribution after a function-value boundary. Failure
+records retain the actual operation separately; existing anchored child failures
+and ordered cleanup causes keep their original sites.

@@ -378,6 +378,7 @@ impl Library {
                     },
                 );
                 self.tasks.starts.push(TaskStart {
+                    site: context.anchor().map(|anchor| anchor.site),
                     id: task,
                     callee: arg(a, 1)?.clone(),
                 });

@@ -1,7 +1,7 @@
 //! A single iterative scheduling loop: Hirsel calls never recurse on the host stack.
 use crate::Failure;
 use crate::checked::Shadow;
-use crate::frame::{Continuation, Frame};
+use crate::frame::{CallerSite, Continuation, Frame};
 use crate::scalar::{self, ScalarError};
 use crate::*;
 use hirsel_diag::RuleId;
@@ -221,6 +221,16 @@ fn execute_frames(
                 _ => return Err(invalid("task body requires a callable")),
             };
             let mut child = Frame::new_body(definition, body, vec![], captures, sizes)?;
+            if child.definition.tracks_caller(body) {
+                child.caller = start
+                    .site
+                    .and_then(|site| {
+                        frames
+                            .last()
+                            .map(|frame| CallerSite::new(frame, site, sources))
+                    })
+                    .transpose()?;
+            }
             child.type_arguments = invocation_types;
             if let Some(parent) = frames.last().and_then(|f| f.check.as_ref()) {
                 let callee =
@@ -410,6 +420,7 @@ fn execute_frames(
                         frame.work.push_back(crate::resources::Work::Release(
                             value,
                             state.anchor.clone(),
+                            state.caller.clone(),
                         ));
                     }
                     frame.operation = Some((OperationResult::Failed(first), state));
@@ -550,6 +561,7 @@ fn execute_frames(
                                         frame.work.push_back(crate::resources::Work::Release(
                                             value,
                                             state.anchor.clone(),
+                                            state.caller.clone(),
                                         ));
                                     } else {
                                         value.discard();
@@ -587,6 +599,7 @@ fn execute_frames(
                                     })
                                     .collect();
                                 let native = crate::resources::OperationState {
+                                    caller: None,
                                     arguments,
                                     owned: vec![],
                                     taken,
@@ -647,6 +660,9 @@ fn execute_frames(
                     let path = definition.path.clone();
                     let mut callback =
                         Frame::new_body(definition, body, arguments, captures, sizes)?;
+                    if callback.definition.tracks_caller(body) {
+                        callback.caller = Some(CallerSite::new(frame, state.anchor.site, sources)?);
+                    }
                     callback.type_arguments = invocation_types;
                     let mut_parameters = mut_arguments
                         .into_iter()
@@ -696,6 +712,7 @@ fn execute_frames(
                             frame.work.push_back(crate::resources::Work::Release(
                                 value,
                                 state.anchor.clone(),
+                                state.caller.clone(),
                             ));
                             if let Some(mut callback) = state.callback.take() {
                                 writeback_native_callback(&mut callback, &state)?;
@@ -781,6 +798,7 @@ fn execute_frames(
                             frame.work.push_back(crate::resources::Work::Release(
                                 value,
                                 state.anchor.clone(),
+                                state.caller.clone(),
                             ));
                         }
                         frame.operation = Some((OperationResult::returned(value), state));
@@ -794,6 +812,7 @@ fn execute_frames(
                             execution,
                             failure,
                             state.anchor.clone(),
+                            state.caller.as_ref(),
                         );
                     }
                     frame.ending = Some(crate::resources::Ending::Failed);
@@ -916,6 +935,7 @@ fn execute_frames(
                                         execution,
                                         failure(sources, anchor.site, rule, kind)?,
                                         anchor,
+                                        frame.caller.as_ref(),
                                     );
                                     frame.ending = Some(crate::resources::Ending::Failed);
                                     continue;
@@ -927,16 +947,18 @@ fn execute_frames(
                             }
                             if let Some(value) = value {
                                 checked_release_order(frame, place, &value)?;
-                                frame
-                                    .work
-                                    .push_front(crate::resources::Work::Release(value, anchor));
+                                frame.work.push_front(crate::resources::Work::Release(
+                                    value,
+                                    anchor,
+                                    frame.caller.clone(),
+                                ));
                             }
                         }
                         CleanupAction::EndLoan { .. } => (),
                         _ => return Err(Error::Unavailable("M2 cleanup".into())),
                     }
                 }
-                crate::resources::Work::Release(mut value, anchor) => {
+                crate::resources::Work::Release(mut value, anchor, caller) => {
                     if let Some(check) = &frame.check {
                         if matches!(
                             value,
@@ -948,9 +970,11 @@ fn execute_frames(
                     if let Value::Shared(root) = &value {
                         // The last root releases the frozen graph it held.
                         if let Some(graph) = root.release()? {
-                            frame
-                                .work
-                                .push_front(crate::resources::Work::Release(graph, anchor));
+                            frame.work.push_front(crate::resources::Work::Release(
+                                graph,
+                                anchor,
+                                caller.clone(),
+                            ));
                         }
                         continue;
                     }
@@ -976,9 +1000,11 @@ fn execute_frames(
                             },
                         )?;
                         for value in operations.take_releases() {
-                            frame
-                                .work
-                                .push_front(crate::resources::Work::Release(value, anchor.clone()));
+                            frame.work.push_front(crate::resources::Work::Release(
+                                value,
+                                anchor.clone(),
+                                caller.clone(),
+                            ));
                         }
                         if let Some((rule, kind)) = operations.take_drop_failure() {
                             let mut at = anchor.clone();
@@ -988,6 +1014,7 @@ fn execute_frames(
                                 execution,
                                 failure(sources, at.site, &rule, &kind)?,
                                 at,
+                                caller.as_ref(),
                             );
                             frame.ending = Some(crate::resources::Ending::Failed);
                         }
@@ -1051,7 +1078,7 @@ fn execute_frames(
                                 .parameters
                                 .first()
                                 .ok_or_else(|| invalid("finalizer needs self"))?;
-                            callee.finalized = Some((local, anchor));
+                            callee.finalized = Some((local, anchor, caller));
                             callee.depth_failure = depth >= limits.call_depth;
                             frames.push(callee);
                             if runtime.trace_mode == TraceMode::Full {
@@ -1063,7 +1090,7 @@ fn execute_frames(
                             continue;
                         }
                     }
-                    release_fields(frame, &mut value, anchor)?;
+                    release_fields(frame, &mut value, anchor, caller)?;
                 }
             }
             continue;
@@ -1075,9 +1102,11 @@ fn execute_frames(
             let frame = frames.last_mut().unwrap();
             let released = frame.loop_owned.len();
             for (value, anchor) in frame.loop_owned.drain(..).rev() {
-                frame
-                    .work
-                    .push_back(crate::resources::Work::Release(value, anchor));
+                frame.work.push_back(crate::resources::Work::Release(
+                    value,
+                    anchor,
+                    frame.caller.clone(),
+                ));
             }
             if runtime.trace_mode == TraceMode::Full {
                 execution
@@ -1096,9 +1125,11 @@ fn execute_frames(
             {
                 let value = std::mem::replace(value, Value::Unit);
                 let site = site_of(frame)?;
-                frame
-                    .work
-                    .push_back(crate::resources::Work::Release(value, anchor(frame, site)));
+                frame.work.push_back(crate::resources::Work::Release(
+                    value,
+                    anchor(frame, site),
+                    frame.caller.clone(),
+                ));
                 continue;
             }
         }
@@ -1127,9 +1158,11 @@ fn execute_frames(
                         unreachable!()
                     };
                     frame.ending = Some(crate::resources::Ending::Return(Value::Unit));
-                    frame
-                        .work
-                        .push_back(crate::resources::Work::Release(value, root_anchor));
+                    frame.work.push_back(crate::resources::Work::Release(
+                        value,
+                        root_anchor,
+                        frame.caller.clone(),
+                    ));
                     continue;
                 }
             }
@@ -1156,7 +1189,7 @@ fn execute_frames(
                     depth,
                 });
             }
-            if let Some((local, anchor)) = finished.finalized.take() {
+            if let Some((local, anchor, caller)) = finished.finalized.take() {
                 if matches!(&ending,crate::resources::Ending::Return(value) if *value != Value::Unit)
                 {
                     return Err(invalid("finalizer must return unit"));
@@ -1164,7 +1197,7 @@ fn execute_frames(
                 let mut value = finished.slots[local.0 as usize]
                     .take()
                     .ok_or_else(|| invalid("finalizer consumed self"))?;
-                release_fields(frames.last_mut().unwrap(), &mut value, anchor)?;
+                release_fields(frames.last_mut().unwrap(), &mut value, anchor, caller)?;
                 if matches!(ending, crate::resources::Ending::Failed) {
                     let caller = frames.last_mut().unwrap();
                     let already_exiting = caller.ending.is_some();
@@ -1177,6 +1210,7 @@ fn execute_frames(
                                 cleanup: None,
                                 site: site_of(caller)?,
                             },
+                            caller.caller.clone(),
                         ));
                     }
                     caller.ending = Some(crate::resources::Ending::Failed);
@@ -1210,6 +1244,7 @@ fn execute_frames(
                     caller.work.push_back(crate::resources::Work::Release(
                         value,
                         callback.state.anchor.clone(),
+                        callback.state.caller.clone(),
                     ));
                 }
 
@@ -1492,6 +1527,7 @@ fn execute_frames(
                     execution,
                     failure(sources, site, "SEM-1", &format!("{reason:?}"))?,
                     anchor(frame, site),
+                    frame.caller.as_ref(),
                 );
                 frame.ending = Some(crate::resources::Ending::Failed);
                 if let Some(id) = cleanup {
@@ -1505,6 +1541,7 @@ fn execute_frames(
                     execution,
                     failure(sources, site, "MEM-6", "OutOfSpace")?,
                     anchor(frame, site),
+                    frame.caller.as_ref(),
                 );
                 frame.ending = Some(crate::resources::Ending::Failed);
                 if let Some(id) = cleanup {
@@ -1517,6 +1554,7 @@ fn execute_frames(
                     execution,
                     failure(sources, site, "MEM-3", "Depth")?,
                     anchor(frame, site),
+                    frame.caller.as_ref(),
                 );
                 frame.ending = Some(crate::resources::Ending::Failed);
                 if let Some(id) = cleanup {
@@ -1534,6 +1572,7 @@ fn execute_frames(
                     execution,
                     failure(sources, site, rule, kind)?,
                     anchor(frame, site),
+                    frame.caller.as_ref(),
                 );
                 frame.ending = Some(crate::resources::Ending::Failed);
                 if let Some(id) = cleanup {
@@ -1547,9 +1586,11 @@ fn execute_frames(
                     return Err(invalid("unconditional drop of dead storage"));
                 }
                 if let Some(value) = value {
-                    frame
-                        .work
-                        .push_back(crate::resources::Work::Release(value, anchor(frame, site)));
+                    frame.work.push_back(crate::resources::Work::Release(
+                        value,
+                        anchor(frame, site),
+                        frame.caller.clone(),
+                    ));
                 }
             }
             Ok(Action::Cleanup(id)) => enqueue_cleanup(frame, id, site)?,
@@ -1559,6 +1600,7 @@ fn execute_frames(
                     execution,
                     failure(sources, site, rule.as_str(), "Check")?,
                     anchor(frame, site),
+                    frame.caller.as_ref(),
                 );
                 frame.ending = Some(crate::resources::Ending::Failed);
                 if let Some(id) = cleanup {
@@ -1572,6 +1614,7 @@ fn execute_frames(
                 }
             }
             Ok(Action::Call {
+                forward_caller,
                 callee,
                 mut checks,
                 mut arguments,
@@ -1580,6 +1623,16 @@ fn execute_frames(
                 returns,
                 on_failure,
             }) => {
+                let caller = if forward_caller && frame.definition.tracks_caller(frame.body_id) {
+                    frame.caller.clone()
+                } else {
+                    Some(CallerSite::new(frame, site, sources)?)
+                };
+                let operation_caller = if forward_caller {
+                    frame.caller.clone()
+                } else {
+                    None
+                };
                 let (callee, closes_arena, bounded) =
                     checked_callee(frame, callee, &mut arguments, &mut checks, &mut budgets)?;
                 let mut closure_check = None;
@@ -1645,13 +1698,15 @@ fn execute_frames(
                                     && tail.kind == TailKind::SelfTail
                             })
                             .cloned();
-                        if path == frame.definition.path && tail.is_some() {
+                        if forward_caller && path == frame.definition.path && tail.is_some() {
                             let tail = tail.unwrap();
                             let released = frame.loop_owned.len();
                             for (value, anchor) in frame.loop_owned.drain(..).rev() {
-                                frame
-                                    .work
-                                    .push_back(crate::resources::Work::Release(value, anchor));
+                                frame.work.push_back(crate::resources::Work::Release(
+                                    value,
+                                    anchor,
+                                    frame.caller.clone(),
+                                ));
                             }
                             for (_, place) in tail.owned_loop_arguments {
                                 let value = frame
@@ -1795,6 +1850,7 @@ fn execute_frames(
                             frame.operation = Some((
                                 result,
                                 crate::resources::OperationState {
+                                    caller: operation_caller,
                                     arguments,
                                     owned: vec![],
                                     taken,
@@ -1841,6 +1897,9 @@ fn execute_frames(
                 };
                 let path = definition.path.clone();
                 let mut callee = Frame::new_body(definition, body, arguments, captures, sizes)?;
+                if callee.definition.tracks_caller(body) {
+                    callee.caller = caller;
+                }
                 callee.type_arguments = invocation_types;
                 let writebacks = mut_places
                     .into_iter()
@@ -1942,9 +2001,17 @@ fn effect(
 fn record_failure(
     trace_mode: TraceMode,
     execution: &mut Execution,
-    failure: Failure,
-    anchor: crate::observation::Anchor,
+    mut failure: Failure,
+    mut anchor: crate::observation::Anchor,
+    caller: Option<&CallerSite>,
 ) {
+    let operation = caller
+        .filter(|caller| caller.site != anchor.site)
+        .map(|caller| {
+            failure.site = caller.site;
+            failure.line = caller.line;
+            std::mem::replace(&mut anchor, caller.anchor())
+        });
     let index = execution.failures.len();
     if let Some(previous) = execution.failures.last_mut() {
         previous.cause = Some(index);
@@ -1953,7 +2020,7 @@ fn record_failure(
         execution.trace.push(TraceEvent::Failure(failure.clone()));
     }
     execution.failures.push(crate::observation::FailureRecord {
-        operation: None,
+        operation,
         failure,
         anchor,
         cause: None,
@@ -1993,6 +2060,7 @@ fn release_fields(
     frame: &mut Frame,
     value: &mut Value,
     anchor: crate::observation::Anchor,
+    caller: Option<CallerSite>,
 ) -> Result<(), Error> {
     if let Value::Closure {
         captures,
@@ -2007,9 +2075,11 @@ fn release_fields(
         for (capture, owned) in captures.iter_mut().zip(owned_captures) {
             if let Some(v) = capture.take() {
                 if *owned && !invoked.as_ref().is_some_and(|v| v.get().is_some()) {
-                    frame
-                        .work
-                        .push_front(crate::resources::Work::Release(v, anchor.clone()));
+                    frame.work.push_front(crate::resources::Work::Release(
+                        v,
+                        anchor.clone(),
+                        caller.clone(),
+                    ));
                 } else {
                     v.discard();
                 }
@@ -2019,9 +2089,11 @@ fn release_fields(
         // Push front in declaration order: the worklist visits high to low (DROP-2).
         for field in fields.iter_mut() {
             if let Some(v) = field.take() {
-                frame
-                    .work
-                    .push_front(crate::resources::Work::Release(v, anchor.clone()));
+                frame.work.push_front(crate::resources::Work::Release(
+                    v,
+                    anchor.clone(),
+                    caller.clone(),
+                ));
             }
         }
     }
@@ -2065,6 +2137,7 @@ enum Action {
     Return(Value),
     Fail(RuleId),
     Call {
+        forward_caller: bool,
         callee: RuntimeCallee,
         checks: Vec<crate::checked::Argument>,
         arguments: Vec<Value>,
@@ -2978,6 +3051,10 @@ fn execute_terminator(
                     return Err(invalid("forget requires one take argument").into());
                 }
             }
+            let forward_caller = match &callee {
+                Callee::Definition { .. } => true,
+                Callee::Indirect { forward_caller, .. } => *forward_caller,
+            };
             let callee = match callee {
                 Callee::Definition { path, arguments } => {
                     let generics = arguments
@@ -3117,6 +3194,7 @@ fn execute_terminator(
                 }
             }
             Action::Call {
+                forward_caller,
                 callee,
                 checks,
                 arguments: values.into_iter().map(|v| v.unwrap()).collect(),
@@ -3409,9 +3487,11 @@ fn failure_cleanup_at(frame: &Frame) -> Option<CleanupId> {
 
 fn enqueue_owned(frame: &mut Frame, state: &mut crate::resources::OperationState) {
     for value in state.owned.drain(..).rev() {
-        frame
-            .work
-            .push_back(crate::resources::Work::Release(value, state.anchor.clone()));
+        frame.work.push_back(crate::resources::Work::Release(
+            value,
+            state.anchor.clone(),
+            state.caller.clone(),
+        ));
     }
 }
 fn release_operation_result(
@@ -3429,13 +3509,17 @@ fn release_operation_result(
         } => {
             transfer_operation(state, consumed)?;
             update_operation(state, arguments)?;
-            frame
-                .work
-                .push_back(crate::resources::Work::Release(value, anchor.clone()));
+            frame.work.push_back(crate::resources::Work::Release(
+                value,
+                anchor.clone(),
+                state.caller.clone(),
+            ));
             for value in released.into_iter().rev() {
-                frame
-                    .work
-                    .push_back(crate::resources::Work::Release(value, anchor.clone()));
+                frame.work.push_back(crate::resources::Work::Release(
+                    value,
+                    anchor.clone(),
+                    state.caller.clone(),
+                ));
             }
         }
         OperationResult::Call {
@@ -3453,9 +3537,11 @@ fn release_operation_result(
                 value.discard();
             }
             for value in owned.into_iter().rev() {
-                frame
-                    .work
-                    .push_back(crate::resources::Work::Release(value, anchor.clone()));
+                frame.work.push_back(crate::resources::Work::Release(
+                    value,
+                    anchor.clone(),
+                    state.caller.clone(),
+                ));
             }
         }
         OperationResult::Failed(_)
@@ -3599,8 +3685,10 @@ fn transfer_operation(
 fn enqueue_taken(frame: &mut Frame, state: &mut crate::resources::OperationState) {
     for index in state.taken.drain(..).rev() {
         let value = std::mem::replace(&mut state.arguments[index], Value::Unit);
-        frame
-            .work
-            .push_back(crate::resources::Work::Release(value, state.anchor.clone()));
+        frame.work.push_back(crate::resources::Work::Release(
+            value,
+            state.anchor.clone(),
+            state.caller.clone(),
+        ));
     }
 }

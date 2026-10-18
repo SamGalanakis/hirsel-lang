@@ -7834,7 +7834,7 @@ fn postcondition_formals_cannot_claim_uniqueness_lost_by_the_parent() {
             ],
             Terminator::Call {
                 callee: Callee::Indirect {
-                    forward_caller: false,
+                    forward_caller: true,
                     value: Operand {
                         place: function,
                         usage: UseKind::Copy,

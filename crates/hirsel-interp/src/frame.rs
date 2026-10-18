@@ -42,7 +42,41 @@ pub(crate) struct Continuation {
     pub on_failure: CleanupId,
     pub writebacks: Vec<(PlaceId, LocalId)>,
 }
+/// Borrow-free immutable caller metadata. Cloning the definition handle allocates nothing.
+#[derive(Clone, Debug)]
+pub(crate) struct CallerSite {
+    pub definition: DefinitionRef,
+    pub body: BodyId,
+    pub site: hirsel_span::Span,
+    pub line: u32,
+}
+impl CallerSite {
+    pub fn new(
+        frame: &Frame,
+        site: hirsel_span::Span,
+        sources: &hirsel_span::SourceMap,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            definition: frame.definition.clone(),
+            body: frame.body_id,
+            site,
+            line: sources
+                .location(site)
+                .ok_or_else(|| invalid("caller site absent from source map"))?
+                .line,
+        })
+    }
+    pub fn anchor(&self) -> crate::observation::Anchor {
+        crate::observation::Anchor {
+            definition: self.definition.path.clone(),
+            body: self.body,
+            site: self.site,
+            cleanup: None,
+        }
+    }
+}
 pub(crate) struct Frame {
+    pub caller: Option<CallerSite>,
     pub definition: DefinitionRef,
     pub body_id: BodyId,
     pub mut_parameters: Vec<LocalId>,
@@ -50,7 +84,7 @@ pub(crate) struct Frame {
     pub callback: Option<crate::resources::Callback>,
     pub work: std::collections::VecDeque<crate::resources::Work>,
     pub ending: Option<crate::resources::Ending>,
-    pub finalized: Option<(LocalId, crate::observation::Anchor)>,
+    pub finalized: Option<(LocalId, crate::observation::Anchor, Option<CallerSite>)>,
     pub loop_owned: Vec<(Value, crate::observation::Anchor)>,
     pub slots: Vec<Option<Value>>,
     pub sizes: crate::value::SizeBindings,
@@ -160,6 +194,7 @@ impl Frame {
         }
         let block = body.entry;
         Ok(Self {
+            caller: None,
             type_arguments: Default::default(),
             sizes,
             definition,
@@ -802,7 +837,7 @@ impl Drop for Frame {
         }
         while let Some(work) = self.work.pop_front() {
             match work {
-                crate::resources::Work::Release(value, _) => value.discard(),
+                crate::resources::Work::Release(value, ..) => value.discard(),
                 crate::resources::Work::Resume(result, _) => {
                     crate::resources::discard_result(result)
                 }

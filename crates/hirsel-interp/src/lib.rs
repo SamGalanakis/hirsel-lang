@@ -182,6 +182,8 @@ pub(crate) fn invalid(message: impl Into<String>) -> Error {
 
 /// A transferred task environment, entered on its own evaluator stack.
 pub struct TaskStart {
+    /// Actual spawn invocation, independent of inherited failure attribution.
+    pub site: Option<hirsel_span::Span>,
     pub id: u64,
     pub callee: Value,
 }

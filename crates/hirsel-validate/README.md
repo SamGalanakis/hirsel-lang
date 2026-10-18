@@ -821,3 +821,7 @@ V independently derives `Definition.caller_bodies` from its owner declaration an
 the entry's contract producers, and refuses caller tracking on type and extern
 declarations. Hand-built controls in `declaration_controls.rs` cover mismatches
 and accepted twins; `typing_gap_controls.rs` keeps nested contracts untracked.
+The independent callable-provenance analysis also checks `forward_caller`: all
+possible producers must be generated contract bodies. Ordinary closure and named
+function values establish invocation boundaries, and contract calls retain their
+owner's attribution.
