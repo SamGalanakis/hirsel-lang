@@ -359,6 +359,36 @@ fn lower<T>(
                 functions.push((unit, function, signature));
                 continue;
             }
+            if inputs.callbacks.contains(&unit.header.definition) {
+                let thunk =
+                    callback_thunk_name(&unit.header.definition, Some(&unit.header.instance));
+                let callback = foreign::define_callback_thunk(
+                    &module,
+                    &mut manifested,
+                    inputs.layouts,
+                    &thunk,
+                    entry,
+                    &external,
+                    &unit.header.definition,
+                )?;
+                if unit.header.origin == UnitOrigin::Library
+                    || inputs.inline_instances.contains(&unit.header.instance)
+                {
+                    module.make_linkonce_odr(callback);
+                    module.add_attribute(callback, AttributeSlot::Function, Attribute::InlineHint);
+                    manifested.library.insert(thunk);
+                } else {
+                    manifested.exports.insert(
+                        thunk.clone(),
+                        ObjectSymbol {
+                            name: thunk,
+                            kind: ObjectSymbolKind::Function,
+                            definition: Some(unit.header.definition.clone()),
+                            abi: Some(abi_digest(abi)),
+                        },
+                    );
+                }
+            }
             // A library unit is in every object whose units call it, `linkonce_odr` and
             // `inlinehint`, so a partition never changes whether it inlines. It is no
             // export of the object: the copy may be gone once every call is inlined.
@@ -406,28 +436,6 @@ fn lower<T>(
                 let thunk =
                     function_thunk_name(&unit.header.definition, Some(&unit.header.instance));
                 define_function_thunk(&module, &thunk, function, &signature);
-                manifested.exports.insert(
-                    thunk.clone(),
-                    ObjectSymbol {
-                        name: thunk,
-                        kind: ObjectSymbolKind::Function,
-                        definition: Some(unit.header.definition.clone()),
-                        abi: Some(abi_digest(abi)),
-                    },
-                );
-            }
-            if inputs.callbacks.contains(&unit.header.definition) {
-                let thunk =
-                    callback_thunk_name(&unit.header.definition, Some(&unit.header.instance));
-                foreign::define_callback_thunk(
-                    &module,
-                    &mut manifested,
-                    inputs.layouts,
-                    &thunk,
-                    function,
-                    &signature,
-                    &unit.header.definition,
-                )?;
                 manifested.exports.insert(
                     thunk.clone(),
                     ObjectSymbol {

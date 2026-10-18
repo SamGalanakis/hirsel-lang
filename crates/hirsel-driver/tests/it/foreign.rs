@@ -493,3 +493,66 @@ fn native_callback_failure_ends_the_process() {
         );
     });
 }
+
+/// Source syntax currently cannot form a FnPtr from a generic library operation.
+/// Revalidate the existing callback body as a library unit, or mark it as an
+/// inlined callable instance, to exercise both emission owners against real C.
+#[test]
+fn native_c_callbacks_follow_library_and_inline_definitions() {
+    use hirsel_lir::ir::UnitOrigin;
+    use hirsel_lir::validate::{Inputs, validate_ready};
+    with_compiler_stack(|| {
+        let (root, path, _) = native_demo("callback-owners", NATIVE_MAIN);
+        let mut loaded = load_program(&path).unwrap();
+        loaded.check_for_execution().unwrap();
+        let input = loaded.engine.export_native_input().unwrap();
+        let validated = loaded.engine.import_native_input(input).unwrap();
+        let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+        let tools = native::Toolchain::in_tree(&root.join("runtime"), &[&target]).unwrap();
+        for library in [true, false] {
+            let mut ready =
+                native::build(&validated, &native::Options::new(target.clone())).unwrap();
+            let index = ready
+                .units
+                .iter()
+                .position(|u| u.unit().header.definition.0.name == "double")
+                .unwrap();
+            if library {
+                let mut unit = ready.units[index].clone().into_raw();
+                unit.header.origin = UnitOrigin::Library;
+                ready.units[index] = validate_ready(
+                    unit,
+                    &Inputs {
+                        target: &ready.target,
+                        layouts: &ready.table,
+                        manifest: &ready.manifest,
+                        operations: &ready.operations,
+                        discharge: None,
+                    },
+                )
+                .unwrap();
+            } else {
+                ready
+                    .inline_instances
+                    .insert(ready.units[index].unit().header.instance);
+            }
+            for opt in [native::OptLevel::None, native::OptLevel::Speed] {
+                for partition in [native::Partition::Whole, native::Partition::Singleton] {
+                    let dir = root.join(format!("{library}-{opt:?}-{partition:?}"));
+                    std::fs::create_dir_all(&dir).unwrap();
+                    let exe =
+                        native::link(&ready, &loaded.entry, opt, partition, &tools, &dir).unwrap();
+                    let launched = native::launch(&exe, &target, &tools, &dir, false).unwrap();
+                    let observation = native::observe(
+                        &launched,
+                        &ready,
+                        &native::Sites::new(validated.snapshot()),
+                    )
+                    .unwrap();
+                    assert_eq!(observation.exit_code, Some(0), "{observation:?}");
+                    assert!(observation.failures.is_empty(), "{observation:?}");
+                }
+            }
+        }
+    });
+}

@@ -132,8 +132,10 @@ Invariants:
   returns its scalar or `void`, and afterwards no cached length or uniqueness survives.
   Before the call, `hirsel_rt_v2_foreign_enter` records the run context for callbacks.
 - C callbacks: a `FunctionRef` at a pointer scalar is the address of the definition's
-  `callback_thunk_name` thunk, which the definition's own object exports when
-  `EmitInputs::callbacks` names it: `R thunk(void *ctx, ...)` takes the run context from
+  `callback_thunk_name` thunk, emitted wherever its target is defined when
+  `EmitInputs::callbacks` names it. Library and inlined targets deduplicate their
+  thunks with `linkonce_odr`; source owners export theirs. Each thunk calls the
+  declared entry, including a library root adapter: `R thunk(void *ctx, ...)` takes the run context from
   `hirsel_rt_v2_callback_context`, calls the entry with `ctx` as its `mut` context address
   and the scalars, and returns the register result, or ends the process through
   `hirsel_rt_v2_callback_failed` on a failure status.

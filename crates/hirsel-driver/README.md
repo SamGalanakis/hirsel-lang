@@ -47,7 +47,7 @@ inputs, passed after the runtime archive (`-l<name>` or the file); the link acce
 `UNREPLAYABLE` bit beside the root mask, so the executable refuses `--hirsel-record` and
 `--hirsel-replay`; H refuses an extern call as `Unsupported`.
 `ReadyProgram.callbacks` names the definitions a unit references as C callbacks, whose
-objects export their callback thunks.
+objects define their callback thunks (linkonce for library and inlined units).
 
 Native callable-target specializations retain their original instance's signature
 and placement proofs. `ReadyProgram.inline_instances` lets `native::link` include
