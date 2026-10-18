@@ -136,3 +136,46 @@ fn scalar_name(kind: ScalarKind) -> Option<&'static str> {
         ScalarKind::Bool | ScalarKind::Pointer => return None,
     })
 }
+
+/// The platform C register of a foreign value. Nullable pointers retain their
+/// ordinary variant layout internally; the C boundary reads/writes its niche word.
+pub fn foreign_scalar(table: &crate::LayoutTable, layout: LayoutId) -> Option<ScalarKind> {
+    use crate::layout_types::{LayoutKind, TagForm};
+    let record = table.layout(layout)?;
+    if let LayoutKind::Scalar(kind) = record.kind {
+        return Some(kind);
+    }
+    let tag = record.tag.as_ref()?;
+    let TagForm::Niche { dataful, .. } = tag.form else {
+        return None;
+    };
+    let fields = &tag.variants.get(dataful as usize)?.fields;
+    (tag.offset == 0
+        && matches!(fields.as_slice(), [f] if f.offset == 0
+            && table.layout(f.layout)?.kind == LayoutKind::Scalar(ScalarKind::Pointer)
+            && record.size == table.layout(f.layout)?.size))
+    .then_some(ScalarKind::Pointer)
+}
+
+/// Non-null pointer words C can overwrite through a writable record address.
+/// A nullable variant's niche word is deliberately absent.
+pub fn foreign_nonnull_offsets(table: &crate::LayoutTable, layout: LayoutId) -> Vec<u64> {
+    use crate::layout_types::LayoutKind;
+    fn visit(table: &crate::LayoutTable, layout: LayoutId, base: u64, out: &mut Vec<u64>) {
+        let Some(record) = table.layout(layout) else {
+            return;
+        };
+        match record.kind {
+            LayoutKind::Scalar(ScalarKind::Pointer) => out.push(base),
+            LayoutKind::Aggregate => {
+                for field in &record.fields {
+                    visit(table, field.layout, base + field.offset, out);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut offsets = Vec::new();
+    visit(table, layout, 0, &mut offsets);
+    offsets
+}

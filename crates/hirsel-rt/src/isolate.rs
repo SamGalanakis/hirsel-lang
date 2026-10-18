@@ -314,3 +314,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_spawn(
     }
     STATUS_OK
 }
+
+/// Source location of a foreign contract violation, outside the language failure chain.
+pub(crate) fn foreign_location(code: u64) -> String {
+    let source = site(code);
+    format!(
+        "{} ({}:{}:{})",
+        source.definition, source.file, source.line, source.column
+    )
+}
