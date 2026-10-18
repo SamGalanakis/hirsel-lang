@@ -30,7 +30,7 @@ fn finish(take builder: List[u8]) -> String uses {} {
   }
 }
 
-fn piece(text: String, begin: u64, end: u64) -> String uses {} {
+fn piece(text: String, begin: u64, end: u64) -> unique String uses {} {
   let data = core@1/string.as_bytes(text)
   let mut out: List[u8] = []
   let mut i = begin
@@ -103,7 +103,7 @@ fn parse_port(data: Bytes, start: u64, end: u64) -> Result[u16, UriError] uses {
 }
 
 // Zig formatRaw: invalid or incomplete escapes stay literal; '+' stays '+'.
-pub fn percent_decode(text: String) -> Bytes uses {} {
+pub fn percent_decode(text: String) -> unique Bytes uses {} {
   let data = core@1/string.as_bytes(text)
   let end = core@1/bytes.len(data)
   let mut out: List[u8] = []
@@ -151,7 +151,7 @@ fn valid_char(byte: u8, part: Part) -> bool uses {} {
   }
 }
 
-fn encode(data: Bytes, part: Part) -> String uses {} {
+fn encode(data: Bytes, part: Part) -> unique String uses {} {
   let digits: Bytes = b"0123456789ABCDEF"
   let mut out: List[u8] = []
   let mut i: u64 = 0
@@ -169,11 +169,11 @@ fn encode(data: Bytes, part: Part) -> String uses {} {
   finish(take out)
 }
 
-pub fn percent_encode(data: Bytes) -> String uses {} {
+pub fn percent_encode(data: Bytes) -> unique String uses {} {
   encode(data, Unreserved())
 }
 
-pub fn component_raw(component: Component) -> Bytes uses {} {
+pub fn component_raw(component: Component) -> unique Bytes uses {} {
   match component {
     Encoded(text) => percent_decode(text),
     Raw(text) => {
@@ -193,7 +193,7 @@ pub fn component_text(component: Component) -> Result[String, Bytes] uses {} {
   core@1/string.from_bytes(component_raw(component))
 }
 
-pub fn component_encoded(component: Component, part: Part) -> String uses {} {
+pub fn component_encoded(component: Component, part: Part) -> unique String uses {} {
   match component {
     Encoded(text) => unique text,
     Raw(text) => encode(core@1/string.as_bytes(text), part),
@@ -216,6 +216,7 @@ fn valid_scheme(data: Bytes, end: u64) -> bool uses {} {
   true
 }
 
+@preserves_unique(scheme, text)
 fn parse_after_scheme(take scheme: String, take text: String) -> Result[Uri, UriError] uses {} {
   let data = core@1/string.as_bytes(text)
   let end = core@1/bytes.len(data)
@@ -367,7 +368,7 @@ pub fn parse(text: String) -> Result[Uri, UriError] uses {} {
 }
 
 // Zig writeToStream(.all): an empty path is rendered as '/'.
-pub fn format(parsed_uri: Uri) -> String uses {} {
+pub fn format(parsed_uri: Uri) -> unique String uses {} {
   let mut out: List[u8] = []
   text.append(mut out, parsed_uri.scheme)
   core@1/list.push(mut out, 58)
@@ -427,7 +428,7 @@ pub fn format(parsed_uri: Uri) -> String uses {} {
 
 // Zig remove_dot_segments, RFC3986 §5.2.4. Active output length replaces a
 // mutable byte slice; unused list suffixes are discarded when building the result.
-pub fn remove_dot_segments(path: String) -> String uses {} {
+pub fn remove_dot_segments(path: String) -> unique String uses {} {
   let data = core@1/string.as_bytes(path)
   let end = core@1/bytes.len(data)
   let mut input: u64 = 0

@@ -166,7 +166,7 @@ fn finish_valid(take builder: List[u8]) -> String uses {} {
   }
 }
 
-fn ascii_case(s: String, lower: bool) -> String uses {} {
+fn ascii_case(s: String, lower: bool) -> unique String uses {} {
   let source = core@1/string.as_bytes(s)
   let mut builder: List[u8] = []
   let mut i: u64 = 0
@@ -185,11 +185,11 @@ fn ascii_case(s: String, lower: bool) -> String uses {} {
   finish_valid(take builder)
 }
 
-pub fn ascii_lower(s: String) -> String uses {} {
+pub fn ascii_lower(s: String) -> unique String uses {} {
   ascii_case(s, true)
 }
 
-pub fn ascii_upper(s: String) -> String uses {} {
+pub fn ascii_upper(s: String) -> unique String uses {} {
   ascii_case(s, false)
 }
 
@@ -206,14 +206,14 @@ pub fn compare(a: String, b: String) -> i32 uses {} {
   }
 }
 
-pub fn concat(a: String, b: String) -> String uses {} {
+pub fn concat(a: String, b: String) -> unique String uses {} {
   let mut builder: List[u8] = []
   text.append(mut builder, a)
   text.append(mut builder, b)
   finish_valid(take builder)
 }
 
-pub fn join(parts: List[String], separator: String) -> String uses {} {
+pub fn join(parts: List[String], separator: String) -> unique String uses {} {
   let mut builder: List[u8] = []
   let mut i: u64 = 0
   while i < core@1/list.len(parts) {

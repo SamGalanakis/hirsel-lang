@@ -1,0 +1,8 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 7
+// A fresh std result shared by a copy is no longer unique.
+fn label(n: u64) -> unique String uses {} {
+  let text = u64.to_string(n)
+  let kept = copy text
+  text
+}

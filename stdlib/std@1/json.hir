@@ -86,7 +86,7 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
 
 // Adapted serde_json src/read.rs scratch string copying,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: copy validated token bytes.
-fn json_owned_text(data: Bytes, start: u64, end: u64) -> String uses {} {
+fn json_owned_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
   let mut output: List[u8] = []
   let mut i = start
   while i < end {
@@ -460,11 +460,12 @@ pub fn write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses 
 
 // Adapted serde_json src/ser.rs to_string,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: one writer path.
-pub fn stringify(value: Value) -> Result[String, JsonError] uses {} {
+pub fn stringify(value: Value) -> Result[unique String, JsonError] uses {} {
   let mut builder: List[u8] = []
   write(value, mut builder)?
-  match text.finish(take builder) {
-    Ok(s) => Ok(s),
+  let built = text.finish(take builder)
+  match take built {
+    Ok(s) => Ok(take s),
     Error(_) => Error(InvalidNumber()),
   }
 }

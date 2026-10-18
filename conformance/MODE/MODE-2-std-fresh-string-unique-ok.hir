@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: accept
+// Std functions whose result is freshly allocated declare `-> unique`, so a unique
+// result or a Mutex payload built from them needs no deep copy. Twin is
+// MODE-2-std-fresh-string-copied-bad.
+fn label(n: u64) -> unique String uses {} {
+  string.concat("todo ", u64.to_string(n))
+}
+
+fn payload(v: json.Value) -> unique String uses {} {
+  match json.stringify(v) {
+    Ok(s) => take s,
+    Error(_) => "",
+  }
+}
+
+fn guarded(tasks: Tasks, n: u64) -> Mutex[String] {
+  mutex.create(tasks, label(n))
+}

@@ -249,7 +249,7 @@ fn write_hex(value: u16, mut out: List[u8]) -> () uses {} {
 }
 
 // Rust Display: mapped IPv4, otherwise the first longest zero run (length > 1).
-pub fn format_ip(ip: IpAddr) -> String uses {} {
+pub fn format_ip(ip: IpAddr) -> unique String uses {} {
   let mut out: List[u8] = []
   match ip {
     V4(octets) => write_v4(octets, mut out),
@@ -305,7 +305,7 @@ pub fn format_ip(ip: IpAddr) -> String uses {} {
   finish(take out)
 }
 
-pub fn format_socket_addr(addr: SocketAddr) -> String uses {} {
+pub fn format_socket_addr(addr: SocketAddr) -> unique String uses {} {
   let mut out: List[u8] = []
   match addr.ip {
     V4(_) => text.append(mut out, format_ip(addr.ip)),

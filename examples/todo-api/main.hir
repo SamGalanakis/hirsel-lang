@@ -48,7 +48,7 @@ fn todo_value(t: Todo) -> json.Value uses {} {
   Object(take fields)
 }
 
-fn todo_json(t: Todo) -> String uses {} {
+fn todo_json(t: Todo) -> unique String uses {} {
   match json.stringify(todo_value(t)) {
     Ok(s) => take s,
     Error(_) => "{}",
@@ -63,7 +63,7 @@ fn list_value(todos: List[Todo]) -> json.Value uses {} {
   Array(take items)
 }
 
-fn store_json(st: Store) -> String uses {} {
+fn store_json(st: Store) -> unique String uses {} {
   let mut fields: Map[String, box json.Value] = map.empty()
   map.insert(mut fields, "next_id", box Number(u64.to_string(st.next_id)))
   map.insert(mut fields, "todos", box list_value(st.todos))
@@ -73,7 +73,7 @@ fn store_json(st: Store) -> String uses {} {
   }
 }
 
-fn error_json(message: String) -> String uses {} {
+fn error_json(message: String) -> unique String uses {} {
   let mut fields: Map[String, box json.Value] = map.empty()
   map.insert(mut fields, "error", box text_value(message))
   match json.stringify(Object(take fields)) {
@@ -83,7 +83,7 @@ fn error_json(message: String) -> String uses {} {
 }
 
 // Patterns look through each member's box, so a field reads without unboxing.
-fn text_field(fields: Map[String, box json.Value], key: String) -> Option[String] uses {} {
+fn text_field(fields: Map[String, box json.Value], key: String) -> Option[unique String] uses {} {
   match map.get(fields, key) {
     Some(Text(s)) => Some(unique s),
     _ => None(),
@@ -118,7 +118,7 @@ fn parse_object(body: Bytes) -> Option[Map[String, box json.Value]] uses {} {
   }
 }
 
-fn parse_store(take text: String) -> Result[Store, ServerError] uses {} {
+fn parse_store(take text: String) -> Result[unique Store, ServerError] uses {} {
   let fields = match json.parse(take text) {
     Ok(Object(fields)) => copy fields,
     _ => return Error(Corrupt("state is not a JSON object")),
@@ -155,7 +155,7 @@ fn parse_store(take text: String) -> Result[Store, ServerError] uses {} {
 }
 
 // ---- persistence ----
-fn load(dir: Dir) -> Result[Store, ServerError] {
+fn load(dir: Dir) -> Result[unique Store, ServerError] {
   match file.read_bytes(dir, path.of(STATE)) {
     Ok(data) => {
       let text = match string.from_bytes(copy data) {
@@ -204,15 +204,15 @@ fn write_loop(tasks: Tasks, dir: Dir, take receiver: Receiver[SaveJob]) -> () {
 }
 
 // ---- routing ----
-fn not_found() -> Reply uses {} {
+fn not_found() -> unique Reply uses {} {
   Reply(status: 404u16, body: error_json("not found"), allow: "", save: None())
 }
 
-fn bad_request(message: String) -> Reply uses {} {
+fn bad_request(message: String) -> unique Reply uses {} {
   Reply(status: 400u16, body: error_json(message), allow: "", save: None())
 }
 
-fn method_not_allowed(allow: String) -> Reply uses {} {
+fn method_not_allowed(allow: String) -> unique Reply uses {} {
   Reply(
     status: 405u16,
     body: error_json("method not allowed"),
@@ -221,7 +221,7 @@ fn method_not_allowed(allow: String) -> Reply uses {} {
   )
 }
 
-fn unsupported_media() -> Reply uses {} {
+fn unsupported_media() -> unique Reply uses {} {
   Reply(
     status: 415u16,
     body: error_json("Content-Type must be application/json"),
@@ -240,7 +240,7 @@ fn find(todos: List[Todo], id: u64) -> Option[u64] uses {} {
 }
 
 // The caller has already bumped the version; the snapshot goes to the writer task.
-fn snapshot_reply(st: Store, status: u16, take body: String) -> Reply uses {} {
+fn snapshot_reply(st: Store, status: u16, take body: unique String) -> unique Reply uses {} {
   Reply(
     status: status,
     body: take body,
@@ -249,7 +249,7 @@ fn snapshot_reply(st: Store, status: u16, take body: String) -> Reply uses {} {
   )
 }
 
-fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
+fn apply(mut st: unique Store, action: Action) -> unique Reply uses {} {
   match action {
     Index() => Reply(
       status: 200u16,
@@ -288,13 +288,7 @@ fn apply(mut st: unique Store, action: Action) -> Reply uses {} {
     },
     Remove(id) => match find(st.todos, id) {
       Some(i) => {
-        let mut kept: List[Todo] = []
-        for j in 0u64..list.len(st.todos) {
-          if j != i {
-            list.push(mut kept, unique st.todos[j])
-          }
-        }
-        st.todos = unique kept
+        let _ = list.remove(mut st.todos, i)
         st.version += 1
         snapshot_reply(st, 204u16, "")
       },
@@ -404,7 +398,7 @@ fn handle(
     tasks,
     state,
     fn(mut store: unique Store) -> Reply uses {} {
-      unique apply(mut store, action)
+      apply(mut store, action)
     }
   )
   let (version, text): (u64, unique String) = match reply.save {
@@ -468,7 +462,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let n = io.net(rt) ? Grant
   let tasks = io.tasks(rt) ? Grant
   let dir = io.dir(rt, path.of("data")) ? Files
-  let store: unique Store = unique load(dir)?
+  let store = load(dir)?
   let state: Mutex[Store] = mutex.create(tasks, take store)
   let (saves, jobs): (Sender[SaveJob], Receiver[SaveJob]) = channel.open(tasks)
   let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ? Network

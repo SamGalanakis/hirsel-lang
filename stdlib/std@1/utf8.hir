@@ -1,6 +1,7 @@
 // Zig unicode.utf8Encode and Rust str validation/lossy error-span semantics.
 pub type EncodeError = InvalidScalar(u32)
 
+@preserves_unique(out)
 pub fn append_scalar(mut out: List[u8], scalar: u32) -> Result[(), EncodeError] uses {} {
   if scalar > 1114111u32 || scalar >= 55296u32 && scalar <= 57343u32 {
     return Error(InvalidScalar(scalar))

@@ -1,7 +1,7 @@
 // Slash-only lexical policy. No host authority.
 pub type PathError = Invalid(u64)
 
-fn owned_piece(text: String, begin: u64, end: u64) -> String uses {} {
+fn owned_piece(text: String, begin: u64, end: u64) -> unique String uses {} {
   let bytes = core@1/string.as_bytes(text)
   let mut builder: List[u8] = []
   let mut i = begin
@@ -20,7 +20,7 @@ fn owned_piece(text: String, begin: u64, end: u64) -> String uses {} {
 
 // Adapted from Zig lib/std/fs/path.zig mem.tokenizeScalar used by resolveAppendPosix.
 // Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
-pub fn components(p: Path) -> List[String] uses {} {
+pub fn components(p: Path) -> unique List[String] uses {} {
   let text = core@1/path.text(p)
   let bytes = core@1/string.as_bytes(text)
   let len = core@1/bytes.len(bytes)
@@ -177,7 +177,7 @@ pub fn parent(p: Path) -> Option[Path] uses {} {
 
 // Adapted from Zig lib/std/fs/path.zig basenameInner (last component; owned UTF-8 result).
 // Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
-pub fn filename(p: Path) -> String uses {} {
+pub fn filename(p: Path) -> unique String uses {} {
   let text = core@1/path.text(p)
   let bytes = core@1/string.as_bytes(text)
   let mut end = core@1/bytes.len(bytes)
@@ -194,7 +194,7 @@ pub fn filename(p: Path) -> String uses {} {
 // Empty means both absent extension and an empty suffix ("a.").
 // Adapted from Zig lib/std/fs/path.zig extension (suffix excludes dot per Hirsel contract).
 // Reference commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors (third-party/NOTICES.md).
-pub fn extension(p: Path) -> String uses {} {
+pub fn extension(p: Path) -> unique String uses {} {
   let name = filename(p)
   let bytes = core@1/string.as_bytes(name)
   let len = core@1/bytes.len(bytes)

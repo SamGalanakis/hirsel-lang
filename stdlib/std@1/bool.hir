@@ -39,7 +39,7 @@ pub fn format_into(value: bool, mut out: List[u8]) -> () uses {} {
   )
 }
 
-pub fn to_string(value: bool) -> String uses {} {
+pub fn to_string(value: bool) -> unique String uses {} {
   let mut out: List[u8] = []
   format_into(value, mut out)
   internal.decimal.finish(take out)

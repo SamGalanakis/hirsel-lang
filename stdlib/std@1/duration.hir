@@ -82,7 +82,7 @@ pub fn parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {} {
 
 // Adapted decimal fraction emission from Rust library/core/src/time.rs Debug::fmt_decimal.
 // Reference commit f6c1107f8be13e48465e12c0fd26e6a39fe18e4f; fixed seconds unit and signed i128 replace unsigned auto units.
-pub fn format(value: time.Duration) -> String uses {} {
+pub fn format(value: time.Duration) -> unique String uses {} {
   let raw: u128 = core@1/int.truncate(value.nanoseconds)
   let negative = value.nanoseconds < 0
   let magnitude = if negative {

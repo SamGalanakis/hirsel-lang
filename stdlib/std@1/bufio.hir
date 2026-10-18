@@ -24,7 +24,7 @@ pub fn buffered(r: Reader) -> u64 uses {} {
   core@1/list.len(r.input) - r.offset
 }
 
-pub fn contents(r: Reader) -> Bytes uses {} {
+pub fn contents(r: Reader) -> unique Bytes uses {} {
   let mut out: List[u8] = []
   let mut i = r.offset
   while i < core@1/list.len(r.input) {

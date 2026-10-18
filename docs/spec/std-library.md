@@ -52,12 +52,12 @@ N fn ascii.digit_value(c: u32) -> Option[u32] uses {}
 fn path.normalize(p: Path) -> Result[Path, path.PathError] uses {}
 fn path.join(base: Path, child: Path) -> Result[Path, path.PathError] uses {}
 fn path.parent(p: Path) -> Option[Path] uses {}
-fn path.filename(p: Path) -> String uses {}
-fn path.extension(p: Path) -> String uses {}
-fn path.components(p: Path) -> List[String] uses {}
+fn path.filename(p: Path) -> unique String uses {}
+fn path.extension(p: Path) -> unique String uses {}
+fn path.components(p: Path) -> unique List[String] uses {}
 N fn duration.from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {}
 N fn duration.parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {}
-fn duration.format(value: time.Duration) -> String uses {}
+fn duration.format(value: time.Duration) -> unique String uses {}
 N fn time.parse(text: String) -> Result[time.Timestamp, scalar.ParseError] uses {}
 fn time.format(value: time.Timestamp) -> Result[String, time.TimeError] uses {}
 N fn time.elapsed(clock: MonotonicClock, start: Instant of clock) -> Result[time.Duration, ClockError]
@@ -69,7 +69,7 @@ fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> Bytes in src
 N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
 N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
-fn json.stringify(value: Value) -> Result[String, JsonError] uses {}
+fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 @preserves_unique(builder) fn json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}
 N fn test.equal[T: data](t: Test, actual: T, expected: T) -> ()
 N fn test.approx(t: Test, actual: f64, expected: f64, absolute: f64, relative: f64) -> ()
@@ -167,7 +167,7 @@ reflection, automatic record conversion or authority.
 `bool`, `u8` to `u128`, `i8` to `i128`, `f32` and `f64` each have a module exposing, with
 `uses {}`:
 
-- `to_string(value) -> String`;
+- `to_string(value) -> unique String`;
 - `format_into(value, mut out: List[u8]) -> ()`, which appends exactly the text `to_string`
   returns and fails only by allocation exhaustion;
 - `@noalloc format[n: size](value, mut buffer: Inline[u8, n]) -> Result[u64, scalar.FormatError]`,
@@ -338,7 +338,7 @@ existing list prefix.
 ```text
 fn bufio.new(capacity: u64) -> Reader uses {}
 fn bufio.buffered(r: Reader) -> u64 uses {}
-fn bufio.contents(r: Reader) -> Bytes uses {}
+fn bufio.contents(r: Reader) -> unique Bytes uses {}
 fn bufio.consume(mut r: Reader, count: u64) -> () uses {}
 fn bufio.read_more[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], max: u64) -> Result[u64,ReadError[E]]
 fn bufio.read[S,E](mut r: Reader, mut source: S, refill: fn(mut S, mut List[u8], u64) -> Result[u64,E], mut out: List[u8], max: u64) -> Result[u64,ReadError[E]]

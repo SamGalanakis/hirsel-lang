@@ -15,7 +15,7 @@ pub fn format_into(value: u64, mut out: List[u8]) -> () uses {} {
   internal.decimal.append(mut out, core@1/int.widen(value), false)
 }
 
-pub fn to_string(value: u64) -> String uses {} {
+pub fn to_string(value: u64) -> unique String uses {} {
   let mut out: List[u8] = []
   u64.format_into(value, mut out)
   internal.decimal.finish(take out)

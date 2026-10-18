@@ -128,7 +128,7 @@ fn decompose(mut points: List[u32], cp: u32) -> () uses {} {
 }
 
 // Explicit NFC: compatibility mappings never enter canonical_pair.
-pub fn normalize_nfc(s: String) -> String uses {} {
+pub fn normalize_nfc(s: String) -> unique String uses {} {
   let mut points: List[u32] = []
   for cp in core@1/string.scalars(s) {
     decompose(mut points, cp)

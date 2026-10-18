@@ -299,7 +299,7 @@ pub fn request(
   )
 }
 
-fn http_method_text(method: Method) -> String uses {} {
+fn http_method_text(method: Method) -> unique String uses {} {
   match method {
     Get() => "GET",
     Head() => "HEAD",
@@ -950,7 +950,7 @@ pub fn read_all(mut r: Request, limit: u64) -> Result[Bytes, HttpError] {
   Error(Truncated())
 }
 
-pub fn trailers(r: Request) -> List[Header] {
+pub fn trailers(r: Request) -> unique List[Header] {
   unique r.response_trailers
 }
 

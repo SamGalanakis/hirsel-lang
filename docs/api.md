@@ -313,7 +313,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn bool.format[n: size](value: bool, mut buffer: Inline[u8, n]) -> Result[ u64, scalar.FormatError ] uses {}` <!-- std@1/bool/format -->
 - `@preserves_unique(out) pub fn bool.format_into(value: bool, mut out: List[u8]) -> () uses {}` — Appends 'true' or 'false' to 'out'; to_string is that text. <!-- std@1/bool/format_into -->
 - `@noalloc pub fn bool.parse(text: String) -> Result[bool, scalar.ParseError] uses {}` <!-- std@1/bool/parse -->
-- `pub fn bool.to_string(value: bool) -> String uses {}` <!-- std@1/bool/to_string -->
+- `pub fn bool.to_string(value: bool) -> unique String uses {}` <!-- std@1/bool/to_string -->
 
 ## bufio
 
@@ -326,7 +326,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub opaque type bufio.Reader: copyable + inert + noalloc_drop uses {}` <!-- std@1/bufio/Reader -->
 - `pub fn bufio.buffered(r: Reader) -> u64 uses {}` <!-- std@1/bufio/buffered -->
 - `pub fn bufio.consume(mut r: Reader, count: u64) -> () uses {}` <!-- std@1/bufio/consume -->
-- `pub fn bufio.contents(r: Reader) -> Bytes uses {}` <!-- std@1/bufio/contents -->
+- `pub fn bufio.contents(r: Reader) -> unique Bytes uses {}` <!-- std@1/bufio/contents -->
 - `pub fn bufio.file_read(d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], max: u64) -> Result[ u64, ReadError[FileError] ]` <!-- std@1/bufio/file_read -->
 - `pub fn bufio.file_read_exact( d: Dir, mut f: File of d, mut r: Reader, mut out: List[u8], count: u64 ) -> Result[(), ReadError[FileError]]` <!-- std@1/bufio/file_read_exact -->
 - `pub fn bufio.file_read_line(d: Dir, mut f: File of d, mut r: Reader, limit: u64) -> Result[ String, ReadError[FileError] ]` <!-- std@1/bufio/file_read_line -->
@@ -374,7 +374,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 ## duration
 
-- `pub fn duration.format(value: time.Duration) -> String uses {}` — Adapted decimal fraction emission from Rust library/core/src/time.rs Debug::fmt_decimal. <!-- std@1/duration/format -->
+- `pub fn duration.format(value: time.Duration) -> unique String uses {}` — Adapted decimal fraction emission from Rust library/core/src/time.rs Debug::fmt_decimal. <!-- std@1/duration/format -->
 - `@noalloc pub fn duration.from_parts(seconds: i64, nanoseconds: i32) -> time.Duration uses {}` — Adapted unit composition from Rust library/core/src/time.rs Duration::new/as_nanos. <!-- std@1/duration/from_parts -->
 - `@noalloc pub fn duration.parse(text: String) -> Result[time.Duration, scalar.ParseError] uses {}` — Contract-specific parser: neither referenced Zig nor Rust std has signed seconds-text parsing. <!-- std@1/duration/parse -->
 
@@ -399,7 +399,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn f32.sqrt(value: f32) -> f32 uses {}` <!-- std@1/f32/sqrt -->
 - `@noalloc pub fn f32.sum(xs: Array[f32]) -> f32 uses {}` <!-- std@1/f32/sum -->
 - `pub fn f32.sum_exact(xs: Array[f32]) -> f32 uses {}` <!-- std@1/f32/sum_exact -->
-- `pub fn f32.to_string(value: f32) -> String uses {}` <!-- std@1/f32/to_string -->
+- `pub fn f32.to_string(value: f32) -> unique String uses {}` <!-- std@1/f32/to_string -->
 
 ## f64
 
@@ -414,7 +414,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn f64.sqrt(value: f64) -> f64 uses {}` <!-- std@1/f64/sqrt -->
 - `@noalloc pub fn f64.sum(xs: Array[f64]) -> f64 uses {}` <!-- std@1/f64/sum -->
 - `pub fn f64.sum_exact(xs: Array[f64]) -> f64 uses {}` <!-- std@1/f64/sum_exact -->
-- `pub fn f64.to_string(value: f64) -> String uses {}` <!-- std@1/f64/to_string -->
+- `pub fn f64.to_string(value: f64) -> unique String uses {}` <!-- std@1/f64/to_string -->
 
 ## failure
 
@@ -523,7 +523,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn http.send_bodiless(mut r: Request) -> Result[(), HttpError]` <!-- std@1/http/send_bodiless -->
 - `pub fn http.send_body(mut r: Request, body: Bytes) -> Result[(), HttpError]` <!-- std@1/http/send_body -->
 - `pub fn http.send_chunk(mut r: Request, data: Bytes) -> Result[(), HttpError]` <!-- std@1/http/send_chunk -->
-- `pub fn http.trailers(r: Request) -> List[Header]` <!-- std@1/http/trailers -->
+- `pub fn http.trailers(r: Request) -> unique List[Header]` <!-- std@1/http/trailers -->
 
 ## http_wire
 
@@ -572,7 +572,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i128.parse_radix(text: String, radix: u8) -> Result[i128, scalar.ParseError] uses {}` <!-- std@1/i128/parse_radix -->
 - `@noalloc pub fn i128.saturating_mul(a: i128, b: i128) -> i128 uses {}` <!-- std@1/i128/saturating_mul -->
 - `@noalloc pub fn i128.saturating_sub(a: i128, b: i128) -> i128 uses {}` <!-- std@1/i128/saturating_sub -->
-- `pub fn i128.to_string(value: i128) -> String uses {}` <!-- std@1/i128/to_string -->
+- `pub fn i128.to_string(value: i128) -> unique String uses {}` <!-- std@1/i128/to_string -->
 - `@noalloc pub fn i128.wrapping_mul(a: i128, b: i128) -> i128 uses {}` <!-- std@1/i128/wrapping_mul -->
 - `@noalloc pub fn i128.wrapping_sub(a: i128, b: i128) -> i128 uses {}` <!-- std@1/i128/wrapping_sub -->
 
@@ -588,7 +588,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i16.parse_radix(text: String, radix: u8) -> Result[i16, scalar.ParseError] uses {}` <!-- std@1/i16/parse_radix -->
 - `@noalloc pub fn i16.saturating_mul(a: i16, b: i16) -> i16 uses {}` <!-- std@1/i16/saturating_mul -->
 - `@noalloc pub fn i16.saturating_sub(a: i16, b: i16) -> i16 uses {}` <!-- std@1/i16/saturating_sub -->
-- `pub fn i16.to_string(value: i16) -> String uses {}` <!-- std@1/i16/to_string -->
+- `pub fn i16.to_string(value: i16) -> unique String uses {}` <!-- std@1/i16/to_string -->
 - `@noalloc pub fn i16.wrapping_mul(a: i16, b: i16) -> i16 uses {}` <!-- std@1/i16/wrapping_mul -->
 - `@noalloc pub fn i16.wrapping_sub(a: i16, b: i16) -> i16 uses {}` <!-- std@1/i16/wrapping_sub -->
 
@@ -604,7 +604,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i32.parse_radix(text: String, radix: u8) -> Result[i32, scalar.ParseError] uses {}` <!-- std@1/i32/parse_radix -->
 - `@noalloc pub fn i32.saturating_mul(a: i32, b: i32) -> i32 uses {}` <!-- std@1/i32/saturating_mul -->
 - `@noalloc pub fn i32.saturating_sub(a: i32, b: i32) -> i32 uses {}` <!-- std@1/i32/saturating_sub -->
-- `pub fn i32.to_string(value: i32) -> String uses {}` <!-- std@1/i32/to_string -->
+- `pub fn i32.to_string(value: i32) -> unique String uses {}` <!-- std@1/i32/to_string -->
 - `@noalloc pub fn i32.wrapping_mul(a: i32, b: i32) -> i32 uses {}` <!-- std@1/i32/wrapping_mul -->
 - `@noalloc pub fn i32.wrapping_sub(a: i32, b: i32) -> i32 uses {}` <!-- std@1/i32/wrapping_sub -->
 
@@ -620,7 +620,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i64.parse_radix(text: String, radix: u8) -> Result[i64, scalar.ParseError] uses {}` <!-- std@1/i64/parse_radix -->
 - `@noalloc pub fn i64.saturating_mul(a: i64, b: i64) -> i64 uses {}` <!-- std@1/i64/saturating_mul -->
 - `@noalloc pub fn i64.saturating_sub(a: i64, b: i64) -> i64 uses {}` <!-- std@1/i64/saturating_sub -->
-- `pub fn i64.to_string(value: i64) -> String uses {}` <!-- std@1/i64/to_string -->
+- `pub fn i64.to_string(value: i64) -> unique String uses {}` <!-- std@1/i64/to_string -->
 - `@noalloc pub fn i64.wrapping_mul(a: i64, b: i64) -> i64 uses {}` <!-- std@1/i64/wrapping_mul -->
 - `@noalloc pub fn i64.wrapping_sub(a: i64, b: i64) -> i64 uses {}` <!-- std@1/i64/wrapping_sub -->
 
@@ -636,7 +636,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn i8.parse_radix(text: String, radix: u8) -> Result[i8, scalar.ParseError] uses {}` <!-- std@1/i8/parse_radix -->
 - `@noalloc pub fn i8.saturating_mul(a: i8, b: i8) -> i8 uses {}` <!-- std@1/i8/saturating_mul -->
 - `@noalloc pub fn i8.saturating_sub(a: i8, b: i8) -> i8 uses {}` <!-- std@1/i8/saturating_sub -->
-- `pub fn i8.to_string(value: i8) -> String uses {}` <!-- std@1/i8/to_string -->
+- `pub fn i8.to_string(value: i8) -> unique String uses {}` <!-- std@1/i8/to_string -->
 - `@noalloc pub fn i8.wrapping_mul(a: i8, b: i8) -> i8 uses {}` <!-- std@1/i8/wrapping_mul -->
 - `@noalloc pub fn i8.wrapping_sub(a: i8, b: i8) -> i8 uses {}` <!-- std@1/i8/wrapping_sub -->
 
@@ -735,7 +735,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `Object(Map[String, box Value]) -> json.Value` — Variant of json.Value. <!-- std@1/json/Value#Object -->
 - `Text(String) -> json.Value` — Variant of json.Value. <!-- std@1/json/Value#Text -->
 - `pub fn json.parse(take text: String) -> Result[Value, JsonError] uses {}` — Adapted serde_json src/de.rs from_str/end, commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. <!-- std@1/json/parse -->
-- `pub fn json.stringify(value: Value) -> Result[String, JsonError] uses {}` — Adapted serde_json src/ser.rs to_string, commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: one writer path. <!-- std@1/json/stringify -->
+- `pub fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}` — Adapted serde_json src/ser.rs to_string, commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: one writer path. <!-- std@1/json/stringify -->
 - `@preserves_unique(builder) pub fn json.write(value: Value, mut builder: List[u8]) -> Result[(), JsonError] uses {}` — Adapted serde_json src/ser.rs compact Serializer dispatch and sequence/map emission, commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8. <!-- std@1/json/write -->
 
 ## list
@@ -784,8 +784,8 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `fn net.connect(n: Net, host: String, port: u16, timeout: NetTimeout) -> Result[Stream of n, NetError]` — '(host, port, Connect())' or '(host, port, ConnectTls())' <!-- core@1/net/connect -->
 - `fn net.connect_addr(n: Net, addr: SocketAddr, timeout: NetTimeout) -> Result[Stream of n, NetError]` — a rule whose address is the canonical literal of 'addr.ip', with 'addr.port'; a host-name rule never authorizes a raw address <!-- core@1/net/connect_addr -->
 - `@noalloc pub fn net.ends_in_number(text: String) -> bool uses {}` — WHATWG URL ends-in-a-number checker; shared by host validation and URI parsing. <!-- std@1/net/ends_in_number -->
-- `pub fn net.format_ip(ip: IpAddr) -> String uses {}` — Rust Display: mapped IPv4, otherwise the first longest zero run (length > 1). <!-- std@1/net/format_ip -->
-- `pub fn net.format_socket_addr(addr: SocketAddr) -> String uses {}` <!-- std@1/net/format_socket_addr -->
+- `pub fn net.format_ip(ip: IpAddr) -> unique String uses {}` — Rust Display: mapped IPv4, otherwise the first longest zero run (length > 1). <!-- std@1/net/format_ip -->
+- `pub fn net.format_socket_addr(addr: SocketAddr) -> unique String uses {}` <!-- std@1/net/format_socket_addr -->
 - `fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]` — '(literal, port, Listen())' for 'addr'; port 0 grants an ephemeral port <!-- core@1/net/listen -->
 - `@noalloc fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]` <!-- core@1/net/local_addr -->
 - `fn net.narrow(n: Net, rules: List[NetRule]) -> Result[Net, NetError]` <!-- core@1/net/narrow -->
@@ -812,9 +812,9 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `pub type path.PathError = Invalid(u64)` — Slash-only lexical policy. <!-- std@1/path/PathError -->
 - `Invalid(u64) -> path.PathError` — Variant of path.PathError. <!-- std@1/path/PathError#Invalid -->
-- `pub fn path.components(p: Path) -> List[String] uses {}` — Adapted from Zig lib/std/fs/path.zig mem.tokenizeScalar used by resolveAppendPosix. <!-- std@1/path/components -->
-- `pub fn path.extension(p: Path) -> String uses {}` — Empty means both absent extension and an empty suffix ("a."). <!-- std@1/path/extension -->
-- `pub fn path.filename(p: Path) -> String uses {}` — Adapted from Zig lib/std/fs/path.zig basenameInner (last component; owned UTF-8 result). <!-- std@1/path/filename -->
+- `pub fn path.components(p: Path) -> unique List[String] uses {}` — Adapted from Zig lib/std/fs/path.zig mem.tokenizeScalar used by resolveAppendPosix. <!-- std@1/path/components -->
+- `pub fn path.extension(p: Path) -> unique String uses {}` — Empty means both absent extension and an empty suffix ("a."). <!-- std@1/path/extension -->
+- `pub fn path.filename(p: Path) -> unique String uses {}` — Adapted from Zig lib/std/fs/path.zig basenameInner (last component; owned UTF-8 result). <!-- std@1/path/filename -->
 - `pub fn path.join(base: Path, child: Path) -> Result[Path, PathError] uses {}` — Adapted from Zig lib/std/fs/path.zig joinSepMaybeZ/resolveAppendPosix (relative child contract). <!-- std@1/path/join -->
 - `pub fn path.normalize(p: Path) -> Result[Path, PathError] uses {}` — Adapted from Zig lib/std/fs/path.zig resolveAppendPosix (active prefix instead of raw buffer truncation). <!-- std@1/path/normalize -->
 - `fn path.of(text: String) -> Path` <!-- core@1/path/of -->
@@ -933,17 +933,17 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 ## string
 
 - `@noalloc fn string.as_bytes(s: String) -> Bytes in s` <!-- core@1/string/as_bytes -->
-- `pub fn string.ascii_lower(s: String) -> String uses {}` <!-- std@1/string/ascii_lower -->
-- `pub fn string.ascii_upper(s: String) -> String uses {}` <!-- std@1/string/ascii_upper -->
+- `pub fn string.ascii_lower(s: String) -> unique String uses {}` <!-- std@1/string/ascii_lower -->
+- `pub fn string.ascii_upper(s: String) -> unique String uses {}` <!-- std@1/string/ascii_upper -->
 - `@noalloc fn string.byte_len(s: String) -> u64` <!-- core@1/string/byte_len -->
 - `@noalloc fn string.byte_offset(s: String, pos: StrPos of s) -> u64` <!-- core@1/string/byte_offset -->
 - `@noalloc pub fn string.compare(a: String, b: String) -> i32 uses {}` — Rust str Ord: byte-lexicographic, a proper prefix first, as '<' orders String. <!-- std@1/string/compare -->
-- `pub fn string.concat(a: String, b: String) -> String uses {}` <!-- std@1/string/concat -->
+- `pub fn string.concat(a: String, b: String) -> unique String uses {}` <!-- std@1/string/concat -->
 - `@noalloc pub fn string.contains(s: String, pattern: String) -> bool uses {}` <!-- std@1/string/contains -->
 - `@noalloc pub fn string.ends_with(s: String, pattern: String) -> bool uses {}` <!-- std@1/string/ends_with -->
 - `@noalloc pub fn string.find(s: String, pattern: String) -> Option[StrPos of s] uses {}` <!-- std@1/string/find -->
 - `@preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]` <!-- core@1/string/from_bytes -->
-- `pub fn string.join(parts: List[String], separator: String) -> String uses {}` <!-- std@1/string/join -->
+- `pub fn string.join(parts: List[String], separator: String) -> unique String uses {}` <!-- std@1/string/join -->
 - `pub fn string.lines(take s: String) -> List[String] uses {}` — Rust str::lines: only LF and CRLF terminate lines; omit a final empty line. <!-- std@1/string/lines -->
 - `@noalloc fn string.position(s: String, offset: u64) -> Option[StrPos of s]` <!-- core@1/string/position -->
 - `@noalloc fn string.positions(s: String) -> PositionView of s in s` <!-- core@1/string/positions -->
@@ -1019,7 +1019,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u128.parse_radix(text: String, radix: u8) -> Result[u128, scalar.ParseError] uses {}` <!-- std@1/u128/parse_radix -->
 - `@noalloc pub fn u128.saturating_mul(a: u128, b: u128) -> u128 uses {}` <!-- std@1/u128/saturating_mul -->
 - `@noalloc pub fn u128.saturating_sub(a: u128, b: u128) -> u128 uses {}` <!-- std@1/u128/saturating_sub -->
-- `pub fn u128.to_string(value: u128) -> String uses {}` <!-- std@1/u128/to_string -->
+- `pub fn u128.to_string(value: u128) -> unique String uses {}` <!-- std@1/u128/to_string -->
 - `@noalloc pub fn u128.wrapping_mul(a: u128, b: u128) -> u128 uses {}` <!-- std@1/u128/wrapping_mul -->
 - `@noalloc pub fn u128.wrapping_sub(a: u128, b: u128) -> u128 uses {}` <!-- std@1/u128/wrapping_sub -->
 
@@ -1035,7 +1035,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u16.parse_radix(text: String, radix: u8) -> Result[u16, scalar.ParseError] uses {}` <!-- std@1/u16/parse_radix -->
 - `@noalloc pub fn u16.saturating_mul(a: u16, b: u16) -> u16 uses {}` <!-- std@1/u16/saturating_mul -->
 - `@noalloc pub fn u16.saturating_sub(a: u16, b: u16) -> u16 uses {}` <!-- std@1/u16/saturating_sub -->
-- `pub fn u16.to_string(value: u16) -> String uses {}` <!-- std@1/u16/to_string -->
+- `pub fn u16.to_string(value: u16) -> unique String uses {}` <!-- std@1/u16/to_string -->
 - `@noalloc pub fn u16.wrapping_mul(a: u16, b: u16) -> u16 uses {}` <!-- std@1/u16/wrapping_mul -->
 - `@noalloc pub fn u16.wrapping_sub(a: u16, b: u16) -> u16 uses {}` <!-- std@1/u16/wrapping_sub -->
 
@@ -1051,7 +1051,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u32.parse_radix(text: String, radix: u8) -> Result[u32, scalar.ParseError] uses {}` <!-- std@1/u32/parse_radix -->
 - `@noalloc pub fn u32.saturating_mul(a: u32, b: u32) -> u32 uses {}` <!-- std@1/u32/saturating_mul -->
 - `@noalloc pub fn u32.saturating_sub(a: u32, b: u32) -> u32 uses {}` <!-- std@1/u32/saturating_sub -->
-- `pub fn u32.to_string(value: u32) -> String uses {}` <!-- std@1/u32/to_string -->
+- `pub fn u32.to_string(value: u32) -> unique String uses {}` <!-- std@1/u32/to_string -->
 - `@noalloc pub fn u32.wrapping_mul(a: u32, b: u32) -> u32 uses {}` <!-- std@1/u32/wrapping_mul -->
 - `@noalloc pub fn u32.wrapping_sub(a: u32, b: u32) -> u32 uses {}` <!-- std@1/u32/wrapping_sub -->
 
@@ -1067,7 +1067,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u64.parse_radix(text: String, radix: u8) -> Result[u64, scalar.ParseError] uses {}` <!-- std@1/u64/parse_radix -->
 - `@noalloc pub fn u64.saturating_mul(a: u64, b: u64) -> u64 uses {}` <!-- std@1/u64/saturating_mul -->
 - `@noalloc pub fn u64.saturating_sub(a: u64, b: u64) -> u64 uses {}` <!-- std@1/u64/saturating_sub -->
-- `pub fn u64.to_string(value: u64) -> String uses {}` <!-- std@1/u64/to_string -->
+- `pub fn u64.to_string(value: u64) -> unique String uses {}` <!-- std@1/u64/to_string -->
 - `@noalloc pub fn u64.wrapping_mul(a: u64, b: u64) -> u64 uses {}` <!-- std@1/u64/wrapping_mul -->
 - `@noalloc pub fn u64.wrapping_sub(a: u64, b: u64) -> u64 uses {}` <!-- std@1/u64/wrapping_sub -->
 
@@ -1083,7 +1083,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn u8.parse_radix(text: String, radix: u8) -> Result[u8, scalar.ParseError] uses {}` <!-- std@1/u8/parse_radix -->
 - `@noalloc pub fn u8.saturating_mul(a: u8, b: u8) -> u8 uses {}` <!-- std@1/u8/saturating_mul -->
 - `@noalloc pub fn u8.saturating_sub(a: u8, b: u8) -> u8 uses {}` <!-- std@1/u8/saturating_sub -->
-- `pub fn u8.to_string(value: u8) -> String uses {}` <!-- std@1/u8/to_string -->
+- `pub fn u8.to_string(value: u8) -> unique String uses {}` <!-- std@1/u8/to_string -->
 - `@noalloc pub fn u8.wrapping_mul(a: u8, b: u8) -> u8 uses {}` <!-- std@1/u8/wrapping_mul -->
 - `@noalloc pub fn u8.wrapping_sub(a: u8, b: u8) -> u8 uses {}` <!-- std@1/u8/wrapping_sub -->
 
@@ -1095,7 +1095,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `@noalloc pub fn unicode.is_digit(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_digit -->
 - `@noalloc pub fn unicode.is_letter(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_letter -->
 - `@noalloc pub fn unicode.is_whitespace(cp: u32) -> bool uses {}` <!-- std@1/unicode/is_whitespace -->
-- `pub fn unicode.normalize_nfc(s: String) -> String uses {}` — Explicit NFC: compatibility mappings never enter canonical_pair. <!-- std@1/unicode/normalize_nfc -->
+- `pub fn unicode.normalize_nfc(s: String) -> unique String uses {}` — Explicit NFC: compatibility mappings never enter canonical_pair. <!-- std@1/unicode/normalize_nfc -->
 - `@noalloc pub fn unicode.simple_lower(cp: u32) -> u32 uses {}` <!-- std@1/unicode/simple_lower -->
 - `@noalloc pub fn unicode.simple_upper(cp: u32) -> u32 uses {}` <!-- std@1/unicode/simple_upper -->
 
@@ -1118,19 +1118,19 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `InvalidHostName -> uri.UriError` — Variant of uri.UriError. <!-- std@1/uri/UriError#InvalidHostName -->
 - `InvalidPort -> uri.UriError` — Variant of uri.UriError. <!-- std@1/uri/UriError#InvalidPort -->
 - `UnexpectedCharacter -> uri.UriError` — Variant of uri.UriError. <!-- std@1/uri/UriError#UnexpectedCharacter -->
-- `pub fn uri.component_encoded(component: Component, part: Part) -> String uses {}` <!-- std@1/uri/component_encoded -->
-- `pub fn uri.component_raw(component: Component) -> Bytes uses {}` <!-- std@1/uri/component_raw -->
+- `pub fn uri.component_encoded(component: Component, part: Part) -> unique String uses {}` <!-- std@1/uri/component_encoded -->
+- `pub fn uri.component_raw(component: Component) -> unique Bytes uses {}` <!-- std@1/uri/component_raw -->
 - `pub fn uri.component_text(component: Component) -> Result[String, Bytes] uses {}` <!-- std@1/uri/component_text -->
-- `pub fn uri.format(parsed_uri: Uri) -> String uses {}` — Zig writeToStream(.all): an empty path is rendered as '/'. <!-- std@1/uri/format -->
+- `pub fn uri.format(parsed_uri: Uri) -> unique String uses {}` — Zig writeToStream(.all): an empty path is rendered as '/'. <!-- std@1/uri/format -->
 - `pub fn uri.parse(text: String) -> Result[Uri, UriError] uses {}` <!-- std@1/uri/parse -->
-- `pub fn uri.percent_decode(text: String) -> Bytes uses {}` — Zig formatRaw: invalid or incomplete escapes stay literal; '+' stays '+'. <!-- std@1/uri/percent_decode -->
-- `pub fn uri.percent_encode(data: Bytes) -> String uses {}` <!-- std@1/uri/percent_encode -->
-- `pub fn uri.remove_dot_segments(path: String) -> String uses {}` — Zig remove_dot_segments, RFC3986 §5.2.4. <!-- std@1/uri/remove_dot_segments -->
+- `pub fn uri.percent_decode(text: String) -> unique Bytes uses {}` — Zig formatRaw: invalid or incomplete escapes stay literal; '+' stays '+'. <!-- std@1/uri/percent_decode -->
+- `pub fn uri.percent_encode(data: Bytes) -> unique String uses {}` <!-- std@1/uri/percent_encode -->
+- `pub fn uri.remove_dot_segments(path: String) -> unique String uses {}` — Zig remove_dot_segments, RFC3986 §5.2.4. <!-- std@1/uri/remove_dot_segments -->
 - `pub fn uri.resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {}` — Zig resolveInPlace and merge_paths; the result owns its copied base components. <!-- std@1/uri/resolve -->
 
 ## utf8
 
 - `pub type utf8.EncodeError = InvalidScalar(u32)` — Zig unicode.utf8Encode and Rust str validation/lossy error-span semantics. <!-- std@1/utf8/EncodeError -->
 - `InvalidScalar(u32) -> utf8.EncodeError` — Variant of utf8.EncodeError. <!-- std@1/utf8/EncodeError#InvalidScalar -->
-- `pub fn utf8.append_scalar(mut out: List[u8], scalar: u32) -> Result[(), EncodeError] uses {}` <!-- std@1/utf8/append_scalar -->
+- `@preserves_unique(out) pub fn utf8.append_scalar(mut out: List[u8], scalar: u32) -> Result[(), EncodeError] uses {}` <!-- std@1/utf8/append_scalar -->
 - `pub fn utf8.decode_lossy(data: Bytes) -> String uses {}` <!-- std@1/utf8/decode_lossy -->
