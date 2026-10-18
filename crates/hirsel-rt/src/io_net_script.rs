@@ -482,6 +482,19 @@ impl ScriptIo {
         }
         model
     }
+    /// A Main launch's admitted `io.process` grant; absent, the root Proc runs nothing.
+    pub fn set_process_grant(&mut self, grant: &hirsel_run_config::ProcessGrant) {
+        self.state.set_process_grant(grant);
+    }
+    /// A monotonic clock handle for a `proc.run` deadline to name. Its caller owns the
+    /// clock's reading and reports it with [`Self::observe_monotonic`] before each request.
+    pub fn monotonic_clock(&mut self) -> u64 {
+        self.state.handles.insert(crate::handles::Grant::MonotonicClock)
+    }
+    /// The monotonic clock's reading now, which a scripted run's deadline is checked against.
+    pub fn observe_monotonic(&mut self, now: u64) {
+        self.state.last_monotonic = Some(now);
+    }
     pub fn call(
         &mut self,
         request: crate::io::Request,
