@@ -23,7 +23,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   let out = io.stdout(rt) ? grant
   let p = io.process(rt) ? grant
   let program = arg.path(args, 0u64) ? argument
-  match proc.run(p, program, ["recorded", "once"], b"", None(), 64) {
+  match proc.run(p, program, ["recorded", "once"], b"", None(), 64, None()) {
     Ok(o) => {
       if o.status == Exited(0) && o.stdout == b"recorded once\n" {
         out.print(out, "echo ran\n") ? output
@@ -31,7 +31,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     },
     Error(_) => out.print(out, "echo failed\n") ? output,
   }
-  if proc.run(p, program, ["too long"], b"", None(), 1) == Error(OutputLimit()) {
+  if proc.run(p, program, ["too long"], b"", None(), 1, None()) == Error(OutputLimit()) {
     out.print(out, "bound held\n") ? output
   }
   Ok(())

@@ -224,12 +224,23 @@ served from its entries, and only a checked host run reaches the adapter's provi
 `RealIo` runs it with `run_host`: std `Command`, an empty environment plus the rule's
 pass-through names, `/` or the pinned Dir as working directory, and one `poll` loop
 that feeds stdin and drains both pipes, killing a child past `max_output` on either
-stream. SIGPIPE is blocked on the calling thread for the loop and a raised one is
+stream. A `Deadline` is the Instant's CLOCK_MONOTONIC ticks: a reached one is
+`TimedOut` before spawning, and at expiry the child gets SIGTERM, then SIGKILL after
+`TERMINATION_GRACE` (1 s), and is reaped before `TimedOut` returns. Under cooperative
+admission the run is a `HostJob`: the same loop on a helper thread, whose finished
+outcome makes a socket readable that is the parked token's interest, so the task parks
+(`host_waits::may_park`); a cancelled poll finishes the token, whose dropped job makes
+the loop's cancellation socket readable, SIGKILLs the child and joins the thread, and
+the run completes `Canceled` with no tape event beyond its `blocked` park. SIGPIPE is
+blocked on the calling thread for the loop and a raised one is
 discarded, so a child that ignores its stdin cannot end the program. `SimIo` replays
 the recorded completion in place of the host and rejects one that contradicts the
 re-derived checks. A launch without a run record reads the root Proc's `io.process`
-grant JSON from `HIRSEL_RT_PROCESS`, for live runs and replay alike. Tape forms are `process`, `test_process` and `process_run`
-requests and a `process` completion (`host_io_tape.rs`).
+grant JSON from `HIRSEL_RT_PROCESS`, for live runs and replay alike. Tape forms are `process`, `test_process` (runs and
+children) and `process_run` (with its deadline as `clock:ticks` or `none`) requests and a
+`process` completion (`host_io_tape.rs`). A recorded `TimedOut` needs a deadline, and
+raises the latest monotonic reading to it as a completed timer wait does; a scripted
+world times out only a deadline that reading already reached.
 
 ## Random draws and timer waits
 

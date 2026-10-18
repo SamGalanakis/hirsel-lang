@@ -32,6 +32,8 @@ pub(crate) struct Pending {
     pub(crate) last_error: Option<NetError>,
     pub(crate) offset: usize,
     pub(crate) committed: bool,
+    /// A host process operation running on its helper thread; dropping it kills the child.
+    pub(crate) process: Option<crate::process::HostJob>,
 }
 impl Readiness {
     pub(crate) fn pending(&self) -> std::cell::RefMut<'_, Pending> {

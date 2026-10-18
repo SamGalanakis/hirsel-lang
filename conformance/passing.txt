@@ -445,6 +445,7 @@ conformance/CONC/CONC-3-cancellation-shields-drop-run.hir
 conformance/CONC/CONC-3-check-canceled-run.hir
 conformance/CONC/CONC-3-child-local-scope.hir
 conformance/CONC/CONC-3-explicit-cancellation-check.hir
+conformance/CONC/CONC-3-process-run-canceled-run.hir
 conformance/CONC/CONC-3-shielded-drop-send-run.hir
 conformance/CONC/CONC-3-stdin-stderr-canceled-before-effect-run.hir
 conformance/CONC/CONC-4-sequential-atomic-order.hir
@@ -3665,6 +3666,8 @@ conformance/PROV/PROV-4-unplaced-take-parameter-bad.hir
 conformance/PROV/PROV-4-unplaced-take-parameter-ok.hir
 conformance/PROV/PROV-5-constructor-brand-bad.hir
 conformance/PROV/PROV-5-constructor-brand-ok.hir
+conformance/PROV/PROV-5-deadline-same-clock-ok.hir
+conformance/PROV/PROV-5-deadline-wrong-clock-bad.hir
 conformance/PROV/PROV-5-destructured-brand-bad.hir
 conformance/PROV/PROV-5-destructured-brand-ok.hir
 conformance/PROV/PROV-5-field-read-record-take-bad.hir

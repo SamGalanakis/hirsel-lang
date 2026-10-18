@@ -4,6 +4,7 @@ use hirsel_interp::library::{Library, SimulationConfig, error, ok, u64_value};
 use hirsel_interp::{
     Error, Integer, OperationCall, OperationContext, OperationResult, Operations, Value,
 };
+use hirsel_rt::process::{ProcessFailure, ProcessOutcome};
 use hirsel_rt::{
     io::{Adapter, Completion as C, Request as R},
     io_real::RealIo,
@@ -227,6 +228,10 @@ impl HostIo {
     }
 }
 
+/// `Result[ProcessOutput, ProcessError]` for a run's outcome.
+fn process_value(outcome: ProcessOutcome) -> Value {
+    hirsel_interp::library::process::outcome_value(&outcome)
+}
 /// `WaitError::Canceled(cause)`.
 fn wait_canceled(cause: u32) -> Value {
     error(variant(1, vec![variant(cause, vec![])]))
@@ -590,48 +595,104 @@ impl HostLibrary {
         Ok(())
     }
     /// The root Proc and its runs go to the runtime's host provider, which checks and
-    /// records them; a scripted `test.process` Proc stays with the library.
-    fn host_process(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
-        let request = if name == "io.process" {
-            R::Process { io: 1 }
-        } else {
-            let directory = match tag(&a[4])? {
-                0 => None,
-                _ => match self.id(fields(&a[4])?[0]) {
-                    Ok(directory) => Some(directory),
-                    Err(_) => {
-                        return Ok(OperationResult::returned(
-                            hirsel_interp::library::process::outcome_value(
-                                &hirsel_rt::process::ProcessOutcome::Error(
-                                    hirsel_rt::process::ProcessFailure::InvalidInput,
-                                ),
-                            ),
-                        ));
-                    }
+    /// records them; a scripted `test.process` Proc stays with the library. A run parks
+    /// its task on the provider's readiness token until its child exits (CONC-1), and a
+    /// cancelled scope returns Canceled before any request (CONC-3).
+    fn host_process(
+        &mut self,
+        name: &str,
+        a: &[Value],
+        cx: &mut OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        if name == "io.process" {
+            return Ok(OperationResult::returned(
+                match self.host(R::Process { io: 1 })? {
+                    C::Handle(Ok(id)) => ok(self.handle(id, "Proc")),
+                    C::Handle(Err(hirsel_rt::io::IoError::NotGranted)) => error(variant(0, vec![])),
+                    _ => return Err(invalid()),
                 },
-            };
-            R::ProcessRun {
-                process: self.id(&a[0])?,
-                program: text(fields(&a[1])?[0])?,
-                args: fields(&a[2])?
-                    .into_iter()
-                    .map(text)
-                    .collect::<Result<_, _>>()?,
-                stdin: bytes(&a[3])?,
-                directory,
-                max_output: word(&a[5])?,
+            ));
+        }
+        self.yield_now = true;
+        if let Some(cause) = self.library.cancellation() {
+            return Ok(OperationResult::returned(process_value(
+                ProcessOutcome::Error(ProcessFailure::Canceled(cause)),
+            )));
+        }
+        let token = self.next_wait;
+        self.next_wait += 1;
+        match self.process_request(a, token) {
+            Err(Error::Blocked(_)) => {}
+            result => return result,
+        }
+        self.waits.insert(
+            token,
+            HostWait {
+                name: name.into(),
+                arguments: a.to_vec(),
+            },
+        );
+        Ok(OperationResult::Park {
+            token,
+            wait: hirsel_interp::BlockedWait {
+                spawn_path: self.library.task_path(),
+                anchor: cx.anchor().cloned().ok_or_else(invalid)?,
+                kind: name.into(),
+                targets: vec![],
+            },
+        })
+    }
+    /// Issue `proc.run` under `token`: its completion, or Blocked while the child runs.
+    fn process_request(&mut self, a: &[Value], token: u64) -> Result<OperationResult, Error> {
+        let directory = match tag(&a[4])? {
+            0 => None,
+            _ => match self.id(fields(&a[4])?[0]) {
+                Ok(directory) => Some(directory),
+                // A test.dir Dir has no host directory to start in.
+                Err(_) => {
+                    return Ok(OperationResult::returned(process_value(
+                        ProcessOutcome::Error(ProcessFailure::InvalidInput),
+                    )));
+                }
+            },
+        };
+        let deadline = match tag(&a[6])? {
+            0 => None,
+            _ => {
+                let deadline = fields(fields(&a[6])?[0])?;
+                let Value::Handle { kind, id: ticks } = deadline[1] else {
+                    return Err(invalid());
+                };
+                if kind != "Instant" {
+                    return Err(invalid());
+                }
+                Some(hirsel_rt::process::Deadline {
+                    clock: self.id(deadline[0])?,
+                    ticks: *ticks,
+                })
             }
         };
-        let completion = self
-            .io
-            .call(request)
-            .map_err(|e| Error::Unavailable(format!("host process: {e:?}")))?;
-        Ok(OperationResult::returned(match completion {
-            C::Handle(Ok(id)) => ok(self.handle(id, "Proc")),
-            C::Handle(Err(hirsel_rt::io::IoError::NotGranted)) => error(variant(0, vec![])),
-            C::Process(outcome) => hirsel_interp::library::process::outcome_value(&outcome),
-            _ => return Err(invalid()),
-        }))
+        let request = R::ProcessRun {
+            process: self.id(&a[0])?,
+            program: text(fields(&a[1])?[0])?,
+            args: fields(&a[2])?
+                .into_iter()
+                .map(text)
+                .collect::<Result<_, _>>()?,
+            stdin: bytes(&a[3])?,
+            directory,
+            max_output: word(&a[5])?,
+            deadline,
+        };
+        self.io.adapter().enter(token);
+        let completion = self.host(request);
+        if !matches!(completion, Err(Error::Blocked(_))) {
+            self.io.adapter().finish(token);
+        }
+        match completion? {
+            C::Process(outcome) => Ok(OperationResult::returned(process_value(outcome))),
+            _ => Err(invalid()),
+        }
     }
     fn storage(&mut self, name: &str, a: &[Value]) -> Result<OperationResult, Error> {
         self.yield_now = true;
@@ -1244,6 +1305,25 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                 }
             };
         }
+        if name == "proc.run" {
+            // Finishing a cancelled run's token kills and reaps its child.
+            if canceled {
+                self.io.adapter().finish(token);
+                self.waits.remove(&token);
+                return Ok(Some(OperationResult::returned(process_value(
+                    ProcessOutcome::Error(ProcessFailure::Canceled(
+                        self.library.cancellation().unwrap(),
+                    )),
+                ))));
+            }
+            return match self.process_request(&arguments, token) {
+                Err(Error::Blocked(_)) => Ok(None),
+                result => {
+                    self.waits.remove(&token);
+                    result.map(Some)
+                }
+            };
+        }
         if name == "stdin.read" {
             // A canceled read consumes nothing; the library reports Canceled.
             if canceled {
@@ -1330,7 +1410,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
                         cx,
                     )?;
                 }
-                return self.host_process(&name, call.arguments).map(Some);
+                return self.host_process(&name, call.arguments, cx).map(Some);
             }
             if name == "io.net" {
                 // Validate the Io operand through the ordinary library before projecting it.
@@ -1439,9 +1519,10 @@ mod tests {
             Value::Bytes(vec![]),
             variant(1, vec![directory]),
             u64_value(1024),
+            variant(0, vec![]),
         ];
         assert_eq!(
-            host.host_process("proc.run", &arguments).unwrap(),
+            host.process_request(&arguments, 1).unwrap(),
             OperationResult::returned(error(variant(1, vec![])))
         );
         let HostIo::Replay(io) = &host.io else {

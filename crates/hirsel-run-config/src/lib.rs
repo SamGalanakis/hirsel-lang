@@ -17,8 +17,9 @@ pub use net::{
 };
 mod process;
 pub use process::{
-    ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun, bounded,
-    canonical_program, check, decode_process_runs, encode_process_runs, validate_process_grant,
+    ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule,
+    ProcessRun, bounded, canonical_program, check, decode_child_runs, decode_process_runs,
+    encode_child_runs, encode_process_runs, scriptable, validate_process_grant,
 };
 
 /// A host-supplied, immutable admission snapshot. Its revision hashes the exact file.

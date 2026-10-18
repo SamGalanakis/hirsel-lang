@@ -82,8 +82,10 @@ pass-through variable names. `process.script@1` additionally requires `runs`
 (possibly empty), forbidden under every other provider: ordered `{program, args,
 outcome}` entries, where an outcome is `{"output":{"status":{"exited":0},"stdout":[..],
 "stderr":[..]}}` (or `{"signaled":n}`) or `{"error":e}` with a snake_case
-ProcessError tag such as `"not_found"` or `{"fault":7}`. Runs grant nothing beyond
-the rules.
+ProcessError tag such as `"not_found"`, `"timed_out"` or `{"fault":7}`, never
+`Canceled`. It may also take `children`, ordered `{program, args, steps}` streaming
+child entries whose steps are `{"stdout":[..]}`, `{"stderr":[..]}`, `{"expect":[..]}` or
+`{"exit":status}`. Runs and children grant nothing beyond the rules.
 
 `RunConfig::read_path` accepts only an explicit absolute record path.
 `ValidatedRun::io_projections`, `clock_grants`, `net_grant` and `process_grant` derive adapter policy

@@ -1,0 +1,21 @@
+// rule: PROV-5
+// expect: reject PROV-5 at line 19
+// An instant of one clock cannot bound a run on another.
+fn bounded(p: Proc, a: MonotonicClock, b: MonotonicClock) -> Result[
+  ProcessOutput,
+  ProcessError
+] {
+  let now = match clock.monotonic(a) {
+    Ok(now) => now,
+    Error(_) => return Error(Fault(0)),
+  }
+  proc.run(
+    p,
+    path.of("/bin/true"),
+    [],
+    b"",
+    None(),
+    64,
+    Some(Deadline(clock: b, at: now))
+  )
+}

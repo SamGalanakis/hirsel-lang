@@ -11,6 +11,9 @@ fn failure_word(failure: ProcessFailure) -> String {
         ProcessFailure::PermissionDenied => "permission_denied".into(),
         ProcessFailure::OutputLimit => "output_limit".into(),
         ProcessFailure::Fault(code) => format!("fault {code}"),
+        ProcessFailure::TimedOut => "timed_out".into(),
+        ProcessFailure::Canceled(cause) => format!("canceled {cause}"),
+        ProcessFailure::InputClosed => "input_closed".into(),
     }
 }
 
@@ -25,9 +28,14 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         Request::Ready { wait, polls } => format!("ready {wait} {polls}"),
         Request::RandomBytes { random, count } => format!("random_bytes {random} {count}"),
         Request::SleepUntil { clock, deadline } => format!("sleep_until {clock} {deadline}"),
-        Request::TestProcess { test, runs } => format!(
-            "test_process {test} {}",
-            hex(&hirsel_run_config::encode_process_runs(runs))
+        Request::TestProcess {
+            test,
+            runs,
+            children,
+        } => format!(
+            "test_process {test} {} {}",
+            hex(&hirsel_run_config::encode_process_runs(runs)),
+            hex(&hirsel_run_config::encode_child_runs(children))
         ),
         // The argument count leads, so every word after it is one argument.
         Request::ProcessRun {
@@ -37,12 +45,14 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
             stdin,
             directory,
             max_output,
+            deadline,
         } => {
             let mut text = format!(
-                "process_run {process} {} {} {} {max_output} {}",
+                "process_run {process} {} {} {} {max_output} {} {}",
                 hex(program.as_bytes()),
                 hex(stdin),
                 directory.map_or_else(|| "none".into(), |d| d.to_string()),
+                deadline.map_or_else(|| "none".into(), |d| format!("{}:{}", d.clock, d.ticks)),
                 args.len()
             );
             for arg in args {
@@ -148,9 +158,11 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             clock: number(clock)?,
             deadline: number(deadline)?,
         },
-        ["test_process", test, runs] => Request::TestProcess {
+        ["test_process", test, runs, children] => Request::TestProcess {
             test: number(test)?,
             runs: hirsel_run_config::decode_process_runs(&bytes(runs)?)
+                .map_err(|e| e.to_string())?,
+            children: hirsel_run_config::decode_child_runs(&bytes(children)?)
                 .map_err(|e| e.to_string())?,
         },
         [
@@ -160,6 +172,7 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             stdin,
             directory,
             max_output,
+            deadline,
             count,
             args @ ..,
         ] => {
@@ -176,6 +189,16 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
                     d => Some(number(d)?),
                 },
                 max_output: number(max_output)?,
+                deadline: match *deadline {
+                    "none" => None,
+                    d => {
+                        let (clock, ticks) = d.split_once(':').ok_or("process tape deadline")?;
+                        Some(crate::process::Deadline {
+                            clock: number(clock)?,
+                            ticks: number(ticks)?,
+                        })
+                    }
+                },
             }
         }
         _ => return Ok(None),
@@ -227,6 +250,9 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
                 ["permission_denied"] => ProcessFailure::PermissionDenied,
                 ["output_limit"] => ProcessFailure::OutputLimit,
                 ["fault", code] => ProcessFailure::Fault(number(code)?),
+                ["timed_out"] => ProcessFailure::TimedOut,
+                ["canceled", cause] => ProcessFailure::Canceled(number(cause)?),
+                ["input_closed"] => ProcessFailure::InputClosed,
                 _ => return Err("bad process tape error".into()),
             }))
         }

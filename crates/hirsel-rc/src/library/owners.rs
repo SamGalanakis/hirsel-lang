@@ -196,6 +196,7 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         ("AtomicFile", true),
         ("Stream", true),
         ("Listener", true),
+        ("Child", true),
     ] {
         if let Some(signature) = signatures.get(&hirsel_syntax::DefPath::core(name)) {
             out.nominals.insert(

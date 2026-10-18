@@ -190,7 +190,8 @@ impl Operations for Io {
                     value: Box::new(OpValue::Plain(bytes)),
                 }
             }
-            (module, name, _) => net::canceled(module, name, cause)?,
+            (module, name, _) => net::canceled(module, name, cause)
+                .or_else(|| process::canceled(module, name, cause))?,
         };
         self.yielded = true;
         Some(OpOutcome::Value(value))

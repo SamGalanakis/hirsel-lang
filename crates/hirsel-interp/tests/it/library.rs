@@ -1415,6 +1415,7 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
                 env: vec![],
             }],
             runs: Some(runs),
+            children: None,
         }),
         ..Default::default()
     };
@@ -1440,6 +1441,7 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
                 Value::Bytes(vec![]),
                 none(),
                 u64_value(64),
+                none(),
             ],
             TypeKind::Tuple(vec![].into()),
         )
@@ -1480,6 +1482,13 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
             stdout: vec![0; 65],
             stderr: vec![],
         }),
+        // A timeout needs a deadline, and a cancellation an uncancelled scope cannot give.
+        process::encode_completion(&ProcessOutcome::Error(
+            hirsel_run_config::ProcessFailure::TimedOut,
+        )),
+        process::encode_completion(&ProcessOutcome::Error(
+            hirsel_run_config::ProcessFailure::Canceled(0),
+        )),
         vec![2],
     ] {
         let mut h = Harness::new(Default::default());
@@ -1489,6 +1498,80 @@ fn process_replay_returns_recorded_completions_and_refuses_contradicting_ones() 
         assert!(run(&mut h, "/usr/bin/git").is_err());
         assert_eq!(h.library.simulation.events.len(), 1);
     }
+}
+
+#[test]
+fn a_scripted_run_times_out_only_at_a_reached_virtual_deadline() {
+    use hirsel_run_config::{
+        ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun,
+    };
+    let served = ProcessOutcome::Output {
+        status: ExitStatus::Exited(0),
+        stdout: b"done".to_vec(),
+        stderr: vec![],
+    };
+    let mut h = Harness::new(SimulationConfig {
+        process: Some(ProcessGrant {
+            provider: "process.script@1".into(),
+            rules: vec![ProcessRule {
+                program: "/bin/sleep".into(),
+                env: vec![],
+            }],
+            runs: Some(vec![ProcessRun {
+                program: "/bin/sleep".into(),
+                args: vec![],
+                outcome: served.clone(),
+            }]),
+            children: None,
+        }),
+        monotonic: 1000,
+        ..Default::default()
+    });
+    h.library
+        .simulation
+        .config
+        .grants
+        .insert("MonotonicClock".into());
+    let io = h.root("Io");
+    let Value::Variant { fields, .. } = h.project(&io, "monotonic_clock") else {
+        panic!()
+    };
+    let clock = fields[0].clone().unwrap();
+    let p = unok(h.value("io.process", vec![io]));
+    let run = |h: &mut Harness, at: u64| {
+        let deadline = some(Value::Record {
+            definition: hirsel_syntax::DefPath::core("Deadline"),
+            fields: vec![
+                Some(clock.clone()),
+                Some(Value::Handle {
+                    kind: "Instant".into(),
+                    id: at,
+                }),
+            ],
+        });
+        h.value(
+            "proc.run",
+            vec![
+                p.clone(),
+                path("/bin/sleep"),
+                collection::sequence(BuiltinType::List, []),
+                Value::Bytes(vec![]),
+                none(),
+                u64_value(64),
+                deadline,
+            ],
+        )
+    };
+    // The reached deadline spends no entry; the next run, before its deadline, takes it.
+    assert_eq!(
+        run(&mut h, 1000),
+        process::outcome_value(&ProcessOutcome::Error(ProcessFailure::TimedOut))
+    );
+    assert_eq!(run(&mut h, 1001), process::outcome_value(&served));
+    assert_eq!(
+        run(&mut h, 1001),
+        process::outcome_value(&ProcessOutcome::Error(ProcessFailure::NotFound))
+    );
 }
 
 #[test]

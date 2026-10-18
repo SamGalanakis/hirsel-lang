@@ -88,7 +88,9 @@ To let a program run other programs, grant each one by its exact absolute path:
 `"process":{"provider":"process.spawn@1","rules":[{"program":"/usr/bin/git","env":["HOME"]}]}`
 in `io`. `io.process(rt)` then projects a `Proc`, and `proc.run` runs `/usr/bin/git`
 with an empty environment except `HOME`; any other program is `NotGranted()`. A granted
-program can do whatever the host lets it do.
+program can do whatever the host lets it do. A run bounded by a `Deadline` on a granted
+monotonic clock is killed at expiry and returns `TimedOut()`; with `io.tasks` it parks
+only its task, and cancelling that task kills the child.
 
 When supplied as a path, the run record path must be absolute; a template path may be relative. The launcher validates the record, checks
 its semantic program revision, entry and launch kind, checks required roots and

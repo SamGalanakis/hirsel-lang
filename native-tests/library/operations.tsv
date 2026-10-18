@@ -70,6 +70,12 @@ bytes.slice	e1921884cdd5a64d5d0b02b30773a2e3c6760207850cefb903c0c9e3928637bc	0:b
 channel.open	af6f7bb2ca54ef7ab669b42ece35e28a76a06fae8e19352062f5d1d5ba50f5b5	0:b:n->[0]
 channel.receive	1eaff70e76ac427b45ce141dba08321fa7bd547ed2b03a8c38dbb33a1739972a	0:b:n;1:m:[0]->[0]
 channel.send	74319a6a9b51c38b9c0bc0a3b335b27cd8b79ddee2d0ec184f4dd6c6a14c7b79	0:b:n;1:m:[0];2:t:[0]->[0]
+child.close_stdin	b568b31ba747499d885adb50d8a57307b15901e6519e5acdf27ab115ac30fc30	0:b:n;1:m:n->n
+child.kill	8f688126c3eb6ff59a192478fb6acd1bc17b0f3299a2bc0fbc881b06326a368c	0:b:n;1:m:n->n
+child.read_stderr	97e781f5193793b0d61d7cff4101b088c580323db896540a1f178f3e6b732b78	0:b:n;1:m:n;2:m:n;3:b:n->n
+child.read_stdout	a859e3858870c0d63f67e970e364c3039c7a33e01863f8d81db5a96707e43fdc	0:b:n;1:m:n;2:m:n;3:b:n->n
+child.wait	71f7cee8f752c7bcc726c75b2079811185b87c4a9af3fbd5b8a02e05753e8054	0:b:n;1:t:n->n
+child.write	08d3a471eb1d0583e08893662955ca01a034d847cd0c8c4307d1f20d72e368d3	0:b:n;1:m:n;2:b:n->n
 clock.monotonic	aa1a4a5cd9984a8a83437072208da6d62f319fe0bd155bc87ccb9d8a3d4197c7	0:b:n->n
 clock.sleep_until	a36abac76e9731482d28e1d3a3b5d0f87047bcdbd3727ce41b3aabe5af43d3bc	0:b:n;1:b:n->n
 clock.wall	bbeba15a1fb9656f65f95bfbe7d534fc098a66426d48f2686749dca21842ecc3	0:b:n->n
@@ -170,7 +176,8 @@ net.write_all	03e20b7338f5a7fb986ee0c026cd40e25c8d0d88985bd49aadabaab0c8fbdcf9	0
 out.print	aa71cec9370aba8f69ec592bc3c67ca59ccc62977f6223f16803e979dc1cffd5	0:b:n;1:b:n->n
 path.of	41fee628446a1d9270dc49d705fcc0acbca218e90478ad6fccfffaa6909f6eb9	0:b:n->n
 path.text	211bbc75464dbe37c44d8d797551552276981b7c49f93962165ce7112009b7ae	0:b:n->n
-proc.run	335f1c34783d198b97488734d5cc54f02f18b32585b7b576ddceacf701cd175f	0:b:n;1:b:n;2:b:n;3:b:n;4:b:n;5:b:n->n
+proc.run	9c7297d023f64f0ddc2569c09f4c3e891344be48744b1be9a76194ed200a3bc7	0:b:n;1:b:n;2:b:n;3:b:n;4:b:n;5:b:n;6:b:n->n
+proc.spawn	209e395e13a11a5753b6b44ae686582fe43d07107b70d9344b8e1a8d250f294e	0:b:n;1:b:n;2:b:n;3:b:n->n
 random.bytes	145de296aea0ff894938802391f0af1a99d85780cf030992dd57b3ac4315eb36	0:b:n;1:b:n->n
 region.with	c502b76c18147565e3e60a9671d4c4529eab9c9f17d93e23670558e1ebf9da9c	0:m:[0];1:b:a->[1]
 reservations.insert	a07d8a10eb4e92ccc7a6804caf7688f6e50038a852e5fa9ca8ddb3919adffcd8	0:b:n;1:b:n->n
@@ -217,6 +224,6 @@ test.check_case	027e53cb84a4b98084bb95d53030934f921abe1bc207492d6b3483fd86306ccf
 test.dir	7713520aef8144eadc6d99d37d081d641db40cb5d3e46aa145828ae3d35ac34b	0:b:n;1:b:n->n
 test.fail	210f8c9637a5820506020a1a0f7f561917ad49548a5b6613623744fdddb5d8b7	0:b:n->n
 test.net	a4016eb7855ca7b92adc4aaf10e17bbbfa0c2f4ae8c23ff3c980a507cf30dc4e	0:b:n;1:b:n;2:b:n->n
-test.process	1e984d89c658ccf93f4b4b2f43557702135ca8b58e17c63486d6950e16d17dab	0:b:n;1:b:n->n
+test.process	66d728d0eb051b08b4ea2cd087ad3906f42f18a26682626f126068c05db16337	0:b:n;1:b:n;2:b:n->n
 tls.close	04805cbc3b7a4de824e9f3b4eeb505b782582bd7afb3ca09474f7e7dcc39a868	0:b:n;1:t:n->n
 tls.connect	0727e99bd8443c9c690ab584933d8d412951de7ac4bcd38f3bd2933fa76951ab	0:b:n;1:t:n;2:b:n;3:b:n->n

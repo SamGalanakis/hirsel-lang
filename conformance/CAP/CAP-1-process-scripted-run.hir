@@ -30,38 +30,53 @@ pub fn exercise(t: Test) -> Result[(), ProcessError] {
         args: ["gc"],
         outcome: Error(PermissionDenied())
       )
-    ]
+    ],
+    []
   )
   // Wrong paths: a search name or a noncanonical spelling is invalid input, a
   // different program is not granted, and neither consumes a script entry.
   test.check(
     t,
-    proc.run(p, path.of("git"), ["status"], b"", None(), 64) == Error(InvalidInput())
-  )
-  test.check(
-    t,
-    proc.run(p, path.of("/usr/bin/../bin/git"), ["status"], b"", None(), 64) == Error(
+    proc.run(p, path.of("git"), ["status"], b"", None(), 64, None()) == Error(
       InvalidInput()
     )
   )
   test.check(
     t,
-    proc.run(p, path.of("/usr/bin/gti"), ["status"], b"", None(), 64) == Error(
+    proc.run(p, path.of("/usr/bin/../bin/git"), ["status"], b"", None(), 64, None()) == Error(
+      InvalidInput()
+    )
+  )
+  test.check(
+    t,
+    proc.run(p, path.of("/usr/bin/gti"), ["status"], b"", None(), 64, None()) == Error(
       NotGranted()
     )
   )
   test.check(
     t,
-    proc.run(p, git, ["sta\u{0}tus"], b"", None(), 64) == Error(InvalidInput())
+    proc.run(p, git, ["sta\u{0}tus"], b"", None(), 64, None()) == Error(InvalidInput())
   )
   // Granted: entries serve in order, and a nonzero exit is an ordinary Ok.
-  let first = proc.run(p, git, ["status"], b"input", None(), 64)?
+  let first = proc.run(p, git, ["status"], b"input", None(), 64, None())?
   test.check(t, first.status == Exited(0) && first.stdout == b"clean\n")
-  test.check(t, proc.run(p, git, ["status"], b"", None(), 64) == output(1, b"dirty\n"))
-  test.check(t, proc.run(p, git, ["status"], b"", None(), 64) == Error(NotFound()))
+  test.check(
+    t,
+    proc.run(p, git, ["status"], b"", None(), 64, None()) == output(1, b"dirty\n")
+  )
+  test.check(
+    t,
+    proc.run(p, git, ["status"], b"", None(), 64, None()) == Error(NotFound())
+  )
   // The bound applies to each stream; an over-long run is spent.
-  test.check(t, proc.run(p, git, ["log"], b"", None(), 9) == Error(OutputLimit()))
-  test.check(t, proc.run(p, git, ["log"], b"", None(), 10) == Error(NotFound()))
-  test.check(t, proc.run(p, git, ["gc"], b"", None(), 0) == Error(PermissionDenied()))
+  test.check(
+    t,
+    proc.run(p, git, ["log"], b"", None(), 9, None()) == Error(OutputLimit())
+  )
+  test.check(t, proc.run(p, git, ["log"], b"", None(), 10, None()) == Error(NotFound()))
+  test.check(
+    t,
+    proc.run(p, git, ["gc"], b"", None(), 0, None()) == Error(PermissionDenied())
+  )
   Ok(())
 }

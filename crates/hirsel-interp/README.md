@@ -526,12 +526,14 @@ language failure (a scripted client's unmet Expect) reports it through
 
 `library::process` is the reference Process provider. `SimulationConfig.process`
 holds the `io.process` grant; the `process` projection mints the root Proc with its
-rules. `proc.run` checks a canonical absolute program and NUL-free arguments
-(InvalidInput), then the exact rules (NotGranted), then serves the first unused
-`process.script@1` or `test.process` entry with equal program and args (none:
-NotFound), bounding each stream by `max_output` (OutputLimit). It never spawns: a
-`process.spawn@1` grant needs a host completion from `supply_process`. Replay takes
-the recorded completion and re-derives the checks; a contradiction refuses.
+rules. `proc.run` returns Canceled in a cancelled scope, then checks a canonical
+absolute program and NUL-free arguments (InvalidInput) and the exact rules
+(NotGranted); a deadline virtual time has reached is TimedOut, and otherwise it
+serves the first unused `process.script@1` or `test.process` entry with equal program
+and args (none: NotFound), bounding each stream by `max_output` (OutputLimit). It
+never spawns: the driver's host library sends `process.spawn@1` runs to the runtime.
+Replay takes the recorded completion and re-derives the checks; a contradiction
+refuses.
 
 SimulationConfig supplies stdin bytes and exact Env name-to-optional-value snapshots.
 Library dispatch owns stdin cursor advancement, append-only mut byte buffers,

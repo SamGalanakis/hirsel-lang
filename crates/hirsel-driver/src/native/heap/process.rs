@@ -4,7 +4,9 @@ use super::{Io, IoGrant, io_ok};
 use hirsel_heapcheck::{OpOutcome, OpValue};
 use hirsel_lir::layout_types::ScalarKind;
 use hirsel_rt::io::{Completion as C, Request as R};
-use hirsel_rt::process::{ExitStatus, ProcessFailure, ProcessOutcome, ProcessRun};
+use hirsel_rt::process::{
+    ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessOutcome, ProcessRun,
+};
 
 fn bytes(v: &OpValue) -> Option<Vec<u8>> {
     match v {
@@ -57,7 +59,54 @@ fn failure(f: ProcessFailure) -> OpValue {
                 bits: code.into(),
             },
         ),
+        ProcessFailure::TimedOut => v(6, OpValue::Unit),
+        ProcessFailure::Canceled(cause) => v(7, v(cause, OpValue::Unit)),
+        ProcessFailure::InputClosed => v(8, OpValue::Unit),
     }
+}
+/// The `Canceled(cause)` a canceled `proc.run` completes with
+/// (`hirsel-rt/src/host_waits.rs`), or None for any other operation.
+pub(super) fn canceled(module: Option<&str>, name: &str, cause: u32) -> Option<OpValue> {
+    match (module, name) {
+        (Some("proc"), "run") => Some(v(1, failure(ProcessFailure::Canceled(cause)))),
+        _ => None,
+    }
+}
+fn status(v: &OpValue) -> Option<ExitStatus> {
+    let (tag, code) = variant(v)?;
+    let code = word(code)? as u32 as i32;
+    match tag {
+        0 => Some(ExitStatus::Exited(code)),
+        1 => Some(ExitStatus::Signaled(code)),
+        _ => None,
+    }
+}
+fn child_script(v: &OpValue) -> Option<ChildRun> {
+    let OpValue::Aggregate(fields) = v else {
+        return None;
+    };
+    let [program, args, steps] = fields.as_slice() else {
+        return None;
+    };
+    let OpValue::Sequence(steps) = steps else {
+        return None;
+    };
+    Some(ChildRun {
+        program: text(program)?,
+        args: strings(args)?,
+        steps: steps
+            .iter()
+            .map(|step| {
+                Some(match variant(step)? {
+                    (0, b) => ChildStep::Stdout(bytes(b)?),
+                    (1, b) => ChildStep::Stderr(bytes(b)?),
+                    (2, b) => ChildStep::Expect(bytes(b)?),
+                    (3, s) => ChildStep::Exit(status(s)?),
+                    _ => return None,
+                })
+            })
+            .collect::<Option<_>>()?,
+    })
 }
 fn script(v: &OpValue) -> Option<ProcessRun> {
     let OpValue::Aggregate(fields) = v else {
@@ -68,17 +117,11 @@ fn script(v: &OpValue) -> Option<ProcessRun> {
     };
     let outcome = match variant(outcome)? {
         (0, OpValue::Aggregate(output)) => {
-            let [status, stdout, stderr] = output.as_slice() else {
+            let [status_value, stdout, stderr] = output.as_slice() else {
                 return None;
             };
-            let (tag, code) = variant(status)?;
-            let code = word(code)? as u32 as i32;
             ProcessOutcome::Output {
-                status: match tag {
-                    0 => ExitStatus::Exited(code),
-                    1 => ExitStatus::Signaled(code),
-                    _ => return None,
-                },
+                status: status(status_value)?,
                 stdout: bytes(stdout)?,
                 stderr: bytes(stderr)?,
             }
@@ -90,6 +133,10 @@ fn script(v: &OpValue) -> Option<ProcessRun> {
             (3, _) => ProcessFailure::PermissionDenied,
             (4, _) => ProcessFailure::OutputLimit,
             (5, code) => ProcessFailure::Fault(word(code)? as u32),
+            (6, _) => ProcessFailure::TimedOut,
+            // A script is never canceled: the runtime refuses it.
+            (7, cause) => ProcessFailure::Canceled(variant(cause)?.0),
+            (8, _) => ProcessFailure::InputClosed,
             _ => return None,
         }),
         _ => return None,
@@ -109,19 +156,25 @@ impl Io {
         args: &[OpValue],
     ) -> Option<OpOutcome> {
         let request = match (module, name, args) {
-            (Some("test"), "process", [OpValue::Handle(test), runs])
+            (Some("test"), "process", [OpValue::Handle(test), runs, children])
                 if matches!(self.grants.get(test), Some(IoGrant::Test)) =>
             {
-                let OpValue::Sequence(runs) = runs else {
+                let (OpValue::Sequence(runs), OpValue::Sequence(children)) = (runs, children)
+                else {
                     return None;
                 };
                 R::TestProcess {
                     test: 1,
                     runs: runs.iter().map(script).collect::<Option<_>>()?,
+                    children: children.iter().map(child_script).collect::<Option<_>>()?,
                 }
             }
             (Some("io"), "process", [OpValue::Handle(1)]) => R::Process { io: 1 },
-            (Some("proc"), "run", [p, OpValue::Handle(path), argv, stdin, dir, max]) => {
+            (Some("proc"), "run", [p, OpValue::Handle(path), argv, stdin, dir, max, deadline]) => {
+                // The model grants no clock, so a deadline cannot name one.
+                if variant(deadline)?.0 != 0 {
+                    return Some(OpOutcome::Unsupported);
+                }
                 // The model's Dir handles are H's own; check one here. A scripted world
                 // does not consult it, and the model has no host world to start one in.
                 match variant(dir)? {
@@ -137,6 +190,7 @@ impl Io {
                     stdin: bytes(stdin)?,
                     directory: None,
                     max_output: word(max)?,
+                    deadline: None,
                 }
             }
             _ => return None,

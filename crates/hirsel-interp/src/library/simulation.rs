@@ -142,7 +142,7 @@ pub struct Simulation {
     pub(super) net_worlds: BTreeMap<u64, super::net::World>,
     pub(super) net_streams: BTreeMap<u64, super::net::ScriptStream>,
     pub(super) process_worlds: BTreeMap<u64, super::process::World>,
-    pub(super) supplied_process: Option<hirsel_run_config::ProcessOutcome>,
+    pub(super) process_children: BTreeMap<u64, super::process::Children>,
     pub(super) net_listeners: BTreeMap<u64, super::net::ScriptListener>,
     pub config: SimulationConfig,
     pub events: Vec<CapabilityEvent>,
@@ -329,12 +329,13 @@ impl Simulation {
         }
         let random_seed = config.random_seed;
         let net_worlds = super::net::configured_world(config.net.as_ref())?;
-        let process_worlds = super::process::configured_world(config.process.as_ref())?;
+        let (process_worlds, process_children) =
+            super::process::configured_world(config.process.as_ref())?;
         let mut simulation = Self {
             net_worlds,
             net_streams: BTreeMap::new(),
             process_worlds,
-            supplied_process: None,
+            process_children,
             net_listeners: BTreeMap::new(),
             config,
             events: vec![],

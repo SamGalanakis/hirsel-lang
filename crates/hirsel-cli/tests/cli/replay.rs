@@ -265,7 +265,7 @@ const PROCESS_PROGRAM: &str = r#"pub fn main(rt: Io, args: Args) -> Result[(), G
     Ok(program) => program,
     Error(_) => path.of("/missing"),
   }
-  match proc.run(p, program, ["recorded"], b"", None(), 64) {
+  match proc.run(p, program, ["recorded"], b"", None(), 64, None()) {
     Ok(o) => {
       if o.status == Exited(0) && o.stdout == b"recorded\n" {
         let _ = out.print(out, "echo ran\n")
@@ -331,5 +331,187 @@ fn process_recordings_replay_in_either_engine_without_spawning() {
             );
         }
     }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Runs a private copy of sleep under a deadline that expires, then under one that does
+/// not (docs/spec/core-library.md#processes).
+const DEADLINE_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
+fn clock_error(take e: ClockError) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant
+  let p = io.process(rt) ? grant
+  let c = io.monotonic_clock(rt) ? grant
+  let sleep = match arg.path(args, 0u64) {
+    Ok(program) => program,
+    Error(_) => path.of("/missing"),
+  }
+  let now = clock.monotonic(c) ? clock_error
+  let soon = match instant.checked_add(c, now, 200000000u64) {
+    Some(at) => at,
+    None() => now,
+  }
+  match proc.run(p, sleep, ["10"], b"", None(), 64, Some(Deadline(clock: c, at: soon))) {
+    Error(TimedOut()) => {
+      let _ = out.print(out, "timed out\n")
+    },
+    _ => {
+      let _ = out.print(out, "ran on\n")
+    },
+  }
+  let later = match instant.checked_add(c, now, 60000000000u64) {
+    Some(at) => at,
+    None() => now,
+  }
+  match proc.run(p, sleep, ["0"], b"", None(), 64, Some(Deadline(clock: c, at: later))) {
+    Ok(o) => {
+      if o.status == Exited(0) {
+        let _ = out.print(out, "in time\n")
+      }
+    },
+    Error(_) => {
+      let _ = out.print(out, "failed\n")
+    },
+  }
+  Ok(())
+}
+"#;
+
+/// A task runs a script that would leave a marker after a second; its parent cancels it
+/// after 100 ms, which kills the child.
+const CANCEL_PROGRAM: &str = r#"fn grant(take e: GrantError) -> () {}
+fn clock_error(take e: ClockError) -> () {}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let out = io.stdout(rt) ? grant
+  let p = io.process(rt) ? grant
+  let tasks = io.tasks(rt) ? grant
+  let c = io.monotonic_clock(rt) ? grant
+  let script = match arg.path(args, 0u64) {
+    Ok(program) => program,
+    Error(_) => path.of("/missing"),
+  }
+  let now = clock.monotonic(c) ? clock_error
+  let soon = match instant.checked_add(c, now, 100000000u64) {
+    Some(at) => at,
+    None() => now,
+  }
+  let canceled = task.scope(
+    tasks,
+    fn(s: Scope) -> bool {
+      let h = task.async(
+        s,
+        fn() -> bool {
+          proc.run(p, script, [], b"", None(), 64, None()) == Error(Canceled(Requested))
+        }
+      )
+      let _ = clock.sleep_until(c, soon)
+      task.cancel(s, h)
+      task.await(s, take h)
+    }
+  )
+  if canceled {
+    let _ = out.print(out, "canceled\n")
+  }
+  Ok(())
+}
+"#;
+
+/// Record `program` with `grants` in both engines, then delete the granted program and
+/// replay each tape in both engines: nothing is spawned, and the output is the recorded one.
+fn process_round_trip(name: &str, program: &str, child: &Path, expected: &[u8]) -> PathBuf {
+    let root = child.parent().unwrap();
+    let source = root.join(format!("{name}.hir"));
+    std::fs::write(&source, program).unwrap();
+    let grants = root.join(format!("{name}.json"));
+    std::fs::write(
+        &grants,
+        serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"process":{"provider":"process.spawn@1","rules":[{"program":child}]}},"args":[child]}).to_string(),
+    )
+    .unwrap();
+    let tapes = [false, true].map(|native| {
+        let tape = root.join(format!("{name}-tape-{native}"));
+        let begun = std::time::Instant::now();
+        let output = hirsel(
+            native,
+            &source,
+            &[
+                "--grants".as_ref(),
+                grants.as_os_str(),
+                "--record".as_ref(),
+                tape.as_os_str(),
+            ],
+        )
+        .output()
+        .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(expected),
+            "native={native}: {output:?}"
+        );
+        // Neither a timeout nor a cancellation waits out the child.
+        assert!(
+            begun.elapsed() < std::time::Duration::from_secs(8),
+            "native={native}"
+        );
+        tape
+    });
+    let copy = std::fs::read(child).unwrap();
+    std::fs::remove_file(child).unwrap();
+    for tape in &tapes {
+        for native in [false, true] {
+            assert_replayed(
+                &replay(hirsel(
+                    native,
+                    &source,
+                    &["--replay".as_ref(), tape.as_os_str()],
+                )),
+                expected,
+                &format!("{} replayed native={native}", tape.display()),
+            );
+        }
+    }
+    std::fs::write(child, copy).unwrap();
+    root.to_path_buf()
+}
+
+fn process_root(name: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("hirsel-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    root.canonicalize().unwrap()
+}
+
+#[test]
+fn timed_out_runs_kill_their_child_and_replay_without_spawning() {
+    let root = process_root("replay-deadline");
+    let sleep = root.join("sleep");
+    std::fs::copy("/bin/sleep", &sleep).unwrap();
+    process_round_trip(
+        "deadline",
+        DEADLINE_PROGRAM,
+        &sleep,
+        b"timed out\nin time\n",
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_canceled_parent_kills_its_running_child_and_replays_without_spawning() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = process_root("replay-cancel");
+    let marker = root.join("survived");
+    let script = root.join("child.sh");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\nsleep 1\ntouch {}\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    process_round_trip("cancel", CANCEL_PROGRAM, &script, b"canceled\n");
+    // Had either recorded run left its child alive, the marker would appear by now.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(!marker.exists());
     std::fs::remove_dir_all(&root).unwrap();
 }

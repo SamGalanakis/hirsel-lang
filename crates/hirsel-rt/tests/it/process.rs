@@ -2,7 +2,8 @@
 //! port Rust library/std/src/process/tests.rs (f6c1107f; third-party/NOTICES.md):
 //! `smoke`, `smoke_failure`, `exit_reported_right`, `signal_reported_right`,
 //! `stdout_works`, `stdin_works`, `test_process_output_fail_to_start`,
-//! `test_process_output_output` and `env_empty`, `test_add_to_env`.
+//! `test_process_output_output` and `env_empty`, `test_add_to_env`. Deadlines and
+//! cancellation follow docs/spec/core-library.md#processes.
 use hirsel_rt::io::*;
 use hirsel_rt::io_real::RealIo;
 use hirsel_rt::io_sim::SimIo;
@@ -39,14 +40,16 @@ fn grant(rules: &[(&str, &[&str])]) -> hirsel_run_config::ProcessGrant {
             })
             .collect(),
         runs: None,
+        children: None,
     }
 }
 
-/// A RealIo over a fresh directory with the root Proc projected.
+/// A RealIo over a fresh directory with the root Proc and a monotonic clock granted.
 fn host(rules: &[(&str, &[&str])]) -> (Disposable, RealIo, u64) {
     let temp = Disposable::new();
     let mut io = RealIo::grant(&temp.0).unwrap();
     io.set_process_grant(&grant(rules));
+    io.clock_grants(true, false);
     let Ok(Completion::Handle(Ok(proc))) = io.call(Request::Process { io: 1 }) else {
         panic!("root Proc")
     };
@@ -61,8 +64,34 @@ fn run(process: u64, program: &str, args: &[&str], stdin: &[u8], max: u64) -> Re
         stdin: stdin.to_vec(),
         directory: None,
         max_output: max,
+        deadline: None,
     }
 }
+
+/// The MonotonicClock handle of `io` and its reading now.
+fn clock(io: &mut RealIo) -> (u64, u64) {
+    let Ok(Completion::ClockGrant(Ok(clock))) = io.call(Request::MonotonicClock { io: 1 }) else {
+        panic!("monotonic clock")
+    };
+    let Ok(Completion::Monotonic(Ok(now))) = io.call(Request::Monotonic { clock }) else {
+        panic!("monotonic sample")
+    };
+    (clock, now)
+}
+
+/// `request` bounded by a deadline `nanoseconds` after `now` on `clock`.
+fn until(mut request: Request, (clock, now): (u64, u64), nanoseconds: u64) -> Request {
+    let Request::ProcessRun { deadline, .. } = &mut request else {
+        unreachable!()
+    };
+    *deadline = Some(Deadline {
+        clock,
+        ticks: now + nanoseconds,
+    });
+    request
+}
+
+const TIMED_OUT: Completion = Completion::Process(ProcessOutcome::Error(ProcessFailure::TimedOut));
 
 fn output(status: ExitStatus, stdout: &[u8], stderr: &[u8]) -> Completion {
     Completion::Process(ProcessOutcome::Output {
@@ -291,6 +320,7 @@ fn scripted_worlds_serve_matching_entries_in_order() {
     let Ok(Completion::Handle(Ok(p))) = io.call(Request::TestProcess {
         test: 1,
         runs: runs.clone(),
+        children: vec![],
     }) else {
         panic!("scripted Proc")
     };
@@ -331,4 +361,182 @@ fn scripted_worlds_serve_matching_entries_in_order() {
             Ok(Completion::Process(expected))
         );
     }
+}
+
+#[test]
+fn a_deadline_times_out_a_running_child_and_a_reached_one_spawns_nothing() {
+    let (temp, mut io, p) = host(&[("/bin/sleep", &[]), (SH, &[])]);
+    let now = clock(&mut io);
+    let begun = std::time::Instant::now();
+    assert_eq!(
+        io.call(until(
+            run(p, "/bin/sleep", &["10"], b"", 64),
+            now,
+            200_000_000
+        )),
+        Ok(TIMED_OUT)
+    );
+    // SIGTERM ends sleep at once: no grace was needed.
+    assert!(begun.elapsed() < std::time::Duration::from_secs(5));
+    // A run that ends first returns as without a deadline.
+    let now = clock(&mut io);
+    assert_eq!(
+        io.call(until(
+            run(p, SH, &["-c", "echo done"], b"", 64),
+            now,
+            60_000_000_000
+        )),
+        Ok(output(ExitStatus::Exited(0), b"done\n", b""))
+    );
+    // A child that ignores SIGTERM is killed once the grace passes.
+    let now = clock(&mut io);
+    let begun = std::time::Instant::now();
+    assert_eq!(
+        io.call(until(
+            run(
+                p,
+                SH,
+                &["-c", "trap '' TERM; while :; do sleep 0.05; done"],
+                b"",
+                64
+            ),
+            now,
+            100_000_000
+        )),
+        Ok(TIMED_OUT)
+    );
+    assert!(begun.elapsed() >= TERMINATION_GRACE);
+    // A deadline the clock already reached is checked before spawning.
+    let marker = temp.0.join("spawned");
+    let (clock, now) = clock(&mut io);
+    let mut reached = run(p, SH, &["-c", "touch spawned"], b"", 64);
+    let Request::ProcessRun {
+        deadline,
+        directory,
+        ..
+    } = &mut reached
+    else {
+        unreachable!()
+    };
+    *deadline = Some(Deadline { clock, ticks: now });
+    let Ok(Completion::Handle(Ok(dir))) = io.call(Request::Directory {
+        io: 1,
+        path: "".into(),
+    }) else {
+        panic!("root Dir")
+    };
+    *directory = Some(dir);
+    assert_eq!(io.call(reached.clone()), Ok(TIMED_OUT));
+    assert!(!marker.exists());
+    // Its accepted twin, with no deadline, spawns.
+    let Request::ProcessRun { deadline, .. } = &mut reached else {
+        unreachable!()
+    };
+    *deadline = None;
+    assert_eq!(
+        io.call(reached),
+        Ok(output(ExitStatus::Exited(0), b"", b""))
+    );
+    assert!(marker.exists());
+    // A deadline names a MonotonicClock handle, never another grant.
+    assert_eq!(
+        io.call(until(run(p, "/bin/sleep", &["0"], b"", 64), (p, now), 0)),
+        Err(AdapterError::InvalidHandle(p))
+    );
+}
+
+#[test]
+fn timeouts_record_and_replay_only_under_a_deadline() {
+    use hirsel_rt::launch::{parse_tape, render_tape};
+    let (_temp, mut io, p) = host(&[("/bin/sleep", &[])]);
+    let now = clock(&mut io);
+    let request = until(run(p, "/bin/sleep", &["10"], b"", 64), now, 50_000_000);
+    assert_eq!(io.call(request.clone()), Ok(TIMED_OUT));
+    let tape = io.tape().to_vec();
+    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    let replay = |tape: &[Event]| {
+        let mut sim = SimIo::new(Tree::default(), tape.to_vec());
+        sim.set_process_grant(&grant(&[("/bin/sleep", &[])]));
+        sim.clock_grants(true, false);
+        tape.iter()
+            .map(|event| sim.call(event.request.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        replay(&tape),
+        tape.iter()
+            .map(|e| Ok(e.completion.clone()))
+            .collect::<Vec<_>>()
+    );
+    // A recorded timeout of a run without a deadline contradicts the request.
+    let mut forged = tape.clone();
+    let last = forged.len() - 1;
+    let Request::ProcessRun { deadline, .. } = &mut forged[last].request else {
+        unreachable!()
+    };
+    *deadline = None;
+    assert_eq!(replay(&forged)[last], Err(AdapterError::InvalidCompletion));
+    // A completed timeout proves the clock reached the deadline: a later sample below it
+    // is not a monotonic reading.
+    let mut below = tape.clone();
+    below.push(Event {
+        request: Request::Monotonic { clock: now.0 },
+        completion: Completion::Monotonic(Ok(now.1 + 1)),
+        fault: None,
+    });
+    assert_eq!(
+        replay(&below).last().unwrap(),
+        &Err(AdapterError::InvalidCompletion)
+    );
+}
+
+#[test]
+fn a_cooperative_run_parks_until_its_child_exits() {
+    let (_temp, mut io, p) = host(&[(SH, &[])]);
+    io.set_cooperative(hirsel_rt::readiness::Readiness::default());
+    io.enter(3);
+    let request = run(p, SH, &["-c", "sleep 0.1; echo late"], b"", 64);
+    let parked = io.tape().len();
+    assert_eq!(io.call(request.clone()), Err(AdapterError::Blocked));
+    assert_eq!(
+        io.tape()[parked].completion,
+        Completion::Blocked { committed: false }
+    );
+    assert!(io.cancellable(3));
+    while !io.ready(3).unwrap() {
+        assert!(io.wait().unwrap());
+    }
+    io.enter(3);
+    assert_eq!(
+        io.call(request),
+        Ok(output(ExitStatus::Exited(0), b"late\n", b""))
+    );
+    io.finish(3);
+    assert!(!io.wait().unwrap());
+}
+
+#[test]
+fn cancelling_a_parked_run_kills_its_child_at_once() {
+    let (temp, mut io, p) = host(&[(SH, &[])]);
+    io.set_cooperative(hirsel_rt::readiness::Readiness::default());
+    let mut request = run(p, SH, &["-c", "sleep 0.5; touch survived"], b"", 64);
+    let Ok(Completion::Handle(Ok(dir))) = io.call(Request::Directory {
+        io: 1,
+        path: "".into(),
+    }) else {
+        panic!("root Dir")
+    };
+    let Request::ProcessRun { directory, .. } = &mut request else {
+        unreachable!()
+    };
+    *directory = Some(dir);
+    io.enter(4);
+    assert_eq!(io.call(request), Err(AdapterError::Blocked));
+    // The scheduler finishes a cancelled token: the child is killed and reaped then.
+    let begun = std::time::Instant::now();
+    io.finish(4);
+    assert!(begun.elapsed() < std::time::Duration::from_millis(400));
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(!temp.0.join("survived").exists());
+    assert!(!io.wait().unwrap());
 }

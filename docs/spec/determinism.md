@@ -131,10 +131,9 @@ no authority beyond the explicit rules. An implementation that cannot enforce a 
 rule or provider refuses the launch; it never widens it.
 `process.spawn@1` runs host programs with the [process semantics of the core
 library](core-library.md#processes). `process.script@1` additionally takes `runs`, an
-array of `{program, args, outcome}` script entries, and `children`, an array of
-`{program, args, steps}` streaming child entries, and serves the program from them exactly
-as `test.process` does; either may be omitted for none, and both are invalid under any
-other provider. An outcome is
+array of `{program, args, outcome}` script entries, and optionally `children`, an array of
+`{program, args, steps}` streaming child entries (absent for none), and serves the program
+from them exactly as `test.process` does; both are invalid under any other provider. An outcome is
 `{"output": {"status": status, "stdout": [bytes], "stderr": [bytes]}}`, with status
 `{"exited": code}` or `{"signaled": number}`, or `{"error": error}`, with error
 `"not_granted"`, `"invalid_input"`, `"not_found"`, `"permission_denied"`, `"output_limit"`,

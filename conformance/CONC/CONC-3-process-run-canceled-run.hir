@@ -1,0 +1,59 @@
+// rule: CONC-3
+// expect: run
+// A canceled run returns Canceled before any check, so even an ungranted or invalid
+// program is Canceled; the uncanceled parent's same runs are checked as usual.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let p = io.process(rt)?
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (sender, receiver): (Sender[u8], Receiver[u8]) = channel.open(tasks)
+      let h = task.async(
+        s,
+        fn() -> bool {
+          let mut r = take receiver
+          let _ = channel.receive(tasks, mut r)
+          let ungranted: bool = match proc.run(
+            p,
+            path.of("/bin/echo"),
+            [],
+            b"",
+            None(),
+            64,
+            None()
+          ) {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          let invalid: bool = match proc.run(
+            p,
+            path.of("echo"),
+            [],
+            b"",
+            None(),
+            64,
+            None()
+          ) {
+            Error(Canceled(Requested)) => true,
+            _ => false,
+          }
+          ungranted && invalid
+        }
+      )
+      task.cancel(s, h)
+      failure.check(task.await(s, take h), Arithmetic())
+    }
+  )
+  failure.check(
+    proc.run(p, path.of("/bin/echo"), [], b"", None(), 64, None()) == Error(
+      NotGranted()
+    ),
+    Arithmetic()
+  )
+  failure.check(
+    proc.run(p, path.of("echo"), [], b"", None(), 64, None()) == Error(InvalidInput()),
+    Arithmetic()
+  )
+  Ok(())
+}

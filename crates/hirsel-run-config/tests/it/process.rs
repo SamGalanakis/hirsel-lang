@@ -131,3 +131,76 @@ fn unknown_process_providers_refuse_instead_of_widening() {
         );
     }
 }
+
+#[test]
+fn scripted_children_belong_only_to_the_script_provider() {
+    let children = json!([
+        {"program": "/bin/cat", "args": [], "steps": [
+            {"expect": [104, 105]}, {"stdout": [104, 105]}, {"stderr": []}, {"exit": {"exited": 0}}
+        ]}
+    ]);
+    let run = validate(
+        json!({"provider": "process.script@1", "rules": [], "runs": [], "children": children}),
+    )
+    .unwrap();
+    let grant = run.process_grant().unwrap();
+    let child = &grant.children.as_ref().unwrap()[0];
+    assert_eq!(child.steps[0], ChildStep::Expect(b"hi".to_vec()));
+    assert_eq!(child.steps[3], ChildStep::Exit(ExitStatus::Exited(0)));
+    // Absent children are none; they are no substitute for runs.
+    assert!(
+        validate(json!({"provider": "process.script@1", "rules": [], "runs": []}))
+            .unwrap()
+            .process_grant()
+            .unwrap()
+            .children
+            .is_none()
+    );
+    invalid(
+        json!({"provider": "process.spawn@1", "rules": [], "children": []}),
+        "io.process.children",
+    );
+    invalid(
+        json!({"provider": "process.script@1", "rules": [], "runs": [], "children": [
+            {"program": "cat", "args": [], "steps": []}
+        ]}),
+        "io.process.children.program",
+    );
+    assert!(matches!(
+        validate(
+            json!({"provider": "process.script@1", "rules": [], "runs": [], "children": [
+                {"program": "/bin/cat", "args": [], "steps": ["stall"]}
+            ]})
+        ),
+        Err(RunRefusal::Malformed { .. })
+    ));
+}
+
+#[test]
+fn scripts_time_out_but_never_cancel() {
+    let run = |outcome: Value| {
+        validate(
+            json!({"provider": "process.script@1", "rules": [], "runs": [
+                {"program": "/bin/sleep", "args": [], "outcome": outcome}
+            ]}),
+        )
+    };
+    assert_eq!(
+        run(json!({"error": "timed_out"}))
+            .unwrap()
+            .process_grant()
+            .unwrap()
+            .runs
+            .as_ref()
+            .unwrap()[0]
+            .outcome,
+        ProcessOutcome::Error(ProcessFailure::TimedOut)
+    );
+    assert!(run(json!({"error": "input_closed"})).is_ok());
+    invalid(
+        json!({"provider": "process.script@1", "rules": [], "runs": [
+            {"program": "/bin/sleep", "args": [], "outcome": {"error": {"canceled": 0}}}
+        ]}),
+        "io.process.runs.outcome",
+    );
+}

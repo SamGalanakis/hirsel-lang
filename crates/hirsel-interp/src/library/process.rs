@@ -9,18 +9,26 @@ use super::{
 };
 use crate::{Error, OperationCall, OperationContext, OperationResult, Value, invalid};
 use hirsel_run_config::{
-    ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule, ProcessRun,
-    ProviderContract, bounded, canonical_program, check,
+    ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessGrant, ProcessOutcome, ProcessRule,
+    ProcessRun, ProviderContract, bounded, canonical_program, check, scriptable,
 };
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
 
 /// The unused script entries of one scripted world, in order.
 pub(super) type World = Vec<Option<ProcessRun>>;
+/// The unused streaming-child entries of one scripted world, in order.
+pub(super) type Children = Vec<Option<ChildRun>>;
 
 pub(super) fn configured_world(
     grant: Option<&ProcessGrant>,
-) -> Result<BTreeMap<u64, World>, Error> {
+) -> Result<(BTreeMap<u64, World>, BTreeMap<u64, Children>), Error> {
+    let children = grant
+        .and_then(|g| g.children.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(Some)
+        .collect();
     let runs = match grant {
         None => vec![],
         Some(grant) => {
@@ -29,7 +37,15 @@ pub(super) fn configured_world(
             }
             match (ProviderContract::parse(&grant.provider), &grant.runs) {
                 (Some(ProviderContract::ProcessScript), Some(runs)) => {
-                    if runs.iter().any(|run| !canonical_program(&run.program)) {
+                    if runs
+                        .iter()
+                        .any(|run| !canonical_program(&run.program) || !scriptable(&run.outcome))
+                        || grant
+                            .children
+                            .iter()
+                            .flatten()
+                            .any(|child| !canonical_program(&child.program))
+                    {
                         return Err(invalid("invalid simulation process script"));
                     }
                     runs.clone()
@@ -40,7 +56,10 @@ pub(super) fn configured_world(
             }
         }
     };
-    Ok(BTreeMap::from([(0, runs.into_iter().map(Some).collect())]))
+    Ok((
+        BTreeMap::from([(0, runs.into_iter().map(Some).collect())]),
+        BTreeMap::from([(0, children)]),
+    ))
 }
 
 /// `ProcessError`'s variant ordinal and Fault payload.
@@ -52,6 +71,9 @@ fn failure_parts(failure: ProcessFailure) -> (u32, u32) {
         ProcessFailure::PermissionDenied => (3, 0),
         ProcessFailure::OutputLimit => (4, 0),
         ProcessFailure::Fault(code) => (5, code),
+        ProcessFailure::TimedOut => (6, 0),
+        ProcessFailure::Canceled(cause) => (7, cause),
+        ProcessFailure::InputClosed => (8, 0),
     }
 }
 fn failure_of(ordinal: u32, code: u32) -> Option<ProcessFailure> {
@@ -62,8 +84,23 @@ fn failure_of(ordinal: u32, code: u32) -> Option<ProcessFailure> {
         (3, 0) => ProcessFailure::PermissionDenied,
         (4, 0) => ProcessFailure::OutputLimit,
         (5, code) => ProcessFailure::Fault(code),
+        (6, 0) => ProcessFailure::TimedOut,
+        (7, cause) if cause <= 2 => ProcessFailure::Canceled(cause),
+        (8, 0) => ProcessFailure::InputClosed,
         _ => return None,
     })
+}
+/// `ProcessError` as a value.
+pub fn failure_value(failure: ProcessFailure) -> Value {
+    let (ordinal, code) = failure_parts(failure);
+    variant(
+        ordinal,
+        match failure {
+            ProcessFailure::Fault(_) => vec![super::dispatch::u32_value(code)],
+            ProcessFailure::Canceled(_) => vec![variant(code, vec![])],
+            _ => vec![],
+        },
+    )
 }
 
 /// The recorded completion: `0, status tag, i32, stdout, stderr` with u64-framed
@@ -154,17 +191,7 @@ pub fn outcome_value(outcome: &ProcessOutcome) -> Value {
                 ],
             })
         }
-        ProcessOutcome::Error(failure) => {
-            let (ordinal, code) = failure_parts(*failure);
-            error(variant(
-                ordinal,
-                if ordinal == 5 {
-                    vec![super::dispatch::u32_value(code)]
-                } else {
-                    vec![]
-                },
-            ))
-        }
+        ProcessOutcome::Error(failure) => error(failure_value(*failure)),
     }
 }
 
@@ -229,6 +256,7 @@ fn script(v: &Value) -> Result<ProcessRun, Error> {
             let code = match code.as_slice() {
                 [] => 0,
                 [Value::Integer(n)] if n.kind() == Primitive::U32 => n.bits() as u32,
+                [cause] => variant_fields(cause)?.0,
                 _ => return Err(invalid("ProcessError representation")),
             };
             ProcessOutcome::Error(
@@ -237,18 +265,62 @@ fn script(v: &Value) -> Result<ProcessRun, Error> {
         }
         _ => return Err(invalid("ProcessScript outcome representation")),
     };
+    if !scriptable(&outcome) {
+        return Err(invalid("test.process canceled script outcome"));
+    }
     Ok(ProcessRun {
         program,
         args: strings(f[1])?,
         outcome,
     })
 }
+fn exit_status(v: &Value) -> Result<ExitStatus, Error> {
+    match variant_fields(v)? {
+        (0, code) if code.len() == 1 => Ok(ExitStatus::Exited(int32(code[0])?)),
+        (1, signal) if signal.len() == 1 => Ok(ExitStatus::Signaled(int32(signal[0])?)),
+        _ => Err(invalid("ExitStatus representation")),
+    }
+}
+fn child_script(v: &Value) -> Result<ChildRun, Error> {
+    let f = record_fields(v, "ChildScript", 3)?;
+    let program = text(f[0])?.to_owned();
+    if !canonical_program(&program) {
+        return Err(invalid("test.process noncanonical program"));
+    }
+    let steps = collection::elements(f[2], BuiltinType::List)?
+        .iter()
+        .map(|step| {
+            Ok(match variant_fields(step)? {
+                (0, b) if b.len() == 1 => ChildStep::Stdout(bytes(b[0])?.to_vec()),
+                (1, b) if b.len() == 1 => ChildStep::Stderr(bytes(b[0])?.to_vec()),
+                (2, b) if b.len() == 1 => ChildStep::Expect(bytes(b[0])?.to_vec()),
+                (3, s) if s.len() == 1 => ChildStep::Exit(exit_status(s[0])?),
+                _ => return Err(invalid("ChildStep representation")),
+            })
+        })
+        .collect::<Result<_, Error>>()?;
+    Ok(ChildRun {
+        program,
+        args: strings(f[1])?,
+        steps,
+    })
+}
+/// `Option[Deadline]`: the clock handle's id and the Instant's ticks.
+fn deadline(v: &Value) -> Result<Option<(&Value, u64)>, Error> {
+    match variant_fields(v)? {
+        (0, d) if d.is_empty() => Ok(None),
+        (1, d) if d.len() == 1 => {
+            let f = record_fields(d[0], "Deadline", 2)?;
+            match f[1] {
+                Value::Handle { kind, id } if kind == "Instant" => Ok(Some((f[0], *id))),
+                _ => Err(invalid("invalid Instant representation")),
+            }
+        }
+        _ => Err(invalid("Option[Deadline] representation")),
+    }
+}
 
 impl Simulation {
-    /// Give the next granted `proc.run` a host completion; authority and replay are unchanged.
-    pub fn supply_process(&mut self, outcome: ProcessOutcome) {
-        self.supplied_process = Some(outcome);
-    }
     fn process_grant(&self, v: &Value) -> Result<(u64, Vec<ProcessRule>), Error> {
         let id = self.id(v, "Proc")?;
         let Some(Grant::Proc { world, rules }) = self.grants.get(&id) else {
@@ -261,6 +333,7 @@ impl Simulation {
         name: &str,
         call: &OperationCall<'_>,
         cx: &mut OperationContext<'_>,
+        canceled: Option<u32>,
     ) -> Result<OperationResult, Error> {
         let a = call.arguments;
         let value = match name {
@@ -286,7 +359,15 @@ impl Simulation {
                     .iter()
                     .map(script)
                     .collect::<Result<Vec<_>, _>>()?;
-                let mut programs: Vec<_> = runs.iter().map(|r| r.program.clone()).collect();
+                let children = collection::elements(arg(a, 2)?, BuiltinType::List)?
+                    .iter()
+                    .map(child_script)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut programs: Vec<_> = runs
+                    .iter()
+                    .map(|r| r.program.clone())
+                    .chain(children.iter().map(|c| c.program.clone()))
+                    .collect();
                 programs.sort();
                 programs.dedup();
                 let rules = programs
@@ -299,6 +380,8 @@ impl Simulation {
                 let world = self.next_id;
                 self.process_worlds
                     .insert(world, runs.into_iter().map(Some).collect());
+                self.process_children
+                    .insert(world, children.into_iter().map(Some).collect());
                 let value = self.handle("Proc", Grant::Proc { world, rules });
                 self.record("Test", name, encode_arguments(a), encode_value(&value), cx)?;
                 value
@@ -320,7 +403,19 @@ impl Simulation {
                     Value::Integer(n) if n.kind() == Primitive::U64 => n.bits() as u64,
                     _ => return Err(invalid("max_output requires u64")),
                 };
-                let checked = check(&program, &args, &rules);
+                // The clock is only the deadline's owner: a host adapter's handle serves too.
+                let deadline = deadline(arg(a, 6)?)?;
+                if deadline.is_some_and(
+                    |(clock, _)| !matches!(clock, Value::Handle { kind, .. } if kind == "MonotonicClock"),
+                ) {
+                    return Err(invalid("expected MonotonicClock"));
+                }
+                let deadline = deadline.map(|(_, ticks)| ticks);
+                // A cancelled scope returns Canceled before any check (CONC-3).
+                let checked = match canceled {
+                    Some(cause) => Err(ProcessFailure::Canceled(cause)),
+                    None => check(&program, &args, &rules),
+                };
                 let request = encode_arguments(a);
                 let outcome = if let Some(recorded) = self.replay_output("Proc", name, &request)? {
                     // Replay re-derives the program check; a contradicting completion refuses.
@@ -329,8 +424,18 @@ impl Simulation {
                     let consistent = match (&checked, &outcome) {
                         (Err(expected), ProcessOutcome::Error(found)) => expected == found,
                         (Err(_), _) => false,
-                        (Ok(()), ProcessOutcome::Error(ProcessFailure::NotGranted)) => false,
+                        (
+                            Ok(()),
+                            ProcessOutcome::Error(
+                                ProcessFailure::NotGranted
+                                | ProcessFailure::Canceled(_)
+                                | ProcessFailure::InputClosed,
+                            ),
+                        ) => false,
                         (Ok(()), ProcessOutcome::Error(ProcessFailure::InvalidInput)) => with_dir,
+                        (Ok(()), ProcessOutcome::Error(ProcessFailure::TimedOut)) => {
+                            deadline.is_some()
+                        }
                         (Ok(()), outcome) => bounded(outcome.clone(), max_output) == *outcome,
                     };
                     if !consistent {
@@ -339,8 +444,6 @@ impl Simulation {
                     outcome
                 } else if let Err(failure) = checked {
                     ProcessOutcome::Error(failure)
-                } else if let Some(supplied) = self.supplied_process.take() {
-                    bounded(supplied, max_output)
                 } else if world == 0
                     && self.config.process.as_ref().is_some_and(|p| {
                         ProviderContract::parse(&p.provider) == Some(ProviderContract::ProcessSpawn)
@@ -350,6 +453,9 @@ impl Simulation {
                         "the reference runs host programs only through a host adapter; simulation requires {}",
                         ProviderContract::ProcessScript.name()
                     )));
+                } else if deadline.is_some_and(|ticks| ticks <= self.monotonic_now()) {
+                    // A scripted run takes no time: only a reached deadline times it out.
+                    ProcessOutcome::Error(ProcessFailure::TimedOut)
                 } else {
                     let runs = self
                         .process_worlds

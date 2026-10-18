@@ -4,7 +4,9 @@
 pub fn main(rt: Io) -> Result[(), GrantError] {
   let p = io.process(rt)?
   failure.check(
-    proc.run(p, path.of("/bin/echo"), ["hello"], b"", None(), 64) == Error(NotGranted()),
+    proc.run(p, path.of("/bin/echo"), ["hello"], b"", None(), 64, None()) == Error(
+      NotGranted()
+    ),
     Bounds()
   )
   Ok(())

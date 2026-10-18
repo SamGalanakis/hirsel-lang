@@ -4,16 +4,30 @@
 //! The host provider is Rust std's `Command` with an empty environment and an explicit
 //! working directory. Its stream loop adapts std's unix `read_output`
 //! (library/std/src/sys/process/unix/common.rs, f6c1107f; third-party/NOTICES.md):
-//! one `poll` over nonblocking pipes, here also feeding stdin and bounding each
-//! stream, so neither pipe can stall the other.
+//! one `poll` over nonblocking pipes, here also feeding stdin, bounding each stream and
+//! watching a deadline and a cancellation descriptor, so neither pipe can stall the other.
+//! Under a cooperative scheduler a run is a [`HostJob`]: the same loop on a helper thread,
+//! whose completion wakes a descriptor the scheduler polls, so the task parks instead of
+//! blocking the thread.
 use crate::handles::Grant;
 use crate::io::{AdapterError, Completion, Request, State};
 pub use hirsel_run_config::{
-    ExitStatus, ProcessFailure, ProcessOutcome, ProcessRule, ProcessRun, bounded,
-    canonical_program, check,
+    ChildRun, ChildStep, ExitStatus, ProcessFailure, ProcessOutcome, ProcessRule, ProcessRun,
+    bounded, canonical_program, check,
 };
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
+
+/// A run's `Deadline`: its MonotonicClock handle and the Instant's nanosecond ticks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Deadline {
+    pub clock: u64,
+    pub ticks: u64,
+}
+
+/// The grace a timed-out child has between SIGTERM and SIGKILL
+/// (docs/spec/core-library.md#processes).
+pub const TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Which provider serves a Proc: the host, or a scripted world.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -33,6 +47,8 @@ pub struct ProcessSpec<'a> {
     /// The working directory's Dir handle, always host-backed here; `None` is `/`.
     pub directory: Option<u64>,
     pub max_output: u64,
+    /// CLOCK_MONOTONIC nanoseconds by which the run must end.
+    pub deadline: Option<u64>,
 }
 
 impl State {
@@ -44,6 +60,10 @@ impl State {
             Some(runs) => {
                 self.process_scripts
                     .insert(0, runs.iter().cloned().map(Some).collect());
+                self.child_scripts.insert(
+                    0,
+                    grant.children.iter().flatten().cloned().map(Some).collect(),
+                );
                 ProcessWorld::Script(0)
             }
             None => ProcessWorld::Host,
@@ -74,14 +94,25 @@ impl State {
                 };
                 Ok(Completion::Handle(Ok(self.handles.insert(grant))))
             }
-            Request::TestProcess { test, runs } => {
+            Request::TestProcess {
+                test,
+                runs,
+                children,
+            } => {
                 if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
                     return Err(AdapterError::InvalidHandle(*test));
                 }
-                if runs.iter().any(|run| !canonical_program(&run.program)) {
+                if runs.iter().any(|run| {
+                    !canonical_program(&run.program) || !hirsel_run_config::scriptable(&run.outcome)
+                }) || children.iter().any(|c| !canonical_program(&c.program))
+                {
                     return Err(AdapterError::InvalidCompletion);
                 }
-                let mut programs: Vec<_> = runs.iter().map(|r| r.program.clone()).collect();
+                let mut programs: Vec<_> = runs
+                    .iter()
+                    .map(|r| r.program.clone())
+                    .chain(children.iter().map(|c| c.program.clone()))
+                    .collect();
                 programs.sort();
                 programs.dedup();
                 let id = self.handles.next();
@@ -97,6 +128,8 @@ impl State {
                 });
                 self.process_scripts
                     .insert(id, runs.iter().cloned().map(Some).collect());
+                self.child_scripts
+                    .insert(id, children.iter().cloned().map(Some).collect());
                 Ok(Completion::Handle(Ok(id)))
             }
             Request::ProcessRun {
@@ -106,6 +139,7 @@ impl State {
                 stdin,
                 directory,
                 max_output,
+                deadline,
             } => {
                 let (rules, world) = self.process_grant(*process)?;
                 if let Some(d) = directory
@@ -113,10 +147,22 @@ impl State {
                 {
                     return Err(AdapterError::InvalidHandle(*d));
                 }
+                if let Some(d) = deadline {
+                    self.expect(d.clock, Grant::MonotonicClock)?;
+                }
                 if let Err(failure) = check(program, args, &rules) {
                     return Ok(Completion::Process(ProcessOutcome::Error(failure)));
                 }
                 let outcome = match world {
+                    // A scripted run takes no time: only a deadline the clock's latest
+                    // reading already reached times it out, before any entry is taken.
+                    ProcessWorld::Script(_)
+                        if deadline.is_some_and(|d| {
+                            self.last_monotonic.is_some_and(|now| now >= d.ticks)
+                        }) =>
+                    {
+                        ProcessOutcome::Error(ProcessFailure::TimedOut)
+                    }
                     ProcessWorld::Script(id) => {
                         let runs = self
                             .process_scripts
@@ -145,13 +191,20 @@ impl State {
                             env: &rule.env,
                             directory: *directory,
                             max_output: *max_output,
+                            deadline: deadline.map(|d| d.ticks),
                         })?;
-                        // A provider can fail or exceed the bound, never contradict the checks.
+                        // A provider can fail, time out or exceed the bound, never contradict
+                        // the checks; cancellation never reaches it.
                         let valid = match &outcome {
-                            ProcessOutcome::Error(ProcessFailure::NotGranted) => false,
+                            ProcessOutcome::Error(
+                                ProcessFailure::NotGranted
+                                | ProcessFailure::Canceled(_)
+                                | ProcessFailure::InputClosed,
+                            ) => false,
                             ProcessOutcome::Error(ProcessFailure::InvalidInput) => {
                                 directory.is_some()
                             }
+                            ProcessOutcome::Error(ProcessFailure::TimedOut) => deadline.is_some(),
                             outcome => bounded(outcome.clone(), *max_output) == *outcome,
                         };
                         if !valid {
@@ -160,6 +213,13 @@ impl State {
                         outcome
                     }
                 };
+                // A completed timeout proves the clock reached the deadline, as a
+                // completed timer wait does.
+                if let (ProcessOutcome::Error(ProcessFailure::TimedOut), Some(d)) =
+                    (&outcome, deadline)
+                {
+                    self.last_monotonic = Some(self.last_monotonic.unwrap_or(0).max(d.ticks));
+                }
                 Ok(Completion::Process(outcome))
             }
             _ => Err(AdapterError::InvalidCompletion),
@@ -182,11 +242,113 @@ fn spawn_failure(error: &std::io::Error) -> ProcessFailure {
     }
 }
 
+/// CLOCK_MONOTONIC nanoseconds, the clock `clock.monotonic.ns@1` ticks read.
+pub(crate) fn monotonic_now() -> u64 {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: now is writable; CLOCK_MONOTONIC always exists on Linux.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    (now.tv_sec as u64) * 1_000_000_000 + now.tv_nsec as u64
+}
+
+/// Milliseconds a poll may sleep before `deadline`, rounded up; -1 without one.
+fn poll_timeout(deadline: Option<u64>) -> libc::c_int {
+    deadline.map_or(-1, |d| {
+        let left = d.saturating_sub(monotonic_now());
+        left.div_ceil(1_000_000).min(libc::c_int::MAX as u64) as libc::c_int
+    })
+}
+
+/// Whether `fd` (a cancellation descriptor) is readable now.
+fn signaled(fd: Option<RawFd>) -> bool {
+    let Some(fd) = fd else { return false };
+    let mut row = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: row holds a live descriptor owned by the caller.
+    unsafe { libc::poll(&mut row, 1, 0) > 0 }
+}
+
+/// How a bounded wait for the child ended.
+enum Ended {
+    Exited(std::process::ExitStatus),
+    Expired,
+    Canceled,
+}
+
+/// Wait for `child` to exit, until `deadline` or until `cancel` is readable.
+fn wait_child(
+    child: &mut std::process::Child,
+    deadline: Option<u64>,
+    cancel: Option<RawFd>,
+) -> std::io::Result<Ended> {
+    if deadline.is_none() && cancel.is_none() {
+        loop {
+            match child.wait() {
+                Ok(status) => return Ok(Ended::Exited(status)),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Ended::Exited(status));
+        }
+        if signaled(cancel) {
+            return Ok(Ended::Canceled);
+        }
+        if deadline.is_some_and(|d| monotonic_now() >= d) {
+            return Ok(Ended::Expired);
+        }
+        // No descriptor reports a child's exit portably; recheck every 10 ms.
+        let mut row = libc::pollfd {
+            fd: cancel.unwrap_or(-1),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout = match poll_timeout(deadline) {
+            -1 => 10,
+            t => t.min(10),
+        };
+        // SAFETY: row holds a live descriptor or -1, which poll ignores.
+        unsafe { libc::poll(&mut row, 1, timeout) };
+    }
+}
+
+/// Kill and reap a child that is not trusted to stop.
+fn kill(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// A timed-out child: SIGTERM, then SIGKILL once [`TERMINATION_GRACE`] passes, then reap.
+fn terminate(child: &mut std::process::Child, cancel: Option<RawFd>) {
+    // SAFETY: the child is unreaped, so its pid still names it.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    let grace = monotonic_now() + TERMINATION_GRACE.as_nanos() as u64;
+    if !matches!(wait_child(child, Some(grace), cancel), Ok(Ended::Exited(_))) {
+        kill(child);
+    }
+}
+
 /// Run one checked program on the host to completion, starting in `cwd` (a pinned
-/// directory descriptor) or `/`.
-pub fn run_host(spec: &ProcessSpec<'_>, cwd: Option<std::os::fd::RawFd>) -> ProcessOutcome {
+/// directory descriptor) or `/`. The run ends `TimedOut()` at its deadline, and kills the
+/// child at once when `cancel` becomes readable (its outcome is then discarded).
+pub fn run_host(
+    spec: &ProcessSpec<'_>,
+    cwd: Option<RawFd>,
+    cancel: Option<RawFd>,
+) -> ProcessOutcome {
     use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
+    if spec.deadline.is_some_and(|d| monotonic_now() >= d) {
+        return ProcessOutcome::Error(ProcessFailure::TimedOut);
+    }
     let mut command = Command::new(spec.program);
     command
         .args(spec.args)
@@ -211,27 +373,43 @@ pub fn run_host(spec: &ProcessSpec<'_>, cwd: Option<std::os::fd::RawFd>) -> Proc
             child.stdout.take().expect("piped stdout"),
             child.stderr.take().expect("piped stderr"),
             spec.max_output,
+            spec.deadline,
+            cancel,
         )
     });
     let (stdout, stderr) = match streams {
-        Ok(Some(streams)) => streams,
-        Ok(None) => {
-            // Over the bound: the child is not trusted to stop writing.
-            let _ = child.kill();
-            let _ = child.wait();
+        Ok(Drained::Done(stdout, stderr)) => (stdout, stderr),
+        // Over the bound: the child is not trusted to stop writing.
+        Ok(Drained::OverLimit) => {
+            kill(&mut child);
             return ProcessOutcome::Error(ProcessFailure::OutputLimit);
         }
+        Ok(Drained::Expired) => {
+            terminate(&mut child, cancel);
+            return ProcessOutcome::Error(ProcessFailure::TimedOut);
+        }
+        Ok(Drained::Canceled) => {
+            kill(&mut child);
+            return ProcessOutcome::Error(ProcessFailure::Canceled(0));
+        }
         Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill(&mut child);
             return ProcessOutcome::Error(ProcessFailure::Fault(1));
         }
     };
-    let status = loop {
-        match child.wait() {
-            Ok(status) => break status,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return ProcessOutcome::Error(ProcessFailure::Fault(1)),
+    let status = match wait_child(&mut child, spec.deadline, cancel) {
+        Ok(Ended::Exited(status)) => status,
+        Ok(Ended::Expired) => {
+            terminate(&mut child, cancel);
+            return ProcessOutcome::Error(ProcessFailure::TimedOut);
+        }
+        Ok(Ended::Canceled) => {
+            kill(&mut child);
+            return ProcessOutcome::Error(ProcessFailure::Canceled(0));
+        }
+        Err(_) => {
+            kill(&mut child);
+            return ProcessOutcome::Error(ProcessFailure::Fault(1));
         }
     };
     let status = match (status.code(), status.signal()) {
@@ -244,6 +422,114 @@ pub fn run_host(spec: &ProcessSpec<'_>, cwd: Option<std::os::fd::RawFd>) -> Proc
         stdout,
         stderr,
     }
+}
+
+/// A host operation under a cooperative scheduler, on a helper thread. Its completion is
+/// sent, then a byte makes `wake` readable, which is the parked request's readiness
+/// interest. Dropping the job (a finished or cancelled wait) makes `cancel` readable, so a
+/// running child is killed, and joins the thread, so the child is reaped before the drop
+/// returns.
+pub(crate) struct HostJob {
+    wake: std::os::unix::net::UnixStream,
+    cancel: std::os::unix::net::UnixStream,
+    result: std::sync::mpsc::Receiver<ProcessOutcome>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl HostJob {
+    fn start(body: impl FnOnce(RawFd) -> ProcessOutcome + Send + 'static) -> std::io::Result<Self> {
+        use std::os::unix::net::UnixStream;
+        let (wake, signal) = UnixStream::pair()?;
+        let (cancel, canceled) = UnixStream::pair()?;
+        let (send, result) = std::sync::mpsc::channel();
+        let thread = std::thread::Builder::new()
+            .name("hirsel-process".into())
+            .spawn(move || {
+                let outcome = body(canceled.as_raw_fd());
+                let _ = send.send(outcome);
+                let _ = (&signal).write_all(&[1]);
+            })?;
+        Ok(Self {
+            wake,
+            cancel,
+            result,
+            thread: Some(thread),
+        })
+    }
+}
+impl Drop for HostJob {
+    fn drop(&mut self) {
+        let _ = (&self.cancel).write_all(&[1]);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Deliver the entered cooperative token's finished job, or park while it runs: `start`
+/// begins it the first time. A job that cannot start is a host fault.
+pub(crate) fn cooperative_job(
+    readiness: &crate::readiness::Readiness,
+    start: impl FnOnce() -> Option<Box<dyn FnOnce(RawFd) -> ProcessOutcome + Send>>,
+) -> Result<ProcessOutcome, AdapterError> {
+    let mut pending = readiness.pending();
+    if let Some(job) = &pending.process {
+        return match job.result.try_recv() {
+            Ok(outcome) => {
+                pending.process = None;
+                pending.interest = None;
+                Ok(outcome)
+            }
+            Err(_) => Err(AdapterError::Blocked),
+        };
+    }
+    let Some(body) = start() else {
+        return Ok(ProcessOutcome::Error(ProcessFailure::Fault(1)));
+    };
+    match HostJob::start(body) {
+        Ok(job) => {
+            pending.interest = Some((job.wake.as_raw_fd(), libc::POLLIN));
+            pending.process = Some(job);
+            Err(AdapterError::Blocked)
+        }
+        Err(_) => Ok(ProcessOutcome::Error(ProcessFailure::Fault(1))),
+    }
+}
+
+/// `run_host` for the entered cooperative token, as a [`HostJob`].
+pub(crate) fn run_cooperative(
+    readiness: &crate::readiness::Readiness,
+    spec: &ProcessSpec<'_>,
+    cwd: Option<RawFd>,
+) -> Result<ProcessOutcome, AdapterError> {
+    cooperative_job(readiness, || {
+        let program = spec.program.to_owned();
+        let args = spec.args.to_vec();
+        let stdin = spec.stdin.to_vec();
+        let env = spec.env.to_vec();
+        let (directory, max_output, deadline) = (spec.directory, spec.max_output, spec.deadline);
+        // The thread keeps its own descriptor of the working directory.
+        let cwd = match cwd {
+            // SAFETY: the pinned directory descriptor is live for this call.
+            Some(fd) => Some(
+                unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }
+                    .try_clone_to_owned()
+                    .ok()?,
+            ),
+            None => None,
+        };
+        Some(Box::new(move |cancel| {
+            let spec = ProcessSpec {
+                program: &program,
+                args: &args,
+                stdin: &stdin,
+                env: &env,
+                directory,
+                max_output,
+                deadline,
+            };
+            run_host(&spec, cwd.as_ref().map(AsRawFd::as_raw_fd), Some(cancel))
+        }))
+    })
 }
 
 /// Run `body` with SIGPIPE blocked on this thread, then discard a SIGPIPE it raised:
@@ -274,15 +560,26 @@ fn without_sigpipe<T>(body: impl FnOnce() -> T) -> T {
     }
 }
 
-/// Write all of `input` and read both streams to end of file, concurrently. `None` when a
-/// stream passes `max` bytes. A child that closes its stdin early only ends the writing.
+/// How draining a child's streams ended.
+enum Drained {
+    Done(Vec<u8>, Vec<u8>),
+    OverLimit,
+    Expired,
+    Canceled,
+}
+
+/// Write all of `input` and read both streams to end of file, concurrently, until a
+/// stream passes `max` bytes, `deadline` passes or `cancel` is readable. A child that
+/// closes its stdin early only ends the writing.
 fn drain(
     stdin: std::process::ChildStdin,
     input: &[u8],
     mut stdout: std::process::ChildStdout,
     mut stderr: std::process::ChildStderr,
     max: u64,
-) -> std::io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+    deadline: Option<u64>,
+    cancel: Option<RawFd>,
+) -> std::io::Result<Drained> {
     fn nonblocking(fd: std::os::fd::RawFd) -> std::io::Result<()> {
         // SAFETY: fd is a live pipe descriptor owned by the caller.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -325,14 +622,25 @@ fn drain(
                 events: libc::POLLOUT,
                 revents: 0,
             },
+            libc::pollfd {
+                fd: cancel.unwrap_or(-1),
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
-        // SAFETY: fds is a live array of three pollfd records.
-        if unsafe { libc::poll(fds.as_mut_ptr(), 3, -1) } < 0 {
+        // SAFETY: fds is a live array of four pollfd records.
+        if unsafe { libc::poll(fds.as_mut_ptr(), 4, poll_timeout(deadline)) } < 0 {
             let error = std::io::Error::last_os_error();
             if error.kind() == std::io::ErrorKind::Interrupted {
                 continue;
             }
             return Err(error);
+        }
+        if fds[3].revents != 0 {
+            return Ok(Drained::Canceled);
+        }
+        if deadline.is_some_and(|d| monotonic_now() >= d) {
+            return Ok(Drained::Expired);
         }
         if fds[2].revents != 0
             && let Some(pipe) = &mut stdin
@@ -370,7 +678,7 @@ fn drain(
                 Ok(n) => {
                     buffer.extend_from_slice(&chunk[..n]);
                     if buffer.len() as u64 > max {
-                        return Ok(None);
+                        return Ok(Drained::OverLimit);
                     }
                 }
                 Err(e)
@@ -382,7 +690,7 @@ fn drain(
             }
         }
     }
-    Ok(Some((out, err)))
+    Ok(Drained::Done(out, err))
 }
 
 /// `Result[ProcessOutput, ProcessError]`. Ok: ExitStatus (u32 tag, i32) at 8, stdout at
@@ -434,6 +742,31 @@ fn failure_parts(failure: ProcessFailure) -> (u32, u32) {
         ProcessFailure::PermissionDenied => (3, 0),
         ProcessFailure::OutputLimit => (4, 0),
         ProcessFailure::Fault(code) => (5, code),
+        ProcessFailure::TimedOut => (6, 0),
+        ProcessFailure::Canceled(cause) => (7, cause),
+        ProcessFailure::InputClosed => (8, 0),
+    }
+}
+/// `ProcessError` from its variant ordinal and payload word.
+fn failure_of(kind: u32, code: u32) -> ProcessFailure {
+    match (kind, code) {
+        (0, _) => ProcessFailure::NotGranted,
+        (1, _) => ProcessFailure::InvalidInput,
+        (2, _) => ProcessFailure::NotFound,
+        (3, _) => ProcessFailure::PermissionDenied,
+        (4, _) => ProcessFailure::OutputLimit,
+        (5, code) => ProcessFailure::Fault(code),
+        (6, _) => ProcessFailure::TimedOut,
+        (7, cause) => ProcessFailure::Canceled(cause),
+        (8, _) => ProcessFailure::InputClosed,
+        _ => crate::fault("ProcessError tag"),
+    }
+}
+fn status_of(kind: u32, code: u32) -> ExitStatus {
+    match kind {
+        0 => ExitStatus::Exited(code as i32),
+        1 => ExitStatus::Signaled(code as i32),
+        _ => crate::fault("ExitStatus tag"),
     }
 }
 /// One `ProcessScript` (96 bytes): program String at 0, args List at 24, outcome
@@ -451,31 +784,47 @@ unsafe fn script(at: *const u8) -> ProcessRun {
         },
         outcome: match unsafe { outcome.cast::<u32>().read() } {
             0 => ProcessOutcome::Output {
-                status: match kind {
-                    0 => ExitStatus::Exited(code as i32),
-                    1 => ExitStatus::Signaled(code as i32),
-                    _ => crate::fault("ExitStatus tag"),
-                },
+                status: status_of(kind, code),
                 stdout: unsafe { slice(outcome.add(16)) },
                 stderr: unsafe { slice(outcome.add(40)) },
             },
-            1 => ProcessOutcome::Error(match (kind, code) {
-                (0, _) => ProcessFailure::NotGranted,
-                (1, _) => ProcessFailure::InvalidInput,
-                (2, _) => ProcessFailure::NotFound,
-                (3, _) => ProcessFailure::PermissionDenied,
-                (4, _) => ProcessFailure::OutputLimit,
-                (5, code) => ProcessFailure::Fault(code),
-                _ => crate::fault("ProcessError tag"),
-            }),
+            1 => ProcessOutcome::Error(failure_of(kind, code)),
             _ => crate::fault("ProcessScript outcome tag"),
+        },
+    }
+}
+/// One `ChildScript` (40 bytes): program String at 0, args List at 24, steps List at 32,
+/// each `ChildStep` 32 bytes: its tag, then Bytes or `ExitStatus` at 8.
+unsafe fn child_script(at: *const u8) -> ChildRun {
+    ChildRun {
+        program: unsafe { text(at) },
+        args: unsafe {
+            list(at.add(24).cast::<*mut crate::Header>().read(), 24, |a| {
+                text(a)
+            })
+        },
+        steps: unsafe {
+            list(at.add(32).cast::<*mut crate::Header>().read(), 32, |step| {
+                let payload = step.add(8);
+                match step.cast::<u32>().read() {
+                    0 => ChildStep::Stdout(slice(payload)),
+                    1 => ChildStep::Stderr(slice(payload)),
+                    2 => ChildStep::Expect(slice(payload)),
+                    3 => ChildStep::Exit(status_of(
+                        payload.cast::<u32>().read(),
+                        payload.add(4).cast::<u32>().read(),
+                    )),
+                    _ => crate::fault("ChildStep tag"),
+                }
+            })
         },
     }
 }
 
 /// # Safety
-/// Context is bound; Proc, Path, the List[String] block, the Bytes slice and the
-/// `Option[Dir]` (u32 tag, Dir at 8) are borrowed live values; out is writable.
+/// Context is bound; Proc, Path, the List[String] block, the Bytes slice, the
+/// `Option[Dir]` (u32 tag, Dir at 8) and the `Option[Deadline]` (u32 tag, the clock at 8
+/// and the Instant's ticks at 16) are borrowed live values; out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
     ctx: *mut crate::RunCtx,
@@ -489,6 +838,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
     stdin_length: u64,
     directory: *const u8,
     max_output: u64,
+    deadline: *const u8,
 ) -> u8 {
     let request = Request::ProcessRun {
         process: unsafe { process.read() },
@@ -500,6 +850,13 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
             _ => Some(unsafe { directory.add(8).cast::<u64>().read() }),
         },
         max_output,
+        deadline: match unsafe { deadline.cast::<u32>().read() } {
+            0 => None,
+            _ => Some(Deadline {
+                clock: unsafe { deadline.add(8).cast::<u64>().read() },
+                ticks: unsafe { deadline.add(16).cast::<u64>().read() },
+            }),
+        },
     };
     let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
@@ -532,8 +889,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
 }
 
 /// # Safety
-/// Context is bound; Test and the List[ProcessScript] block are borrowed live values;
-/// out is writable. No borrowed input is retained.
+/// Context is bound; Test and the List[ProcessScript] and List[ChildScript] blocks are
+/// borrowed live values; out is writable. No borrowed input is retained.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_test_process(
     ctx: *mut crate::RunCtx,
@@ -541,10 +898,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_process(
     out: *mut u64,
     test: *const u64,
     runs: *mut crate::Header,
+    children: *mut crate::Header,
 ) -> u8 {
     let request = Request::TestProcess {
         test: unsafe { test.read() },
         runs: unsafe { list(runs, 96, |at| script(at)) },
+        children: unsafe { list(children, 40, |at| child_script(at)) },
     };
     let Ok(completion) = (unsafe { crate::io::capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;

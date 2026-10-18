@@ -303,7 +303,11 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "program: String,args: List[String],steps: List[ChildStep]",
         ),
-        ("Deadline", "", "clock: MonotonicClock,at: Instant of .clock"),
+        (
+            "Deadline",
+            "",
+            "clock: MonotonicClock,at: Instant of .clock",
+        ),
         ("NetClient", "", "from: SocketAddr,steps: List[NetStep]"),
         (
             "NetListener",

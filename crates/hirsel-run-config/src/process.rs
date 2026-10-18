@@ -20,9 +20,36 @@ pub struct ProcessGrant {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "runs"
+        deserialize_with = "present"
     )]
     pub runs: Option<Vec<ProcessRun>>,
+    /// Scripted streaming children: process.script@1 only, absent for none.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub children: Option<Vec<ChildRun>>,
+}
+
+/// One scripted streaming child: the first unused entry whose program and args equal a
+/// spawn's, playing its steps in order.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChildRun {
+    pub program: String,
+    pub args: Vec<String>,
+    pub steps: Vec<ChildStep>,
+}
+
+/// `ChildStep`, in its docs/spec/core-library.md variant order.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ChildStep {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+    Expect(Vec<u8>),
+    Exit(ExitStatus),
 }
 
 /// One scripted run: the first unused entry whose program and args equal a call's.
@@ -63,11 +90,23 @@ pub enum ProcessFailure {
     PermissionDenied,
     OutputLimit,
     Fault(u32),
+    TimedOut,
+    /// `Canceled(cause)`, the `CancelCause` ordinal; never a script outcome.
+    Canceled(u32),
+    InputClosed,
 }
 
-// Missing is None; an explicit null is not a runs array, under any provider.
-fn runs<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<Vec<ProcessRun>>, D::Error> {
+// Missing is None; an explicit null is not an array, under any provider.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    de: D,
+) -> Result<Option<Vec<T>>, D::Error> {
     Vec::deserialize(de).map(Some)
+}
+
+/// Whether a script may hold `outcome`: everything a host run can return except
+/// `Canceled`, which only a cancellation produces.
+pub fn scriptable(outcome: &ProcessOutcome) -> bool {
+    !matches!(outcome, ProcessOutcome::Error(ProcessFailure::Canceled(_)))
 }
 
 /// A canonical absolute program path: `/`, then nonempty components other than
@@ -115,6 +154,12 @@ impl ProcessGrant {
                 "runs is required only for process.script@1",
             ));
         }
+        if !script && self.children.is_some() {
+            return Err(invalid(
+                "io.process.children",
+                "children is only for process.script@1",
+            ));
+        }
         self.rules.sort_by(|a, b| a.program.cmp(&b.program));
         for rule in &mut self.rules {
             if !canonical_program(&rule.program) {
@@ -148,6 +193,20 @@ impl ProcessGrant {
                     "expected a canonical absolute path",
                 ));
             }
+            if !scriptable(&run.outcome) {
+                return Err(invalid(
+                    "io.process.runs.outcome",
+                    "a script cannot be canceled",
+                ));
+            }
+        }
+        for child in self.children.iter().flatten() {
+            if !canonical_program(&child.program) {
+                return Err(invalid(
+                    "io.process.children.program",
+                    "expected a canonical absolute path",
+                ));
+            }
         }
         Ok(())
     }
@@ -162,6 +221,17 @@ pub fn encode_process_runs(runs: &[ProcessRun]) -> Vec<u8> {
 /// Decode script data without minting a validated run; the serving adapter checks it.
 pub fn decode_process_runs(bytes: &[u8]) -> Result<Vec<ProcessRun>, RunRefusal> {
     serde_json::from_slice(bytes).map_err(|error| invalid("io.process.runs", &error.to_string()))
+}
+
+/// The ordered streaming-child script encoding of scripted process tape requests.
+pub fn encode_child_runs(children: &[ChildRun]) -> Vec<u8> {
+    serde_json::to_vec(children).expect("script data has no failing JSON values")
+}
+
+/// Decode streaming-child script data; the serving adapter checks it.
+pub fn decode_child_runs(bytes: &[u8]) -> Result<Vec<ChildRun>, RunRefusal> {
+    serde_json::from_slice(bytes)
+        .map_err(|error| invalid("io.process.children", &error.to_string()))
 }
 
 /// A launcher's standalone `io.process` grant: the JSON of a RunConfig's `io.process`

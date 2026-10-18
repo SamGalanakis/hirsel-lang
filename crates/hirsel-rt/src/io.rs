@@ -131,6 +131,7 @@ pub enum Request {
     TestProcess {
         test: u64,
         runs: Vec<hirsel_run_config::ProcessRun>,
+        children: Vec<hirsel_run_config::ChildRun>,
     },
     /// `proc.run`; `directory` is the working directory's Dir handle.
     ProcessRun {
@@ -140,6 +141,7 @@ pub enum Request {
         stdin: Vec<u8>,
         directory: Option<u64>,
         max_output: u64,
+        deadline: Option<crate::process::Deadline>,
     },
     TestCheck {
         test: u64,
@@ -641,7 +643,7 @@ pub(crate) struct State {
     pub handles: Handles,
     pub(crate) monotonic_granted: bool,
     pub(crate) wall_granted: bool,
-    last_monotonic: Option<u64>,
+    pub(crate) last_monotonic: Option<u64>,
     pub(crate) random: RandomSource,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -662,6 +664,8 @@ pub(crate) struct State {
     pub process_world: crate::process::ProcessWorld,
     /// Unused entries of each scripted world, keyed by world.
     pub process_scripts: BTreeMap<u64, Vec<Option<hirsel_run_config::ProcessRun>>>,
+    /// Unused streaming-child entries of each scripted world, keyed by world.
+    pub child_scripts: BTreeMap<u64, Vec<Option<hirsel_run_config::ChildRun>>>,
 }
 impl Default for State {
     fn default() -> Self {
@@ -686,6 +690,7 @@ impl Default for State {
             process_rules: vec![],
             process_world: crate::process::ProcessWorld::Host,
             process_scripts: BTreeMap::new(),
+            child_scripts: BTreeMap::new(),
             projections: [
                 "stdin", "stderr", "stdout", "tasks", "net", "process", "random", "dir",
             ]

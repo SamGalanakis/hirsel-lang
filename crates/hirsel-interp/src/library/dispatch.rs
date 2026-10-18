@@ -1267,11 +1267,13 @@ primary_operations! { self, call, context, name, a, value;
     Capability: "io.process" | "proc.run" | "test.process" => {
         // A rejected replay never publishes effects or consumes script entries.
         let saved = (!context.configuration.inputs.is_empty()).then(|| self.simulation.clone());
-        let result = self.simulation.process_call(name, &call, context);
+        self.tasks.yield_now = true;
+        let result = self.simulation.process_call(name, &call, context, self.tasks.canceled());
         if result.is_err() && let Some(saved) = saved { self.simulation = saved; }
         return result.map(Some);
     },
     Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
+    Unavailable: "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" => { return Err(Error::Unavailable(format!("{name}: streaming children are not implemented yet"))); },
     Unavailable: "$intrinsic.NetReadInto" => { return Err(Error::Unavailable(format!("{name} is the native entry of net.read_into's compiled body; the reference executes net.read_into"))); },
     Unavailable: "reservations.insert" | "stock.get" | "stock.put" | "store.transact" => { return Err(Error::Unavailable(format!("{name} is a signature-only application fixture"))); },
     Primitive: "path.of" => path(text(arg(a, 0)?)?),

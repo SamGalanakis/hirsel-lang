@@ -582,6 +582,7 @@ impl RealIo {
             }
             Request::ProcessRun { .. } => {
                 let directories = &self.disk.directories;
+                let cooperative = self.cooperative.as_ref().map(|(readiness, _)| readiness);
                 self.state.execute_process(
                     &mut |spec| {
                         let cwd = match spec.directory {
@@ -595,7 +596,14 @@ impl RealIo {
                                 }
                             },
                         };
-                        Ok(crate::process::run_host(spec, cwd))
+                        // Under cooperative admission the run parks its task instead of
+                        // blocking the thread, and a cancellation kills its child.
+                        match cooperative {
+                            Some(readiness) => {
+                                crate::process::run_cooperative(readiness, spec, cwd)
+                            }
+                            None => Ok(crate::process::run_host(spec, cwd, None)),
+                        }
                     },
                     &request,
                 )
