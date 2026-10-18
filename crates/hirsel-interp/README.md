@@ -346,7 +346,9 @@ The private heap producer returns an opaque stable `$Heap` handle with identity 
 
 BindOrigin and EndOrigin are validated semantic identity bookkeeping with no
 runtime value effect. ReadConstant reads the program-lifetime materialized value
-served by TirProvider; it has no initializer operand. The scheduler decodes the
+served by TirProvider; it has no initializer operand. A call of a CT-5
+generic generated declaration runs the definition `TirProvider::instance_body`
+names for its closed actuals. The scheduler decodes the
 provider's ordered constants before entry and caches each once. Source reads use
 the reference evaluator's semantic-copy representation of readonly shares. No
 initializer user code executes at startup. Named FunctionReference values retain

@@ -150,6 +150,7 @@ pub fn program(validated: &ValidatedNativeInput) -> Program {
             })
             .collect(),
         owners,
+        instance_bodies: input.instance_bodies.clone(),
         constants: input.constants.clone(),
     }
 }

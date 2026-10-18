@@ -36,6 +36,8 @@ pub struct NativeInput {
     pub audits: BTreeMap<DefPath, SourceAudit>,
     /// GEN-5 instance requirements; import recollects them and rejects growth.
     pub instances: InstanceGraph,
+    /// CT-5 instance bodies of the selected generic generated declarations.
+    pub instance_bodies: hirsel_tir::InstanceBodies,
     /// What the externs resolve against at link time (PROG-4).
     pub foreign_links: Vec<crate::LinkInput>,
     /// Whether executables refuse to record or replay (PROG-4).
@@ -103,12 +105,7 @@ impl QueryEngine {
             }
             let (file, item) = self.parse_definition(&path)?.value;
             let source = &file.tree.items[item.0 as usize];
-            let executable = matches!(
-                &source.kind,
-                ItemKind::Function { body: Some(_), .. }
-                    | ItemKind::Const { .. }
-                    | ItemKind::Type { drop: Some(_), .. }
-            );
+            let executable = crate::queries::generation::executable(&file, item);
             source_owners.insert(
                 path.clone(),
                 NativeSource {
@@ -207,6 +204,7 @@ impl QueryEngine {
             completed_source_stages: NativeStatus::Complete,
             audits,
             instances: InstanceGraph::default(),
+            instance_bodies: self.instance_bodies(&paths),
             foreign_links: self.foreign_links.clone(),
             foreign_unreplayable: self.foreign_unreplayable,
         };
@@ -358,6 +356,17 @@ impl QueryEngine {
             {
                 return Err(invalid("forged materialization substitutions"));
             }
+        }
+        if input.instance_bodies != current.instance_bodies {
+            return Err(invalid("forged or incomplete instance bodies"));
+        }
+        let violations = hirsel_validate::validate_instance_bodies(
+            &input.instance_bodies,
+            &input.signatures,
+            &input.definitions,
+        );
+        if !violations.is_empty() {
+            return Err(invalid(format!("invalid instance bodies: {violations:?}")));
         }
         if !InstanceGraph::native(&input)?.same(&input.instances) {
             return Err(invalid("forged or incomplete instance graph"));

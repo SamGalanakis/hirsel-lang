@@ -1361,6 +1361,29 @@ impl Importer<'_, '_> {
         path: &DefPath,
         arguments: &[GenericArgument],
     ) -> R<(SymbolId, FnAbiId)> {
+        // CT-5: a generic generated declaration is its selected instance's
+        // monomorphic definition.
+        if self.program.instance_bodies.declarations.contains(path) {
+            let callee = crate::instance::callee_actuals(
+                None,
+                &self.def.types,
+                arguments,
+                self.actuals,
+                false,
+                path,
+            )?;
+            let instance =
+                match self
+                    .program
+                    .instance_bodies
+                    .resolve(path, &callee.store, &callee.arguments)
+                {
+                    Ok(Some(instance)) => instance.clone(),
+                    Ok(None) => return unsupported(format!("{path:?} has no instance bodies")),
+                    Err(error) => return unsupported(format!("{error:?}")),
+                };
+            return self.direct(&instance, &[]);
+        }
         if let Some(body) = crate::library::body_index(path) {
             let request = self.library_request(body, path, arguments)?;
             let direct = self.require(request)?;

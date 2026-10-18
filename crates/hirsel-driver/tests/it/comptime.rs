@@ -545,3 +545,41 @@ fn generated_body_diagnostics_name_the_literal_parameter_on_compiler_thread() {
     assert_eq!(provided.span.file, generated, "{own:?}");
     assert_eq!(engine.sources.slice(provided.span), Some("tag"), "{own:?}");
 }
+
+#[test]
+fn generic_generated_instances_follow_their_declaration() {
+    hirsel_engine::with_compiler_stack(
+        generic_generated_instances_follow_their_declaration_on_compiler_thread,
+    );
+}
+fn generic_generated_instances_follow_their_declaration_on_compiler_thread() {
+    // CT-5: evaluation selects width[Point] lazily; editing the declaration
+    // retires that instance, so the next evaluation generates it again.
+    let source = |generator: &str| {
+        format!(
+            "type Point {{ x: u64 }}\n\
+             fn two[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {{}}], String] {{\n\
+             Ok(codegen.body(\"fn(v: standalone@0/Point) -> u64 uses {{}} {{ 2 }}\"))\n\
+             }}\n\
+             fn twelve[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {{}}], String] {{\n\
+             Ok(codegen.body(\"fn(v: standalone@0/Point) -> u64 uses {{}} {{ 12 }}\"))\n\
+             }}\n\
+             fn width[T](v: T) -> u64 uses {{}} = comptime {generator}(shape(T))\n\
+             const VALUE: u64 = comptime width(Point(x: 1))\n"
+        )
+    };
+    let mut engine = engine(&source("two"));
+    assert_eq!(
+        engine.materialize_constant(&path("VALUE")).unwrap(),
+        Constant::Integer(2)
+    );
+    let file = engine
+        .sources
+        .add("comptime.hir", source("twelve"))
+        .unwrap();
+    engine.parse_file(file, &default_context()).unwrap();
+    assert_eq!(
+        engine.materialize_constant(&path("VALUE")).unwrap(),
+        Constant::Integer(12)
+    );
+}

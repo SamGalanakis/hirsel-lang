@@ -1,0 +1,77 @@
+// rule: CT-5
+// expect: accept
+// Instances select further instances: the body for Tag[n] calls the declaration at
+// Tag[n + 1] until Tag[3], whose body calls nothing, so selection closes at four.
+type Tag[n: size] {
+  a: u64,
+}
+
+fn put(mut out: List[u8], text: String) -> () uses {} {
+  let bytes = core@1/string.as_bytes(text)
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(bytes) {
+    list.push(mut out, bytes[i])
+    i += 1
+  }
+}
+
+fn put_decimal(mut out: List[u8], n: u64) -> () uses {} {
+  if n >= 10 {
+    put_decimal(mut out, n / 10)
+  }
+  let digits = core@1/string.as_bytes("0123456789")
+  list.push(mut out, digits[n % 10])
+}
+
+// The size in a spelling such as `standalone@0/Tag[7]`.
+fn size_of(name: String) -> u64 uses {} {
+  let bytes = core@1/string.as_bytes(name)
+  let digits = core@1/string.as_bytes("0123456789")
+  let mut n: u64 = 0
+  let mut inside = false
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(bytes) {
+    if bytes[i] == 91 {
+      inside = true
+    } else if inside {
+      let mut d: u64 = 0
+      while d < 10 {
+        if bytes[i] == digits[d] {
+          n = n * 10 + d
+        }
+        d += 1
+      }
+    }
+    i += 1
+  }
+  n
+}
+
+fn tags_body[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {} {
+  let info = type_shape.info(s)
+  let mut out: List[u8] = []
+  put(mut out, "fn(v: ")
+  put(mut out, info.name)
+  if size_of(info.name) == 3 {
+    put(mut out, ") -> u64 uses {} { v.a }")
+    return match core@1/string.from_bytes(core@1/bytes.from_list(take out)) {
+      Ok(text) => Ok(codegen.body(text)),
+      Error(_) => Error("not UTF-8"),
+    }
+  }
+  put(mut out, ") -> u64 uses {} { let w: standalone@0/Tag[")
+  put_decimal(mut out, size_of(info.name) + 1)
+  put(mut out, "] = Tag(a: v.a)\n tags(w) + 1 }")
+  match core@1/string.from_bytes(core@1/bytes.from_list(take out)) {
+    Ok(text) => Ok(codegen.body(text)),
+    Error(_) => Error("not UTF-8"),
+  }
+}
+
+fn tags[T](v: T) -> u64 uses {} = comptime tags_body(shape(T))
+
+pub fn main() -> Result[(), ()] {
+  let start: Tag[0] = Tag(a: 1)
+  let _ = tags(start)
+  Ok(())
+}

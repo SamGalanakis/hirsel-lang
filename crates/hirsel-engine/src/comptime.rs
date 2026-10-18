@@ -55,6 +55,14 @@ impl TirProvider for Evaluation<'_> {
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
         Ok(vec![])
     }
+    fn instance_body(
+        &mut self,
+        path: &DefPath,
+        types: &hirsel_types::TypeStore,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError> {
+        self.engine.resolve_instance(path, types, arguments)
+    }
 
     fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError> {
         self.engine.read_implementation(path);

@@ -64,6 +64,31 @@ impl QueryEngine {
         let mut visited = BTreeSet::new();
         let mut uses = BTreeMap::new();
         let mut pending: Vec<_> = roots.into_iter().collect();
+        // CT-5: the closure also holds every instance of a generic generated
+        // declaration that it selects, and what those instances reach.
+        loop {
+            self.semantic_closure(&mut pending, &mut visited, &mut uses, &mut nodes)?;
+            let selected =
+                self.select_generated_instances(visited.iter().cloned().collect::<Vec<_>>())?;
+            pending.extend(selected.into_iter().filter(|path| !visited.contains(path)));
+            if pending.is_empty() {
+                break;
+            }
+        }
+        Ok(SemanticProgram {
+            nodes,
+            definitions: visited,
+            uses,
+        })
+    }
+
+    fn semantic_closure(
+        &mut self,
+        pending: &mut Vec<DefPath>,
+        visited: &mut BTreeSet<DefPath>,
+        uses: &mut BTreeMap<DefPath, BTreeSet<DefPath>>,
+        nodes: &mut Vec<ProgramNode>,
+    ) -> Result<(), QueryError> {
         while let Some(path) = pending.pop() {
             if !visited.insert(path.clone()) {
                 continue;
@@ -90,11 +115,7 @@ impl QueryEngine {
                 dependencies,
             });
         }
-        Ok(SemanticProgram {
-            nodes,
-            definitions: visited,
-            uses,
-        })
+        Ok(())
     }
 
     /// One definition's revision content and direct semantic dependencies,
@@ -124,12 +145,7 @@ impl QueryEngine {
             let file = &analyzed.value.typed.file;
             let item = &file.tree.items[analyzed.value.typed.item.0 as usize];
             content.extend(self.semantic_tokens(file, item)?);
-            if matches!(
-                &item.kind,
-                ItemKind::Function { body: Some(_), .. }
-                    | ItemKind::Const { .. }
-                    | ItemKind::Type { drop: Some(_), .. }
-            ) {
+            if generation::executable(file, analyzed.value.typed.item) {
                 let lowered = self.lower_to_tir(path)?;
                 if has_errors(&lowered.diagnostics) {
                     return Err(QueryError::Diagnostics(lowered.diagnostics));

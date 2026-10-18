@@ -283,15 +283,26 @@ pub(crate) fn check_file_lowering(
         if !crate::queries::has_errors(&diagnostics) {
             for item in &parsed.value.roots {
                 let source = &parsed.value.tree.items[item.0 as usize];
-                let executable = matches!(
-                    &source.kind,
-                    hirsel_syntax::ItemKind::Function { body: Some(_), .. }
-                        | hirsel_syntax::ItemKind::Const { .. }
-                        | hirsel_syntax::ItemKind::Type { drop: Some(_), .. }
-                );
-                if executable && engine.lowers_at_check(&source.definition, lowering) {
+                if crate::queries::generation::executable(&parsed.value, *item)
+                    && engine.lowers_at_check(&source.definition, lowering)
+                {
                     diagnostics.extend(engine.lower_to_tir(&source.definition)?.diagnostics);
                 }
+            }
+            // CT-5: each instance a body selects is generated and checked here.
+            let roots = parsed
+                .value
+                .roots
+                .iter()
+                .map(|id| parsed.value.tree.items[id.0 as usize].definition.clone());
+            match engine.select_generated_instances(roots) {
+                Ok(instances) => {
+                    for instance in instances {
+                        diagnostics.extend(engine.lower_to_tir(&instance)?.diagnostics);
+                    }
+                }
+                Err(QueryError::Diagnostics(errors)) => diagnostics.extend(errors),
+                Err(error) => return Err(error),
             }
             engine.prepare_staged_instances()?;
         }

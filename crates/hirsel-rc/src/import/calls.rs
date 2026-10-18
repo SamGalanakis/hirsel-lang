@@ -214,7 +214,9 @@ impl Importer<'_, '_> {
                     let (abi, actuals) = self.operation_abi(path, arguments)?;
                     operation_arguments = actuals;
                     (Callee::Operation(reference), abi)
-                } else if self.program.definitions.contains_key(path) {
+                } else if self.program.definitions.contains_key(path)
+                    || self.program.instance_bodies.declarations.contains(path)
+                {
                     let (symbol, abi) = self.direct(path, arguments)?;
                     (Callee::Direct(symbol), abi)
                 } else if let Some(abi) = self.foreign_abi(path)? {

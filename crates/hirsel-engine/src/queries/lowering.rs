@@ -74,12 +74,8 @@ impl QueryEngine {
             };
             parsed.value.roots.iter().all(|id| {
                 let item = &parsed.value.tree.items[id.0 as usize];
-                !matches!(
-                    item.kind,
-                    ItemKind::Function { body: Some(_), .. }
-                        | ItemKind::Const { .. }
-                        | ItemKind::Type { drop: Some(_), .. }
-                ) || self.lowered.contains_key(&item.definition)
+                !generation::executable(&parsed.value, *id)
+                    || self.lowered.contains_key(&item.definition)
                     || !self.lowers_at_check(&item.definition, policy)
             })
         })

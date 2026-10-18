@@ -95,9 +95,7 @@ impl QueryEngine {
             for (file, item) in items {
                 modules.insert(file.file, module_identity(path));
                 match &file.tree.items[item.0 as usize].kind {
-                    ItemKind::Function { body: Some(_), .. }
-                    | ItemKind::Const { .. }
-                    | ItemKind::Type { drop: Some(_), .. } => {
+                    _ if crate::queries::generation::executable(&file, item) => {
                         executable.insert(path.clone());
                     }
                     ItemKind::Type {

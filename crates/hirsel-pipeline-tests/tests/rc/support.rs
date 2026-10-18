@@ -158,6 +158,7 @@ pub fn program(input: &NativeInput) -> Program {
             .collect(),
         owners,
         constants: input.constants.clone(),
+        instance_bodies: input.instance_bodies.clone(),
     }
 }
 

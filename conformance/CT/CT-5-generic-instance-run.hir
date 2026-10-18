@@ -1,0 +1,39 @@
+// rule: CT-5
+// expect: run
+// stdout: 2 3
+// A generic generated declaration is generated per selected instance: width[Point] and
+// width[Box3] each read their own shape.
+type Point {
+  x: u64,
+  y: u64,
+}
+
+type Box3 {
+  a: u64,
+  b: u64,
+  c: u64,
+}
+
+fn width_body[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] uses {} {
+  let info = type_shape.info(s)
+  let n = match info.body {
+    Record(fields) => list.len(fields),
+    _ => 0u64,
+  }
+  Ok(codegen.body(f"fn(v: {info.name}) -> u64 uses {{}} {{ {n} }}"))
+}
+
+fn width[T](v: T) -> u64 uses {} = comptime width_body(shape(T))
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let p = width(Point(x: 1, y: 2))
+  let b = width(Box3(a: 1, b: 2, c: 3))
+  let text = if p == 2 && b == 3 {
+    "2 3\n"
+  } else {
+    "wrong\n"
+  }
+  let _ = out.print(out, text)
+  Ok(())
+}

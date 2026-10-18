@@ -300,14 +300,9 @@ impl QueryEngine {
             let Ok((content, dependencies)) = self.semantic_node(&path) else {
                 continue;
             };
-            let executable = self.items[&path].first().is_some_and(|item| {
-                matches!(
-                    item.file.tree.items[item.item.0 as usize].kind,
-                    ItemKind::Function { body: Some(_), .. }
-                        | ItemKind::Const { .. }
-                        | ItemKind::Type { drop: Some(_), .. }
-                )
-            });
+            let executable = self.items[&path]
+                .first()
+                .is_some_and(|item| generation::executable(&item.file, item.item));
             let audit = if executable {
                 Some(self.source_audit_products(&path)?)
             } else {

@@ -30,6 +30,7 @@ mod flow;
 mod flow_origins;
 mod generics;
 mod indexed;
+mod instances;
 mod matching;
 mod origin_dependencies;
 mod origin_types;
@@ -42,6 +43,7 @@ mod static_data;
 mod tail;
 mod typing;
 mod variant_brands;
+pub use instances::{InstanceViolation, validate_instance_bodies};
 pub use matching::{MAX_MATCH_WORK, tooling_limit_error};
 
 /// Owned, self-contained snapshots; IDs are never shared between their stores.

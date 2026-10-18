@@ -82,3 +82,9 @@ operands: its size actuals are constants or lexical size references. The provide
 materializes each selected instance, and native import emits the existing static
 read using that instance's data.
 
+`InstanceBodies` (CT-5) names every generic generated declaration and, per
+declaration, its selected instances keyed by the canonical spelling of their
+closed arguments (`InstanceBodies::key`). A declaration has no `Definition`;
+`resolve` gives the monomorphic definition a call at closed arguments runs, and
+`TirProvider::instance_body` serves the same lookup lazily (default: none).
+

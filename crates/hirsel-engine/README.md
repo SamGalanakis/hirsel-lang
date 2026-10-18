@@ -342,6 +342,17 @@ query engine. The snapshot carries the native GEN-5 `InstanceGraph` and one
 `SourceAudit` per executable definition (noalloc, cleanup and invocation promises);
 import recollects both. Forged flags, graphs, audit records, materializations or
 stale bodies fail closed, and a growing native instance graph is unavailable.
+The snapshot also carries the CT-5 `InstanceBodies` table, recomputed on import
+and checked by `hirsel_validate::validate_instance_bodies`.
+
+A generic generated declaration (`queries/generation.rs`) is checked bodyless and
+is never lowered (`generation::executable`). `select_generated_instances` walks
+checked calls and instantiations from roots under closed bindings and stages
+each new instance as a hidden private item (`name$instance$<hash>`) whose source
+is the declaration's text with its generic list dropped and parameters spelled,
+padded to the declaration's lines; the semantic program and lowering repeat the
+walk until no instance is new. At most `MAX_GENERATED_INSTANCES` (256) per
+declaration, then CT-1. Re-indexing a declaration's source retires its instances.
 
 A *precheck* (`queries/precheck.rs`) is a dependency package checked once, at
 toolchain build time, instead of by every program: `LoadedProgram::precheck`

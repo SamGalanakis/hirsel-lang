@@ -134,8 +134,8 @@ the package that writes `shape(T)` ([PROG-2](programs.md#prog-2-visibility)). Sc
 tuples, function types, builtin collections, `distinct` types and aliases of any of these
 have none: `shape(T)` of one is GEN-3. A generic declaration has a shape at each concrete
 instance. `TypeShape[T]` carries no structural operation, and taking a shape adds no bound or
-operation to the shaped type. Generating declarations or
-bodies from shapes is reserved
+operation to the shaped type. Generated function bodies read shapes
+([CT-5](compile-time.md#ct-5-generation)); generating declarations is reserved
 ([reserved compile-time features](compile-time.md#reserved-for-future-compile-time-features)).
 
 ### GEN-4: Representation

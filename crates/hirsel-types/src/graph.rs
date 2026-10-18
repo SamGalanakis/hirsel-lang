@@ -109,6 +109,89 @@ pub fn mentions_compile_time_only(store: &TypeStore, ty: TypeId) -> bool {
     }
     false
 }
+/// Whether `ty` names a generic type or size parameter anywhere in its graph.
+pub fn mentions_parameter(store: &TypeStore, ty: TypeId) -> bool {
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![ty];
+    while let Some(ty) = pending.pop() {
+        if !seen.insert(ty) {
+            continue;
+        }
+        let Some(row) = store.get(ty) else {
+            return true;
+        };
+        let sized = match &row.kind {
+            TypeKind::Parameter(_) => return true,
+            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => arguments
+                .iter()
+                .any(|a| matches!(a, GenericArgument::Size(Size::Parameter(_)))),
+            _ => false,
+        };
+        if sized {
+            return true;
+        }
+        pending.extend(row.kind.graph_edges().into_iter().map(|e| e.ty));
+    }
+    false
+}
+/// The closed generic arguments of an invocation, rows of their own store.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Actuals {
+    pub types: std::sync::Arc<TypeStore>,
+    pub arguments: Vec<GenericArgument>,
+}
+/// The actuals bound to each enclosing generic binder of an invocation.
+pub type ActualBindings = BTreeMap<NameSite, Actuals>;
+/// `arguments`, rows of `source`, with every parameter of a binder in
+/// `bindings` replaced by that binder's actuals.
+pub fn close_arguments(
+    source: &TypeStore,
+    arguments: &[GenericArgument],
+    bindings: &ActualBindings,
+) -> Result<Actuals, GraphError> {
+    let mut store = source.clone();
+    let mut result = arguments.to_vec();
+    for (&scope, actuals) in bindings.iter().filter(|_| !arguments.is_empty()) {
+        let imported = actuals
+            .arguments
+            .iter()
+            .map(|a| match a {
+                GenericArgument::Type(t) => {
+                    import_type(&actuals.types, *t, &mut store).map(GenericArgument::Type)
+                }
+                GenericArgument::Size(n) => Ok(GenericArgument::Size(n.clone())),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let authorities = vec![AuthoritySummary::Unknown; imported.len()];
+        let substitution = Substitution {
+            binder: Some(GenericBinder::Body(scope)),
+            arguments: &imported,
+            authorities: &authorities,
+            ..Default::default()
+        };
+        for argument in &mut result {
+            match argument {
+                GenericArgument::Type(t) => {
+                    *t = substitute_type_in_place(&mut store, *t, substitution)?
+                }
+                GenericArgument::Size(Size::Parameter(SizeParameterRef::Body {
+                    scope: owner,
+                    parameter,
+                })) if *owner == scope => {
+                    *argument = imported
+                        .get(parameter.0 as usize)
+                        .cloned()
+                        .ok_or(GraphError::MissingArgument(parameter.0))?;
+                }
+                _ => (),
+            }
+        }
+    }
+    Ok(Actuals {
+        types: std::sync::Arc::new(store),
+        arguments: result,
+    })
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum GraphError {
     UnboundGeneric(GenericBinder),

@@ -5,10 +5,7 @@ use super::dispatch::variant;
 use super::{none, some};
 use crate::{Error, OperationCall, Value, invalid};
 use hirsel_syntax::{DefPath, Visibility};
-use hirsel_types::{
-    BuiltinType, GenericArgument, PassingMode, Primitive, SignatureKind, Size, TypeId, TypeKind,
-    TypeStore,
-};
+use hirsel_types::{BuiltinType, CanonicalSpelling, GenericArgument, SignatureKind, TypeKind};
 
 pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
     let [GenericArgument::Type(ty)] = call.generics else {
@@ -33,12 +30,12 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
         .representation
         .and_then(|r| signature.types.get(r))
         .ok_or_else(|| invalid("type_shape.info representation is hidden"))?;
-    let actual = Spelling {
+    let actual = CanonicalSpelling {
         types: call.types,
         arguments: &[],
         outer: None,
     };
-    let declared = Spelling {
+    let declared = CanonicalSpelling {
         types: &signature.types,
         arguments,
         outer: Some(&actual),
@@ -52,7 +49,10 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
                     .map(|f| {
                         record(
                             "FieldShape",
-                            vec![Value::String(f.name.clone()), declared.text(f.ty)],
+                            vec![
+                                Value::String(f.name.clone()),
+                                Value::String(declared.text(f.ty)),
+                            ],
                         )
                     })
                     .collect(),
@@ -72,7 +72,7 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
                                     "PayloadShape",
                                     vec![
                                         label.clone().map_or_else(none, |l| some(Value::String(l))),
-                                        declared.text(*ty),
+                                        Value::String(declared.text(*ty)),
                                     ],
                                 )
                             })
@@ -94,7 +94,11 @@ pub(super) fn info(call: &OperationCall<'_>) -> Result<Value, Error> {
     };
     Ok(record(
         "ShapeInfo",
-        vec![actual.text(*ty), variant(visibility, vec![]), body],
+        vec![
+            Value::String(actual.text(*ty)),
+            variant(visibility, vec![]),
+            body,
+        ],
     ))
 }
 
@@ -109,131 +113,5 @@ fn list(elements: Vec<Value>) -> Value {
         kind: BuiltinType::List,
         elements: elements.into_iter().map(Some).collect(),
         arena: None,
-    }
-}
-
-/// Canonical type spelling: valid source in every module, so every nominal
-/// type is its full versioned path. A declaration's own parameters spell
-/// through the actual arguments, which `outer` owns.
-struct Spelling<'a> {
-    types: &'a TypeStore,
-    arguments: &'a [GenericArgument],
-    outer: Option<&'a Spelling<'a>>,
-}
-impl Spelling<'_> {
-    fn text(&self, ty: TypeId) -> Value {
-        let mut out = String::new();
-        self.write(ty, &mut out);
-        Value::String(out)
-    }
-    fn write(&self, ty: TypeId, out: &mut String) {
-        let Some(row) = self.types.get(ty) else {
-            out.push_str("<unknown>");
-            return;
-        };
-        match &row.kind {
-            TypeKind::Primitive(p) => out.push_str(match p {
-                Primitive::String => "String",
-                Primitive::Bytes => "Bytes",
-                Primitive::Never => "Never",
-                Primitive::Bool => "bool",
-                Primitive::Char => "char",
-                Primitive::U8 => "u8",
-                Primitive::U16 => "u16",
-                Primitive::U32 => "u32",
-                Primitive::U64 => "u64",
-                Primitive::U128 => "u128",
-                Primitive::I8 => "i8",
-                Primitive::I16 => "i16",
-                Primitive::I32 => "i32",
-                Primitive::I64 => "i64",
-                Primitive::I128 => "i128",
-                Primitive::F32 => "f32",
-                Primitive::F64 => "f64",
-            }),
-            TypeKind::Tuple(items) => {
-                out.push('(');
-                for (i, item) in items.iter().enumerate() {
-                    if i != 0 {
-                        out.push_str(", ");
-                    }
-                    self.write(*item, out);
-                }
-                if items.len() == 1 {
-                    out.push(',');
-                }
-                out.push(')');
-            }
-            TypeKind::Parameter(p) => {
-                match (self.arguments.get(p.parameter().0 as usize), self.outer) {
-                    (Some(GenericArgument::Type(actual)), Some(outer)) => outer.write(*actual, out),
-                    _ => out.push_str("<parameter>"),
-                }
-            }
-            TypeKind::Named {
-                definition,
-                arguments,
-            } => {
-                let item = &definition.0;
-                out.push_str(&format!("{}@{}/", item.package.name, item.package.version));
-                if !item.modules.is_empty() {
-                    out.push_str(&item.modules.join("/"));
-                    out.push('.');
-                }
-                out.push_str(&item.name);
-                self.arguments_text(arguments, out);
-            }
-            TypeKind::Builtin { kind, arguments } => {
-                out.push_str(&format!("{kind:?}"));
-                self.arguments_text(arguments, out);
-            }
-            TypeKind::Box(inner) => {
-                out.push_str("box ");
-                self.write(*inner, out);
-            }
-            TypeKind::Function(f) => {
-                out.push_str("fn(");
-                for (i, parameter) in f.parameters.iter().enumerate() {
-                    if i != 0 {
-                        out.push_str(", ");
-                    }
-                    out.push_str(match parameter.passing {
-                        PassingMode::Take => "take ",
-                        PassingMode::Mut => "mut ",
-                        _ => "",
-                    });
-                    self.write(parameter.ty, out);
-                }
-                out.push_str(") -> ");
-                self.write(f.result, out);
-            }
-            TypeKind::Record(_) | TypeKind::Variant(_) | TypeKind::Error => {
-                out.push_str("<unknown>")
-            }
-        }
-    }
-    fn arguments_text(&self, arguments: &[GenericArgument], out: &mut String) {
-        if arguments.is_empty() {
-            return;
-        }
-        out.push('[');
-        for (i, argument) in arguments.iter().enumerate() {
-            if i != 0 {
-                out.push_str(", ");
-            }
-            match argument {
-                GenericArgument::Type(ty) => self.write(*ty, out),
-                GenericArgument::Size(Size::Constant(n)) => out.push_str(&n.to_string()),
-                GenericArgument::Size(Size::Parameter(p)) => {
-                    match (self.arguments.get(p.parameter().0 as usize), self.outer) {
-                        (Some(GenericArgument::Size(Size::Constant(n))), Some(_)) => {
-                            out.push_str(&n.to_string())
-                        }
-                        _ => out.push_str("<size>"),
-                    }
-                }
-            }
-        }
-        out.push(']');
     }
 }

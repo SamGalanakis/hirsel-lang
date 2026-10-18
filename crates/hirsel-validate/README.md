@@ -191,6 +191,13 @@ available through the explicit test helper and publication API, rather than
 guessing signatures through `TirProvider`. All validator regression and
 mutation tests remain in this crate, with no new dependencies.
 
+`validate_instance_bodies` checks a CT-5 instance table against the program:
+each declaration is a generic function with no definition of its own; each row's
+arguments fit its generics and spell its key; its definition exists with a
+monomorphic header equal to the declaration's at those arguments (canonical
+spelling, passing and root uniqueness; other modes are the closed types'
+MODE-7 defaults); and every closed call or reference of a declaration has a row.
+
 Timing on main `fca0c36` with the validator: 31 alternating samples of the same
 159-test interpreter suite, compiled binaries run with one test thread (three
 warmups). Median without the assertion **273.680 ms**, with it **278.084 ms**,

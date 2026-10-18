@@ -1572,6 +1572,17 @@ field has no form: a deriver takes its type by value and a box's payload is
 reached only through patterns ([MEM-7](memory.md#mem-7-layout)). `equal`
 compares every field with `==`, nested types included.
 
+A generic declaration derives each instance separately (CT-5 instances), so one
+declaration serves every instance of a generic type, and a nested `T` field uses
+the deriver of each instance's argument:
+
+```text
+fn page_to_json[T](p: Page[T]) -> json.Value uses {} = comptime derive.json_value(shape(Page[T]))
+```
+
+A decoder declared `-> Result[unique T, String]` builds every nested value it
+holds through its nested types' decoders, so they are declared `unique` too.
+
 A record's JSON form is an object with a member per field, in declaration
 order; integers are JSON numbers, and so are finite floats, written by
 `to_string`; `NaN`, `inf` and `-inf` are those JSON strings. `None` is `null`,

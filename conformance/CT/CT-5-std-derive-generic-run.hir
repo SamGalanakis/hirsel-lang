@@ -1,0 +1,72 @@
+// rule: CT-5
+// expect: run
+// stdout: {"items":[{"id":1,"name":"a"},{"id":2,"name":"b"}],"next":3}
+// stdout: {"items":[5,6],"next":null}
+// stdout: round trip: 2 items, next 3
+// stdout: hash equal: true
+// A generic deriver is generated per selected instance: Page[Item] and Page[u64] each get
+// their own body, and Page[Item]'s calls Item's deriver by the naming convention.
+type Item {
+  id: u64,
+  name: String,
+}
+
+type Page[T] {
+  items: List[T],
+  next: Option[u64],
+}
+
+fn item_to_json(v: Item) -> json.Value uses {} = comptime derive.json_value(shape(Item))
+
+fn item_from_json(v: json.Value) -> Result[unique Item, String] uses {} = comptime derive.from_json(
+  shape(Item)
+)
+
+fn item_hash(v: Item) -> u64 uses {} = comptime derive.hash(shape(Item))
+
+fn page_to_json[T](v: Page[T]) -> json.Value uses {} = comptime derive.json_value(
+  shape(Page[T])
+)
+
+fn page_from_json[T](v: json.Value) -> Result[unique Page[T], String] uses {} = comptime derive.from_json(
+  shape(Page[T])
+)
+
+fn page_hash[T](v: Page[T]) -> u64 uses {} = comptime derive.hash(shape(Page[T]))
+
+fn json_text(v: json.Value) -> unique String uses {} {
+  match json.stringify(v) {
+    Ok(text) => unique text,
+    Error(_) => unique "?",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let mut text: List[u8] = []
+  let items: Page[Item] = Page(
+    items: [Item(id: 1, name: "a"), Item(id: 2, name: "b")],
+    next: Some(3)
+  )
+  let encoded = json_text(page_to_json(items))
+  text.append(mut text, f"{encoded}\n")
+  let numbers: Page[u64] = Page(items: [5, 6], next: None)
+  text.append(mut text, f"{json_text(page_to_json(numbers))}\n")
+  let Ok(parsed) = json.parse(copy encoded) else {
+    return Ok(())
+  }
+  let decoded: Result[unique Page[Item], String] = page_from_json(parsed)
+  match decoded {
+    Ok(back) => {
+      let next = match back.next {
+        Some(n) => n,
+        None => 0u64,
+      }
+      text.append(mut text, f"round trip: {list.len(back.items)} items, next {next}\n")
+      text.append(mut text, f"hash equal: {page_hash(items) == page_hash(back)}\n")
+    },
+    Error(e) => text.append(mut text, f"{e}\n"),
+  }
+  let _ = out.print(out, text.finish_valid(take text))
+  Ok(())
+}

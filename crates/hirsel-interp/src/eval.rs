@@ -1686,7 +1686,7 @@ fn execute_frames(
                         (definition, body, captures, sizes)
                     }
                     RuntimeCallee::Definition {
-                        path,
+                        mut path,
                         mut generics,
                         types,
                     } => {
@@ -1701,11 +1701,20 @@ fn execute_frames(
                             }
                             call_types = Some(merged);
                         }
-                        let concrete = crate::type_arguments::concrete(
+                        let mut concrete = crate::type_arguments::concrete(
                             call_types.as_ref().unwrap_or(&frame.definition.types),
                             &generics,
                             &frame.type_arguments,
                         )?;
+                        // CT-5: a generic generated declaration runs the
+                        // monomorphic body of its selected instance.
+                        if let Some(instance) = provider
+                            .instance_body(&path, &concrete.types, &concrete.arguments)
+                            .map_err(Error::Query)?
+                        {
+                            path = instance;
+                            concrete.arguments.clear();
+                        }
                         generics = concrete.arguments.clone();
                         call_types = Some((*concrete.types).clone());
                         let tail = frame

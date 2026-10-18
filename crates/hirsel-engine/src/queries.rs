@@ -1,7 +1,7 @@
 use crate::layered::Layered;
 use crate::*;
 mod dependencies;
-mod generation;
+pub(crate) mod generation;
 pub use generation::GeneratedSource;
 mod lowering;
 pub(crate) use lowering::Lowering;
@@ -130,6 +130,8 @@ pub struct QueryEngine {
     pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
     /// Generated function bodies (CT-5), by declaration.
     generated: BTreeMap<DefPath, GeneratedSource>,
+    /// Selected instances of generic generated declarations (CT-5).
+    pub(crate) instance_bodies: hirsel_tir::InstanceBodies,
     pub sources: SourceMap,
     pub symbols: Interner,
     pub environment: QueryEnvironment,
@@ -272,6 +274,7 @@ impl QueryEngine {
             staged_constants: BTreeMap::new(),
             staged_values: BTreeMap::new(),
             generated: BTreeMap::new(),
+            instance_bodies: hirsel_tir::InstanceBodies::default(),
             sources: SourceMap::default(),
             symbols: Interner::default(),
             environment,
@@ -685,6 +688,20 @@ impl QueryEngine {
                     delta: i64::from(item.origin.span.start) - i64::from(before.origin.span.start),
                     whole: (before.origin.span, item.origin.span),
                 });
+            }
+        }
+        // CT-5: a retired declaration's instances are made again from its new
+        // text when a call selects them.
+        for path in &owned {
+            self.instance_bodies.declarations.remove(path);
+            for (_, instance) in self
+                .instance_bodies
+                .instances
+                .remove(path)
+                .unwrap_or_default()
+            {
+                self.items.remove(&instance.definition);
+                self.generated.remove(&instance.definition);
             }
         }
         for path in &owned {
@@ -1575,6 +1592,14 @@ impl TirProvider for QueryEngine {
 
     fn definition(&mut self, path: &DefPath) -> Result<hirsel_tir::DefinitionRef, QueryError> {
         self.lower_to_tir(path).map(|o| o.value)
+    }
+    fn instance_body(
+        &mut self,
+        path: &DefPath,
+        types: &hirsel_types::TypeStore,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError> {
+        self.resolve_instance(path, types, arguments)
     }
 }
 struct Recorder<'a> {

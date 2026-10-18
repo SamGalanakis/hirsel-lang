@@ -1,6 +1,6 @@
 // rule: CT-5
-// expect: reject CT-2 at line 12
-// "a generic declaration is CT-2 at `e` (generic shape inputs are reserved)".
+// expect: reject GEN-3 at line 12
+// A generic generated declaration evaluates per selected instance: count[u64] reads shape(u64), and a scalar has no shape.
 type Count {
   n: u64,
 }
@@ -10,3 +10,8 @@ fn count_body[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] 
 }
 
 fn count[T](c: T) -> u64 uses {} = comptime count_body(shape(T))
+
+pub fn main() -> Result[(), ()] {
+  let _ = count(5u64)
+  Ok(())
+}

@@ -38,6 +38,30 @@ pub(crate) fn generator(file: &SyntaxFile, item: ItemId) -> Option<ExprId> {
     }
 }
 
+/// Whether a declaration is generic and generated: it has no body of its own,
+/// and each selected instance is a monomorphic generated declaration.
+pub(crate) fn instance_bodied(file: &SyntaxFile, item: ItemId) -> bool {
+    generator(file, item).is_some()
+        && matches!(
+            &file.tree.items[item.0 as usize].kind,
+            ItemKind::Function { signature, .. } if !signature.generics.is_empty()
+        )
+}
+
+/// Whether an item has a body to lower: a function with one, a constant or a
+/// finalizer. A generic generated declaration has none; its instances do.
+pub(crate) fn executable(file: &SyntaxFile, item: ItemId) -> bool {
+    matches!(
+        &file.tree.items[item.0 as usize].kind,
+        ItemKind::Function { body: Some(_), .. }
+            | ItemKind::Const { .. }
+            | ItemKind::Type { drop: Some(_), .. }
+    ) && !instance_bodied(file, item)
+}
+
+/// The most instances one generic generated declaration may select (CT-5).
+pub const MAX_GENERATED_INSTANCES: usize = 256;
+
 fn renamed(definition: &DefPath, suffix: &str) -> DefPath {
     let mut path = definition.clone();
     path.0.name = format!("{}${suffix}", path.0.name);
@@ -112,6 +136,9 @@ impl QueryEngine {
         snapshot: ItemSnapshot,
         body: ExprId,
     ) -> Result<Arc<QueryOutput<TypedBody>>, QueryError> {
+        if instance_bodied(&snapshot.file, snapshot.item) {
+            return self.declaration_check_query(definition, snapshot);
+        }
         let site = snapshot.file.tree.expressions[body.0 as usize].origin.span;
         // CT-4: a generator that needs its own declaration's body.
         if self
@@ -171,22 +198,21 @@ impl QueryEngine {
         reads: &mut Reads,
     ) -> Result<QueryOutput<TypedBody>, QueryError> {
         let site = snapshot.file.tree.expressions[body.0 as usize].origin.span;
-        let SignatureKind::Function(declared) = &signature.kind else {
+        let SignatureKind::Function(_) = &signature.kind else {
             return Err(QueryError::NotImplemented);
         };
-        if !declared.generics.is_empty() {
-            return Err(diagnostic(
-                "CT-2",
-                site,
-                "a generated declaration is not generic: generic shape inputs are outside the closed compile-time frame",
-            ));
-        }
         let text = self.generated_text(definition, snapshot, body, reads)?;
         let file = match self.generated.get(definition) {
             Some(g) if g.text == text => g.file,
             _ => {
                 let origin = self.sources.file(site.file).unwrap().path.display();
-                let path = format!("{origin}#{definition}");
+                // An instance's source path already names its declaration and
+                // arguments; its hidden path would only repeat them.
+                let path = if definition.0.name.contains("$instance$") {
+                    format!("{origin}#body")
+                } else {
+                    format!("{origin}#{definition}")
+                };
                 let file = self.sources.add(path, text.clone()).ok_or_else(|| {
                     QueryError::Operational(hirsel_types::OperationalFailure {
                         operation: "typed generation".into(),
@@ -245,7 +271,7 @@ impl QueryEngine {
             }),
             segments: vec![symbols.intern(name)],
         };
-        let mut push = |kind: TypeExprKind, tree: &mut hirsel_syntax::SyntaxTree| {
+        let push = |kind: TypeExprKind, tree: &mut hirsel_syntax::SyntaxTree| {
             tree.types.push(TypeExpr { origin: site, kind });
             TypeExprId(tree.types.len() as u32 - 1)
         };
@@ -660,5 +686,440 @@ fn without_uniqueness(tree: &mut hirsel_syntax::SyntaxTree, ty: TypeExprId) {
             }
             TypeExprKind::Error => {}
         }
+    }
+}
+
+impl QueryEngine {
+    /// Whether `path` is a generic generated declaration (CT-5).
+    pub(crate) fn instance_bodied(&self, path: &DefPath) -> bool {
+        self.items
+            .get(path)
+            .and_then(|items| items.first())
+            .is_some_and(|s| instance_bodied(&s.file, s.item))
+    }
+
+    /// check_query for a generic generated declaration: its header alone, as a
+    /// bodyless declaration. Each selected instance generates and checks its
+    /// own body (`generated_instance`).
+    fn declaration_check_query(
+        &mut self,
+        definition: &DefPath,
+        snapshot: ItemSnapshot,
+    ) -> Result<Arc<QueryOutput<TypedBody>>, QueryError> {
+        let signature = self.signature_output(definition)?;
+        let key = self.key(definition, QueryKind::Check)?;
+        if let Some(cached) = self.checked.get(definition).cloned()
+            && self.valid(&cached, &key)
+        {
+            return cached.result.clone();
+        }
+        let (Some(resolver), Some(checker)) = (
+            self.adapters.resolver.clone(),
+            self.adapters.checker.clone(),
+        ) else {
+            return Err(QueryError::NotImplemented);
+        };
+        let mut file = (*snapshot.file).clone();
+        if let ItemKind::Function { body, .. } = &mut file.tree.items[snapshot.item.0 as usize].kind
+        {
+            *body = None;
+        }
+        let file = Arc::new(file);
+        let mut reads = Reads {
+            reads: DependencyReads::default(),
+            representations: BTreeMap::new(),
+        };
+        reads
+            .reads
+            .signatures
+            .extend(signature.dependencies.clone());
+        reads.reads.signatures.push(SignatureDependency {
+            definition: definition.clone(),
+            fingerprint: signature.value.fingerprint,
+        });
+        self.start(definition, QueryKind::Check)?;
+        let symbols = self.symbols.clone();
+        let item = snapshot.item;
+        let result = self
+            .recorded(definition, &mut reads, |r| {
+                resolver.resolve(file.clone(), item, &symbols, r)
+            })
+            .and_then(|resolution| {
+                if has_errors(&resolution.diagnostics) {
+                    return Err(QueryError::Diagnostics(resolution.diagnostics));
+                }
+                self.recorded(definition, &mut reads, |r| {
+                    checker.check(file.clone(), item, resolution.value, &signature.value, r)
+                })
+            });
+        let cached = self.finish(key, reads.reads, result, reads.representations);
+        if !cached.result.as_ref().is_err_and(|e| !e.cacheable()) {
+            self.checked.insert(definition.clone(), cached.clone());
+        }
+        cached.result.clone()
+    }
+
+    /// The monomorphic definition of `declaration` at closed `arguments`,
+    /// created on first selection: the written declaration with its generics
+    /// dropped and each parameter spelled as its actual (CT-3's canonical
+    /// spelling), indexed as a private item of the declaring module and checked
+    /// like any generated declaration. `site` selected it.
+    pub(crate) fn generated_instance(
+        &mut self,
+        declaration: &DefPath,
+        actuals: &hirsel_types::Actuals,
+        site: Span,
+    ) -> Result<DefPath, QueryError> {
+        let key = hirsel_tir::InstanceBodies::key(&actuals.types, &actuals.arguments).ok_or_else(
+            || {
+                QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "generated instance".into(),
+                    message: format!("{declaration} selected at open arguments"),
+                })
+            },
+        )?;
+        if let Some(instance) = self
+            .instance_bodies
+            .instances
+            .get(declaration)
+            .and_then(|instances| instances.get(&key))
+        {
+            return Ok(instance.definition.clone());
+        }
+        let snapshot = self.snapshot(declaration)?;
+        let source = &snapshot.file.tree.items[snapshot.item.0 as usize];
+        let ItemKind::Function {
+            signature,
+            body: Some(body),
+            ..
+        } = &source.kind
+        else {
+            return Err(QueryError::NotImplemented);
+        };
+        let generator_site = snapshot.file.tree.expressions[body.0 as usize].origin.span;
+        let selected = self
+            .instance_bodies
+            .instances
+            .get(declaration)
+            .map_or(0, |instances| instances.len());
+        let instance_name = format!("{}[{}]", declaration, key.join(", "));
+        if selected >= MAX_GENERATED_INSTANCES {
+            let mut d = Diagnostic::error(
+                const { hirsel_diag::RuleId::of("CT-1") },
+                generator_site,
+                format!(
+                    "a generic generated declaration selects at most {MAX_GENERATED_INSTANCES} instances"
+                ),
+            );
+            d.secondary.push(hirsel_diag::Label {
+                span: site,
+                message: format!("selects instance {instance_name}"),
+            });
+            return Err(QueryError::Diagnostics(vec![d]));
+        }
+        // The instance's source: the declaration's tokens with the generic list
+        // after its name left out and each generic parameter replaced by its
+        // actual's spelling, on the declaration's own lines.
+        let names: Vec<_> = signature.generics.iter().map(|g| g.name).collect();
+        let tokens = &snapshot.file.tokens
+            [source.origin.tokens.start as usize..source.origin.tokens.end as usize];
+        let name_index = tokens
+            .iter()
+            .position(|t| t.span == source.name_span)
+            .ok_or(QueryError::NotImplemented)?;
+        let significant = |t: &hirsel_syntax::Token| !matches!(t.kind, TokenKind::Trivia(_));
+        let before = tokens.first().map_or(0, |t| t.span.start as usize);
+        let lines = self
+            .sources
+            .file(snapshot.file.file)
+            .and_then(|f| f.text().get(..before))
+            .map_or(0, |prefix| prefix.matches('\n').count());
+        let mut text = "\n".repeat(lines);
+        let mut skip_to = None;
+        if let Some(open) = tokens[name_index + 1..]
+            .iter()
+            .position(significant)
+            .map(|i| i + name_index + 1)
+            .filter(|&i| self.sources.slice(tokens[i].span) == Some("["))
+        {
+            let mut depth = 0usize;
+            for (i, token) in tokens.iter().enumerate().skip(open) {
+                match self.sources.slice(token.span) {
+                    Some("[") => depth += 1,
+                    Some("]") => {
+                        depth -= 1;
+                        if depth == 0 {
+                            skip_to = Some((open, i));
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for (i, token) in tokens.iter().enumerate() {
+            if skip_to.is_some_and(|(open, close)| i >= open && i <= close) {
+                continue;
+            }
+            let spelling = self
+                .sources
+                .slice(token.span)
+                .ok_or(QueryError::NotImplemented)?;
+            let parameter = match token.kind {
+                TokenKind::Ident(symbol) => names.iter().position(|n| *n == symbol),
+                _ => None,
+            };
+            match parameter {
+                Some(p) => text.push_str(&key[p]),
+                None => text.push_str(spelling),
+            }
+        }
+        let instance = renamed(
+            declaration,
+            &format!(
+                "instance${}",
+                ContentHash::of_parts(
+                    "hirsel.generated-instance.v1",
+                    key.iter().map(|k| k.as_bytes())
+                )
+                .0[..8]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            ),
+        );
+        let origin = self
+            .sources
+            .file(snapshot.file.file)
+            .unwrap()
+            .path
+            .display();
+        let file = self
+            .sources
+            .add(format!("{origin}#{instance_name}"), text)
+            .ok_or_else(|| {
+                QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "generated instance".into(),
+                    message: "instance source exceeds the source map".into(),
+                })
+            })?;
+        let (Some(lexer), Some(parser)) =
+            (self.adapters.lexer.clone(), self.adapters.parser.clone())
+        else {
+            return Err(QueryError::NotImplemented);
+        };
+        let context = FileContext {
+            package: declaration.0.package.clone(),
+            modules: declaration.0.modules.clone(),
+        };
+        let lexed = lexer.lex(file, &self.sources, &mut self.symbols)?;
+        if has_errors(&lexed.diagnostics) {
+            return Err(QueryError::Diagnostics(lexed.diagnostics));
+        }
+        let symbols = self.symbols.clone();
+        let parsed = parser.parse(file, lexed.value, &context, &self.sources, &symbols)?;
+        if has_errors(&parsed.diagnostics) {
+            return Err(QueryError::Diagnostics(parsed.diagnostics));
+        }
+        let mut parsed = parsed.value;
+        let [id] = parsed.roots[..] else {
+            return Err(QueryError::NotImplemented);
+        };
+        {
+            let item = &mut parsed.tree.items[id.0 as usize];
+            item.definition = instance.clone();
+            item.visibility = Visibility::Private;
+        }
+        self.items
+            .entry_or_default(instance.clone())
+            .push(ItemSnapshot {
+                file: Arc::new(parsed),
+                item: id,
+            });
+        // The package's validated signature input now includes the instance.
+        self.source_revision += 1;
+        self.instance_bodies
+            .declarations
+            .insert(declaration.clone());
+        self.instance_bodies
+            .instances
+            .entry(declaration.clone())
+            .or_default()
+            .insert(
+                key,
+                hirsel_tir::InstanceBody {
+                    types: (*actuals.types).clone(),
+                    arguments: actuals.arguments.clone(),
+                    definition: instance.clone(),
+                },
+            );
+        // The instance's diagnostics also cite the call that selected it.
+        let checked = self.mode_query(&instance).and_then(|analyzed| {
+            if has_errors(&analyzed.diagnostics) {
+                Err(QueryError::Diagnostics(analyzed.diagnostics.clone()))
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(QueryError::Diagnostics(mut diagnostics)) = checked {
+            for d in &mut diagnostics {
+                d.secondary.push(hirsel_diag::Label {
+                    span: site,
+                    message: format!("selects instance {instance_name}"),
+                });
+            }
+            return Err(QueryError::Diagnostics(diagnostics));
+        }
+        checked?;
+        Ok(instance)
+    }
+
+    /// Select the instances of generic generated declarations that `roots`
+    /// reach, walking each call's closed generic arguments through generic
+    /// callees (CT-5). Returns every selected instance definition.
+    pub(crate) fn select_generated_instances(
+        &mut self,
+        roots: impl IntoIterator<Item = DefPath>,
+    ) -> Result<BTreeSet<DefPath>, QueryError> {
+        let any = self.items.iter().any(|(_, items)| {
+            items
+                .first()
+                .is_some_and(|s| instance_bodied(&s.file, s.item))
+        });
+        let mut selected = BTreeSet::new();
+        if !any {
+            return Ok(selected);
+        }
+        let mut pending: Vec<(DefPath, hirsel_types::ActualBindings)> = vec![];
+        for root in roots {
+            if self.items.contains_key(&root)
+                && self.item_signature(&root)?.value.generics().is_empty()
+            {
+                pending.push((root, BTreeMap::new()));
+            }
+        }
+        let mut seen = BTreeSet::new();
+        while let Some((path, bindings)) = pending.pop() {
+            let binding_key: Vec<_> = bindings
+                .iter()
+                .map(|(site, actuals)| {
+                    (
+                        *site,
+                        hirsel_tir::InstanceBodies::key(&actuals.types, &actuals.arguments),
+                    )
+                })
+                .collect();
+            if !seen.insert((path.clone(), binding_key)) {
+                continue;
+            }
+            if seen.len() > 65536 {
+                return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "generated instance".into(),
+                    message: "instance selection expansion limit".into(),
+                }));
+            }
+            if !self.items.contains_key(&path)
+                || self.instance_bodied(&path)
+                || self.prechecked(&path.0.package)
+            {
+                continue;
+            }
+            let analyzed = self.mode_query(&path)?;
+            let checked = &analyzed.value.typed.checked;
+            let tree = &analyzed.value.typed.file.tree;
+            let calls: Vec<_> = checked
+                .calls
+                .iter()
+                .filter_map(|call| match &call.target {
+                    hirsel_types::CallTarget::Definition(callee) => Some((
+                        call.expression,
+                        callee.clone(),
+                        call.generic_arguments.clone(),
+                    )),
+                    _ => None,
+                })
+                .chain(
+                    checked
+                        .instantiations
+                        .iter()
+                        .map(|i| (i.expression, i.callee.clone(), i.arguments.clone())),
+                )
+                .collect();
+            let types = checked.types.clone();
+            let sites: Vec<_> = calls
+                .iter()
+                .map(|(expression, _, _)| tree.expressions[expression.0 as usize].origin.span)
+                .collect();
+            for ((_, callee, arguments), site) in calls.into_iter().zip(sites) {
+                if !self.items.contains_key(&callee) {
+                    continue;
+                }
+                let actuals = hirsel_types::close_arguments(&types, &arguments, &bindings)
+                    .map_err(|e| {
+                        QueryError::Operational(hirsel_types::OperationalFailure {
+                            operation: "generated instance".into(),
+                            message: format!("closing {callee} arguments: {e:?}"),
+                        })
+                    })?;
+                let closed =
+                    hirsel_tir::InstanceBodies::key(&actuals.types, &actuals.arguments).is_some();
+                if self.instance_bodied(&callee) {
+                    if closed {
+                        let instance = self.generated_instance(&callee, &actuals, site)?;
+                        selected.insert(instance.clone());
+                        pending.push((instance, BTreeMap::new()));
+                    }
+                } else if actuals.arguments.is_empty() {
+                    pending.push((callee, BTreeMap::new()));
+                } else if closed {
+                    let binder =
+                        hirsel_types::NameSite::Item(self.mode_query(&callee)?.value.typed.item);
+                    pending.push((callee, BTreeMap::from([(binder, actuals)])));
+                }
+            }
+        }
+        Ok(selected)
+    }
+
+    /// The instance of a generic generated declaration that runs a call at
+    /// closed `arguments`, selecting it when evaluation reaches one that
+    /// checking did not (a compile-time call); None for any other callee.
+    pub(crate) fn resolve_instance(
+        &mut self,
+        path: &DefPath,
+        types: &hirsel_types::TypeStore,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError> {
+        if !self.instance_bodied(path) {
+            return Ok(None);
+        }
+        let actuals = hirsel_types::Actuals {
+            types: Arc::new(types.clone()),
+            arguments: arguments.to_vec(),
+        };
+        let site = self
+            .snapshot(path)
+            .map(|s| s.file.tree.items[s.item.0 as usize].name_span)?;
+        self.generated_instance(path, &actuals, site).map(Some)
+    }
+
+    /// The instance table of the selected program: every generic generated
+    /// declaration in `paths`, and the instances `paths` holds.
+    pub(crate) fn instance_bodies(&self, paths: &BTreeSet<DefPath>) -> hirsel_tir::InstanceBodies {
+        let mut table = hirsel_tir::InstanceBodies::default();
+        for path in paths.iter().filter(|p| self.instance_bodied(p)) {
+            table.declarations.insert(path.clone());
+            if let Some(instances) = self.instance_bodies.instances.get(path) {
+                let kept: BTreeMap<_, _> = instances
+                    .iter()
+                    .filter(|(_, i)| paths.contains(&i.definition))
+                    .map(|(k, i)| (k.clone(), i.clone()))
+                    .collect();
+                if !kept.is_empty() {
+                    table.instances.insert(path.clone(), kept);
+                }
+            }
+        }
+        table
     }
 }

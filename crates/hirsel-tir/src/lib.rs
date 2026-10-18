@@ -630,6 +630,65 @@ pub enum ValueKind {
 /// Immutable materialized constant snapshot.
 pub type MaterializedRef = std::sync::Arc<Materialized>;
 
+/// CT-5 instance bodies. A generic generated declaration has no definition of
+/// its own: each selected instance at closed generic arguments is a monomorphic
+/// definition, and a call of the declaration at those arguments runs it.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
+pub struct InstanceBodies {
+    /// Every generic generated declaration of the program, selected or not.
+    pub declarations: std::collections::BTreeSet<DefPath>,
+    /// Selected instances by declaration and `InstanceBodies::key`.
+    pub instances:
+        std::collections::BTreeMap<DefPath, std::collections::BTreeMap<Vec<String>, InstanceBody>>,
+}
+/// One selected instance: its closed arguments, rows of `types`, and the
+/// monomorphic definition that is the declaration's body at them.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct InstanceBody {
+    pub types: TypeStore,
+    pub arguments: Vec<GenericArgument>,
+    pub definition: DefPath,
+}
+impl InstanceBodies {
+    /// The canonical spelling of each closed argument (CT-3), sizes in decimal;
+    /// None when an argument still names a parameter.
+    pub fn key(types: &TypeStore, arguments: &[GenericArgument]) -> Option<Vec<String>> {
+        arguments
+            .iter()
+            .map(|argument| match argument {
+                GenericArgument::Type(ty) => (!hirsel_types::mentions_parameter(types, *ty))
+                    .then(|| hirsel_types::CanonicalSpelling::closed(types, *ty)),
+                GenericArgument::Size(hirsel_types::Size::Constant(n)) => Some(n.to_string()),
+                GenericArgument::Size(_) => None,
+            })
+            .collect()
+    }
+    /// The definition that runs a call of `path` at closed `arguments`: None
+    /// when `path` is not a generic generated declaration, and an error when
+    /// it is but that instance was never selected.
+    pub fn resolve(
+        &self,
+        path: &DefPath,
+        types: &TypeStore,
+        arguments: &[GenericArgument],
+    ) -> Result<Option<&DefPath>, QueryError> {
+        if !self.declarations.contains(path) {
+            return Ok(None);
+        }
+        let unselected = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "generated instance".into(),
+                message: format!("{path} has no selected instance at these arguments"),
+            })
+        };
+        let key = Self::key(types, arguments).ok_or_else(unselected)?;
+        self.instances
+            .get(path)
+            .and_then(|instances| instances.get(&key))
+            .map(|instance| Some(&instance.definition))
+            .ok_or_else(unselected)
+    }
+}
 /// Execution requests other definitions lazily, permitting any topology (PROG-5).
 pub trait TirProvider {
     fn definition(&mut self, path: &DefPath) -> Result<DefinitionRef, QueryError>;
@@ -649,6 +708,17 @@ pub trait TirProvider {
     }
     /// Program constants in dependency order, with source-order ties (#63).
     fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError>;
+    /// CT-5: the definition that runs a call of `path` at closed `arguments`
+    /// (`InstanceBodies::resolve`); None for a declaration with its own body.
+    fn instance_body(
+        &mut self,
+        path: &DefPath,
+        types: &TypeStore,
+        arguments: &[GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError> {
+        let _ = (path, types, arguments);
+        Ok(None)
+    }
 }
 /// Simulation input events are ordered and explicit; real external effects are not ambient (DET-1, CAP-1).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]

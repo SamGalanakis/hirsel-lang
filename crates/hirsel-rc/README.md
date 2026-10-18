@@ -66,7 +66,9 @@ at each stage and H against the interpreter, and keeps the declined twins.
   storage or captures; their calls use a Definition ABI and direct code.
   Expansion keeps the caller's argument actuals separate from the producer's
   enclosing actuals. The lexical edge index and shared producer paths are
-  computed once per definition. A nonempty generic declaration stores an
+  computed once per definition. A direct call of a CT-5 generic generated declaration
+  (`Program::instance_bodies`) imports as a call of the instance its closed
+  actuals select. A nonempty generic declaration stores an
   ordinary environment record containing only its data snapshot. Wrapping
   closures capture that record; concrete nested instances receive its fields
   as explicit Borrow parameters and use a Definition ABI. Ordinary once closure

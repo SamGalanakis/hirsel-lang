@@ -84,6 +84,8 @@ pub struct Program {
     pub owners: Owners,
     /// Each constant's materialized value (CT-2), the source of its static data.
     pub constants: BTreeMap<DefPath, hirsel_tir::Materialized>,
+    /// The instance definitions of generic generated declarations (CT-5).
+    pub instance_bodies: hirsel_tir::InstanceBodies,
 }
 
 impl Program {

@@ -59,7 +59,8 @@ keeps CT-1 at the comptime expression and cites the selecting site and size actu
 Closed expressions inside generic declarations remain legal. Enclosing contracts
 are not inherited, but called helpers' contracts apply. Size arithmetic in type
 positions remains forbidden, and an abstract type's shape stays a closed-frame failure
-([CT-3](#ct-3-shapes)).
+([CT-3](#ct-3-shapes)), except in a generic generated declaration's generator, which is
+evaluated per selected instance ([CT-5](#ct-5-generation)).
 
 ### CT-3: Shapes
 
@@ -103,7 +104,9 @@ const USER_FIELDS: List[String] = comptime field_names(shape(User))
   helper's body is run-time code even when only compile-time code calls it, so helpers
   take a `TypeShape[T]` parameter and their callers write `shape(T)`.
 - **Subject.** `T` is written at the shape and must be known where it is written: an
-  abstract type parameter fails the closed frame of [CT-2](#ct-2-materialisation).
+  abstract type parameter fails the closed frame of [CT-2](#ct-2-materialisation),
+  except the generic parameters of a generated declaration in its generator, which are
+  closed per instance ([CT-5](#ct-5-generation)).
   Eligibility is [GEN-3](generics.md#gen-3-reflection); a hidden representation is
   [PROG-2](programs.md#prog-2-visibility). A transparent alias has its target's shape.
 - **Content.** `name` and every `ty` spell a type canonically (below). Fields, variants
@@ -171,7 +174,8 @@ independent of topology ([PROG-5](programs.md#prog-5-topology)).
   checks from signatures alone as a body for `fn(Todo) -> json.Value uses {}`, and a
   declaration with any other header is LANG-7 at `e` before evaluation. `e` is inside
   CT-2's closed frame: it reads no parameter, and naming a declared parameter in `e` is
-  CT-2 at the name. A generic declaration is CT-2 at `e` (generic shape inputs are reserved).
+  CT-2 at the name. In a generic declaration `e` may also use the declaration's own generic
+  parameters, in `shape(T)` and as type arguments: they are closed per instance (below).
 - **Bodies.** `codegen.body(text)` builds a `Body[F]`, taking `F` from the expected type.
   `Error(message)` from a generator is CT-1 at `e`, with the message as a note; a failing
   evaluation is CT-1 as for any comptime expression. The text must be one function literal
@@ -196,6 +200,22 @@ independent of topology ([PROG-5](programs.md#prog-5-topology)).
   executed and the declarations its shapes read ([CT-2](#ct-2-materialisation)); then the
   generated body is checked and lowered like any body. The same inputs give the same text.
   Generation that needs its own result is a CT-4 cycle at `e`.
+- **Instances.** A generic declaration publishes its header once and dependents check
+  against it like any generic function's, but the declaration itself has no body. Each
+  closed argument list that a call or function reference selects, from the program's
+  definitions and transitively from other instances' bodies, is an instance: the
+  declaration's text with its generic list dropped and each generic parameter replaced by
+  its argument's canonical spelling (CT-3), staged as a private monomorphic definition of
+  the declaring module and generated, checked and lowered like a non-generic declaration.
+  A call at those arguments runs the instance. Instances are cached by the spellings of
+  their arguments, so every call at the same arguments shares one, and the arguments'
+  own modes do not distinguish instances: an instance's header takes the closed types'
+  defaults ([MODE-7](ownership.md#mode-7-inference)). Unselected instances are never generated, and a call
+  evaluated at compile time selects its instance when it runs. An instance's diagnostics
+  are in its text, on the declaration's lines, with a secondary label at the call that
+  selected it. One declaration selects at most 256 instances; selecting another is CT-1
+  at `e`, with a secondary label at the selecting call, so a body that selects ever-new
+  instances stops. Each generator evaluation has the CT-4 budget.
 
 **Worked example.** `examples/todo-api` derives its `todo_value` with
 [`std@1/derive.json_value`](std-library.md#derived-bodies); this is that generator reduced to

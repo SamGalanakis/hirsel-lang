@@ -716,8 +716,11 @@ conformance/CT/CT-5-generator-error-bad.hir
 conformance/CT/CT-5-generator-error-ok.hir
 conformance/CT/CT-5-generic-declaration-bad.hir
 conformance/CT/CT-5-generic-declaration-ok.hir
+conformance/CT/CT-5-generic-instance-run.hir
 conformance/CT/CT-5-header-match-run.hir
 conformance/CT/CT-5-header-mismatch-bad.hir
+conformance/CT/CT-5-instance-cap-bad.hir
+conformance/CT/CT-5-instance-cap-ok.hir
 conformance/CT/CT-5-literal-type-bad.hir
 conformance/CT/CT-5-literal-type-ok.hir
 conformance/CT/CT-5-not-literal-bad.hir
@@ -726,6 +729,7 @@ conformance/CT/CT-5-std-derive-box-bad.hir
 conformance/CT/CT-5-std-derive-box-ok.hir
 conformance/CT/CT-5-std-derive-float-hash-bad.hir
 conformance/CT/CT-5-std-derive-float-hash-ok.hir
+conformance/CT/CT-5-std-derive-generic-run.hir
 conformance/CT/CT-5-std-derive-nested-deriver-bad.hir
 conformance/CT/CT-5-std-derive-nested-deriver-ok.hir
 conformance/CT/CT-5-std-derive-nested-option-bad.hir
