@@ -9,10 +9,22 @@ fn registry_and_dispatch_have_exact_bidirectional_callable_coverage() {
     let declarations: BTreeSet<_> = registry
         .signatures()
         .filter_map(|s| {
-            matches!(s.kind, SignatureKind::Function(_)).then_some(s.definition.clone())
+            (matches!(s.kind, SignatureKind::Function(_))
+                && hirsel_types::core_roles::LoweredIntrinsic::for_definition(&s.definition)
+                    .is_none())
+            .then_some(s.definition.clone())
         })
         .collect();
     let dispatch = operation_dispatch();
+    for intrinsic in hirsel_types::core_roles::LoweredIntrinsic::ALL {
+        let path = intrinsic.definition();
+        assert!(matches!(
+            registry.get(&path).unwrap().kind,
+            SignatureKind::Function(_)
+        ));
+        assert!(!dispatch.contains_key(&path));
+        assert!(!records.keys().any(|key| key.definition == path));
+    }
     assert_eq!(
         records
             .keys()

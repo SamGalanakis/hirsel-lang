@@ -102,8 +102,9 @@ for the predicate. The consuming helpers are parametric calls
 ([MODE-2](ownership.md#mode-2-uniqueness)), so a unique payload stays unique through them,
 except `filter`, which lends its payload to the predicate. Rust `is_err` / `err` / `map_err` use `is_error` / `error` /
 `map_error`. The module is `results` because `result` is reserved. Panicking
-`unwrap` / `expect` are omitted; Rust `Option::take` (`option.remove`) awaits an
-ownership-transfer operation for `mut` storage.
+`unwrap` / `expect` are omitted. `option.remove(mut value)` adapts Rust
+`Option::take`: it returns the current option and leaves `None` in its place,
+using core `replace`. A unique payload remains unique.
 
 ## Paths
 

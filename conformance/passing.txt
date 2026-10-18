@@ -635,6 +635,7 @@ conformance/DROP/DROP-2-noalloc-drop-beside-net-connect-match-run.hir
 conformance/DROP/DROP-2-noalloc-drop-beside-net-connect-try-run.hir
 conformance/DROP/DROP-2-noalloc-drop-beside-user-try-run.hir
 conformance/DROP/DROP-2-question-exit.hir
+conformance/DROP/DROP-2-replace-resource-run.hir
 conformance/DROP/DROP-2-replace.hir
 conformance/DROP/DROP-2-resource-beside-net-connect-try-run.hir
 conformance/DROP/DROP-2-return-exit.hir
@@ -2510,6 +2511,7 @@ conformance/MODE/MODE-2-plain-unique-callback-ok.hir
 conformance/MODE/MODE-2-plain-unique-inert.hir
 conformance/MODE/MODE-2-record-aliased-part-bad.hir
 conformance/MODE/MODE-2-record-aliased-part-ok.hir
+conformance/MODE/MODE-2-replace-unique-run.hir
 conformance/MODE/MODE-2-scoped-capture-result-bad.hir
 conformance/MODE/MODE-2-scoped-capture-result-ok.hir
 conformance/MODE/MODE-2-scoped-capture-unique-bad.hir
@@ -3093,8 +3095,10 @@ conformance/OWN/OWN-3-mut-block-copy-run.hir
 conformance/OWN/OWN-3-mut-block-ok.hir
 conformance/OWN/OWN-3-mut-borrowed-part-bad.hir
 conformance/OWN/OWN-3-mut-borrowed-part-ok.hir
+conformance/OWN/OWN-3-option-remove-run.hir
 conformance/OWN/OWN-3-parent-and-field-bad.hir
 conformance/OWN/OWN-3-parent-and-field-ok.hir
+conformance/OWN/OWN-3-replace-run.hir
 conformance/OWN/OWN-3-replaced-callee-loop-run.hir
 conformance/OWN/OWN-3-reserved-view-passed-bad.hir
 conformance/OWN/OWN-3-same-name-bad.hir

@@ -1,0 +1,23 @@
+// rule: OWN-3
+// expect: run
+// Adapted from Rust core::mem::replace documentation examples.
+fn exchange[T](mut place: T, take new: T) -> T {
+  replace(mut place, take new)
+}
+
+type Buffer {
+  values: List[u64],
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut values: List[u64] = [1, 2]
+  let previous = exchange(mut values, [3, 4, 5])
+  failure.check(list.len(previous) == 2 && previous[0] == 1, Bounds())
+  failure.check(list.len(values) == 3 && values[0] == 3, Bounds())
+  let mut buffer = Buffer(values: [0u64, 1u64])
+  let old = replace(mut buffer.values[0], 2u64)
+  failure.check(old == 0 && buffer.values[0] == 2, Bounds())
+  let earlier = replace(mut values[0], values[0] + 1)
+  failure.check(earlier == 3 && values[0] == 4, Bounds())
+  Ok(())
+}

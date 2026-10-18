@@ -1214,6 +1214,30 @@ impl Builder<'_, '_> {
             };
             return Ok(Some(self.construct(ty, rv, span)));
         }
+        if let Some(Callee::Definition { path, .. }) = &callee {
+            if let Some(intrinsic) =
+                hirsel_types::core_roles::LoweredIntrinsic::for_definition(path)
+            {
+                match intrinsic {
+                    hirsel_types::core_roles::LoweredIntrinsic::Replace => {
+                        let place = prepared.iter().find(|(ordinal, _)| *ordinal == 0);
+                        let new = prepared.iter().find(|(ordinal, _)| *ordinal == 1);
+                        let (Some((_, place)), Some((_, new))) = (place, new) else {
+                            return self.error(span, "replace requires its two checked operands");
+                        };
+                        if prepared.len() != 2
+                            || place.usage != UseKind::Mut
+                            || new.usage != UseKind::Take
+                        {
+                            return self.error(span, "invalid replace operand conventions");
+                        }
+                        let result = self.exchange(place.place, *new, ty, false, span);
+                        self.end_unheld_loans(span);
+                        return Ok(Some(result));
+                    }
+                }
+            }
+        }
         let arguments: Vec<CallArgument> = prepared
             .into_iter()
             .map(|(o, value)| CallArgument {

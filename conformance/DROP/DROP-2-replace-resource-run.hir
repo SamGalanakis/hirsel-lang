@@ -1,0 +1,35 @@
+// rule: DROP-2
+// expect: run
+// stdout: exchanged
+// stdout: old
+// stdout: removed
+// stdout: payload
+// stdout: new
+resource type Item {
+  out: Stdout,
+  name: String,
+}
+drop(value) {
+  let _ = out.print(value.out, value.name)
+  let _ = out.print(value.out, "\n")
+}
+
+fn exchange[T](mut place: T, take new: T) -> T {
+  replace(mut place, take new)
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let mut item = Item(out: out, name: "old")
+  {
+    let previous = exchange(mut item, Item(out: out, name: "new"))
+    let _ = out.print(out, "exchanged\n")
+  }
+  let mut present: Option[Item] = Some(Item(out: out, name: "payload"))
+  {
+    let previous = option.remove(mut present)
+    failure.check(option.is_none(present), Bounds())
+    let _ = out.print(out, "removed\n")
+  }
+  Ok(())
+}

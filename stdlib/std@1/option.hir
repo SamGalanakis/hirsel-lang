@@ -1,7 +1,13 @@
 // Adapted from Rust core::option, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f.
 // Queries borrow; transformations take their input and callbacks.
-// Rust's Option::take (option.remove) is omitted: mut storage cannot be moved out.
 // Panicking unwrap and expect are omitted: Hirsel has no panic.
+
+// Returns the current option, leaving None in the caller's storage.
+@preserves_unique(value)
+pub fn remove[T](mut value: Option[T]) -> Option[T] {
+  replace(mut value, None)
+}
+
 // Tests whether a value is present without consuming it.
 @noalloc
 pub fn is_some[T](value: Option[T]) -> bool uses {} {

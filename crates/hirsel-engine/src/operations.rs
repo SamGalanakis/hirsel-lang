@@ -62,6 +62,7 @@ pub fn check_operation_coverage(
 impl BuiltinRegistry {
     /// Headers remain the sole declaration authority. Implementation availability
     /// is annotation from the same tables that perform interpreter dispatch.
+    /// Lowered intrinsics disappear into TIR and have no executable operation row.
     pub fn operation_inventory(&self) -> BTreeMap<OperationKey, OperationRecord> {
         let dispatch = hirsel_interp::library::operation_dispatch();
         self.signatures()
@@ -69,6 +70,11 @@ impl BuiltinRegistry {
                 let SignatureKind::Function(function) = &signature.kind else {
                     return None;
                 };
+                if hirsel_types::core_roles::LoweredIntrinsic::for_definition(&signature.definition)
+                    .is_some()
+                {
+                    return None;
+                }
                 let key = OperationKey {
                     definition: signature.definition.clone(),
                     declaration_digest: signature.fingerprint,

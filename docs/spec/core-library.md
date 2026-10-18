@@ -24,9 +24,21 @@ under [CLO-2](closures.md#clo-2-transparent), even for an `N` operation. Result 
 follows the passing modes on every exit unless stated otherwise. Ordinary field and index
 syntax needs no library call.
 
+## Value replacement
+
+`replace(mut place, take new)` exchanges the complete value in mutable storage
+with `new` and returns the displaced value. Neither value is finalized by the
+exchange. Argument evaluation and address checks precede the exchange; if either
+fails, no exchange occurs. It is a lowered intrinsic: its call becomes
+TIR `Replace`, with no runtime operation. Lowered intrinsics have checked core
+declarations but are exempt from runtime dispatch and operation manifests.
+
 ## The ledger
 
 ```text
+// OWN-3, MODE-2
+@preserves_unique(place) fn replace[T](mut place: T, take new: T) -> T
+
 // SER-1/2
 fn codec.encode[T: serializable](value: T) -> Bytes
 fn codec.decode[T: serializable](data: Bytes) -> Result[T, DecodeError]

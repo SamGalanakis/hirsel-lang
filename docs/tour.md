@@ -260,6 +260,9 @@ input error
 
 ## Option and Result helpers
 
+Use `option.remove(mut value)` to move out the current option and leave `None`.
+A unique payload remains unique.
+
 Use `option.is_some` / `is_none` and `results.is_ok` / `is_error` to inspect a
 borrowed value. Both modules provide `map`, `and_then`, `or_else`, `flatten`,
 `unwrap_or` (eager fallback) and `unwrap_or_else` (lazy fallback). `option.filter`

@@ -371,3 +371,7 @@ Call completion retires invocation permissions through the surviving content
 holders. Evaluated temporary owners last through their statement, including
 owners named only by result brands. Their captured views retain permissions
 until owner cleanup, including mixed borrowed handle and taken payload captures.
+
+Core `replace` is a lowered intrinsic: normal call argument preparation precedes
+one TIR `Replace`, and the displaced temporary becomes the call result without
+destruction. Assignment uses the same exchange helper, then drops that temporary.

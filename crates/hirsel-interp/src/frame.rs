@@ -662,6 +662,19 @@ impl Frame {
         }
         Ok(node)
     }
+    /// Replace moves caller-owned content, excluding the callee's access root.
+    /// Real region and arena bounds remain attached to the displaced owner.
+    pub fn displaced_shadow(&self, id: PlaceId) -> Result<crate::checked::Shadow, Error> {
+        let shadow = self.shadow_of(id)?;
+        let place = self.place(id)?;
+        if self.mut_parameters.contains(&place.root)
+            && let Some(check) = &self.check
+            && let Some(parameter) = self.body().parameters.iter().position(|p| *p == place.root)
+        {
+            return Ok(check.caller_content(parameter, shadow));
+        }
+        Ok(shadow)
+    }
     /// Record a written value's bound: an `in a` destination row places it in
     /// a's arena (PROV-4); inline aggregates keep one bound per field.
     pub fn set_shadow(

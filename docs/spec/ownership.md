@@ -403,7 +403,9 @@ fn caller() -> u64 {
 elements are places (`mut r.f`, `mut xs[i]`). No storage is passed twice: distinct fields
 are separate storage, a loan lasts until its holder's last use, all elements of one
 sequence are one storage, and a scoped closure's captures count as arguments of the call.
-Whole-value assignment is allowed ([MODE-2](#mode-2-uniqueness) for `unique`). Mutable
+Whole-value assignment is allowed ([MODE-2](#mode-2-uniqueness) for `unique`).
+Moving out of a `mut` place requires `replace(mut place, take new)`, which returns
+its old value while leaving the replacement installed. Mutable
 callable parameter types are invariant in once and many.
 
 ```hirsel

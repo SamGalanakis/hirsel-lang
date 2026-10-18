@@ -5,6 +5,7 @@ the license named in its row; the license texts follow once each.
 
 | Source | Adapted | Where in this tree | Upstream revision | License |
 |---|---|---|---|---|
+| Rust standard library | `library/core/src/{mem/mod,option}.rs` replace and Option::take implementation/documentation examples, adapted to mutable places | core replace lowering, `stdlib/std@1/option.hir`, replace/remove conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Rust standard library | `library/core/src/{option,result}.rs` owned helpers and documentation examples, adapted to taking callbacks and Hirsel error spelling | `stdlib/std@1/{option,results}.hir`, Option/Result conformance | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Go standard library | `src/net/http/serve_test.go` TestServeHTTP10Close, TestClientCanClose, HTTP10/11KeepAlive204Response, HTTP10KeepAlive304Response, testTCPConnectionStaysOpen and CloseNotifierPipelined cases; adapted to deterministic scripted connections and real clients | HTTP persistence conformance and hello-web-concurrent E2Es | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | Go standard library | `src/net/url/{url.go,url_test.go}` parseQuery, QueryUnescape, QueryEscape and ParseQuery vectors; ordered owned pairs, atomic errors and byte offsets replace Go maps and partial results | `stdlib/std@1/uri.hir`, URI query conformance | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |

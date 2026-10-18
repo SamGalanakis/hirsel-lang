@@ -25,7 +25,7 @@ bits and the selected trace. Semantic observations are identical across trace mo
   actions execute in stored order. Field/parameter ordinals determine layout,
   independently of evaluation order. Types remain in their owning definition store.
 - A slot contains `Option<Value>`. Take clears it; Copy/Borrow/Mut read it; Assign
-  requires dead storage. Replace atomically installs a prepared value and puts old content in its declared displaced temporary; explicit Drop follows. Borrow checking and loan validity are lowering's job;
+  requires dead storage. Replace atomically installs a prepared value and puts old content in its declared displaced temporary; assignment follows it with explicit Drop; core replace returns the displaced owner. Borrow checking and loan validity are lowering's job;
   loan instructions have no scalar runtime effect. StorageLive requires a dead
   slot. Snapshot reads its already lowered operand's explicit use mode.
 - Calls use caller temporaries already prepared by earlier instructions. Entry
@@ -572,3 +572,7 @@ Scripted stdin exhaustion is enabled EOF; live host stdin and sockets retain
 readiness interests and prevent a premature Blocked conclusion. CONC-5 mutex
 bodies are synchronous and hold no authority, so they cannot suspend in this
 cooperative evaluator.
+
+Checked Replace transports displaced caller-owned content with its mutable
+parameter's original lifetime bounds, as mutable writeback does. Its callee
+access instance does not follow the moved owner; real region/arena bounds do.

@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-812 exported definitions; 254 variants.
+814 exported definitions; 254 variants.
 
 
 ## Types and roots
@@ -264,6 +264,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `type i32: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/i32 -->
 - `type i64: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/i64 -->
 - `type i8: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/i8 -->
+- `@preserves_unique(place) fn replace[T](mut place: T, take new: T) -> T` <!-- core@1/replace -->
 - `type u128: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/u128 -->
 - `type u16: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/u16 -->
 - `type u32: copyable + data + inert + noalloc_drop + plain + sendable + key uses {}` <!-- core@1/u32 -->
@@ -937,11 +938,12 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn option.filter[T](take value: Option[T], take predicate: once fn(T) -> bool) -> Option[T] uses {value, predicate}` — Borrows the payload for the predicate and retains it only on success. <!-- std@1/option/filter -->
 - `@preserves_unique(value) pub fn option.flatten[T](take value: Option[Option[T]]) -> Option[T] uses {value}` — Removes exactly one level of nesting. <!-- std@1/option/flatten -->
 - `@noalloc pub fn option.is_none[T](value: Option[T]) -> bool uses {}` — Tests whether a value is absent without consuming it. <!-- std@1/option/is_none -->
-- `@noalloc pub fn option.is_some[T](value: Option[T]) -> bool uses {}` — Adapted from Rust core::option, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f. <!-- std@1/option/is_some -->
+- `@noalloc pub fn option.is_some[T](value: Option[T]) -> bool uses {}` — Tests whether a value is present without consuming it. <!-- std@1/option/is_some -->
 - `pub fn option.map[T, U](take value: Option[T], take f: once fn(take T) -> U) -> Option[U] uses {value, f}` — Transforms a present payload, consuming it. <!-- std@1/option/map -->
 - `@preserves_unique(value) pub fn option.ok_or[T, E](take value: Option[T], take error: E) -> Result[T, E] uses {value, error}` — Converts absence to the eagerly evaluated error. <!-- std@1/option/ok_or -->
 - `pub fn option.ok_or_else[T, E](take value: Option[T], take error: once fn() -> E) -> Result[ T, E ] uses {value, error}` — Computes an error only when no payload is present. <!-- std@1/option/ok_or_else -->
 - `pub fn option.or_else[T](take value: Option[T], take fallback: once fn() -> Option[T]) -> Option[ T ] uses {value, fallback}` — Computes another option only when no payload is present. <!-- std@1/option/or_else -->
+- `@preserves_unique(value) pub fn option.remove[T](mut value: Option[T]) -> Option[T]` — Adapted from Rust core::option, f6c1107f8be13e48465e12c0fd26e6a39fe18e4f. <!-- std@1/option/remove -->
 - `@preserves_unique(value) pub fn option.unwrap_or[T](take value: Option[T], take fallback: T) -> T uses {value, fallback}` — Returns the payload or the eagerly evaluated fallback. <!-- std@1/option/unwrap_or -->
 - `pub fn option.unwrap_or_else[T](take value: Option[T], take fallback: once fn() -> T) -> T uses {value, fallback}` — Computes the fallback only when no payload is present. <!-- std@1/option/unwrap_or_else -->
 - `@preserves_unique(left) pub fn option.zip[T, U](take left: Option[T], take right: Option[U]) -> Option[(T, U)] uses {left, right}` — Pairs two present payloads; otherwise discards both inputs. <!-- std@1/option/zip -->

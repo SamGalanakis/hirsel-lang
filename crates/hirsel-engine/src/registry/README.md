@@ -99,3 +99,8 @@ ordinary std@1 source manifest. There are no std registry slots.
 The host I/O ledger declares Stdin/Stderr as global capability types, typed
 InputError/EnvError variants, and Args count/text operations. All use the existing
 parameter-authority derivation; no ambient-grant or checker exception is added.
+
+Lowered intrinsics are enumerated by `hirsel_types::core_roles::LoweredIntrinsic`.
+They retain checked ledger declarations but calls disappear into existing TIR
+instructions before execution. They therefore have no runtime dispatch entry or
+operation-inventory/manifest row. `replace` lowers to TIR `Replace`.

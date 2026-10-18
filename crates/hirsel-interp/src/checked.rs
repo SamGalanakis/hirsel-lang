@@ -964,13 +964,9 @@ impl FrameCheck {
         shadow.substitute(&map);
         shadow
     }
-    /// A `mut` write-back keeps its own argument's original bound.
-    pub fn written_back(&self, parameter: usize, local: LocalId) -> Shadow {
-        let mut shadow = self
-            .shadows
-            .get(local.0 as usize)
-            .cloned()
-            .unwrap_or_default();
+    /// Caller-owned content keeps its argument's original bounds when moved
+    /// out by Replace or handed back after a mutable call.
+    pub fn caller_content(&self, parameter: usize, mut shadow: Shadow) -> Shadow {
         if let Some(entry) = self
             .parameters
             .get(parameter)
@@ -979,6 +975,16 @@ impl FrameCheck {
             shadow.substitute(std::slice::from_ref(entry));
         }
         shadow
+    }
+    /// A `mut` write-back keeps its own argument's original bound.
+    pub fn written_back(&self, parameter: usize, local: LocalId) -> Shadow {
+        self.caller_content(
+            parameter,
+            self.shadows
+                .get(local.0 as usize)
+                .cloned()
+                .unwrap_or_default(),
+        )
     }
     /// A self-tail restart substitutes surviving parameter contracts, then
     /// poisons every old invocation instance, including its lexical scopes.

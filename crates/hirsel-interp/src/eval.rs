@@ -2812,7 +2812,7 @@ fn execute_instruction(
             let (value, shadow) = frame.operand_shadow(&value)?;
             arena_write(frame, destination, false, budgets)?;
             frame.write_access(destination)?;
-            let old_shadow = frame.shadow_of(destination)?;
+            let old_shadow = frame.displaced_shadow(destination)?;
             let old = frame.slot(destination)?.replace(value);
             frame.set_shadow(destination, shadow)?;
             if let Some(old) = old {

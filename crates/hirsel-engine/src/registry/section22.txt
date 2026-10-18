@@ -1,3 +1,6 @@
+// OWN-3, MODE-2
+@preserves_unique(place) fn replace[T](mut place: T, take new: T) -> T
+
 // SER-1/2
 fn codec.encode[T: serializable](value: T) -> Bytes
 fn codec.decode[T: serializable](data: Bytes) -> Result[T, DecodeError]

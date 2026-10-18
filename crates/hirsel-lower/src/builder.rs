@@ -1131,6 +1131,27 @@ impl<'a, 'b> Builder<'a, 'b> {
         if_live: bool,
         span: Span,
     ) {
+        let displaced = self
+            .exchange(destination, value, content, if_live, span)
+            .place;
+        self.emit(
+            InstructionKind::Drop {
+                place: displaced,
+                if_live,
+            },
+            span,
+        );
+        self.state.live.remove(&self.root(displaced).0);
+    }
+    /// Exchange live storage without finalizing the displaced owner.
+    pub fn exchange(
+        &mut self,
+        destination: PlaceId,
+        value: Value,
+        content: TypeId,
+        if_live: bool,
+        span: Span,
+    ) -> Value {
         let displaced = self.slot(content, Storage::Temporary, span, true);
         self.emit(InstructionKind::StorageLive(self.root(displaced)), span);
         let failure = self.cleanup();
@@ -1157,14 +1178,11 @@ impl<'a, 'b> Builder<'a, 'b> {
         self.set_held_loans(displaced, outgoing);
         self.state.live.insert(self.root(displaced).0);
         self.state.live.insert(self.root(destination).0);
-        self.emit(
-            InstructionKind::Drop {
-                place: displaced,
-                if_live,
-            },
-            span,
-        );
-        self.state.live.remove(&self.root(displaced).0);
+        Value {
+            checked_ty: None,
+            place: displaced,
+            usage: UseKind::Take,
+        }
     }
     pub fn assign(&mut self, destination: PlaceId, value: Rvalue, span: Span) {
         self.retain_rvalue(destination, &value);

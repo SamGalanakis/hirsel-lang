@@ -1,0 +1,21 @@
+// rule: MODE-2
+// expect: run
+fn keep(take value: unique Bytes) -> unique Bytes {
+  take value
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut value: unique Bytes = bytes.from_list([1u8, 2u8])
+  let old: unique Bytes = replace(mut value, bytes.from_list([3u8]))
+  failure.check(old == bytes.from_list([1u8, 2u8]), Bounds())
+  failure.check(value == bytes.from_list([3u8]), Bounds())
+  keep(take old)
+  keep(take value)
+  let mut present: Option[unique Bytes] = Some(bytes.from_list([4u8]))
+  let previous: Option[unique Bytes] = option.remove(mut present)
+  failure.check(option.is_none(present), Bounds())
+  let payload: unique Bytes = option.unwrap_or(take previous, bytes.from_list([]))
+  failure.check(payload == bytes.from_list([4u8]), Bounds())
+  keep(take payload)
+  Ok(())
+}
