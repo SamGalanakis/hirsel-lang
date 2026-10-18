@@ -173,6 +173,8 @@ pub(crate) struct Emitter<'a> {
     pub(crate) anonymous: u64,
     /// With `Some`, each function's Cranelift IR as it is defined (`crate::emit_clif`).
     pub(crate) clif: Option<String>,
+    pub(crate) sources: Option<&'a hirsel_lir::profile::ProfileSources>,
+    debug_functions: Vec<crate::dwarf::DebugFunction>,
 }
 
 fn isa(target: &TargetSpec, opt: OptLevel) -> Emitted<OwnedTargetIsa> {
@@ -211,6 +213,7 @@ pub(crate) fn emit(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
     clif: bool,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Emitted<(hirsel_lir::stage::ObjectArtifact, Option<String>)> {
     for unit in units {
         check_receipt(unit, inputs).map_err(|problem| CodegenError::Receipt {
@@ -224,6 +227,7 @@ pub(crate) fn emit(
         });
     }
     let mut emitter = Emitter::new(inputs, clif)?;
+    emitter.sources = sources;
     let emitted: Vec<&ValidatedUnit<Ready>> = units
         .iter()
         .copied()
@@ -308,7 +312,18 @@ pub(crate) fn emit(
             let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
             crate::function::FnEmitter::new(&mut emitter, unit, builder, sig).emit()?;
         }
-        emitter.define(&name, id, &mut context)?;
+        emitter.compile(&name, id, &mut context)?;
+        if let Some(source) = sources.and_then(|s| s.get(&unit.header.definition)) {
+            emitter
+                .debug_functions
+                .push(crate::dwarf::DebugFunction::new(
+                    id,
+                    unit,
+                    source,
+                    context.compiled_code().expect("defined function"),
+                )?);
+        }
+        emitter.module.clear_context(&mut context);
     }
     // The registry names every descriptor of the program, and a descriptor its finalizer's
     // drop wrapper.
@@ -322,9 +337,12 @@ pub(crate) fn emit(
         module,
         manifested,
         clif,
+        debug_functions,
         ..
     } = emitter;
-    let bytes = module.finish().emit().map_err(|e| CodegenError::Object {
+    let mut product = module.finish();
+    crate::dwarf::write(&mut product, debug_functions)?;
+    let bytes = product.emit().map_err(|e| CodegenError::Object {
         message: e.to_string(),
     })?;
     let file = ObjectFile::read(inputs.target, bytes)
@@ -360,6 +378,8 @@ impl<'a> Emitter<'a> {
             pending: Vec::new(),
             anonymous: 0,
             clif: clif.then(String::new),
+            sources: None,
+            debug_functions: Vec::new(),
         })
     }
 
@@ -459,6 +479,12 @@ impl<'a> Emitter<'a> {
     }
 
     pub(crate) fn define(&mut self, name: &str, id: FuncId, context: &mut Context) -> Emitted {
+        self.compile(name, id, context)?;
+        self.module.clear_context(context);
+        Ok(())
+    }
+
+    fn compile(&mut self, name: &str, id: FuncId, context: &mut Context) -> Emitted {
         if let Some(text) = &mut self.clif {
             text.push_str(&format!("; {name}\n{}\n", context.func.display()));
         }
@@ -473,7 +499,6 @@ impl<'a> Emitter<'a> {
                     other => other.to_string(),
                 },
             })?;
-        self.module.clear_context(context);
         Ok(())
     }
 

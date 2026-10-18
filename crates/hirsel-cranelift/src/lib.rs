@@ -15,6 +15,7 @@ mod compare;
 mod construction;
 mod data;
 mod drop;
+mod dwarf;
 mod flat;
 mod foreign;
 mod function;
@@ -119,7 +120,16 @@ pub fn emit_object(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false)).map(|(artifact, _)| artifact)
+    caught(|| module::emit(units, inputs, false, None)).map(|(artifact, _)| artifact)
+}
+
+/// Emits source line tables and subprogram entries when immutable source files are supplied.
+pub fn emit_object_profile(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
+) -> Result<ObjectArtifact, CodegenError> {
+    caught(|| module::emit(units, inputs, false, sources)).map(|(artifact, _)| artifact)
 }
 
 /// The Cranelift IR of every function `emit_object` defines, before compilation, as text:
@@ -128,7 +138,7 @@ pub fn emit_clif(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    caught(|| module::emit(units, inputs, true)).map(|(_, clif)| clif.unwrap_or_default())
+    caught(|| module::emit(units, inputs, true, None)).map(|(_, clif)| clif.unwrap_or_default())
 }
 
 /// A panic in Cranelift or in this crate is a refused compilation, never a crash of the

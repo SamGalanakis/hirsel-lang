@@ -18,6 +18,7 @@ cranelift-codegen = { version = "=0.136.3", default-features = false, features =
 cranelift-frontend = { version = "=0.136.3", default-features = false, features = ["std"] }
 cranelift-module = { version = "=0.136.3", default-features = false, features = ["default", "std"] }
 cranelift-object = { version = "=0.136.3", default-features = false, features = [] }
+gimli = { version = "=0.33.0", default-features = false, features = ["read", "read-core", "std", "write"] }
 insta = { version = "=1.49.0", default-features = false, features = ["colors", "console", "default"] }
 lexopt = { version = "=0.3.2", default-features = false, features = [] }
 libc = { version = "=0.2.190", default-features = false, features = ["default", "std"] }

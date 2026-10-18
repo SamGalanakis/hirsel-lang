@@ -4,6 +4,8 @@ use std::{
 };
 #[path = "cli/deadlines.rs"]
 mod deadlines;
+#[path = "cli/dwarf.rs"]
+mod dwarf;
 #[path = "cli/entropy_waits.rs"]
 mod entropy_waits;
 #[path = "cli/ergonomics.rs"]

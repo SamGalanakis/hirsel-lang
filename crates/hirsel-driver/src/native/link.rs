@@ -505,7 +505,7 @@ pub fn partition_objects(
     partition: Partition,
     registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
     measurement: bool,
-    sources: Option<&hirsel_llvm::ProfileSources>,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     partition_backend_objects(
         program,
@@ -527,7 +527,7 @@ pub fn partition_backend_objects(
     partition: Partition,
     registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
     measurement: bool,
-    sources: Option<&hirsel_llvm::ProfileSources>,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     use hirsel_lir::ir::{Callee, Inst, UnitOrigin};
     let assignment = partition.assign(program.units.len());
@@ -659,7 +659,7 @@ pub fn link_profile(
     partition: Partition,
     toolchain: &Toolchain,
     dir: &Path,
-    sources: Option<&hirsel_llvm::ProfileSources>,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<PathBuf, NativeError> {
     let objects = emit_objects(
         program,
@@ -679,7 +679,7 @@ pub fn emit_objects(
     opt: OptLevel,
     partition: Partition,
     measurement: bool,
-    sources: Option<&hirsel_llvm::ProfileSources>,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     emit_backend_objects(program, Backend::Llvm, opt, partition, measurement, sources)
 }
@@ -692,7 +692,7 @@ pub fn emit_backend_objects(
     opt: OptLevel,
     partition: Partition,
     measurement: bool,
-    sources: Option<&hirsel_llvm::ProfileSources>,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     check_runtime_calls(program)?;
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(

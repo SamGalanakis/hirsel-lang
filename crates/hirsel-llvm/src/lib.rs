@@ -11,7 +11,6 @@ mod compare;
 mod context;
 mod emit;
 mod glue;
-mod profile;
 mod runtime;
 mod scalar;
 
@@ -22,7 +21,7 @@ use hirsel_syntax::DefPath;
 pub use c_entry::{c_call, c_definition};
 pub use emit::emit_object_profile;
 pub use emit::{check_target, compile_ir, emit_ir, emit_object, emit_optimized_ir};
-pub use profile::{ProfileSource, ProfileSources};
+pub use hirsel_lir::profile::{ProfileSource, ProfileSources};
 
 /// An LLVM release, `major.minor.patch`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

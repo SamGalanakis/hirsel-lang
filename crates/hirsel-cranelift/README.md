@@ -8,8 +8,8 @@ links with the same runtime archive and calls at the same ABI as `hirsel-llvm`.
 select it. The Cranelift parity gate holds it to LLVM's observations.
 
 Allowed dependencies: the pure `hirsel-graph` utility, the shared data crates
-`hirsel-lir`, `hirsel-core-contract` and `hirsel-syntax`, and the four Cranelift
-crates. No other implementation crate.
+`hirsel-lir`, `hirsel-core-contract` and `hirsel-syntax`, the four Cranelift
+crates and `gimli` 0.33 (DWARF writing). No other implementation crate.
 
 Interface:
 
@@ -65,8 +65,12 @@ Invariants:
   sharing finalizer shielding, field-ordinal live masks, ordered drops and failure
   accumulation with block releases. Sequence/column copies walk their scan programs.
 
-Debug line tables and profile sources are not emitted. Cranelift records source
-locations and machine-code ranges but does not write DWARF line sections; doing so
-requires a separate DWARF writer and object-section relocations.
+`emit_object_profile` accepts the shared LIR `ProfileSources` and emits DWARF 5
+line tables, a compile unit and subprogram entries through gimli. Source locations
+use the same operation/cleanup/block anchor selection as LLVM. Rows cover only
+Cranelift's final machine source ranges; generated thunks/helpers have no source
+rows. Deferred failure code retains its initiating operation's location. Code
+addresses and section offsets relocate through cranelift-object's object writer
+on both x86-64 and AArch64. Without sources, no debug sections are emitted.
 
 `named_launch_object` uses an explicit exported dispatcher symbol, allowing a package test executable to contain one launch adapter per test.

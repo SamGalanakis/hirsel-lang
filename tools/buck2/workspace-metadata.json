@@ -290,6 +290,12 @@
         },
         {
           "kind": null,
+          "name": "gimli",
+          "req": "=0.33.0",
+          "uses_default_features": false
+        },
+        {
+          "kind": null,
           "name": "hirsel-core-contract",
           "path": "crates/hirsel-core-contract",
           "req": "*",
@@ -1042,13 +1048,6 @@
           "kind": null,
           "name": "hirsel-lir",
           "path": "crates/hirsel-lir",
-          "req": "*",
-          "uses_default_features": true
-        },
-        {
-          "kind": null,
-          "name": "hirsel-span",
-          "path": "crates/hirsel-span",
           "req": "*",
           "uses_default_features": true
         },

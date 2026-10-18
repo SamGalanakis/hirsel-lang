@@ -13,14 +13,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         {
             self.at = (b, i);
             self.profile_location(
-                crate::profile::instruction_site(unit, b, inst),
+                hirsel_lir::profile::instruction_site(unit, b, inst),
                 &format!("{:?}", inst.opcode()),
             )?;
             self.instruction(inst)?;
         }
         let terminator = unit.terminators[b.index()].clone();
         self.profile_location(
-            crate::profile::terminator_site(unit, b),
+            hirsel_lir::profile::terminator_site(unit, b),
             &format!("{:?}", terminator.opcode()),
         )?;
         self.terminator(&terminator)

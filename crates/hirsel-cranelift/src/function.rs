@@ -139,7 +139,7 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     blocks: Vec<Block>,
     params: Vec<Vec<Param>>,
     failures: BTreeMap<FailureId, Block>,
-    deferred: Vec<Deferred>,
+    deferred: Vec<(ir::SourceLoc, Deferred)>,
     /// Per compiler-local region instance, its `hirsel_rt_v2_region` record in the frame.
     pub(crate) regions: Vec<Value>,
     funcs: HashMap<FuncId, FuncRef>,
@@ -179,6 +179,14 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         mut b: FunctionBuilder<'f>,
         sig: Sig<'a>,
     ) -> Self {
+        if em
+            .sources
+            .is_some_and(|s| s.contains_key(&unit.header.definition))
+        {
+            let site =
+                unit.tables.source_anchors[unit.blocks[unit.entry.index()].anchor.index()].site;
+            b.set_srcloc(ir::SourceLoc::new(site.start));
+        }
         let prologue = b.create_block();
         b.append_block_params_for_function_params(prologue);
         b.switch_to_block(prologue);
@@ -659,7 +667,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         for b in order {
             self.emit_block(BlockId(b as u32))?;
         }
-        while let Some(deferred) = self.deferred.pop() {
+        while let Some((location, deferred)) = self.deferred.pop() {
+            self.b.set_srcloc(location);
             self.fill_deferred(deferred)?;
         }
         self.b.seal_all_blocks();
@@ -1064,6 +1073,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let unit = self.unit;
         let block = self.blocks[b.index()];
         self.b.switch_to_block(block);
+        self.source_location(
+            unit.tables.source_anchors[unit.blocks[b.index()].anchor.index()].site,
+        );
         // The block's parameter values.
         let parameters = self.pool(unit.blocks[b.index()].parameters, &unit.pools.values)?;
         let params = self.params[b.index()].clone();
@@ -1095,10 +1107,22 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
         }
         for inst in self.pool(unit.blocks[b.index()].instructions, &unit.instructions)? {
+            self.source_location(hirsel_lir::profile::instruction_site(unit, b, inst));
             self.instruction(inst)?;
         }
         let terminator = &unit.terminators[b.index()];
+        self.source_location(hirsel_lir::profile::terminator_site(unit, b));
         self.terminator(terminator)
+    }
+
+    fn source_location(&mut self, site: SiteRange) {
+        if self
+            .em
+            .sources
+            .is_some_and(|s| s.contains_key(self.definition()))
+        {
+            self.b.set_srcloc(ir::SourceLoc::new(site.start));
+        }
     }
 
     /// The arguments an edge passes to its target's SSA parameters, after copying each bytes
@@ -1196,9 +1220,13 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.failure_edge(failure)?;
         let block = self.b.create_block();
         self.b.set_cold_block(block);
-        self.deferred.push(Deferred::Failure { block, failure });
+        self.defer(Deferred::Failure { block, failure });
         self.failures.insert(failure, block);
         Ok(block)
+    }
+
+    fn defer(&mut self, deferred: Deferred) {
+        self.deferred.push((self.b.srcloc(), deferred));
     }
 
     fn fill_deferred(&mut self, deferred: Deferred) -> Emitted {
@@ -1301,7 +1329,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let site = self.anchor_code(anchor)?;
         let block = self.b.create_block();
         self.b.set_cold_block(block);
-        self.deferred.push(Deferred::Exhausted {
+        self.defer(Deferred::Exhausted {
             block,
             code,
             region,
@@ -1789,7 +1817,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             let block = self.b.create_block();
             self.b.set_cold_block(block);
             let site = self.anchor_code(site.anchor)?;
-            self.deferred.push(Deferred::Reanchor {
+            self.defer(Deferred::Reanchor {
                 block,
                 site,
                 then: failure_block,
@@ -1811,7 +1839,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             let block = self.b.create_block();
             self.b.set_cold_block(block);
             let site = self.anchor_code(site.anchor)?;
-            self.deferred.push(Deferred::Record {
+            self.defer(Deferred::Record {
                 block,
                 code,
                 site,

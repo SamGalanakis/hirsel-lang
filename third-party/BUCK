@@ -2174,6 +2174,12 @@ third_party_buildscript_run(
     version = "0.4.3",
 )
 
+alias(
+    name = "gimli",
+    actual = ":gimli-0.33",
+    visibility = ["PUBLIC"],
+)
+
 third_party_http_archive(
     name = "gimli-0.33.0.crate",
     sha256 = "0bf7f043f89559805f8c7cacc432749b2fa0d0a0a9ee46ce47164ed5ba7f126c",

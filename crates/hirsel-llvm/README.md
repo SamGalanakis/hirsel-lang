@@ -4,7 +4,7 @@ The LLVM backend: emission of validated Ready LIR units through a
 small RAII layer over the LLVM C API, returning an owned `hirsel_lir::ObjectArtifact`.
 
 Allowed dependencies: the pure `hirsel-graph` utility, the shared data crates `hirsel-lir`, `hirsel-core-contract` and
-`hirsel-syntax`, `hirsel-span` (the existing Unicode-aware source-line index), and `llvm-sys = "=211.0.1"` with `strict-versioning` and `force-dynamic`,
+`hirsel-syntax`, and `llvm-sys = "=211.0.1"` with `strict-versioning` and `force-dynamic`,
 bound to the shared libLLVM 21.1.8 pinned in `tools/native-toolchain/llvm-21.lock`. No
 Inkwell, no other implementation crate. Test-only: `hirsel-types` and `hirsel-tir` (fixture
 type stores and representation records). `.cargo/config.toml` points `LLVM_SYS_211_PREFIX` at
@@ -494,6 +494,8 @@ A `FlatCopy` whose result has an ordinary source layout materializes the
 address's prefixed encoding directly: a new flat-record block holds the payload
 past its prefix, and a String/Bytes slice owns a new ordinary byte sequence,
 with its copied length word, start zero and copied bytes. No source credit moves.
+
+Shared source ownership and instruction anchor selection live in `hirsel-lir::profile`.
 
 Optional `emit_object_profile(units, inputs, Some(&ProfileSources))` emits DWARF 5
 line tables through a DIBuilder, with file, compile-unit, subprogram and instruction

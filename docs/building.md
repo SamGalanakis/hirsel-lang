@@ -49,6 +49,7 @@ through this same renderer.
 hirsel build hello.hir -o hello                 # LLVM O2, production runtime
 hirsel build app/manifest.json --release -o app # LLVM O3
 hirsel build hello.hir --debug -o hello-debug   # O0 with DWARF source line tables
+hirsel build hello.hir --debug --backend cranelift -o hello-clif
 hirsel build hello.hir --target aarch64-linux -o hello-arm64
 ```
 
@@ -57,6 +58,26 @@ launch manifest. The default target is `x86_64-linux`; `aarch64-linux` uses the
 pinned cross compiler and runtime archive. The executable contains the production
 runtime and compiler support libraries statically; its only shared dependencies are
 libc and the platform ELF loader. It runs independently of Hirsel and the source checkout.
+
+Debug builds from both LLVM and Cranelift emit DWARF 5 source line tables on
+x86-64 and AArch64. Cranelift uses final machine source ranges and emits compile
+unit and subprogram entries with relocated code addresses. Both backends prefer
+an operation's source or cleanup anchor, falling back to its enclosing block;
+LIR does not retain a separate span for every scalar instruction. Generated
+Cranelift helpers and thunks have no source rows. These are line tables, without
+local-variable descriptions.
+
+```sh
+gdb -batch -ex 'break hello.hir:3' -ex run ./hello-clif
+llvm-dwarfdump --verify ./hello-clif
+llvm-dwarfdump --debug-line ./hello-clif
+```
+
+Use an executable source line for the breakpoint. Cross-target line tables can
+be inspected with the same `llvm-dwarfdump`; running AArch64 needs qemu or an
+AArch64 debugger. The CLI regression compares LLVM and Cranelift line sets per
+function for straight-line code, branches and loops on both targets, and checks
+address-to-source lookup through `llvm-dwarfdump --lookup`.
 
 Grants are supplied at launch using schema-1 RunConfig fields. A grants template
 omits `schema`, `program`, `entry` and `launch`: the launcher binds those to the

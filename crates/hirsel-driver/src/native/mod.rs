@@ -35,7 +35,8 @@ pub use executable::{BuildProfile, build_path_native, build_path_native_backend}
 pub use heap::{HeapRun, HeapWorld, heap_campaign, heap_campaign_in, run_heap, run_heap_in};
 pub use hirsel_lir::emission::OptLevel;
 pub use hirsel_lir::layout_types::TargetSpec;
-pub use hirsel_llvm::{ProfileSource, ProfileSources, c_call};
+pub use hirsel_lir::profile::{ProfileSource, ProfileSources};
+pub use hirsel_llvm::c_call;
 pub use hirsel_proof_export::sidecar::Checker;
 pub use hirsel_run_config::Inputs as LaunchInputs;
 pub use link::{

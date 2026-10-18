@@ -164,7 +164,7 @@ pub(crate) fn emit_registered(
     copies: &BTreeSet<hirsel_syntax::ContentHash>,
     registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
     measurement: bool,
-    sources: Option<&hirsel_llvm::ProfileSources>,
+    sources: Option<&hirsel_lir::profile::ProfileSources>,
 ) -> Result<ObjectArtifact, NativeError> {
     let failures = failure_codes(program);
     let units: Vec<_> = program
@@ -202,7 +202,7 @@ pub(crate) fn emit_registered(
             };
             (definition, e.to_string())
         }),
-        Backend::Cranelift => hirsel_cranelift::emit_object(&units, &inputs)
+        Backend::Cranelift => hirsel_cranelift::emit_object_profile(&units, &inputs, sources)
             .map_err(|e| (e.definition().cloned(), e.to_string())),
     };
     emitted.map_err(|(definition, message)| NativeError {
