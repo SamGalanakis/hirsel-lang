@@ -58,7 +58,7 @@ fn grants_trailing_arguments_are_exact_snapshots_and_records_stay_authoritative(
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let output = io.stdout(rt)?
   let mut i: u64 = 0
-  while i < arg.count(args) {
+  while i < arg.len(args) {
     let text = match arg.text(args, i) { Ok(text) => text, Error(_) => "missing" }
     let _ = out.print(output, text)
     let _ = out.print(output, "\n")
@@ -237,8 +237,8 @@ fn inline_launch_json_works_in_the_cli_and_built_executables() {
 fn trailing_arguments_alone_grant_only_the_exact_args_snapshot() {
     let source = file(
         r#"pub fn main(args: Args) -> Result[(), ()] {
-  failure.check(arg.count(args) == 4, Arithmetic())
-  for i in 0u64..arg.count(args) {
+  failure.check(arg.len(args) == 4, Arithmetic())
+  for i in 0u64..arg.len(args) {
     let text = match arg.text(args, i) { Ok(t) => t, Error(_) => "invalid" }
     let expected = match i { 0 => "200", 1 => "", 2 => "λ", _ => "--flag" }
     failure.check(text == expected, Arithmetic())
@@ -275,7 +275,7 @@ fn trailing_arguments_alone_grant_only_the_exact_args_snapshot() {
         }
     }
     let empty = file(
-        "pub fn main(args: Args) -> Result[(), ()] { failure.check(arg.count(args) == 0, Arithmetic()); Ok(()) }",
+        "pub fn main(args: Args) -> Result[(), ()] { failure.check(arg.len(args) == 0, Arithmetic()); Ok(()) }",
     );
     let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
         .arg("run")

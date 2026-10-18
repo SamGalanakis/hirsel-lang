@@ -65,7 +65,7 @@ fn random.bytes(r: Random, count: u64) -> Result[Bytes, RandomError]
 N fn io.process(rt: Io) -> Result[Proc, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
 fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
-N fn arg.count(args: Args) -> u64
+N fn arg.len(args: Args) -> u64
 fn arg.text(args: Args, index: u64) -> Result[String, ArgError]
 fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
 fn path.of(text: String) -> Path
@@ -396,7 +396,7 @@ NetListener   = { address: SocketAddr, clients: List[NetClient] }
 NetClient     = { from: SocketAddr, tls: PeerTls, steps: List[NetStep] }
 ```
 
-`arg.count` counts the ordered launch arguments, excluding the executable and tool options.
+`arg.len` is the number of ordered launch arguments, excluding the executable and tool options.
 `arg.text` returns the unchanged UTF-8 argument at a zero-based index, or
 `MissingArgument()` outside the snapshot and `InvalidUtf8()` for a non-UTF-8 argument.
 Run descriptions contain UTF-8 snapshots; host admission may reject an invalid snapshot

@@ -136,7 +136,7 @@ fn toc(found: List[Heading]) -> String {
 }
 
 fn run(rt: Io, args: Args) -> Result[String, String] {
-  if arg.count(args) != 1 {
+  if arg.len(args) != 1 {
     return Error("usage: mdtoc FILE")
   }
   let Ok(name) = arg.text(args, 0) else {

@@ -155,7 +155,7 @@ fn arena_summary(words: List[String], capacity: u64) -> Result[Summary, String] 
 }
 
 fn number(args: Args, index: u64, default: u64) -> Result[u64, String] {
-  if arg.count(args) <= index {
+  if arg.len(args) <= index {
     return Ok(default)
   }
   let text = match arg.text(args, index) {
@@ -169,7 +169,7 @@ fn number(args: Args, index: u64, default: u64) -> Result[u64, String] {
 }
 
 fn run(args: Args) -> Result[String, String] {
-  if arg.count(args) > 3 {
+  if arg.len(args) > 3 {
     return Error("usage: bench-lite [WORDS [SEED [ARENA_BYTES]]]")
   }
   let words = corpus(number(args, 0, 2000)?, number(args, 1, 1)?)

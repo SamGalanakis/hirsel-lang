@@ -7,7 +7,7 @@ pub type AppError = Grant(GrantError) | Arguments(ArgError) | Environment(EnvErr
 ) | Output(OutputError)
 
 pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), AppError] {
-  let name = if arg.count(args) == 0 {
+  let name = if arg.len(args) == 0 {
     "tour"
   } else {
     arg.text(args, 0) ? Arguments

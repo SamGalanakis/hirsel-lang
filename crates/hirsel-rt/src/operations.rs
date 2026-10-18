@@ -147,7 +147,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "dir.narrow"
         | "path.of"
         | "arg.path"
-        | "arg.count"
+        | "arg.len"
         | "arg.text"
         | "file.open"
         | "file.read"
@@ -277,7 +277,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "dir.narrow"
             | "path.of"
             | "arg.path"
-            | "arg.count"
+            | "arg.len"
             | "arg.text"
             | "io.monotonic_clock"
             | "io.wall_clock"
@@ -1421,7 +1421,7 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
-        symbol: "hirsel_rt_v2_arg_count",
+        symbol: "hirsel_rt_v2_arg_len",
         destination: false,
         result: Some((8, 8)),
         parameters: &[Physical::Pointer],
@@ -1667,7 +1667,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "arena.bounded",
     "arena.seal",
     "arena.with",
-    "arg.count",
+    "arg.len",
     "arg.path",
     "arg.text",
     "array.len",

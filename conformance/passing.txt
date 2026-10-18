@@ -4,8 +4,8 @@ conformance/CAP/CAP-1-acquire-stdout-result-run.hir
 conformance/CAP/CAP-1-acquire-tasks-result-run.hir
 conformance/CAP/CAP-1-ambient-heap-exception.hir
 conformance/CAP/CAP-1-arena-parameter.hir
-conformance/CAP/CAP-1-arg-count-parameter-bad.hir
-conformance/CAP/CAP-1-arg-count-parameter-ok.hir
+conformance/CAP/CAP-1-arg-len-parameter-bad.hir
+conformance/CAP/CAP-1-arg-len-parameter-ok.hir
 conformance/CAP/CAP-1-arg-snapshot-run.hir
 conformance/CAP/CAP-1-arg-text-parameter-bad.hir
 conformance/CAP/CAP-1-arg-text-parameter-ok.hir

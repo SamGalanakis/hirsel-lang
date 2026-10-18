@@ -2,7 +2,7 @@
 // expect: run
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let s = io.stdin(rt)?
-  if arg.count(args) == 0 {
+  if arg.len(args) == 0 {
     failure.check(input.read_line(s) == Ok(None()), Bounds())
   } else {
     failure.check(input.read_line(s) == Error(InvalidUtf8()), Bounds())

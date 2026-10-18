@@ -304,7 +304,7 @@ impl Library {
                     error(variant(2, vec![]))
                 }
             }
-            "arg.count" => {
+            "arg.len" => {
                 self.simulation.id(arg(a, 0)?, "Args")?;
                 u64_value(self.simulation.config.args.len() as u64)
             }
@@ -1315,7 +1315,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.count" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();

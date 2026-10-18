@@ -26,7 +26,7 @@ const USAGE: String = "usage: logq [--level LEVEL] [--match TEXT] [--field KEY=V
 const MAX_LINE: u64 = 65536
 
 fn flag_value(args: Args, i: u64, flag: String) -> Result[String, String] {
-  if i >= arg.count(args) {
+  if i >= arg.len(args) {
     return Error(f"{flag} needs a value")
   }
   let Ok(text) = arg.text(args, i) else {
@@ -42,7 +42,7 @@ fn parse_args(args: Args) -> Result[Query, String] {
   let mut top = 5u64
   let mut file: Option[String] = None()
   let mut i = 0u64
-  while i < arg.count(args) {
+  while i < arg.len(args) {
     let Ok(text) = arg.text(args, i) else {
       return Error("arguments must be UTF-8")
     }

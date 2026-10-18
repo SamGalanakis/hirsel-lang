@@ -735,7 +735,7 @@ fn native_null_pointer_boundaries_match_on_both_backends() {
             ("nested_null_callback", Some("nested_visit")),
         ];
         let mut main = String::from(
-            "pub fn main(u: Unsafe, args: Args) -> Result[(), ()] {\n  match arg.count(args) {\n",
+            "pub fn main(u: Unsafe, args: Args) -> Result[(), ()] {\n  match arg.len(args) {\n",
         );
         for (index, (function, violation)) in cases.iter().enumerate() {
             if violation.is_none() {

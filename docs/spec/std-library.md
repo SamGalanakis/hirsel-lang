@@ -1182,7 +1182,7 @@ a standalone `--` ends option parsing and is omitted from the result.
 
 `usage` requires valid specs (otherwise SEM-3 failure), emits a Usage line and
 one line per spec in declaration order, and appends LF. Applications collect
-Args through arg.count/text once, parse typed values separately, and choose how
+Args through arg.len/text once, parse typed values separately, and choose how
 to print help or errors. There is no registration, ambient Args access or exit.
 
 ## Explicit-sink structured logging

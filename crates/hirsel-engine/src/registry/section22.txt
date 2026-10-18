@@ -27,7 +27,7 @@ fn random.bytes(r: Random, count: u64) -> Result[Bytes, RandomError]
 N fn io.process(rt: Io) -> Result[Proc, GrantError]
 fn io.dir(rt: Io, p: Path) -> Result[Dir, FileError]
 fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]
-N fn arg.count(args: Args) -> u64
+N fn arg.len(args: Args) -> u64
 fn arg.text(args: Args, index: u64) -> Result[String, ArgError]
 fn arg.path(args: Args, index: u64) -> Result[Path, ArgError]
 fn path.of(text: String) -> Path

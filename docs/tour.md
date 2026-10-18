@@ -1102,7 +1102,7 @@ No stdout; exit 0 (all checks pass).
 
 ## Capabilities, grants, stdin, arguments and environment
 
-Roots arrive as entry parameters; each Io projection is fallible. `arg.count`
+Roots arrive as entry parameters; each Io projection is fallible. `arg.len`
 and `arg.text` use the explicit zero-based argument snapshot, excluding the
 executable. `env.get` distinguishes a denied key (`Error(NotGranted())`) from a
 granted unset key (`Ok(None())`). Io alone grants neither stdin nor stdout.
@@ -1129,7 +1129,7 @@ pub type AppError = Grant(GrantError) | Arguments(ArgError) | Environment(EnvErr
 ) | Output(OutputError)
 
 pub fn main(rt: Io, args: Args, environment: Env) -> Result[(), AppError] {
-  let name = if arg.count(args) == 0 {
+  let name = if arg.len(args) == 0 {
     "tour"
   } else {
     arg.text(args, 0) ? Arguments

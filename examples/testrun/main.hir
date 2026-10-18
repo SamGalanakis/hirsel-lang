@@ -5,7 +5,7 @@ pub type RunError = Grant(GrantError) | Usage(String) | Clock(ClockError)
 pub type Verdict = Passed | Failed(ExitStatus) | TimedOut | NotRun(ProcessError)
 
 fn limit(args: Args) -> Result[u64, RunError] {
-  if arg.count(args) < 2 {
+  if arg.len(args) < 2 {
     return Ok(5000)
   }
   let Ok(text) = arg.text(args, 1) else {
@@ -71,7 +71,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), RunError] {
   let p = io.process(rt) ? Grant
   let tasks = io.tasks(rt) ? Grant
   let clock = io.monotonic_clock(rt) ? Grant
-  if arg.count(args) < 1 || arg.count(args) > 2 {
+  if arg.len(args) < 1 || arg.len(args) > 2 {
     return Error(Usage("usage: testrun PROGRAM [MILLISECONDS]"))
   }
   let Ok(program) = arg.path(args, 0) else {

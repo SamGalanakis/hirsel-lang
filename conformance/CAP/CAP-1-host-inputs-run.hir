@@ -8,7 +8,7 @@ pub fn main(e: Env, args: Args, rt: Io) -> Result[(), GrantError] {
   let original = copy buffer
   let dest = io.stderr(rt)?
   let mut i: u64 = 0
-  while i < arg.count(args) {
+  while i < arg.len(args) {
     let name = match arg.text(args, i) {
       Ok(text) => text,
       Error(_) => {
@@ -20,7 +20,7 @@ pub fn main(e: Env, args: Args, rt: Io) -> Result[(), GrantError] {
     i += 1
   }
   let line = input.read_line(s)
-  if arg.count(args) == 0 {
+  if arg.len(args) == 0 {
     failure.check(line == Ok(None()), Bounds())
   } else {
     failure.check(line == Ok(Some("λ\n")), Bounds())

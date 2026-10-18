@@ -1,7 +1,7 @@
 // rule: CAP-1
 // expect: run
 pub fn main(io: Io, args: Args) -> Result[(), GrantError] {
-  failure.check(arg.count(args) == 0, Bounds())
+  failure.check(arg.len(args) == 0, Bounds())
   match arg.text(args, 0) {
     Error(MissingArgument()) => (),
     _ => failure.check(false, Bounds()),

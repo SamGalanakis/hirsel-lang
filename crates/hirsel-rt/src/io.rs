@@ -2336,7 +2336,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
 /// # Safety
 /// Args names the launch snapshot and out is writable scalar storage.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_arg_count(
+pub unsafe extern "C" fn hirsel_rt_v2_arg_len(
     ctx: *mut crate::RunCtx,
     out: *mut u64,
     args: *const u64,

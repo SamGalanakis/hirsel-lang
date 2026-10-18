@@ -291,7 +291,7 @@ fn serve(
 }
 
 fn port_arg(args: Args) -> Result[u16, ServerError] {
-  if arg.count(args) == 0 {
+  if arg.len(args) == 0 {
     return Ok(8080u16)
   }
   let text = match arg.text(args, 0) {

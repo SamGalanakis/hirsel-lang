@@ -1305,7 +1305,7 @@ fn argument_snapshot_preserves_empty_unicode_and_option_like_text() {
         ..Default::default()
     });
     let args = h.root("Args");
-    assert_eq!(h.value("arg.count", vec![args.clone()]), u64_value(3));
+    assert_eq!(h.value("arg.len", vec![args.clone()]), u64_value(3));
     for (i, text) in texts.into_iter().enumerate() {
         assert_eq!(
             h.value("arg.text", vec![args.clone(), u64_value(i as u64)]),

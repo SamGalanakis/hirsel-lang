@@ -149,7 +149,7 @@ fn emit(rt: Io, text: String) -> Result[(), Error] {
 
 fn run(rt: Io, args: Args) -> Result[(), Error] {
   let mut snapshot: List[String] = []
-  let count = arg.count(args)
+  let count = arg.len(args)
   for i in 0u64..count {
     list.push(mut snapshot, arg.text(args, i) ? Arguments)
   }

@@ -604,7 +604,7 @@ impl Io {
                     value: Box::new(OpValue::Unit),
                 }),
             },
-            (Some("arg"), "count", [OpValue::Handle(ARGS_HANDLE)]) => OpValue::Bits {
+            (Some("arg"), "len", [OpValue::Handle(ARGS_HANDLE)]) => OpValue::Bits {
                 scalar: ScalarKind::U64,
                 bits: 0,
             },

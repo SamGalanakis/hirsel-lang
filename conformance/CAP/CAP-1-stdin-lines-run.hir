@@ -3,7 +3,7 @@
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let s = io.stdin(rt)?
   let mut index: u64 = 0
-  while index < arg.count(args) {
+  while index < arg.len(args) {
     let expected = match arg.text(args, index) {
       Ok(text) => text,
       Error(_) => {
