@@ -8,9 +8,8 @@ fn limit(args: Args) -> Result[u64, RunError] {
   if arg.count(args) < 2 {
     return Ok(5000)
   }
-  let text = match arg.text(args, 1) {
-    Ok(t) => take t,
-    Error(_) => return Error(Usage("MILLISECONDS must be UTF-8")),
+  let Ok(text) = arg.text(args, 1) else {
+    return Error(Usage("MILLISECONDS must be UTF-8"))
   }
   match u64.parse(text) {
     Ok(n) => Ok(n),
@@ -72,14 +71,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), RunError] {
   if arg.count(args) < 1 || arg.count(args) > 2 {
     return Error(Usage("usage: testrun PROGRAM [MILLISECONDS]"))
   }
-  let program = match arg.path(args, 0) {
-    Ok(program) => program,
-    Error(_) => return Error(Usage("PROGRAM must be a path")),
+  let Ok(program) = arg.path(args, 0) else {
+    return Error(Usage("PROGRAM must be a path"))
   }
   let start = clock.monotonic(clock) ? Clock
-  let deadline = match instant.checked_add(clock, start, limit(args)? * 1000000u64) {
-    Some(at) => at,
-    None() => return Error(Usage("MILLISECONDS is too large")),
+  let Some(deadline) = instant.checked_add(clock, start, limit(args)? * 1000000u64) else {
+    return Error(Usage("MILLISECONDS is too large"))
   }
   // The deadline cancels the stream's scope: no task watches the clock.
   let verdict = match task.scope_until(

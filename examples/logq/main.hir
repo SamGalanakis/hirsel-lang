@@ -27,12 +27,12 @@ const MAX_LINE: u64 = 65536
 
 fn flag_value(args: Args, i: u64, flag: String) -> Result[String, String] {
   if i >= arg.count(args) {
-    return Error(string.concat(flag, " needs a value"))
+    return Error(f"{flag} needs a value")
   }
-  match arg.text(args, i) {
-    Ok(text) => Ok(take text),
-    Error(_) => Error(string.concat(flag, " value must be UTF-8")),
+  let Ok(text) = arg.text(args, i) else {
+    return Error(f"{flag} value must be UTF-8")
   }
+  Ok(take text)
 }
 
 fn parse_args(args: Args) -> Result[Query, String] {
@@ -43,9 +43,8 @@ fn parse_args(args: Args) -> Result[Query, String] {
   let mut file: Option[String] = None()
   let mut i = 0u64
   while i < arg.count(args) {
-    let text = match arg.text(args, i) {
-      Ok(t) => take t,
-      Error(_) => return Error("arguments must be UTF-8"),
+    let Ok(text) = arg.text(args, i) else {
+      return Error("arguments must be UTF-8")
     }
     i += 1
     if text == "--level" {
@@ -56,26 +55,23 @@ fn parse_args(args: Args) -> Result[Query, String] {
       i += 1
     } else if text == "--field" {
       let value = flag_value(args, i, text)?
-      field = match string.split_once(value, "=") {
-        Some((key, wanted)) => Some((unique key, unique wanted)),
-        None() => return Error("--field needs KEY=VALUE"),
+      let Some((key, wanted)) = string.split_once(value, "=") else {
+        return Error("--field needs KEY=VALUE")
       }
+      field = Some((unique key, unique wanted))
       i += 1
     } else if text == "--top" {
-      top = match u64.parse(flag_value(args, i, text)?) {
-        Ok(n) => n,
-        Error(_) => return Error("--top needs a number"),
+      let Ok(n) = u64.parse(flag_value(args, i, text)?) else {
+        return Error("--top needs a number")
       }
+      top = n
       i += 1
     } else if string.starts_with(text, "--") {
-      return Error(string.concat("unknown flag ", text))
+      return Error(f"unknown flag {text}")
+    } else if option.is_some(file) {
+      return Error(USAGE)
     } else {
-      match file {
-        Some(_) => return Error(USAGE),
-        None() => {
-          file = Some(take text)
-        },
-      }
+      file = Some(take text)
     }
   }
   match file {
@@ -190,12 +186,8 @@ fn report(query: Query, levels: Map[String, u64], messages: Map[String, u64]) ->
   }
   text.append(mut out, f"matched {total}\n")
   for name in sorted_names {
-    text.append(mut out, name)
-    text.append(mut out, " ")
-    if let Some(n) = map.get(levels, name) {
-      u64.format_into(n, mut out)
-    }
-    text.append(mut out, "\n")
+    let n = option.unwrap_or(map.get(levels, name), 0u64)
+    text.append(mut out, f"{name} {n}\n")
   }
   let mut ranked: List[Ranked] = []
   for (message, n) in messages {
@@ -220,14 +212,13 @@ fn report(query: Query, levels: Map[String, u64], messages: Map[String, u64]) ->
 
 fn run(rt: Io, args: Args) -> Result[String, String] {
   let query = parse_args(args)?
-  let dir = match io.dir(rt, path.of("")) {
-    Ok(d) => d,
-    Error(_) => return Error("no file access granted"),
+  let Ok(dir) = io.dir(rt, path.of("")) else {
+    return Error("no file access granted")
   }
   let mut f = match file.open(dir, path.of(query.file)) {
     Ok(f) => take f,
-    Error(NotFound()) => return Error(string.concat("no such file: ", query.file)),
-    Error(_) => return Error(string.concat("cannot open ", query.file)),
+    Error(NotFound()) => return Error(f"no such file: {query.file}"),
+    Error(_) => return Error(f"cannot open {query.file}"),
   }
   let mut reader = bufio.new(4096)
   let mut levels: Map[String, u64] = map.empty()
@@ -238,7 +229,7 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
       Ok(l) => take l,
       Error(Limit()) => return Error(f"line {number + 1}: too long"),
       Error(InvalidUtf8()) => return Error(f"line {number + 1}: invalid UTF-8"),
-      Error(_) => return Error(string.concat("cannot read ", query.file)),
+      Error(_) => return Error(f"cannot read {query.file}"),
     }
     if string.byte_len(line) == 0 {
       break
@@ -258,9 +249,8 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
 pub fn main(rt: Io, args: Args) -> Result[(), String] {
   match run(rt, args) {
     Ok(text) => {
-      let output = match io.stdout(rt) {
-        Ok(o) => o,
-        Error(_) => return Error("no stdout"),
+      let Ok(output) = io.stdout(rt) else {
+        return Error("no stdout")
       }
       match out.print(output, text) {
         Ok(()) => Ok(()),

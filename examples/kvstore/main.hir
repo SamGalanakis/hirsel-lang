@@ -51,7 +51,7 @@ fn parse_entries(take text: String) -> Result[Map[String, String], ServerError] 
   for (key, value) in fields {
     match value {
       Text(s) => map.insert(mut entries, unique key, unique s),
-      _ => return Error(Corrupt(string.concat("value of ", key))),
+      _ => return Error(Corrupt(f"value of {key}")),
     }
   }
   Ok(take entries)
@@ -83,14 +83,10 @@ fn save(dir: Dir, text: String) -> Result[(), FileError] {
 fn write_loop(tasks: Tasks, dir: Dir, take receiver: Receiver[SaveJob]) -> () {
   let mut jobs = take receiver
   let mut written: u64 = 0
-  while true {
-    let SaveJob(version: version, text: text, reply: reply_to) = match channel.receive(
-      tasks,
-      mut jobs
-    ) {
-      Ok(j) => take j,
-      Error(_) => return (),
-    }
+  while let Ok(SaveJob(version: version, text: text, reply: reply_to)) = channel.receive(
+    tasks,
+    mut jobs
+  ) {
     let mut ok = true
     if version > written {
       ok = results.is_ok(save(dir, text))

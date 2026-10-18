@@ -139,22 +139,19 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
   if arg.count(args) != 1 {
     return Error("usage: mdtoc FILE")
   }
-  let name = match arg.text(args, 0) {
-    Ok(t) => take t,
-    Error(_) => return Error("usage: mdtoc FILE"),
+  let Ok(name) = arg.text(args, 0) else {
+    return Error("usage: mdtoc FILE")
   }
-  let dir = match io.dir(rt, path.of("")) {
-    Ok(d) => d,
-    Error(_) => return Error("no file access granted"),
+  let Ok(dir) = io.dir(rt, path.of("")) else {
+    return Error("no file access granted")
   }
   let data = match file.read_bytes(dir, path.of(name)) {
     Ok(d) => copy d,
-    Error(NotFound()) => return Error(string.concat("no such file: ", name)),
-    Error(_) => return Error(string.concat("cannot read ", name)),
+    Error(NotFound()) => return Error(f"no such file: {name}"),
+    Error(_) => return Error(f"cannot read {name}"),
   }
-  let text = match string.from_bytes(take data) {
-    Ok(s) => take s,
-    Error(_) => return Error(string.concat(name, " is not UTF-8")),
+  let Ok(text) = string.from_bytes(take data) else {
+    return Error(f"{name} is not UTF-8")
   }
   Ok(toc(headings(take text)))
 }
@@ -162,9 +159,8 @@ fn run(rt: Io, args: Args) -> Result[String, String] {
 pub fn main(rt: Io, args: Args) -> Result[(), String] {
   // The host reports a returned error as `error: <message>` and exits 1.
   let text = run(rt, args)?
-  let output = match io.stdout(rt) {
-    Ok(o) => o,
-    Error(_) => return Error("no stdout"),
+  let Ok(output) = io.stdout(rt) else {
+    return Error("no stdout")
   }
   match out.print(output, text) {
     Ok(()) => Ok(()),

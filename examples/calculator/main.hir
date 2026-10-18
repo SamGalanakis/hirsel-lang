@@ -45,10 +45,7 @@ fn append_result(take line: String, mut builder: List[u8]) -> () {
 
 fn repl(rt: Io) -> Result[(), common.Error] {
   let stream = io.stdin(rt) ? Grant
-  while true {
-    let Some(line) = input.read_line(stream) ? Input else {
-      return Ok(())
-    }
+  while let Some(line) = input.read_line(stream) ? Input {
     let mut builder: List[u8] = []
     append_result(take line, mut builder)
     common.print(rt, common.finish(take builder)?)?

@@ -101,8 +101,8 @@ fn convert[S](
         if encoded_index == None() {
           return Error(Invalid())
         }
-        hash_name = string.concat(column, "_sha256")
-        if let Some(_) = map.get(names, hash_name) {
+        hash_name = f"{column}_sha256"
+        if map.contains(names, hash_name) {
           return Error(Invalid())
         }
       }
@@ -136,7 +136,7 @@ fn convert[S](
     Ok(output) => take output,
     Error(_) => return Error(Invalid()),
   }
-  Ok(string.concat(output, "\n"))
+  Ok(f"{output}\n")
 }
 
 fn specs() -> List[std@1/cli.Flag] {
