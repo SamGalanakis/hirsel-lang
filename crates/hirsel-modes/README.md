@@ -878,6 +878,9 @@ while copying, lifetime and current Sendable proofs remain independent.
 The registry-backed source harnesses import signature normalization from
 hirsel-signature and body checking from hirsel-check directly. Both dependencies
 are test-only; production modes continue to consume shared phase data.
+The ownership corpus classifies a rejection as J-owned only when J actually
+reports the expected rule at the expected source line. Its existing passing
+ratchet still requires I to retain every previously proved ownership judgment.
 
 Loop pattern bindings name the yielded value, separately from the collection or
 cursor source. Each iteration introduces a fresh binding identity, including

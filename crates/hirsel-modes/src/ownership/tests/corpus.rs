@@ -32,6 +32,13 @@ pub(super) fn run(
     source: &str,
     base: &support::Registry,
 ) -> Result<(Vec<Diagnostic>, SourceMap), String> {
+    run_with_authority(source, base).map(|(diagnostics, _, map)| (diagnostics, map))
+}
+
+fn run_with_authority(
+    source: &str,
+    base: &support::Registry,
+) -> Result<(Vec<Diagnostic>, Vec<Diagnostic>, SourceMap), String> {
     let (file, map, ds) = support::parse(source, &[]);
     if let Some(d) = ds.first() {
         return Err(format!(
@@ -60,6 +67,7 @@ pub(super) fn run(
     support::normalize_file(&file, &mut registry)
         .map_err(|e| format!("dependency-owned signature: {e}"))?;
     let mut diagnostics = vec![];
+    let mut authority_diagnostics = vec![];
     for item in &file.roots {
         let resolution = hirsel_resolve::resolve_item(
             &file,
@@ -172,6 +180,7 @@ pub(super) fn run(
             .collect();
         // This oracle checks I's diagnostics. J's judgments supply real capture
         // layouts, but its independent diagnostics belong to its own ratchet.
+        authority_diagnostics.extend(authority.diagnostics);
         let mut checked = authority.body;
         let output = check_ownership_with_clauses(
             &file.tree,
@@ -203,7 +212,7 @@ pub(super) fn run(
                 suffix(b.rule.as_str()),
             ))
     });
-    Ok((diagnostics, map))
+    Ok((diagnostics, authority_diagnostics, map))
 }
 #[test]
 fn source_corpus_ratchets_rule_and_primary_line() {
@@ -236,74 +245,13 @@ fn source_corpus_ratchets_rule_and_primary_line() {
             let rejection = expected
                 .strip_prefix("reject ")
                 .map(|r| r.split_once(" at line ").unwrap());
-            if matches!(
-                name.as_str(),
-                "CLO/CLO-4-capture-authority-declared-bad.hir"
-                    | "MODE/MODE-5-authority-union-bad.hir"
-            ) {
-                count.2 += 1;
-                pending.insert(
-                    name,
-                    "dependency-owned J: declared escaping authority (CLO-4)".to_string(),
-                );
-                continue;
-            }
-            if matches!(
-                name.as_str(),
-                "CLO/CLO-2-annotation-nested-uses-part-bad.hir"
-                    | "CLO/CLO-4-annotated-tuple-callable-return-bad.hir"
-                    | "CLO/CLO-4-contract6-held-selection-bad.hir"
-            ) {
-                count.2 += 1;
-                pending.insert(
-                    name,
-                    "dependency-owned J: written annotation contract (CLO-4)".to_string(),
-                );
-                continue;
-            }
-            if name == "MODE/MODE-2-callable-parameter-unique-bad.hir" {
-                count.2 += 1;
-                pending.insert(
-                    name,
-                    "dependency-owned J: instantiated callable header (MODE-2)".to_string(),
-                );
-                continue;
-            }
-            // Mutable callable multiplicity is a fixed receiving contract
-            // checked by J, not I's current ownership evidence. The full
-            // source pipeline and independent V control cover this case.
-            if name == "MODE/MODE-3-mut-callable-multiplicity-bad.hir" {
-                count.2 += 1;
-                pending.insert(
-                    name,
-                    "dependency-owned J: invariant mutable callable contract (MODE-3)".to_string(),
-                );
-                continue;
-            }
-            // Nested type-graph contracts are J's shared view relation, not
-            // I's current root ownership evidence. Their producer tests and
-            // integrated corpus independently check these new diagnostics.
-            if matches!(
-                name.as_str(),
-                "MODE/MODE-2-nested-view-copy-kept-bad.hir"
-                    | "MODE/MODE-2-nested-view-mut-bad.hir"
-                    | "MODE/MODE-2-nested-view-strengthen-bad.hir"
-                    | "MODE/MODE-2-nested-view-phantom-bad.hir"
-            ) {
-                count.2 += 1;
-                pending.insert(
-                    name,
-                    "dependency-owned J: nested receiving contract (MODE-2)".to_string(),
-                );
-                continue;
-            }
             if rejection.is_some_and(|(rule, _)| !owned(rule)) {
                 count.2 += 1;
                 pending.insert(name, "outside ownership operative-rule scope".to_string());
                 continue;
             }
             count.1 += 1;
-            let outcome = run(&source, &base).and_then(|(ds, map)| {
+            let outcome = run_with_authority(&source, &base).and_then(|(ds, authority, map)| {
                 if let Some((rule, line)) = rejection {
                     let line = line.parse::<u32>().unwrap();
                     match ds.first() {
@@ -312,6 +260,12 @@ fn source_corpus_ratchets_rule_and_primary_line() {
                                 && map.location(d.primary).unwrap().line == line =>
                         {
                             Ok(())
+                        }
+                        _ if authority.iter().any(|d| {
+                            d.rule.as_str() == rule && map.location(d.primary).unwrap().line == line
+                        }) =>
+                        {
+                            Err(format!("dependency-owned J: {rule} line {line}"))
                         }
                         Some(d) => Err(format!(
                             "not done: expected {rule} line {line}; got {} line {} ({})",
@@ -338,6 +292,10 @@ fn source_corpus_ratchets_rule_and_primary_line() {
                     passing.insert(name);
                 }
                 Err(reason) => {
+                    if reason.starts_with("dependency-owned J:") {
+                        count.1 -= 1;
+                        count.2 += 1;
+                    }
                     pending.insert(name, reason);
                 }
             }
