@@ -50,12 +50,15 @@ server name ([network operations](core-library.md#network)).
 **Processes.** `Proc` is a process capability over a finite set of rules, each naming one
 canonical absolute executable path and the exact environment variable names passed through
 to it. There is no `PATH` search, no wildcard and no directory rule, and an empty rule set
-is a `Proc` that runs nothing. `proc.run` checks the program against the rules of the `Proc`
-it is given before any host effect; a failed check returns `NotGranted()` without spawning.
-A child starts with an empty environment except the variables its rule lists, and with its
-working directory set only by an explicit `Dir`. The child's own file system, network and
-process access is outside Hirsel's model: granting a program is trusting it with whatever
-the host lets it do ([processes](core-library.md#processes)).
+is a `Proc` that runs nothing. `proc.run` and `proc.spawn` check the program against the
+rules of the `Proc` they are given before any host effect; a failed check returns
+`NotGranted()` without spawning. A child starts with an empty environment except the
+variables its rule lists, and with its working directory set only by an explicit `Dir`. A
+streaming `Child of p` carries `p`'s authority, and every operation on it takes `p` as
+well ([CAP-2](#cap-2-charged-at-use)). A run's deadline names a `MonotonicClock` the
+program already holds; it grants nothing, and no implicit clock is read. The child's own
+file system, network and process access is outside Hirsel's model: granting a program is
+trusting it with whatever the host lets it do ([processes](core-library.md#processes)).
 
 Libraries define further capabilities and declare each global or scoped.
 

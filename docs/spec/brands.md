@@ -64,7 +64,8 @@ create it.
 
 The core library brands: `File of dir`; `StrPos of s`; `SortedMap[K, V] of by` (combining
 two maps requires the same `by`); `Task[R] of s`; `SlotId[T] of slots`; `Instant of clock`
-for a `MonotonicClock`; `Stream of n` and `Listener of n` for a `Net`.
+for a `MonotonicClock`; `Stream of n` and `Listener of n` for a `Net`; `Child of p` for a
+`Proc`.
 
 ### PROV-4: Arena placement
 

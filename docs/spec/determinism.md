@@ -131,12 +131,16 @@ no authority beyond the explicit rules. An implementation that cannot enforce a 
 rule or provider refuses the launch; it never widens it.
 `process.spawn@1` runs host programs with the [process semantics of the core
 library](core-library.md#processes). `process.script@1` additionally takes `runs`, an
-array of `{program, args, outcome}` script entries, and serves the program from them
-exactly as `test.process` does; `runs` is invalid under any other provider. An outcome is
+array of `{program, args, outcome}` script entries, and `children`, an array of
+`{program, args, steps}` streaming child entries, and serves the program from them exactly
+as `test.process` does; either may be omitted for none, and both are invalid under any
+other provider. An outcome is
 `{"output": {"status": status, "stdout": [bytes], "stderr": [bytes]}}`, with status
 `{"exited": code}` or `{"signaled": number}`, or `{"error": error}`, with error
-`"not_granted"`, `"invalid_input"`, `"not_found"`, `"permission_denied"`, `"output_limit"`
-or `{"fault": code}`. Script entries grant no authority beyond the explicit rules.
+`"not_granted"`, `"invalid_input"`, `"not_found"`, `"permission_denied"`, `"output_limit"`,
+`{"fault": code}`, `"timed_out"` or `"input_closed"`. A step is `{"stdout": [bytes]}`,
+`{"stderr": [bytes]}`, `{"expect": [bytes]}` or `{"exit": status}`. Script entries grant
+no authority beyond the explicit rules.
 
 **Canonical form.** The record has one strict canonical representation: schema-order object
 members; arrays ordered as specified (`args` order preserved, grant sets sorted by
@@ -274,13 +278,27 @@ InDoubt; continuing from an InDoubt write never retries it.
 ### Process recording
 
 A process run is recorded at the call: the request (the `Proc` handle, program, arguments,
-every stdin byte, the working-directory handle or none, and `max_output`) and the
-completion (the exit status with exactly the captured stdout and stderr bytes, or the
-error). Elapsed time and the order in which the child's streams were drained are never
-recorded. Replay returns the recorded completion without spawning anything, and re-derives
-the program check from the bound run configuration: a recorded completion that contradicts
-it is a replay refusal, like any other mismatch. Recordings hold whatever the child wrote,
-so they are as secret-bearing as the child's output.
+every stdin byte, the working-directory handle or none, `max_output`, and the deadline's
+clock handle and ticks or none) and the completion (the exit status with exactly the
+captured stdout and stderr bytes, or the error, `TimedOut()` included). Elapsed time and the
+order in which the child's streams were drained are never recorded. Under
+`tasks.cooperative@1` a run that parks records `blocked` and a `ready` event like a network
+request, and its completion when the poll that finds it ready completes it; a cancelled run
+records nothing more, since cancellation is derived from the schedule. A completed
+`TimedOut()` run, like a completed timer wait, refuses a later recorded monotonic sample
+below its deadline.
+
+A streaming child is recorded at the stream API, as a network stream is: `proc.spawn` (the
+`Proc` handle, program, arguments and working-directory handle; the `Child` handle or the
+error), each `child.write` (every byte; success or the error), each read (the stream and
+`max`; exactly the bytes it delivered, end of stream or the error), `close_stdin`, `kill`,
+`wait` (the `ExitStatus` or the error) and the close of a dropped `Child`. The bytes `wait`
+discards are never recorded. Reads, writes and waits park and are readied as recorded.
+
+Replay returns the recorded completions without spawning, reading or writing anything, and
+re-derives the program check from the bound run configuration: a recorded completion that
+contradicts it is a replay refusal, like any other mismatch. Recordings hold whatever the
+child wrote, so they are as secret-bearing as the child's output.
 
 ### Random and timer recording
 

@@ -174,9 +174,14 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         ("GrantError", "", "NotGranted()"),
         ("ExitStatus", "", "Exited(i32)|Signaled(i32)"),
         (
+            "ChildStep",
+            "",
+            "Stdout(Bytes)|Stderr(Bytes)|Expect(Bytes)|Exit(ExitStatus)",
+        ),
+        (
             "ProcessError",
             "",
-            "NotGranted()|InvalidInput()|NotFound()|PermissionDenied()|OutputLimit()|Fault(u32)",
+            "NotGranted()|InvalidInput()|NotFound()|PermissionDenied()|OutputLimit()|Fault(u32)|TimedOut()|Canceled(CancelCause)|InputClosed()",
         ),
         (
             "InputError",
@@ -238,7 +243,10 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
                 .collect(),
         );
         if b.generics.is_empty()
-            && !matches!(name, "TlsRoots" | "PeerTls" | "NetConnection" | "NetStep")
+            && !matches!(
+                name,
+                "TlsRoots" | "PeerTls" | "NetConnection" | "NetStep" | "ChildStep"
+            )
         {
             t.bounds = vec![
                 Bound::Plain,
@@ -290,6 +298,12 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "program: String,args: List[String],outcome: Result[ProcessOutput,ProcessError]",
         ),
+        (
+            "ChildScript",
+            "",
+            "program: String,args: List[String],steps: List[ChildStep]",
+        ),
+        ("Deadline", "", "clock: MonotonicClock,at: Instant of .clock"),
         ("NetClient", "", "from: SocketAddr,steps: List[NetStep]"),
         (
             "NetListener",
@@ -301,7 +315,22 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             .with_declarations(&out)
             .with_schema(super::schema(name));
         let repr = b.record(fields);
-        let t = type_definition(b.generics.clone(), Some(repr));
+        let mut t = type_definition(b.generics.clone(), Some(repr));
+        if name == "Deadline" {
+            // A deadline holds its clock, so it carries that clock's authority.
+            t.bounds = vec![
+                Bound::Plain,
+                Bound::Copyable,
+                Bound::Sendable,
+                Bound::NoallocDrop,
+            ];
+            t.authority = AuthoritySummary::Known(
+                vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
+                    "MonotonicClock",
+                ))]
+                .into(),
+            );
+        }
         publish(b.signature(name, SignatureKind::Type(t), false), &mut out);
     }
     for (name, fields) in [("File", ""), ("AtomicFile", "dir: Dir,tmp: Path,dst: Path")] {
@@ -323,8 +352,9 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             &mut out,
         );
     }
-    // Core library network resources have Net authority and a noalloc close finalizer.
-    for name in ["Stream", "Listener"] {
+    // Core library network and process resources have their capability's authority and a
+    // noalloc close finalizer.
+    for (name, capability) in [("Stream", "Net"), ("Listener", "Net"), ("Child", "Proc")] {
         let b = Builder::new("").with_declarations(&out);
         let mut t = type_definition(vec![], None);
         t.resource = true;
@@ -332,7 +362,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         t.destructor_allocation = Allocation::NoAlloc;
         t.authority = AuthoritySummary::Known(
             vec![AuthorityTerm::Capability(hirsel_syntax::DefPath::core(
-                "Net",
+                capability,
             ))]
             .into(),
         );
@@ -775,6 +805,8 @@ pub(super) struct Builder {
     params: Vec<String>,
     outer_params: Vec<Vec<String>>,
     generic_depth: u32,
+    /// The fields of the record being built, which `of .field` brands name (PROV-5).
+    siblings: Vec<String>,
 }
 impl Builder {
     pub fn new(generics: &str) -> Self {
@@ -823,6 +855,7 @@ impl Builder {
             params: vec![],
             outer_params: vec![],
             generic_depth: 0,
+            siblings: vec![],
         }
     }
     pub(super) fn with_schema(mut self, schema: Vec<SchemaConstraint>) -> Self {
@@ -895,7 +928,12 @@ impl Builder {
         })
     }
     fn record(&mut self, text: &str) -> TypeId {
-        let fields = split(text, ',')
+        let fields = split(text, ',');
+        self.siblings = fields
+            .iter()
+            .map(|s| s.split_once(':').unwrap().0.trim().to_owned())
+            .collect();
+        let fields = fields
             .iter()
             .map(|s| {
                 let (name, ty) = s.split_once(':').unwrap();
@@ -1058,6 +1096,17 @@ impl Builder {
             })
     }
     fn origin(&self, text: &str) -> Origin {
+        if let Some(field) = text.trim().strip_prefix('.') {
+            let index = self
+                .siblings
+                .iter()
+                .position(|s| s == field)
+                .unwrap_or_else(|| panic!("unknown sibling origin {text}"));
+            return Origin {
+                root: OriginRoot::Sibling(FieldId(index as u32)),
+                fields: vec![].into(),
+            };
+        }
         let parameter = self
             .parameter(text.trim())
             .unwrap_or_else(|| panic!("unknown origin {text}"));

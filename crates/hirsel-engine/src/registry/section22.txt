@@ -33,7 +33,7 @@ N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
-fn test.process(t: Test, runs: List[ProcessScript]) -> Proc
+fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc
 
 // CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
@@ -77,8 +77,15 @@ fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
 N fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]
 
-// CAP-1/2, DET-1
-fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64) -> Result[ProcessOutput, ProcessError]
+// CAP-1/2, PROV-1/3, DROP-2/3, CONC-1/3, DET-1
+fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
+fn proc.spawn(p: Proc, program: Path, args: List[String], dir: Option[Dir]) -> Result[Child of p, ProcessError]
+N fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessError]
+N fn child.close_stdin(p: Proc, mut c: Child of p) -> ()
+fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
+fn child.read_stderr(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
+N fn child.wait(p: Proc, take c: Child of p) -> Result[ExitStatus, ProcessError]
+N fn child.kill(p: Proc, mut c: Child of p) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R

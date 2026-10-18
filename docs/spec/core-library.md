@@ -62,7 +62,7 @@ N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
 fn test.net(t: Test, peers: List[NetPeer], listeners: List[NetListener]) -> Net
-fn test.process(t: Test, runs: List[ProcessScript]) -> Proc
+fn test.process(t: Test, runs: List[ProcessScript], children: List[ChildScript]) -> Proc
 
 // CAP-1/2, PROV-1/2, DROP-2/4, DET-1
 fn file.open(d: Dir, p: Path) -> Result[File of d, FileError]
@@ -106,8 +106,15 @@ fn net.listen(n: Net, addr: SocketAddr) -> Result[Listener of n, NetError]
 fn net.accept(n: Net, mut l: Listener of n) -> Result[(Stream of n, SocketAddr), NetError]
 N fn net.local_addr(n: Net, l: Listener of n) -> Result[SocketAddr, NetError]
 
-// CAP-1/2, DET-1
-fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64) -> Result[ProcessOutput, ProcessError]
+// CAP-1/2, PROV-1/3, DROP-2/3, CONC-1/3, DET-1
+fn proc.run(p: Proc, program: Path, args: List[String], stdin: Bytes, dir: Option[Dir], max_output: u64, deadline: Option[Deadline]) -> Result[ProcessOutput, ProcessError]
+fn proc.spawn(p: Proc, program: Path, args: List[String], dir: Option[Dir]) -> Result[Child of p, ProcessError]
+N fn child.write(p: Proc, mut c: Child of p, data: Bytes) -> Result[(), ProcessError]
+N fn child.close_stdin(p: Proc, mut c: Child of p) -> ()
+fn child.read_stdout(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
+fn child.read_stderr(p: Proc, mut c: Child of p, mut buffer: List[u8], max: u64) -> Result[u64, ProcessError]
+N fn child.wait(p: Proc, take c: Child of p) -> Result[ExitStatus, ProcessError]
+N fn child.kill(p: Proc, mut c: Child of p) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn task.scope[R](tasks: Tasks, body: once fn(s: Scope) -> R) -> R
@@ -429,7 +436,8 @@ the run's Test seed and the supplied zero-based case index. `test.fail` records 
 failure through Test reporting, then ends the test along its failure edge after ordinary
 failure cleanup; it never returns. `test.dir` creates a confined fake file system from its
 entries; `test.net` creates a fake `Net` served by scripted peers ([below](#network));
-`test.process` creates a fake `Proc` served by scripted runs ([below](#processes)).
+`test.process` creates a fake `Proc` served by scripted runs and children
+([below](#processes)).
 
 ## Concurrency
 
@@ -574,45 +582,127 @@ The process data types are root core types, with variant ordinals in the order w
 ExitStatus    = Exited(i32) | Signaled(i32)
 ProcessOutput = { status: ExitStatus, stdout: Bytes, stderr: Bytes }
 ProcessError  = NotGranted() | InvalidInput() | NotFound() | PermissionDenied()
-              | OutputLimit() | Fault(u32)
+              | OutputLimit() | Fault(u32) | TimedOut() | Canceled(CancelCause)
+              | InputClosed()
+Deadline      = { clock: MonotonicClock, at: Instant of .clock }
 ProcessScript = { program: String, args: List[String],
                   outcome: Result[ProcessOutput, ProcessError] }
+ChildScript   = { program: String, args: List[String], steps: List[ChildStep] }
+ChildStep     = Stdout(Bytes) | Stderr(Bytes) | Expect(Bytes) | Exit(ExitStatus)
 ```
 
-`proc.run(p, program, args, stdin, dir, max_output)` runs one child to completion and
-returns its exit status and everything it wrote to standard output and standard error.
-The checks run in this order, each before any host effect:
+`proc.run(p, program, args, stdin, dir, max_output, deadline)` runs one child to completion
+and returns its exit status and everything it wrote to standard output and standard error.
+`proc.spawn(p, program, args, dir)` starts a streaming child that the program talks to while
+it runs. Both make these checks in this order, each before any host effect:
 
-1. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
+1. In a cancelled scope the call returns `Canceled(cause)`
+   ([CONC-3](concurrency.md#conc-3-cancellation)).
+2. `program` must be a canonical absolute path: it starts with `/`, has no empty, `.` or
    `..` component and no trailing `/`, and no argument contains a NUL byte; otherwise
    `InvalidInput()`.
-2. `program` must equal a rule of `p` byte for byte; otherwise `NotGranted()`. No `PATH`
+3. `program` must equal a rule of `p` byte for byte; otherwise `NotGranted()`. No `PATH`
    search, link resolution or prefix match takes part in the check.
-3. With `Some(d)`, the child's working directory is `d`'s directory; a `Dir` with no host
+4. With `Some(d)`, the child's working directory is `d`'s directory; a `Dir` with no host
    directory (one from `test.dir`) is `InvalidInput()` for a host provider. With `None()`
    the working directory is `/`. A `Dir` grants the child nothing; it only names where it
    starts.
+5. For `proc.run` with `Some(d)`, a deadline `d.at` that `d.clock` has already reached is
+   `TimedOut()`, and nothing is spawned.
 
 The child's argument vector is `program` followed by `args`. Its environment holds exactly
 the variables its rule lists that are set in the launcher's environment, and nothing else.
-`stdin` is written to the child's standard input, which is then closed; standard output and
-standard error are captured separately and concurrently, so neither pipe can stall the
-other. When either stream exceeds `max_output` bytes the child is killed and the result is
-`OutputLimit()`; `max_output` 0 accepts only a child that writes nothing. A child that
-exits returns `Exited(code)`, one ended by a signal `Signaled(number)`; a nonzero status is
-an ordinary `Ok`, not an error. A missing executable is `NotFound()`, one the host refuses
-to execute `PermissionDenied()`, and any other spawn or wait failure `Fault(code)`, a
-capability input like other fault codes. `proc.run` blocks its task until the child exits;
-it is not a cancellation point. Interactive and streaming children are not provided.
+A missing executable is `NotFound()`, one the host refuses to execute `PermissionDenied()`,
+and any other spawn, stream or wait failure `Fault(code)`, a capability input like other
+fault codes. A child that exits has status `Exited(code)`, one ended by a signal
+`Signaled(number)`; a nonzero status is an ordinary `Ok`, not an error. The host provider
+signals only the child itself, never processes it started.
 
-**Scripted runs.** `test.process` returns a fake `Proc` whose rules are the distinct
-`program` values of its runs, with no environment names. A `proc.run` on it makes the same
-checks, `InvalidInput()` and `NotGranted()` first, then takes the first unused script
-entry whose `program` and `args` equal its own and returns its `outcome`, with an output
-longer than `max_output` on either stream returning `OutputLimit()`. With no such entry the
-result is `NotFound()`. `stdin` and `dir` are not consulted beyond their checks. A scripted
-run is recorded as the same request and completion a host run produces, so a simulated run
-replays like a real one ([process recording](determinism.md#process-recording)).
+**One-shot runs.** `proc.run` writes `stdin` to the child's standard input, which is then
+closed; standard output and standard error are captured separately and concurrently, so
+neither pipe can stall the other. When either stream exceeds `max_output` bytes the child is
+killed and the result is `OutputLimit()`; `max_output` 0 accepts only a child that writes
+nothing. With `deadline` `Some(d)` the run must end by `d.at`: when `d.clock` reaches it
+first, the child is sent SIGTERM, then SIGKILL if it has not exited one second later, and
+once it is reaped the result is `TimedOut()`, with its output discarded. A run that ends
+first returns as if it had no deadline, and `None()` sets none. A deadline grants nothing:
+its clock is a `MonotonicClock` the program already holds, and no other clock is read.
+
+`proc.run` parks its task while the child runs, so other tasks keep running
+([CONC-1](concurrency.md#conc-1-runtime)). It is a cancellation point throughout: cancelling
+its task sends the child SIGKILL at once, reaps it, discards its output and returns
+`Canceled(cause)`. The child's own effects are outside Hirsel's model
+([CAP-1](capabilities.md#cap-1-authority)), and none of its output reaches the program, so
+the run establishes no effect. Without a Tasks provider the run blocks the thread and
+nothing can cancel it.
+
+**Streaming children.** `proc.spawn` starts the child with all three standard streams as
+pipes and returns it as a `Child of p`: a noncopyable, sendable resource carrying `Proc`
+authority, whose operations take the same `Proc`
+([CAP-2](capabilities.md#cap-2-charged-at-use)).
+
+- `child.write(p, mut c, data)` writes every byte of `data` to the child's standard input
+  and succeeds once all are accepted; empty `data` succeeds with no effect. After
+  `child.close_stdin` it is `InvalidInput()`. When the child has closed its end, or exited,
+  it is `InputClosed()`, possibly after a prefix was accepted.
+- `child.close_stdin(p, mut c)` closes the child's standard input, so the child reads end of
+  input; closing again has no effect.
+- `child.read_stdout(p, mut c, mut buffer, max)` appends between 1 and `max` bytes of the
+  child's standard output to `buffer` and returns their count as soon as any are available,
+  or returns 0 at end of stream; it does not wait to fill `max`. `max` 0 is
+  `InvalidInput()`, and an error appends nothing. `child.read_stderr` is the same for
+  standard error. A stream is a pipe of bounded host capacity: a child that fills one
+  nobody reads waits until it is read.
+- `child.wait(p, take c)` closes standard input if it is open, reads and discards whatever
+  the child still writes to either stream until the child exits, reaps it and returns its
+  `ExitStatus`. It consumes the Child on every outcome.
+- `child.kill(p, mut c)` sends SIGKILL to the child; a later `wait` returns `Signaled(9)`
+  unless the child had already exited. Killing again has no effect.
+
+`child.write`, the reads and `child.wait` park their task until they can proceed. A write or
+read is a cancellation point only before it has an effect: a write before any byte is
+accepted, a read before any byte is received. A cancelled `child.wait` returns
+`Canceled(cause)` and drops the Child it took, which kills the child. `close_stdin` and
+`kill` never wait and are not cancellation points.
+
+Dropping a `Child` (one never waited, since `child.wait` takes it) closes its standard
+input, sends the child SIGKILL, reaps it, then closes its output pipes, discarding unread
+bytes. The finalizer is `@noalloc`, and it never waits on the child except to reap it after
+SIGKILL. A program that wants the child's exit status calls `child.wait`.
+
+**Scripted runs.** `test.process(t, runs, children)` returns a fake `Proc` whose rules are
+the distinct `program` values of its runs and children, with no environment names. A
+script outcome or step that is not valid for a host child (a noncanonical `program`, or an
+outcome `Error(Canceled(_))`) is invalid input. A `proc.run` on it makes the same checks,
+then takes the first unused run entry whose `program` and `args` equal its own and returns
+its `outcome`, with an output longer than `max_output` on either stream returning
+`OutputLimit()`. With no such entry the result is `NotFound()`. `stdin` and `dir` are not
+consulted beyond their checks. A scripted run takes no time: its deadline matters only to
+the check before spawning, and an outcome `Error(TimedOut())` scripts a timeout.
+
+A `proc.spawn` on it takes the first unused child entry whose `program` and `args` equal
+its own (with none, `NotFound()`) and plays its steps in order:
+
+- `Stdout(b)` and `Stderr(b)` make `b` available on that stream, and the child moves on at
+  once. A read returns at most `max` bytes of one step and never crosses into the next.
+- `Expect(b)` waits until the program has written `b`'s length of bytes to standard input,
+  which must equal `b`. Written bytes accumulate across writes and are compared at the
+  write that completes them; a mismatch fails LANG-9 after reporting
+  `test failure: child P expected E but the program wrote W` and a newline through Test
+  reporting, where `P` is the program path and `E` and `W` are byte-string literals of the
+  expected bytes and of the same number of written bytes. Closing standard input (by
+  `close_stdin`, `wait` or drop) at an unmet `Expect` fails LANG-9 the same way, reporting
+  `test failure: child P expected E but the program closed its input after writing W`.
+- `Exit(status)` ends the child: each stream returns 0 once its available bytes are read, a
+  write is `InputClosed()`, and `wait` returns `status`. The end of the steps is
+  `Exit(Exited(0))`.
+
+A read of a stream with no available bytes waits while the child is at an `Expect`, as a
+host read does, and so can leave a run Blocked ([CONC-8](concurrency.md#conc-8-global-quiescence)).
+Writes never wait. `child.kill` ends the script at once without checking an `Expect`, and a
+later `wait` returns `Signaled(9)`. Every scripted operation is recorded as the same request
+and completion a host child produces, so a simulated run replays like a real one
+([process recording](determinism.md#process-recording)).
 
 ## Memory and iteration
 
