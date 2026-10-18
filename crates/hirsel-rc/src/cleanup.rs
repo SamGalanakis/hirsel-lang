@@ -556,7 +556,7 @@ fn presence(s: &crate::insert::SlotState, path: &[Step]) -> Tri {
     value
 }
 
-fn absent(
+pub(crate) fn absent(
     s: &crate::insert::SlotState,
     path: &mut Vec<Step>,
     layout: LayoutId,
@@ -608,7 +608,11 @@ fn owner_presence(
     layout: LayoutId,
     lay: Lay<'_>,
 ) -> Tri {
-    if !lay.trivial(layout) && absent(s, &mut path.to_vec(), layout, lay) {
+    // A slot proved empty owns nothing at any part with owners (C's
+    // `flag_content`).
+    if s.owned_empty && (path.is_empty() || !lay.trivial(layout)) {
+        Tri::No
+    } else if !lay.trivial(layout) && absent(s, &mut path.to_vec(), layout, lay) {
         Tri::No
     } else {
         presence(s, path)
@@ -1600,6 +1604,7 @@ impl Lowering<'_, '_> {
             taken: BTreeMap::new(),
             fields_pending: BTreeMap::new(),
             versions: crate::insert::Versions::One(version),
+            owned_empty: false,
         };
         for (start, failed) in [(retry, true), (at, false)] {
             let loan = LoanId(self.ed.unit.tables.loans.len() as u32);
@@ -1785,6 +1790,7 @@ impl Lowering<'_, '_> {
             taken: BTreeMap::new(),
             fields_pending: BTreeMap::new(),
             versions: crate::insert::Versions::One(local.version.unwrap()),
+            owned_empty: false,
         };
         let mut actions = Vec::new();
         for index in (0..count).rev() {
@@ -2553,6 +2559,7 @@ mod pending_tests {
             taken: BTreeMap::new(),
             fields_pending: BTreeMap::new(),
             versions: Versions::None,
+            owned_empty: false,
         };
         let variant_state = state.clone();
         let paths = |actions: &[Action]| {

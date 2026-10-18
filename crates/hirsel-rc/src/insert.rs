@@ -1163,6 +1163,11 @@ pub(crate) struct SlotState {
     pub fields_pending: BTreeMap<Vec<Step>, Tri>,
     /// Versions that may name the content here.
     pub versions: Versions,
+    /// Proved to own nothing on every path since its last write, as C's
+    /// `owned_empty`: a join keeps the proof where path correlation is lost,
+    /// so no flag claims content there. Unlike C, a join still merges both
+    /// sides' moved parts, since drops are planned from them.
+    pub owned_empty: bool,
 }
 
 /// The versions that may name a slot's content at a point. Only one names
@@ -1206,6 +1211,7 @@ impl SlotState {
         taken: BTreeMap::new(),
         fields_pending: BTreeMap::new(),
         versions: Versions::None,
+        owned_empty: false,
     };
     /// Whole and definitely initialized: no part moved out on any path.
     pub fn whole(&self) -> bool {
@@ -1261,6 +1267,11 @@ impl SlotState {
                 self.fields_pending.insert(path, left.join(right));
             }
         }
+        if self.init == Tri::No {
+            self.owned_empty = other.owned_empty;
+        } else if other.init != Tri::No {
+            self.owned_empty &= other.owned_empty;
+        }
         self.init = self.init.join(other.init);
         self.versions = self.versions.join(other.versions);
     }
@@ -1273,7 +1284,8 @@ impl Element for SlotState {
             && self.taken.is_empty()
             && self.moved.is_empty()
             && self.fields_pending.is_empty()
-            && self.versions == Versions::None;
+            && self.versions == Versions::None
+            && !self.owned_empty;
         // Joined with dead storage, a `Yes` becomes `Maybe` and nothing else
         // changes.
         let absorbs = self.live != Tri::Yes
@@ -1372,6 +1384,7 @@ impl<S: Stage> Flow<'_, S> {
                     taken: BTreeMap::new(),
                     fields_pending: BTreeMap::new(),
                     versions,
+                    owned_empty: false,
                 }
             })
             .collect();
@@ -1547,6 +1560,7 @@ impl<S: Stage> Flow<'_, S> {
                                         .filter(|(p, _)| overlap(p, path))
                                         .map(|(p, &t)| (p.clone(), t)),
                                 );
+                                slot.owned_empty = false;
                                 slot.versions = Versions::One(version);
                             }
                         }
@@ -1590,6 +1604,9 @@ impl<S: Stage> Flow<'_, S> {
             {
                 let path = flag_steps(unit, self.code, flag.path).expect("validated flag path");
                 let slot = &mut state.slots[flag.slot.index()];
+                if e == yes {
+                    slot.owned_empty = false;
+                }
                 if path.is_empty() {
                     if e == yes {
                         slot.live = Tri::Yes;
@@ -1606,6 +1623,7 @@ impl<S: Stage> Flow<'_, S> {
                     slot.taken.insert(path.clone(), Tri::Yes);
                     slot.moved.insert(path, Tri::Yes);
                 }
+                self.remember_empty(&mut state, flag.slot);
             }
             outs.push(self.leave(e, state));
         }
@@ -1663,6 +1681,24 @@ impl<S: Stage> Flow<'_, S> {
                     state.slots[slot.index()].moved.insert(path, actual);
                 }
             }
+        }
+        self.remember_empty(state, *slot);
+    }
+
+    /// Record that `slot` owns nothing once every owner is absent, as C does
+    /// after a take, a drop, a finalization or a variant observation.
+    fn remember_empty(&self, st: &mut State, slot: SlotId) {
+        let layout = self.unit.types[self.unit.slots[slot.index()].ty.index()].layout;
+        if self.lay.trivial(layout) {
+            return;
+        }
+        let s = &st.slots[slot.index()];
+        if s.init != Tri::No
+            && !s.owned_empty
+            && (s.moved.get(&Vec::new()) == Some(&Tri::Yes)
+                || crate::cleanup::absent(s, &mut Vec::new(), layout, self.lay))
+        {
+            st.slots[slot.index()].owned_empty = true;
         }
     }
 
@@ -1759,7 +1795,10 @@ impl<S: Stage> Flow<'_, S> {
             | Inst::RegionPublish { .. }
             | Inst::FinalizeBegin { .. } => {}
             Inst::FinalizeEnd { address, .. } | Inst::Defuse { address } => {
-                self.fields_pending(st, address)
+                self.fields_pending(st, address);
+                if let Some((slot, _)) = self.place(address) {
+                    self.remember_empty(st, slot);
+                }
             }
             Inst::Address { address, .. } => {
                 if let Some((slot, path)) = self.facts.slot_of(address) {
@@ -1824,6 +1863,7 @@ impl<S: Stage> Flow<'_, S> {
                             _ => break,
                         };
                     }
+                    self.remember_empty(st, slot);
                 }
             }
             Inst::StorageLive { slot } => {
@@ -1858,6 +1898,10 @@ impl<S: Stage> Flow<'_, S> {
                         s.taken.insert(path.clone(), Tri::Yes);
                         s.moved.insert(path, Tri::Yes);
                     }
+                    if s.init == Tri::No {
+                        s.owned_empty = false;
+                    }
+                    self.remember_empty(st, slot);
                 }
                 self.create(st, result);
             }
@@ -1882,6 +1926,7 @@ impl<S: Stage> Flow<'_, S> {
                     s.taken
                         .retain(|q, _| !(q.len() >= path.len() && overlap(q, &path)));
                     s.fields_pending.retain(|p, _| !p.starts_with(&path));
+                    s.owned_empty = false;
                     s.versions = Versions::One(version);
                 }
             }
@@ -1899,6 +1944,7 @@ impl<S: Stage> Flow<'_, S> {
                 address, version, ..
             } => {
                 if let Some((slot, _)) = self.place(address) {
+                    st.slots[slot.index()].owned_empty = false;
                     st.slots[slot.index()].versions = Versions::One(version);
                 }
             }
@@ -1910,6 +1956,7 @@ impl<S: Stage> Flow<'_, S> {
             } => {
                 take_credit(&mut st.credits, value);
                 if let Some((slot, _)) = self.place(address) {
+                    st.slots[slot.index()].owned_empty = false;
                     st.slots[slot.index()].versions = Versions::One(version);
                 }
             }
@@ -1925,6 +1972,7 @@ impl<S: Stage> Flow<'_, S> {
                     take_credit(&mut st.credits, v);
                 }
                 if let Some((slot, _)) = self.place(address) {
+                    st.slots[slot.index()].owned_empty = false;
                     st.slots[slot.index()].versions = Versions::One(version);
                 }
             }
@@ -1961,6 +2009,7 @@ impl<S: Stage> Flow<'_, S> {
                     s.taken
                         .retain(|q, _| !(q.len() >= path.len() && overlap(q, &path)));
                     s.fields_pending.retain(|p, _| !p.starts_with(&path));
+                    s.owned_empty = false;
                     s.versions = Versions::One(version);
                     let d = &mut st.slots[displaced.index()];
                     d.init = if path.is_empty() { before } else { Tri::Yes };
@@ -1968,6 +2017,7 @@ impl<S: Stage> Flow<'_, S> {
                     d.taken.clear();
 
                     d.fields_pending = phases;
+                    d.owned_empty = false;
                     d.versions = Versions::One(displaced_version);
                 }
             }
@@ -2000,6 +2050,7 @@ impl<S: Stage> Flow<'_, S> {
                             .filter(|(p, _)| overlap(p, &path))
                             .map(|(p, &t)| (p.clone(), t)),
                     );
+                    state.owned_empty = false;
                 }
             }
             Inst::EndLoan { loan, .. } => st.loans[loan.index()] = Tri::No,
@@ -2021,6 +2072,10 @@ impl<S: Stage> Flow<'_, S> {
                         s.taken.insert(path.clone(), Tri::Yes);
                         s.moved.insert(path, Tri::Yes);
                     }
+                    if s.init == Tri::No {
+                        s.owned_empty = false;
+                    }
+                    self.remember_empty(st, slot);
                 }
             }
             Inst::Dup { value } => *st.credits.entry(value).or_insert(0) += 1,
@@ -4635,6 +4690,7 @@ mod tests {
                                         .map(|t| (path.clone(), t))
                                         .collect(),
                                     versions: version.into(),
+                                    owned_empty: false,
                                 };
                                 let mut joined = state.clone();
                                 joined.join(&SlotState::DEAD);

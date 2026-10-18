@@ -2784,8 +2784,11 @@ impl<'p, S: Stage> Machine<'p, S> {
                     if !extent.any_init(ptr.offset, self.size(layout)?) {
                         return Ok(Some(false));
                     }
+                    // An inactive variant's field owns nothing, but C counts a
+                    // variant no test proved as present, as a failure edge
+                    // before the test sees it.
                     if self.active_variant(ptr.at(tag.offset), tag.form)? != variant {
-                        return Ok(Some(false));
+                        return Ok(None);
                     }
                     tag.variants
                         .iter()

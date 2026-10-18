@@ -1,0 +1,47 @@
+// rule: LANG-13
+// expect: run
+// stdout: row 3
+// stdout: none
+// stdout: bad 7
+// A match whose arms prove an inner None or an error with a plain payload
+// leaves the scrutinee owning nothing, so the later arm test for the error
+// carries no drop flag claiming content, as a CSV reader's feed loop does.
+type E = Bad(u64) | Worse
+
+pub type AppError = Grant(GrantError) | Output(OutputError)
+
+fn step(b: u8) -> Result[Option[String], E] {
+  if b == 0 {
+    return Error(Bad(7))
+  }
+  if b == 10 {
+    return Ok(Some("row"))
+  }
+  Ok(None())
+}
+
+fn feed(b: u8) -> Result[u64, E] {
+  match step(b) {
+    Ok(Some(row)) => return Ok(string.byte_len(row)),
+    Ok(None()) => (),
+    Error(error) => return Error(error),
+  }
+  Ok(0)
+}
+
+fn describe(b: u8) -> String {
+  match feed(b) {
+    Ok(3) => "row 3\n",
+    Ok(_) => "none\n",
+    Error(Bad(7)) => "bad 7\n",
+    Error(_) => "other\n",
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let output = io.stdout(rt) ? Grant
+  out.print(output, describe(10)) ? Output
+  out.print(output, describe(1)) ? Output
+  out.print(output, describe(0)) ? Output
+  Ok(())
+}

@@ -436,15 +436,17 @@ clear bit over live cells. Source-free controls and both native targets share
 
 Revision 13 field flags are checked on every incoming edge against the physical
 initialized-byte and resource ledger. A plain part is present when any of its bytes
-is initialized; any other part only while an owner remains in its active storage (a
-data handle not yet taken, static ones included, a run-context handle's initialized
-word, or a resource not yet finalized), so inactive variant fields, taken fields and
-completed inline finalizers count as absent. An initialized part with no owner left,
-such as an inner variant whose active case owns nothing, may carry either value: C
-cannot always know that case, and its drop releases nothing. Static inline indices
-are decoded from their constant declarations, not from possibly unavailable SSA
-runtime values. The producer's moved masks and C's proof are never consulted. The
-cleanup join controls exercise both incremental and per-step recount modes.
+is initialized. Any other part must be flagged present while an owner remains in its
+active storage (a data handle not yet taken, static ones included, a run-context
+handle's initialized word, or a resource not yet finalized), and absent once taken
+or uninitialized, so taken fields and completed inline finalizers count as absent. A
+part that was never taken and holds no owner, an inactive variant's field or an
+inner variant whose active case owns nothing, may carry either value: C counts a
+variant no test proved as present (a failure edge before the test), and its drop
+releases nothing. Static inline indices are decoded from their constant
+declarations, not from possibly unavailable SSA runtime values. The producer's moved
+masks and C's proof are never consulted. The cleanup join controls exercise both
+incremental and per-step recount modes.
 
 Slice indexing resolves the checked owner, accumulated start and selected length
 before reading its byte. Slice constants record their byte-sequence payload
