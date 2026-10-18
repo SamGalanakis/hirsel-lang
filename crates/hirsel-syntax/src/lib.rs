@@ -244,6 +244,7 @@ pub enum TriviaKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TokenKind {
     Ident(Symbol),
+    Label(Symbol),
     Keyword(Keyword),
     Punct(Punct),
     Integer,
@@ -473,8 +474,8 @@ pub enum ExprKind {
         body: ExprId,
     },
     Return(Option<ExprId>),
-    Break,
-    Continue,
+    Break(Option<Symbol>),
+    Continue(Option<Symbol>),
     Shape(TypeExprId),
     Before(ExprId),
     Comptime(ExprId),
@@ -547,10 +548,12 @@ pub enum StmtKind {
     },
     Expr(ExprId),
     While {
+        label: Option<Symbol>,
         condition: ExprId,
         body: ExprId,
     },
     For {
+        label: Option<Symbol>,
         pattern: PatternId,
         source: ExprId,
         body: ExprId,
@@ -560,6 +563,15 @@ pub enum StmtKind {
         signature: FunctionSyntax,
         body: ExprId,
     },
+}
+impl StmtKind {
+    /// The written loop label, in a namespace separate from value bindings.
+    pub fn loop_label(&self) -> Option<Symbol> {
+        match self {
+            Self::While { label, .. } | Self::For { label, .. } => *label,
+            _ => None,
+        }
+    }
 }
 /// Pattern tree node, with constructor names resolved using the expected type (LANG-2/13).
 #[derive(Clone, Debug, Eq, PartialEq)]

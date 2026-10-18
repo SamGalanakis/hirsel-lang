@@ -1,0 +1,7 @@
+// rule: LANG-7
+// expect: accept
+fn f() {
+  'outer: while true {
+    break 'outer
+  }
+}

@@ -66,3 +66,5 @@ the constant; positional `N$` counts are SEM-3. Written spec spellings remain
 alongside holes for formatting. `@format(path)` parses to
 `AttributeArgument::Format`. Recovery treats Head and Tail pieces
 as braces.
+
+Loop labels are retained on for/while statements and optional break/continue targets. Only loops may be labelled; lexical target validation belongs to body checking.

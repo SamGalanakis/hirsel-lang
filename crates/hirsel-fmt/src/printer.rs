@@ -607,6 +607,17 @@ impl<'a> Printer<'a> {
             })
         })()
     }
+    fn loop_label(&self, label: Option<hirsel_intern::Symbol>, declaration: bool) -> Option<Doc> {
+        let Some(label) = label else {
+            return Some(cat([]));
+        };
+        let spelling = self.file.symbols.resolve(label)?;
+        Some(if declaration {
+            cat([token(format!("'{spelling}")), token(":"), Space])
+        } else {
+            cat([Space, token(format!("'{spelling}"))])
+        })
+    }
     fn stmt(&self, id: StmtId, final_statement: bool) -> Printed {
         Some(match &self.file.tree.statements.get(id.0 as usize)?.kind {
             StmtKind::Let {
@@ -638,7 +649,12 @@ impl<'a> Printer<'a> {
                 self.expr(*e, 0)?,
                 if final_statement { token(";") } else { cat([]) },
             ]),
-            StmtKind::While { condition, body } => cat([
+            StmtKind::While {
+                condition,
+                body,
+                label,
+            } => cat([
+                self.loop_label(*label, true)?,
                 token("while"),
                 Space,
                 self.expr(*condition, 0)?,
@@ -649,7 +665,9 @@ impl<'a> Printer<'a> {
                 pattern,
                 source,
                 body,
+                label,
             } => cat([
+                self.loop_label(*label, true)?,
                 token("for"),
                 Space,
                 self.pattern(*pattern)?,
@@ -917,8 +935,8 @@ impl<'a> Printer<'a> {
                 }
                 cat(ds)
             }
-            ExprKind::Break => token("break"),
-            ExprKind::Continue => token("continue"),
+            ExprKind::Break(label) => cat([token("break"), self.loop_label(*label, false)?]),
+            ExprKind::Continue(label) => cat([token("continue"), self.loop_label(*label, false)?]),
             ExprKind::Shape(t) => cat([token("shape"), token("("), self.ty(*t)?, token(")")]),
             ExprKind::Before(v) => {
                 cat([token("before"), token("("), self.expr(*v, 0)?, token(")")])

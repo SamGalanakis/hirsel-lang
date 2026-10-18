@@ -77,8 +77,8 @@ impl Heights {
             ExprKind::Literal(_)
             | ExprKind::Path(_)
             | ExprKind::Formatter(_)
-            | ExprKind::Break
-            | ExprKind::Continue
+            | ExprKind::Break(_)
+            | ExprKind::Continue(_)
             | ExprKind::Heap
             | ExprKind::Result
             | ExprKind::Todo(_)
@@ -96,11 +96,14 @@ impl Heights {
                 .max(self.expr(*value)),
             StmtKind::Assign { place, value, .. } => self.expr(*place).max(self.expr(*value)),
             StmtKind::Expr(id) => return self.expr(*id), // statement wrapper is transparent
-            StmtKind::While { condition, body } => self.expr(*condition).max(self.expr(*body)),
+            StmtKind::While {
+                condition, body, ..
+            } => self.expr(*condition).max(self.expr(*body)),
             StmtKind::For {
                 pattern,
                 source,
                 body,
+                ..
             } => self
                 .pattern(*pattern)
                 .max(self.expr(*source))

@@ -1,0 +1,12 @@
+// rule: LANG-7
+// expect: accept
+fn f() {
+  'outer: while true {
+    let g = fn() {
+      'outer: while true {
+        break 'outer
+      }
+    }
+    g()
+  }
+}

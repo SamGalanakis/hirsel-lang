@@ -252,9 +252,9 @@ impl Parser<'_> {
             };
             ExprKind::Return(value)
         } else if self.eat("break") {
-            ExprKind::Break
+            ExprKind::Break(self.exit_label())
         } else if self.eat("continue") {
-            ExprKind::Continue
+            ExprKind::Continue(self.exit_label())
         } else if self.eat("heap") {
             ExprKind::Heap
         } else if self.eat("result") {
@@ -388,7 +388,35 @@ impl Parser<'_> {
             ExprKind::Block { .. } | ExprKind::If { .. } | ExprKind::Match { .. }
         )
     }
+    fn exit_label(&mut self) -> Option<Symbol> {
+        if self.whitespace == 0 && self.newline() {
+            return None;
+        }
+        let TokenKind::Label(label) = self.token(0)?.kind else {
+            return None;
+        };
+        self.pos += 1;
+        Some(label)
+    }
     fn statement(&mut self) -> Parsed<StmtKind> {
+        let label = if let Some(Token {
+            kind: TokenKind::Label(label),
+            ..
+        }) = self.token(0)
+        {
+            let label = *label;
+            self.pos += 1;
+            self.expect(":", const { RuleId::of("LANG-1") })?;
+            if !self.at("for") && !self.at("while") {
+                return self.fail(
+                    const { RuleId::of("LANG-1") },
+                    "only for and while may have a loop label",
+                );
+            }
+            Some(label)
+        } else {
+            None
+        };
         if self.eat("let") {
             let mutable = self.eat("mut");
             let pattern = self.pattern()?;
@@ -418,6 +446,7 @@ impl Parser<'_> {
             let source = self.required(|p| p.expr(0))?;
             let body = self.block()?;
             return Ok(StmtKind::For {
+                label,
                 pattern,
                 source,
                 body,
@@ -426,7 +455,11 @@ impl Parser<'_> {
         if self.eat("while") {
             let condition = self.required(|p| p.expr(0))?;
             let body = self.block()?;
-            return Ok(StmtKind::While { condition, body });
+            return Ok(StmtKind::While {
+                label,
+                condition,
+                body,
+            });
         }
         if self.at("fn") && self.ident(1) {
             self.pos += 1;

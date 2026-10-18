@@ -276,6 +276,7 @@ fn build(name: &str) -> Fixture {
                 pattern,
                 source: src,
                 body,
+                label: None,
             });
             let ok = f.invoke("Ok", &["changed"]);
             let body = f.block(vec![changed, walk, for_], Some(ok));
@@ -551,6 +552,7 @@ fn build(name: &str) -> Fixture {
                 pattern,
                 source,
                 body,
+                label: None,
             });
             let body = f.block(vec![for_], None);
             f.function(name, signature, Some(body), true);

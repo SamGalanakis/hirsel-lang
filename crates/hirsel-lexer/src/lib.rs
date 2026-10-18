@@ -161,6 +161,7 @@ impl<'a> Scanner<'a> {
             b'r' if self.raw_start(false).is_some() => self.raw_string(false),
             b'b' if self.raw_start(true).is_some() => self.raw_string(true),
             b'"' => self.string(false),
+            b'\'' if self.label_end().is_some() => self.label(),
             b'\'' => self.character_literal(false),
             b'b' if self.starts(b"b'") => self.character_literal(true),
             b'b' if self.starts(b"b\"") => self.string(true),
@@ -220,6 +221,33 @@ impl<'a> Scanner<'a> {
             kind
         };
         self.emit(start, kind);
+    }
+    fn label_end(&self) -> Option<usize> {
+        let start = self.pos + 1;
+        if !self.bytes.get(start).is_some_and(|&b| letter(b)) {
+            return None;
+        }
+        let mut end = start + 1;
+        while self.bytes.get(end).is_some_and(|&b| name_byte(b)) {
+            end += 1;
+        }
+        // A closing apostrophe owns a character literal, including malformed ones.
+        (self.bytes.get(end) != Some(&b'\'')).then_some(end)
+    }
+    fn label(&mut self) -> TokenKind {
+        let start = self.pos;
+        self.pos = self.label_end().expect("checked label prefix");
+        let name = std::str::from_utf8(&self.bytes[start + 1..self.pos]).unwrap();
+        let symbol = self.interner.intern(name);
+        if name == "_" || keyword(name).is_some() {
+            self.error(
+                const { RuleId::of("LANG-1") },
+                start,
+                self.pos,
+                "loop label requires a non-keyword name other than underscore",
+            );
+        }
+        TokenKind::Label(symbol)
     }
     // Keep malformed spellings together through a quote or physical newline.
     // A byte literal (`byte`) is `b` and a character literal spelling one ASCII scalar.

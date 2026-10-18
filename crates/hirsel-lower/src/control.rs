@@ -511,13 +511,14 @@ impl Builder<'_, '_> {
                     self.bind_origin(destination.place, origin, OriginBindingKind::Fresh, span);
                 }
             }
-            StmtKind::While { condition, body } => {
-                self.while_loop(id, condition, body, span, bodies)?
-            }
+            StmtKind::While {
+                condition, body, ..
+            } => self.while_loop(id, condition, body, span, bodies)?,
             StmtKind::For {
                 pattern,
                 source,
                 body,
+                ..
             } => {
                 self.decision(source)?;
                 if let Some((_, plan)) = self
@@ -799,6 +800,7 @@ impl Builder<'_, '_> {
         });
         self.scope = scope;
         self.loops.push(Loop {
+            statement,
             next: header,
             exit,
             scope,

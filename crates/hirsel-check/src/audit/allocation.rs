@@ -533,9 +533,9 @@ impl<'a> Audit<'a, '_> {
                             ast::StmtKind::Assign { place, value, .. } => {
                                 todo.extend([*place, *value])
                             }
-                            ast::StmtKind::While { condition, body } => {
-                                todo.extend([*condition, *body])
-                            }
+                            ast::StmtKind::While {
+                                condition, body, ..
+                            } => todo.extend([*condition, *body]),
                             ast::StmtKind::For { source, body, .. } => {
                                 todo.extend([*source, *body])
                             }
@@ -773,7 +773,9 @@ impl<'a> Audit<'a, '_> {
                                 todo.push((*place, false));
                                 todo.push((*value, false));
                             }
-                            ast::StmtKind::While { condition, body } => {
+                            ast::StmtKind::While {
+                                condition, body, ..
+                            } => {
                                 todo.push((*condition, true));
                                 todo.push((*body, true));
                             }
@@ -1159,7 +1161,9 @@ impl<'a> Audit<'a, '_> {
                                 todo.push((*place, prohibited, false));
                                 todo.push((*value, prohibited, true));
                             }
-                            ast::StmtKind::While { condition, body } => {
+                            ast::StmtKind::While {
+                                condition, body, ..
+                            } => {
                                 todo.push((*condition, prohibited, false));
                                 todo.push((*body, prohibited, false));
                             }

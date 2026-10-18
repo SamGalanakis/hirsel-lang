@@ -590,27 +590,26 @@ impl Builder<'_, '_> {
                 self.return_value(value, span, bodies)?;
                 return Ok(None);
             }
-            ExprKind::Break | ExprKind::Continue => {
+            ExprKind::Break(label) | ExprKind::Continue(label) => {
                 let is_break = matches!(
                     self.input.tree.expressions[id.0 as usize].kind,
-                    ExprKind::Break
+                    ExprKind::Break(_)
                 );
-                let Some(lp) = self.loops.last().cloned() else {
-                    return self.error(span, "loop exit outside checked loop");
+                let Some(target) = self.loops.iter().rposition(|lp| {
+                    label.is_none()
+                        || self.input.tree.statements[lp.statement.0 as usize]
+                            .kind
+                            .loop_label()
+                            == label
+                }) else {
+                    return self.error(span, "loop exit outside checked target loop");
                 };
+                let lp = self.loops[target].clone();
                 self.exit_scope(lp.scope, span);
                 if is_break {
-                    self.loops
-                        .last_mut()
-                        .unwrap()
-                        .exits
-                        .push(self.state.clone());
+                    self.loops[target].exits.push(self.state.clone());
                 } else {
-                    self.loops
-                        .last_mut()
-                        .unwrap()
-                        .feedback
-                        .push(self.state.clone());
+                    self.loops[target].feedback.push(self.state.clone());
                 }
                 self.terminate(
                     Terminator::Goto(if is_break { lp.exit } else { lp.next }),

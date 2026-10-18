@@ -538,9 +538,9 @@ fn loop_control_cannot_consume_a_task_handle_in_unreachable_code() {
             });
             let control = f.expr(
                 if breaks {
-                    ExprKind::Break
+                    ExprKind::Break(None)
                 } else {
-                    ExprKind::Continue
+                    ExprKind::Continue(None)
                 },
                 f.unit,
             );
@@ -551,6 +551,7 @@ fn loop_control_cannot_consume_a_task_handle_in_unreachable_code() {
             let loop_statement = f.statement(StmtKind::While {
                 condition,
                 body: loop_body,
+                label: None,
             });
             let tail = if consumes {
                 Some(consume_handle(&mut f, local, ty, true))

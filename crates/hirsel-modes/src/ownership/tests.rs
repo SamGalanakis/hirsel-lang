@@ -111,7 +111,11 @@ fn loops_reach_a_fixed_point_and_reinitialisation_repairs_a_move() {
             f.unit,
         );
         let condition = f.literal(f.scalar);
-        let loop_ = f.stmt(hirsel_syntax::StmtKind::While { condition, body });
+        let loop_ = f.stmt(hirsel_syntax::StmtKind::While {
+            condition,
+            body,
+            label: None,
+        });
         f.statements.push(loop_);
         let again = f.read(x);
         f.expr_stmt(again);

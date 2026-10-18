@@ -294,8 +294,20 @@ impl Normalizer<'_, '_> {
                     self.expression(*x, e, active, locals)?;
                 }
             }
-            ast::ExprKind::Break => e.tag("break"),
-            ast::ExprKind::Continue => e.tag("continue"),
+            ast::ExprKind::Break(label) => {
+                e.tag("break");
+                if let Some(label) = label {
+                    e.tag("label");
+                    e.tag(&self.name(*label)?);
+                }
+            }
+            ast::ExprKind::Continue(label) => {
+                e.tag("continue");
+                if let Some(label) = label {
+                    e.tag("label");
+                    e.tag(&self.name(*label)?);
+                }
+            }
             ast::ExprKind::Shape(t) => {
                 e.tag("shape");
                 let t = self.ty(*t, Position::Field)?;
@@ -392,8 +404,16 @@ impl Normalizer<'_, '_> {
                 e.tag("expr");
                 self.expression(*x, e, active, locals)?;
             }
-            ast::StmtKind::While { condition, body } => {
+            ast::StmtKind::While {
+                condition,
+                body,
+                label,
+            } => {
                 e.tag("while");
+                if let Some(label) = label {
+                    e.tag("label");
+                    e.tag(&self.name(*label)?);
+                }
                 self.expression(*condition, e, active, locals)?;
                 self.expression(*body, e, active, locals)?;
             }
@@ -401,8 +421,13 @@ impl Normalizer<'_, '_> {
                 pattern,
                 source,
                 body,
+                ..
             } => {
                 e.tag("for");
+                if let Some(label) = s.kind.loop_label() {
+                    e.tag("label");
+                    e.tag(&self.name(label)?);
+                }
                 self.expression(*source, e, active, locals)?;
                 let mut scoped = locals.clone();
                 self.pattern(*pattern, e, &mut scoped, &mut BTreeSet::new())?;

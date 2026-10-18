@@ -515,7 +515,9 @@ pub(super) fn children(tree: &ast::SyntaxTree, id: ast::ExprId) -> Vec<ast::Expr
             .flat_map(|s| match &tree.statements[s.0 as usize].kind {
                 ast::StmtKind::Let { value, .. } | ast::StmtKind::Expr(value) => vec![*value],
                 ast::StmtKind::Assign { place, value, .. } => vec![*place, *value],
-                ast::StmtKind::While { condition, body } => vec![*condition, *body],
+                ast::StmtKind::While {
+                    condition, body, ..
+                } => vec![*condition, *body],
                 ast::StmtKind::For { source, body, .. } => vec![*source, *body],
                 ast::StmtKind::Function { .. } => vec![],
             })

@@ -1,0 +1,27 @@
+// rule: DROP-2
+// expect: run
+// stdout: first
+// stdout: second
+// stdout: first
+// stdout: second
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  'outer: for pass in 0u64..2 {
+    let items: List[Trace] = [
+      Trace(stdout: stdout, text: "first\n"),
+      Trace(stdout: stdout, text: "second\n")
+    ]
+    for value in take items {
+      continue 'outer
+    }
+  }
+  Ok(())
+}

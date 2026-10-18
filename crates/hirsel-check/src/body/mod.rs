@@ -249,7 +249,7 @@ struct Frame {
     finalizer: bool,
     parameters: Vec<TypeId>,
     locals: BTreeMap<LocalId, TypeId>,
-    loops: u32,
+    loops: Vec<ast::StmtId>,
     restricted: Vec<(ResolvedName, Span)>,
 }
 /// Each work item owns its lexical frame and expected type; exits never change
@@ -783,7 +783,7 @@ impl Checker<'_, '_> {
             finalizer: false,
             parameters: vec![],
             locals: BTreeMap::new(),
-            loops: 0,
+            loops: vec![],
             restricted: vec![],
         });
         i
@@ -934,8 +934,8 @@ impl Checker<'_, '_> {
             | E::Shape(_)
             | E::Todo(_)
             | E::Error
-            | E::Break
-            | E::Continue => self.finish(id, expected, frame)?,
+            | E::Break(_)
+            | E::Continue(_) => self.finish(id, expected, frame)?,
             E::Call { callee, arguments }
                 if let ast::ExprKind::Formatter(step) =
                     self.input.tree.expressions[callee.0 as usize].kind =>
@@ -1517,12 +1517,19 @@ impl Checker<'_, '_> {
                 }
                 self.primitive(Primitive::Never)
             }
-            E::Break | E::Continue => {
-                if self.frames[frame].loops == 0 {
+            E::Break(label) | E::Continue(label) => {
+                let found = self.frames[frame].loops.iter().rev().any(|statement| {
+                    label.is_none()
+                        || self.input.tree.statements[statement.0 as usize]
+                            .kind
+                            .loop_label()
+                            == label
+                });
+                if !found {
                     self.report(
                         const { RuleId::of("LANG-7") },
                         self.span(id),
-                        "loop control requires an enclosing loop in this function",
+                        "loop control requires a matching enclosing loop in this function",
                     );
                     self.error()
                 } else {
@@ -1607,6 +1614,23 @@ impl Checker<'_, '_> {
         }
         self.put(id, ty, expected, usage)
     }
+    fn enter_loop(&mut self, id: ast::StmtId, frame: usize) {
+        if let Some(label) = self.input.tree.statements[id.0 as usize].kind.loop_label() {
+            if self.frames[frame].loops.iter().any(|outer| {
+                self.input.tree.statements[outer.0 as usize]
+                    .kind
+                    .loop_label()
+                    == Some(label)
+            }) {
+                self.report(
+                    const { RuleId::of("LANG-7") },
+                    self.input.tree.statements[id.0 as usize].origin.span,
+                    "loop label shadows an enclosing loop label",
+                );
+            }
+        }
+        self.frames[frame].loops.push(id);
+    }
     fn statement(&mut self, id: ast::StmtId, frame: usize) -> Result<(), QueryError> {
         use ast::StmtKind as S;
         let stmt = self.input.tree.statements[id.0 as usize].clone();
@@ -1625,8 +1649,10 @@ impl Checker<'_, '_> {
                 self.work.push(Work::Enter(place, None, frame));
             }
             S::Expr(e) => self.work.push(Work::Enter(e, None, frame)),
-            S::While { condition, body } => {
-                self.frames[frame].loops += 1;
+            S::While {
+                condition, body, ..
+            } => {
+                self.enter_loop(id, frame);
                 let b = self.primitive(Primitive::Bool);
                 let unit = self.ty(TypeKind::Tuple(vec![].into()));
                 self.work.push(Work::AfterChild(After::LoopEnd(
@@ -1851,6 +1877,7 @@ impl Checker<'_, '_> {
                     pattern,
                     source,
                     body,
+                    ..
                 } = self.input.tree.statements[id.0 as usize].kind
                 else {
                     unreachable!()
@@ -1976,14 +2003,14 @@ impl Checker<'_, '_> {
                         ));
                     }
                 }
-                self.frames[frame].loops += 1;
+                self.enter_loop(id, frame);
                 let unit = self.ty(TypeKind::Tuple(vec![].into()));
                 self.work
                     .push(Work::AfterChild(After::LoopEnd(frame, previous)));
                 self.work.push(Work::Enter(body, Some(unit), frame));
             }
             After::LoopEnd(frame, restricted) => {
-                self.frames[frame].loops -= 1;
+                self.frames[frame].loops.pop();
                 self.frames[frame].restricted.truncate(restricted);
             }
             After::Closure(id, expected, _parent, child, mut f) => {

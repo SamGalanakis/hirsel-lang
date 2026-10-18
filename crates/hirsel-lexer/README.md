@@ -69,3 +69,5 @@ ending before `}`; delimiters inside the expression protect their own colons.
 Raw String/Bytes literals use delimiter-counted r/br prefixes and retain multiline
 bodies as one token. CR (including CRLF) inside them is LANG-1; LF and tab are data.
 Other scalar restrictions and invalid-token recovery follow ordinary literals.
+
+An apostrophe followed by an unclosed ASCII name is a Label token; a closing apostrophe keeps character-literal scanning. Labels reject keywords and underscore.

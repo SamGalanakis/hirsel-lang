@@ -1,0 +1,11 @@
+// rule: OWN-3
+// expect: accept
+fn f() {
+  let mut xs: List[u64] = [1, 2]
+  'outer: for x in xs {
+    for y in 0u64..1 {
+      list.push(mut xs, 3u64)
+      break 'outer
+    }
+  }
+}

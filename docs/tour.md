@@ -49,6 +49,36 @@ Expected:
 No stdout; exit 0 (all checks pass).
 <!-- /tour -->
 
+Use `'outer: for ...` or `'outer: while ...` to name an enclosing loop.
+`break 'outer` leaves it; `continue 'outer` advances it, cleaning up the
+inner scopes on the way. Labels are lexical within one function, cannot
+shadow an active label, and carry no break value.
+
+<!-- tour: conformance/LANG/LANG-11-tour-loop-labels-run.hir -->
+[Runnable source](../conformance/LANG/LANG-11-tour-loop-labels-run.hir)
+
+```hirsel
+pub fn main() -> Result[(), String] {
+  let rows: List[List[u64]] = [[1, 2], [3, 7], [8, 9]]
+  let mut row: u64 = 0
+  'search: for i in 0u64..list.len(rows) {
+    for value in rows[i] {
+      if value == 7 {
+        row = i
+        break 'search
+      }
+    }
+  }
+  failure.check(row == 1, TextInvariant())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
 To read one decimal number, pass the line returned by `input.read_line` to
 `u64.parse(string.trim(line))`. Matching the parse result handles invalid input;
 `?` propagates `scalar.ParseError`.

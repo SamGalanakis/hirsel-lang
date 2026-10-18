@@ -41,7 +41,9 @@ pub(crate) fn expression_children(tree: &SyntaxTree, e: ExprId) -> Vec<ExprId> {
             .flat_map(|s| match &tree.statements[s.0 as usize].kind {
                 StmtKind::Let { value, .. } | StmtKind::Expr(value) => vec![*value],
                 StmtKind::Assign { place, value, .. } => vec![*place, *value],
-                StmtKind::While { condition, body } => vec![*condition, *body],
+                StmtKind::While {
+                    condition, body, ..
+                } => vec![*condition, *body],
                 StmtKind::For { source, body, .. } => vec![*source, *body],
                 StmtKind::Function { body, .. } => vec![*body],
             })

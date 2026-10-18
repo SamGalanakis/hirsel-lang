@@ -59,3 +59,5 @@ the block the parser desugared it to.
 carries parsed options; `FormatStep::Mark` and `FormatStep::Pad(hole)` pad a hole
 whose options are only fill, alignment and width; `FormatString.specs` retains each
 written spec. `AttributeArgument::Format` carries an `@format(function)` path.
+
+Loop statements carry optional label Symbols; Break/Continue expressions carry optional target labels. StmtKind::loop_label exposes the written declaration without treating it as a value binding.

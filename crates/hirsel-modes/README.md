@@ -919,3 +919,5 @@ parameter (SEM-3). Ownership reconstructs that promise from the receiver's
 declaration for direct calls and re-proves f's body, including unused functions.
 Failed proofs report MODE-2 at f with a note naming the association; an explicit
 promise is redundant and runs the same proof once.
+
+Ownership CFG environments retain all active lexical loop targets. Labelled edges end statements and scoped bindings up to their selected loop. Authority task obligations follow that same target, and header convergence includes labelled continues from nested loops.

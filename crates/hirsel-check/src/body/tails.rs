@@ -206,7 +206,7 @@ impl Checker<'_, '_> {
                         | E::Result
                         | E::Todo(_)
                         | E::Error => (),
-                        E::Break | E::Continue => states[state].terminated = true,
+                        E::Break(_) | E::Continue(_) => states[state].terminated = true,
                     }
                 }
                 Visit::Statement(id, barrier, state) => {
@@ -226,7 +226,9 @@ impl Checker<'_, '_> {
                             todo.push(Visit::Expression(value, false, barrier, state));
                             todo.push(Visit::Expression(place, false, barrier, state));
                         }
-                        ast::StmtKind::While { condition, body } => {
+                        ast::StmtKind::While {
+                            condition, body, ..
+                        } => {
                             // A zero-iteration path keeps all incoming owners live.
                             todo.push(Visit::Fork(
                                 vec![

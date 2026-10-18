@@ -1,0 +1,21 @@
+// rule: OWN-3
+// expect: run
+// exit: 0
+pub fn main() -> Result[(), String] {
+  let mut xs: List[u64] = [1, 2]
+  'outer: for turn in 0u64..3 {
+    list.push(mut xs, turn)
+    for x in xs {
+      continue 'outer
+    }
+  }
+  failure.check(list.len(xs) == 5, TextInvariant())
+  'outer: for x in xs {
+    for y in xs {
+      break 'outer
+    }
+  }
+  list.push(mut xs, 8u64)
+  failure.check(list.len(xs) == 6, TextInvariant())
+  Ok(())
+}

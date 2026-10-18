@@ -1,0 +1,7 @@
+// rule: LANG-1
+// expect: reject LANG-1 at line 5
+fn f() {
+  'outer: while true {
+    break 'outer 3u64
+  }
+}

@@ -74,6 +74,7 @@ impl Builder<'_, '_> {
         });
         self.scope = scope;
         self.loops.push(Loop {
+            statement,
             next: step,
             exit,
             scope,
@@ -356,6 +357,7 @@ impl Builder<'_, '_> {
         });
         self.scope = scope;
         self.loops.push(Loop {
+            statement,
             next: step,
             exit,
             scope,

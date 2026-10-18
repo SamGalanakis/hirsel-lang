@@ -1,0 +1,12 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 8
+fn consume(take values: List[u64]) {}
+
+fn f(take values: List[u64]) {
+  'outer: for i in 0u64..2 {
+    for j in 0u64..1 {
+      consume(take values)
+      continue 'outer
+    }
+  }
+}

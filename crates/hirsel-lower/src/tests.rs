@@ -663,6 +663,7 @@ fn iterator_protocol_uses_checked_tags_and_mutates_its_receiver() {
             pattern,
             source,
             body,
+            label: None,
         },
         2,
     );
@@ -1110,6 +1111,7 @@ fn indexed_loop_adapter_consumes_the_mode_checked_pattern_type() {
             pattern,
             source,
             body,
+            label: None,
         },
         1,
     );

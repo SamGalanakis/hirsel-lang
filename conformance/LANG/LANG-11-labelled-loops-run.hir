@@ -1,0 +1,57 @@
+// rule: LANG-11
+// expect: run
+// exit: 0
+pub fn main() -> Result[(), String] {
+  let mut count: u64 = 0
+  'outer: for i in 0u64..4 {
+    for j in 0u64..3 {
+      if j == 1 {
+        continue 'outer
+      }
+      count += 1
+    }
+    count += 1000
+  }
+  failure.check(count == 4, TextInvariant())
+  'search: while true {
+    for i in 0u64..4 {
+      count += 1
+      break 'search
+    }
+  }
+  failure.check(count == 5, TextInvariant())
+  let mut turn: u64 = 0
+  'outer: while turn < 3 {
+    turn += 1
+    'inner: while true {
+      if turn < 3 {
+        continue 'outer
+      }
+      break 'inner
+    }
+    count += 10
+  }
+  failure.check(count == 15, TextInvariant())
+  'outer: for i in 0u64..1 {
+    let f = fn() {
+      'outer: while true {
+        break 'outer
+      }
+    }
+    f()
+  }
+  'condition: while {
+    count += 1
+    break 'condition
+  } {
+    count += 1000
+  }
+  failure.check(count == 16, TextInvariant())
+  let letter: char = 'a'
+  'a: while true {
+    if letter == 'a' {
+      break 'a
+    }
+  }
+  Ok(())
+}

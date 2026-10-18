@@ -197,6 +197,7 @@ fn fixture() -> (Fixture, ExprId) {
             pattern,
             source,
             body,
+            label: None,
         },
         10,
     );

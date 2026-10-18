@@ -1469,8 +1469,8 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             | ExprKind::Heap
             | ExprKind::Todo(_)
             | ExprKind::Error
-            | ExprKind::Break
-            | ExprKind::Continue => expected,
+            | ExprKind::Break(_)
+            | ExprKind::Continue(_) => expected,
             // The body checker selects a formatter's operation (SEM-3).
             ExprKind::Formatter(_) => ExpectedType::Unknown,
             ExprKind::Result => {
@@ -2039,7 +2039,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             StmtKind::Expr(expr) => {
                 self.expr(expr, ExpectedType::Unknown);
             }
-            StmtKind::While { condition, body } => {
+            StmtKind::While {
+                condition, body, ..
+            } => {
                 self.expr(condition, ExpectedType::Unknown);
                 self.expr(body, ExpectedType::Unknown);
             }
@@ -2047,6 +2049,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 pattern,
                 source,
                 body,
+                ..
             } => {
                 self.expr(source, ExpectedType::Unknown);
                 self.scopes.push(Scope::default());

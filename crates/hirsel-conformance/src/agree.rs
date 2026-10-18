@@ -1136,7 +1136,9 @@ impl Catalogue<'_> {
                                 format!("\n{}\n", self.text(stmt.origin.span)),
                             );
                         }
-                        StmtKind::While { condition, body }
+                        StmtKind::While {
+                            condition, body, ..
+                        }
                         | StmtKind::For {
                             source: condition,
                             body,

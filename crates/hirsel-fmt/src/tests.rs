@@ -687,8 +687,8 @@ fn flow_control_closures_and_special_expressions() {
         f.e(ExprKind::Closure { signature, body })
     });
     for (text, kind) in [
-        ("break", ExprKind::Break),
-        ("continue", ExprKind::Continue),
+        ("break", ExprKind::Break(None)),
+        ("continue", ExprKind::Continue(None)),
         ("return", ExprKind::Return(None)),
         ("heap", ExprKind::Heap),
         ("result", ExprKind::Result),
@@ -788,10 +788,10 @@ fn all_statements_and_final_expression_discard() {
     let one = f.int("1");
     let x = f.value("x");
     let condition = f.value("ok");
-    let br = f.e(ExprKind::Break);
+    let br = f.e(ExprKind::Break(None));
     let br = f.st(StmtKind::Expr(br));
     let body = f.block(vec![br], None);
-    let cont = f.e(ExprKind::Continue);
+    let cont = f.e(ExprKind::Continue(None));
     let cont = f.st(StmtKind::Expr(cont));
     let cb = f.block(vec![cont], None);
     let wild = f.p(PatternKind::Wildcard);
@@ -810,11 +810,16 @@ fn all_statements_and_final_expression_discard() {
             op: AssignOp(Some(BinaryOp::Add)),
             value: one,
         }),
-        f.st(StmtKind::While { condition, body }),
+        f.st(StmtKind::While {
+            condition,
+            body,
+            label: None,
+        }),
         f.st(StmtKind::For {
             pattern: wild,
             source,
             body: cb,
+            label: None,
         }),
         f.st(StmtKind::Function {
             name: local,

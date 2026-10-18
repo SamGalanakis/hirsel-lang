@@ -1,0 +1,8 @@
+// rule: LANG-7
+// expect: accept
+fn f() {
+  'outer: for i in 0u64..1 {}
+  'outer: while true {
+    break 'outer
+  }
+}

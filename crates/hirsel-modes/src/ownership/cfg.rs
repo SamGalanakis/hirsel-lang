@@ -196,9 +196,8 @@ impl LifetimeScopes {
 #[derive(Clone)]
 struct Environment {
     owner: NameSite,
-    /// The innermost loop's break and continue targets, its scope depth and
-    /// its statement.
-    breaks: Option<(usize, usize, usize, StmtId)>,
+    /// Active lexical loops: break/continue targets, scope depth and statement.
+    breaks: Vec<(usize, usize, usize, StmtId)>,
     scopes: Vec<Vec<usize>>,
     lifetime: usize,
     result: Modes,
@@ -406,7 +405,7 @@ pub(super) fn build(
         let mut entry = reserve(&mut nodes, tree.expressions[root.0 as usize].origin.span);
         let env = Environment {
             owner: owner.clone(),
-            breaks: None,
+            breaks: vec![],
             scopes: vec![],
             lifetime: 0,
             result: result.clone(),
@@ -1099,10 +1098,15 @@ pub(super) fn build(
                             }
                             continue;
                         }
-                        ExprKind::Break | ExprKind::Continue => {
-                            if let Some((break_to, continue_to, depth, loop_statement)) = env.breaks
+                        ExprKind::Break(label) | ExprKind::Continue(label) => {
+                            if let Some(&(break_to, continue_to, depth, loop_statement)) =
+                                env.breaks.iter().rev().find(|(_, _, _, statement)| {
+                                    label.is_none()
+                                        || tree.statements[statement.0 as usize].kind.loop_label()
+                                            == *label
+                                })
                             {
-                                let target = if matches!(expr.kind, ExprKind::Break) {
+                                let target = if matches!(expr.kind, ExprKind::Break(_)) {
                                     break_to
                                 } else {
                                     continue_to
@@ -1472,6 +1476,7 @@ pub(super) fn build(
                         StmtKind::While {
                             condition,
                             body: loop_body,
+                            ..
                         } => {
                             env.lifetime = lifetimes.child(env.lifetime);
                             let condition_entry = reserve(&mut nodes, stmt.origin.span);
@@ -1479,7 +1484,7 @@ pub(super) fn build(
                             nodes[entry].next = vec![condition_entry];
                             let branch = node(&mut nodes, Op::Nop, vec![], stmt.origin.span);
                             let loop_entry = reserve(&mut nodes, stmt.origin.span);
-                            env.breaks = Some((next, entry, env.scopes.len(), statement));
+                            env.breaks.push((next, entry, env.scopes.len(), statement));
                             jobs.push(Job::Expr {
                                 entry: loop_entry,
                                 expression: *loop_body,
@@ -1506,6 +1511,7 @@ pub(super) fn build(
                             pattern,
                             source,
                             body: loop_body,
+                            ..
                         } => {
                             // Collection preparation outlives individual yielded items.
                             env.lifetime = lifetimes.child(env.lifetime);
@@ -1565,7 +1571,8 @@ pub(super) fn build(
                                 stmt.origin.span,
                             );
                             let loop_entry = reserve(&mut nodes, stmt.origin.span);
-                            env.breaks = Some((loop_exit, kill, env.scopes.len(), statement));
+                            env.breaks
+                                .push((loop_exit, kill, env.scopes.len(), statement));
                             jobs.push(Job::Expr {
                                 entry: loop_entry,
                                 expression: *loop_body,
@@ -1744,7 +1751,9 @@ fn entry_snapshots(tree: &SyntaxTree, owner: NameSite) -> Vec<ExprId> {
                     match &tree.statements[statement.0 as usize].kind {
                         StmtKind::Let { value, .. } | StmtKind::Expr(value) => pending.push(*value),
                         StmtKind::Assign { place, value, .. } => pending.extend([*place, *value]),
-                        StmtKind::While { condition, body } => pending.extend([*condition, *body]),
+                        StmtKind::While {
+                            condition, body, ..
+                        } => pending.extend([*condition, *body]),
                         StmtKind::For { source, body, .. } => pending.extend([*source, *body]),
                         _ => (),
                     }

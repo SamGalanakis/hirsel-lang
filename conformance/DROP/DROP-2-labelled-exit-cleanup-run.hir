@@ -1,0 +1,41 @@
+// rule: DROP-2
+// expect: run
+// stdout: block
+// stdout: inner
+// stdout: outer
+// stdout: block
+// stdout: inner
+// stdout: outer
+// stdout: break-inner
+// stdout: break-outer
+// stdout: after
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  'outer: for i in 0u64..2 {
+    let outer = Trace(stdout: stdout, text: "outer\n")
+    while true {
+      let inner = Trace(stdout: stdout, text: "inner\n")
+      {
+        let block = Trace(stdout: stdout, text: "block\n")
+        continue 'outer
+      }
+    }
+  }
+  'outer: while true {
+    let outer = Trace(stdout: stdout, text: "break-outer\n")
+    for i in 0u64..2 {
+      let inner = Trace(stdout: stdout, text: "break-inner\n")
+      break 'outer
+    }
+  }
+  let _ = out.print(stdout, "after\n")
+  Ok(())
+}

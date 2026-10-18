@@ -424,8 +424,9 @@ statement    = let-stmt | assignment | for-stmt | while-stmt | local-fn | expres
 let-stmt     = "let", [ "mut" ], pattern, [ ":", type ], "=", expression ; (* LANG-5/13/15 *)
 assignment   = expression, assign-op, expression ;       (* LANG-5 *)
 assign-op    = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "<<=" | ">>=" | "&=" | "|=" | "^=" ; (* LANG-1, SEM-1 *)
-for-stmt     = "for", pattern, "in", expression, block ; (* SEM-4, LANG-13 *)
-while-stmt   = "while", expression, block ;              (* LANG-1 *)
+loop-label   = "'", name ; (* one token; separate from character literals *)
+for-stmt     = [ loop-label, ":" ], "for", pattern, "in", expression, block ; (* SEM-4, LANG-13 *)
+while-stmt   = [ loop-label, ":" ], "while", expression, block ;              (* LANG-1 *)
 local-fn     = "fn", name, fn-header, block ;            (* LANG-10 *)
 expression   = range ;                                   (* LANG-1 *)
 range        = logical-or, [ (".." | "..="), logical-or ] ; (* SEM-4 *)
@@ -451,7 +452,7 @@ primary      = literal | f-string | value-path | "heap" | "result"
              | "shape", "(", type, ")"
              | "before", "(", expression, ")"
              | "todo", [ "(", string, ")" ]
-             | "return", [ expression ] | "break" | "continue" ; (* LANG-1/2/11, MEM-4, FACT-1, CT-3 *)
+             | "return", [ expression ] | "break", [ loop-label ] | "continue", [ loop-label ] ; (* LANG-1/2/11, MEM-4, FACT-1, CT-3 *)
 if-expr      = "if", expression, block, [ "else", (block | if-expr) ] ; (* LANG-1 *)
 match-expr   = "match", expression, "{",
                [ arm, { entry-sep, arm }, [ entry-sep ] ], "}" ; (* LANG-7/13 *)
@@ -481,7 +482,20 @@ constructor.
 A statement expression becomes the block's tail exactly when it is last and not followed
 by a semicolon. An assignment's left side parses as an expression and must check as a
 mutable place. `return` consumes the rest of the current expression and binds below
-range. `break` and `continue` carry no values or labels. Constructors use ordinary call
+range. `break` and `continue` carry no values. A loop label such as `'outer` may
+prefix a `for` or `while` statement (`'outer: for x in xs { ... }`), and
+`break 'outer` or `continue 'outer` selects that enclosing loop. Unlabelled
+exits select the innermost loop. Labels occupy a separate lexical namespace,
+are visible within their loop (including a while condition, excluding a for
+source expression), and cannot shadow an active label in the same function.
+An unknown, out-of-scope or shadowed label is LANG-7. A closure or local
+function starts a new label scope; an exit cannot cross a function boundary.
+A label name is an ordinary non-keyword name, excluding `_`; a closing
+apostrophe belongs to a character literal instead. A bare exit ends at a
+statement newline, so its label must be on the same logical line. Labelled
+exits end the same loans and clean up every exited scope in the same order
+as an unlabelled exit to that loop; a continue retains the selected loop's
+iteration preparation. No blocks other than loops may be labelled. Constructors use ordinary call
 syntax; field and variant names are resolved against the expected type. `[a, b]` is a
 sequence literal whose kind (`Array`, `List`, `Inline`) comes from the expected type; an
 empty sequence literal also needs one. `box e` builds the block a `box T` needs. The

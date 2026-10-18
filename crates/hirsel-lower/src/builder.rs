@@ -24,6 +24,7 @@ pub(super) struct Value {
 }
 #[derive(Clone)]
 pub(super) struct Loop {
+    pub statement: hirsel_syntax::StmtId,
     pub next: BlockId,
     pub exit: BlockId,
     pub scope: ScopeId,

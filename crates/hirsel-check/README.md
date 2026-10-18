@@ -368,3 +368,5 @@ for an integer or float hole and `text.pad_from` for `String`, `bool` and `@form
 holes, and recovers silently when the hole's append already reported. Ordinary
 call checking checks every option, including a `name$` width's path (LANG-7 for
 a non-u64).
+
+Each function frame retains its active loop statements. Labelled exits require a matching enclosing label and active labels cannot shadow; nested callable frames start empty (LANG-7).

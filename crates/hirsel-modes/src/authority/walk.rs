@@ -144,7 +144,7 @@ pub(super) struct Checker<'a> {
     task_values: BTreeMap<ExprId, BTreeSet<ExprId>>,
     task_bindings: BTreeMap<BindingKey, BTreeSet<ExprId>>,
     pending_tasks: BTreeMap<ExprId, Span>,
-    loop_task_exits: Vec<BTreeMap<ExprId, Span>>,
+    loop_task_exits: Vec<(hirsel_syntax::StmtId, BTreeMap<ExprId, Span>)>,
     cursor_loops: BTreeMap<hirsel_syntax::StmtId, CursorPlan>,
     /// The callee path of the direct call being entered, which is not a value.
     direct_callee: Option<ExprId>,
@@ -727,7 +727,7 @@ impl<'a> Checker<'a> {
     }
     fn falls_through(&self, e: ExprId) -> bool {
         match &self.tree.expressions[e.0 as usize].kind {
-            ExprKind::Return(_) | ExprKind::Break | ExprKind::Continue => false,
+            ExprKind::Return(_) | ExprKind::Break(_) | ExprKind::Continue(_) => false,
             ExprKind::Block { statements, tail } => {
                 statements
                     .iter()
@@ -1604,9 +1604,14 @@ impl<'a> Checker<'a> {
                 // preserve the complete call-refined occurrence, not H's template.
                 self.copy_value_type(e, value);
             }
-            ExprKind::Break | ExprKind::Continue => {
-                if let Some(exits) = self.loop_task_exits.last_mut() {
-                    exits.extend(std::mem::take(&mut self.pending_tasks));
+            ExprKind::Break(label) | ExprKind::Continue(label) => {
+                if let Some(target) = self.loop_task_exits.iter().rposition(|(statement, _)| {
+                    label.is_none()
+                        || self.tree.statements[statement.0 as usize].kind.loop_label() == label
+                }) {
+                    self.loop_task_exits[target]
+                        .1
+                        .extend(std::mem::take(&mut self.pending_tasks));
                 }
             }
             ExprKind::Return(value) => {
@@ -1682,7 +1687,10 @@ impl<'a> Checker<'a> {
     /// Type rows are immutable and may be freshly allocated during replay, so
     /// convergence compares semantic types and expiration, not arena indices.
     fn loop_body(&mut self, site: NameSite, body: ExprId, condition: Option<ExprId>) {
-        let (falls, continues) = self.loop_control(body);
+        let NameSite::Statement(target) = site else {
+            unreachable!("loop body belongs to a statement")
+        };
+        let (falls, continues) = self.loop_control(body, target, 0);
         let incoming = self.identities.clone();
         loop {
             let before: BTreeMap<_, _> = self
@@ -1720,11 +1728,19 @@ impl<'a> Checker<'a> {
             }
         }
     }
-    /// Fallthrough and continue reach this header; nested loops and callable
-    /// bodies own their own break/continue destinations.
-    fn loop_control(&self, expression: ExprId) -> (bool, bool) {
+    /// Fallthrough and continues selecting this loop reach its header. Nested
+    /// loops hide unlabelled exits; labelled continues can cross them. Callable
+    /// bodies start independent loop scopes.
+    fn loop_control(
+        &self,
+        expression: ExprId,
+        target: hirsel_syntax::StmtId,
+        nesting: usize,
+    ) -> (bool, bool) {
         fn sequence(
             checker: &Checker<'_>,
+            target: hirsel_syntax::StmtId,
+            nesting: usize,
             expressions: impl IntoIterator<Item = ExprId>,
         ) -> (bool, bool) {
             let (mut next, mut back) = (true, false);
@@ -1732,40 +1748,55 @@ impl<'a> Checker<'a> {
                 if !next {
                     break;
                 }
-                let flow = checker.loop_control(expression);
+                let flow = checker.loop_control(expression, target, nesting);
                 next = flow.0;
                 back |= flow.1;
             }
             (next, back)
         }
         match &self.tree.expressions[expression.0 as usize].kind {
-            ExprKind::Continue => (false, true),
-            ExprKind::Break => (false, false),
-            ExprKind::Return(value) => {
-                (false, value.is_some_and(|value| self.loop_control(value).1))
-            }
+            ExprKind::Continue(label) => (
+                false,
+                match label {
+                    Some(label) => {
+                        self.tree.statements[target.0 as usize].kind.loop_label() == Some(*label)
+                    }
+                    None => nesting == 0,
+                },
+            ),
+            ExprKind::Break(_) => (false, false),
+            ExprKind::Return(value) => (
+                false,
+                value.is_some_and(|value| self.loop_control(value, target, nesting).1),
+            ),
             ExprKind::Closure { .. } => (true, false),
             ExprKind::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                let prefix = self.loop_control(*condition);
+                let prefix = self.loop_control(*condition, target, nesting);
                 if !prefix.0 {
                     return prefix;
                 }
-                let a = self.loop_control(*then_branch);
-                let b = else_branch.map_or((true, false), |branch| self.loop_control(branch));
+                let a = self.loop_control(*then_branch, target, nesting);
+                let b = else_branch.map_or((true, false), |branch| {
+                    self.loop_control(branch, target, nesting)
+                });
                 (a.0 || b.0, prefix.1 || a.1 || b.1)
             }
             ExprKind::Match { value, arms } => {
-                let prefix = self.loop_control(*value);
+                let prefix = self.loop_control(*value, target, nesting);
                 if !prefix.0 {
                     return prefix;
                 }
                 arms.iter().fold((false, prefix.1), |flow, arm| {
-                    let branch =
-                        sequence(self, arm.guard.into_iter().chain(std::iter::once(arm.body)));
+                    let branch = sequence(
+                        self,
+                        target,
+                        nesting,
+                        arm.guard.into_iter().chain(std::iter::once(arm.body)),
+                    );
                     (flow.0 || branch.0, flow.1 || branch.1)
                 })
             }
@@ -1777,11 +1808,23 @@ impl<'a> Checker<'a> {
                     }
                     let flow = match &self.tree.statements[statement.0 as usize].kind {
                         StmtKind::Expr(value) | StmtKind::Let { value, .. } => {
-                            self.loop_control(*value)
+                            self.loop_control(*value, target, nesting)
                         }
-                        StmtKind::Assign { place, value, .. } => sequence(self, [*place, *value]),
-                        StmtKind::For { source, .. } => self.loop_control(*source),
-                        StmtKind::While { condition, .. } => self.loop_control(*condition),
+                        StmtKind::Assign { place, value, .. } => {
+                            sequence(self, target, nesting, [*place, *value])
+                        }
+                        StmtKind::For { source, body, .. } => {
+                            let prefix = self.loop_control(*source, target, nesting);
+                            let inner = self.loop_control(*body, target, nesting + 1);
+                            (prefix.0, prefix.1 || (prefix.0 && inner.1))
+                        }
+                        StmtKind::While {
+                            condition, body, ..
+                        } => {
+                            let prefix = self.loop_control(*condition, target, nesting + 1);
+                            let inner = self.loop_control(*body, target, nesting + 1);
+                            (prefix.0, prefix.1 || (prefix.0 && inner.1))
+                        }
                         StmtKind::Function { .. } => (true, false),
                     };
                     next = flow.0;
@@ -1789,14 +1832,14 @@ impl<'a> Checker<'a> {
                 }
                 if next {
                     if let Some(tail) = tail {
-                        let flow = self.loop_control(*tail);
+                        let flow = self.loop_control(*tail, target, nesting);
                         next = flow.0;
                         back |= flow.1;
                     }
                 }
                 (next, back)
             }
-            _ => sequence(self, self.expression_children(expression)),
+            _ => sequence(self, target, nesting, self.expression_children(expression)),
         }
     }
     fn statement(&mut self, s: hirsel_syntax::StmtId) -> AuthoritySummary {
@@ -2120,14 +2163,16 @@ impl<'a> Checker<'a> {
                 self.expr(e, None);
                 self.used(e)
             }
-            StmtKind::While { condition, body } => {
+            StmtKind::While {
+                condition, body, ..
+            } => {
+                self.loop_task_exits.push((s, BTreeMap::new()));
                 self.expr(condition, None);
                 let before = self.binding_types.clone();
                 let pending = self.pending_tasks.clone();
-                self.loop_task_exits.push(BTreeMap::new());
                 self.loop_body(NameSite::Statement(s), body, Some(condition));
                 self.pending_tasks
-                    .extend(self.loop_task_exits.pop().unwrap());
+                    .extend(self.loop_task_exits.pop().unwrap().1);
                 self.pending_tasks.extend(pending);
                 self.join_bindings(&before, &before);
                 self.used(condition).join(self.used(body))
@@ -2136,6 +2181,7 @@ impl<'a> Checker<'a> {
                 source,
                 body,
                 pattern,
+                ..
             } => {
                 self.expr(source, None);
                 if let Some(plan) = self.cursor_loops.get(&s).cloned() {
@@ -2176,10 +2222,10 @@ impl<'a> Checker<'a> {
                     }
                 }
                 let pending = self.pending_tasks.clone();
-                self.loop_task_exits.push(BTreeMap::new());
+                self.loop_task_exits.push((s, BTreeMap::new()));
                 self.loop_body(NameSite::Statement(s), body, None);
                 self.pending_tasks
-                    .extend(self.loop_task_exits.pop().unwrap());
+                    .extend(self.loop_task_exits.pop().unwrap().1);
                 self.pending_tasks.extend(pending);
                 self.used(source).join(self.used(body))
             }

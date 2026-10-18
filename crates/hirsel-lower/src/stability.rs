@@ -43,8 +43,8 @@ impl Builder<'_, '_> {
                 | ExprKind::Path(_)
                 | ExprKind::Formatter(_)
                 | ExprKind::Heap
-                | ExprKind::Break
-                | ExprKind::Continue
+                | ExprKind::Break(_)
+                | ExprKind::Continue(_)
                 | ExprKind::Todo(_) => {}
                 ExprKind::Tuple(xs) | ExprKind::Sequence(xs) => pending.extend(xs),
                 ExprKind::Field { base, .. } => pending.push(*base),
