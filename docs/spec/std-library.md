@@ -561,7 +561,7 @@ Response     = { status: u16, headers: List[Header], body: Bytes, url: String }
 HttpError    = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError)
              | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects
              | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme
-             | UnsupportedTransferEncoding | Status(u16) | OutOfOrder | Closed
+             | UnsupportedTransferEncoding | Status(u16) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError)
 
 pub opaque resource type Request: noalloc_drop uses {Net}
 
@@ -617,7 +617,7 @@ the exact canonical origin (scheme, host and port). A redirect target goes throu
 `Net`, so a target outside the grant fails with `Net(NotGranted())`, and an https-to-http
 downgrade fails under a `ConnectTls` rule. There is no connection reuse: each request opens
 its own connection and sends `connection: close`, while `keep_alive` is still reported.
-There is no whole-request deadline, since a deadline needs a clock.
+There is no client whole-request deadline, since that API has no clock parameter.
 
 ## Input
 
@@ -677,7 +677,7 @@ N fn http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut hea
 ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool }
 fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
 fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection
-fn http.receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpError]
+fn http.receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[ServerRequest, HttpError]
 fn http.respond(mut c: ServerConnection, status: u16, headers: List[Header], body: Bytes, close: bool) -> Result[(), HttpError]
 ```
 
@@ -716,6 +716,21 @@ reuse. It emits Connection: keep-alive or close accordingly. A failed request pe
 one final error response, always closing. Any failed response ends reuse. A closed
 connection, clean EOF between requests, or an expired keep-alive idle wait returns
 `Closed`; EOF within a request is `Truncated`. Dropping the resource closes the socket.
+For a server, `Config.read_timeout` bounds the whole request, including the head,
+Content-Length or chunked payload, and trailers. `receive_request` takes an explicit
+`Some(clock)` for a finite bound; `None` needs no clock authority for an unbounded
+request. A finite bound without a clock is `Net(InvalidInput())` before any read.
+Clock failures are `Clock(ClockError)`; a deadline beyond the clock range is
+`Clock(OutOfRange())`. A reused connection's idle wait is separately bounded by
+`idle_timeout`; its request budget starts when the first bytes arrive.
+
+One absolute deadline is sampled per request. Each socket read waits with the
+remaining interval using the existing network readiness/deadline waits; successful
+short reads never restart the budget, and there is no polling loop. On expiry the
+receiver sends 408 with Connection: close and returns `RequestTimeout`; a failure
+writing that response propagates its network error. The connection cannot be
+reused or receive a second response. Dropping its resource closes the socket.
+
 Servers map malformed requests to a 400 response before application handling. The
 caller owns the listen/accept loop, routing and concurrency across connections.
 

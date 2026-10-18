@@ -685,28 +685,43 @@ fn host_run(source: &std::path::Path, record: &std::path::Path, native: bool) ->
 
 #[test]
 fn hello_web_concurrent_serves_while_another_request_is_incomplete() {
-    hello_web(false, true, false);
+    hello_web(false, true, false, false);
 }
 
 #[test]
 #[ignore = "full gate"]
 fn full_gate_hello_web_answers_real_requests_native() {
-    hello_web(true, false, false);
+    hello_web(true, false, false, false);
 }
 
 #[test]
 #[ignore = "full gate"]
 fn full_gate_hello_web_concurrent_serves_while_another_request_is_incomplete_native() {
-    hello_web(true, true, false);
+    hello_web(true, true, false, false);
 }
 
 #[test]
 #[ignore = "full gate"]
 fn full_gate_hello_web_concurrent_keeps_connections_alive_cranelift() {
-    hello_web(true, true, true);
+    hello_web(true, true, true, false);
 }
 
-fn hello_web(native: bool, concurrent: bool, cranelift: bool) {
+#[test]
+fn hello_web_concurrent_request_read_deadline() {
+    hello_web(false, true, false, true);
+}
+#[test]
+#[ignore = "full gate"]
+fn full_gate_hello_web_concurrent_request_read_deadline_llvm() {
+    hello_web(true, true, false, true);
+}
+#[test]
+#[ignore = "full gate"]
+fn full_gate_hello_web_concurrent_request_read_deadline_cranelift() {
+    hello_web(true, true, true, true);
+}
+
+fn hello_web(native: bool, concurrent: bool, cranelift: bool, deadline: bool) {
     use std::io::{BufRead, Read, Write};
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
@@ -729,11 +744,28 @@ let _ = out.print(output, "\n")
 for i in 0u64..COUNTu64
 "#,
             )
-            .replace("COUNTu64", if concurrent { "6u64" } else { "3u64" });
+            .replace(
+                "COUNTu64",
+                if deadline {
+                    "1u64"
+                } else if concurrent {
+                    "6u64"
+                } else {
+                    "3u64"
+                },
+            );
         let source = if concurrent {
             source.replace(
                 "net.local_addr(n, listener)",
                 "net.local_addr(n, accepting)",
+            )
+        } else {
+            source
+        };
+        let source = if deadline {
+            source.replace(
+                "config.read_timeout = Some(duration.from_parts(30, 0))",
+                "config.read_timeout = Some(duration.from_parts(0, 500000000))",
             )
         } else {
             source
@@ -750,12 +782,21 @@ for i in 0u64..COUNTu64
         } else {
             serde_json::Value::Null
         };
+        let clock = if concurrent {
+            serde_json::json!("clock.monotonic.ns@1")
+        } else {
+            serde_json::Value::Null
+        };
         let record = run_record(
             &path,
-            serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":tasks,"dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}),
+            serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":tasks,"monotonic_clock":clock,"dirs":[],"net":{"provider":"net.stream@1","rules":[{"address":"127.0.0.1","service":"0","operation":"listen"}]}},"args":[]}),
         );
+        let tape = path.with_extension("tape");
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command.arg("run").arg(&path).arg("--run").arg(&record);
+        if deadline {
+            command.arg("--record").arg(&tape);
+        }
         if native {
             command.arg("--native");
             if cranelift {
@@ -799,49 +840,65 @@ for i in 0u64..COUNTu64
             .recv_timeout(Duration::from_secs(90))
             .unwrap_or_else(|e| panic!("server readiness native={native}: {e}"));
         let port: u16 = port.trim().parse().unwrap();
-        // An incomplete first request must not prevent later clients completing.
-        let mut held = concurrent.then(|| {
-            let mut stream =
+        if deadline {
+            let mut stalled =
                 std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
-            stream
+            stalled
                 .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
-            stream.write_all(b"GET / HTTP/1.1\r\nHost:").unwrap();
-            stream
-        });
-        if concurrent {
-            let keep = b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: keep-alive\r\n\r\nHello, world";
-            let close = b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, world";
-            // Go TestCloseNotifierPipelined: both requests arrive before the first response.
-            let mut pipeline =
-                std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
-            pipeline
-                .set_read_timeout(Some(Duration::from_secs(10)))
+            stalled
+                .write_all(b"POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\na")
                 .unwrap();
-            pipeline.write_all(b"POST /one HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\nabcGET /two HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();
-            let mut responses = vec![];
-            pipeline.read_to_end(&mut responses).unwrap();
-            assert_eq!(responses, [keep.as_slice(), close.as_slice()].concat());
-            // Go testTCPConnectionStaysOpen: drain each body, then reuse the socket.
-            let mut sequential =
-                std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
-            sequential
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .unwrap();
-            sequential
-                .write_all(b"GET /one HTTP/1.1\r\nHost: localhost\r\n\r\n")
-                .unwrap();
-            let mut first = vec![0; keep.len()];
-            sequential.read_exact(&mut first).unwrap();
-            assert_eq!(first, keep);
-            sequential
-                .write_all(b"GET /two HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-                .unwrap();
-            let mut second = vec![];
-            sequential.read_to_end(&mut second).unwrap();
-            assert_eq!(second, close);
-        }
-        for (request,expected) in [
+            let mut response = vec![];
+            stalled.read_to_end(&mut response).unwrap();
+            assert_eq!(
+                response,
+                b"HTTP/1.1 408 \r\nContent-Length: 15\r\nConnection: close\r\n\r\nRequest Timeout"
+            );
+        } else {
+            // An incomplete first request must not prevent later clients completing.
+            let mut held = concurrent.then(|| {
+                let mut stream =
+                    std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                stream.write_all(b"GET / HTTP/1.1\r\nHost:").unwrap();
+                stream
+            });
+            if concurrent {
+                let keep = b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: keep-alive\r\n\r\nHello, world";
+                let close = b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, world";
+                // Go TestCloseNotifierPipelined: both requests arrive before the first response.
+                let mut pipeline =
+                    std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
+                pipeline
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                pipeline.write_all(b"POST /one HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\n\r\nabcGET /two HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();
+                let mut responses = vec![];
+                pipeline.read_to_end(&mut responses).unwrap();
+                assert_eq!(responses, [keep.as_slice(), close.as_slice()].concat());
+                // Go testTCPConnectionStaysOpen: drain each body, then reuse the socket.
+                let mut sequential =
+                    std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
+                sequential
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                sequential
+                    .write_all(b"GET /one HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                    .unwrap();
+                let mut first = vec![0; keep.len()];
+                sequential.read_exact(&mut first).unwrap();
+                assert_eq!(first, keep);
+                sequential
+                    .write_all(b"GET /two HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                    .unwrap();
+                let mut second = vec![];
+                sequential.read_to_end(&mut second).unwrap();
+                assert_eq!(second, close);
+            }
+            for (request,expected) in [
             (&b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"[..],&b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, world"[..]),
             (b"POST / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 3\r\n\r\nabc",b"HTTP/1.1 200 \r\nContent-Type: text/plain\r\nContent-Length: 12\r\nConnection: close\r\n\r\nHello, world"),
             (b"BAD\0 / HTTP/1.1\r\n\r\n",b"HTTP/1.1 400 \r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad Request"),
@@ -852,12 +909,13 @@ for i in 0u64..COUNTu64
             stream.shutdown(std::net::Shutdown::Write).unwrap();
             let mut response=vec![];stream.read_to_end(&mut response).unwrap();assert_eq!(response,expected,"native={native}");
         }
-        if let Some(held) = &mut held {
-            held.write_all(b" localhost\r\n\r\n").unwrap();
-            held.shutdown(std::net::Shutdown::Write).unwrap();
-            let mut response = vec![];
-            held.read_to_end(&mut response).unwrap();
-            assert!(response.ends_with(b"Hello, world"));
+            if let Some(held) = &mut held {
+                held.write_all(b" localhost\r\n\r\n").unwrap();
+                held.shutdown(std::net::Shutdown::Write).unwrap();
+                let mut response = vec![];
+                held.read_to_end(&mut response).unwrap();
+                assert!(response.ends_with(b"Hello, world"));
+            }
         }
         let status = server.0.wait().unwrap();
         server.1 = true;
@@ -872,6 +930,25 @@ for i in 0u64..COUNTu64
         assert!(status.success(), "native={native}: {stderr}");
         assert!(stderr.is_empty(), "{stderr}");
         reader.join().unwrap();
+        if deadline {
+            let mut replay = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+            replay.arg("run").arg(&path).arg("--replay").arg(&tape);
+            if native {
+                replay.arg("--native");
+            }
+            if cranelift {
+                replay.args(["--backend", "cranelift"]);
+            }
+            let replayed = replay.output().unwrap();
+            assert!(
+                replayed.status.success(),
+                "{}",
+                String::from_utf8_lossy(&replayed.stderr)
+            );
+            assert_eq!(replayed.stdout, format!("{port}\n").as_bytes());
+            assert!(replayed.stderr.is_empty());
+            std::fs::remove_file(tape).unwrap();
+        }
         for path in [path, manifest, record] {
             std::fs::remove_file(path).unwrap();
         }

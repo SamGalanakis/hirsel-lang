@@ -53,19 +53,19 @@ fn exercise(t: Test, first: String, keep: bool, pipelined: bool, status: u16) ->
   let mut listener = net.listen(n, addr) ? http_net
   let (stream, _) = net.accept(n, mut listener) ? http_net
   let mut connection = http.server_connection(n, take stream, http.default_config())
-  let request = http.receive_request(mut connection)?
+  let request = http.receive_request(mut connection, None())?
   test.check(t, request.keep_alive == keep)
-  match http.receive_request(mut connection) {
+  match http.receive_request(mut connection, None()) {
     Error(OutOfOrder()) => (),
     _ => test.check(t, false),
   }
   http.respond(mut connection, status, [], b"", false)?
   if keep {
-    let next = http.receive_request(mut connection)?
+    let next = http.receive_request(mut connection, None())?
     test.check(t, next.target == "/two")
     http.respond(mut connection, 200u16, [], b"two", false)?
   }
-  match http.receive_request(mut connection) {
+  match http.receive_request(mut connection, None()) {
     Error(Closed()) => (),
     _ => test.check(t, false),
   }
@@ -173,9 +173,9 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   )
   let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
   let mut connection = http.server_connection(n, take stream, http.default_config())
-  let _ = http.receive_request(mut connection)?
+  let _ = http.receive_request(mut connection, None())?
   http.respond(mut connection, 200u16, [], b"", false)?
-  match http.receive_request(mut connection) {
+  match http.receive_request(mut connection, None()) {
     Error(Closed()) => (),
     _ => test.check(t, false),
   }

@@ -40,7 +40,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   config.max_head_bytes = 1024
   config.max_body_bytes = 3
   let mut connection = http.server_connection(n, take s, config)
-  let incoming = http.receive_request(mut connection) ? http_error
+  let incoming = http.receive_request(mut connection, None()) ? http_error
   test.check(
     t,
     incoming.method == "POST" && incoming.target == "/submit" && incoming.body == b"abc"

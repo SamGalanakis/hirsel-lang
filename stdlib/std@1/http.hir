@@ -48,7 +48,7 @@ pub type Response {
 
 pub type HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status(
   u16
-) | OutOfOrder | Closed
+) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError)
 
 // ready=0, streaming request=1, sent=2, body=3, done=4, failed=5.
 // body_kind: EOF=0, content-length=1, chunked=2. chunk_suffix tracks the
@@ -1344,32 +1344,99 @@ pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64
   Ok(Some((take incoming, end + consumed)))
 }
 
-fn http_server_read_more(mut c: ServerConnection, idle: bool) -> Result[u64, HttpError] {
+fn http_clock_error(error: ClockError) -> HttpError uses {} {
+  Clock(error)
+}
+
+// A request keeps one absolute budget, sampled from the explicitly supplied clock.
+fn http_server_deadline(clock: Option[MonotonicClock], timeout: Option[time.Duration]) -> Result[
+  Option[u64],
+  HttpError
+] {
+  let interval = match http_timeout(timeout)? {
+    Unbounded() => return Ok(None()),
+    Nanos(interval) => interval,
+  }
+  let c = match clock {
+    Some(c) => c,
+    None() => return Error(http_net_error(InvalidInput())),
+  }
+  let now = core@1/clock.monotonic(c) ? http_clock_error
+  match core@1/instant.checked_add(c, now, interval) {
+    Some(end) => Ok(Some(core@1/instant.ticks(end))),
+    None() => Error(http_clock_error(OutOfRange())),
+  }
+}
+
+fn http_server_remaining(clock: Option[MonotonicClock], deadline: Option[u64]) -> Result[
+  NetTimeout,
+  HttpError
+] {
+  let end = match deadline {
+    None() => return Ok(Unbounded()),
+    Some(end) => end,
+  }
+  let c = match clock {
+    Some(c) => c,
+    None() => return Error(http_net_error(InvalidInput())),
+  }
+  let now = core@1/instant.ticks(core@1/clock.monotonic(c) ? http_clock_error)
+  if now >= end {
+    return Error(RequestTimeout())
+  }
+  Ok(Nanos(end - now))
+}
+
+fn http_server_expired(mut c: ServerConnection) -> Result[u64, HttpError] {
+  respond(mut c, 408u16, [], b"Request Timeout", true)?
+  Error(RequestTimeout())
+}
+
+fn http_server_read_more(
+  mut c: ServerConnection,
+  idle: bool,
+  clock: Option[MonotonicClock],
+  deadline: Option[u64]
+) -> Result[u64, HttpError] {
   let n = c.net
-  let timeout = http_timeout(
-    if idle {
-      c.config.idle_timeout
-    } else {
-      c.config.read_timeout
+  let timeout = if idle {
+    http_timeout(c.config.idle_timeout)?
+  } else {
+    match http_server_remaining(clock, deadline) {
+      Ok(timeout) => timeout,
+      Error(RequestTimeout()) => return http_server_expired(mut c),
+      Error(error) => return Error(error),
     }
-  )?
+  }
   core@1/net.set_read_timeout(n, mut c.stream, timeout) ? http_net_error
-  match bufio.stream_read_more(n, mut c.stream, mut c.input, 4096) {
-    Ok(count) => Ok(count),
+  let count = match bufio.stream_read_more(n, mut c.stream, mut c.input, 4096) {
+    Ok(count) => count,
     Error(Source(TimedOut())) => {
       if idle {
         c.state = 2
         return Error(Closed())
       }
-      Error(http_net_error(TimedOut()))
+      return http_server_expired(mut c)
     },
-    Error(error) => Error(http_buffer_error(error)),
+    Error(error) => return Error(http_buffer_error(error)),
   }
+  // A completion after the deadline cannot deliver a request to the handler.
+  if !idle {
+    match http_server_remaining(clock, deadline) {
+      Error(RequestTimeout()) => return http_server_expired(mut c),
+      Error(error) => return Error(error),
+      Ok(_) => (),
+    }
+  }
+  Ok(count)
 }
 
 // Clean EOF and the keep-alive idle limit return Closed. An incomplete request
 // is Truncated. A failed read may receive one final error response, then closes.
-pub fn receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpError] {
+pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[
+  ServerRequest,
+  HttpError
+] {
   if c.state == 2 {
     return Error(Closed())
   }
@@ -1378,6 +1445,13 @@ pub fn receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpErr
   }
   c.state = 3
   let mut idle = c.served && bufio.buffered(c.input) == 0
+  // Validate the configuration and clock even when the connection starts idle.
+  let initial_deadline = http_server_deadline(clock, c.config.read_timeout)?
+  let mut deadline: Option[u64] = if idle {
+    None()
+  } else {
+    initial_deadline
+  }
   while true {
     let buf = bufio.contents(c.input)
     match http_server_head(buf, c.config.max_head_bytes)? {
@@ -1394,7 +1468,7 @@ pub fn receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpErr
             c.config.max_body_bytes
           )?
           bufio.consume(mut c.input, consumed)
-          if body.state != 5 && http_server_read_more(mut c, false)? == 0 {
+          if body.state != 5 && http_server_read_more(mut c, false, clock, deadline)? == 0 {
             return Error(Truncated())
           }
         }
@@ -1406,13 +1480,16 @@ pub fn receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpErr
       },
       None() => (),
     }
-    let count = http_server_read_more(mut c, idle)?
+    let count = http_server_read_more(mut c, idle, clock, deadline)?
     if count == 0 {
       if bufio.buffered(c.input) == 0 {
         c.state = 2
         return Error(Closed())
       }
       return Error(Truncated())
+    }
+    if idle {
+      deadline = http_server_deadline(clock, c.config.read_timeout)?
     }
     idle = false
   }

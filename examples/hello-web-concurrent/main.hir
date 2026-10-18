@@ -12,15 +12,19 @@ fn http_error(e: http.HttpError) -> ServerError uses {} {
   Http(e)
 }
 
-fn serve(n: Net, take incoming_stream: Stream of n) -> Result[(), ServerError] {
+fn serve(n: Net, clock: MonotonicClock, take incoming_stream: Stream of n) -> Result[
+  (),
+  ServerError
+] {
   let mut stream = take incoming_stream
   let mut config = http.default_config()
   config.max_head_bytes = 16384
   config.max_body_bytes = 1048576
+  config.read_timeout = Some(duration.from_parts(30, 0))
   let mut connection = http.server_connection(n, take stream, config)
   let mut serving = true
   while serving {
-    match http.receive_request(mut connection) {
+    match http.receive_request(mut connection, Some(clock)) {
       Ok(incoming) => http.respond(
         mut connection,
         200u16,
@@ -29,6 +33,9 @@ fn serve(n: Net, take incoming_stream: Stream of n) -> Result[(), ServerError] {
         false
       ) ? http_error,
       Error(Closed()) => {
+        serving = false
+      },
+      Error(RequestTimeout()) => {
         serving = false
       },
       Error(_) => {
@@ -42,6 +49,7 @@ fn serve(n: Net, take incoming_stream: Stream of n) -> Result[(), ServerError] {
 
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let n = io.net(rt) ? grant_error
+  let clock = io.monotonic_clock(rt) ? grant_error
   let listener = net.listen(
     n,
     SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
@@ -55,7 +63,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
         let child = task.async(
           s,
           fn() -> Result[(), ServerError] {
-            serve(n, take stream)
+            serve(n, clock, take stream)
           }
         )
         task.detach(s, take child)

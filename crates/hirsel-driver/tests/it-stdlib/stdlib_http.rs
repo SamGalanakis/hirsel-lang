@@ -428,3 +428,188 @@ match std@1/http.fetch(invalid, std@1/http.default_config(), Get(), "http://exam
 "#,
     );
 }
+
+// A deterministic slow client: each successful read advances the shared clock.
+// The normal library records the clock values and socket completions for replay.
+struct HttpClockProgress {
+    library: hirsel_interp::library::Library,
+    ticks_per_read: u64,
+}
+impl hirsel_interp::OperationsAdapter for HttpClockProgress {
+    fn operations(&self) -> &dyn hirsel_interp::Operations {
+        &self.library
+    }
+    fn operations_mut(&mut self) -> &mut dyn hirsel_interp::Operations {
+        &mut self.library
+    }
+    fn call(
+        &mut self,
+        call: hirsel_interp::OperationCall<'_>,
+        context: &mut hirsel_interp::OperationContext<'_>,
+    ) -> Result<Option<hirsel_interp::OperationResult>, hirsel_interp::Error> {
+        let name = call.path;
+        let read = name.0.package.package_is("core", "1")
+            && name.0.modules.iter().map(|s| s.as_str()).eq(["net"])
+            && matches!(name.0.name.as_str(), "read" | "read_into");
+        let result = hirsel_interp::Operations::call(&mut self.library, call, context)?;
+        if read {
+            self.library.simulation.config.monotonic += self.ticks_per_read;
+        }
+        Ok(result)
+    }
+}
+
+fn http_progress_events(
+    program: &mut LoadedProgram,
+    run: &RunConfiguration,
+    config: SimulationConfig,
+    ticks: u64,
+) -> Vec<hirsel_tir::CapabilityEvent> {
+    let signature =
+        hirsel_types::SignatureProvider::signature(&mut program.engine, &run.entry).unwrap();
+    let runtime = program.engine.runtime_types().unwrap();
+    let sources = program.engine.sources.clone();
+    let mut library = hirsel_interp::library::Library::new(run, config).unwrap();
+    let arguments = library.entry_arguments(&signature).unwrap();
+    let mut operations = HttpClockProgress {
+        library,
+        ticks_per_read: ticks,
+    };
+    let execution = hirsel_interp::run_with_runtime(
+        &mut program.engine,
+        &sources,
+        run,
+        arguments,
+        hirsel_interp::Limits::default(),
+        &mut operations,
+        &runtime,
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            execution.outcome,
+            hirsel_interp::Outcome::Returned {
+                value: hirsel_interp::Value::Variant { variant: 0, .. },
+                ..
+            }
+        ),
+        "{:?}",
+        execution.outcome
+    );
+    operations.library.simulation.finish_replay().unwrap();
+    std::mem::take(&mut operations.library.simulation.events)
+}
+
+// The corpus has no clock grant seam. Exercise timed scripted listeners here and
+// replay every capability completion. Virtual progress catches a per-read reset.
+#[test]
+fn server_request_deadlines_close_partial_heads_and_bodies_and_replay() {
+    with_compiler_stack(|| {
+        let source = r#"
+pub type AppError = Grant(GrantError) | Network(NetError) | Http(http.HttpError)
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
+  let n = io.net(rt) ? Grant
+  let clock = io.monotonic_clock(rt) ? Grant
+  let addr = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  let mut listener = net.listen(n, addr) ? Network
+  let (stream, _) = net.accept(n, mut listener) ? Network
+  let mut config = http.default_config()
+  config.read_timeout = Some(duration.from_parts(0, 1000))
+  let mut connection = http.server_connection(n, take stream, config)
+  match http.receive_request(mut connection, Some(clock)) {
+    Error(RequestTimeout()) => (),
+    _ => failure.check(false, Arithmetic()),
+  }
+  match http.receive_request(mut connection, Some(clock)) {
+    Error(Closed()) => (),
+    _ => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}
+"#;
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../conformance/SEM/SEM-1-http-wire-run.hir");
+        let mut program =
+            load_program_source(&path, Some(source)).unwrap_or_else(|e| panic!("{}", details(&e)));
+        program
+            .check_for_execution()
+            .unwrap_or_else(|e| panic!("{}", details(&e)));
+        for (fragments, ticks) in [
+            (vec![b"GET / HTTP/1.1\r\nHost:".to_vec()], 0u64),
+            (
+                vec![b"POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\na".to_vec()],
+                0,
+            ),
+            (
+                vec![b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nab".to_vec()],
+                0,
+            ),
+            (
+                vec![
+                    b"POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\na".to_vec(),
+                    b"b".to_vec(),
+                    b"c".to_vec(),
+                ],
+                400,
+            ),
+        ] {
+            let response =
+                b"HTTP/1.1 408 \r\nContent-Length: 15\r\nConnection: close\r\n\r\nRequest Timeout";
+            let mut steps: Vec<serde_json::Value> = fragments
+                .into_iter()
+                .map(|bytes| serde_json::json!({"send": bytes}))
+                .collect();
+            steps.push(serde_json::json!({"expect": response.as_slice()}));
+            steps.push(serde_json::json!("close"));
+            let mut config = SimulationConfig::default();
+            config.grants.insert("MonotonicClock".into());
+            config.net = Some(
+                serde_json::from_value(serde_json::json!({
+                    "provider": "net.script@2",
+                    "rules": [{"address": "127.0.0.1", "service": "8080", "operation": "listen"}],
+                    "peers": [],
+                    "listeners": [{"address": "127.0.0.1", "port": 8080, "clients": [{
+                        "address": "127.0.0.1", "port": 40001,
+                        "steps": steps
+                    }]}]
+                }))
+                .unwrap(),
+            );
+            let run = RunConfiguration {
+                entry: program.entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let events = http_progress_events(&mut program, &run, config.clone(), ticks);
+            if ticks == 0 {
+                let replay = run_observed_snapshot(
+                    &mut program.engine,
+                    &RunConfiguration {
+                        inputs: events,
+                        ..run
+                    },
+                    config,
+                )
+                .unwrap();
+                assert!(
+                    matches!(replay.outcome, Ok(RunOutcome::Exit(0))),
+                    "{:?}",
+                    replay.outcome
+                );
+            } else {
+                // Simulation inputs validate the provider's responses, so replay the
+                // advancing-clock provider as well as the scripted socket world.
+                let replay = http_progress_events(
+                    &mut program,
+                    &RunConfiguration {
+                        inputs: events.clone(),
+                        ..run
+                    },
+                    config,
+                    ticks,
+                );
+                assert_eq!(replay, events);
+            }
+        }
+    });
+}

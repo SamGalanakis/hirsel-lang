@@ -30,7 +30,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   config.max_head_bytes = 16384
   config.max_body_bytes = 1048576
   let mut connection = std@1/http.server_connection(n, take stream, config)
-  let _ = std@1/http.receive_request(mut connection) ? Http
+  let _ = std@1/http.receive_request(mut connection, None()) ? Http
   std@1/http.respond(mut connection, 200u16, [], greeting, true) ? Http
   let _ = out.print(output, "served ")
   let _ = out.print(output, name)

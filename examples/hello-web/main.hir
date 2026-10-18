@@ -6,7 +6,7 @@ fn serve(n: Net, mut listener: Listener of n) -> Result[(), ServerError] {
   config.max_head_bytes = 16384
   config.max_body_bytes = 1048576
   let mut connection = http.server_connection(n, take stream, config)
-  match http.receive_request(mut connection) {
+  match http.receive_request(mut connection, None()) {
     Ok(incoming) => http.respond(
       mut connection,
       200u16,

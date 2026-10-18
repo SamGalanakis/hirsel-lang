@@ -438,7 +438,7 @@ fn serve(
   config.max_head_bytes = 16384
   config.max_body_bytes = 65536
   let mut connection = http.server_connection(n, take stream, config)
-  let reply = match http.receive_request(mut connection) {
+  let reply = match http.receive_request(mut connection, None()) {
     Ok(request) => handle(tasks, state, mut jobs, request),
     Error(_) => bad_request("malformed HTTP request"),
   }

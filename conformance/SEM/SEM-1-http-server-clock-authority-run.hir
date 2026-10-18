@@ -1,0 +1,55 @@
+// rule: SEM-1
+// expect: run
+fn network(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+fn exercise(t: Test, timed: bool) -> Result[(), http.HttpError] {
+  let addr = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  let steps: List[NetStep] = if timed {
+    [
+      Expect(b"HTTP/1.1 400 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+      Close()
+    ]
+  } else {
+    [
+      Send(b"GET / HTTP/1.1\r\nConnection: close\r\n\r\n"),
+      Expect(b"HTTP/1.1 200 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+      Close()
+    ]
+  }
+  let n = test.net(
+    t,
+    [],
+    [NetListener(address: addr, clients: [NetClient(from: addr, steps: steps)])]
+  )
+  let mut listener = net.listen(n, addr) ? network
+  let (stream, _) = net.accept(n, mut listener) ? network
+  let mut config = http.default_config()
+  if timed {
+    config.read_timeout = Some(duration.from_parts(0, 1000))
+  }
+  let mut connection = http.server_connection(n, take stream, config)
+  if timed {
+    // A finite whole-request bound requires an explicit clock before any read.
+    test.check(
+      t,
+      http.receive_request(mut connection, None()) == Error(network(InvalidInput()))
+    )
+    http.respond(mut connection, 400u16, [], b"", true)?
+  } else {
+    let _ = http.receive_request(mut connection, None())?
+    http.respond(mut connection, 200u16, [], b"", false)?
+  }
+  match http.receive_request(mut connection, None()) {
+    Error(Closed()) => (),
+    _ => test.check(t, false),
+  }
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  exercise(t, true)?
+  exercise(t, false)?
+  Ok(())
+}

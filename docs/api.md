@@ -10,7 +10,7 @@ comment or catalogue row when one exists. Constructor rows also appear in their 
 Core types show their registry bounds and authority; intrinsic storage is not a recursive alias.
 Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/float/bool scalars.
 
-807 exported definitions; 253 variants.
+807 exported definitions; 255 variants.
 
 
 ## Types and roots
@@ -549,9 +549,10 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 
 - `pub type http.Config { max_redirects: u32, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, }` <!-- std@1/http/Config -->
 - `pub type http.Header { name: String, value: String, }` <!-- std@1/http/Header -->
-- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed` <!-- std@1/http/HttpError -->
+- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError)` <!-- std@1/http/HttpError -->
 - `BodyTooLarge -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#BodyTooLarge -->
 - `Chunk -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Chunk -->
+- `Clock(ClockError) -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Clock -->
 - `Closed -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Closed -->
 - `HeadTooLarge -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#HeadTooLarge -->
 - `Malformed(http_wire.HeadError) -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Malformed -->
@@ -559,6 +560,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `OutOfOrder -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#OutOfOrder -->
 - `RedirectLocationInvalid -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#RedirectLocationInvalid -->
 - `RedirectRequiresResend -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#RedirectRequiresResend -->
+- `RequestTimeout -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#RequestTimeout -->
 - `Status( u16 ) -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Status -->
 - `TooManyRedirects -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#TooManyRedirects -->
 - `Truncated -> http.HttpError` — Variant of http.HttpError. <!-- std@1/http/HttpError#Truncated -->
@@ -589,7 +591,7 @@ Core schema variables `I`/`J` mean sized integers, `F` floats, and `A` integer/f
 - `pub fn http.read_all(mut r: Request, limit: u64) -> Result[unique Bytes, HttpError]` <!-- std@1/http/read_all -->
 - `@preserves_unique(out) pub fn http.read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]` <!-- std@1/http/read_body -->
 - `pub fn http.receive_head(mut r: Request) -> Result[ResponseHead, HttpError]` <!-- std@1/http/receive_head -->
-- `pub fn http.receive_request(mut c: ServerConnection) -> Result[ServerRequest, HttpError]` — Clean EOF and the keep-alive idle limit return Closed. <!-- std@1/http/receive_request -->
+- `pub fn http.receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[ ServerRequest, HttpError ]` — Clean EOF and the keep-alive idle limit return Closed. <!-- std@1/http/receive_request -->
 - `pub fn http.request( n: Net, config: Config, method: Method, url: String, headers: List[Header] ) -> Result[Request, HttpError]` <!-- std@1/http/request -->
 - `pub fn http.respond( mut c: ServerConnection, status: u16, headers: List[Header], body: Bytes, close: bool ) -> Result[(), HttpError]` — The writer owns framing: callers cannot inject a second length or encoding. <!-- std@1/http/respond -->
 - `pub fn http.send_bodiless(mut r: Request) -> Result[(), HttpError]` <!-- std@1/http/send_bodiless -->

@@ -106,14 +106,14 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   let mut config = http.default_config()
   config.max_body_bytes = 9
   let mut connection = http.server_connection(n, take stream, config)
-  let request = http.receive_request(mut connection)?
+  let request = http.receive_request(mut connection, None())?
   check(
     request.body == b"Wikipedia" && http.header(request.trailers, "x-check") == Some(
       "yes"
     )
   )
   http.respond(mut connection, 200u16, [], request.body, false)?
-  let next = http.receive_request(mut connection)?
+  let next = http.receive_request(mut connection, None())?
   check(next.target == "/next" && next.body == b"" && next.trailers == [])
   http.respond(mut connection, 200u16, [], b"next", false)?
   // The decoded limit is independent of wire overhead, and fails before payload allocation.
@@ -140,12 +140,12 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   )
   let large_stream = net.connect(large, "example.com", 80u16, Unbounded()) ? net_error
   let mut rejected = http.server_connection(large, take large_stream, config)
-  match http.receive_request(mut rejected) {
+  match http.receive_request(mut rejected, None()) {
     Error(BodyTooLarge()) => (),
     _ => check(false),
   }
   http.respond(mut rejected, 413u16, [], b"", false)?
-  match http.receive_request(mut rejected) {
+  match http.receive_request(mut rejected, None()) {
     Error(Closed()) => (),
     _ => check(false),
   }
@@ -171,7 +171,7 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   )
   let short_stream = net.connect(short, "example.com", 80u16, Unbounded()) ? net_error
   let mut truncated = http.server_connection(short, take short_stream, config)
-  match http.receive_request(mut truncated) {
+  match http.receive_request(mut truncated, None()) {
     Error(Truncated()) => (),
     _ => check(false),
   }
