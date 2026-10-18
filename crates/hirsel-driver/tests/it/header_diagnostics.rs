@@ -52,7 +52,7 @@ fn unknown_variant_lists_the_expected_types_variants() {
         for (source, expected) in [
             (
                 "fn lookup() -> Result[u64, FileError] { Error(Fault()) }",
-                "Fault is not a variant of FileError; variants: FileFault, Canceled, NotGranted, NotFound, PermissionDenied, AlreadyExists, IsDirectory, NotDirectory",
+                "Fault is not a variant of FileError; variants: FileFault, Canceled, NotGranted, NotFound, PermissionDenied, AlreadyExists, IsDirectory, NotDirectory, DirectoryNotEmpty, CrossDevice",
             ),
             (
                 "fn lookup() { let x = Fault() }",
