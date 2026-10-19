@@ -550,8 +550,9 @@ earlier call is observable.
 
 **`sim@1`** runs every callee of every `sim@1` runner of the run as a node of one
 deterministic simulation in this process, under the run's seeded scheduler. Each runner
-names its `node` and the contract it `models` (`remote.tls@1` or `local.process@1`) and
-produces only that contract's outcomes. Faults are provider outcomes drawn from
+names its `node` and the runner contract it `models`, including `local.threads@1`,
+`local.process@1` or `remote.tls@1`, and produces only that contract's outcomes.
+Faults are provider outcomes drawn from
 `inputs.fault_seed`: each named fault site is enabled once per run with probability
 `enable` and then fires per evaluation with probability `fire`, both in parts per million.
 The sites are `refuse` (before the commit point: `NotRun(Unreachable())`), `overload`

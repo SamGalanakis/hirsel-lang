@@ -47,9 +47,9 @@ global, inert, plain allocator token, not a scoped grant. `arena.with(fn(a: Aren
 opens a named arena, freed at scope end; arenas are scoped capabilities
 ([MODE-6](ownership.md#mode-6-scoped-capabilities)) and hold no resources. Arena values
 are built bottom-up and are immutable once built, except that a `unique` builder mutates
-its root block in place; mutating a nested arena block detaches it onto the heap, except a
-List, Map, Set or SortedMap, which [MEM-6](#mem-6-bounded-arenas) copies within its arena. Arena
-blocks carry no count; the heap blocks they hold are released when the arena closes.
+its root block in place; nested arena mutation follows [MEM-6](#mem-6-bounded-arenas) for
+collections and otherwise detaches onto the heap. Arena blocks carry no count; the heap
+blocks they hold are released when the arena closes.
 `copy_to(heap, x)` deep-copies out of an arena (an allocation site).
 
 `arena.seal(take a, take root) -> Region[T]` first copies every heap block the arena holds
@@ -251,10 +251,8 @@ flat list of variable-size elements is sequential: it can be walked but not inde
 values are copied only explicitly (a memory copy) and are sendable by copy subject to
 [MODE-4](ownership.md#mode-4-sendable).
 
-Flat is a pointer-free storage property and grants no serialization. A flat type may
-additionally opt into [SER-1](serialization.md#ser-1-serializable-schemas); exposing or
-accepting its bytes as a serialized value uses the canonical codec of SER-2, and the
-private native flat layout is not a wire format. No target ABI is implicitly canonical.
+Flat grants no serialization: opt-in follows [SER-1](serialization.md#ser-1-serializable-schemas)
+and the wire format is [SER-2](serialization.md#ser-2-canonical-codec).
 
 The sole growable field is spelled `items: List[T] @ growable`, where `T` has
 flat-compatible layout (sized scalars or flat elements); the marker is field metadata,
