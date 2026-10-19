@@ -345,6 +345,54 @@ fn http_host(parsed_uri: uri.Uri) -> Result[unique String, HttpError] uses {} {
   }
 }
 
+/// The origin-form request target for `parsed_uri`: its encoded path (`/` when empty)
+/// and `?query` when present.
+pub fn request_target(parsed_uri: uri.Uri) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let target_path = uri.component_encoded(parsed_uri.path, Path())
+  text.append(
+    mut out,
+    if target_path == "" {
+      "/"
+    } else {
+      target_path
+    }
+  )
+  if let Some(q) = parsed_uri.query {
+    text.append(mut out, "?")
+    text.append(mut out, uri.component_encoded(q, Query()))
+  }
+  text.finish_valid(take out)
+}
+
+/// The `host` field value for `parsed_uri`: its canonical host, bracketed when IPv6,
+/// with `:port` when the URI spells a port.
+pub fn host_header(parsed_uri: uri.Uri) -> Result[unique String, HttpError] uses {} {
+  let hostname = http_host(parsed_uri)?
+  let mut out: List[u8] = []
+  let data = core@1/string.as_bytes(hostname)
+  let mut ipv6: bool = false
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(data) {
+    if data[i] == 58 {
+      ipv6 = true
+    }
+    i += 1
+  }
+  if ipv6 {
+    text.append(mut out, "[")
+  }
+  text.append(mut out, hostname)
+  if ipv6 {
+    text.append(mut out, "]")
+  }
+  if let Some(p) = parsed_uri.port {
+    text.append(mut out, ":")
+    u16.format_into(p, mut out)
+  }
+  Ok(text.finish_valid(take out))
+}
+
 @noalloc
 fn http_port(parsed_uri: uri.Uri) -> u16 uses {} {
   match parsed_uri.port {
@@ -357,7 +405,11 @@ fn http_port(parsed_uri: uri.Uri) -> u16 uses {} {
   }
 }
 
-fn http_open(n: Net, config: Config, parsed_uri: uri.Uri) -> Result[
+/// Opens the connection a request to `parsed_uri` uses: `http` or `https` (any other
+/// scheme is `UnsupportedScheme()`), the config's `unix_socket` or a TCP connect under
+/// its connect timeout, the read and write timeouts, then `tls.connect` for `https`.
+/// Protocols that start with an HTTP/1.1 exchange, such as WebSocket, dial with it.
+pub fn dial(n: Net, config: Config, parsed_uri: uri.Uri) -> Result[
   Stream of n,
   HttpError
 ] {
@@ -385,8 +437,10 @@ fn http_open(n: Net, config: Config, parsed_uri: uri.Uri) -> Result[
   Ok(take s)
 }
 
-// Reject all non-token names and control bytes before writing any request.
-fn http_validate_headers(headers: List[Header]) -> Result[(), HttpError] uses {} {
+/// Rejects an empty or non-token header name and a value with a control byte other
+/// than tab (`Malformed(HeaderName())`, `Malformed(HeaderValue())`): the header-injection
+/// boundary every writer applies before writing a head.
+pub fn validate_headers(headers: List[Header]) -> Result[(), HttpError] uses {} {
   for h in headers {
     let name = core@1/string.as_bytes(h.name)
     if core@1/bytes.len(name) == 0 {
@@ -432,15 +486,15 @@ pub fn request(
   url: String,
   headers: List[Header]
 ) -> Result[Request, HttpError] {
-  http_validate_headers(headers)?
-  http_validate_headers([Header(name: "user-agent", value: config.user_agent)])?
+  validate_headers(headers)?
+  validate_headers([Header(name: "user-agent", value: config.user_agent)])?
   let parsed_uri = uri.parse(url) ?
   let target = uri.component_encoded(parsed_uri.path, Path())
   http_validate_target(target)?
   if let Some(q) = parsed_uri.query {
     http_validate_target(uri.component_encoded(q, Query()))?
   }
-  let s = http_open(n, config, parsed_uri)?
+  let s = dial(n, config, parsed_uri)?
   Ok(
     Request(
       transport: http_transport(
@@ -496,41 +550,9 @@ fn http_send_head(mut r: Request, framing_line: String) -> Result[(), HttpError]
   let mut out: List[u8] = []
   text.append(mut out, http_method_text(r.method))
   text.append(mut out, " ")
-  let target_path = uri.component_encoded(r.uri.path, Path())
-  text.append(
-    mut out,
-    if target_path == "" {
-      "/"
-    } else {
-      target_path
-    }
-  )
-  if let Some(q) = r.uri.query {
-    text.append(mut out, "?")
-    text.append(mut out, uri.component_encoded(q, Query()))
-  }
+  text.append(mut out, request_target(r.uri))
   text.append(mut out, " HTTP/1.1\r\nhost: ")
-  let hostname = http_host(r.uri)?
-  let data = core@1/string.as_bytes(hostname)
-  let mut ipv6: bool = false
-  let mut i: u64 = 0
-  while i < core@1/bytes.len(data) {
-    if data[i] == 58 {
-      ipv6 = true
-    }
-    i += 1
-  }
-  if ipv6 {
-    text.append(mut out, "[")
-  }
-  text.append(mut out, hostname)
-  if ipv6 {
-    text.append(mut out, "]")
-  }
-  if let Some(p) = r.uri.port {
-    text.append(mut out, ":")
-    u16.format_into(p, mut out)
-  }
+  text.append(mut out, host_header(r.uri)?)
   text.append(mut out, "\r\nuser-agent: ")
   text.append(mut out, r.config.user_agent)
   text.append(
@@ -646,7 +668,7 @@ pub fn end_request_body(mut r: Request, request_trailers: List[Header]) -> Resul
   if http_is_h2(r.transport) {
     return http_h2_request_end(mut r, request_trailers)
   }
-  http_validate_headers(request_trailers)?
+  validate_headers(request_trailers)?
   for h in request_trailers {
     if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
       h.name,
@@ -764,7 +786,10 @@ fn http_add_header_batch(
   Ok(())
 }
 
-fn http_parse_head(buf: Bytes, config: Config, head_request: bool) -> Result[
+/// Parses a complete response head at the start of `buf`, returning it with the head's
+/// byte length, or `None()` while it is incomplete. At most `config.max_headers` fields;
+/// `head_request` says the response answers HEAD, so it has no body.
+pub fn parse_response_head(buf: Bytes, config: Config, head_request: bool) -> Result[
   Option[(ResponseHead, u64)],
   HttpError
 ] uses {} {
@@ -907,7 +932,7 @@ fn http_read_more(mut r: Request, max: u64) -> Result[u64, HttpError] {
 fn http_next_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   while true {
     let buf = http_input_contents(r.transport.input)
-    if let Some((head, end)) = http_parse_head(buf, r.config, r.method == Head())? {
+    if let Some((head, end)) = parse_response_head(buf, r.config, r.method == Head())? {
       if end > r.config.max_head_bytes {
         return Error(HeadTooLarge())
       }
@@ -1094,7 +1119,7 @@ fn http_read_trailers(mut r: Request) -> Result[(), HttpError] {
     }
     http_input_consume(mut r.transport.input, count)
     let buf = core@1/bytes.from_list(copy collected)
-    if let Some((head, end)) = http_parse_head(buf, r.config, true)? {
+    if let Some((head, end)) = parse_response_head(buf, r.config, true)? {
       if end - 17 > r.config.max_head_bytes {
         return Error(HeadTooLarge())
       }
@@ -1298,7 +1323,7 @@ fn http_client_request(
   url: String,
   headers: List[Header]
 ) -> Result[Request, HttpError] {
-  http_validate_headers(headers)?
+  validate_headers(headers)?
   let parsed = uri.parse(url) ?
   if !http_same(parsed.scheme, "http") && !http_same(parsed.scheme, "https") {
     return Error(UnsupportedScheme())
@@ -1556,6 +1581,60 @@ pub fn serve_tls(
   let http1 = TlsServer(identities: server.identities, clients: server.clients, alpn: ["http/1.1"])
   let secure = core@1/tls.accept(n, take plain, http1) ? http_net_error
   Ok(server_connection(tasks, n, take secure, config))
+}
+
+/// A server connection after an HTTP/1.1 request, with the bytes already read past that
+/// request, for a protocol that takes over the connection (WebSocket, an event stream)
+/// and writes its own response. The connection serves no further requests.
+pub resource type Detached: noalloc_drop uses {Net} {
+  net: Net,
+  stream: Stream of .net,
+  input: bufio.Reader,
+}
+@noalloc drop(self) {}
+
+/// Hands over the connection once `next_stream` has yielded this stream and before any
+/// response; otherwise `OutOfOrder()`, as for an HTTP/2 stream, whose connection other
+/// streams share (`Closed()` once closed).
+pub fn detach(take s: ServerStream) -> Result[Detached, HttpError] {
+  let state = http_stream_state(s)
+  if state == 2 {
+    return Error(Closed())
+  }
+  if state != 1 || s.version == Http2() {
+    return Error(OutOfOrder())
+  }
+  let ServerStream(tasks: _, returned: _, exchange: current, version: _) = take s
+  let Some(transfer) = current else {
+    return Error(OutOfOrder())
+  }
+  let HttpExchange(
+    tasks: tasks,
+    active: active,
+    transport: transport,
+    config: _,
+    state: _,
+    keep_alive: _,
+    served: _,
+    version: _,
+    head_request: _,
+    stream_id: _
+  ) = http_exchange_from_transfer(take transfer)?
+  let HttpTransport(
+    net: n,
+    stream: stream,
+    input: input,
+    version: _,
+    endpoint: _,
+    needs_preface: _,
+    pending: _,
+    pending_bytes: _,
+    pending_limit: _,
+    closed: _,
+    draining: _
+  ) = take transport
+  core@1/atomic.store(tasks, active, 3u8)
+  Ok(Detached(net: n, stream: take stream, input: input))
 }
 
 // All Connection fields contribute tokens; close wins regardless of order.
@@ -2131,7 +2210,7 @@ fn http_server_response_head(version: Version, status: u16, headers: List[Header
   unique List[u8],
   HttpError
 ] uses {} {
-  http_validate_headers(headers)?
+  validate_headers(headers)?
   let mut out: List[u8] = []
   text.append(
     mut out,
