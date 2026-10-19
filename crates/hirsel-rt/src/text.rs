@@ -222,26 +222,22 @@ pub unsafe extern "C" fn hirsel_rt_v2_string_slice(
     STATUS_OK
 }
 
-/// Share the incoming String interval as immutable Bytes.
+/// Append a borrowed interval to the caller's byte List. Import prepares and
+/// charges tracked arena room before entering this leaf.
 /// # Safety
-/// The borrowed source is live and out names writable Slice storage.
+/// Context, exclusive builder slot and borrowed source interval are live.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_string_as_bytes(
+pub unsafe extern "C" fn hirsel_rt_v2_bytes_append(
     ctx: *mut RunCtx,
-    _destination: *mut c_void,
-    out: *mut Slice,
+    builder: *mut *mut Header,
     owner: *mut Header,
     start: u64,
     length: u64,
 ) -> u8 {
-    unsafe {
-        hirsel_rt_v2_dup(ctx, owner);
-        out.write(Slice {
-            owner,
-            start,
-            length,
-        });
-    }
+    let bytes = unsafe {
+        std::slice::from_raw_parts(payload(owner).add(8 + start as usize), length as usize)
+    };
+    unsafe { crate::io::append_byte_list(ctx, builder, bytes) };
     STATUS_OK
 }
 

@@ -1,0 +1,47 @@
+// rule: SEM-3
+// expect: run
+// stdout: prefix
+// A custom formatter fails after writing its temporary; the caller's builder
+// must still have its original contents when failure cleanup observes it.
+@format(broken_text)
+type Broken {
+  value: u64,
+}
+
+fn broken_text(value: Broken, mut output: List[u8]) -> () uses {} {
+  text.append(mut output, "partial")
+  failure.check(false, TextInvariant())
+}
+
+resource type Guard {
+  stdout: Stdout,
+  output: List[u8],
+}
+drop(guard) {
+  failure.check(
+    guard.output == [112u8, 114u8, 101u8, 102u8, 105u8, 120u8, 10u8],
+    TextInvariant()
+  )
+  let _ = out.print(guard.stdout, "prefix\n")
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let tasks = io.tasks(rt)?
+  let caught: Result[(), Failure] = task.isolate(
+    tasks,
+    fn() {
+      let mut guard = Guard(stdout: stdout, output: [])
+      text.append(mut guard.output, "prefix\n")
+      text.append(mut guard.output, f"{Broken(value: 0u64)}")
+    }
+  )
+  failure.check(
+    match caught {
+      Ok(_) => false,
+      Error(_) => true,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

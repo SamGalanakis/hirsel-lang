@@ -205,6 +205,7 @@ N fn string.positions(s: String) -> PositionView of s in s
 N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in s
 @preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
 N fn bytes.len(src: Bytes) -> u64
+@preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()
 @preserves_unique(src) fn bytes.from_list(take src: List[u8]) -> Bytes
 N fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src
 N fn string.as_bytes(s: String) -> Bytes in s

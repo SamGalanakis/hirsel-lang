@@ -1,0 +1,9 @@
+// rule: SEM-3
+// expect: fail SEM-3 at line 7
+// Arbitrary byte appends must retain the TextInvariant validation.
+pub fn main() -> Result[(), ()] {
+  let mut output: List[u8] = []
+  bytes.append(mut output, b"\xff")
+  let text = std@1/text.finish_valid(take output)
+  Ok(())
+}

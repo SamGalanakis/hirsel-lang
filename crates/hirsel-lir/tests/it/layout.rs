@@ -1196,7 +1196,10 @@ fn relations_never_change_a_layout() {
     assert_eq!(b.layout(&t.store, p1).unwrap(), a);
     let bytes = t.p(Primitive::Bytes);
     let pb = t.named(&pair, vec![GenericArgument::Type(bytes)]);
-    assert_ne!(b.layout(&t.store, pb).unwrap(), a);
+    assert_eq!(b.layout(&t.store, pb).unwrap(), a);
+    let byte = t.p(Primitive::U8);
+    let different = t.named(&pair, vec![GenericArgument::Type(byte)]);
+    assert_ne!(b.layout(&t.store, different).unwrap(), a);
     checked(b);
 }
 
@@ -2583,4 +2586,51 @@ fn a_sequence_element_holding_its_owner_inline_waits_for_it() {
         keys.push((rec(&table, vid).key.clone(), rec(&table, mid).key.clone()));
     }
     assert_eq!(keys[0], keys[1]);
+}
+
+#[test]
+fn strings_and_bytes_share_physical_layouts_in_every_request_order() {
+    for target in TargetSpec::executed() {
+        for reverse in [false, true] {
+            let owners = Owners::default();
+            let mut b = LayoutBuilder::new(&target, &owners);
+            let mut types = Ty::default();
+            let text = types.p(Primitive::String);
+            let bytes = types.p(Primitive::Bytes);
+            assert_ne!(text, bytes);
+            let text_list = types.list(text);
+            let bytes_list = types.list(bytes);
+            let text_record = types.record(&[text, text_list]);
+            let bytes_record = types.record(&[bytes, bytes_list]);
+            for (a, z) in [
+                (text, bytes),
+                (text_list, bytes_list),
+                (text_record, bytes_record),
+            ] {
+                let (a, z) = if reverse { (z, a) } else { (a, z) };
+                let first = b.layout(&types.store, a).unwrap();
+                let second = b.layout(&types.store, z).unwrap();
+                assert_eq!(first, second);
+                assert_eq!(b.record(first).key, b.record(second).key);
+                let instance = |ty| {
+                    hirsel_layout::instance::InstanceKey::new(
+                        &path("identity"),
+                        0,
+                        &[(
+                            hirsel_layout::instance::ActualBinder::Type(TypeParameterRef::bound(
+                                TypeParamId(0),
+                            )),
+                            GenericArgument::Type(ty),
+                        )],
+                        &types.store,
+                        None,
+                        None,
+                    )
+                    .unwrap()
+                };
+                assert_ne!(instance(a), instance(z));
+            }
+            checked(b);
+        }
+    }
 }

@@ -699,7 +699,7 @@
     "programs/resource-failure-heavy.hir": "8a526b1b700ae29910740d9e7b231326edbdfda976f929c814fb65ebc768503f",
     "programs/expr-compiler.hir": "85279bc8de74abe67676ae594bcb1055ee369c648dbb15f9e5cbaa10836c60ce",
     "programs/batch-validation.hir": "718cfe9ef072611e8affb40a0c7768a7cdd28ca66ff2a6ee69281073e384a437",
-    "programs/json-roundtrip.hir": "0d1979eeee2b489b1ab21113a07c53ea24d9e6d74b0a36165c857b5b83022e03",
+    "programs/json-roundtrip.hir": "f5553ab0a2a3482f7a8726e18a98a8f96c0b48432cd5756941d9a0eeee54c9f2",
     "programs/wordfreq.hir": "d250c96165ecc12585d1ac79d7296a001d669585392cc0adc93cb94f7ad83b79",
     "programs/persistent-list-map-unique.hir": "0570aa674c4260a111535a231a320dea8d29d77c01ffcf6613966e59b1f132de",
     "programs/persistent-list-map-shared.hir": "861587d93400c2b423e7e2a28865a0b7d593f4e6b92b2f3a25339a8aa32efbd8",

@@ -1,0 +1,9 @@
+// rule: SEM-3
+// expect: run
+// Accepted twin of invalid-fail, with the same byte-level write.
+pub fn main() -> Result[(), ()] {
+  let mut output: List[u8] = []
+  bytes.append(mut output, b"\xc3\xa9")
+  failure.check(std@1/text.finish_valid(take output) == "é", TextInvariant())
+  Ok(())
+}

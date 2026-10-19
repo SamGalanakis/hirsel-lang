@@ -8038,6 +8038,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             let owner = self.heap_alloc(payload, size, self.record(payload)?.align)?;
             self.ledger.get_mut(owner.alloc).extent.place(0, image);
+            // A semantic buffer update constructs a complete sequence header,
+            // including the capacity read by a later scalar push.
+            self.exact_capacity(owner, element)?;
             if counted && self.count_down(old)? {
                 self.ledger.free(old.alloc)?;
             }

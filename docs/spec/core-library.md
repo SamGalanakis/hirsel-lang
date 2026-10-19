@@ -243,6 +243,7 @@ N fn string.positions(s: String) -> PositionView of s in s
 N fn string.slice(s: String, start: StrPos of s, end: StrPos of s) -> String in s
 @preserves_unique(bytes) fn string.from_bytes(take bytes: Bytes) -> Result[String, Bytes]
 N fn bytes.len(src: Bytes) -> u64
+@preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()
 @preserves_unique(src) fn bytes.from_list(take src: List[u8]) -> Bytes
 N fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src
 N fn string.as_bytes(s: String) -> Bytes in s
@@ -1207,6 +1208,13 @@ library included, raise language failures; `bytes.replace`'s empty-pattern SEM-3
 example, is reported at its check site in the std source. A failure during cleanup keeps
 FAIL-3 shielding.
 
+**Bulk byte append.** `bytes.append(mut builder, data)` appends the complete borrowed
+byte interval to the `List[u8]` in order. Empty input is a complete no-op, including arena preparation and charges.
+The destination follows ordinary copy-on-write; other holders keep their contents.
+It preserves destination uniqueness and introduces no source ownership. Growth is
+amortized and the copy is bulk. Tracked arena destinations charge the appended
+bytes under MEM-6 before mutation, including detachment of shared storage.
+
 **Owner-sharing slices.** `string.slice(s, start, end)` takes positions relative to this
 exact source slice, a slice with a nonzero origin included; both brands are checked
 statically. The interval is half-open; a reversed interval fails SEM-3 before a result is
@@ -1223,7 +1231,9 @@ slice's byte count. Byte and string slices share the exact owner and interval an
 mutable alias or uniqueness. `bytes.slice` accepts `0 <= start <= end <= len` and otherwise
 fails SEM-3 before creating a result. `bytes.from_list` consumes the list once, reusing its
 storage when the layouts are compatible and copying otherwise. `string.as_bytes` views a
-string's bytes. `string.position` returns `Some` exactly at a UTF-8 scalar boundary within
+string's bytes. Native physical layout keys identify `String` and `Bytes` as the same
+owner/start/length slice, also within containing types. Source type identity and semantic
+instance keys still distinguish them. `string.position` returns `Some` exactly at a UTF-8 scalar boundary within
 the source, zero and the terminal offset included, and `None` for an offset inside a scalar
 or out of range. The brand belongs only to the `StrPos` inside `Some`, never to the `Option`
 owner, and `None` carries no source identity. Matching preserves the payload's identity,

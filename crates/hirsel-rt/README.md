@@ -162,7 +162,10 @@ Invariants and boundary:
   sequence starts at `sequence_slice_start` (8 for bytes).
   `hirsel_rt_v2_seq_grow(ctx, block, element_size, element_align, capacity)` leaves a unique
   heap block that already holds `capacity` elements alone, its capacity word made exact; otherwise
-  the count and the counted elements move bitwise into a block of the class that fits (the new
+  its held slots double or meet the request, whichever is larger, within the host extent bound.
+  This amortizes repeated incremental reservations such as direct formatting. Tracked arena
+  reservations retain their hint-only behavior and exact logical charging. The count and the
+  counted elements move bitwise into a block of the class that fits (the new
   capacity is the class's, written exact),
   the old storage is freed shallowly, never scanned, and the returned reference names the new
   block. A block that is not unique (shared, immortal, or static: an empty list literal is the
@@ -715,7 +718,7 @@ and its Unicode16 segmentation execute ordinary std source; official source
 vector tests live in hirsel-driver/tests/stdlib_graphemes.rs.
 
 `text.rs` implements string.from_bytes, string.slice,
-string.as_bytes, bytes.slice, string.position,
+bytes.append, bytes.slice, string.position,
 string.byte_offset at their declared Hirsel ABI. Fresh results use
 `hirsel_rt_v2_bytes_descriptor` (Sequence[u8]: u64 count, then bytes). UTF-8
 conversion transfers the same slice into either Result arm; slicing shares one
@@ -726,7 +729,17 @@ site. `hirsel-pipeline-tests/tests/front/rt_text_native.rs` checks the full nati
 ASan/UBSan on x86-64 and qemu on AArch64, and generated drop glue with zero
 live blocks after every one of 1000 calls at O0/O2 in both runtime modes.
 
-The byte bridges retain one Slice owner credit and its exact interval. Freezing
+`bytes.append` copies a borrowed byte interval with one geometric growth and a
+bulk copy. Native import charges and prepares tracked arena destinations through
+`ArenaPush` before the runtime leaf; an empty append skips preparation and the
+leaf entirely. H models the append independently. Ordinary
+heap destinations with spare capacity avoid the growth call. Native output borrows
+already-valid String bytes through `Adapter::print`; RealIo writes them directly
+when neither retained history nor recording is enabled. The owned request path
+keeps recording, replay, fault injection and simulation behavior unchanged.
+
+Owning byte bridges retain one Slice owner credit and its exact interval.
+Stable local `string.as_bytes` views reuse the String storage without a holder. Freezing
 List[u8] is a checked LIR Slice construction in hirsel-rc and has no runtime
 entry. Position Option initializes both tag and inactive bytes; Some holds the relative offset without another owner credit.
 Path text reads only the bound lexical intern table and emits no host request.

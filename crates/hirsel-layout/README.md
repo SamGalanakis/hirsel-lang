@@ -12,7 +12,8 @@ this bridge in production; LIR, LLVM and runtime fixtures use a dev-dependency.
 Backends and validators consume physical schemas without front-end types.
 
 Layout keys erase relations, brands, uniqueness and sendability; callable
-multiplicity remains. Owner revisions participate in containing keys. Failed
+multiplicity remains. String and Bytes share one physical key, including inside
+containing types; source types and semantic instance keys remain distinct. Owner revisions participate in containing keys. Failed
 requests roll back the table, recursive payloads are reserved before deriving
 children, and inline cycles fail. A payload first reached through a block (a Box,
 or the element of a List, Array or Shared) is derived once the inline layouts under

@@ -3,8 +3,7 @@
 type JsonNode { tag: u8, first: u64, next: u64, spelling: Bytes }
 fn owned(data: Bytes) -> Bytes {
   let mut output_bytes: List[u8] = []
-  list.reserve(mut output_bytes, bytes.len(data))
-  for i in 0u64..bytes.len(data) { list.push(mut output_bytes, data[i]) }
+  bytes.append(mut output_bytes, data)
   bytes.from_list(take output_bytes)
 }
 fn node(mut nodes: List[box JsonNode], tag: u8, first: u64, spelling: Bytes) -> u64 {
@@ -100,7 +99,7 @@ fn parse(data: Bytes, mut position: u64, mut nodes: List[box JsonNode]) -> u64 {
   }
 }
 fn append(mut output: List[u8], data: Bytes) {
-  for i in 0u64..bytes.len(data) { list.push(mut output, data[i]) }
+  bytes.append(mut output, data)
 }
 fn emit(nodes: List[box JsonNode], index: u64, mut output: List[u8]) {
   let tag = nodes[index].tag

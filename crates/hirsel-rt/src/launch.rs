@@ -85,6 +85,14 @@ fn tape_header(line: Option<&str>) -> bool {
 struct Shared<A>(Rc<RefCell<A>>);
 
 impl<A: Adapter> Adapter for Shared<A> {
+    fn print(
+        &mut self,
+        handle: u64,
+        stderr: bool,
+        bytes: &[u8],
+    ) -> Result<Completion, AdapterError> {
+        self.0.borrow_mut().print(handle, stderr, bytes)
+    }
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.0.borrow().preflight(request)
     }
@@ -128,6 +136,54 @@ impl<A: Adapter> Adapter for Shared<A> {
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         self.0.borrow_mut().wait()
+    }
+}
+
+#[cfg(test)]
+mod borrowed_output_tests {
+    use super::*;
+
+    struct Probe {
+        pointer: *const u8,
+        calls: usize,
+    }
+    impl Adapter for Probe {
+        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+            Ok(None)
+        }
+        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+            panic!("shared output must forward the borrowed operation")
+        }
+        fn print(
+            &mut self,
+            handle: u64,
+            stderr: bool,
+            bytes: &[u8],
+        ) -> Result<Completion, AdapterError> {
+            assert_eq!(handle, 17);
+            assert_eq!(stderr, self.calls == 1);
+            assert_eq!(bytes, b"borrowed");
+            assert_eq!(bytes.as_ptr(), self.pointer);
+            self.calls += 1;
+            Ok(Completion::Unit(Ok(())))
+        }
+    }
+
+    #[test]
+    fn shared_adapter_forwards_borrowed_print() {
+        let bytes = b"borrowed";
+        let probe = Rc::new(RefCell::new(Probe {
+            pointer: bytes.as_ptr(),
+            calls: 0,
+        }));
+        let mut shared = Shared(probe.clone());
+        for stderr in [false, true] {
+            assert!(matches!(
+                shared.print(17, stderr, bytes),
+                Ok(Completion::Unit(Ok(())))
+            ));
+        }
+        assert_eq!(probe.borrow().calls, 2);
     }
 }
 

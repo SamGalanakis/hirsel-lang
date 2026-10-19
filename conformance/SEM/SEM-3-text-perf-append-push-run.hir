@@ -1,0 +1,10 @@
+// rule: SEM-3
+// expect: run
+// A bulk update leaves complete sequence metadata for a subsequent scalar push.
+pub fn main() -> Result[(), ()] {
+  let mut output: List[u8] = []
+  core@1/bytes.append(mut output, b"x")
+  list.push(mut output, 121u8)
+  failure.check(output == [120u8, 121u8], TextInvariant())
+  Ok(())
+}

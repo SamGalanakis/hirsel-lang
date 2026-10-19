@@ -2753,8 +2753,8 @@ fn list_write(
     None
 }
 
-/// MEM-6: an Io read into an arena List (`stdin.read`, `file.read`,
-/// `net.read`) charges its maximum bytes before its effect, whatever it then
+/// MEM-6: a bulk byte append or an Io read into an arena List (`stdin.read`,
+/// `file.read`, `net.read`) charges its input or maximum bytes before its effect, whatever it then
 /// reads, and first copies a shared List within its arena, charged its length,
 /// so an `OutOfSpace` reads nothing. Returns the arena whose budget is
 /// exceeded.
@@ -2763,17 +2763,30 @@ fn read_write(
     arguments: &mut [Value],
     budgets: &mut crate::bounded::Budgets,
 ) -> Option<u64> {
-    let (buffer, max) = if path.is_core("stdin.read") {
-        (1, 2)
-    } else if path.is_core("file.read") || path.is_core("net.read") || path.is_core("udp.recv_from")
-    {
-        (2, 3)
+    let (buffer, max) = if path.is_core("bytes.append") {
+        let Some(Value::Bytes(data)) = arguments.get(1) else {
+            return None;
+        };
+        if data.is_empty() {
+            return None;
+        }
+        (0, data.len() as u64)
     } else {
-        return None;
-    };
-    let max = match arguments.get(max) {
-        Some(Value::Integer(i)) => u64::try_from(i.bits()).ok()?,
-        _ => return None,
+        let (buffer, max) = if path.is_core("stdin.read") {
+            (1, 2)
+        } else if path.is_core("file.read")
+            || path.is_core("net.read")
+            || path.is_core("udp.recv_from")
+        {
+            (2, 3)
+        } else {
+            return None;
+        };
+        let max = match arguments.get(max) {
+            Some(Value::Integer(i)) => u64::try_from(i.bits()).ok()?,
+            _ => return None,
+        };
+        (buffer, max)
     };
     let Some(Value::Sequence {
         kind: hirsel_types::BuiltinType::List,

@@ -374,3 +374,75 @@ fn decimal_digit_emitters_need_no_reference_count_or_release_work() {
         assert_eq!(emitters, 3);
     }
 }
+
+#[test]
+fn inline_format_builders_append_into_the_destination() {
+    let input = source(
+        "fn value() -> u64 { let mut output: List[u8] = []\n std@1/text.append(mut output, f\"{42u64},\")\n checksum(bytes.from_list(take output)) }
+",
+    );
+    let program = compile(&input);
+    let fused = fuse(&program);
+    checked(&input, &program, &fused);
+    assert!(
+        !calls(&fused, "value")
+            .iter()
+            .any(|c| c == "text.finish_valid"),
+        "{:?}",
+        calls(&fused, "value")
+    );
+    agree(&input, "inline-format-append");
+}
+
+#[test]
+fn string_byte_borrows_need_no_runtime_bridge_or_holder_operations() {
+    with_compiler_stack(|| {
+        let input = "fn view_size(s: String) -> u64 { let data = string.as_bytes(s)\n bytes.len(data) }\npub fn main() -> Result[(), u64] { let mut b: List[u8] = []\n std@1/text.append(mut b, \"é😀\")\n Error(view_size(std@1/text.finish_valid(take b))) }";
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../hirsel-driver/tests/fixtures/std_numeric.hir");
+        let mut loaded = hirsel_driver::load_program_source(&path, Some(input)).unwrap();
+        loaded.check_for_execution().unwrap();
+        let input = loaded.engine.export_native_input().unwrap();
+        let validated = loaded.engine.import_native_input(input).unwrap();
+        for target in hirsel_lir::layout_types::TargetSpec::executed() {
+            let built = hirsel_driver::native::build(&validated, &Options::new(target)).unwrap();
+            let mut checked = 0;
+            for unit in &built.units {
+                let unit = unit.unit();
+                let path = &unit.header.definition.0;
+                if path.name == "view_size"
+                    || (path.package.package_is("std", "1")
+                        && path.modules == ["text"]
+                        && path.name == "append")
+                {
+                    checked += 1;
+                    assert!(
+                        !unit.instructions.iter().any(|i| {
+                            let value = match i {
+                                hirsel_lir::ir::Inst::Dup { value, .. }
+                                | hirsel_lir::ir::Inst::Release { value, .. } => *value,
+                                _ => return false,
+                            };
+                            let layout = unit.types[unit.values[value.index()].ty.index()].layout;
+                            matches!(
+                                built.table.layouts[layout.0 as usize].kind,
+                                hirsel_lir::layout_types::LayoutKind::Slice { .. }
+                            )
+                        }),
+                        "{}: {:#?}",
+                        path.name,
+                        unit.instructions
+                    );
+                    assert!(
+                        !unit
+                            .tables
+                            .operations
+                            .iter()
+                            .any(|op| op.definition.is_core("string.as_bytes"))
+                    );
+                }
+            }
+            assert_eq!(checked, 2);
+        }
+    });
+}

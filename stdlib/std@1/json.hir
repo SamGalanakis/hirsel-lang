@@ -83,11 +83,7 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8: copy validated token bytes.
 fn json_owned_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
   let mut output: List[u8] = []
-  let mut i = start
-  while i < end {
-    core@1/list.push(mut output, data[i])
-    i += 1
-  }
+  core@1/bytes.append(mut output, core@1/bytes.slice(data, start, end))
   match text.finish(take output) {
     Ok(s) => s,
     Error(_) => {
@@ -137,7 +133,15 @@ fn json_quoted(data: Bytes, mut pos: u64) -> Result[unique String, JsonError] us
       return Error(Syntax(pos - 1))
     }
     if c != 92 {
-      core@1/list.push(mut output, c)
+      let start = pos - 1
+      while pos < core@1/bytes.len(data) {
+        let next = data[pos]
+        if next < 32 || next == 34 || next == 92 {
+          break
+        }
+        pos += 1
+      }
+      core@1/bytes.append(mut output, core@1/bytes.slice(data, start, pos))
     } else {
       if pos == core@1/bytes.len(data) {
         return Error(Syntax(pos))
@@ -351,7 +355,15 @@ fn json_write_text(text: String, mut builder: List[u8]) -> () uses {} {
         core@1/list.push(mut builder, hex[core@1/int.widen(c & 15)])
       }
     } else {
-      core@1/list.push(mut builder, c)
+      let start = at - 1
+      while at < core@1/bytes.len(data) {
+        let next = data[at]
+        if next < 32 || next == 34 || next == 92 {
+          break
+        }
+        at += 1
+      }
+      core@1/bytes.append(mut builder, core@1/bytes.slice(data, start, at))
     }
   }
   core@1/list.push(mut builder, 34)

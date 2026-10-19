@@ -1857,6 +1857,26 @@ pub trait Adapter {
     fn replay_stderr(&self) -> Vec<u8> {
         vec![]
     }
+    /// A synchronous output borrows its bytes until completion. Adapters that retain
+    /// requests use the ordinary owned protocol; a live sink can consume the view.
+    fn print(
+        &mut self,
+        handle: u64,
+        stderr: bool,
+        bytes: &[u8],
+    ) -> Result<Completion, AdapterError> {
+        self.call(if stderr {
+            Request::PrintStderr {
+                stderr: handle,
+                bytes: bytes.to_vec(),
+            }
+        } else {
+            Request::Print {
+                stdout: handle,
+                bytes: bytes.to_vec(),
+            }
+        })
+    }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError>;
     /// Cooperative waits (`crate::host_waits`, DET-1). Select the readiness token of the
     /// request about to be issued; a `Blocked` answer parks it under that token.
@@ -2060,9 +2080,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_out_print(
     let data = crate::alloc::payload(owner)
         .wrapping_add(8)
         .wrapping_add(start);
-    let bytes = unsafe { native_text(data, len) }.as_bytes().to_vec();
-    let Completion::Unit(value) = (unsafe { native_call(ctx, Request::Print { stdout, bytes }) })
-    else {
+    // String's validity was established when constructed; output needs only bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(data, len as usize) };
+    let Completion::Unit(value) = (unsafe { native_print(ctx, stdout, false, bytes) }) else {
         crate::fault("Io completion type mismatch");
     };
     unsafe { out.write(UnitResult::of(value)) };
@@ -2087,10 +2107,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_err_print(
     let data = crate::alloc::payload(owner)
         .wrapping_add(8)
         .wrapping_add(start);
-    let bytes = unsafe { native_text(data, len) }.as_bytes().to_vec();
-    let Completion::Unit(value) =
-        (unsafe { native_call(ctx, Request::PrintStderr { stderr, bytes }) })
-    else {
+    let bytes = unsafe { std::slice::from_raw_parts(data, len as usize) };
+    let Completion::Unit(value) = (unsafe { native_print(ctx, stderr, true, bytes) }) else {
         crate::fault("Io completion type mismatch");
     };
     unsafe { out.write(UnitResult::of(value)) };
@@ -2136,6 +2154,40 @@ fn error_word(error: IoError) -> u64 {
         IoError::CrossDevice => 9,
     }
 }
+// Prints cannot park. Keep their borrowed bytes out of the owned wait protocol,
+// while retaining the same cancellation checks and post-effect scheduling point.
+unsafe fn native_print(
+    ctx: *mut crate::RunCtx,
+    handle: u64,
+    stderr: bool,
+    bytes: &[u8],
+) -> Completion {
+    if unsafe { crate::tasks::canceled(ctx) }.is_some() {
+        return unsafe {
+            native_call(
+                ctx,
+                if stderr {
+                    Request::PrintStderr {
+                        stderr: handle,
+                        bytes: bytes.to_vec(),
+                    }
+                } else {
+                    Request::Print {
+                        stdout: handle,
+                        bytes: bytes.to_vec(),
+                    }
+                },
+            )
+        };
+    }
+    let result = unsafe { Binding::get(ctx) }
+        .adapter
+        .print(handle, stderr, bytes);
+    let completion = unsafe { crate::stop::check(ctx, result.map_err(crate::stop::Stop::refusal)) };
+    unsafe { crate::tasks::yield_now(ctx) };
+    completion
+}
+
 unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
     let operation = !matches!(request, Request::Close { .. });
     // SAFETY: the context is live; the request moved into the issue.
@@ -3598,7 +3650,20 @@ pub(crate) unsafe fn append_byte_list(
                     block
                 }
             } else {
-                crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, total)
+                let capacity = crate::alloc::payload(block)
+                    .add(crate::alloc::SEQUENCE_CAPACITY_OFFSET as usize)
+                    .cast::<u64>()
+                    .read();
+                if (*block).count == 1 && capacity >= total {
+                    block
+                } else {
+                    let slots = if capacity < total {
+                        total.max(count.saturating_mul(2)).max(4)
+                    } else {
+                        total
+                    };
+                    crate::alloc::hirsel_rt_v2_seq_grow(ctx, block, 1, 1, slots)
+                }
             };
             let payload = crate::alloc::payload(block);
             std::ptr::copy_nonoverlapping(

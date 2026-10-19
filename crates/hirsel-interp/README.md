@@ -652,3 +652,7 @@ pinned directory.
 
 Secondary file and child handles are validated before authority, argument
 checks, cancellation or injected provider faults.
+
+`bytes.append` publishes a byte-list update through the same operation completion
+boundary as list mutations. Its bounded-arena charge covers the input length and
+any shared destination copy before the update, matching native bulk reads.

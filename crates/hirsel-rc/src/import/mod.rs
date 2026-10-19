@@ -73,6 +73,7 @@ pub const SCRATCH_DISPOSAL: u32 = u32::MAX - 2;
 pub const STATE_RELEASE: u32 = u32::MAX - 3;
 
 mod build;
+mod byte_views;
 mod calls;
 mod cleanup;
 mod flat_builder;
@@ -1024,6 +1025,7 @@ fn import_mapped(
     im.fields = im.field_webs()?;
     let loans: Vec<_> = im.fields.loans.iter().copied().collect();
     im.elided_loans.extend(loans);
+    byte_views::aliases(body, &def.types, &mut im.aliases);
     im.cfg()?;
     let mut entry: Vec<Option<State>> = vec![None; body.blocks.len()];
     // Abstract states only grow (towards Maybe), so this reaches a fixpoint.

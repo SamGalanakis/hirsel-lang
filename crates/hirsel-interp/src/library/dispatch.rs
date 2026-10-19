@@ -1723,6 +1723,17 @@ primary_operations! { self, call, context, name, a, value;
     },
     Primitive: "string.as_bytes" => Value::Bytes(text(arg(a, 0)?)?.as_bytes().to_vec()),
     Primitive: "bytes.len" => u64_value(bytes(arg(a, 0)?)?.len() as u64),
+    Primitive: "bytes.append" => {
+        let (list, rest) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing builtin argument"))?;
+        let data = bytes(arg(rest, 0)?)?;
+        if !data.is_empty() {
+            let Value::Sequence { kind: BuiltinType::List, elements, .. } = list else {
+                return Err(invalid("byte append destination"));
+            };
+            elements.extend(data.iter().map(|&b| Some(Value::Integer(Integer::new(Primitive::U8, b.into()).unwrap()))));
+        }
+        Value::Unit
+    },
     Primitive: "bytes.from_list" => {
         let values = collection::elements(arg(a, 0)?, BuiltinType::List)?;
         let mut result = Vec::with_capacity(values.len());

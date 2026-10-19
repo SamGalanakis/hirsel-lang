@@ -1033,7 +1033,13 @@ impl<'o> LayoutBuilder<'o> {
         match &row.kind {
             TypeKind::Primitive(p) => {
                 e.tag("primitive");
-                e.tag(primitive_name(*p));
+                // String and Bytes are the same owner/start/length slice. Keep
+                // their semantic identity in instance keys, not physical keys.
+                e.tag(primitive_name(if *p == Primitive::Bytes {
+                    Primitive::String
+                } else {
+                    *p
+                }));
             }
             TypeKind::Tuple(items) => {
                 e.tag("tuple");

@@ -1,0 +1,26 @@
+// rule: SEM-3
+// expect: run
+// Direct multi-block input and split/empty updates, through a nonzero-origin slice.
+pub fn main() -> Result[(), ()] {
+  let mut input: List[u8] = [0, 0, 0]
+  for i in 0u64..257u64 {
+    list.push(mut input, int.narrow((i * 37 + 11) % 256))
+  }
+  list.push(mut input, 255)
+  let whole = bytes.from_list(take input)
+  let data = bytes.slice(whole, 3, 260)
+  let expected = "fd9b3aed5c02eaa88a6798a27a3b70a675539f91"
+  failure.check(std@1/sha1.digest_hex(data) == expected, TextInvariant())
+  let splits: Array[u64] = [1]
+  for split in splits {
+    let mut state = std@1/sha1.new()
+    std@1/sha1.update(mut state, bytes.slice(data, 0, split))
+    std@1/sha1.update(mut state, b"")
+    std@1/sha1.update(mut state, bytes.slice(data, split, 257))
+    let actual = std@1/hex.encode(
+      std@1/bytes.from_inline(std@1/sha1.finish(take state))
+    )
+    failure.check(actual == expected, TextInvariant())
+  }
+  Ok(())
+}

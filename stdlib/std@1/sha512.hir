@@ -353,6 +353,113 @@ fn compress(mut state: State) -> () uses {} {
     schedule[i] = word
     i += 1
   }
+  rounds(mut state.words, take schedule)
+}
+
+@noalloc
+fn compress_input(mut words: Inline[u64, 8], data: Bytes, offset: u64) -> () uses {} {
+  let mut schedule: Inline[u64, 80] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  let mut i: u64 = 0
+  while i < 16 {
+    let at = offset + i * 8
+    let mut word: u64 = 0
+    let mut j: u64 = 0
+    while j < 8 {
+      let byte: u64 = core@1/int.widen(data[at + j])
+      word = word << 8 | byte
+      j += 1
+    }
+    schedule[i] = word
+    i += 1
+  }
+  rounds(mut words, take schedule)
+}
+
+@noalloc
+fn rounds(mut words: Inline[u64, 8], take initial: Inline[u64, 80]) -> () uses {} {
+  let mut schedule = take initial
+  let mut i: u64 = 16
   while i < 80 {
     let a = schedule[i - 15]
     let b = schedule[i - 2]
@@ -361,14 +468,14 @@ fn compress(mut state: State) -> () uses {} {
     schedule[i] = add(add(schedule[i - 16], s0), add(schedule[i - 7], s1))
     i += 1
   }
-  let mut a = state.words[0]
-  let mut b = state.words[1]
-  let mut c = state.words[2]
-  let mut d = state.words[3]
-  let mut e = state.words[4]
-  let mut f = state.words[5]
-  let mut g = state.words[6]
-  let mut h = state.words[7]
+  let mut a = words[0]
+  let mut b = words[1]
+  let mut c = words[2]
+  let mut d = words[3]
+  let mut e = words[4]
+  let mut f = words[5]
+  let mut g = words[6]
+  let mut h = words[7]
   i = 0
   while i < 80 {
     let upper = rotate(e, 14) ^ rotate(e, 18) ^ rotate(e, 41)
@@ -387,14 +494,14 @@ fn compress(mut state: State) -> () uses {} {
     a = add(t1, t2)
     i += 1
   }
-  state.words[0] = add(state.words[0], a)
-  state.words[1] = add(state.words[1], b)
-  state.words[2] = add(state.words[2], c)
-  state.words[3] = add(state.words[3], d)
-  state.words[4] = add(state.words[4], e)
-  state.words[5] = add(state.words[5], f)
-  state.words[6] = add(state.words[6], g)
-  state.words[7] = add(state.words[7], h)
+  words[0] = add(words[0], a)
+  words[1] = add(words[1], b)
+  words[2] = add(words[2], c)
+  words[3] = add(words[3], d)
+  words[4] = add(words[4], e)
+  words[5] = add(words[5], f)
+  words[6] = add(words[6], g)
+  words[7] = add(words[7], h)
 }
 
 @noalloc
@@ -403,13 +510,27 @@ pub fn update(mut state: State, data: Bytes) -> () uses {} {
   core@1/failure.check(len <= 18446744073709551615u64 - state.count, Arithmetic())
   state.count += len
   let mut i: u64 = 0
-  while i < len {
-    state.block[state.used] = data[i]
-    state.used += 1
+  // Fill a partial block left by the previous call before reading input blocks.
+  if state.used != 0 {
+    while i < len && state.used < 128 {
+      state.block[state.used] = data[i]
+      state.used += 1
+      i += 1
+    }
     if state.used == 128 {
       compress(mut state)
       state.used = 0
     }
+  }
+  // Zig std crypto update: compress full middle blocks without a staging copy.
+  while len - i >= 128 {
+    compress_input(mut state.words, data, i)
+    i += 128
+  }
+  // Only the incomplete tail survives until the next update or finish.
+  while i < len {
+    state.block[state.used] = data[i]
+    state.used += 1
     i += 1
   }
 }

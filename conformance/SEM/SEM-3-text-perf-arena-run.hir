@@ -1,0 +1,60 @@
+// rule: SEM-3
+// expect: run
+// Bulk append charges input bytes and the first shared arena copy before writing.
+fn appended(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut bytes: List[u8] in a = [1u8, 2u8]
+      let original = copy bytes
+      let append = core@1/bytes.append
+      append(mut bytes, b"abc")
+      core@1/bytes.append(mut bytes, b"d")
+      failure.check(original == [1u8, 2u8], TextInvariant())
+      list.len(bytes)
+    }
+  )
+}
+
+fn empty(indirect: bool) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    2u64,
+    fn(a: Arena) -> u64 {
+      let mut bytes: List[u8] in a = [1u8, 2u8]
+      let original = copy bytes
+      if indirect {
+        let append = core@1/bytes.append
+        append(mut bytes, b"")
+      } else {
+        core@1/bytes.append(mut bytes, b"")
+      }
+      failure.check(original == bytes, TextInvariant())
+      list.len(bytes)
+    }
+  )
+}
+
+// Reserve hints and spare physical capacity do not consume logical bytes.
+fn incremental(cap: u64) -> Result[u64, OutOfSpace] {
+  arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let mut bytes: List[u8] in a = []
+      for i in 0u64..5u64 {
+        list.reserve(mut bytes, list.len(bytes) + 1u64)
+        core@1/bytes.append(mut bytes, b"x")
+      }
+      list.len(bytes)
+    }
+  )
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(incremental(5u64) == Ok(5u64), TextInvariant())
+  failure.check(incremental(4u64) == Error(OutOfSpace()), TextInvariant())
+  failure.check(empty(false) == Ok(2u64), TextInvariant())
+  failure.check(empty(true) == Ok(2u64), TextInvariant())
+  failure.check(appended(8u64) == Ok(6u64), TextInvariant())
+  failure.check(appended(7u64) == Error(OutOfSpace()), TextInvariant())
+  Ok(())
+}

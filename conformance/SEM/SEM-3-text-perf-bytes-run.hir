@@ -1,0 +1,20 @@
+// rule: SEM-3
+// expect: run
+// Bulk append preserves interval origins, empty inputs, COW and arbitrary bytes.
+pub fn main() -> Result[(), ()] {
+  let mut output: List[u8] = [1, 2]
+  let previous = copy output
+  let source = b"prefix\x00\xff\xc3\xa9suffix"
+  bytes.append(mut output, bytes.slice(source, 6, 10))
+  bytes.append(mut output, b"")
+  failure.check(previous == [1u8, 2u8], TextInvariant())
+  failure.check(
+    bytes.from_list(take output) == b"\x01\x02\x00\xff\xc3\xa9",
+    TextInvariant()
+  )
+  let mut text: List[u8] = []
+  std@1/text.append(mut text, "é😀")
+  std@1/text.append(mut text, f"{42u64},")
+  failure.check(std@1/text.finish_valid(take text) == "é😀42,", TextInvariant())
+  Ok(())
+}

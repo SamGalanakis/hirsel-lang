@@ -138,7 +138,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "string.from_bytes"
         | "string.slice"
         | "io.stdout"
-        | "string.as_bytes"
+        | "bytes.append"
         | "string.position"
         | "string.byte_offset"
         | "bytes.slice"
@@ -454,6 +454,7 @@ pub const INLINE_OPERATIONS: &[&str] = &[
     "codec.decode",
     "slots.empty",
     "bytes.from_list",
+    "string.as_bytes",
     "bytes.len",
     "map.empty",
     "map.len",
@@ -1019,10 +1020,15 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
-        symbol: "hirsel_rt_v2_string_as_bytes",
-        destination: true,
-        result: Some((24, 8)),
-        parameters: &[Physical::Pointer, Physical::I64, Physical::I64],
+        symbol: "hirsel_rt_v2_bytes_append",
+        destination: false,
+        result: None,
+        parameters: &[
+            Physical::Pointer,
+            Physical::Pointer,
+            Physical::I64,
+            Physical::I64,
+        ],
     },
     AbiExport {
         caller_site: false,
@@ -1871,6 +1877,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "atomic.store",
     "bytes.len",
     "bytes.from_list",
+    "bytes.append",
     "bytes.slice",
     "string.as_bytes",
     "string.position",

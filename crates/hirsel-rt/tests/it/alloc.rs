@@ -466,6 +466,39 @@ fn reserve(ctx: &Ctx, block: &mut *mut Header, size: u64, align: u64, capacity: 
 }
 
 #[test]
+fn seq_reserve_amortizes_incremental_growth() {
+    let ctx = Ctx::diagnostic();
+    let empty = leaf(0);
+    let mut block = bytes_block(&ctx, empty);
+    let limit = SMALL_MAX + 4096;
+    let mut relocations = 0;
+    for wanted in 4..=limit {
+        let before = block;
+        reserve(&ctx, &mut block, 1, 1, wanted);
+        relocations += u32::from(block != before);
+        assert!(
+            relocations <= limit.ilog2() + 2,
+            "incremental reserve must amortize growth: {relocations} relocations at {wanted} bytes"
+        );
+        unsafe {
+            let p = payload(block);
+            assert_eq!(p.cast::<u64>().read(), wanted - 1);
+            p.add(16 + wanted as usize - 1).write((wanted % 251) as u8);
+            p.cast::<u64>().write(wanted);
+        }
+    }
+    unsafe {
+        let bytes = std::slice::from_raw_parts(payload(block).add(16), limit as usize);
+        assert_eq!(&bytes[..3], &[1, 2, 3]);
+        for (i, byte) in bytes.iter().enumerate().skip(3) {
+            assert_eq!(*byte, ((i + 1) % 251) as u8);
+        }
+    }
+    release(&ctx, block, empty);
+    assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+#[test]
 fn seq_reserve_lands_on_every_class_boundary_and_keeps_the_elements() {
     let ctx = Ctx::diagnostic();
     let empty = leaf(0);

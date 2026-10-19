@@ -317,24 +317,12 @@ fn byte_bridges_preserve_nested_intervals_and_publish_only_after_checks() {
     for ctx in [Ctx::production(), Ctx::diagnostic()] {
         unsafe {
             let source = allocate_bytes(ctx.0, "prefixé😀xTAIL".as_bytes());
-            let mut view = std::mem::MaybeUninit::uninit();
-            assert_eq!(
-                hirsel_rt_v2_string_as_bytes(
-                    ctx.0,
-                    std::ptr::null_mut(),
-                    view.as_mut_ptr(),
-                    source.owner,
-                    source.start + 6,
-                    7
-                ),
-                0
-            );
-            let view = view.assume_init();
-            assert_eq!(
-                (view.owner, view.start, view.length),
-                (source.owner, source.start + 6, 7)
-            );
-            assert_eq!((*source.owner).count, 2);
+            hirsel_rt::count::hirsel_rt_v2_dup(ctx.0, source.owner);
+            let view = Slice {
+                owner: source.owner,
+                start: source.start + 6,
+                length: 7,
+            };
             let mut slice = std::mem::MaybeUninit::uninit();
             assert_eq!(
                 hirsel_rt_v2_bytes_slice(

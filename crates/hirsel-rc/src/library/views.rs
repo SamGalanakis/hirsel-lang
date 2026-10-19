@@ -4,6 +4,10 @@ use crate::import::ImportCx;
 use hirsel_lir::ir::Inst;
 use hirsel_types::UseKind;
 
+pub static AS_BYTES: InlineLowering = InlineLowering {
+    path: || hirsel_syntax::DefPath::core("string.as_bytes"),
+    lower: view,
+};
 pub static SCALARS: InlineLowering = InlineLowering {
     path: || hirsel_syntax::DefPath::core("string.scalars"),
     lower: view,

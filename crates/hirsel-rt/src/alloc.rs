@@ -1781,8 +1781,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
 /// hold at least `capacity` elements: a u64 count at payload offset 0, the u64 capacity word at
 /// 8, then elements `element_size` bytes apart from the first offset aligned for them
 /// (runtime ABI 5). A unique heap block that already holds them is left alone. Otherwise the
-/// count and the counted elements move bitwise into fresh storage of the class that fits (so
-/// the new capacity is the class's), the old storage is freed shallowly, never scanned, and
+/// capacity doubles or meets the request, whichever is larger, within the host extent bound.
+/// The count and counted elements move bitwise into fresh storage of the class that fits
+/// (so the new capacity is the class's), the old storage is freed shallowly, never scanned, and
 /// returns the new block. Every path leaves the returned block's capacity word exact: every
 /// slot its storage holds.
 ///
@@ -1830,6 +1831,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_seq_grow(
         else {
             fault("a sequence capacity overflows its extent");
         };
+        // Rust RawVec::grow_amortized: an incremental reserve must not copy
+        // the entire sequence on every append. Keep the requested extent if
+        // doubling would exceed the host bound; tracked/shared blocks took
+        // their existing paths above.
+        let geometric = slots
+            .checked_mul(2)
+            .and_then(|slots| slots.checked_mul(element_size))
+            .and_then(|bytes| bytes.checked_add(elements))
+            .filter(|extent| *extent <= EXTENT_MAX)
+            .unwrap_or(extent);
+        let extent = extent.max(geometric);
         let count = payload(block).cast::<u64>().read();
         let used = elements + count * element_size;
         let (grown, bytes) = grow(ctx, block, used, extent, element_align);

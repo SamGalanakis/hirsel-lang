@@ -171,6 +171,7 @@ pub const INLINE: &[&InlineLowering] = &[
     &iter::FROM,
     &iter::MAP,
     &iter::NEXT,
+    &views::AS_BYTES,
     &views::SCALARS,
     &views::POSITIONS,
     // core (lib-core): list.len, array.len, string.byte_len.

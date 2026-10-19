@@ -1377,11 +1377,33 @@ impl Io {
 fn text(module: Option<&str>, name: &str, args: &[OpValue]) -> Option<OpOutcome> {
     use hirsel_lir::layout_types::ScalarKind;
     let value = match (module, name, args) {
-        (Some("string"), "as_bytes", [OpValue::Bytes(bytes)]) => OpValue::Slice {
-            argument: 0,
-            start: 0,
-            length: bytes.len() as u64,
-        },
+        (
+            Some("bytes"),
+            "append",
+            [
+                OpValue::Elements {
+                    scalar: ScalarKind::U8,
+                    bits,
+                },
+                OpValue::Bytes(bytes),
+            ],
+        ) => {
+            if bytes.is_empty() {
+                return Some(OpOutcome::Value(OpValue::Unit));
+            }
+            let mut bits = bits.clone();
+            bits.extend(bytes.iter().map(|&byte| u128::from(byte)));
+            return Some(OpOutcome::Updated {
+                value: OpValue::Unit,
+                arguments: vec![(
+                    0,
+                    OpValue::Elements {
+                        scalar: ScalarKind::U8,
+                        bits,
+                    },
+                )],
+            });
+        }
         (
             Some("bytes"),
             "from_list",

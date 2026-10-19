@@ -54,6 +54,19 @@ see a call and a function. `hirsel-pipeline-tests/tests/rc/rc_append_into.rs`
 validates every rewritten and derived definition with the IR checker, runs C
 at each stage and H against the interpreter, and keeps the declined twins.
 
+Inline format builders consumed by one `text.append` use the same destination.
+Only std primitive formatting and String append steps qualify; custom formatters,
+padding and possible failures after partial output retain their temporary. The
+rewrite preserves ordinary TIR loans and cleanup, and leaves the destination's
+own final UTF-8 validation in place. Only known local heap destinations qualify;
+bounded arenas and parameters retain the temporary because a charge can fail.
+
+`string.as_bytes` lowers inline at the shared slice layout. Read-only local views
+of an enclosing, stable String use that String's existing storage without holder
+operations. Moving/escaping views, mutable owners and temporary owners retain an
+ordinary owning copy; operation values use a compiled forwarding body. Source
+scope and mutation checks precede aliasing, and C/H check the resulting lifetimes.
+
 ## Task E: instances, self-tail loops, SSA import
 
 - `instance`: expands the program from the GEN-5 graph (`Program::requirements`,
@@ -498,8 +511,8 @@ a FunctionRef and inline Order construction, with no callable static-data format
 (`let f = out.print`): one forwarding body per operation, instantiated at the
 operation's own path and actuals, passes each parameter on as declared and calls
 the operation, so a call through the value fails and cleans up as a direct call
-does. Of the inline lowerings only the lengths have a value (their `SeqLen`); the
-others are unsupported as values. `conformance/LANG/LANG-2-core-operation-values-run.hir`
+does. The inline lengths have a value (their `SeqLen`), as does
+`string.as_bytes` (a Slice copy); other inline lowerings are unsupported as values. `conformance/LANG/LANG-2-core-operation-values-run.hir`
 runs it in the native smoke.
 
 `flat_walk` strength-reduces zero-based, unit-stride loops over variable-element

@@ -40,6 +40,8 @@
 //!
 //! The rewrite is TIR to TIR over the `Program` before instance expansion:
 //! every later pass, and C, sees an ordinary call and an ordinary function.
+mod inline_format;
+
 use crate::instance::Program;
 use hirsel_syntax::{BinaryOp, ContentHash, DefPath, ItemPath, PassingMode, UnaryOp};
 use hirsel_tir::{
@@ -949,6 +951,7 @@ impl Fuser {
     /// Calls that cannot fail but by exhaustion.
     fn total_callee(&mut self, program: &Program, path: &DefPath) -> bool {
         if [
+            "bytes.append",
             "list.push",
             "list.reserve",
             "list.len",
@@ -1023,6 +1026,10 @@ impl Fuser {
     /// Rewrite `path`'s fusable sites; true when it changed.
     fn fuse_definition(&mut self, program: &mut Program, path: &DefPath) -> bool {
         let def = program.definitions[path].clone();
+        if let Some(fused) = inline_format::fuse(program, &def, self) {
+            program.definitions.insert(path.clone(), Arc::new(fused));
+            return true;
+        }
         let entry = def.entry.0 as usize;
         let mut sites = Vec::new();
         {

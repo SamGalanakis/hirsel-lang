@@ -418,6 +418,42 @@ impl RealIo {
     }
 }
 impl Adapter for RealIo {
+    fn print(
+        &mut self,
+        handle: u64,
+        stderr: bool,
+        bytes: &[u8],
+    ) -> Result<Completion, AdapterError> {
+        if !self.retain_history && self.recording.is_none() && self.fault.is_none() {
+            self.state.expect(
+                handle,
+                if stderr {
+                    crate::handles::Grant::Stderr
+                } else {
+                    crate::handles::Grant::Stdout
+                },
+            )?;
+            let output = if stderr {
+                &mut self.stderr
+            } else {
+                &mut self.output
+            };
+            let (value, _) = write_output(output.as_mut(), bytes);
+            return Ok(Completion::Unit(value));
+        }
+        self.call(if stderr {
+            Request::PrintStderr {
+                stderr: handle,
+                bytes: bytes.to_vec(),
+            }
+        } else {
+            Request::Print {
+                stdout: handle,
+                bytes: bytes.to_vec(),
+            }
+        })
+    }
+
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.state.preflight(request)
     }
@@ -676,38 +712,11 @@ impl RealIo {
             };
             let before = if stderr { stderr_before } else { before };
             let bytes = &captured[before..];
-            let mut written = 0;
-            while written < bytes.len() {
-                match output.write(&bytes[written..]) {
-                    Ok(0) => {
-                        let e = IoError::Fault(1);
-                        completion = Completion::Unit(Err(e.clone()));
-                        fault = Some(Fault {
-                            error: e,
-                            partial: written,
-                        });
-                        break;
-                    }
-                    Ok(n) => written += n,
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                    Err(e) => {
-                        let e = stream_error(e);
-                        completion = Completion::Unit(Err(e.clone()));
-                        fault = Some(Fault {
-                            error: e,
-                            partial: written,
-                        });
-                        break;
-                    }
-                }
-            }
-            // Completion means acceptance at the provider boundary, including
-            // flushing any private buffer before its success enters the tape.
-            if let Err(e) = output.flush() {
-                let e = stream_error(e);
-                completion = Completion::Unit(Err(e.clone()));
+            let (value, written) = write_output(output.as_mut(), bytes);
+            if let Err(error) = value {
+                completion = Completion::Unit(Err(error.clone()));
                 fault = Some(Fault {
-                    error: e,
+                    error,
                     partial: written,
                 });
             }
@@ -777,6 +786,30 @@ impl RealIo {
         Ok(completion)
     }
 }
+// Success includes flushing the provider's private buffer before returning.
+fn write_output(output: &mut dyn Write, bytes: &[u8]) -> (Result<(), IoError>, usize) {
+    let mut written = 0;
+    let mut result = Ok(());
+    while written < bytes.len() {
+        match output.write(&bytes[written..]) {
+            Ok(0) => {
+                result = Err(IoError::Fault(1));
+                break;
+            }
+            Ok(n) => written += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => {
+                result = Err(stream_error(e));
+                break;
+            }
+        }
+    }
+    if let Err(e) = output.flush() {
+        result = Err(stream_error(e));
+    }
+    (result, written)
+}
+
 #[derive(Debug)]
 struct Disk {
     mounts: BTreeMap<String, crate::host_paths::PinnedDirectory>,
@@ -1704,5 +1737,103 @@ fn clock_input(request: &Request, fault: Option<&Fault>) -> Completion {
         )
     } else {
         Completion::Wall(value.and_then(|n| i64::try_from(n).map_err(|_| ClockError::OutOfRange)))
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[derive(Default)]
+    struct Written {
+        bytes: Vec<u8>,
+        flushes: usize,
+        interrupted: bool,
+    }
+    struct Sink {
+        written: Rc<RefCell<Written>>,
+        limit: usize,
+        fail_flush: bool,
+    }
+    impl Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let mut written = self.written.borrow_mut();
+            if !written.interrupted {
+                written.interrupted = true;
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            let count = bytes.len().min(2).min(self.limit - written.bytes.len());
+            written.bytes.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.written.borrow_mut().flushes += 1;
+            if self.fail_flush {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    // Direct output must preserve the recorded protocol's handle checks, interrupted
+    // and partial writes, flush failures and accepted byte prefix, without capture.
+    #[test]
+    fn borrowed_output_matches_retained_output_without_capturing() {
+        for stderr in [false, true] {
+            for (limit, fail_flush) in [(usize::MAX, false), (3, false), (usize::MAX, true)] {
+                let mut observations = Vec::new();
+                for retain in [true, false] {
+                    let written = Rc::new(RefCell::new(Written::default()));
+                    let sink = Sink {
+                        written: written.clone(),
+                        limit,
+                        fail_flush,
+                    };
+                    let mut io = RealIo::from_pinned_mounts([], std::io::sink()).unwrap();
+                    if stderr {
+                        io.set_stderr(sink);
+                    } else {
+                        io.output = Box::new(sink);
+                    }
+                    if !retain {
+                        io.discard_history();
+                    }
+                    let projection = if stderr {
+                        Request::Stderr { io: 1 }
+                    } else {
+                        Request::Stdout { io: 1 }
+                    };
+                    let Completion::Handle(Ok(handle)) = io.call(projection).unwrap() else {
+                        panic!("output grant");
+                    };
+                    assert!(matches!(
+                        io.print(9999, stderr, b"denied"),
+                        Err(AdapterError::InvalidHandle(9999))
+                    ));
+                    assert!(written.borrow().bytes.is_empty());
+                    let completion = io.print(handle, stderr, "é😀\n".as_bytes()).unwrap();
+                    let written = written.borrow();
+                    observations.push((completion, written.bytes.clone(), written.flushes));
+                    if retain {
+                        let captured = if stderr {
+                            &io.state.stderr
+                        } else {
+                            &io.state.stdout
+                        };
+                        assert_eq!(*captured, written.bytes);
+                        assert_eq!(io.tape.len(), 2);
+                    } else {
+                        assert!(
+                            io.state.stdout.is_empty()
+                                && io.state.stderr.is_empty()
+                                && io.tape.is_empty()
+                        );
+                    }
+                }
+                assert_eq!(observations[0], observations[1]);
+            }
+        }
     }
 }

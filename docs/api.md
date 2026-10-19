@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1347 exported definitions; 491 variants.
+1348 exported definitions; 491 variants.
 
 ## Types and roots
 
@@ -2473,6 +2473,10 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/Net`](#def-core_401_
 
 
 ## bytes
+
+<a id="def-core_401_2fbytes_2fappend"></a>
+
+- `@preserves_unique(builder) @unretained(data) fn bytes.append(mut builder: List[u8], data: Bytes) -> ()`
 
 <a id="def-std_401_2fbytes_2ffrom_5finline"></a>
 

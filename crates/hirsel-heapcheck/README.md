@@ -595,7 +595,8 @@ nested records, variants, inline arrays and lists; scalar lists retain `Elements
 The former test.dir-only entry transport is removed. Every nested pointer is
 read through checked storage, and only semantic data enters a driver model.
 Aggregate/sequence results are materialized under H's ledger. Scalar buffer
-updates allocate or replace checked storage, and `TakenHandle` transfers a Take
+updates allocate or replace checked storage and initialize sequence capacity from
+the ledger, so later scalar pushes read a complete header. `TakenHandle` transfers a Take
 operand without closing or reopening its identity (TLS upgrade).
 
 A whole-byte Slice constructor can take a Sequence[u8] block as its owner.

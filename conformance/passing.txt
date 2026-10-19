@@ -5314,6 +5314,16 @@ conformance/SEM/SEM-3-tar-write-pax-run.hir
 conformance/SEM/SEM-3-tar-write-run.hir
 conformance/SEM/SEM-3-tar-write-ustar-run.hir
 conformance/SEM/SEM-3-test-extra-run.hir
+conformance/SEM/SEM-3-text-perf-append-push-run.hir
+conformance/SEM/SEM-3-text-perf-arena-run.hir
+conformance/SEM/SEM-3-text-perf-bytes-run.hir
+conformance/SEM/SEM-3-text-perf-custom-run.hir
+conformance/SEM/SEM-3-text-perf-invalid-fail.hir
+conformance/SEM/SEM-3-text-perf-invalid-run.hir
+conformance/SEM/SEM-3-text-perf-md5-run.hir
+conformance/SEM/SEM-3-text-perf-sha1-run.hir
+conformance/SEM/SEM-3-text-perf-sha256-run.hir
+conformance/SEM/SEM-3-text-perf-sha512-run.hir
 conformance/SEM/SEM-3-toml-datetime-run.hir
 conformance/SEM/SEM-3-toml-decode-run.hir
 conformance/SEM/SEM-3-toml-document-read-run.hir

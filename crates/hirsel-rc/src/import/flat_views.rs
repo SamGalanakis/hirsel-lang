@@ -107,7 +107,7 @@ fn stable_owned_roots(
 
 /// Same iterative interval construction as GenericDeclarations::lexical; TIR
 /// validation has already checked this scope forest. Queries are constant time.
-fn scope_intervals(body: &tir::Body) -> Vec<(usize, usize)> {
+pub(super) fn scope_intervals(body: &tir::Body) -> Vec<(usize, usize)> {
     let mut children = vec![Vec::new(); body.scopes.len()];
     let mut pending = Vec::new();
     for (i, scope) in body.scopes.iter().enumerate() {

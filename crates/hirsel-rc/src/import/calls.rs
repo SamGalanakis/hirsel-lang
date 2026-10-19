@@ -121,7 +121,11 @@ impl Importer<'_, '_> {
             return malformed("an Io read's buffer is not lent mut");
         }
         let count = self.operand(&max.value)?;
-        let p = self.place(buffer.value.place)?;
+        self.append_room(buffer.value.place, count)
+    }
+
+    fn append_room(&mut self, buffer: tir::PlaceId, count: ValueId) -> R<()> {
+        let p = self.place(buffer)?;
         let address = self.address(&p)?;
         let ty = self.out.slots[p.slot.index()].ty;
         let version = self.value(ty, Holding::Plain);
@@ -162,6 +166,15 @@ impl Importer<'_, '_> {
                 return self.flat_length(&p, destination, next);
             }
         }
+        if let tir::Callee::Definition { path, .. } = callee
+            && path.is_core("string.as_bytes")
+            && let Some(ret) = returns
+            && self.aliases[self.body.places[ret.destination.0 as usize].root.0 as usize].is_some()
+        {
+            let edge = self.enter(ret.next);
+            self.terminate(Terminator::Jump(edge));
+            return Ok(());
+        }
         // A family's inline lowering replaces the call by instructions.
         if let tir::Callee::Definition {
             path,
@@ -189,6 +202,70 @@ impl Importer<'_, '_> {
             && let Some((buffer, max)) = read_room(path)
         {
             self.read_room(arguments, buffer, max)?;
+        }
+        if let tir::Callee::Definition { path, .. } = callee
+            && path.is_core("bytes.append")
+        {
+            let builder = arguments
+                .iter()
+                .find(|a| a.parameter.0 == 0)
+                .ok_or_else(|| PassError::Malformed("byte append destination".into()))?;
+            let data = arguments
+                .iter()
+                .find(|a| a.parameter.0 == 1)
+                .ok_or_else(|| PassError::Malformed("byte append source".into()))?;
+            let value = self.operand(&data.value)?;
+            let ty = self.value_type(value);
+            let word = self.record(ty).fields[1].layout;
+            let word = self.intern(word);
+            let count = self.value(word, Holding::Plain);
+            self.push(Inst::SeqLen {
+                result: count,
+                value,
+            });
+            // An empty append neither prepares nor charges shared storage.
+            // Both paths return through the original continuation, whose slot
+            // versions therefore join in the ordinary importer SSA machinery.
+            let ret =
+                returns.ok_or_else(|| PassError::Malformed("byte append continuation".into()))?;
+            self.tir_preds[ret.next.0 as usize] += 1;
+            let zero_constant = self.constant(word, ConstantValue::Integer(0));
+            let zero = self.value(word, Holding::Plain);
+            self.push(Inst::Const {
+                result: zero,
+                constant: zero_constant,
+            });
+            let boolean = self.bool_type()?;
+            let empty = self.value(boolean, Holding::Plain);
+            let failure = self.fail(None)?;
+            self.push(Inst::Binary {
+                result: empty,
+                op: BinaryOp::Eq,
+                left: count,
+                right: zero,
+                failure,
+            });
+            let done = self.block(BlockKind::Body);
+            let append = self.block(BlockKind::Body);
+            let yes = self.edge(done, Vec::new());
+            let no = self.edge(append, Vec::new());
+            self.terminate(Terminator::Branch {
+                condition: empty,
+                yes,
+                no,
+            });
+            let state = self.state.clone();
+            let versions = self.versions.clone();
+            let views = self.views.clone();
+            let facts = self.facts.clone();
+            self.current = done;
+            self.removed_call(returns)?;
+            self.state = state;
+            self.versions = versions;
+            self.views = views;
+            self.facts = facts;
+            self.current = append;
+            self.append_room(builder.value.place, count)?;
         }
         // Native operand preparation can still fail before the call is
         // entered. Its TIR failure chain already excludes all taken inputs;
