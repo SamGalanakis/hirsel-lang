@@ -1,5 +1,7 @@
 // rule: SEM-1
 // expect: test
+// steps: 3000000
+// Exercise a header beyond the 16384-byte CONTINUATION boundary in both directions.
 fn field(name: Bytes, value: Bytes) -> std@1/hpack.Field {
   std@1/hpack.Field(name: unique name, value: unique value, sensitive: false)
 }
