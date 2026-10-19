@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1341 exported definitions; 468 variants.
+1333 exported definitions; 467 variants.
 
 ## Types and roots
 
@@ -225,10 +225,6 @@ Variant of ClockError.
 <a id="def-core_401_2fCommand"></a>
 
 - `type Command uses {Dir} = { program: Path, args: List[String], dir: Option[Dir], env: Option[List[(String, String)]], own_group: bool }`
-
-<a id="def-core_401_2fDb"></a>
-
-- `@capability(global) opaque type Db: plain + copyable + sendable + noalloc_drop uses {Db}`
 
 <a id="def-core_401_2fDeadline"></a>
 
@@ -1080,10 +1076,6 @@ Variant of RandomError.
 
 - `type Region[T] uses {T}`
 
-<a id="def-core_401_2fReservation"></a>
-
-- `type Reservation uses {} = { sku: Sku, count: u32 }`
-
 <a id="def-core_401_2fResult"></a>
 
 - `type Result[T, E] uses {T, E} = Ok(T) | Error(E)`
@@ -1210,10 +1202,6 @@ Variant of Signal.
 
 - `type Simd[A, n: size] uses {A}`
 
-<a id="def-core_401_2fSku"></a>
-
-- `opaque type Sku: copyable + inert + noalloc_drop + plain + data + key + sendable uses {}`
-
 <a id="def-core_401_2fSlotId"></a>
 
 - `type SlotId[T] uses {}`
@@ -1245,16 +1233,6 @@ Variant of Signal.
 <a id="def-core_401_2fStdout"></a>
 
 - `@capability(global) opaque type Stdout: plain + copyable + sendable + noalloc_drop uses {Stdout}`
-
-<a id="def-core_401_2fStockError"></a>
-
-- `type StockError: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = OutOfStock(Sku)`
-
-<a id="def-core_401_2fStockError_23OutOfStock"></a>
-
-- `OutOfStock(Sku) -> StockError`
-
-Variant of StockError.
 
 <a id="def-core_401_2fStrPos"></a>
 
@@ -7567,13 +7545,6 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `@noalloc fn region.with[T, R](mut r: Region[T], body: fn(root: T) -> R) -> R`
 
 
-## reservations
-
-<a id="def-core_401_2freservations_2finsert"></a>
-
-- `fn reservations.insert(tx: Tx, value: Reservation) -> Result[Reservation, StockError]`
-
-
 ## results
 
 <a id="def-std_401_2fresults_2fand_5fthen"></a>
@@ -8033,24 +8004,6 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/sha512_256/State`](
 <a id="def-core_401_2fstdin_2fread"></a>
 
 - `@preserves_unique(buf) @unretained(s) fn stdin.read(s: Stdin, mut buf: List[u8], max: u64) -> Result[u64, InputError]`
-
-
-## stock
-
-<a id="def-core_401_2fstock_2fget"></a>
-
-- `fn stock.get(tx: Tx, sku: Sku) -> Result[u32, StockError]`
-
-<a id="def-core_401_2fstock_2fput"></a>
-
-- `fn stock.put(tx: Tx, sku: Sku, n: u32) -> Result[(), StockError]`
-
-
-## store
-
-<a id="def-core_401_2fstore_2ftransact"></a>
-
-- `fn store.transact[R: inert, E: inert](db: Db, body: fn(tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]`
 
 
 ## string
