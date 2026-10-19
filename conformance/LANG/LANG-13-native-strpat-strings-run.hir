@@ -1,0 +1,97 @@
+// rule: LANG-13
+// expect: run
+// Literal arms keep source order, including guards and nested payload tests.
+type Token = Text(String) | Other(String) | End
+
+fn copied(text: String) -> String {
+  let mut data: List[u8] = []
+  for byte in string.as_bytes(text) {
+    list.push(mut data, byte)
+  }
+  match string.from_bytes(bytes.from_list(take data)) {
+    Ok(value) => value,
+    Error(_) => "",
+  }
+}
+
+fn classify(text: String, enabled: bool) -> i32 {
+  match text {
+    "outer" if enabled => 1,
+    "outer" => 2,
+    "out" => 3,
+    "" => 4,
+    "é羊🙂" => 5,
+    "a\0b" => 6,
+    _ => 0,
+  }
+}
+
+fn nested(token: Token) -> i32 {
+  match token {
+    Text("outer") => 1,
+    Text("") => 2,
+    Text("é羊🙂") => 3,
+    Other("outer") => 4,
+    Text(_) => 5,
+    _ => 0,
+  }
+}
+
+fn pair(value: (String, String)) -> i32 {
+  match value {
+    ("outer", "inner") => 1,
+    ("outer", "") => 2,
+    ("outer", _) => 3,
+    (_, "inner") => 4,
+    _ => 0,
+  }
+}
+
+fn consume(take text: String) -> String {
+  match take text {
+    "outer" => "hit",
+    other => other,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, classify("outer", true) == 1)
+  test.check(t, classify("outer", false) == 2)
+  test.check(t, classify("out", true) == 3)
+  test.check(t, classify("", true) == 4)
+  test.check(t, classify("é羊🙂", true) == 5)
+  test.check(t, classify("e羊🙂", true) == 0)
+  test.check(t, classify("é羊🙃", true) == 0)
+  test.check(t, classify("a\0b", true) == 6)
+  test.check(t, classify("a\0c", true) == 0)
+  test.check(t, classify("outermost", true) == 0)
+  test.check(t, classify("otter", true) == 0)
+  let owned = copied("outer")
+  test.check(t, classify(owned, false) == 2)
+  test.check(t, owned == "outer")
+  test.check(t, nested(Text(unique owned)) == 1)
+  test.check(t, nested(Text("")) == 2)
+  test.check(t, nested(Text("é羊🙂")) == 3)
+  test.check(t, nested(Other("outer")) == 4)
+  test.check(t, nested(Text("other")) == 5)
+  test.check(t, nested(End) == 0)
+  test.check(t, pair(("outer", "inner")) == 1)
+  test.check(t, pair(("outer", "")) == 2)
+  test.check(t, pair(("outer", "other")) == 3)
+  test.check(t, pair(("other", "inner")) == 4)
+  test.check(t, pair(("other", "other")) == 0)
+  test.check(t, consume(copied("outer")) == "hit")
+  test.check(t, consume(copied("other")) == "other")
+  let mut hits: i32 = 0
+  let texts: List[String] = ["outer", "", "é羊🙂", "other"]
+  for text in texts {
+    match text {
+      "outer" | "é羊🙂" => {
+        hits += 1
+      },
+      _ => {},
+    }
+  }
+  test.check(t, hits == 2)
+  Ok(())
+}

@@ -1,0 +1,65 @@
+// rule: LANG-13
+// expect: run
+type Packet = Data(Bytes) | End
+
+fn classify(data: Bytes, enabled: bool) -> i32 {
+  match data {
+    b"outer" if enabled => 1,
+    b"outer" => 2,
+    b"" => 3,
+    b"a\0b" => 4,
+    b"\xff\x80" => 5,
+    _ => 0,
+  }
+}
+
+fn nested(packet: Packet) -> i32 {
+  match packet {
+    Data(b"outer") => 1,
+    Data(b"") => 2,
+    Data(_) => 3,
+    End => 0,
+  }
+}
+
+fn pair(value: (Bytes, Bytes)) -> i32 {
+  match value {
+    (b"outer", b"inner") => 1,
+    (b"outer", _) => 2,
+    (_, b"inner") => 3,
+    _ => 0,
+  }
+}
+
+fn consume(take data: Bytes) -> Bytes {
+  match take data {
+    b"outer" => b"hit",
+    other => other,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(t, classify(b"outer", true) == 1)
+  test.check(t, classify(b"outer", false) == 2)
+  test.check(t, classify(b"", true) == 3)
+  test.check(t, classify(b"a\0b", true) == 4)
+  test.check(t, classify(b"a\0c", true) == 0)
+  test.check(t, classify(b"\xff\x80", true) == 5)
+  test.check(t, classify(b"\xff\x81", true) == 0)
+  test.check(t, classify(b"out", true) == 0)
+  test.check(t, classify(b"outermost", true) == 0)
+  let owned: Bytes = bytes.from_list([111u8, 117u8, 116u8, 101u8, 114u8])
+  test.check(t, classify(owned, true) == 1)
+  test.check(t, owned == b"outer")
+  test.check(t, nested(Data(copy owned)) == 1)
+  test.check(t, nested(Data(b"")) == 2)
+  test.check(t, nested(Data(b"other")) == 3)
+  test.check(t, nested(End) == 0)
+  test.check(t, pair((copy owned, b"inner")) == 1)
+  test.check(t, pair((copy owned, b"other")) == 2)
+  test.check(t, pair((b"other", b"inner")) == 3)
+  test.check(t, pair((b"other", b"other")) == 0)
+  test.check(t, consume(take owned) == b"hit")
+  test.check(t, consume(bytes.from_list([97u8])) == b"a")
+  Ok(())
+}

@@ -1,0 +1,14 @@
+// rule: LANG-13
+// expect: run
+fn classify(text: String) -> i32 {
+  match text {
+    "outer" => 1,
+    _ => 0,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(classify("outer") == 1, TextInvariant())
+  failure.check(classify("other") == 0, TextInvariant())
+  Ok(())
+}

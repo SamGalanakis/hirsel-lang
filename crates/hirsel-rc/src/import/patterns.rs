@@ -90,7 +90,7 @@ impl Importer<'_, '_> {
             }
             P::Literal(tir::Constant::Integer(n)) => {
                 let v = self.pattern_bits(pattern.place)?;
-                self.compare_constant(v, BinaryOp::Eq, *n, fail)?;
+                self.compare_constant(v, BinaryOp::Eq, ConstantValue::Integer(*n), fail)?;
             }
             P::Range {
                 start: tir::Constant::Integer(start),
@@ -98,12 +98,20 @@ impl Importer<'_, '_> {
             } => {
                 // The value type's signedness orders both comparisons.
                 let v = self.pattern_bits(pattern.place)?;
-                self.compare_constant(v, BinaryOp::Ge, *start, fail)?;
-                self.compare_constant(v, BinaryOp::Le, *end, fail)?;
+                self.compare_constant(v, BinaryOp::Ge, ConstantValue::Integer(*start), fail)?;
+                self.compare_constant(v, BinaryOp::Le, ConstantValue::Integer(*end), fail)?;
             }
             P::Range { .. } => return malformed("a range pattern with non-integer bounds"),
-            P::Literal(other) => {
-                return unsupported(format!("a {other:?} literal pattern"));
+            P::Literal(tir::Constant::F32(n)) => {
+                let v = self.pattern_bits(pattern.place)?;
+                self.compare_constant(v, BinaryOp::Eq, ConstantValue::F32(*n), fail)?;
+            }
+            P::Literal(tir::Constant::F64(n)) => {
+                let v = self.pattern_bits(pattern.place)?;
+                self.compare_constant(v, BinaryOp::Eq, ConstantValue::F64(*n), fail)?;
+            }
+            P::Literal(c @ (tir::Constant::String(_) | tir::Constant::Bytes(_))) => {
+                self.pattern_slice(pattern.place, c, fail)?;
             }
             P::Tuple(fields) | P::Record { fields, .. } => {
                 for (_, sub) in fields {
@@ -122,10 +130,56 @@ impl Importer<'_, '_> {
         Ok(())
     }
 
-    /// Continue when `v op n` holds; otherwise jump to `fail`.
-    fn compare_constant(&mut self, v: ValueId, op: BinaryOp, n: u128, fail: BlockId) -> R<()> {
+    /// Compare a byte slice without copying or consuming the scrutinee. Both
+    /// native backends lower slice equality to length equality then memcmp.
+    fn pattern_slice(&mut self, place: tir::PlaceId, c: &tir::Constant, fail: BlockId) -> R<()> {
+        let mut loans = Vec::new();
+        let mut taken = Vec::new();
+        let borrowed = tir::Operand {
+            place,
+            usage: UseKind::Borrow,
+        };
+        let left = match self.joined_view(&borrowed) {
+            Some(view) => view?,
+            None => self.compared(
+                &tir::Operand {
+                    place,
+                    usage: UseKind::Copy,
+                },
+                &mut loans,
+                &mut taken,
+            )?,
+        };
+        let right = self.rvalue(&tir::Rvalue::Constant(c.clone()), self.value_type(left))?;
+        let layout = self.layout_of(self.value_type(left));
+        let ty = self.bool_type()?;
+        let result = self.fresh(ty);
+        self.reading(loans, taken, |this| {
+            let failure = this.fail(Some("MEM-3".to_string()))?;
+            this.push(Inst::Compare {
+                result,
+                op: CompareOp::Eq,
+                left,
+                right,
+                layout,
+                failure,
+            });
+            Ok(())
+        })?;
+        self.pattern_branch(result, fail);
+        Ok(())
+    }
+
+    /// Continue when `v op constant` holds; otherwise jump to `fail`.
+    fn compare_constant(
+        &mut self,
+        v: ValueId,
+        op: BinaryOp,
+        constant: ConstantValue,
+        fail: BlockId,
+    ) -> R<()> {
         let ty = self.value_type(v);
-        let constant = self.constant(ty, ConstantValue::Integer(n));
+        let constant = self.constant(ty, constant);
         let k = self.fresh(ty);
         self.push(Inst::Const {
             result: k,
@@ -141,16 +195,16 @@ impl Importer<'_, '_> {
             right: k,
             failure,
         });
+        self.pattern_branch(c, fail);
+        Ok(())
+    }
+
+    fn pattern_branch(&mut self, condition: ValueId, fail: BlockId) {
         let cont = self.block(BlockKind::Body);
         let yes = self.edge(cont, Vec::new());
         let no = self.edge(fail, Vec::new());
-        self.terminate(Terminator::Branch {
-            condition: c,
-            yes,
-            no,
-        });
+        self.terminate(Terminator::Branch { condition, yes, no });
         self.current = cont;
-        Ok(())
     }
 
     pub(super) fn unsigned(&self, ty: LirTypeId) -> bool {
@@ -172,7 +226,7 @@ impl Importer<'_, '_> {
     pub(super) fn pattern_bits(&mut self, place: tir::PlaceId) -> R<ValueId> {
         let p = self.place(place)?;
         if !self.bits(p.ty) {
-            return unsupported("a literal pattern on a counted place");
+            return malformed("a scalar literal pattern on a non-scalar place");
         }
         let address = self.address(&p)?;
         let reaching = self.reaching(p.slot)?;

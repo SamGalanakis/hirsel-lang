@@ -117,6 +117,9 @@ at each stage and H against the interpreter, and keeps the declined twins.
   the same name in every chain through it. `Match` becomes ordered tag switches (exhaustive, the
   `otherwise` edge unreachable) and literal and range tests (a range is two
   comparisons ordered by the value type's signedness), with guard continuations.
+  Float literal tests use IEEE equality. String and Bytes literal tests borrow
+  the scrutinee and use slice equality (length first, then byte comparison),
+  including when nested in structural patterns.
   A comparison of non-scalar operands is `Inst::Compare` (MEM-3 Depth), its
   owned operands read through views under synthetic loans and the taken ones
   released after. Taken comparison and flat-construction operands move into
