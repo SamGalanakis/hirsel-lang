@@ -1,0 +1,11 @@
+// rule: SEM-5
+// expect: run
+pub fn main() -> Result[(), ()] {
+  list_sort_vectors@1/stable(0)
+  list_sort_vectors@1/stable(1)
+  list_sort_vectors@1/stable(2)
+  list_sort_vectors@1/stable(23)
+  list_sort_vectors@1/stable(24)
+  list_sort_vectors@1/stable(25)
+  Ok(())
+}

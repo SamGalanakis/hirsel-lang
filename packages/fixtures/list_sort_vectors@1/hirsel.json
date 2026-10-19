@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "list_sort_vectors",
+    "version": "1"
+  },
+  "sources": [
+    {
+      "path": "vectors.hir",
+      "module": []
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

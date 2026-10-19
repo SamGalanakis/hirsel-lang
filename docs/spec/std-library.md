@@ -979,7 +979,8 @@ pop O(log n), with ordinary allocation growth on push. Push requires a unique
 input; `unique value` copies an aliased value into a fresh unique owner before
 pushing. Push owns its input and
 remaining elements are released on cleanup, including comparator failure. Pop and
-List sort share one sift kernel; reversing its comparator never negates an i32.
+the heapsort fallback of List sort use sift kernels; reversing the priority-queue
+comparator never negates an i32.
 A fresh empty heap is unique. This surface provides no peek or indexed update.
 
 ## Testing helpers
@@ -1118,7 +1119,10 @@ fails SEM-3 for an empty pattern. `bytes.from_inline(xs)` copies a fixed-size
 implicitly. `map.same_entries` compares two maps as sets of entries.
 
 `std@1/list` provides `reverse`, `rotate` (left rotation by `amount`), `sort` (in place,
-unstable, `O(n log n)`, by a noalloc comparator), `binary_search` (the first equal element
+unstable pattern-defeating quicksort with a heapsort fallback, `O(n log n)`, by a
+noalloc comparator), `sort_stable` (in place, stable merge sort, preserving input
+order among equal elements, `O(n log² n)` time and `O(log n)` stack without
+allocation), `binary_search` (the first equal element
 of input sorted by the same comparator), `find`, `map`, `filter`, `fold`, `all`, `any`,
 `partition`, `concat` and `dedup` (removing consecutive equal elements). `std@1/string`
 provides `split` (on a nonempty separator, nonoverlapping, keeping leading, trailing and

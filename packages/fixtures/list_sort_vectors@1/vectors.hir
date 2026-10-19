@@ -1,0 +1,139 @@
+@noalloc
+fn compare(a: u64, b: u64) -> i32 uses {} {
+  if a < b {
+    -1
+  } else if a > b {
+    1
+  } else {
+    0
+  }
+}
+
+type Tagged {
+  key: u64,
+  position: u64,
+}
+
+@noalloc
+fn compare_key(a: Tagged, b: Tagged) -> i32 uses {} {
+  compare(a.key, b.key)
+}
+
+fn sizes() -> List[u64] {
+  [0, 1, 2, 23, 24, 25, 49, 50, 51, 63, 64, 65, 127, 128, 129, 257]
+}
+
+pub fn check_pattern(pattern: u64, first: u64, end: u64) -> () {
+  let lengths = sizes()
+  for index in first..end {
+    let n = lengths[index]
+    let mut input: List[u64] = []
+    for i in 0u64..n {
+      let value = if pattern == 0 {
+        i
+      } else if pattern == 1 {
+        n - i
+      } else if pattern == 2 {
+        7u64
+      } else if pattern == 3 {
+        i % 5
+      } else if pattern == 4 {
+        if i < n / 2 {
+          i
+        } else {
+          n - i
+        }
+      } else {
+        (i * 7 + 13) % 101
+      }
+      list.push(mut input, value)
+    }
+    // Independent mathematical oracle: enumerate each value's exact frequency.
+    let mut expected: List[u64] = []
+    let limit = if pattern == 2 {
+      8u64
+    } else if pattern == 3 {
+      5u64
+    } else if pattern == 5 {
+      101u64
+    } else {
+      n + 1
+    }
+    for key in 0u64..limit {
+      let count = if pattern == 0 {
+        if key < n {
+          1u64
+        } else {
+          0u64
+        }
+      } else if pattern == 1 {
+        if key > 0 {
+          1u64
+        } else {
+          0u64
+        }
+      } else if pattern == 2 {
+        if key == 7 {
+          n
+        } else {
+          0u64
+        }
+      } else if pattern == 3 {
+        n / 5 + if key < n % 5 {
+          1u64
+        } else {
+          0u64
+        }
+      } else if pattern == 4 {
+        if key < n / 2 {
+          1u64
+        } else {
+          0u64
+        } + if key >= 1 && key <= n - n / 2 {
+          1u64
+        } else {
+          0u64
+        }
+      } else {
+        n / 101 + if (key + 101 - 13) * 29 % 101 < n % 101 {
+          1u64
+        } else {
+          0u64
+        }
+      }
+      for _ in 0u64..count {
+        list.push(mut expected, key)
+      }
+    }
+    let mut actual = unique take input
+    list.sort(mut actual, compare)
+    failure.check(actual == expected, Bounds())
+  }
+}
+
+pub fn stable(n: u64) -> () {
+  let mut pairs: List[Tagged] = []
+  for i in 0u64..n {
+    list.push(mut pairs, Tagged(key: (i * 7 + 13) % 11, position: i))
+  }
+  let mut sorted = unique take pairs
+  list.sort_stable(mut sorted, compare_key)
+  for i in 1u64..n {
+    failure.check(sorted[i - 1].key <= sorted[i].key, Bounds())
+    if sorted[i - 1].key == sorted[i].key {
+      failure.check(sorted[i - 1].position < sorted[i].position, Bounds())
+    }
+  }
+  let mut sum: u64 = 0
+  for item in sorted {
+    sum += item.position
+  }
+  failure.check(
+    sum == n * if n == 0 {
+      0u64
+    } else {
+      n - 1
+    } / 2,
+    Bounds()
+  )
+}

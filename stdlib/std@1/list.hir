@@ -38,30 +38,549 @@ pub fn rotate[T](mut xs: unique List[T], amount: u64) -> () {
   reverse(mut xs)
 }
 
-// In-place, unstable heapsort, O(n log n), including move-only elements.
+// Pattern-defeating quicksort adapted from Zig's pdqContext (Rust pdqsort).
+// Recurse on the smaller side; bad splits consume a logarithmic heap budget.
+/// Sorts in place without allocation. Equal elements may change order.
 @noalloc
 pub fn sort[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
   let len = core@1/list.len(xs)
+  let mut budget: u64 = 0
+  let mut size = len
+  while size > 1 {
+    budget += 1
+    size /= 2
+  }
+  quicksort(mut xs, 0, len, budget, by)
+}
+
+@noalloc
+fn insertion[T](
+  mut xs: unique List[T],
+  begin: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut i = begin
+  while i < end {
+    let mut j = i
+    while j > begin && by(xs[j], xs[j - 1]) < 0 {
+      core@1/list.swap(mut xs, j, j - 1)
+      j -= 1
+    }
+    i += 1
+  }
+}
+
+// The pivot hint is only a hint: verify ordering and repair at most five
+// inversions. The bounded number of scans/shifts keeps this linear.
+@noalloc
+fn partial_insertion[T](
+  mut xs: unique List[T],
+  begin: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> bool uses {} {
+  let mut i = begin + 1
+  for _ in 0u64..5u64 {
+    while i < end && by(xs[i - 1], xs[i]) <= 0 {
+      i += 1
+    }
+    if i == end {
+      return true
+    }
+    if end - begin < 50 {
+      return false
+    }
+    core@1/list.swap(mut xs, i, i - 1)
+    let mut left = i - 1
+    while left > begin && by(xs[left], xs[left - 1]) < 0 {
+      core@1/list.swap(mut xs, left, left - 1)
+      left -= 1
+    }
+    let mut right = i + 1
+    while right < end && by(xs[right], xs[right - 1]) < 0 {
+      core@1/list.swap(mut xs, right, right - 1)
+      right += 1
+    }
+  }
+  false
+}
+
+@noalloc
+fn sort_three[T](
+  mut xs: unique List[T],
+  a: u64,
+  b: u64,
+  c: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  let mut swaps: u64 = 0
+  if by(xs[b], xs[a]) < 0 {
+    core@1/list.swap(mut xs, a, b)
+    swaps += 1
+  }
+  if by(xs[c], xs[b]) < 0 {
+    core@1/list.swap(mut xs, b, c)
+    swaps += 1
+  }
+  if by(xs[b], xs[a]) < 0 {
+    core@1/list.swap(mut xs, a, b)
+    swaps += 1
+  }
+  swaps
+}
+
+@noalloc
+fn sift_range[T](
+  mut xs: unique List[T],
+  base: u64,
+  begin: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut root = begin
+  while root < end / 2 {
+    let mut child = root * 2 + 1
+    if child + 1 < end && by(xs[base + child], xs[base + child + 1]) < 0 {
+      child += 1
+    }
+    if by(xs[base + root], xs[base + child]) >= 0 {
+      return
+    }
+    core@1/list.swap(mut xs, base + root, base + child)
+    root = child
+  }
+}
+
+@noalloc
+fn heapsort_range[T](
+  mut xs: unique List[T],
+  begin: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let len = end - begin
   let mut start = len / 2
   while start > 0 {
     start -= 1
-    internal.heap_ops.sift(mut xs, start, len, by)
+    sift_range(mut xs, begin, start, len, by)
   }
-  let mut end = len
-  while end > 1 {
-    end -= 1
-    core@1/list.swap(mut xs, 0, end)
-    internal.heap_ops.sift(mut xs, 0, end, by)
+  let mut remaining = len
+  while remaining > 1 {
+    remaining -= 1
+    core@1/list.swap(mut xs, begin, begin + remaining)
+    sift_range(mut xs, begin, 0, remaining, by)
   }
+}
+
+@noalloc
+fn minimum(a: u64, b: u64) -> u64 uses {} {
+  if a < b {
+    a
+  } else {
+    b
+  }
+}
+
+// Classify two cache-sized blocks before swapping, so unpredictable key
+// comparisons become offset writes rather than branches on every element.
+@noalloc
+fn partition_range[T](
+  mut xs: unique List[T],
+  begin: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> u64 uses {} {
+  let mut left = begin + 1
+  let mut right = end
+  while left < right && by(xs[left], xs[begin]) < 0 {
+    left += 1
+  }
+  while left < right && by(xs[right - 1], xs[begin]) >= 0 {
+    right -= 1
+  }
+  let mut offsets_left: Inline[u64, 64] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  let mut offsets_right: Inline[u64, 64] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  let mut base_left = left
+  let mut base_right = right
+  let mut count_left: u64 = 0
+  let mut count_right: u64 = 0
+  let mut start_left: u64 = 0
+  let mut start_right: u64 = 0
+  while left < right {
+    let unknown = right - left
+    let take_left = if count_left == 0 {
+      if count_right == 0 {
+        minimum(64, unknown / 2)
+      } else {
+        minimum(64, unknown)
+      }
+    } else {
+      0u64
+    }
+    let take_right = if count_right == 0 {
+      minimum(64, unknown - take_left)
+    } else {
+      0u64
+    }
+    for k in 0u64..take_left {
+      offsets_left[count_left] = k
+      count_left += if by(xs[left + k], xs[begin]) >= 0 {
+        1u64
+      } else {
+        0u64
+      }
+    }
+    left += take_left
+    for k in 0u64..take_right {
+      offsets_right[count_right] = k
+      count_right += if by(xs[right - 1 - k], xs[begin]) < 0 {
+        1u64
+      } else {
+        0u64
+      }
+    }
+    right -= take_right
+    let count = minimum(count_left, count_right)
+    for k in 0u64..count {
+      core@1/list.swap(
+        mut xs,
+        base_left + offsets_left[start_left + k],
+        base_right - 1 - offsets_right[start_right + k]
+      )
+    }
+    count_left -= count
+    count_right -= count
+    start_left += count
+    start_right += count
+    if count_left == 0 {
+      start_left = 0
+      base_left = left
+    }
+    if count_right == 0 {
+      start_right = 0
+      base_right = right
+    }
+  }
+  while count_left > 0 {
+    count_left -= 1
+    right -= 1
+    core@1/list.swap(mut xs, base_left + offsets_left[start_left + count_left], right)
+    left = right
+  }
+  while count_right > 0 {
+    count_right -= 1
+    core@1/list.swap(
+      mut xs,
+      base_right - 1 - offsets_right[start_right + count_right],
+      left
+    )
+    left += 1
+  }
+  let pivot = left - 1
+  core@1/list.swap(mut xs, begin, pivot)
+  pivot
+}
+
+@noalloc
+fn quicksort[T](
+  mut xs: unique List[T],
+  begin: u64,
+  end: u64,
+  limit: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  let mut lo = begin
+  let mut hi = end
+  let mut budget = limit
+  let mut balanced = true
+  while hi - lo > 24 {
+    let len = hi - lo
+    if budget == 0 {
+      heapsort_range(mut xs, lo, hi, by)
+      return
+    }
+    if !balanced {
+      // Deterministic xorshift shuffling breaks adversarial pivot patterns.
+      let mut state = len
+      for offset in 0u64..3u64 {
+        state = state ^ state << 13u64
+        state = state ^ state >> 7u64
+        state = state ^ state << 17u64
+        core@1/list.swap(mut xs, lo + len / 2 - 1 + offset, lo + state % len)
+      }
+      budget -= 1
+    }
+    let a = lo + len / 4
+    let mut pivot = lo + len / 2
+    let c = lo + len / 4 * 3
+    let mut swaps: u64 = 0
+    if len >= 50 {
+      swaps += sort_three(mut xs, a - 1, a, a + 1, by)
+      swaps += sort_three(mut xs, pivot - 1, pivot, pivot + 1, by)
+      swaps += sort_three(mut xs, c - 1, c, c + 1, by)
+    }
+    swaps += sort_three(mut xs, a, pivot, c, by)
+    if swaps == 12 {
+      reverse_range(mut xs, lo, hi)
+      pivot = hi - 1 - (pivot - lo)
+      swaps = 0
+    }
+    if swaps == 0 && balanced && partial_insertion(mut xs, lo, hi, by) {
+      return
+    }
+    core@1/list.swap(mut xs, lo, pivot)
+    // The preceding pivot is a lower bound for every element in this range.
+    // Skip an entire equal partition rather than repeatedly splitting it.
+    if lo > 0 && by(xs[lo - 1], xs[lo]) >= 0 {
+      let mut left = lo + 1
+      let mut right = hi
+      while left < right {
+        while left < right && by(xs[lo], xs[left]) >= 0 {
+          left += 1
+        }
+        while left < right && by(xs[lo], xs[right - 1]) < 0 {
+          right -= 1
+        }
+        if left < right {
+          right -= 1
+          core@1/list.swap(mut xs, left, right)
+          left += 1
+        }
+      }
+      lo = left
+    } else {
+      let mid = partition_range(mut xs, lo, hi, by)
+      let left_len = mid - lo
+      let right_len = hi - mid - 1
+      balanced = left_len >= len / 8 && right_len >= len / 8
+      if left_len < right_len {
+        quicksort(mut xs, lo, mid, budget, by)
+        lo = mid + 1
+      } else {
+        quicksort(mut xs, mid + 1, hi, budget, by)
+        hi = mid
+      }
+    }
+  }
+  insertion(mut xs, lo, hi, by)
+}
+
+/// Stable merge sort. Equal elements retain their input order. Elements are
+/// rearranged only by swaps, including move-only elements; no allocation.
+@noalloc
+pub fn sort_stable[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {} {
+  let len = core@1/list.len(xs)
+  stable_range(mut xs, 0, len, by)
+}
+
+@noalloc
+fn stable_range[T](
+  mut xs: unique List[T],
+  begin: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  if end - begin <= 24 {
+    insertion(mut xs, begin, end, by)
+    return
+  }
+  let mid = begin + (end - begin) / 2
+  stable_range(mut xs, begin, mid, by)
+  stable_range(mut xs, mid, end, by)
+  merge_range(mut xs, begin, mid, end, by)
+}
+
+// Divide the longer run, binary-search its stable position in the other,
+// rotate the middle and merge the two independent pairs. O(n log² n) time
+// for the whole sort, O(log n) stack, and no temporary element owners.
+@noalloc
+fn merge_range[T](
+  mut xs: unique List[T],
+  begin: u64,
+  mid: u64,
+  end: u64,
+  by: @noalloc fn(T, T) -> i32 uses {}
+) -> () uses {} {
+  if begin == mid || mid == end || by(xs[mid - 1], xs[mid]) <= 0 {
+    return
+  }
+  if end - begin == 2 {
+    core@1/list.swap(mut xs, begin, mid)
+    return
+  }
+  let mut first = begin
+  let mut second = end
+  if mid - begin > end - mid {
+    first = begin + (mid - begin) / 2
+    let mut lo = mid
+    let mut hi = end
+    while lo < hi {
+      let m = lo + (hi - lo) / 2
+      if by(xs[m], xs[first]) < 0 {
+        lo = m + 1
+      } else {
+        hi = m
+      }
+    }
+    second = lo
+  } else {
+    second = mid + (end - mid) / 2
+    let mut lo = begin
+    let mut hi = mid
+    while lo < hi {
+      let m = lo + (hi - lo) / 2
+      if by(xs[second], xs[m]) >= 0 {
+        lo = m + 1
+      } else {
+        hi = m
+      }
+    }
+    first = lo
+  }
+  reverse_range(mut xs, first, mid)
+  reverse_range(mut xs, mid, second)
+  reverse_range(mut xs, first, second)
+  let new_mid = first + (second - mid)
+  merge_range(mut xs, begin, first, new_mid, by)
+  merge_range(mut xs, new_mid, second, end, by)
 }
 
 // First equal element; callers provide input sorted by the same comparator.
 @noalloc
-pub fn binary_search[T](
-  xs: List[T],
-  value: T,
-  by: @noalloc fn(T, T) -> i32 uses {}
-) -> Option[u64] uses {} {
+pub fn binary_search[T](xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {}) -> Option[
+  u64
+] uses {} {
   let mut lo: u64 = 0
   let mut hi = core@1/list.len(xs)
   while lo < hi {

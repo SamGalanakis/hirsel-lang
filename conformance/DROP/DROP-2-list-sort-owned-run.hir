@@ -1,0 +1,38 @@
+// rule: DROP-2
+// expect: run
+// stdout: first
+// stdout: second
+// stdout: third
+resource type Item {
+  priority: u64,
+  output: Stdout,
+  label: String,
+}
+drop(x) {
+  let _ = out.print(x.output, x.label)
+}
+
+@noalloc
+fn compare(a: Item, b: Item) -> i32 uses {} {
+  if a.priority < b.priority {
+    -1
+  } else if a.priority > b.priority {
+    1
+  } else {
+    0
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut xs: unique List[Item] = [
+    Item(priority: 2, output: o, label: "third\n"),
+    Item(priority: 1, output: o, label: "first\n"),
+    Item(priority: 1, output: o, label: "second\n")
+  ]
+  list.sort_stable(mut xs, compare)
+  for item in take xs {
+    let _ = take item
+  }
+  Ok(())
+}

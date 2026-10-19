@@ -1,0 +1,6 @@
+// rule: SEM-5
+// expect: run
+pub fn main() -> Result[(), ()] {
+  list_sort_vectors@1/check_pattern(4, 12, 14)
+  Ok(())
+}
