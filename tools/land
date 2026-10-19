@@ -141,6 +141,8 @@ def undo_index_commit(generated):
 def describe(record):
     """What the gate ran for a change and why, as tools/gate recorded it."""
     lines = [f'gated {record.get("at", "?")}: why: {record.get("why") or "(not recorded)"}']
+    if record.get('pool'):
+        lines.append(f'  pool: {record["pool"]}')
     if record.get('extends'):
         lines.append(f'  extends change {record["extends"][:12]}')
     lines += ['  floor: ' + part for part in record.get('floor', [])]
@@ -156,7 +158,7 @@ def log_landing(pushed, base, identity, record):
     entry = dict(pushed=pushed, base=base, identity=identity, branch=run('git', 'branch', '--show-current').stdout.strip(),
                  at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                  gated=record.get('at'),
-                 **{key: record.get(key) for key in ('why', 'tokens', 'floor', 'selection', 'extends')})
+                 **{key: record.get(key) for key in ('why', 'tokens', 'floor', 'selection', 'extends', 'pool')})
     with open(common / LANDINGS, 'a') as log:
         log.write(json.dumps(entry, sort_keys=True) + '\n')
 

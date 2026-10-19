@@ -71,11 +71,17 @@ def say(message):
 
 # ---------------------------------------------------------------- gate slots
 
-# `dir:N`: dir/count controls a host's concurrent gates; N seeds it only when
-# absent. Each gate holds one numbered slot's lock while its Buck2 work runs.
+# `dir:N`: count and express-count control independent FIFO pools. Preserve
+# normal slot/queue paths so already-loaded gates share the normal pool.
 # Unset, there is no cap.
 GATE_SLOTS = 'HIRSEL_GATE_SLOTS'
 SLOT_POLL_SECONDS = 5
+NORMAL_POOL = 'normal'
+EXPRESS_POOL = 'express'
+EXPRESS_SLOTS = 2
+# One selected conformance slice and one agreement slice, plus two test targets.
+EXPRESS_TEST_TARGETS = 4
+POOL_PREFIX = {NORMAL_POOL: '', EXPRESS_POOL: 'express-'}
 
 
 def gate_slot_config(environ):
@@ -88,11 +94,12 @@ def gate_slot_config(environ):
     return Path(directory), int(count)
 
 
-def write_gate_slot_count(directory, count, *, seed=False):
+def write_gate_slot_count(directory, count, *, pool=NORMAL_POOL, seed=False):
     """Publish a complete count atomically; seeding never replaces a host's cap."""
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / 'count'
-    with tempfile.NamedTemporaryFile('w', dir=directory, prefix='.count-', delete=False) as temporary:
+    name = POOL_PREFIX[pool] + 'count'
+    path = directory / name
+    with tempfile.NamedTemporaryFile('w', dir=directory, prefix=f'.{name}-', delete=False) as temporary:
         pending = Path(temporary.name)
         try:
             temporary.write(f'{count}\n')
@@ -108,13 +115,14 @@ def write_gate_slot_count(directory, count, *, seed=False):
             pending.unlink(missing_ok=True)
 
 
-def read_gate_slot_count(directory, fallback):
+def read_gate_slot_count(directory, fallback, *, pool=NORMAL_POOL):
+    path = directory / (POOL_PREFIX[pool] + 'count')
     try:
-        text = (directory / 'count').read_text().strip()
+        text = path.read_text().strip()
     except FileNotFoundError:
         return fallback
     if not text.isascii() or not text.isdigit() or int(text) < 1:
-        raise SystemExit(f'gate: {directory / "count"}={text!r} is not a positive slot count')
+        raise SystemExit(f'gate: {path}={text!r} is not a positive slot count')
     return int(text)
 
 
@@ -140,16 +148,19 @@ def oldest_gate_ticket(queue):
 
 
 @contextlib.contextmanager
-def gate_slot(environ=os.environ):
-    """Hold one of the host's gate slots, in FIFO waiter order."""
+def gate_slot(environ=os.environ, *, pool=NORMAL_POOL):
+    """Hold one slot in the selected host pool, in its own FIFO waiter order."""
     config = gate_slot_config(environ)
     if config is None:
         yield
         return
     directory, fallback = config
-    if not (directory / 'count').exists():
-        write_gate_slot_count(directory, fallback, seed=True)
-    queue = directory / 'queue'
+    prefix = POOL_PREFIX[pool]
+    if pool == EXPRESS_POOL:
+        fallback = EXPRESS_SLOTS
+    if not (directory / (prefix + 'count')).exists():
+        write_gate_slot_count(directory, fallback, pool=pool, seed=True)
+    queue = directory / (prefix + 'queue')
     queue.mkdir(exist_ok=True)
     while True:
         ticket = queue / f'{time.time_ns()}-{os.getpid()}'
@@ -161,11 +172,11 @@ def gate_slot(environ=os.environ):
     waiting = None
     try:
         while True:
-            count = read_gate_slot_count(directory, fallback)
+            count = read_gate_slot_count(directory, fallback, pool=pool)
             if oldest_gate_ticket(queue) == ticket:
                 for slot in range(count):
                     # Python opens files non-inheritable, so Buck2 never holds the lock.
-                    handle = open(directory / f'slot-{slot}', 'a+')
+                    handle = open(directory / f'{prefix}slot-{slot}', 'a+')
                     try:
                         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     except BlockingIOError:
@@ -176,15 +187,15 @@ def gate_slot(environ=os.environ):
                         handle.write(f'{os.getpid()} {ROOT}\n')
                         handle.flush()
                         ticket.unlink(missing_ok=True)
-                        if waiting is not None:
-                            say(f'gate: took gate slot {slot} after waiting {time.monotonic() - waiting:.0f} s')
+                        seconds = time.monotonic() - waiting if waiting is not None else 0
+                        say(f'gate: took {pool} gate slot {slot} after waiting {seconds:.0f} s')
                         yield
                     return
             if waiting is None:
                 holders = [path.read_text().strip() if path.exists() else ''
                            for slot in range(count)
-                           for path in [directory / f'slot-{slot}']]
-                say(f'gate: waiting for one of {count} gate slots in {directory}; held by: ' + '; '.join(holders))
+                           for path in [directory / f'{prefix}slot-{slot}']]
+                say(f'gate: waiting for one of {count} {pool} gate slots in {directory}; held by: ' + '; '.join(holders))
                 waiting = time.monotonic()
             time.sleep(SLOT_POLL_SECONDS)
     finally:
@@ -545,6 +556,13 @@ class Plan:
         if self.native:
             targets += NATIVE_TARGETS
         return targets
+
+    def slot_pool(self) -> str:
+        """Classify the settled, combined floor and choice before queueing."""
+        if self.campaigns or self.native:
+            return NORMAL_POOL
+        targets = self.tests | set(self.campaign_targets())
+        return EXPRESS_POOL if len(targets) <= EXPRESS_TEST_TARGETS else NORMAL_POOL
 
     def summary(self) -> list[str]:
         """The plan in a line per part, for the green record and tools/land."""

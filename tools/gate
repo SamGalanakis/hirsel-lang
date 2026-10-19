@@ -7,7 +7,8 @@
     tools/gate --extend [--tests ...] --why ...   # after an edit to a passed change
     tools/gate --base <commit> ...                # the change from <commit> (for example a replay)
     tools/gate --full                             # every stage, on demand at milestone cuts
-    tools/gate --set-slots N                      # change this host's cap, including queued gates
+    tools/gate --set-slots N                      # change the normal pool's cap
+    tools/gate --set-express-slots N              # change the express pool's cap
 
 The floor runs on every gate: documentation links and whitespace, the gate
 tooling's tests when it changed (the Lean model's checks when it or its
@@ -39,9 +40,16 @@ the paths whose change differs from the last recorded pass, the test targets
 that own them and any `--tests`, and records the edited change's identity.
 
 `$HIRSEL_GATE_SLOTS` (`dir:N`) selects a host's slot directory. Its `count`
-file caps concurrent gates and is re-read on every poll; N seeds it only
-when absent. `--set-slots N` updates the count without running a gate.
-Lowering it leaves held slots running. Unset, there is no cap.
+file caps normal gates; N seeds it only when absent. A settled selection with
+no whole campaign or native programs and at most four distinct test targets
+(including selected corpus shards) uses a separate express pool: its
+`express-count` defaults to 2. Four accommodates one conformance slice (up to
+20 cases), one agreement slice (up to 260 cases), and two other test targets.
+Each pool has its own FIFO, and re-reads its count every poll. `--set-slots N`
+and `--set-express-slots N` atomically update their counts without running a
+gate; neither selects a gate's class. Lowering a count leaves held slots
+running. Unset, there is no cap. Output and the green receipt name the pool;
+tooling-only gates use no pool.
 
 A passing change is remembered by its identity (gating.change_identity: the
 patch-id of the lane's own diff without the generated docs/api.md, and the
@@ -381,7 +389,9 @@ def push_gate(base_ref, tokens, why, extend):
         say('gate: this change already passed; main moved under it and it rebased cleanly, '
             'so only the workspace build and formatting run')
         if prepare(report):
-            with gating.gate_slot():
+            pool = gating.Plan().slot_pool()
+            say(f'gate: pool: {pool}')
+            with gating.gate_slot(pool=pool):
                 build_only(report, log)
         report.print(time.monotonic() - started)
         return 0 if report.passed else 1
@@ -412,6 +422,7 @@ def push_gate(base_ref, tokens, why, extend):
     local_checks(report, local, base, scope)
     needs_buck2 = c.needs_buck2 or bool(tokens) or c.everything
     plan = floor = None
+    pool = 'none'
     if needs_buck2:
         if not prepare(report):
             local_rows(report, local.finish())
@@ -437,7 +448,9 @@ def push_gate(base_ref, tokens, why, extend):
             show_plan(chosen)
         gating.SESSION_CONFIG[:] = plan.config()
         # One slot for the build and the tests, so a gate never queues twice.
-        with gating.gate_slot():
+        pool = plan.slot_pool()
+        say(f'gate: pool: {pool}')
+        with gating.gate_slot(pool=pool):
             if build_first(report, log):
                 run_plan(report, plan, log)
             else:
@@ -455,7 +468,7 @@ def push_gate(base_ref, tokens, why, extend):
             floored = record.get('floor', []) + [part for part in floored if part not in record.get('floor', [])]
             why = f'{why} (extending: {record.get("why", "")})'
         gating.record_green(identity, selection.crates, why=why, tokens=list(tokens), selection=ran, floor=floored,
-                            digests=digests, extends=extended)
+                            digests=digests, extends=extended, pool=pool)
     else:
         say('gate: the worktree changed while the gate ran; not recording it as passed')
     return 0
@@ -563,19 +576,24 @@ def main():
     parser.add_argument('--tests', nargs='+', default=[], metavar='TEST', help='what to run beyond the floor (forms above)')
     parser.add_argument('--why', help='one line: why this selection suffices')
     parser.add_argument('--extend', action='store_true', help='add an edit to the last passed change')
-    parser.add_argument('--set-slots', type=int, metavar='N', help='set the host slot count; run no checks')
+    counts = parser.add_mutually_exclusive_group()
+    counts.add_argument('--set-slots', type=int, metavar='N', help='set the normal pool count; run no checks')
+    counts.add_argument('--set-express-slots', type=int, metavar='N', help='set the express pool count; run no checks')
     args = parser.parse_args()
-    if args.set_slots is not None:
+    if args.set_slots is not None or args.set_express_slots is not None:
+        pool = gating.NORMAL_POOL if args.set_slots is not None else gating.EXPRESS_POOL
+        option = '--set-slots' if args.set_slots is not None else '--set-express-slots'
+        count = args.set_slots if args.set_slots is not None else args.set_express_slots
         if args.full or args.suggest or args.tests or args.extend or args.why or args.base != 'origin/main':
-            parser.error('--set-slots takes no other option')
-        if args.set_slots < 1:
-            parser.error('--set-slots must be positive')
+            parser.error(f'{option} takes no other option')
+        if count < 1:
+            parser.error(f'{option} must be positive')
         config = gating.gate_slot_config(os.environ)
         if config is None:
-            parser.error('--set-slots requires HIRSEL_GATE_SLOTS=dir:N')
+            parser.error(f'{option} requires HIRSEL_GATE_SLOTS=dir:N')
         directory, _ = config
-        gating.write_gate_slot_count(directory, args.set_slots)
-        say(f'gate: set {directory / "count"} to {args.set_slots}')
+        gating.write_gate_slot_count(directory, count, pool=pool)
+        say(f'gate: set {directory / (gating.POOL_PREFIX[pool] + "count")} to {count}')
         return 0
     os.chdir(ROOT)
     if args.full:
