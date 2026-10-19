@@ -27,6 +27,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             steps: self.steps,
             runtime_iterators: self.runtime_iterators.clone(),
             version_slots: self.version_slots.clone(),
+            map_storage: self.map_storage.clone(),
             statics: self.statics.clone(),
             constants: self.constants.clone(),
             roots: self.roots.clone(),

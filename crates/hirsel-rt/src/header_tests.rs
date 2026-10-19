@@ -39,6 +39,7 @@ fn layout(size: u64, steps: &[Step], flags: u32) -> Layout {
         field_count: 0,
         flags,
         logical: 0,
+        logical_count: std::ptr::null(),
     }
 }
 struct Ctx(*mut RunCtx);

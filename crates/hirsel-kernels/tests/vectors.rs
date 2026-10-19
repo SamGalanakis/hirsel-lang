@@ -145,3 +145,38 @@ fn scheduler_policies_follow_their_seeded_words() {
     }
     assert_eq!(Algorithm::from_code(3), None);
 }
+
+#[test]
+fn siphash13_streaming_matches_independent_oracle_at_every_chunk_boundary() {
+    use std::hash::Hasher;
+    for len in 0..=256 {
+        let data: Vec<_> = (0..len).map(|i| i as u8).collect();
+        let mut oracle = std::collections::hash_map::DefaultHasher::new();
+        oracle.write(&data);
+        let expected = oracle.finish();
+        for split in 0..=len {
+            let mut stream = siphash::SipHasher13::new(0, 0);
+            stream.write(&data[..split]);
+            stream.write(&[]);
+            stream.write(&data[split..]);
+            assert_eq!(stream.finish(), expected, "len={len} split={split}");
+        }
+        let mut stream = siphash::SipHasher13::new(0, 0);
+        for byte in &data {
+            stream.write(std::slice::from_ref(byte));
+        }
+        assert_eq!(stream.finish(), expected);
+    }
+    // Nonzero seeded states obey the same framing law as one-shot hashing.
+    for seed in [1, 7, u64::MAX] {
+        let data = [0xa5; 79];
+        let expected = siphash::siphash13(&data, seed, 0x6869_7273_656c_2d37);
+        for width in 1..=17 {
+            let mut stream = siphash::SipHasher13::new(seed, 0x6869_7273_656c_2d37);
+            for bytes in data.chunks(width) {
+                stream.write(bytes);
+            }
+            assert_eq!(stream.finish(), expected);
+        }
+    }
+}

@@ -1216,6 +1216,17 @@ impl Importer<'_, '_> {
             .collect();
         let mut values = Vec::new();
         for (field, layout) in shape {
+            if kind == hirsel_types::BuiltinType::Map && field == 3 {
+                let ty = self.intern(layout);
+                let constant = self.constant(ty, ConstantValue::Integer(0));
+                let value = self.value(ty, Holding::Plain);
+                self.push(Inst::Const {
+                    result: value,
+                    constant,
+                });
+                values.push(FieldValue { field, value });
+                continue;
+            }
             let sequence = match self.layouts.record(layout).kind {
                 LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
                 _ => return malformed("container sequence"),

@@ -32,6 +32,11 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
             (MemoryEffects::ArgumentRead, true, &[0])
         }
         R::HashBytes => (MemoryEffects::ArgumentRead, true, &[1]),
+        R::HashInit => (MemoryEffects::ArgumentReadWrite, true, &[0]),
+        // The state pointer is carried as u64, so its accesses are not LLVM
+        // argument memory. Keep the corresponding whole-memory effects.
+        R::HashUpdate => (MemoryEffects::ReadWrite, true, &[1]),
+        R::HashFinish => (MemoryEffects::Read, true, &[]),
         // Queries copy scalar FailureRecords; no pointer escapes. Reanchoring
         // visits the finite cause vector, without allocating or invoking code.
         R::FailurePrimary => (MemoryEffects::ArgumentReadWrite, true, &[0, 1]),

@@ -143,6 +143,8 @@ pub struct Descriptor {
     /// The MEM-6 charge of a block of this payload layout (descriptor version 6), per
     /// element with `LAYOUT_LOGICAL_PER_ELEMENT`; `LOGICAL_UNSUPPORTED` without one.
     pub logical: u64,
+    /// Optional native count program for live private entries.
+    pub logical_count: Option<[u64; 5]>,
     pub steps: Vec<Step>,
 }
 
@@ -168,6 +170,14 @@ fn malformed<T>(what: impl Into<String>) -> Result<T, DescriptorError> {
 
 /// The descriptor of one layout.
 pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, DescriptorError> {
+    let storage = crate::logical_storage::MapStorage::new(table);
+    descriptor_with_storage(table, id, &storage)
+}
+fn descriptor_with_storage(
+    table: &LayoutTable,
+    id: LayoutId,
+    storage: &crate::logical_storage::MapStorage,
+) -> Result<Descriptor, DescriptorError> {
     let record = lookup(table, id)?;
     let mut drop = record.drop.as_slice();
     if let Some(DropStep::Finalize) = drop.first() {
@@ -271,7 +281,12 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
         }
         None => (crate::runtime_abi::LOGICAL_UNSUPPORTED, 0),
     };
+    let (logical, logical_count) = match storage.entries(id) {
+        Some(entries) => (entries.logical, Some(entries.program())),
+        None => (logical, None),
+    };
     Ok(Descriptor {
+        logical_count,
         layout: id,
         size,
         align: u64::from(record.align),
@@ -425,6 +440,14 @@ pub fn descriptors(
     table: &LayoutTable,
     roots: &[LayoutId],
 ) -> Result<Vec<Descriptor>, DescriptorError> {
+    let storage = crate::logical_storage::MapStorage::new(table);
+    descriptors_with_storage(table, roots, &storage)
+}
+pub fn descriptors_with_storage(
+    table: &LayoutTable,
+    roots: &[LayoutId],
+    storage: &crate::logical_storage::MapStorage,
+) -> Result<Vec<Descriptor>, DescriptorError> {
     let mut out: Vec<Descriptor> = Vec::new();
     let mut queue: Vec<LayoutId> = roots.to_vec();
     let mut next = 0;
@@ -434,7 +457,7 @@ pub fn descriptors(
         if out.iter().any(|d| d.layout == id) {
             continue;
         }
-        let d = descriptor(table, id)?;
+        let d = descriptor_with_storage(table, id, storage)?;
         queue.extend(d.referenced());
         out.push(d);
     }

@@ -77,6 +77,12 @@ pub enum LoopLength {
 pub enum LoopRead {
     /// SEM-4 sequence indexing; no library function is called.
     Index { result: TypeId },
+    /// Insertion-ordered Map storage can contain holes. Advance visits each
+    /// physical slot once, while the source item remains an ordinary Index.
+    MapIndex {
+        result: TypeId,
+        advance: ast::DefPath,
+    },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ForProtocol {

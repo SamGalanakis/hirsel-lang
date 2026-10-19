@@ -178,9 +178,30 @@ impl Builder<'_, '_> {
         &mut self,
         source: ExprId,
         definition: DefPath,
+        receiver: Value,
+        result: TypeId,
+        retain_receiver: bool,
+        span: Span,
+    ) -> Result<Value> {
+        self.protocol_call_index(
+            source,
+            definition,
+            receiver,
+            result,
+            retain_receiver,
+            None,
+            span,
+        )
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn protocol_call_index(
+        &mut self,
+        source: ExprId,
+        definition: DefPath,
         mut receiver: Value,
         result: TypeId,
         retain_receiver: bool,
+        index: Option<Value>,
         span: Span,
     ) -> Result<Value> {
         let actuals = self
@@ -204,16 +225,23 @@ impl Builder<'_, '_> {
         self.emit(InstructionKind::StorageLive(self.root(destination)), span);
         let next = self.block(span);
         let on_failure = self.cleanup();
+        let mut arguments = vec![CallArgument {
+            parameter: hirsel_types::ParamId(0),
+            value: operand,
+        }];
+        if let Some(index) = index {
+            arguments.push(CallArgument {
+                parameter: hirsel_types::ParamId(1),
+                value: self.consume(index),
+            });
+        }
         self.terminate(
             Terminator::Call {
                 callee: Callee::Definition {
                     path: definition,
                     arguments: actuals,
                 },
-                arguments: vec![CallArgument {
-                    parameter: hirsel_types::ParamId(0),
-                    value: operand,
-                }],
+                arguments,
                 returns: Some(CallReturn {
                     destination: destination,
                     next: next,
@@ -337,8 +365,10 @@ impl Builder<'_, '_> {
                 } => self.rvalue(index_type, Rvalue::Size(*parameter), span),
             };
             let zero = self.rvalue(index_type, Rvalue::Constant(Constant::Integer(0)), span);
-            let LoopRead::Index { result } = read;
-            Some((length, zero, *result))
+            let result = match read {
+                LoopRead::Index { result } | LoopRead::MapIndex { result, .. } => *result,
+            };
+            Some((length, zero, result))
         } else {
             // Cursor storage is used again at the next loop step. It remains an
             // independent holder even when its current item permission ends.
@@ -371,6 +401,31 @@ impl Builder<'_, '_> {
         self.publish_identity_joins(&NameSite::Statement(statement), span)?;
         self.state = incoming.clone();
         let item = if let Some((length, counter, result)) = indexed {
+            if let ForExecution::Indexed {
+                read: LoopRead::MapIndex { advance, .. },
+                ..
+            } = &plan
+            {
+                let index_type = self.ty(counter.place);
+                let next = self.protocol_call_index(
+                    source_id,
+                    advance.clone(),
+                    Value {
+                        checked_ty: None,
+                        place: source.place,
+                        usage: UseKind::Borrow,
+                    },
+                    index_type,
+                    false,
+                    Some(Value {
+                        checked_ty: None,
+                        place: counter.place,
+                        usage: UseKind::Copy,
+                    }),
+                    span,
+                )?;
+                self.replace(counter.place, next, index_type, span);
+            }
             let comparison = self.rvalue(
                 self.input.boolean,
                 Rvalue::Binary {

@@ -212,11 +212,11 @@ Invariants and boundary:
   frozen graph. A threaded scheduler would need atomic root counts (the compiled fast paths
   and the runtime entries alike) and a frozen graph whose blocks no thread's heap reclaims
   before the last root's thaw or release.
-- Keyed hashing (SEM-5): `hirsel_rt_v2_hash_begin(ctx)` answers the run's SipHash-1-3 key
-  state from `Config.hash_seed` (Config's hash-seed word, revision 7), and
-  `hirsel_rt_v2_hash_bytes(state, bytes, length)` folds bytes into a state. Compiled
-  `Inst::Hash` walks a layout's scalar leaves itself (hirsel-llvm `compare.rs`) and calls
-  only these two; the seed moves placement and never an observation.
+- Keyed hashing (SEM-5, runtime ABI 21): `hash_begin(ctx)` reads the run's
+  configured seed. Scalar leaves use one-shot `hash_bytes`; a composite creates
+  one 48-byte SipHash-1-3 state with `hash_init`, streams its framed leaves with
+  `hash_update`, and calls `hash_finish` once. Both native engines use the same
+  framing and canonical Set order. The seed changes placement only.
 - The canonical codec (SER-2, runtime ABI 9, `codec.rs`):
   `hirsel_rt_v2_codec_encode(ctx, codec, value, out)` and
   `hirsel_rt_v2_codec_decode(ctx, codec, bytes, out)` walk a compiler-emitted
@@ -229,7 +229,8 @@ Invariants and boundary:
   counted blocks and sequences, so a rejected input allocates nothing; a decoded
   Map or Set carries an empty (unindexed) index. A Path node encodes its run-context
   identity's text and decodes by validating UTF-8 and interning it as `path.of` does.
-  Program version 2 walks
+  Program version 3 also derives private Map tag, cached-hash and live-count
+  offsets; it skips tombstones and preserves the unchanged wire format. It walks
   private flat framing, active Packed extents and SoA columns in row order.
   Flat reconstruction patches native byte extents separately from wire element
   counts; sequential blocks retain exact used bytes and SoA blocks retain rounded
@@ -524,7 +525,7 @@ a fixed peer cannot both accept and reject the same name.
 
 Launch owns a stable `io::Binding`, installs `io::hirsel_rt_v2_io_close` as Config.close_handle, and explicitly binds it with RunCtx.bind_io_data. The adapter must stay at its bound address and outlive every release on that context. Close-handle runs only while it is bound, with exclusive adapter access; unbind before dropping it. There is no global/thread-local fallback. This private RunCtx field changes no Config or C ABI.
 
-`Map` and `Set` are native LIR bodies in `hirsel-rc::library::map`. Public length queries lower to entry-sequence length; membership probes keys without copying values, and ordered removal moves the value and rebuilds only the private index; the compiled seed law in `hirsel-pipeline-tests/tests/rc/rc_maps_native.rs` replaces the Rust Map model. Sequence consumption is implemented by compiled library bodies in `hirsel-rc`; their C and H checks, native target tests and resource failure campaigns replace the Rust Cursor model. The six consuming open/next manifest rows are Body.
+`Map` and `Set` are native LIR bodies in `hirsel-rc::library::map`. A Map's public length is its live count, while its private optional entries may include tombstones. Removal clears one entry and index bucket; insertion compacts lazily in insertion order, reusing cached hashes. Metadata is neither charged nor tracked. Descriptor version 11 adds an optional five-word live-count program for private Map entry Lists, so deep copy and detach charge only live key/value pairs and exclude private tags. The compiled seed law in `hirsel-pipeline-tests/tests/rc/rc_maps_native.rs` replaces the Rust Map model. Sequence consumption uses compiled library bodies in `hirsel-rc`; their C and H checks, native target tests and resource failure campaigns replace the Rust Cursor model. The six consuming open/next manifest rows are Body.
 
 ## Tasks
 

@@ -306,13 +306,27 @@ impl Checker<'_, '_> {
                 let TypeKind::Builtin { arguments, .. } = self.kind(source_type) else {
                     unreachable!()
                 };
-                let result = self.loop_call(source, &definition, arguments.to_vec())?;
+                let arguments = arguments.to_vec();
+                let result = self.loop_call(source, &definition, arguments.clone())?;
                 if !matches!(self.kind(result), TypeKind::Primitive(Primitive::U64)) {
                     return Err(protocol_error("map length must return u64"));
                 }
+                let read = if *kind == BuiltinType::Map {
+                    let advance = ast::DefPath::core("$intrinsic.MapInsertionOrder_advance");
+                    let result = self.loop_call(source, &advance, arguments)?;
+                    if !matches!(self.kind(result), TypeKind::Primitive(Primitive::U64)) {
+                        return Err(protocol_error("map advance must return u64"));
+                    }
+                    LoopRead::MapIndex {
+                        result: element,
+                        advance,
+                    }
+                } else {
+                    LoopRead::Index { result: element }
+                };
                 ForExecution::Indexed {
                     length: LoopLength::Definition { definition, result },
-                    read: LoopRead::Index { result: element },
+                    read,
                 }
             }
             _ => {

@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 20
+#define HIRSEL_RT_V2_ABI_VERSION 21
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_STATUS_OK 0
@@ -228,6 +228,10 @@ struct hirsel_rt_v2_layout {
     uint32_t field_count;
     uint32_t flags;
     uint64_t logical; /* MEM-6 charge of a block of this payload layout (runtime README) */
+    /* NULL: count all elements. Otherwise five words: first element offset, stride,
+       tag offset, form (0 ordinal Some=1, 1 live bit, 2 non-null niche), bit number.
+       Only initialized live entries contribute to a copy/detach charge. */
+    const uint64_t *logical_count;
 };
 
 /* Compiler-reserved cleanup continuation for an inline value. */
@@ -312,7 +316,7 @@ typedef struct hirsel_rt_v2_failure {
 #define HIRSEL_RT_V2_ASSERT_SIZE(type, bytes) _Static_assert(sizeof(type) == (bytes), #type " size")
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_header, HIRSEL_RT_V2_HEADER_SIZE);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_step, 56);
-HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_layout, 64);
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_layout, 72);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_cleanup, 32);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_region, 64);
 HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_builder, 40);
@@ -409,9 +413,14 @@ hirsel_rt_v2_header *hirsel_rt_v2_block_grow(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2
                                 uint64_t extent, uint64_t align);
 
 /* Keyed hashing (LIR schema revision 7; SEM-5). hash_begin answers the run's keyed state and
- * hash_bytes folds `length` bytes into a state with SipHash-1-3. The bits are unobservable. */
+ * hash_bytes hashes one scalar with SipHash-1-3. Composite keys initialize one caller-owned
+ * 48-byte, 8-aligned stream, update it for every framed leaf, and finalize once. The state
+ * address uses an opaque uint64_t carrier inside layout hash helpers. Bits are unobservable. */
 uint64_t hirsel_rt_v2_hash_begin(hirsel_rt_v2_ctx *ctx);
 uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t length);
+void hirsel_rt_v2_hash_init(void *out, uint64_t seed);
+uint64_t hirsel_rt_v2_hash_update(uint64_t state, const void *bytes, uint64_t length);
+uint64_t hirsel_rt_v2_hash_finish(uint64_t state);
 
 /* The canonical SER-2 codec (LIR schema revision 29; runtime ABI 9). A codec is compiler-emitted
  * static data: the schema's descriptor bytes, which an envelope must match exactly, and a program
@@ -432,7 +441,10 @@ uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t len
  *   MAP, SET  container payload index, size, align, entries and index field offsets, the entries
  *             sequence's index, element align, first element offset and stride, the index
  *             sequence's index, element align and stride, key node, key offset, value node (or
- *             CODEC_NO_NODE), value offset
+ *             CODEC_NO_NODE), value offset; MAP additionally carries hashes and live-count
+ *             field offsets, entry tag offset, form (0 ordinal, 1 live bit, 2 non-null niche)
+ *             and bit number. MAP encodes only live entries; decode initializes Some entries,
+ *             an empty hash cache/index and the live count. Wire bytes are unchanged.
  *   FLAT_TEXT utf8; native storage is a u64 byte extent then bytes
  *   FRAMED    content node; native storage adds a u64 content extent
  *   FLAT_FIELDS count, then node per declaration-order field
@@ -449,7 +461,7 @@ uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t len
  * first, then writes Result[T, DecodeError] at `out`: Ok of fresh owned data, or Error of the
  * first malformation in reading order. Neither fails; operational budgets (the reference's
  * limits) terminate environmentally. */
-#define HIRSEL_RT_V2_CODEC_VERSION 2
+#define HIRSEL_RT_V2_CODEC_VERSION 3
 #define HIRSEL_RT_V2_CODEC_NODE_SCALAR 0
 #define HIRSEL_RT_V2_CODEC_NODE_TEXT 1
 #define HIRSEL_RT_V2_CODEC_NODE_FIELDS 2

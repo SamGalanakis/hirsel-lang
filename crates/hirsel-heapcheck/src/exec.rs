@@ -260,6 +260,7 @@ pub(crate) struct Machine<'p, S> {
     pub(crate) steps: u64,
     runtime_iterators: Snapshot<std::sync::Arc<[OpValue]>>,
     version_slots: std::sync::Arc<Vec<Vec<Option<SlotId>>>>,
+    map_storage: std::sync::Arc<hirsel_lir::logical_storage::MapStorage>,
     statics: BTreeMap<(usize, u32), Ptr>,
     constants: BTreeMap<(usize, u32), Ptr>,
     roots: BTreeMap<u64, Held>,
@@ -380,6 +381,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             unanchored_failures: std::collections::BTreeSet::new(),
             sites: 0,
             steps: 0,
+            map_storage: std::sync::Arc::new(hirsel_lir::logical_storage::MapStorage::new(
+                &program.layouts,
+            )),
             runtime_iterators: Default::default(),
             version_slots: std::sync::Arc::new(program.units.iter().map(versions::slots).collect()),
             statics: BTreeMap::new(),
@@ -4605,7 +4609,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                     let len = if hirsel_lir::layout::keyed(&self.program.layouts, layout) {
                         0
                     } else {
-                        self.read_scalar(Ptr { offset: 0, ..p }, 8)? as u64
+                        self.logical_count(p, layout)?
                     };
                     let bytes = self.block_charge(layout, len)?;
                     if !self.charge(region, bytes) {
@@ -5662,9 +5666,26 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
     }
 
+    fn logical_count(&self, p: Ptr, layout: LayoutId) -> Checked<u64> {
+        let count = self.read_scalar(Ptr { offset: 0, ..p }, 8)? as u64;
+        let Some(entries) = self.map_storage.entries(layout) else {
+            return Ok(count);
+        };
+        let mut live = 0u64;
+        for i in 0..count {
+            let at =
+                compare::At::Heap(p.at(entries.first + i * entries.stride + entries.tag.offset));
+            live += u64::from(self.tag_at(at, entries.tag.form)? == 1);
+        }
+        Ok(live)
+    }
+
     /// The logical charge of a block of payload `payload` holding `count`
     /// elements (MEM-6, the runtime README's table).
     fn block_charge(&self, payload: LayoutId, count: u64) -> Checked<u64> {
+        if let Some(entries) = self.map_storage.entries(payload) {
+            return Ok(entries.logical.saturating_mul(count));
+        }
         hirsel_lir::layout::block_charge(&self.program.layouts, payload)
             .map(|charge| charge.bytes(count))
             .ok_or_else(|| err(V::Unsupported, "a bounded-arena charge of a flat payload"))
@@ -5726,12 +5747,12 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             let a = self.ledger.check(p)?;
             // A Map's or Set's index is not charged.
-            let index = self.keyed_index(a.layout.expect("live"));
+            let keyed = hirsel_lir::layout::keyed(&self.program.layouts, a.layout.expect("live"));
             let children: Vec<Ptr> = a
                 .extent
                 .cells
                 .iter()
-                .filter(|(o, _)| Some(**o) != index)
+                .filter(|(o, _)| !keyed || **o == 0)
                 .filter_map(|(_, c)| self.holder_target(c))
                 .collect();
             if !expanded {
@@ -5748,9 +5769,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             let count = match self.record(layout)?.kind {
                 LayoutKind::Sequence { .. }
                 | LayoutKind::Sequential { .. }
-                | LayoutKind::SoaColumns { .. } => {
-                    self.read_scalar(Ptr { offset: 0, ..p }, 8)? as u64
-                }
+                | LayoutKind::SoaColumns { .. } => self.logical_count(p, layout)?,
                 _ => 1,
             };
             let mut total = self.block_charge(layout, count)?;
@@ -5772,13 +5791,6 @@ impl<'p, S: Stage> Machine<'p, S> {
                 self.record(layout)?.kind,
                 LayoutKind::Opaque { .. } | LayoutKind::Environment { .. }
             ))
-    }
-
-    /// The payload offset of a Map's or Set's index, which a bounded arena
-    /// neither charges nor tracks (`LAYOUT_KEYED`, MEM-6); None for any
-    /// other block.
-    fn keyed_index(&self, layout: LayoutId) -> Option<u64> {
-        hirsel_lir::layout::keyed_index(&self.program.layouts, layout)
     }
 
     /// The arena of the tracked arena block `p` names, if it is one (MEM-6).
@@ -5819,7 +5831,11 @@ impl<'p, S: Stage> Machine<'p, S> {
         let len = u64::try_from(self.read_scalar(block, 8)?)
             .map_err(|_| err(V::Malformed, "a sequence count beyond u64"))?;
         let each = self.block_charge(layout, 1)?;
-        let copied = if shared { each.saturating_mul(len) } else { 0 };
+        let copied = if shared {
+            each.saturating_mul(self.logical_count(block, layout)?)
+        } else {
+            0
+        };
         if !self.charge(region, each.saturating_mul(count).saturating_add(copied)) {
             return Ok(Some(region));
         }
@@ -6861,14 +6877,14 @@ impl<'p, S: Stage> Machine<'p, S> {
             ) || hirsel_lir::layout::keyed(&self.program.layouts, layout);
             let tracks = below && !self.untracked_below(layout)?;
             // A Map's or Set's index is never tracked.
-            let index = self.keyed_index(layout);
+            let keyed = hirsel_lir::layout::keyed(&self.program.layouts, layout);
             pending.extend(
                 image
                     .cells
                     .iter()
                     .filter_map(|(o, c)| {
                         self.holder_target(c)
-                            .map(|c| (c, tracks && Some(*o) != index, None))
+                            .map(|c| (c, tracks && (!keyed || *o == 0), None))
                     })
                     .collect::<Vec<_>>(),
             );

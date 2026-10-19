@@ -1,0 +1,32 @@
+// rule: MEM-6
+// expect: run
+// Copying a two-live-entry Map charges exactly 32 bytes after removal.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut m: unique Map[u64, u64] = map.empty()
+  map.insert(mut m, 1, 10)
+  map.insert(mut m, 2, 20)
+  map.insert(mut m, 3, 30)
+  let _ = map.remove(mut m, 2)
+  let fits = arena.bounded(
+    32u64,
+    fn(a: Arena) -> u64 {
+      let copied = copy_to(a, m)
+      failure.check(map.len(copied) == 2, Bounds())
+      let mut order: u64 = 0
+      for (k, v) in copied {
+        order = order * 10 + k
+      }
+      order
+    }
+  )
+  failure.check(fits == Ok(13u64), Bounds())
+  let over = arena.bounded(
+    31u64,
+    fn(a: Arena) -> u64 {
+      let copied = copy_to(a, m)
+      map.len(copied)
+    }
+  )
+  failure.check(over == Error(OutOfSpace()), Bounds())
+  Ok(())
+}

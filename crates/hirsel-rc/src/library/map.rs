@@ -1,5 +1,5 @@
-//! Native insertion-ordered maps and sets. Field 0 is dense entries; field 1
-//! is an optional open-addressing index. Keyed reads never mutate either.
+//! Native insertion-ordered maps and sets. Maps retain optional entries, a
+//! tagged index, cached full hashes and a live count. Keyed reads never mutate.
 use super::builder::{Body, Cx, Direct};
 use super::{CallShape, InlineLowering, LibraryBody, Request, native_path};
 use crate::PassError;
@@ -12,7 +12,7 @@ use hirsel_lir::stage::Value;
 use hirsel_syntax::PassingMode;
 use hirsel_types::{
     Allocation, AuthoritySummary, BuiltinType, FunctionType, GenericArgument, Parameter, Primitive,
-    Type, TypeId, TypeKind, Uses,
+    Type, TypeId, TypeKind, Uses, Variant,
 };
 
 type R<T> = Result<T, PassError>;
@@ -30,6 +30,10 @@ body!(REMOVE_MAP, "map.remove", remove_map);
 body!(REMOVE_SET, "set.remove", remove_set);
 body!(CONTAINS, "set.contains", contains);
 body!(INSERT_MAP, "map.insert", insert_map);
+body!(UPSERT_MAP, "map.upsert_with", upsert_with);
+body!(UPDATE_MAP, "map.update_with", update_with);
+mod edit;
+use edit::{update as update_with, upsert as upsert_with};
 body!(INSERT_SET, "set.insert", insert_set);
 pub static MAP_PROBE: LibraryBody = LibraryBody {
     path: || native_path("map_probe"),
@@ -76,7 +80,11 @@ fn empty(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> super::R<bool> {
     let fields: Vec<_> = cx.record(shape).fields.iter().map(|f| f.layout).collect();
     let mut values = Vec::new();
     for field in fields {
-        values.push(cx.construct(field, payload(cx, field), ConstructorKind::Sequence, &[])?);
+        values.push(if matches!(cx.record(field).kind, LayoutKind::Scalar(_)) {
+            cx.constant(field, ConstantValue::Integer(0))
+        } else {
+            cx.construct(field, payload(cx, field), ConstructorKind::Sequence, &[])?
+        });
     }
     let symbol = cx.symbol(&Symbol {
         kind: SymbolKind::Type,
@@ -92,6 +100,12 @@ fn length(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> super::R<bool> {
         return Ok(false);
     };
     let value = cx.operand(&argument.value)?;
+    if call.path == &hirsel_syntax::DefPath::core("map.len") {
+        let result = cx.read_field(value, 3)?;
+        cx.consumed(value);
+        cx.finish(call, result)?;
+        return Ok(true);
+    }
     let entries = cx.read_field(value, 0)?;
     let layout = cx.place_layout(call.destination)?;
     let result = cx.value(layout, Holding::Plain);
@@ -372,7 +386,12 @@ fn hash(b: &mut Body<'_, '_>, a: AddressId) -> R<ValueId> {
     b.end_loan(loan);
     Ok(result)
 }
-fn probe_call(b: &mut Body<'_, '_>) -> R<ValueId> {
+struct Probe {
+    ordinal: ValueId,
+    hash: ValueId,
+    bucket: ValueId,
+}
+fn probe_call(b: &mut Body<'_, '_>) -> R<Probe> {
     let k = b.cx.type_actual(0)?;
     let types = if b.cx.arguments.len() == 2 {
         vec![k, b.cx.type_actual(1)?]
@@ -390,12 +409,17 @@ fn probe_call(b: &mut Body<'_, '_>) -> R<ValueId> {
         &types,
     );
     let u64_ty = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U64));
+    let result_ty = if is_map {
+        add_type(&mut b.cx.store, TypeKind::Tuple(vec![u64_ty; 3].into()))
+    } else {
+        u64_ty
+    };
     let actuals = b.cx.arguments.clone();
     let direct = helper(
         b,
         if is_map { "map_probe" } else { "set_probe" },
         &[(PassingMode::Borrow, container), (PassingMode::Borrow, k)],
-        u64_ty,
+        result_ty,
         Allocation::NoAlloc,
         actuals,
     )?;
@@ -412,11 +436,208 @@ fn probe_call(b: &mut Body<'_, '_>) -> R<ValueId> {
     .unwrap();
     b.end_loan(kl);
     b.end_loan(ml);
-    Ok(index)
+    if is_map {
+        let layout = b.layout_of(index);
+        let (slot, tuple) = temporary(b, layout)?;
+        b.store(tuple, index)?;
+        let word = b.u64_layout()?;
+        let mut at = |field| {
+            let at = b.place(
+                AddressBase::Address(tuple),
+                &[ProjectionStep::Field(field)],
+                word,
+                None,
+            )?;
+            b.read_bits(at)
+        };
+        let result = Probe {
+            ordinal: at(0)?,
+            hash: at(1)?,
+            bucket: at(2)?,
+        };
+        b.take(tuple)?;
+        b.push(Inst::StorageDead {
+            slot,
+            if_live: false,
+        });
+        Ok(result)
+    } else {
+        Ok(Probe {
+            ordinal: index,
+            hash: index,
+            bucket: index,
+        })
+    }
 }
 fn probe(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    if cx.path == native_path("map_probe") {
+        probe_map(cx)
+    } else {
+        probe_set(cx)
+    }
+}
+/// A lookup also returns the already computed hash and bucket, so insertion,
+/// update and removal never search or hash the key a second time.
+fn probe_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
-    let is_map = b.cx.path == native_path("map_probe");
+    let container = b.parameters[0].address;
+    let key = b.parameters[1].address;
+    let query_hash = hash(&mut b, key)?;
+    let entries = field(&mut b, container, 0)?;
+    let index = field(&mut b, container, 1)?;
+    let hashes = field(&mut b, container, 2)?;
+    let count = len(&mut b, entries)?;
+    let capacity = len(&mut b, index)?;
+    let hashes_count = len(&mut b, hashes)?;
+    let zero = b.u64(0)?;
+    let one = b.u64(1)?;
+    let word = b.u64_layout()?;
+    let miss = b.block(BlockKind::Body, &[]);
+    let indexed = b.block(BlockKind::Body, &[]);
+    let linear = b.block(BlockKind::Body, &[]);
+    let has_index = b.compare(BinaryOp::Ne, capacity, zero)?;
+    b.branch(has_index, indexed, linear);
+    b.at(indexed);
+    let mask = sub(&mut b, capacity, one);
+    let tag_mask = b.u64(0xffff_ffff_0000_0000)?;
+    let ordinal_mask = b.u64(u64::from(u32::MAX))?;
+    let query_tag = binary(&mut b, BinaryOp::BitAnd, query_hash, tag_mask);
+    let start = binary(&mut b, BinaryOp::BitAnd, query_hash, mask);
+    let position = b.fresh(word);
+    let buckets = b.block(BlockKind::Body, &[position]);
+    let occupied = b.block(BlockKind::Body, &[]);
+    let compare_key = b.block(BlockKind::Body, &[]);
+    let advance = b.block(BlockKind::Body, &[]);
+    let found = b.block(BlockKind::Body, &[]);
+    let vacant = b.block(BlockKind::Body, &[]);
+    b.jump(buckets, &[start]);
+    b.at(buckets);
+    let at = b.slot_place(index, position)?;
+    let stored = b.read_bits(at)?;
+    let empty = b.compare(BinaryOp::Eq, stored, zero)?;
+    b.branch(empty, vacant, occupied);
+    b.at(occupied);
+    let encoded = binary(&mut b, BinaryOp::BitAnd, stored, ordinal_mask);
+    let live = b.compare(BinaryOp::Ne, encoded, zero)?;
+    let tagged = b.block(BlockKind::Body, &[]);
+    b.branch(live, tagged, advance);
+    b.at(tagged);
+    let stored_tag = binary(&mut b, BinaryOp::BitAnd, stored, tag_mask);
+    let matches = b.compare(BinaryOp::Eq, stored_tag, query_tag)?;
+    b.branch(matches, compare_key, advance);
+    b.at(compare_key);
+    let ordinal = sub(&mut b, encoded, one);
+    let entry = b.slot_place(entries, ordinal)?;
+    let pair = live_pair(&mut b, entry)?;
+    let candidate = field(&mut b, pair, 0)?;
+    let equal = eq(&mut b, candidate, key)?;
+    b.branch(equal, found, advance);
+    b.at(found);
+    probe_return(&mut b, ordinal, query_hash, position)?;
+    b.at(advance);
+    let next = b.add(ArithMode::Wrapping, position, one);
+    let next = binary(&mut b, BinaryOp::BitAnd, next, mask);
+    b.jump(buckets, &[next]);
+    b.at(vacant);
+    probe_return(&mut b, count, query_hash, position)?;
+
+    // An immutable static map has not acquired a run's hash seed yet. Reads
+    // hash those keys without mutation; its first write caches them once.
+    b.at(linear);
+    let cached = b.compare(BinaryOp::Eq, hashes_count, count)?;
+    let ordinal = b.fresh(word);
+    let scan = b.block(BlockKind::Body, &[ordinal]);
+    let inspect = b.block(BlockKind::Body, &[]);
+    let live = b.block(BlockKind::Body, &[]);
+    let absent = b.block(BlockKind::Body, &[]);
+    let next = b.block(BlockKind::Body, &[]);
+    b.jump(scan, &[zero]);
+    b.at(scan);
+    let more = b.compare(BinaryOp::Lt, ordinal, count)?;
+    b.branch(more, inspect, miss);
+    b.at(inspect);
+    let entry = b.slot_place(entries, ordinal)?;
+    let (view, loan) = b.borrow(entry, false)?;
+    let edge = b.edge(live, &[]);
+    let arms = PoolRange::push(
+        &mut b.ed.unit.pools.switch_arms,
+        [SwitchArm { value: 1, edge }],
+    );
+    let otherwise = b.edge(absent, &[]);
+    b.terminate(Terminator::Switch {
+        value: view,
+        arms,
+        otherwise,
+    });
+    b.at(absent);
+    b.end_loan(loan);
+    b.jump(next, &[]);
+    b.at(live);
+    b.end_loan(loan);
+    let pair = live_pair(&mut b, entry)?;
+    let candidate = field(&mut b, pair, 0)?;
+    let saved = b.block(BlockKind::Body, &[]);
+    let fresh = b.block(BlockKind::Body, &[]);
+    let candidate_hash = b.fresh(word);
+    let hashed = b.block(BlockKind::Body, &[candidate_hash]);
+    b.branch(cached, saved, fresh);
+    b.at(saved);
+    let at = b.slot_place(hashes, ordinal)?;
+    let value = b.read_bits(at)?;
+    b.jump(hashed, &[value]);
+    b.at(fresh);
+    let value = hash(&mut b, candidate)?;
+    b.jump(hashed, &[value]);
+    b.at(hashed);
+    let same_hash = b.compare(BinaryOp::Eq, candidate_hash, query_hash)?;
+    let equal_key = b.block(BlockKind::Body, &[]);
+    let matched = b.block(BlockKind::Body, &[]);
+    b.branch(same_hash, equal_key, next);
+    b.at(equal_key);
+    let equal = eq(&mut b, candidate, key)?;
+    b.branch(equal, matched, next);
+    b.at(matched);
+    probe_return(&mut b, ordinal, query_hash, zero)?;
+    b.at(next);
+    let increment = b.add(ArithMode::Wrapping, ordinal, one);
+    b.jump(scan, &[increment]);
+    b.at(miss);
+    probe_return(&mut b, count, query_hash, zero)?;
+    Ok(b.finish())
+}
+
+fn live_pair(b: &mut Body<'_, '_>, entry: AddressId) -> R<AddressId> {
+    let layout = b.address_layout(entry);
+    let pair = b
+        .record(layout)
+        .tag
+        .as_ref()
+        .unwrap()
+        .variants
+        .iter()
+        .find(|v| v.ordinal == 1)
+        .unwrap()
+        .fields[0]
+        .layout;
+    b.place(
+        AddressBase::Address(entry),
+        &[ProjectionStep::VariantField {
+            variant: 1,
+            field: 0,
+        }],
+        pair,
+        None,
+    )
+}
+fn probe_return(b: &mut Body<'_, '_>, ordinal: ValueId, hash: ValueId, bucket: ValueId) -> R<()> {
+    let layout = b.cx.fn_abi().result.unwrap().layout;
+    let result = construct(b, layout, ConstructorKind::Tuple, &[ordinal, hash, bucket])?;
+    b.ret(Some(result));
+    Ok(())
+}
+
+fn probe_set(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
+    let mut b = Body::new(cx)?;
     let container = b.parameters[0];
     let key = b.parameters[1];
     // Hash even an empty/unindexed collection. The complete key's depth is checked here.
@@ -456,11 +677,7 @@ fn probe(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.at(occupied);
     let ordinal = sub(&mut b, stored, one);
     let entry = b.slot_place(entries, ordinal)?;
-    let candidate = if is_map {
-        field(&mut b, entry, 0)?
-    } else {
-        entry
-    };
+    let candidate = entry;
     let equal = eq(&mut b, candidate, key.address)?;
     b.branch(equal, found, advance);
     b.at(found);
@@ -476,11 +693,7 @@ fn probe(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.branch(more, check, miss);
     b.at(check);
     let entry = b.slot_place(entries, i)?;
-    let candidate = if is_map {
-        field(&mut b, entry, 0)?
-    } else {
-        entry
-    };
+    let candidate = entry;
     let equal = eq(&mut b, candidate, key.address)?;
     b.branch(equal, hit, next);
     b.at(next);
@@ -494,7 +707,8 @@ fn probe(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 }
 fn get(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
-    let i = probe_call(&mut b)?;
+    let probe = probe_call(&mut b)?;
+    let i = probe.ordinal;
     let address = b.parameters[0].address;
     let entries = field(&mut b, address, 0)?;
     let count = len(&mut b, entries)?;
@@ -507,6 +721,7 @@ fn get(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.ret(Some(none));
     b.at(yes);
     let entry = b.slot_place(entries, i)?;
+    let entry = live_pair(&mut b, entry)?;
     let value = field(&mut b, entry, 1)?;
     let failure = b.failure(None);
     let copied = b.copy(value, failure)?;
@@ -516,7 +731,8 @@ fn get(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 }
 fn contains(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
-    let i = probe_call(&mut b)?;
+    let probe = probe_call(&mut b)?;
+    let i = probe.ordinal;
     let address = b.parameters[0].address;
     let entries = field(&mut b, address, 0)?;
     let count = len(&mut b, entries)?;
@@ -553,7 +769,8 @@ fn insert_set(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 }
 fn insert(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
-    let i = probe_call(&mut b)?;
+    let probe = probe_call(&mut b)?;
+    let i = probe.ordinal;
     let container = b.parameters[0];
     let incoming = b.parameters[if is_map { 2 } else { 1 }];
     let entries = field(&mut b, container.address, 0)?;
@@ -576,6 +793,7 @@ fn insert(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
     b.set_reaching(container.slot, replace_v);
     if is_map {
         let entry = b.slot_place(entries, i)?;
+        let entry = live_pair(&mut b, entry)?;
         let value = field(&mut b, entry, 1)?;
         let displaced = b.slot(incoming.layout, SlotKind::Displaced);
         b.push(Inst::StorageLive { slot: displaced });
@@ -610,39 +828,27 @@ fn insert(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
     b.at(append);
     b.set_reaching(container.slot, append_v);
     b.restore_held(&held);
-    let element =
-        b.cx.element(b.ed.unit.types[b.ed.unit.addresses[entries.index()].ty.index()].layout)?;
-    let key = if is_map {
-        Some(b.take(b.parameters[1].address)?)
+    if is_map {
+        let key = b.parameters[1].address;
+        let value = b.parameters[2].address;
+        append_map(&mut b, probe.hash, key, value)?;
     } else {
-        None
-    };
-    let moved = b.take(incoming.address)?;
-    let value = if let Some(key) = key {
-        construct(&mut b, element, ConstructorKind::Tuple, &[key, moved])?
-    } else {
-        moved
-    };
-    let k = b.cx.type_actual(0)?;
-    let element_ty = if is_map {
-        let v = b.cx.type_actual(1)?;
-        add_type(&mut b.cx.store, TypeKind::Tuple(vec![k, v].into()))
-    } else {
-        k
-    };
-    let list_ty = builtin(&mut b, BuiltinType::List, &[element_ty]);
-    let unit_ty = add_type(&mut b.cx.store, TypeKind::Tuple(vec![].into()));
-    let push = helper(
-        &mut b,
-        "list.push",
-        &[(PassingMode::Mut, list_ty), (PassingMode::Take, element_ty)],
-        unit_ty,
-        Allocation::MayAllocate,
-        vec![GenericArgument::Type(element_ty)],
-    )?;
-    let list = mut_argument(&mut b, 0, entries)?;
-    call(&mut b, push, &[list, argument(1, Passing::Take, value)])?;
-    index_call(&mut b, is_map)?;
+        let value = b.take(incoming.address)?;
+        let element_ty = b.cx.type_actual(0)?;
+        let list_ty = builtin(&mut b, BuiltinType::List, &[element_ty]);
+        let unit_ty = add_type(&mut b.cx.store, TypeKind::Tuple(vec![].into()));
+        let push = helper(
+            &mut b,
+            "list.push",
+            &[(PassingMode::Mut, list_ty), (PassingMode::Take, element_ty)],
+            unit_ty,
+            Allocation::MayAllocate,
+            vec![GenericArgument::Type(element_ty)],
+        )?;
+        let list = mut_argument(&mut b, 0, entries)?;
+        call(&mut b, push, &[list, argument(1, Passing::Take, value)])?;
+        index_call(&mut b)?;
+    }
     unit(&mut b);
     Ok(b.finish())
 }
@@ -792,7 +998,8 @@ fn map_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let source = field(&mut b, cursor.address, 0)?;
     let entries = field(&mut b, source, 0)?;
     let position = field(&mut b, cursor.address, 1)?;
-    let i = b.read_bits(position)?;
+    let first = b.read_bits(position)?;
+    let i = table::advance(&mut b, entries, first)?;
     let count = len(&mut b, entries)?;
     let more = b.compare(BinaryOp::Lt, i, count)?;
     let yes_v = b.version(cursor.slot);
@@ -813,7 +1020,8 @@ fn map_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.ret(Some(none));
     b.at(yes);
     b.set_reaching(cursor.slot, yes_v);
-    let entry = b.slot_place(entries, i)?;
+    let stored_entry = b.slot_place(entries, i)?;
+    let entry = live_pair(&mut b, stored_entry)?;
     let one = b.u64(1)?;
     let next = b.add(ArithMode::Wrapping, i, one);
     let displaced = b.slot(b.layout_of(next), SlotKind::Displaced);
@@ -845,7 +1053,11 @@ fn map_next(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let joined = b.block(BlockKind::Body, &[picked]);
     b.branch(unique, moved, shared);
     b.at(moved);
+    let stored_layout = b.address_layout(stored_entry);
+    let empty = table::entry_value(&mut b, stored_layout, None)?;
     let value = b.take(entry)?;
+    // The live payload was moved out; only its tag remains.
+    b.store(stored_entry, empty)?;
     b.jump(joined, &[value]);
     b.at(shared);
     if b.record(entry_layout).copy == CopyRecipe::NotCopyable {
@@ -973,8 +1185,22 @@ fn map_drop(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
 
 pub static MAP_INDEX: LibraryBody = LibraryBody {
     path: || native_path("map_index"),
-    build: index_update,
+    build: map_index_update,
 };
+pub static MAP_WARM: LibraryBody = LibraryBody {
+    path: || native_path("map_warm"),
+    build: table::map_prepare,
+};
+pub static MAP_PREPARE: LibraryBody = LibraryBody {
+    path: || native_path("map_prepare"),
+    build: table::map_prepare,
+};
+body!(
+    MAP_ADVANCE,
+    "$intrinsic.MapInsertionOrder_advance",
+    map_advance
+);
+use table::map_advance;
 pub static SET_INDEX: LibraryBody = LibraryBody {
     path: || native_path("set_index"),
     build: index_update,
@@ -1032,14 +1258,8 @@ fn overwrite(b: &mut Body<'_, '_>, address: AddressId, value: ValueId) -> R<()> 
     });
     Ok(())
 }
-fn index_call(b: &mut Body<'_, '_>, is_map: bool) -> R<()> {
-    let k = b.cx.type_actual(0)?;
-    let element = if is_map {
-        let v = b.cx.type_actual(1)?;
-        add_type(&mut b.cx.store, TypeKind::Tuple(vec![k, v].into()))
-    } else {
-        k
-    };
+fn index_call(b: &mut Body<'_, '_>) -> R<()> {
+    let element = b.cx.type_actual(0)?;
     let entries_type = builtin(b, BuiltinType::List, &[element]);
     let u32_type = add_type(&mut b.cx.store, TypeKind::Primitive(Primitive::U32));
     let index_type = builtin(b, BuiltinType::List, &[u32_type]);
@@ -1047,7 +1267,7 @@ fn index_call(b: &mut Body<'_, '_>, is_map: bool) -> R<()> {
     let actuals = b.cx.arguments.clone();
     let direct = helper(
         b,
-        if is_map { "map_index" } else { "set_index" },
+        "set_index",
         &[
             (PassingMode::Borrow, entries_type),
             (PassingMode::Mut, index_type),
@@ -1069,7 +1289,6 @@ fn index_call(b: &mut Body<'_, '_>, is_map: bool) -> R<()> {
 /// only when crossing the small-table threshold or reaching 7/8 occupancy.
 fn index_update(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
-    let is_map = b.cx.path == native_path("map_index");
     let container = b.parameters[1];
     let entries = b.parameters[0].address;
     let index = container.address;
@@ -1121,7 +1340,7 @@ fn index_update(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.at(fast_block);
     b.set_reaching(container.slot, fast_v);
     let ordinal = sub(&mut b, n, one);
-    index_put(&mut b, entries, index, ordinal, capacity, is_map)?;
+    index_put(&mut b, entries, index, ordinal, capacity)?;
     unit(&mut b);
     b.at(rebuild_block);
     b.set_reaching(container.slot, rebuild_v);
@@ -1201,7 +1420,7 @@ fn index_update(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let more = b.compare(BinaryOp::Lt, ordinal, n)?;
     b.branch(more, put, complete);
     b.at(put);
-    index_put(&mut b, entries, index, ordinal, wanted, is_map)?;
+    index_put(&mut b, entries, index, ordinal, wanted)?;
     let inc = b.add(ArithMode::Wrapping, ordinal, one);
     let after = b.reaching(container.slot)?;
     b.jump(all, &[inc, after]);
@@ -1216,10 +1435,8 @@ fn index_put(
     index: AddressId,
     ordinal: ValueId,
     capacity: ValueId,
-    is_map: bool,
 ) -> R<()> {
-    let entry = b.slot_place(entries, ordinal)?;
-    let key = if is_map { field(b, entry, 0)? } else { entry };
+    let key = b.slot_place(entries, ordinal)?;
     let hash = hash(b, key)?;
     let one = b.u64(1)?;
     let zero = b.u64(0)?;
@@ -1266,21 +1483,15 @@ fn protect(b: &mut Body<'_, '_>, first: usize, loan: LoanId) {
     }
 }
 
-fn remove_map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    remove(cx, true)
-}
-fn remove_set(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    remove(cx, false)
-}
 fn temporary(b: &mut Body<'_, '_>, layout: LayoutId) -> R<(SlotId, AddressId)> {
     let slot = b.slot(layout, SlotKind::Temporary);
     b.push(Inst::StorageLive { slot });
     let address = b.place(AddressBase::Slot(slot), &[], layout, None)?;
     Ok((slot, address))
 }
-fn remove(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
+fn remove_set(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
-    let ordinal = probe_call(&mut b)?;
+    let ordinal = probe_call(&mut b)?.ordinal;
     let container = b.parameters[0];
     let entries = field(&mut b, container.address, 0)?;
     let count = len(&mut b, entries)?;
@@ -1289,27 +1500,16 @@ fn remove(cx: &mut Cx<'_>, is_map: bool) -> R<LirUnit<Value>> {
     let missing = b.block(BlockKind::Body, &[]);
     b.branch(hit, found, missing);
     b.at(missing);
-    let result = if is_map { option(&mut b, None)? } else { hit };
-    b.ret(Some(result));
+    b.ret(Some(hit));
     b.at(found);
-    let moved_value = remove_entry(&mut b, entries, ordinal, is_map)?;
-    reindex(&mut b, is_map)?;
-    let result = if let Some((slot, address)) = moved_value {
-        let value = b.take(address)?;
-        b.push(Inst::StorageDead {
-            slot,
-            if_live: false,
-        });
-        option(&mut b, Some(value))?
-    } else {
-        hit
-    };
-    b.ret(Some(result));
+    remove_entry(&mut b, entries, ordinal, false)?;
+    reindex(&mut b)?;
+    b.ret(Some(hit));
     Ok(b.finish())
 }
 // Ordered removal changes dense ordinals. Rebuild only the private index, in
 // its existing initialized storage; entry/value owners never get copied.
-fn reindex(b: &mut Body<'_, '_>, is_map: bool) -> R<()> {
+fn reindex(b: &mut Body<'_, '_>) -> R<()> {
     let container = b.parameters[0];
     let entries = field(b, container.address, 0)?;
     let index = field(b, container.address, 1)?;
@@ -1362,7 +1562,7 @@ fn reindex(b: &mut Body<'_, '_>, is_map: bool) -> R<()> {
     let more = b.compare(BinaryOp::Lt, ordinal, count)?;
     b.branch(more, put, complete);
     b.at(put);
-    index_put(b, entries, index, ordinal, capacity, is_map)?;
+    index_put(b, entries, index, ordinal, capacity)?;
     let next = b.add(ArithMode::Wrapping, ordinal, one);
     let after = b.reaching(container.slot)?;
     b.jump(all, &[next, after]);
@@ -1373,7 +1573,7 @@ fn reindex(b: &mut Body<'_, '_>, is_map: bool) -> R<()> {
     b.set_reaching(container.slot, done_version);
     Ok(())
 }
-// Shared ordered-entry removal for Map, Set and branded SortedMap. The caller
+// Shared dense-entry removal for Set and branded SortedMap. The caller
 // keeps the returned value owner live through any private metadata repair.
 pub(super) fn remove_entry(
     b: &mut Body<'_, '_>,
@@ -1442,3 +1642,6 @@ pub(super) fn remove_entry(
     };
     Ok(moved_value)
 }
+
+mod table;
+use table::{append_map, map_index_update, remove_map};

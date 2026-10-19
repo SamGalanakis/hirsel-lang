@@ -1058,8 +1058,14 @@ impl<'a> Audit<'a, '_> {
                 }
                 ForExecution::Indexed {
                     length: LoopLength::Definition { definition, .. },
-                    ..
-                } => (vec![definition], None),
+                    read,
+                } => {
+                    let mut calls = vec![definition];
+                    if let hirsel_check_protocol::body::LoopRead::MapIndex { advance, .. } = read {
+                        calls.push(advance);
+                    }
+                    (calls, None)
+                }
                 _ => (vec![], None),
             },
         };

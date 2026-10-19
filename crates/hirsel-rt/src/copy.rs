@@ -343,8 +343,32 @@ unsafe fn copy_graph(
     }
 }
 
+/// Read a private live count independently of any map operation's cached count.
+unsafe fn logical_count(layout: &Layout, at: *const u8) -> u64 {
+    unsafe {
+        let count = at.cast::<u64>().read_unaligned();
+        if layout.logical_count.is_null() {
+            return count;
+        }
+        let program = std::slice::from_raw_parts(layout.logical_count, 5);
+        let [first, stride, tag, form, bit] = *<&[u64; 5]>::try_from(program).unwrap();
+        let mut live = 0;
+        for i in 0..count {
+            let at = at.add((first + i * stride + tag) as usize);
+            let some = match form {
+                0 => at.cast::<u32>().read_unaligned() == 1,
+                1 => at.cast::<u64>().read_unaligned() & (1 << bit) != 0,
+                2 => !at.cast::<*const u8>().read_unaligned().is_null(),
+                _ => fault("a logical-count tag form"),
+            };
+            live += u64::from(some);
+        }
+        live
+    }
+}
+
 /// The MEM-6 charge of one block: its descriptor's logical size, per element times its count.
-unsafe fn block_charge(ctx: &RunCtx, block: *mut Header) -> u64 {
+pub(crate) unsafe fn block_charge(ctx: &RunCtx, block: *mut Header) -> u64 {
     // SAFETY: `block` is a live block of a descriptor of `ctx`.
     unsafe {
         let layout = &*ctx.descriptor((*block).index());
@@ -352,7 +376,7 @@ unsafe fn block_charge(ctx: &RunCtx, block: *mut Header) -> u64 {
             fault("a bounded-arena copy reached a block with no logical size");
         }
         if layout.flags & LAYOUT_LOGICAL_PER_ELEMENT != 0 {
-            let count = payload(block).cast::<u64>().read_unaligned();
+            let count = logical_count(layout, payload(block));
             layout.logical.saturating_mul(count)
         } else {
             layout.logical

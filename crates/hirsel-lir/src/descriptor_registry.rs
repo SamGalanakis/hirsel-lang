@@ -11,6 +11,8 @@ pub struct DescriptorRegistry {
     pub identity: ContentHash,
     /// Index three onwards; index two is the target's empty environment.
     pub layouts: Vec<LayoutId>,
+    /// Derived once from the complete frozen table, shared by all partitions.
+    pub map_storage: crate::logical_storage::MapStorage,
 }
 
 impl DescriptorRegistry {
@@ -37,6 +39,7 @@ impl DescriptorRegistry {
             target: table.target,
             identity,
             layouts,
+            map_storage: crate::logical_storage::MapStorage::new(table),
         }
     }
     pub fn index(&self, layout: LayoutId) -> Option<u32> {
@@ -54,6 +57,9 @@ impl DescriptorRegistry {
         table: &LayoutTable,
         finalizers: &BTreeMap<LayoutId, ContentHash>,
     ) -> bool {
+        if self.map_storage != crate::logical_storage::MapStorage::new(table) {
+            return false;
+        }
         if self.table != table.digest()
             || self.target != table.target
             || self.layouts.len() > (1 << 29) - 3

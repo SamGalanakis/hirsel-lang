@@ -106,6 +106,8 @@ N fn time.sleep(clock: MonotonicClock, interval: time.Duration) -> Result[(), ti
 fn bytes.replace(src: Bytes, old: Bytes, new: Bytes) -> unique Bytes in src
 fn bytes.from_inline[n: size](xs: Inline[u8, n]) -> unique Bytes uses {}
 N fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool
+@preserves_unique(m) fn map.upsert[K: key, V](mut m: unique Map[K, V], k: K, initial: fn() -> unique V uses {}, change: fn(mut value: unique V) -> () uses {}) -> () uses {}
+@preserves_unique(m) fn map.update[K: key, V](mut m: unique Map[K, V], k: K, change: fn(mut value: unique V) -> () uses {}) -> bool uses {}
 N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
@@ -1117,6 +1119,13 @@ Scalar simple-case helpers and ASCII-only string helpers retain their meanings.
 fails SEM-3 for an empty pattern. `bytes.from_inline(xs)` copies a fixed-size
 `Inline[u8, n]`, such as a digest, into a fresh `Bytes`; an `Inline` never converts
 implicitly. `map.same_entries` compares two maps as sets of entries.
+`map.upsert` probes once: for an absent key it copies the borrowed key and stores
+`initial()` at the end of insertion order; a bounded arena charges the vacant
+entry before calling `initial`. For a present key it calls `change`
+with mutable access to the stored value, copying neither key nor value.
+`map.update` only calls `change` for a present key and returns whether it found
+one. Neither function changes an existing entry's position. Callback mutations
+remain visible if the callback fails, under the ordinary mutable-call contract.
 
 `std@1/list` provides `reverse`, `rotate` (left rotation by `amount`), `sort` (in place,
 unstable pattern-defeating quicksort with a heapsort fallback, `O(n log n)`, by a

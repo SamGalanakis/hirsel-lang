@@ -443,7 +443,15 @@ impl<'a> Plan<'a> {
                                 element: self.node(Self::argument(&arguments, 0)?, element),
                             }
                         } else {
-                            let pair = self.record(element)?;
+                            let live = self
+                                .record(element)?
+                                .tag
+                                .as_ref()
+                                .and_then(|t| t.variants.iter().find(|v| v.ordinal == 1))
+                                .and_then(|v| v.fields.first())
+                                .ok_or_else(|| PassError::Malformed("a map live entry".into()))?
+                                .layout;
+                            let pair = self.record(live)?;
                             let at = |ordinal| {
                                 pair.fields
                                     .iter()

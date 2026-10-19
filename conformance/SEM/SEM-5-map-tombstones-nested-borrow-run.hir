@@ -1,0 +1,44 @@
+// rule: SEM-5
+// expect: run
+// Interleaved removals retain insertion order under nested borrowed loops.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut m: unique Map[u64, u64] = map.empty()
+  for i in 0u64..80u64 {
+    map.insert(mut m, i, i * 10)
+    if i % 3 == 2 {
+      let _ = map.remove(mut m, i - 1)
+    }
+  }
+  let mut outer: unique Map[u64, u64] = map.empty()
+  map.insert(mut outer, 4, 40)
+  map.insert(mut outer, 6, 60)
+  let mut loops: u64 = 0
+  for (ok, ov) in outer {
+    let mut expected: u64 = 0
+    let mut seen: u64 = 0
+    for (k, v) in m {
+      if expected % 3 == 1 && expected < 79 {
+        expected += 1
+      }
+      failure.check(k == expected && v == k * 10, Bounds())
+      failure.check(ov == ok * 10, Bounds())
+      expected += 1
+      seen += 1
+    }
+    failure.check(seen == 54 && expected == 80, Bounds())
+    loops += 1
+  }
+  failure.check(loops == 2 && map.len(m) == 54, Bounds())
+  // Enough tombstones to trigger lazy compaction on the next insertion.
+  for i in 0u64..60u64 {
+    let _ = map.remove(mut m, i)
+  }
+  map.insert(mut m, 81, 810)
+  let mut last: u64 = 0
+  for (k, v) in m {
+    failure.check(k > last && v == k * 10, Bounds())
+    last = k
+  }
+  failure.check(last == 81 && map.len(m) == 15, Bounds())
+  Ok(())
+}

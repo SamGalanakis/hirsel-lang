@@ -397,14 +397,64 @@ impl<'m> Generator<'m, '_> {
             self.payload(l, &entries, payload)?,
             self.payload(r, &entries, payload)?,
         );
-        let (lc, rc) = (self.builder.load(word, l, 1), self.builder.load(word, r, 1));
+        let map = owner.0.name == "Map";
+        let (lc, rc) = if map {
+            (
+                self.builder
+                    .load(word, self.at(left, record.fields[3].offset), 1),
+                self.builder
+                    .load(word, self.at(right, record.fields[3].offset), 1),
+            )
+        } else {
+            (self.builder.load(word, l, 1), self.builder.load(word, r, 1))
+        };
         let fewer = self.builder.icmp(IntPredicate::Ult, lc, rc);
         let count = self.builder.select(fewer, lc, rc);
         let start = self.element_offset(element)?;
         let stride = self.size(element)?;
         let (l, r) = (self.at(l, start), self.at(r, start));
         if owner.0.name == "Map" {
-            self.elements(element, stride, l, r, count, depth)?;
+            let tag = self
+                .record(element)?
+                .tag
+                .clone()
+                .ok_or_else(|| CompareError::Invalid("map entry tag".into()))?;
+            let pair = tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0].clone();
+            let from = self.builder.current();
+            let head = self.block();
+            let compare = self.block();
+            let done = self.block();
+            self.builder.br(head);
+            self.builder.position(head);
+            let i = self.builder.phi(word);
+            let lp = self.builder.phi(ptr);
+            let rp = self.builder.phi(ptr);
+            self.builder.add_incoming(i, self.u64(0), from);
+            self.builder.add_incoming(lp, l, from);
+            self.builder.add_incoming(rp, r, from);
+            let more = self.builder.icmp(IntPredicate::Ult, i, count);
+            self.builder.cond_br(more, compare, done);
+            self.builder.position(compare);
+            let ln = map_next(&self.builder, self.function, &tag, stride, lp);
+            let rn = map_next(&self.builder, self.function, &tag, stride, rp);
+            let code = self.child(
+                pair.layout,
+                self.at(ln, pair.offset),
+                self.at(rn, pair.offset),
+                depth,
+            )?;
+            self.decide(code);
+            let next = self
+                .builder
+                .binary(crate::context::BinOp::Add, i, self.u64(1));
+            let next_left = self.at(ln, stride);
+            let next_right = self.at(rn, stride);
+            let from = self.builder.current();
+            self.builder.br(head);
+            self.builder.add_incoming(i, next, from);
+            self.builder.add_incoming(lp, next_left, from);
+            self.builder.add_incoming(rp, next_right, from);
+            self.builder.position(done);
         } else {
             // SEM-5, spec #93. Selection yields canonical structural order
             // without allocating or mutating either borrowed set.
@@ -851,10 +901,9 @@ impl<'m> Generator<'m, '_> {
 
 /// The hash function of `layout` in `module`, generating it and every hash function it calls.
 ///
-/// A hash function `hirsel.hash.<layout>(at, state, depth, deep) -> i64` feeds the scalar
-/// leaves of the value of its layout at `at`, in layout order, to `hash_bytes` (the runtime's
-/// keyed SipHash-1-3 step, `hirsel_rt_v2_hash_bytes`), starting from `state`, and returns the
-/// new state. Floats feed `-0.0` as `+0.0`, so values `Compare Eq` calls equal hash equal; a
+/// A hash function `hirsel.hash.<layout>(at, state, depth, deep, context) -> i64`
+/// feeds framed leaves into one caller-owned SipHash stream through `hash_update`.
+/// It returns the unchanged opaque state address; only the root finalizes it. Floats feed `-0.0` as `+0.0`, so values `Compare Eq` calls equal hash equal; a
 /// variant feeds its active ordinal, a sequence its count, a String or Bytes slice its length
 /// and bytes. Depth is counted as the comparator counts it; a value deeper than
 /// `COMPARE_MAX_DEPTH` sets the byte at `deep` (the MEM-3 Depth failure, spec #90) and its
@@ -890,7 +939,7 @@ fn declare_hash<'m>(
     pending: &mut Vec<HashPending<'m>>,
 ) -> Function<'m> {
     let (ptr, i64_ty) = (module.ptr_type(), module.int_type(64));
-    let ty = module.function_type(i64_ty, &[ptr, i64_ty, i64_ty, ptr]);
+    let ty = module.function_type(i64_ty, &[ptr, i64_ty, i64_ty, ptr, ptr]);
     let name = format!("hirsel.hash.{}", layout.0);
     let fresh = !module.defines(&name);
     let function = module
@@ -1111,6 +1160,95 @@ impl<'m> HashGenerator<'m, '_> {
         Ok(())
     }
 
+    fn sorted_next(
+        &mut self,
+        element: LayoutId,
+        stride: u64,
+        base: Value<'m>,
+        count: Value<'m>,
+        previous: Value<'m>,
+        first: Value<'m>,
+        depth: Value<'m>,
+        state: Value<'m>,
+        deep: Value<'m>,
+    ) -> Compared<Value<'m>> {
+        use crate::context::BinOp;
+        let word = self.module.int_type(64);
+        let ptr = self.module.ptr_type();
+        let boolean = self.module.int_type(1);
+        let from = self.builder.current();
+        let loop_ = self.module.append_block(self.function);
+        let check = self.module.append_block(self.function);
+        let done = self.module.append_block(self.function);
+        self.builder.br(loop_);
+        self.builder.position(loop_);
+        let i = self.builder.phi(word);
+        self.builder.add_incoming(i, self.u64(0), from);
+        let best = self.builder.phi(ptr);
+        self.builder.add_incoming(best, base, from);
+        let found = self.builder.phi(boolean);
+        self.builder
+            .add_incoming(found, self.module.const_int(boolean, 0), from);
+        let more = self.builder.icmp(IntPredicate::Ult, i, count);
+        self.builder.cond_br(more, check, done);
+        self.builder.position(check);
+        let offset = self.builder.binary(BinOp::Mul, i, self.u64(stride));
+        let candidate = self.builder.offset(base, offset);
+        let comparator = comparator(self.module, self.layouts, element, false)?;
+        let context = self.module.parameter(self.function, 4);
+        let after = self
+            .builder
+            .call(comparator, &[candidate, previous, depth, context]);
+        self.hash_order_depth(after, state, deep);
+        let greater = self.builder.icmp(
+            IntPredicate::Eq,
+            after,
+            self.module
+                .const_int(self.module.int_type(8), u128::from(ORDER_GREATER)),
+        );
+        let eligible = self.builder.binary(BinOp::Or, first, greater);
+        let smaller = self
+            .builder
+            .call(comparator, &[candidate, best, depth, context]);
+        self.hash_order_depth(smaller, state, deep);
+        let less = self.builder.icmp(
+            IntPredicate::Eq,
+            smaller,
+            self.module
+                .const_int(self.module.int_type(8), u128::from(ORDER_LESS)),
+        );
+        let not_found =
+            self.builder
+                .icmp(IntPredicate::Eq, found, self.module.const_int(boolean, 0));
+        let better = self.builder.binary(BinOp::Or, not_found, less);
+        let choose = self.builder.binary(BinOp::And, eligible, better);
+        let next_best = self.builder.select(choose, candidate, best);
+        let next_found = self.builder.binary(BinOp::Or, found, eligible);
+        let next_i = self.builder.binary(BinOp::Add, i, self.u64(1));
+        let from = self.builder.current();
+        self.builder.br(loop_);
+        self.builder.add_incoming(i, next_i, from);
+        self.builder.add_incoming(best, next_best, from);
+        self.builder.add_incoming(found, next_found, from);
+        self.builder.position(done);
+        Ok(best)
+    }
+    fn hash_order_depth(&self, code: Value<'m>, state: Value<'m>, deep: Value<'m>) {
+        let too = self.builder.icmp(
+            IntPredicate::Eq,
+            code,
+            self.module
+                .const_int(self.module.int_type(8), u128::from(ORDER_DEPTH)),
+        );
+        let failed = self.module.append_block(self.function);
+        let next = self.module.append_block(self.function);
+        self.builder.cond_br(too, failed, next);
+        self.builder.position(failed);
+        self.builder
+            .store(self.module.const_int(self.module.int_type(8), 1), deep, 1);
+        self.builder.ret(state);
+        self.builder.position(next);
+    }
     fn container_hash(
         &mut self,
         layout: LayoutId,
@@ -1144,41 +1282,87 @@ impl<'m> HashGenerator<'m, '_> {
             .map_err(|e| CompareError::Invalid(format!("{e:?}")))?;
         let data = self.at(pointer, offset);
         let word = self.module.int_type(64);
-        let count = self.builder.load(word, data, 1);
+        let count = if owner.0.name == "Map" {
+            self.builder
+                .load(word, self.at(at, record.fields[3].offset), 1)
+        } else {
+            self.builder.load(word, data, 1)
+        };
         let state = self.feed_int(state, count, 8);
         let start = sequence_elements_offset(self.record(element)?)
             .map_err(|e| CompareError::Invalid(format!("{e:?}")))?;
         let first = self.at(data, start);
         let stride = self.size(element)?;
         if owner.0.name == "Map" {
-            return self.elements(element, stride, first, count, state, depth, deep);
+            let tag = self
+                .record(element)?
+                .tag
+                .clone()
+                .ok_or_else(|| CompareError::Invalid("map entry tag".into()))?;
+            let pair = tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0].clone();
+            let from = self.builder.current();
+            let head = self.module.append_block(self.function);
+            let fold = self.module.append_block(self.function);
+            let done = self.module.append_block(self.function);
+            self.builder.br(head);
+            self.builder.position(head);
+            let i = self.builder.phi(word);
+            let pointer = self.builder.phi(self.module.ptr_type());
+            let state_phi = self.builder.phi(word);
+            self.builder.add_incoming(i, self.u64(0), from);
+            self.builder.add_incoming(pointer, first, from);
+            self.builder.add_incoming(state_phi, state, from);
+            let more = self.builder.icmp(IntPredicate::Ult, i, count);
+            self.builder.cond_br(more, fold, done);
+            self.builder.position(fold);
+            let entry = map_next(&self.builder, self.function, &tag, stride, pointer);
+            let state = self.child(
+                pair.layout,
+                self.at(entry, pair.offset),
+                state_phi,
+                depth,
+                deep,
+            )?;
+            let next = self.builder.binary(BinOp::Add, i, self.u64(1));
+            let next_entry = self.at(entry, stride);
+            let from = self.builder.current();
+            self.builder.br(head);
+            self.builder.add_incoming(i, next, from);
+            self.builder.add_incoming(pointer, next_entry, from);
+            self.builder.add_incoming(state_phi, state, from);
+            self.builder.position(done);
+            return Ok(state_phi);
         }
-        // Each element starts with the same keyed state. Addition is
-        // commutative, so equal sets hash equally in every insertion order.
+        // Canonical structural order makes a set's stream independent of
+        // insertion order, with one finalization for the complete key.
         let from = self.builder.current();
-        let loop_ = self.module.append_block(self.function);
+        let head = self.module.append_block(self.function);
         let fold = self.module.append_block(self.function);
         let done = self.module.append_block(self.function);
-        self.builder.br(loop_);
-        self.builder.position(loop_);
+        self.builder.br(head);
+        self.builder.position(head);
         let i = self.builder.phi(word);
+        let previous = self.builder.phi(self.module.ptr_type());
+        let state_phi = self.builder.phi(word);
         self.builder.add_incoming(i, self.u64(0), from);
-        let combined = self.builder.phi(word);
-        self.builder.add_incoming(combined, self.u64(0), from);
+        self.builder.add_incoming(previous, first, from);
+        self.builder.add_incoming(state_phi, state, from);
         let more = self.builder.icmp(IntPredicate::Ult, i, count);
         self.builder.cond_br(more, fold, done);
         self.builder.position(fold);
-        let offset = self.builder.binary(BinOp::Mul, i, self.u64(stride));
-        let at = self.builder.offset(first, offset);
-        let hash = self.child(element, at, state, depth, deep)?;
-        let sum = self.builder.binary(BinOp::Add, combined, hash);
+        let is_first = self.builder.icmp(IntPredicate::Eq, i, self.u64(0));
+        let entry = self.sorted_next(
+            element, stride, first, count, previous, is_first, depth, state_phi, deep,
+        )?;
+        let state = self.child(element, entry, state_phi, depth, deep)?;
         let next = self.builder.binary(BinOp::Add, i, self.u64(1));
         let from = self.builder.current();
-        self.builder.br(loop_);
+        self.builder.br(head);
         self.builder.add_incoming(i, next, from);
-        self.builder.add_incoming(combined, sum, from);
+        self.builder.add_incoming(previous, entry, from);
+        self.builder.add_incoming(state_phi, state, from);
         self.builder.position(done);
-        Ok(self.feed_int(state, combined, 8))
+        Ok(state_phi)
     }
 
     /// A scalar leaf at `at`: its bytes, a float's `-0.0` as `+0.0`.
@@ -1238,7 +1422,16 @@ impl<'m> HashGenerator<'m, '_> {
         deep: Value<'m>,
     ) -> Compared<Value<'m>> {
         let callee = declare_hash(self.module, layout, self.pending);
-        Ok(self.builder.call(callee, &[at, state, depth, deep]))
+        Ok(self.builder.call(
+            callee,
+            &[
+                at,
+                state,
+                depth,
+                deep,
+                self.module.parameter(self.function, 4),
+            ],
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1319,4 +1512,39 @@ impl<'m> HashGenerator<'m, '_> {
         let length = self.builder.load(i64_ty, self.at(at, length.offset), 1);
         Ok((data, length))
     }
+}
+
+/// Private Map holes do not contribute a structural field or a depth level.
+fn map_next<'m>(
+    builder: &Builder<'m>,
+    function: Function<'m>,
+    tag: &hirsel_lir::layout_types::TagEncoding,
+    stride: u64,
+    first: Value<'m>,
+) -> Value<'m> {
+    let module = builder.module();
+    let from = builder.current();
+    let head = module.append_block(function);
+    let skip = module.append_block(function);
+    let done = module.append_block(function);
+    builder.br(head);
+    builder.position(head);
+    let at = builder.phi(module.ptr_type());
+    builder.add_incoming(at, first, from);
+    let ordinal = load_tag(builder, at, 1, tag.offset, tag.form, true);
+    let live = builder.icmp(
+        IntPredicate::Eq,
+        ordinal,
+        module.const_int(module.int_type(32), 1),
+    );
+    builder.cond_br(live, done, skip);
+    builder.position(skip);
+    let next = builder.offset(
+        at,
+        module.const_int(module.int_type(64), u128::from(stride)),
+    );
+    builder.br(head);
+    builder.add_incoming(at, next, skip);
+    builder.position(done);
+    at
 }

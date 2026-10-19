@@ -68,6 +68,7 @@ impl Emitter<'_> {
             AbiParam::new(types::I64),
             AbiParam::new(types::I64),
             AbiParam::new(PTR),
+            AbiParam::new(PTR),
         ]);
         sig.returns.push(AbiParam::new(types::I64));
         sig
@@ -151,6 +152,28 @@ impl Gen<'_, '_> {
             Some(record) => Ok(record),
             None => self.invalid(format!("no layout {}", layout.0)),
         }
+    }
+
+    fn map_next(
+        &mut self,
+        tag: &hirsel_lir::layout_types::TagEncoding,
+        stride: u64,
+        first: Value,
+    ) -> Value {
+        let head = self.b.create_block();
+        let skip = self.b.create_block();
+        let done = self.b.create_block();
+        let at = self.b.append_block_param(head, PTR);
+        self.b.ins().jump(head, &[first.into()]);
+        self.b.switch_to_block(head);
+        let ordinal = self.tag(at, tag.offset, tag.form);
+        let live = self.b.ins().icmp_imm_s(IntCC::Equal, ordinal, 1);
+        self.b.ins().brif(live, done, &[], skip, &[]);
+        self.b.switch_to_block(skip);
+        let next = self.at(at, stride);
+        self.b.ins().jump(head, &[next.into()]);
+        self.b.switch_to_block(done);
+        at
     }
 
     fn size(&self, layout: LayoutId) -> Generated<u64> {
@@ -335,7 +358,7 @@ impl Gen<'_, '_> {
                     let id = self.em.import_function(name, &sig)?;
                     let l = self.load(types::I64, left);
                     let r = self.load(types::I64, right);
-                    let context = self.params[3];
+                    let context = *self.params.last().unwrap();
                     let result = self.call(id, &[context, l, r]);
                     let less = self.b.ins().icmp_imm_s(IntCC::SignedLessThan, result, 0);
                     let greater = self.b.ins().icmp_imm_s(IntCC::SignedGreaterThan, result, 0);
@@ -503,14 +526,53 @@ impl Gen<'_, '_> {
             self.payload(l, &entries, payload)?,
             self.payload(r, &entries, payload)?,
         );
-        let (lc, rc) = (self.load(types::I64, l), self.load(types::I64, r));
+        let (lc, rc) = if owner.0.name == "Map" {
+            let la = self.at(left, record.fields[3].offset);
+            let ra = self.at(right, record.fields[3].offset);
+            (self.load(types::I64, la), self.load(types::I64, ra))
+        } else {
+            (self.load(types::I64, l), self.load(types::I64, r))
+        };
         let fewer = self.b.ins().icmp(IntCC::UnsignedLessThan, lc, rc);
         let count = self.b.ins().select(fewer, lc, rc);
         let start = self.element_offset(element)?;
         let stride = self.size(element)?;
         let (l, r) = (self.at(l, start), self.at(r, start));
         if owner.0.name == "Map" {
-            self.elements(element, stride, l, r, count, depth)?;
+            let tag = self
+                .record(element)?
+                .tag
+                .clone()
+                .ok_or_else(|| CodegenError::Invalid {
+                    definition: self.definition.clone(),
+                    what: "map entry tag".into(),
+                })?;
+            let pair = tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0].clone();
+            let head = self.b.create_block();
+            let compare = self.b.create_block();
+            let done = self.b.create_block();
+            let i = self.b.append_block_param(head, types::I64);
+            let lp = self.b.append_block_param(head, PTR);
+            let rp = self.b.append_block_param(head, PTR);
+            let zero = self.u64(0);
+            self.b.ins().jump(head, &[zero.into(), l.into(), r.into()]);
+            self.b.switch_to_block(head);
+            let more = self.b.ins().icmp(IntCC::UnsignedLessThan, i, count);
+            self.b.ins().brif(more, compare, &[], done, &[]);
+            self.b.switch_to_block(compare);
+            let ln = self.map_next(&tag, stride, lp);
+            let rn = self.map_next(&tag, stride, rp);
+            let la = self.at(ln, pair.offset);
+            let ra = self.at(rn, pair.offset);
+            let code = self.child(pair.layout, la, ra, depth)?;
+            self.decide(code);
+            let next = self.b.ins().iadd_imm_s(i, 1);
+            let ln = self.at(ln, stride);
+            let rn = self.at(rn, stride);
+            self.b
+                .ins()
+                .jump(head, &[next.into(), ln.into(), rn.into()]);
+            self.b.switch_to_block(done);
         } else {
             // SEM-5: selection yields canonical structural order without allocating or
             // mutating either borrowed set.
@@ -529,8 +591,8 @@ impl Gen<'_, '_> {
             self.b.ins().brif(more, compare, &[], done, &[]);
             self.b.switch_to_block(compare);
             let first = self.b.ins().icmp_imm_s(IntCC::Equal, i, 0);
-            let ln = self.sorted_next(element, stride, l, lc, lp, first, depth)?;
-            let rn = self.sorted_next(element, stride, r, rc, rp, first, depth)?;
+            let ln = self.sorted_next(element, stride, l, lc, lp, first, depth, None)?;
+            let rn = self.sorted_next(element, stride, r, rc, rp, first, depth, None)?;
             let code = self.child(element, ln, rn, depth)?;
             self.decide(code);
             let next = self.b.ins().iadd_imm_s(i, 1);
@@ -556,6 +618,7 @@ impl Gen<'_, '_> {
         previous: Value,
         first: Value,
         depth: Value,
+        hash: Option<(Value, Value)>,
     ) -> Generated<Value> {
         let (head, check, done) = (
             self.b.create_block(),
@@ -578,16 +641,28 @@ impl Gen<'_, '_> {
         let candidate = self.b.ins().iadd(base, offset);
         let equality = self.equality;
         self.equality = false;
-        let after = self.child(element, candidate, previous, depth)?;
-        self.depth_code(after);
+        let after = if hash.is_some() {
+            let callee = self.em.declare_comparator(element, false)?;
+            let context = *self.params.last().unwrap();
+            self.call(callee, &[candidate, previous, depth, context])
+        } else {
+            self.child(element, candidate, previous, depth)?
+        };
+        self.selection_depth(after, hash);
         let greater = self
             .b
             .ins()
             .icmp_imm_s(IntCC::Equal, after, i64::from(ORDER_GREATER));
         let eligible = self.b.ins().bor(first, greater);
-        let smaller = self.child(element, candidate, best, depth)?;
+        let smaller = if hash.is_some() {
+            let callee = self.em.declare_comparator(element, false)?;
+            let context = *self.params.last().unwrap();
+            self.call(callee, &[candidate, best, depth, context])
+        } else {
+            self.child(element, candidate, best, depth)?
+        };
         self.equality = equality;
-        self.depth_code(smaller);
+        self.selection_depth(smaller, hash);
         let less = self
             .b
             .ins()
@@ -605,6 +680,24 @@ impl Gen<'_, '_> {
         Ok(best)
     }
 
+    fn selection_depth(&mut self, code: Value, hash: Option<(Value, Value)>) {
+        if let Some((state, deep)) = hash {
+            let too = self
+                .b
+                .ins()
+                .icmp_imm_s(IntCC::Equal, code, i64::from(ORDER_DEPTH));
+            let failed = self.b.create_block();
+            let next = self.b.create_block();
+            self.b.ins().brif(too, failed, &[], next, &[]);
+            self.b.switch_to_block(failed);
+            let one = self.b.ins().iconst(types::I8, 1);
+            self.b.ins().store(flags(), one, deep, 0);
+            self.b.ins().return_(&[state]);
+            self.b.switch_to_block(next);
+        } else {
+            self.depth_code(code);
+        }
+    }
     fn depth_code(&mut self, code: Value) {
         let deep = self
             .b
@@ -735,7 +828,7 @@ impl Gen<'_, '_> {
     ) -> Generated<Value> {
         match callee {
             Some(id) => {
-                let context = self.params[3];
+                let context = *self.params.last().unwrap();
                 Ok(self.call(id, &[left, right, depth, context]))
             }
             None => {
@@ -798,7 +891,7 @@ impl Gen<'_, '_> {
 
     /// `hash_bytes(state, bytes, length)`.
     fn feed(&mut self, state: Value, bytes: Value, length: Value) -> Generated<Value> {
-        let id = self.em.runtime(RuntimeEntry::HashBytes)?;
+        let id = self.em.runtime(RuntimeEntry::HashUpdate)?;
         Ok(self.call(id, &[state, bytes, length]))
     }
 
@@ -968,38 +1061,86 @@ impl Gen<'_, '_> {
             Err(e) => return self.invalid(format!("{e:?}")),
         };
         let data = self.at(pointer, offset);
-        let count = self.load(types::I64, data);
+        let count_at = if owner.0.name == "Map" {
+            self.at(at, record.fields[3].offset)
+        } else {
+            data
+        };
+        let count = self.load(types::I64, count_at);
         let state = self.feed_int(state, count, 8)?;
         let start = self.element_offset(element)?;
         let first = self.at(data, start);
         let stride = self.size(element)?;
         if owner.0.name == "Map" {
-            return self.hash_elements(element, stride, first, count, state, depth, deep);
+            let tag = self
+                .record(element)?
+                .tag
+                .clone()
+                .ok_or_else(|| CodegenError::Invalid {
+                    definition: self.definition.clone(),
+                    what: "map entry tag".into(),
+                })?;
+            let pair = tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0].clone();
+            let head = self.b.create_block();
+            let fold = self.b.create_block();
+            let done = self.b.create_block();
+            let i = self.b.append_block_param(head, types::I64);
+            let pointer = self.b.append_block_param(head, PTR);
+            let state_phi = self.b.append_block_param(head, types::I64);
+            let zero = self.u64(0);
+            self.b
+                .ins()
+                .jump(head, &[zero.into(), first.into(), state.into()]);
+            self.b.switch_to_block(head);
+            let more = self.b.ins().icmp(IntCC::UnsignedLessThan, i, count);
+            self.b.ins().brif(more, fold, &[], done, &[]);
+            self.b.switch_to_block(fold);
+            let entry = self.map_next(&tag, stride, pointer);
+            let pair_at = self.at(entry, pair.offset);
+            let callee = self.em.declare_hasher(pair.layout)?;
+            let state = self.call(callee, &[pair_at, state_phi, depth, deep, self.params[4]]);
+            let next = self.b.ins().iadd_imm_s(i, 1);
+            let pointer = self.at(entry, stride);
+            self.b
+                .ins()
+                .jump(head, &[next.into(), pointer.into(), state.into()]);
+            self.b.switch_to_block(done);
+            return Ok(state_phi);
         }
-        // Each element starts with the same keyed state; addition is commutative, so equal
-        // sets hash equally in every insertion order.
+        // Canonical Set order feeds one stream and finalizes only at the root.
         let callee = self.em.declare_hasher(element)?;
-        let (head, fold, done) = (
-            self.b.create_block(),
-            self.b.create_block(),
-            self.b.create_block(),
-        );
+        let head = self.b.create_block();
+        let fold = self.b.create_block();
+        let done = self.b.create_block();
         let i = self.b.append_block_param(head, types::I64);
-        let combined = self.b.append_block_param(head, types::I64);
+        let previous = self.b.append_block_param(head, PTR);
+        let state_phi = self.b.append_block_param(head, types::I64);
         let zero = self.u64(0);
-        self.b.ins().jump(head, &[zero.into(), zero.into()]);
+        self.b
+            .ins()
+            .jump(head, &[zero.into(), first.into(), state.into()]);
         self.b.switch_to_block(head);
         let more = self.b.ins().icmp(IntCC::UnsignedLessThan, i, count);
         self.b.ins().brif(more, fold, &[], done, &[]);
         self.b.switch_to_block(fold);
-        let offset = self.b.ins().imul_imm_s(i, stride as i64);
-        let element_at = self.b.ins().iadd(first, offset);
-        let hash = self.call(callee, &[element_at, state, depth, deep]);
-        let sum = self.b.ins().iadd(combined, hash);
+        let is_first = self.b.ins().icmp_imm_s(IntCC::Equal, i, 0);
+        let entry = self.sorted_next(
+            element,
+            stride,
+            first,
+            count,
+            previous,
+            is_first,
+            depth,
+            Some((state_phi, deep)),
+        )?;
+        let state = self.call(callee, &[entry, state_phi, depth, deep, self.params[4]]);
         let next = self.b.ins().iadd_imm_s(i, 1);
-        self.b.ins().jump(head, &[next.into(), sum.into()]);
+        self.b
+            .ins()
+            .jump(head, &[next.into(), entry.into(), state.into()]);
         self.b.switch_to_block(done);
-        self.feed_int(state, combined, 8)
+        Ok(state_phi)
     }
 
     /// A scalar leaf at `at`: its bytes, a float's `-0.0` as `+0.0`.
@@ -1060,7 +1201,7 @@ impl Gen<'_, '_> {
         deep: Value,
     ) -> Generated<Value> {
         let callee = self.em.declare_hasher(layout)?;
-        Ok(self.call(callee, &[at, state, depth, deep]))
+        Ok(self.call(callee, &[at, state, depth, deep, self.params[4]]))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1196,21 +1337,35 @@ impl FnEmitter<'_, '_, '_> {
         layout: LayoutId,
         failure: FailureId,
     ) -> Emitted {
-        let definition = self.definition();
-        let hasher = self.em.hasher(layout, definition)?;
         let at = self.stack(layout)?;
         let operand = self.counted_view(value)?;
         let shape = self.layout_shape(layout)?;
         self.store(shape, operand, at)?;
         let context = self.context;
-        let state = self.rt1(RuntimeEntry::HashBegin, &[context])?;
+        let seed = self.rt1(RuntimeEntry::HashBegin, &[context])?;
+        if matches!(self.layout(layout)?.kind, LayoutKind::Scalar(kind)
+            if !matches!(kind, ScalarKind::F32 | ScalarKind::F64 | ScalarKind::Pointer))
+        {
+            let size = self.fixed_size(layout)?;
+            let length = self.u64c(size);
+            let hash = self.rt1(RuntimeEntry::HashBytes, &[seed, at.ptr, length])?;
+            return self.define(result, V::One(hash));
+        }
+        let definition = self.definition();
+        let hasher = self.em.hasher(layout, definition)?;
+        let (state, _) = self.stack_bytes(
+            hirsel_lir::runtime_abi::HASH_STATE_BYTES,
+            hirsel_lir::runtime_abi::HASH_STATE_ALIGN,
+        );
+        self.rt(RuntimeEntry::HashInit, &[state, seed])?;
         let (deep, _) = self.stack_bytes(1, 1);
         let zero = self.b.ins().iconst(types::I8, 0);
         self.store_at(zero, deep, 0);
         let depth = self.u64c(0);
-        let hash = self.call(hasher, &[at.ptr, state, depth, deep])[0];
+        let hash = self.call(hasher, &[at.ptr, state, depth, deep, context])[0];
         let flag = self.load_ty(types::I8, deep, 0);
         self.guard(flag, failure)?;
+        let hash = self.rt1(RuntimeEntry::HashFinish, &[hash])?;
         self.define(result, V::One(hash))
     }
 }

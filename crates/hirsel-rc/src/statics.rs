@@ -394,10 +394,19 @@ impl Encoder<'_, '_> {
             {
                 // Materialization has already applied duplicate/upsert semantics.
                 // The immutable image keeps that order and remains unindexed.
-                if record.fields.len() != 2 {
-                    return unsupported("a keyed container without entries and index");
+                let map = owner.0.name == "Map";
+                if record.fields.len() != if map { 4 } else { 2 } {
+                    return unsupported("a keyed container without its private fields");
                 }
                 for field in &record.fields {
+                    if map && field.ordinal == 3 {
+                        self.put(
+                            block,
+                            offset + field.offset,
+                            &(fields.len() as u64).to_le_bytes(),
+                        );
+                        continue;
+                    }
                     let (LayoutKind::Block { payload } | LayoutKind::Box { payload }) =
                         self.kind(field.layout)
                     else {
@@ -407,7 +416,23 @@ impl Encoder<'_, '_> {
                     sequence.kind = ValueKind::Construct {
                         constructor: Constructor::Sequence,
                         fields: if field.ordinal == 0 {
-                            fields.clone()
+                            if map {
+                                fields
+                                    .iter()
+                                    .map(|pair| ValueNode {
+                                        ty: pair.ty,
+                                        kind: ValueKind::Construct {
+                                            constructor: Constructor::Variant {
+                                                definition: owner.clone(),
+                                                variant: 1,
+                                            },
+                                            fields: vec![pair.clone()],
+                                        },
+                                    })
+                                    .collect()
+                            } else {
+                                fields.clone()
+                            }
                         } else {
                             Vec::new()
                         },

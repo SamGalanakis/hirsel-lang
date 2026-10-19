@@ -34,14 +34,45 @@ fn sequence(table: &LayoutTable, field: &FieldLayout) -> (u64, u64, u64, LayoutI
 #[test]
 #[ignore = "native: run by tools/check-native.sh"]
 fn compiled_hash_seed_changes_buckets_and_preserves_insertion_order() {
+    compiled_seed_law(false);
+}
+
+#[test]
+#[ignore = "native: run by tools/check-native.sh"]
+fn compiled_composite_hash_is_one_canonical_stream_on_both_backends() {
+    compiled_seed_law(true);
+}
+
+fn compiled_seed_law(composite: bool) {
+    let key_type = if composite {
+        "(u64, String, Set[u64])"
+    } else {
+        "u64"
+    };
+    let helper = if composite {
+        "fn key(i: u64) -> (u64, String, Set[u64]) { let mut s: Set[u64] = set.empty(); set.insert(mut s, 256); set.insert(mut s, 1); (i, \"word\", take s) }\n"
+    } else {
+        ""
+    };
     let inserts = (0..32)
-        .map(|i| format!("map.insert(mut m, {i}, {})\n", i + 100))
+        .map(|i| {
+            let key = if composite {
+                format!("key({i})")
+            } else {
+                i.to_string()
+            };
+            format!("map.insert(mut m, {key}, {})\n", i + 100)
+        })
         .collect::<String>();
     let source = format!(
-        "pub fn build() -> Map[u64,u64] {{ let mut m: Map[u64,u64] = map.empty()\n{inserts}take m }}\npub fn first(take m: Map[u64,u64]) -> u64 {{ for (k,v) in take m {{ return v }}\n 0 }}\npub fn main(rt: Io, args: Args) -> Result[(), ()] {{ Ok(()) }}"
+        "{helper}pub fn build() -> Map[{key_type},u64] {{ let mut m: Map[{key_type},u64] = map.empty()\n{inserts}take m }}\npub fn first(take m: Map[{key_type},u64]) -> u64 {{ for (k,v) in take m {{ return v }}\n 0 }}\npub fn main(rt: Io, args: Args) -> Result[(), ()] {{ Ok(()) }}"
     );
     let targets = TargetSpec::executed();
-    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("map-seed");
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(if composite {
+        "map-composite-seed"
+    } else {
+        "map-seed"
+    });
     let tools =
         Toolchain::in_tree_diagnostic(&root.join("runtime"), &targets.iter().collect::<Vec<_>>())
             .unwrap();
@@ -99,113 +130,142 @@ fn compiled_hash_seed_changes_buckets_and_preserves_insertion_order() {
                 };
                 let map = &ready.table.layouts[payload.0 as usize];
                 let (entries_count, start, stride, pair) = sequence(&ready.table, &map.fields[0]);
-                let pair = &ready.table.layouts[pair.0 as usize];
+                let entry = &ready.table.layouts[pair.0 as usize];
+                let some = &entry.tag.as_ref().unwrap().variants[1].fields[0];
+                let pair = &ready.table.layouts[some.layout.0 as usize];
+                let (hash_count, hash_start, hash_stride, _) =
+                    sequence(&ready.table, &map.fields[2]);
+                assert_eq!(hash_stride, 8);
                 let (index_count, index_start, index_stride, slot) =
                     sequence(&ready.table, &map.fields[1]);
                 assert!(
                     ready.table.layouts[slot.0 as usize].kind
-                        == LayoutKind::Scalar(ScalarKind::U32)
-                        && index_stride == 4,
-                    "the harness reads index slots as uint32_t"
+                        == LayoutKind::Scalar(ScalarKind::U64)
+                        && index_stride == 8,
+                    "the harness reads tagged index slots as uint64_t"
                 );
-                for opt in [OptLevel::None, OptLevel::Speed] {
-                    let object = emit(&ready, opt, |_| true).unwrap();
-                    let symbol = object
-                        .exports
-                        .iter()
-                        .find(|e| e.definition.as_ref().is_some_and(|p| p.0.name == "build"))
-                        .unwrap()
-                        .name
-                        .clone();
-                    let first = object
-                        .exports
-                        .iter()
-                        .find(|e| e.definition.as_ref().is_some_and(|p| p.0.name == "first"))
-                        .unwrap()
-                        .name
-                        .clone();
-                    let dir = root.join(format!("{}-{reuse}-{opt:?}", target.triple));
-                    std::fs::create_dir_all(&dir).unwrap();
-                    let c = include_str!("../rc/maps/seed.c")
-                        .replace("@CALLS@", &calls)
-                        .replace("@BUILD@", &symbol)
-                        .replace("@FIRST@", &first)
-                        .replace(
-                            "@MAPSIZE@",
-                            &match map.size {
-                                SizeSpec::Fixed(n) => n,
-                                _ => panic!("map size"),
-                            }
-                            .to_string(),
+                for backend in [Backend::Llvm, Backend::Cranelift] {
+                    for opt in [OptLevel::None, OptLevel::Speed] {
+                        let mut objects = emit_backend_objects(
+                            &ready,
+                            backend,
+                            opt,
+                            Partition::Whole,
+                            false,
+                            None,
                         )
-                        .replace("@ENTRIES@", &map.fields[0].offset.to_string())
-                        .replace("@INDEX@", &map.fields[1].offset.to_string())
-                        .replace("@COUNT@", &entries_count.to_string())
-                        .replace("@START@", &start.to_string())
-                        .replace("@STRIDE@", &stride.to_string())
-                        .replace("@CAPACITY@", &index_count.to_string())
-                        .replace("@SLOTS@", &index_start.to_string())
-                        .replace("@KEY@", &pair.fields[0].offset.to_string())
-                        .replace("@VALUE@", &pair.fields[1].offset.to_string());
-                    let harness = dir.join("seed.c");
-                    let obj = dir.join("map.o");
-                    let exe = dir.join("program");
-                    std::fs::write(&harness, c).unwrap();
-                    std::fs::write(&obj, object.bytes).unwrap();
-                    let arm = target.triple.starts_with("aarch64");
-                    let mut compiler = std::process::Command::new(if arm {
-                        tools.aarch64_cc.as_ref().unwrap()
-                    } else {
-                        &tools.clang
-                    });
-                    let linked = compiler
-                        .arg(&harness)
-                        .arg("-I")
-                        .arg(
-                            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                                .join("../hirsel-rt/include"),
-                        )
-                        .arg(&obj)
-                        .arg(tools.archive(&target.triple).unwrap())
-                        .args([
-                            "-lgcc_s",
-                            "-lutil",
-                            "-lrt",
-                            "-lpthread",
-                            "-lm",
-                            "-ldl",
-                            "-o",
-                        ])
-                        .arg(&exe)
-                        .output()
                         .unwrap();
-                    assert!(
-                        linked.status.success(),
-                        "{}",
-                        String::from_utf8_lossy(&linked.stderr)
-                    );
-                    let mut command = if arm {
-                        let mut command =
-                            std::process::Command::new(tools.qemu_aarch64.as_ref().unwrap());
-                        command
-                            .arg("-L")
-                            .arg(tools.aarch64_sysroot.as_ref().unwrap())
-                            .arg(&exe);
-                        command
-                    } else {
-                        std::process::Command::new(&exe)
-                    };
-                    let run = command.output().unwrap();
-                    assert!(
-                        run.status.success(),
-                        "{} {reuse} {opt:?}: {}",
-                        target.triple,
-                        String::from_utf8_lossy(&run.stderr)
-                    );
-                    assert_eq!(
-                        run.stdout,
-                        b"seed changes buckets; insertion order stays 0..31\n"
-                    );
+                        assert_eq!(objects.len(), 1);
+                        let object = objects.pop().unwrap();
+                        let symbol = object
+                            .exports
+                            .iter()
+                            .find(|e| e.definition.as_ref().is_some_and(|p| p.0.name == "build"))
+                            .unwrap()
+                            .name
+                            .clone();
+                        let first = object
+                            .exports
+                            .iter()
+                            .find(|e| e.definition.as_ref().is_some_and(|p| p.0.name == "first"))
+                            .unwrap()
+                            .name
+                            .clone();
+                        let dir = root.join(format!(
+                            "{}-{reuse}-{opt:?}-{}",
+                            target.triple,
+                            backend.name()
+                        ));
+                        std::fs::create_dir_all(&dir).unwrap();
+                        let c = include_str!("../rc/maps/seed.c")
+                            .replace("@CALLS@", &calls)
+                            .replace("@COMPOSITE@", if composite { "1" } else { "0" })
+                            .replace("@BUILD@", &symbol)
+                            .replace("@FIRST@", &first)
+                            .replace(
+                                "@MAPSIZE@",
+                                &match map.size {
+                                    SizeSpec::Fixed(n) => n,
+                                    _ => panic!("map size"),
+                                }
+                                .to_string(),
+                            )
+                            .replace("@ENTRIES@", &map.fields[0].offset.to_string())
+                            .replace("@INDEX@", &map.fields[1].offset.to_string())
+                            .replace("@HASHES@", &map.fields[2].offset.to_string())
+                            .replace("@LIVE@", &map.fields[3].offset.to_string())
+                            .replace("@HASHCOUNT@", &hash_count.to_string())
+                            .replace("@HASHSTART@", &hash_start.to_string())
+                            .replace("@COUNT@", &entries_count.to_string())
+                            .replace("@START@", &start.to_string())
+                            .replace("@STRIDE@", &stride.to_string())
+                            .replace("@CAPACITY@", &index_count.to_string())
+                            .replace("@SLOTS@", &index_start.to_string())
+                            .replace("@KEY@", &(some.offset + pair.fields[0].offset).to_string())
+                            .replace(
+                                "@VALUE@",
+                                &(some.offset + pair.fields[1].offset).to_string(),
+                            );
+                        let harness = dir.join("seed.c");
+                        let obj = dir.join("map.o");
+                        let exe = dir.join("program");
+                        std::fs::write(&harness, c).unwrap();
+                        std::fs::write(&obj, object.bytes).unwrap();
+                        let arm = target.triple.starts_with("aarch64");
+                        let mut compiler = std::process::Command::new(if arm {
+                            tools.aarch64_cc.as_ref().unwrap()
+                        } else {
+                            &tools.clang
+                        });
+                        let linked = compiler
+                            .arg(&harness)
+                            .arg("-I")
+                            .arg(
+                                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                                    .join("../hirsel-rt/include"),
+                            )
+                            .arg(&obj)
+                            .arg(tools.archive(&target.triple).unwrap())
+                            .args([
+                                "-lgcc_s",
+                                "-lutil",
+                                "-lrt",
+                                "-lpthread",
+                                "-lm",
+                                "-ldl",
+                                "-o",
+                            ])
+                            .arg(&exe)
+                            .output()
+                            .unwrap();
+                        assert!(
+                            linked.status.success(),
+                            "{}",
+                            String::from_utf8_lossy(&linked.stderr)
+                        );
+                        let mut command = if arm {
+                            let mut command =
+                                std::process::Command::new(tools.qemu_aarch64.as_ref().unwrap());
+                            command
+                                .arg("-L")
+                                .arg(tools.aarch64_sysroot.as_ref().unwrap())
+                                .arg(&exe);
+                            command
+                        } else {
+                            std::process::Command::new(&exe)
+                        };
+                        let run = command.output().unwrap();
+                        assert!(
+                            run.status.success(),
+                            "{} {reuse} {opt:?}: {}",
+                            target.triple,
+                            String::from_utf8_lossy(&run.stderr)
+                        );
+                        assert_eq!(
+                            run.stdout,
+                            b"seed changes buckets; insertion order stays 0..31\n"
+                        );
+                    }
                 }
             }
         }

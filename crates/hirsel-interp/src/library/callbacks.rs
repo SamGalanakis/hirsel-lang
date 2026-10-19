@@ -28,6 +28,13 @@ pub(super) enum Pending {
         hi: usize,
         index: usize,
     },
+    MapUpdated {
+        inserted: bool,
+    },
+    MapInitialized {
+        map: Value,
+        key: Value,
+    },
     /// `shared.with`: the body's result is the operation's.
     Read,
 }
@@ -210,6 +217,110 @@ impl Library {
         updates.push((0, saved));
         result
     }
+    /// One lookup; hit callbacks borrow the existing value, including on failure.
+    pub(super) fn map_edit(
+        &mut self,
+        args: &[Value],
+        insert: bool,
+    ) -> Result<OperationResult, collection::KeyedError> {
+        let map = args
+            .first()
+            .ok_or_else(|| invalid("map update arguments"))?;
+        let key = args.get(1).ok_or_else(|| invalid("map update key"))?;
+        let found = collection::map_index(map, key)?;
+        if !insert && found.is_none() {
+            return Ok(OperationResult::returned(Value::Bool(false)));
+        }
+        let mut prepared = map.clone();
+        let count = collection::len(map)?;
+        let charge = prepared
+            .arena_storage_mut()
+            .unwrap()
+            .as_mut()
+            .map(|storage| {
+                let copied = if storage.shared() { count } else { 0 };
+                let charge = (
+                    storage.arena,
+                    storage
+                        .element
+                        .saturating_mul(copied.saturating_add(u64::from(found.is_none()))),
+                );
+                if storage.shared() {
+                    map.fields()
+                        .unwrap()
+                        .iter()
+                        .flatten()
+                        .for_each(Value::share_arena_storage);
+                    *storage = crate::value::ArenaStorage::fresh(storage.arena, storage.element);
+                }
+                charge
+            });
+        let mut result = if let Some(index) = found {
+            let value = prepared.fields().unwrap()[index]
+                .as_ref()
+                .and_then(Value::fields)
+                .and_then(|pair| pair.get(1))
+                .and_then(Option::as_ref)
+                .ok_or_else(|| invalid("dead map value"))?
+                .clone();
+            let callee = args
+                .get(if insert { 3 } else { 2 })
+                .ok_or_else(|| invalid("map update callback"))?
+                .clone();
+            let mut result = self.schedule(
+                Pending::MapUpdated { inserted: insert },
+                callee,
+                vec![value],
+                vec![0],
+                vec![],
+            );
+            let OperationResult::Call { writebacks, .. } = &mut result else {
+                unreachable!()
+            };
+            writebacks.push(CallbackWriteback {
+                parameter: 0,
+                argument: 0,
+                fields: vec![index, 1],
+            });
+            result
+        } else {
+            // Native insertion copies the unretained key into independent heap storage.
+            let mut key = key.clone();
+            let mut work = vec![&mut key];
+            while let Some(value) = work.pop() {
+                if let Some(storage) = value.arena_storage_mut() {
+                    *storage = None;
+                }
+                if let Some(fields) = value.fields_mut() {
+                    work.extend(fields.iter_mut().flatten());
+                }
+            }
+            self.schedule(
+                Pending::MapInitialized {
+                    map: prepared.clone(),
+                    key,
+                },
+                args.get(2)
+                    .ok_or_else(|| invalid("map initializer"))?
+                    .clone(),
+                vec![],
+                vec![],
+                vec![],
+            )
+        };
+        let OperationResult::Call { updates, .. } = &mut result else {
+            unreachable!()
+        };
+        updates.push((0, prepared));
+        Ok(match charge {
+            Some((arena, bytes)) => OperationResult::ArenaCharge {
+                arena,
+                bytes,
+                result: Box::new(result),
+            },
+            None => result,
+        })
+    }
     pub(super) fn sorted_insert(&mut self, args: &[Value]) -> Result<OperationResult, Error> {
         let [by, map, key, value] = args else {
             return Err(invalid("sorted_map.insert arguments"));
@@ -346,6 +457,26 @@ impl Library {
                         arguments: vec![(0, iterator)],
                     })
                 }
+            }
+            Pending::MapUpdated { inserted } => Ok(OperationResult::returned(if inserted {
+                Value::Unit
+            } else {
+                Value::Bool(true)
+            })),
+            Pending::MapInitialized { mut map, key } => {
+                let OperationResult::Complete { value, .. } = result else {
+                    return Err(invalid("map initializer result"));
+                };
+                let Value::Map { entries, .. } = &mut map else {
+                    unreachable!()
+                };
+                entries.push(Some(Value::Tuple(vec![Some(key), Some(value)])));
+                Ok(OperationResult::Complete {
+                    value: Value::Unit,
+                    arguments: vec![(0, map)],
+                    consumed: vec![],
+                    released: vec![],
+                })
             }
             Pending::Read => match result {
                 OperationResult::Complete {

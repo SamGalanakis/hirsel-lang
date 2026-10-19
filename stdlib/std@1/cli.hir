@@ -141,12 +141,18 @@ pub fn parse(take args: List[String], specs: List[Flag]) -> Result[Parsed, Parse
         index += 1
         value = copy args[index]
       }
-      let mut occurrences: List[String] = match core@1/map.get(flags, spec.name) {
-        Some(values) => unique values,
-        None() => [],
-      }
-      core@1/list.push(mut occurrences, take value)
-      core@1/map.insert(mut flags, unique spec.name, take occurrences)
+      std@1/map.upsert(
+        mut flags,
+        spec.name,
+        fn() -> unique List[String] uses {} {
+          let mut first: List[String] = []
+          core@1/list.push(mut first, unique value)
+          take first
+        },
+        fn(mut occurrences: unique List[String]) -> () uses {} {
+          core@1/list.push(mut occurrences, unique value)
+        }
+      )
     } else {
       core@1/list.push(mut positional, copy token)
     }

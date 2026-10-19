@@ -28,3 +28,24 @@ pub fn same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool {
   }
   true
 }
+
+// One probe. Initialization runs only for an absent key; updates borrow the
+// stored value, so a hit copies neither the key nor the value.
+@preserves_unique(m)
+pub fn upsert[K: key, V](
+  mut m: unique Map[K, V],
+  k: K,
+  initial: fn() -> unique V uses {},
+  change: fn(mut value: unique V) -> () uses {}
+) -> () uses {} {
+  core@1/map.upsert_with(mut m, k, initial, change)
+}
+
+@preserves_unique(m)
+pub fn update[K: key, V](
+  mut m: unique Map[K, V],
+  k: K,
+  change: fn(mut value: unique V) -> () uses {}
+) -> bool uses {} {
+  core@1/map.update_with(mut m, k, change)
+}

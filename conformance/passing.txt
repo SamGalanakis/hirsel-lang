@@ -826,6 +826,8 @@ conformance/DROP/DROP-2-loop-break.hir
 conformance/DROP/DROP-2-loop-continue.hir
 conformance/DROP/DROP-2-map-cursor-empty-join-run.hir
 conformance/DROP/DROP-2-map-replaced-value.hir
+conformance/DROP/DROP-2-map-update-failure.hir
+conformance/DROP/DROP-2-map-update-owned-run.hir
 conformance/DROP/DROP-2-match-resource-binder-drop-run.hir
 conformance/DROP/DROP-2-move-argument.hir
 conformance/DROP/DROP-2-move-binding.hir
@@ -2463,6 +2465,8 @@ conformance/MEM/MEM-6-map-empty-in-arena-run.hir
 conformance/MEM/MEM-6-map-insert-charges-entry-run.hir
 conformance/MEM/MEM-6-map-nested-insert-copies-run.hir
 conformance/MEM/MEM-6-map-shared-copy-charge-run.hir
+conformance/MEM/MEM-6-map-tombstones-copy-charge-run.hir
+conformance/MEM/MEM-6-map-upsert-charge-run.hir
 conformance/MEM/MEM-6-map-value-copy-charge-run.hir
 conformance/MEM/MEM-6-outer-arena-exhaustion-run.hir
 conformance/MEM/MEM-6-packed-list-push-charges-run.hir
@@ -2989,6 +2993,8 @@ conformance/MODE/MODE-2-map-insert-counted-key-bad.hir
 conformance/MODE/MODE-2-map-insert-plain-key-ok.hir
 conformance/MODE/MODE-2-map-insert-taken-key-copied-bad.hir
 conformance/MODE/MODE-2-map-insert-taken-key-unique-ok.hir
+conformance/MODE/MODE-2-map-update-shared-bad.hir
+conformance/MODE/MODE-2-map-update-unique-ok.hir
 conformance/MODE/MODE-2-nested-view-borrow-ok.hir
 conformance/MODE/MODE-2-nested-view-borrow-still-unique-ok.hir
 conformance/MODE/MODE-2-nested-view-copy-kept-bad.hir
@@ -5841,6 +5847,8 @@ conformance/SEM/SEM-5-list-sort-stable-6-run.hir
 conformance/SEM/SEM-5-list-sort-stable-run.hir
 conformance/SEM/SEM-5-map-get-after-overwrite-run.hir
 conformance/SEM/SEM-5-map-get-hit-miss-run.hir
+conformance/SEM/SEM-5-map-tombstones-nested-borrow-run.hir
+conformance/SEM/SEM-5-map-upsert-update-run.hir
 conformance/SEM/SEM-5-mut-map-value-ok.hir
 conformance/SEM/SEM-5-replace-keeps-order.hir
 conformance/SEM/SEM-5-same-entries.hir
@@ -5933,6 +5941,7 @@ conformance/SER/SER-2-core-errors-run.hir
 conformance/SER/SER-2-duplicate-map-run.hir
 conformance/SER/SER-2-duplicate-set-run.hir
 conformance/SER/SER-2-flat-zero-stride-list-run.hir
+conformance/SER/SER-2-map-removed-equals-dense-run.hir
 conformance/SER/SER-2-noncanonical-bool-run.hir
 conformance/SER/SER-2-noncanonical-nan-run.hir
 conformance/SER/SER-2-overflow-length-run.hir

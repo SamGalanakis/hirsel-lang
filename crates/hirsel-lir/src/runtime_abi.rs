@@ -12,7 +12,10 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 20;
+pub const ABI_VERSION: u32 = 21;
+/// Caller-owned streaming SipHash state (six u64 words).
+pub const HASH_STATE_BYTES: u64 = 48;
+pub const HASH_STATE_ALIGN: u32 = 8;
 /// Caller-owned previous foreign context/site storage (two 64-bit words).
 pub const FOREIGN_SCOPE_BYTES: u64 = 16;
 pub const FOREIGN_SCOPE_ALIGN: u32 = 8;
@@ -400,6 +403,9 @@ pub enum RuntimeEntry {
     BlockGrow,
     HashBegin,
     HashBytes,
+    HashInit,
+    HashUpdate,
+    HashFinish,
     CodecEncode,
     CodecDecode,
     UniqueCopy,
@@ -524,7 +530,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 66] = [
+    pub const ALL: [RuntimeEntry; 69] = [
         Self::AbiVersion,
         Self::CtxCreate,
         Self::CtxDestroy,
@@ -544,6 +550,9 @@ impl RuntimeEntry {
         Self::BlockGrow,
         Self::HashBegin,
         Self::HashBytes,
+        Self::HashInit,
+        Self::HashUpdate,
+        Self::HashFinish,
         Self::CodecEncode,
         Self::CodecDecode,
         Self::UniqueCopy,
@@ -702,6 +711,21 @@ impl RuntimeEntry {
                 "hirsel_rt_v2_hash_bytes",
                 U64,
                 const { &[p("state", U64), p("bytes", cptr(N::Void)), p("length", U64)] },
+            ),
+            Self::HashInit => (
+                "hirsel_rt_v2_hash_init",
+                VOID,
+                const { &[p("out", ptr(N::Void, 1)), p("seed", U64)] },
+            ),
+            Self::HashUpdate => (
+                "hirsel_rt_v2_hash_update",
+                U64,
+                const { &[p("state", U64), p("bytes", cptr(N::Void)), p("length", U64)] },
+            ),
+            Self::HashFinish => (
+                "hirsel_rt_v2_hash_finish",
+                U64,
+                const { &[p("state", U64)] },
             ),
             Self::CodecEncode => (
                 "hirsel_rt_v2_codec_encode",
@@ -1082,6 +1106,9 @@ snapshot_enum!(RuntimeEntry {
     BlockGrow,
     HashBegin,
     HashBytes,
+    HashInit,
+    HashUpdate,
+    HashFinish,
     CodecEncode,
     CodecDecode,
     UniqueCopy,

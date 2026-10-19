@@ -131,6 +131,12 @@ fn find(
     }
     Ok(None)
 }
+pub(super) fn map_index(map: &Value, key: &Value) -> Result<Option<usize>, KeyedError> {
+    let Value::Map { entries, .. } = map else {
+        return Err(invalid("map update requires Map").into());
+    };
+    find(entries, key, entry_key)
+}
 pub fn insert(map: &mut Value, key: Value, item: Value) -> Result<Displaced, KeyedError> {
     let Value::Map {
         entries: elements, ..

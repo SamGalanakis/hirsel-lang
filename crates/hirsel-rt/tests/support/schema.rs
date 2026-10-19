@@ -202,6 +202,7 @@ pub fn derive(owners: &Owners, store: &TypeStore, types: &[TypeId]) -> (Derived,
         field_count: 0,
         flags: 0,
         logical: 0,
+        logical_count: std::ptr::null(),
     });
     (
         Derived {
@@ -231,6 +232,9 @@ fn materialize(descriptors: &HashMap<LayoutId, Descriptor>) -> HashMap<LayoutId,
                 field_count: d.field_count,
                 flags: d.flags,
                 logical: d.logical,
+                logical_count: d.logical_count.map_or(std::ptr::null(), |words| {
+                    Box::leak(Box::new(words)).as_ptr()
+                }),
             })
             .collect::<Vec<_>>()
             .into_boxed_slice(),

@@ -1,0 +1,33 @@
+// rule: SER-2
+// expect: run
+// Private tombstones and seed caches never participate in equality or encoding.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut removed: unique Map[u64, String] = map.empty()
+  map.insert(mut removed, 1, "one")
+  map.insert(mut removed, 2, "two")
+  map.insert(mut removed, 3, "three")
+  failure.check(map.remove(mut removed, 2) == Some("two"), Bounds())
+  let mut dense: unique Map[u64, String] = map.empty()
+  map.insert(mut dense, 1, "one")
+  map.insert(mut dense, 3, "three")
+  failure.check(removed == dense, Bounds())
+  failure.check(codec.encode(removed) == codec.encode(dense), Bounds())
+  let decoded: Result[Map[u64, String], DecodeError] = codec.decode(
+    codec.encode(removed)
+  )
+  match decoded {
+    Ok(m) => {
+      failure.check(m == dense && map.len(m) == 2, Bounds())
+      let mut editable: unique Map[u64, String] = unique m
+      map.insert(mut editable, 4, "four")
+      failure.check(map.remove(mut editable, 1) == Some("one"), Bounds())
+      let mut order: u64 = 0
+      for (k, v) in editable {
+        order = order * 10 + k
+      }
+      failure.check(order == 34, Bounds())
+    },
+    Error(_) => failure.check(false, Bounds()),
+  }
+  Ok(())
+}

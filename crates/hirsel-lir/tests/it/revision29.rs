@@ -13,6 +13,7 @@ use support::*;
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Mutant {
     None,
+    MapEntry,
     /// The bytes node is String, not Bytes.
     Text,
     /// DecodeError's variant lacks a class.
@@ -170,6 +171,91 @@ fn plan(t: &mut Lir<Value>, decode: bool, m: Mutant) -> (CodecPlan, LayoutId) {
     } else {
         l::U64
     }));
+    // Map storage is private None/Some(pair), with u64 bucket/hash metadata
+    // and a public live count. C derives the pair independently of its producer.
+    let mut pair = t.table.layouts[l::PAY.0 as usize].clone();
+    pair.fields = vec![
+        at(0, l::U64),
+        FieldLayout {
+            ordinal: 1,
+            ..at(8, l::U64)
+        },
+    ];
+    let pair = push(t, pair);
+    let entry = variant(
+        t,
+        24,
+        8,
+        vec![
+            if m == Mutant::MapEntry {
+                vec![at(8, pair)]
+            } else {
+                vec![]
+            },
+            vec![at(8, pair)],
+        ],
+    );
+    let mut list = |element| {
+        let mut seq = t.table.layouts[l::SEQ.0 as usize].clone();
+        seq.kind = LayoutKind::Sequence { element };
+        let SizeSpec::Fixed(stride) = t.table.layouts[element.0 as usize].size else {
+            unreachable!()
+        };
+        seq.size = SizeSpec::Dynamic(vec![
+            SizeTerm::Constant(16),
+            SizeTerm::ReadLength {
+                offset: 0,
+                scalar: ScalarKind::U64,
+            },
+            SizeTerm::Constant(stride),
+            SizeTerm::Multiply,
+            SizeTerm::Add,
+        ]);
+        let payload = push(t, seq);
+        let mut block = t.table.layouts[l::SEQBLK.0 as usize].clone();
+        block.kind = LayoutKind::Block { payload };
+        push(t, block)
+    };
+    let entries = list(entry);
+    let metadata = list(l::U64);
+    let mut map = t.table.layouts[l::PAY.0 as usize].clone();
+    map.kind = LayoutKind::Opaque {
+        owner: hirsel_syntax::DefPath::core("Map"),
+    };
+    map.size = SizeSpec::Fixed(32);
+    map.fields = vec![
+        at(0, entries),
+        FieldLayout {
+            ordinal: 1,
+            ..at(8, metadata)
+        },
+        FieldLayout {
+            ordinal: 2,
+            ..at(16, metadata)
+        },
+        FieldLayout {
+            ordinal: 3,
+            ..at(24, l::U64)
+        },
+    ];
+    map.copy = CopyRecipe::Fields;
+    map.scan = [0, 8, 16]
+        .into_iter()
+        .map(|offset| ScanStep::Counted { offset })
+        .collect();
+    map.drop = [16, 8, 0]
+        .into_iter()
+        .map(|offset| DropStep::Release { offset })
+        .collect();
+    let payload = push(t, map);
+    let mut block = t.table.layouts[l::BLK.0 as usize].clone();
+    block.kind = LayoutKind::Block { payload };
+    let layout = push(t, block);
+    nodes.push(CodecNode::Map {
+        layout,
+        key: CodecNodeId(0),
+        value: CodecNodeId(0),
+    });
     let plan = CodecPlan {
         descriptor: vec![4],
         nodes,
@@ -297,6 +383,13 @@ fn a_path_node_is_exactly_a_path_identity() {
 #[test]
 fn byte_extent_flat_sequences_require_nonzero_stride() {
     pair(either(encode, Mutant::FlatZero), |k| {
+        *k == K::Type("codec plan")
+    });
+}
+
+#[test]
+fn a_map_codec_rejects_payload_in_a_tombstone_arm() {
+    pair(either(encode, Mutant::MapEntry), |k| {
         *k == K::Type("codec plan")
     });
 }

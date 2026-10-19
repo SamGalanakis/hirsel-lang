@@ -441,6 +441,7 @@ pub(crate) const MAP_BODIES: &[&str] = &[
     "$intrinsic.SetElements_open",
     "$intrinsic.SetElements_next",
     "$intrinsic.MapInsertionOrder_open",
+    "$intrinsic.MapInsertionOrder_advance",
     "$intrinsic.MapInsertionOrder_next",
     "map.get",
     "map.contains",
@@ -448,6 +449,8 @@ pub(crate) const MAP_BODIES: &[&str] = &[
     "set.remove",
     "set.contains",
     "map.insert",
+    "map.upsert_with",
+    "map.update_with",
     "set.insert",
 ];
 
@@ -1834,6 +1837,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.ListConsume_open",
     "$intrinsic.MapInsertionOrder_next",
     "$intrinsic.MapInsertionOrder_open",
+    "$intrinsic.MapInsertionOrder_advance",
     "$intrinsic.NetReadInto",
     "$intrinsic.TaskScopeEnter",
     "$intrinsic.TaskScopeExit",
@@ -2011,6 +2015,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "map.contains",
     "map.remove",
     "map.insert",
+    "map.upsert_with",
+    "map.update_with",
     "mutex.create",
     "mutex.with",
     "out.print",

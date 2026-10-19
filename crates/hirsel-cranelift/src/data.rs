@@ -19,7 +19,7 @@ use crate::CodegenError;
 use crate::module::{Emitted, Emitter, Helper, PTR};
 
 /// Bytes of `hirsel_rt_v2_layout`.
-const DESCRIPTOR_BYTES: usize = 64;
+const DESCRIPTOR_BYTES: usize = 72;
 /// Bytes of `hirsel_rt_v2_step`.
 const STEP_BYTES: usize = 56;
 
@@ -143,7 +143,11 @@ impl Emitter<'_> {
         if let Some(&id) = self.data.get(&name) {
             return Ok(id);
         }
-        let descriptors = match rt_program::descriptors(self.inputs.layouts, &[layout]) {
+        let descriptors = match rt_program::descriptors_with_storage(
+            self.inputs.layouts,
+            &[layout],
+            &self.inputs.registry.map_storage,
+        ) {
             Ok(descriptors) => descriptors,
             Err(error) => {
                 return Self::invalid_at(
@@ -212,6 +216,26 @@ impl Emitter<'_> {
                 Some(finalizer) => Some(self.drop_wrapper(d.layout, finalizer, definition)?),
                 None => None,
             };
+            let logical_count = if let Some(program) = d.logical_count {
+                let logical_name = name.replace("hirsel.layout.", "hirsel.logical-count.");
+                let (id, fresh) = self.declare_data(&logical_name, Linkage::Preemptible)?;
+                if fresh {
+                    self.manifested.descriptors.insert(logical_name.clone());
+                    let mut description = DataDescription::new();
+                    description.define(
+                        program
+                            .into_iter()
+                            .flat_map(u64::to_le_bytes)
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    );
+                    description.set_align(8);
+                    self.define_data(&logical_name, id, &description)?;
+                }
+                Some(id)
+            } else {
+                None
+            };
             let bytes = descriptor_bytes(
                 d.size,
                 d.align,
@@ -223,6 +247,10 @@ impl Emitter<'_> {
             let mut description = DataDescription::new();
             description.define(bytes.into_boxed_slice());
             description.set_align(8);
+            if let Some(count) = logical_count {
+                let gv = self.module.declare_data_in_data(count, &mut description);
+                description.write_data_addr(64, gv, 0);
+            }
             if let Some(finalizer) = finalizer {
                 let f = self
                     .module

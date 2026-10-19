@@ -119,6 +119,8 @@ impl Importer<'_, '_> {
                 lowered.push(ProjectionStep::Field(0));
                 layout = content;
             }
+            let map_index = matches!(p, tir::Projection::Index(_))
+                && matches!(&self.layouts.record(layout).kind, LayoutKind::Opaque { owner } if *owner == hirsel_syntax::DefPath::core("Map"));
             // A container's public element place is entries[i], in its private record.
             if matches!(p, tir::Projection::Index(_))
                 && matches!(&self.layouts.record(layout).kind, LayoutKind::Opaque { owner } if ["Map", "Set", "SortedMap"].iter().any(|name| *owner == hirsel_syntax::DefPath::core(name)))
@@ -191,6 +193,25 @@ impl Importer<'_, '_> {
                 ));
             };
             layout = next;
+            if map_index {
+                steps.push(Step::Variant(1, 0));
+                lowered.push(ProjectionStep::VariantField {
+                    variant: 1,
+                    field: 0,
+                });
+                fixed = false;
+                layout = self
+                    .layouts
+                    .record(layout)
+                    .tag
+                    .as_ref()
+                    .and_then(|t| t.variants.iter().find(|v| v.ordinal == 1))
+                    .and_then(|v| v.fields.first())
+                    .map(|f| f.layout)
+                    .ok_or_else(|| {
+                        PassError::Malformed("a map entry without a live pair".into())
+                    })?;
+            }
         }
         let ty = if place.projection.is_empty() {
             if let Some(&layout) = self.instances.data_locals.get(&(self.id, root)) {

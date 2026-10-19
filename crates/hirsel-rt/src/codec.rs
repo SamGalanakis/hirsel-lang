@@ -24,7 +24,7 @@ pub struct Codec {
     pub program_length: u64,
 }
 
-pub const CODEC_VERSION: u64 = 2;
+pub const CODEC_VERSION: u64 = 3;
 pub const NODE_SCALAR: u64 = 0;
 pub const NODE_TEXT: u64 = 1;
 pub const NODE_FIELDS: u64 = 2;
@@ -99,6 +99,39 @@ struct Container {
     key_at: u64,
     value: Option<usize>,
     value_at: u64,
+    map: Option<MapStorage>,
+}
+#[derive(Clone, Copy)]
+struct MapStorage {
+    hashes_at: u64,
+    live_at: u64,
+    tag_at: u64,
+    tag_form: u64,
+    tag_bit: u64,
+}
+impl MapStorage {
+    unsafe fn live(self, at: *const u8) -> bool {
+        unsafe {
+            let tag = at.add(self.tag_at as usize);
+            match self.tag_form {
+                0 => tag.cast::<u32>().read_unaligned() == 1,
+                1 => word(tag) & (1 << self.tag_bit) != 0,
+                2 => word(tag) != 0,
+                _ => fault("a map entry tag form"),
+            }
+        }
+    }
+    unsafe fn publish(self, at: *mut u8) {
+        unsafe {
+            let tag = at.add(self.tag_at as usize);
+            match self.tag_form {
+                0 => tag.cast::<u32>().write_unaligned(1),
+                1 => tag.cast::<u64>().write_unaligned(1 << self.tag_bit),
+                2 => {} // the decoded non-null payload supplies the niche tag
+                _ => fault("a map entry tag form"),
+            }
+        }
+    }
 }
 
 /// One parsed program node. Field lists are `(offset, node)` pairs.
@@ -302,7 +335,15 @@ impl Program {
                     if (kind == NODE_SET) != value.is_none() {
                         fault("a codec container whose entries disagree with its kind");
                     }
+                    let map = (kind == NODE_MAP).then(|| MapStorage {
+                        hashes_at: w.next(),
+                        live_at: w.next(),
+                        tag_at: w.next(),
+                        tag_form: w.next(),
+                        tag_bit: w.next(),
+                    });
                     Node::Container(Container {
+                        map,
                         set: kind == NODE_SET,
                         index,
                         size,
@@ -851,6 +892,9 @@ unsafe fn encode_payload(
                     at: at.wrapping_add(container.entries.stride as usize),
                     count: count - 1,
                 });
+                if !unsafe { container.map.expect("map storage").live(at) } {
+                    continue;
+                }
                 let value = container.value.expect("a map entry has a value");
                 work.push(Put::Visit(
                     value,
@@ -1037,11 +1081,13 @@ unsafe fn encode_node(
                 });
             }
             Node::Container(container) => {
-                let entries = payload(pointer(
-                    payload(pointer(at)).add(container.entries_at as usize),
-                ));
+                let container_at = payload(pointer(at));
+                let entries = payload(pointer(container_at.add(container.entries_at as usize)));
                 let count = word(entries);
-                out.extend_from_slice(&count.to_le_bytes());
+                let live = container
+                    .map
+                    .map_or(count, |map| word(container_at.add(map.live_at as usize)));
+                out.extend_from_slice(&live.to_le_bytes());
                 let first = entries.add(container.entries.offset as usize);
                 if container.set {
                     sets.push((out.len(), Vec::new()));
@@ -1438,6 +1484,9 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
                 count,
             } => {
                 if count > 0 {
+                    unsafe {
+                        container.map.expect("map storage").publish(at);
+                    }
                     work.push(Build::Entries {
                         container,
                         at: at.wrapping_add(container.entries.stride as usize),
@@ -1607,6 +1656,17 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
                     );
                     set_pointer(payload(c).add(container.entries_at as usize), entries);
                     set_pointer(payload(c).add(container.index_at as usize), index);
+                    if let Some(map) = container.map {
+                        let hashes = allocate_sequence(
+                            ctx,
+                            container.index_index,
+                            0,
+                            container.index_stride,
+                            container.index_align,
+                        );
+                        set_pointer(payload(c).add(map.hashes_at as usize), hashes);
+                        write(payload(c).add(map.live_at as usize), &count.to_le_bytes());
+                    }
                     set_pointer(at, c);
                     let first = payload(entries).add(container.entries.offset as usize);
                     work.push(match container.value {

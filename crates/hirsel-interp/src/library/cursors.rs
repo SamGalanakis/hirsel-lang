@@ -30,6 +30,21 @@ fn entries(source: &Value, protocol: &str) -> Result<Vec<Value>, Error> {
     }
 }
 pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>, Error> {
+    if name == "$intrinsic.MapInsertionOrder_advance" {
+        let [source, index] = args else {
+            return Err(invalid("map advance arguments"));
+        };
+        let count = collection::elements(source, BuiltinType::Map)?.len() as u64;
+        let Value::Integer(index) = index else {
+            return Err(invalid("map advance index"));
+        };
+        if index.kind() != Primitive::U64 {
+            return Err(invalid("map advance index width"));
+        }
+        return Ok(Some(OperationResult::returned(u64_value(
+            (index.bits() as u64).min(count),
+        ))));
+    }
     if let Some(result) = consuming(name, args)? {
         return Ok(Some(result));
     }
@@ -318,6 +333,7 @@ pub(super) fn operation_names() -> Vec<String> {
         })
         .chain([
             "$intrinsic.MapInsertionOrder_len".to_owned(),
+            "$intrinsic.MapInsertionOrder_advance".to_owned(),
             "$intrinsic.SortedMapOrder_len".to_owned(),
         ])
         .collect()

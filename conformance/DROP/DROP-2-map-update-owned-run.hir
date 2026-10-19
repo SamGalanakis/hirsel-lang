@@ -1,0 +1,42 @@
+// rule: DROP-2
+// expect: run
+// stdout: changed
+// stdout: second
+// stdout: changed
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn unused_initializer() -> unique Trace uses {} {
+  failure.check(false, Bounds())
+  unused_initializer()
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut m: unique Map[String, Trace] = map.empty()
+  map.insert(mut m, "first", Trace(stdout: o, text: "first\n"))
+  std@1/map.upsert(
+    mut m,
+    "first",
+    unused_initializer,
+    fn(mut x: unique Trace) -> () uses {} {
+      x.text = "changed\n"
+    }
+  )
+  let changed = std@1/map.update(
+    mut m,
+    "first",
+    fn(mut x: unique Trace) -> () uses {} {
+      x.text = "changed\n"
+    }
+  )
+  failure.check(changed, Bounds())
+  map.insert(mut m, "second", Trace(stdout: o, text: "second\n"))
+  let _ = out.print(o, "changed\n")
+  Ok(())
+}

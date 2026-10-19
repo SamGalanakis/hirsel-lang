@@ -192,6 +192,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
 
     for name in [
         "$intrinsic.MapInsertionOrder_len",
+        "$intrinsic.MapInsertionOrder_advance",
         "$intrinsic.SortedMapOrder_len",
     ] {
         let path = core(name);

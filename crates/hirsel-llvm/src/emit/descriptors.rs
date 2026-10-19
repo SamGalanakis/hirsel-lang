@@ -55,7 +55,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         );
         (
             self.module.struct_type(&[
-                i32_ty, i32_ty, i64_ty, i64_ty, ptr, ptr, i64_ty, i32_ty, i32_ty, i64_ty,
+                i32_ty, i32_ty, i64_ty, i64_ty, ptr, ptr, i64_ty, i32_ty, i32_ty, i64_ty, ptr,
             ]),
             self.module.struct_type(&[
                 i32_ty, i32_ty, i32_ty, i32_ty, i64_ty, i64_ty, i64_ty, i64_ty, ptr,
@@ -148,7 +148,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.manifested.descriptors.insert(name.clone());
         let global = self.module.linkonce_constant(&name, ty, 8);
         let null = self.module.const_zero(self.module.ptr_type());
-        let initializer = self.descriptor_initializer(0, 1, null, null, 0, 0, 0, 0);
+        let initializer = self.descriptor_initializer(0, 1, null, null, 0, 0, 0, 0, null);
         self.module.set_initializer(global, initializer);
         global
     }
@@ -196,6 +196,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         field_count: u32,
         flags: u32,
         logical: u64,
+        logical_count: Value<'m>,
     ) -> Value<'m> {
         let (i32_ty, i64_ty) = (self.module.int_type(32), self.module.int_type(64));
         let u32_ = |n: u32| self.module.const_int(i32_ty, u128::from(n));
@@ -211,6 +212,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             u32_(field_count),
             u32_(flags),
             u64_(logical),
+            logical_count,
         ])
     }
 
@@ -224,7 +226,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         {
             return Ok(global);
         }
-        let descriptors = match rt_program::descriptors(self.inputs.layouts, &[layout]) {
+        let descriptors = match rt_program::descriptors_with_storage(
+            self.inputs.layouts,
+            &[layout],
+            &self.inputs.registry.map_storage,
+        ) {
             Ok(descriptors) => descriptors,
             Err(error) => {
                 return self.invalid(format!(
@@ -287,6 +293,20 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 Some(finalizer) => self.drop_wrapper(d.layout, finalizer)?,
                 None => self.module.const_zero(ptr),
             };
+            let logical_count = if let Some(program) = d.logical_count {
+                let word = self.module.int_type(64);
+                let ty = self.module.array_type(word, 5);
+                let name = descriptor_name(self.layout(d.layout)?)
+                    .replace("hirsel.layout.", "hirsel.logical-count.");
+                self.manifested.descriptors.insert(name.clone());
+                let global = self.module.linkonce_constant(&name, ty, 8);
+                let words: Vec<_> = program.iter().map(|&n| self.const_u64(n)).collect();
+                self.module
+                    .set_initializer(global, self.module.const_array(word, &words));
+                global
+            } else {
+                self.module.const_zero(ptr)
+            };
             let initializer = self.descriptor_initializer(
                 d.size,
                 d.align,
@@ -296,6 +316,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 d.field_count,
                 d.flags,
                 d.logical,
+                logical_count,
             );
             self.module.set_initializer(global, initializer);
         }

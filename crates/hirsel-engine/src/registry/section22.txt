@@ -217,6 +217,8 @@ fn path.text(p: Path) -> String
 N fn failure.check(condition: bool, rule: CheckRule) -> () uses {}
 fn map.empty[K: key, V]() -> unique Map[K, V]
 @preserves_unique(m) fn map.insert[K: key, V](mut m: Map[K, V], take k: K, take v: V) -> ()
+@preserves_unique(m) @unretained(k, initial, update) fn map.upsert_with[K: key, V](mut m: unique Map[K, V], k: K, initial: fn() -> unique V uses {}, update: fn(mut value: unique V) -> () uses {}) -> ()
+@preserves_unique(m) @unretained(k, update) fn map.update_with[K: key, V](mut m: unique Map[K, V], k: K, update: fn(mut value: unique V) -> () uses {}) -> bool
 N fn map.get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
 N fn map.contains[K: key, V](m: Map[K, V], k: K) -> bool
 N fn map.len[K: key, V](m: Map[K, V]) -> u64

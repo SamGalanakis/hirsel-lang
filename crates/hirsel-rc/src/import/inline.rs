@@ -143,7 +143,11 @@ impl Inline for Importer<'_, '_> {
         });
         let failure = self.fail(None)?;
         self.push(Inst::Address { address, failure });
-        let holding = self.out.values[value.index()].holding;
+        let holding = if self.owns(ty) {
+            self.out.values[value.index()].holding
+        } else {
+            Holding::Plain
+        };
         let result = self.value(ty, holding);
         self.push(Inst::Read {
             result,

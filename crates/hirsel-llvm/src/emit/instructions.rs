@@ -1359,30 +1359,56 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 layout,
                 failure,
             } => {
-                let hash_bytes = self.runtime(RuntimeEntry::HashBytes)?;
-                let hasher =
-                    match compare::hasher(self.module, self.inputs.layouts, layout, hash_bytes) {
-                        Ok(hasher) => hasher,
-                        Err(CompareError::Unsupported(what)) => return self.unsupported(what),
-                        Err(CompareError::Invalid(what)) => return self.invalid(what),
-                    };
-                // The value is read in place: spilled to a slot of the layout.
+                // Scalars remain a single one-shot leaf. Composite values
+                // share one stream across all layout helpers.
                 let at = self.stack(layout)?;
                 let operand = self.counted_view(value)?;
                 self.store(self.layout_shape(layout)?, operand, at);
                 let begin = self.runtime(RuntimeEntry::HashBegin)?;
-                let state = self.builder.call(begin, &[self.context]);
+                let seed = self.builder.call(begin, &[self.context]);
+                if matches!(self.layout(layout)?.kind, LayoutKind::Scalar(kind)
+                    if !matches!(kind, ScalarKind::F32 | ScalarKind::F64 | ScalarKind::Pointer))
+                {
+                    let bytes = self.runtime(RuntimeEntry::HashBytes)?;
+                    let size = self.fixed_size(layout)?;
+                    let hash = self
+                        .builder
+                        .call(bytes, &[seed, at.ptr, self.const_u64(size)]);
+                    return self.define(result, hash);
+                }
+                let update = self.runtime(RuntimeEntry::HashUpdate)?;
+                let hasher = match compare::hasher(self.module, self.inputs.layouts, layout, update)
+                {
+                    Ok(hasher) => hasher,
+                    Err(CompareError::Unsupported(what)) => return self.unsupported(what),
+                    Err(CompareError::Invalid(what)) => return self.invalid(what),
+                };
+                let state_ty = self.module.array_type(
+                    self.module.int_type(8),
+                    hirsel_lir::runtime_abi::HASH_STATE_BYTES,
+                );
+                let storage = self
+                    .prologue
+                    .alloca(state_ty, hirsel_lir::runtime_abi::HASH_STATE_ALIGN);
+                let init = self.runtime(RuntimeEntry::HashInit)?;
+                self.builder.call(init, &[storage, seed]);
+                let state = self
+                    .builder
+                    .cast(Cast::PtrToInt, storage, self.module.int_type(64));
                 let i8_ty = self.module.int_type(8);
                 let deep = self.prologue.alloca(i8_ty, 1);
                 self.builder.store(self.module.const_int(i8_ty, 0), deep, 1);
-                let hash = self
-                    .builder
-                    .call(hasher, &[at.ptr, state, self.const_u64(0), deep]);
+                let hash = self.builder.call(
+                    hasher,
+                    &[at.ptr, state, self.const_u64(0), deep, self.context],
+                );
                 let flag = self.builder.load(i8_ty, deep, 1);
                 let too_deep =
                     self.builder
                         .icmp(IntPredicate::Ne, flag, self.module.const_int(i8_ty, 0));
                 self.guard(too_deep, failure)?;
+                let finish = self.runtime(RuntimeEntry::HashFinish)?;
+                let hash = self.builder.call(finish, &[hash]);
                 self.define(result, hash)
             }
             // MEM-11: a fresh root block holding the value, whose blocks the runtime freezes.

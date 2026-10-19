@@ -80,8 +80,8 @@ pub enum CodecNode {
         layout: LayoutId,
         element: CodecNodeId,
     },
-    /// `Map[K, V]`: a container block whose entries are `(K, V)` pairs in
-    /// insertion order; no duplicate key encoding.
+    /// `Map[K, V]`: live `(K, V)` pairs in insertion order; private holes
+    /// and hash metadata never appear on the wire. No duplicate key encoding.
     Map {
         layout: LayoutId,
         key: CodecNodeId,
@@ -251,16 +251,57 @@ fn container(
     if !owner.0.package.name_is("core")
         || !owner.0.modules.is_empty()
         || owner.0.name != name
-        || r.fields.len() != 2
+        || r.fields.len() != if name == "Map" { 4 } else { 2 }
     {
         return Err(format!("a container payload that is not core {name}'s"));
     }
     let (entries, element) = sequence(table, field(r, CONTAINER_ENTRIES)?.layout)?;
     let (index, word) = sequence(table, field(r, CONTAINER_INDEX)?.layout)?;
-    if record(table, word)?.kind != LayoutKind::Scalar(ScalarKind::U32) {
-        return Err("a container index that is not a u32 sequence".into());
+    let scalar = if name == "Map" {
+        ScalarKind::U64
+    } else {
+        ScalarKind::U32
+    };
+    if record(table, word)?.kind != LayoutKind::Scalar(scalar) {
+        return Err("a container index with the wrong word layout".into());
+    }
+    if name == "Map" {
+        if field(r, 2)?.layout != field(r, CONTAINER_INDEX)?.layout
+            || record(table, field(r, 3)?.layout)?.kind != LayoutKind::Scalar(ScalarKind::U64)
+        {
+            return Err("a map without cached u64 hashes and a live count".into());
+        }
+        map_pair(table, element)?;
     }
     Ok((payload, entries, element, index))
+}
+
+/// Validate private optional storage independently of the library that emits it.
+fn map_pair(table: &LayoutTable, entry: LayoutId) -> Result<&FieldLayout, String> {
+    let r = record(table, entry)?;
+    let tag = r.tag.as_ref().ok_or("a map entry without a tag")?;
+    if r.kind != LayoutKind::Variant || tag.variants.len() != 2 {
+        return Err("a map entry that is not optional".into());
+    }
+    let none = tag
+        .variants
+        .iter()
+        .find(|v| v.ordinal == 0)
+        .ok_or("map None")?;
+    let some = tag
+        .variants
+        .iter()
+        .find(|v| v.ordinal == 1)
+        .ok_or("map Some")?;
+    if !none.fields.is_empty() || some.fields.len() != 1 {
+        return Err("a map entry that is not None/Some(pair)".into());
+    }
+    let field = &some.fields[0];
+    let pair = record(table, field.layout)?;
+    if pair.kind != LayoutKind::Aggregate || pair.fields.len() != 2 {
+        return Err("a map entry payload that is not a pair".into());
+    }
+    Ok(field)
 }
 
 impl CodecPlan {
@@ -452,10 +493,7 @@ impl CodecPlan {
                 }
                 CodecNode::Map { layout, key, value } => {
                     let (_, _, pair, _) = container(table, *layout, "Map")?;
-                    let p = record(table, pair)?;
-                    if p.kind != LayoutKind::Aggregate || p.fields.len() != 2 {
-                        return Err("map entries that are not pairs".into());
-                    }
+                    let p = record(table, map_pair(table, pair)?.layout)?;
                     child(*key, field(p, 0)?.layout)?;
                     child(*value, field(p, 1)?.layout)?;
                 }
@@ -732,12 +770,33 @@ impl CodecPlan {
                     ]);
                     match node {
                         CodecNode::Map { key, value, .. } => {
-                            let p = record(table, element)?;
+                            let pair = map_pair(table, element)?;
+                            let p = record(table, pair.layout)?;
                             body.extend([
                                 u64::from(key.0),
-                                field(p, 0)?.offset,
+                                pair.offset + field(p, 0)?.offset,
                                 u64::from(value.0),
-                                field(p, 1)?.offset,
+                                pair.offset + field(p, 1)?.offset,
+                            ]);
+                            let tag = record(table, element)?
+                                .tag
+                                .as_ref()
+                                .ok_or("map entry tag")?;
+                            let (form, bit) = match tag.form {
+                                TagForm::Ordinal => (0, 0),
+                                TagForm::LiveBit { bit } => (1, u64::from(bit)),
+                                TagForm::Niche {
+                                    nullary: 0,
+                                    dataful: 1,
+                                } => (2, 0),
+                                _ => return Err("map entry tag ordinals".into()),
+                            };
+                            body.extend([
+                                field(pr, 2)?.offset,
+                                field(pr, 3)?.offset,
+                                tag.offset,
+                                form,
+                                bit,
                             ]);
                         }
                         CodecNode::Set { element, .. } => {
@@ -792,7 +851,7 @@ fn scalar_code(kind: ScalarKind) -> Result<u64, String> {
 }
 
 /// The codec program's version and node kinds (`HIRSEL_RT_V2_CODEC_*`).
-pub const PROGRAM_VERSION: u64 = 2;
+pub const PROGRAM_VERSION: u64 = 3;
 pub const NODE_SCALAR: u64 = 0;
 pub const NODE_TEXT: u64 = 1;
 pub const NODE_FIELDS: u64 = 2;

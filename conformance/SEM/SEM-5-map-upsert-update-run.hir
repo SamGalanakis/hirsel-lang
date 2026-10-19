@@ -1,0 +1,70 @@
+// rule: SEM-5
+// expect: run
+// A hit neither initializes nor replaces its key or insertion position.
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut counts: unique Map[String, u64] = map.empty()
+  let key = "alpha"
+  std@1/map.upsert(
+    mut counts,
+    key,
+    fn() -> unique u64 uses {} {
+      1
+    },
+    fn(mut n: unique u64) -> () uses {} {
+      n += 1
+    }
+  )
+  std@1/map.upsert(
+    mut counts,
+    "beta",
+    fn() -> unique u64 uses {} {
+      10
+    },
+    fn(mut n: unique u64) -> () uses {} {
+      n += 1
+    }
+  )
+  std@1/map.upsert(
+    mut counts,
+    key,
+    fn() -> unique u64 uses {} {
+      failure.check(false, Bounds())
+      0
+    },
+    fn(mut n: unique u64) -> () uses {} {
+      n += 1
+    }
+  )
+  failure.check(
+    std@1/map.update(
+      mut counts,
+      "beta",
+      fn(mut n: unique u64) -> () uses {} {
+        n += 5
+      }
+    ),
+    Bounds()
+  )
+  failure.check(
+    !std@1/map.update(
+      mut counts,
+      "absent",
+      fn(mut n: unique u64) -> () uses {} {
+        failure.check(false, Bounds())
+      }
+    ),
+    Bounds()
+  )
+  failure.check(key == "alpha" && map.len(counts) == 2, Bounds())
+  failure.check(map.get(counts, key) == Some(2u64), Bounds())
+  failure.check(map.get(counts, "beta") == Some(15u64), Bounds())
+  let mut order: String = ""
+  for (k, v) in counts {
+    if order == "" {
+      order = copy k
+    } else {
+      failure.check(order == "alpha" && k == "beta", Bounds())
+    }
+  }
+  Ok(())
+}

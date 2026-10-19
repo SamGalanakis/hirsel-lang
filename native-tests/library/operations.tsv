@@ -19,6 +19,7 @@ $intrinsic.IsolateRule	b85bece6135d4772e75f525155b9c76e2f1c0346c8af3ac67a2b6eb1a
 $intrinsic.IsolateSpawn	6001ab970d5460df51ceee66f225f85b0fc61368add9e364e9c8897d560f489a	0:b:n;1:b:n->n
 $intrinsic.ListConsume_next	776cb0537858987e329d27a171511508925cbb6a2bd8e4137a6ebe51f4cd585d	0:m:[0]->[0]
 $intrinsic.ListConsume_open	265977d2907ca5e9a5d9c8c5b6c4f71045ed52032a67752cd8ad04bd53024cce	0:t:[0]->[0]
+$intrinsic.MapInsertionOrder_advance	8fd895efaede4395d7767f160142f1e382451c4733619b7c4cb0874b51dbc071	0:b:[0,1];1:b:n->n
 $intrinsic.MapInsertionOrder_len	23a2c0b369dce3fdb95b9460400d813344f61ca74da5e349efc2080801b5fe02	0:b:[0,1]->n
 $intrinsic.MapInsertionOrder_next	25c60f987fadb68453e37137aeba9ae83a9ab69db2b2846d6c0541f50f62ef54	0:m:[0,1]->[0,1]
 $intrinsic.MapInsertionOrder_open	7922f8d820b0cb7775764f91125856b8388d6b5c5a304440c1259c6181d1c314	0:t:[0,1]->[0,1]
@@ -175,6 +176,8 @@ map.get	762c76f092e04c21ff7f68b0a78671129f59dd5488e2d91f1de6123925893c3d	0:b:[0,
 map.insert	352ece8f8cb627b33ea12f57791bda3f9631a494b502792f105465bccb3e9b97	0:m:[0,1];1:t:[0];2:t:[1]->n
 map.len	75f638f6f8149dd43c9ec63c5fcf42965f27b7414c1144383c659be9be809baa	0:b:[0,1]->n
 map.remove	cdd0197e6a09685b9bab591339ffbb340f3d7af3f4821b910e1a5cd2cd4f1c28	0:m:[0,1];1:b:[0]->[1]
+map.update_with	34e6da32a3922d515118f9c5407ce2b22bcdfee20e6757ce1ba4f38a1d546f79	0:m:[0,1];1:b:[0];2:b:a->n
+map.upsert_with	630c5b65a0df606d328a537990a991dd0f173e6c35ce4537ead0c78c3310fdac	0:m:[0,1];1:b:[0];2:b:a;3:b:a->n
 mutex.create	87a18052f3d607fe698ffdf0e682212c2e84ceb4ccbc0f3ab685fc42d09f7dd8	0:b:n;1:t:[0]->[0]
 mutex.with	2b03112fd4510e7979a87b535df4ddc5fb94e2881eb8ffd4a59b6295d5eca7f3	0:b:n;1:b:[0];2:b:a->[1]
 net.accept	52238a75d33b2f73fee539fd0cd03687f41630a0cd7186590840c2ccb5cc03bc	0:b:n;1:m:n->n

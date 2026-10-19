@@ -225,6 +225,15 @@ pub(super) fn signatures() -> Vec<Signature> {
             ));
         }
     }
+    let mut b = Builder::new("K: key,V");
+    let mut f = b.function("source: Map[K,V], index: u64", "u64", true);
+    f.uses = Uses::Only(AuthoritySummary::inert());
+    f.authority = AuthoritySummary::inert();
+    out.push(b.signature(
+        "$intrinsic.MapInsertionOrder_advance",
+        SignatureKind::Function(f),
+        false,
+    ));
     for signature in &mut out {
         signature.metadata.visibility =
             if signature.definition == hirsel_syntax::DefPath::core("$intrinsic.ViewCursor") {

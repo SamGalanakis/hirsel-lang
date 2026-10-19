@@ -31,6 +31,7 @@ pub static hirsel_rt_v2_bytes_descriptor: BytesDescriptor = BytesDescriptor(Layo
     field_count: 0,
     flags: LAYOUT_DYNAMIC | crate::LAYOUT_LOGICAL_PER_ELEMENT | crate::LAYOUT_SEQUENCE,
     logical: 1,
+    logical_count: std::ptr::null(),
 });
 
 /// The `List[Bytes]` payload descriptor the runtime allocates its byte-string lists under:
@@ -82,6 +83,7 @@ pub static BYTES_LIST_DESCRIPTOR: BytesListDescriptor = BytesListDescriptor(Layo
         | crate::LAYOUT_SEQUENCE
         | crate::release::LAYOUT_WIDE_CURSOR,
     logical: 8,
+    logical_count: std::ptr::null(),
 });
 
 /// The registry index of [`BYTES_LIST_DESCRIPTOR`]: the run context places it after the

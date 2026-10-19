@@ -590,7 +590,28 @@ original signature/placement proof owner of every added unit, while
 100,000 variable records require exactly 100,000 H element-prefix reads, while
 the disabled 40/80-element walks require 3,120/12,640 reads.
 
-`library::map` owns Map/Set construction and keyed operations. Field 0 is insertion-ordered entries; field 1 is a private u32 ordinal index, empty through eight entries, built or rebuilt by private slow-path bodies at 7/8 load. Every keyed call hashes before probing, including an empty container; reads never write or build an index. Replacement installs the new value before dropping the displaced one, then drops the taken incoming key. Consuming Map cursors save source uniqueness at open, move unique entries and copy shared/static entries without allocation; finalizers drain unique remaining entries backwards through temporary holders. `hirsel-pipeline-tests/tests/rc/rc_maps.rs` audits clean and injected failures, and `hirsel-pipeline-tests/tests/rc/rc_maps_native.rs` checks compiled seed placement, internal Set ordering and source failure attribution on both targets.
+`library::map` owns Map/Set construction and keyed operations. A Map holds
+optional insertion-ordered entries, a u64 index with a 32-bit hash tag and
+32-bit physical ordinal, cached full hashes, and a live count. Its private
+`$native.MapEntry` nominal keeps its live-entry charge distinct from ordinary
+optional-pair Lists. Removal clears one entry and marks its bucket; insertion
+compacts stably when at least half the slots are dead. Growth and compaction
+reuse cached hashes. Only a cold materialized or decoded Map acquires its
+missing cache once on mutation. An index stays empty through eight entries and
+grows at 7/8 load. Set retains its dense entries and u32 index. Every keyed
+call hashes its query, including an empty container; reads never mutate. Map
+key equality follows a matching tag (or full cached hash for small Maps).
+Replacement installs the new value before dropping the displaced one, then
+drops the taken incoming key. `map.upsert_with` and `map.update_with` lend the
+stored value after one probe; only a missing upsert copies its borrowed key
+and calls its initializer. Borrowed iteration advances monotonically to the
+next live physical slot while public `map.len` reports live entries.
+Consuming Map cursors save source uniqueness at open, move unique entries and
+copy shared/static entries without allocation; finalizers drain remaining
+entries backwards through temporary holders.
+`hirsel-pipeline-tests/tests/rc/rc_maps.rs` audits clean and injected failures,
+and `rc_maps_native.rs` checks compiled seed placement, internal Set ordering
+and source failure attribution on both targets.
 
 Defuse handoff: Flow records per-path `fields_pending` without
 changing versions or field ownership. The planner omits the parent's Finalize

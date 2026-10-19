@@ -1814,6 +1814,9 @@ primary_operations! { self, call, context, name, a, value;
     },
     Primitive: "map.empty" => collection::sequence(BuiltinType::Map, []),
     Primitive: "set.empty" => collection::sequence(BuiltinType::Set, []),
+    Primitive: "map.upsert_with" | "map.update_with" => {
+        return Ok(Some(keyed(self.map_edit(a, name == "map.upsert_with"), &call, context)?));
+    },
     Primitive: "map.insert" => {
                 let (key, item) = (take_arg(call.arguments, 1)?, take_arg(call.arguments, 2)?);
                 return Ok(Some(keyed(

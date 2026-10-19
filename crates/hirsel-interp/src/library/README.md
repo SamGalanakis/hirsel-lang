@@ -190,3 +190,9 @@ Each `test.dir` tree keeps a durable state (`hirsel_kernels::disk::Durable`, sha
 runtime's test trees): writes note the last write, `file.sync` and `file.put_new(Durable())`
 record the file's bytes and its directory chain, and `test.crash` rebuilds the tree from it
 and marks the tree's open File and AtomicFile handles stale.
+
+`map.upsert_with` and `map.update_with` select once through `collection::find`.
+A hit schedules a mutable value callback with an explicit field writeback,
+which preserves its mutations on success, failure and abandonment. A missing
+upsert initializes and appends a copied key; a missing update returns false.
+Bounded-arena growth and shared-entry copies charge before scheduling.

@@ -33,6 +33,7 @@ fn words() -> &'static Layout {
     cached_layout("arena-list-words", 0, || {
         leak(Layout {
             logical: 8,
+            logical_count: std::ptr::null(),
             flags: LAYOUT_DYNAMIC | LAYOUT_LOGICAL_PER_ELEMENT | LAYOUT_SEQUENCE,
             ..*leaf(16)
         })
@@ -50,6 +51,7 @@ fn boxes() -> &'static Layout {
         );
         leak(Layout {
             logical: 8,
+            logical_count: std::ptr::null(),
             flags: program.flags | LAYOUT_DYNAMIC | LAYOUT_LOGICAL_PER_ELEMENT | LAYOUT_SEQUENCE,
             ..*program
         })

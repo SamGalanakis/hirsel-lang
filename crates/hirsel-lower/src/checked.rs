@@ -146,7 +146,7 @@ impl Plans {
                     ));
                 }
                 _ => match &execution {
-                    hirsel_check_protocol::body::ForExecution::Indexed { length, .. } => {
+                    hirsel_check_protocol::body::ForExecution::Indexed { length, read } => {
                         let mut patterns = patterns.get(&pattern).iter().copied();
                         let Some(item) = patterns.next() else {
                             return Err(fail(source, "indexed loop lacks a checked pattern type"));
@@ -163,8 +163,19 @@ impl Plans {
                             plan.statement(),
                             hirsel_check_protocol::body::ForExecution::Indexed {
                                 length: length.clone(),
-                                read: hirsel_check_protocol::body::LoopRead::Index {
-                                    result: item.ty,
+                                read: match read {
+                                    hirsel_check_protocol::body::LoopRead::Index { .. } => {
+                                        hirsel_check_protocol::body::LoopRead::Index {
+                                            result: item.ty,
+                                        }
+                                    }
+                                    hirsel_check_protocol::body::LoopRead::MapIndex {
+                                        advance,
+                                        ..
+                                    } => hirsel_check_protocol::body::LoopRead::MapIndex {
+                                        result: item.ty,
+                                        advance: advance.clone(),
+                                    },
                                 },
                             },
                         ));

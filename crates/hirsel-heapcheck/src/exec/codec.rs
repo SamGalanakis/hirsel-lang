@@ -383,14 +383,44 @@ impl<S: Stage> Machine<'_, S> {
                     let (_, pair, start, stride) = self.codec_sequence(entries.layout)?;
                     let block = self.ptr_at(At::Heap(self.ptr_at(at)?.at(entries.offset)))?;
                     let count = self.bits_at(At::Heap(block), 8)? as u64;
-                    out.extend_from_slice(&count.to_le_bytes());
+                    let live = if matches!(node, CodecNode::Map { .. }) {
+                        let live_field = self.field_at(container, 3)?;
+                        let root = self.ptr_at(at)?;
+                        self.bits_at(At::Heap(root.at(live_field.offset)), 8)? as u64
+                    } else {
+                        count
+                    };
+                    out.extend_from_slice(&live.to_le_bytes());
                     match node {
                         CodecNode::Map { key, value, .. } => {
-                            let (k, v) = (self.field_at(pair, 0)?, self.field_at(pair, 1)?);
+                            let tag = self
+                                .record(pair)?
+                                .tag
+                                .as_ref()
+                                .ok_or_else(|| err(V::Malformed, "a map entry tag"))?;
+                            let data = tag
+                                .variants
+                                .iter()
+                                .find(|v| v.ordinal == 1)
+                                .and_then(|v| v.fields.first())
+                                .ok_or_else(|| err(V::Malformed, "a map entry pair"))?;
+                            let (k, v) = (
+                                self.field_at(data.layout, 0)?,
+                                self.field_at(data.layout, 1)?,
+                            );
                             for i in (0..count).rev() {
                                 let entry = block.at(start + i * stride);
-                                work.push(Job::Visit(*value, At::Heap(entry.at(v.offset))));
-                                work.push(Job::Visit(*key, At::Heap(entry.at(k.offset))));
+                                if self.tag_at(At::Heap(entry.at(tag.offset)), tag.form)? != 1 {
+                                    continue;
+                                }
+                                work.push(Job::Visit(
+                                    *value,
+                                    At::Heap(entry.at(data.offset + v.offset)),
+                                ));
+                                work.push(Job::Visit(
+                                    *key,
+                                    At::Heap(entry.at(data.offset + k.offset)),
+                                ));
                             }
                         }
                         CodecNode::Set { element, .. } => {
@@ -1104,15 +1134,31 @@ impl<S: Stage> Machine<'_, S> {
                     let (unindexed, _, _) = self.codec_elements(index.layout, 0)?;
                     self.codec_cell(image, Dest::Heap(block.at(entries.offset)), list);
                     self.codec_cell(image, Dest::Heap(block.at(index.offset)), unindexed);
+                    if matches!(node, CodecNode::Map { .. }) {
+                        let hashes = self.field_at(container, 2)?;
+                        let live = self.field_at(container, 3)?;
+                        let (cache, _, _) = self.codec_elements(hashes.layout, 0)?;
+                        self.codec_cell(image, Dest::Heap(block.at(hashes.offset)), cache);
+                        self.codec_bytes(
+                            image,
+                            Dest::Heap(block.at(live.offset)),
+                            &count.to_le_bytes(),
+                        );
+                    }
                     self.codec_cell(image, dest, block);
                     let pair = self.codec_sequence(entries.layout)?.1;
                     for i in (0..count).rev() {
                         let entry = block_entry(list, start, stride, i);
                         match node {
                             CodecNode::Map { key, value, .. } => {
-                                let (k, v) = (self.field_at(pair, 0)?, self.field_at(pair, 1)?);
-                                work.push((*value, Dest::Heap(entry.at(v.offset))));
-                                work.push((*key, Dest::Heap(entry.at(k.offset))));
+                                let (tag, offsets) = self.arm_fields(pair, 1)?;
+                                self.codec_tag(image, Dest::Heap(entry), &tag, 1);
+                                let data =
+                                    tag.variants.iter().find(|v| v.ordinal == 1).unwrap().fields[0]
+                                        .layout;
+                                let (k, v) = (self.field_at(data, 0)?, self.field_at(data, 1)?);
+                                work.push((*value, Dest::Heap(entry.at(offsets[0] + v.offset))));
+                                work.push((*key, Dest::Heap(entry.at(offsets[0] + k.offset))));
                             }
                             CodecNode::Set { element, .. } => {
                                 work.push((*element, Dest::Heap(entry)))

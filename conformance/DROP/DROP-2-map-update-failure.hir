@@ -1,0 +1,23 @@
+// rule: DROP-2
+// expect: fail MEM-14 at line 14
+// stdout: changed
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+fn change(mut x: unique Trace) -> () uses {} {
+  x.text = "changed\n"
+  failure.check(false, Bounds())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let o = io.stdout(rt)?
+  let mut m: unique Map[String, Trace] = map.empty()
+  map.insert(mut m, "first", Trace(stdout: o, text: "first\n"))
+  let _ = std@1/map.update(mut m, "first", change)
+  Ok(())
+}

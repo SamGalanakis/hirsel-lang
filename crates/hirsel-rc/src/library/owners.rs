@@ -14,7 +14,7 @@ use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::{BodyId, RepresentationRecord};
 use hirsel_types::{
     BinderRef, BuiltinType, Field, GenericArgument, GenericParameter, Layout, Primitive,
-    SignatureKind, SignatureRef, Type, TypeId, TypeKind, TypeParamId, TypeStore,
+    SignatureKind, SignatureRef, Type, TypeId, TypeKind, TypeParamId, TypeStore, Variant,
 };
 use std::collections::BTreeMap;
 
@@ -212,12 +212,56 @@ pub fn owners(signatures: &BTreeMap<DefPath, SignatureRef>) -> LibraryOwners {
         }
     }
 
-    // Containers. Field 0, `entries`, is dense and the public contract;
-    // `index` is lib-map's and empty means unindexed.
+    // A private nominal keeps entry accounting distinct from an ordinary
+    // user List with the same optional-pair shape.
+    let mut entry_shape = Shape::default();
+    let k = entry_shape.parameter(0);
+    let v = entry_shape.parameter(1);
+    let pair = entry_shape.add(TypeKind::Tuple(vec![k, v].into()));
+    let optional = entry_shape.add(TypeKind::Variant(
+        vec![
+            Variant {
+                name: "None".into(),
+                fields: vec![].into(),
+            },
+            Variant {
+                name: "Some".into(),
+                fields: vec![(None, pair)].into(),
+            },
+        ]
+        .into(),
+    ));
+    out.nominals.insert(
+        native_path("MapEntry"),
+        OwnerRepresentation::Defined(record(
+            native_path("MapEntry"),
+            "MapEntry",
+            None,
+            type_parameters(&["K", "V"]),
+            entry_shape,
+            optional,
+        )),
+    );
+
+    // Maps retain optional entries in insertion order, cached hashes, and a
+    // tagged index. Deletion clears the entry; insertion compacts lazily.
     let mut s = Shape::default();
-    let entries = s.pairs();
-    let index = s.index();
-    let shape = s.record(&[("entries", entries), ("index", index)]);
+    let k = s.parameter(0);
+    let v = s.parameter(1);
+    let entry = s.add(TypeKind::Named {
+        definition: native_path("MapEntry"),
+        arguments: vec![GenericArgument::Type(k), GenericArgument::Type(v)].into(),
+    });
+    let entries = s.builtin(BuiltinType::List, &[entry]);
+    let word = s.primitive(Primitive::U64);
+    let index = s.builtin(BuiltinType::List, &[word]);
+    let hashes = s.builtin(BuiltinType::List, &[word]);
+    let shape = s.record(&[
+        ("entries", entries),
+        ("index", index),
+        ("hashes", hashes),
+        ("live", word),
+    ]);
     out.containers.insert(
         Container::Map,
         record(

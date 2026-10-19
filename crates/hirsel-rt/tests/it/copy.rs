@@ -544,10 +544,12 @@ fn a_bounded_copy_charges_every_reference_before_copying() {
     let ctx = Ctx::diagnostic();
     let leaf = leak(Layout {
         logical: 8,
+        logical_count: std::ptr::null(),
         ..*leaf(8)
     });
     let pair = leak(Layout {
         logical: 24,
+        logical_count: std::ptr::null(),
         ..*pair()
     });
     let shared = alloc_block(ctx.0, leaf, 8);

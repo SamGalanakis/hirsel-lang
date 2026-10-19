@@ -55,3 +55,5 @@ pub const VALIDATOR_VERSION: u32 = 9;
 /// Shared hand-built LIR assembly, available only with the `testing` feature.
 #[cfg(feature = "testing")]
 pub mod testing;
+
+pub mod logical_storage;

@@ -204,11 +204,11 @@ impl<S: Stage> Machine<'_, S> {
                         LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
                         _ => return fail(V::Malformed, "container entries"),
                     };
-                    let element = match self.record(payload)?.kind {
+                    let mut element = match self.record(payload)?.kind {
                         LayoutKind::Sequence { element } => element,
                         _ => return fail(V::Malformed, "container sequence"),
                     };
-                    let (xc, yc) = (
+                    let (mut xc, mut yc) = (
                         self.bits_at(At::Heap(x), 8)? as u64,
                         self.bits_at(At::Heap(y), 8)? as u64,
                     );
@@ -219,6 +219,36 @@ impl<S: Stage> Machine<'_, S> {
                     let mut ys: Vec<_> = (0..yc)
                         .map(|i| At::Heap(y.at(start + i * stride)))
                         .collect();
+                    if owner.0.name == "Map" {
+                        let tag = self
+                            .record(element)?
+                            .tag
+                            .as_ref()
+                            .ok_or_else(|| err(V::Malformed, "map entry tag"))?;
+                        let pair = tag
+                            .variants
+                            .iter()
+                            .find(|v| v.ordinal == 1)
+                            .and_then(|v| v.fields.first())
+                            .ok_or_else(|| err(V::Malformed, "map entry pair"))?;
+                        let mut left = Vec::new();
+                        let mut right = Vec::new();
+                        for item in xs {
+                            if self.tag_at(item.at(tag.offset), tag.form)? == 1 {
+                                left.push(item.at(pair.offset));
+                            }
+                        }
+                        for item in ys {
+                            if self.tag_at(item.at(tag.offset), tag.form)? == 1 {
+                                right.push(item.at(pair.offset));
+                            }
+                        }
+                        xs = left;
+                        ys = right;
+                        xc = xs.len() as u64;
+                        yc = ys.len() as u64;
+                        element = pair.layout;
+                    }
                     if owner.0.name == "Set" {
                         // SEM-5, #93: structural sorted element order.
                         let mut language_failure = false;
@@ -439,7 +469,12 @@ impl<S: Stage> Machine<'_, S> {
                         _ => return fail(V::Malformed, "container sequence"),
                     };
                     let count = self.bits_at(At::Heap(entries), 8)? as u64;
-                    fold(&count.to_le_bytes());
+                    let live = if owner.0.name == "Map" {
+                        self.bits_at(at.at(record.fields[3].offset), 8)? as u64
+                    } else {
+                        count
+                    };
+                    fold(&live.to_le_bytes());
                     let (start, stride) = self.sequence_shape(element)?;
                     if owner.0.name == "Set" {
                         let mut combined = 0u64;
@@ -456,12 +491,22 @@ impl<S: Stage> Machine<'_, S> {
                         }
                         fold(&combined.to_le_bytes());
                     } else {
+                        let tag = self
+                            .record(element)?
+                            .tag
+                            .as_ref()
+                            .ok_or_else(|| err(V::Malformed, "map entry tag"))?;
+                        let pair = tag
+                            .variants
+                            .iter()
+                            .find(|v| v.ordinal == 1)
+                            .and_then(|v| v.fields.first())
+                            .ok_or_else(|| err(V::Malformed, "map entry pair"))?;
                         for i in (0..count).rev() {
-                            work.push((
-                                At::Heap(entries.at(start + i * stride)),
-                                element,
-                                depth + 1,
-                            ));
+                            let entry = At::Heap(entries.at(start + i * stride));
+                            if self.tag_at(entry.at(tag.offset), tag.form)? == 1 {
+                                work.push((entry.at(pair.offset), pair.layout, depth + 1));
+                            }
                         }
                     }
                 }

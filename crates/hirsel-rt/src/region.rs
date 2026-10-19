@@ -494,7 +494,11 @@ unsafe fn prepare(
         let shared = (*block).count == COUNT_ARENA_SHARED;
         let len = crate::alloc::payload(block).cast::<u64>().read();
         let each = element_charge(&*ctx, block);
-        let copied = if shared { each.saturating_mul(len) } else { 0 };
+        let copied = if shared {
+            crate::copy::block_charge(&*ctx, block)
+        } else {
+            0
+        };
         if !charge_arena(region, each.saturating_mul(count).saturating_add(copied)) {
             return crate::STATUS_EXHAUSTED;
         }
