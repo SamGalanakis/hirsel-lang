@@ -154,10 +154,19 @@ fn all_agree(what: &str, results: &[native::CaseResult]) -> bool {
     ok
 }
 
+fn worker_count(configured: Option<&str>, explicit: Option<usize>) -> usize {
+    explicit
+        .or_else(|| {
+            configured
+                .and_then(|jobs| jobs.parse().ok())
+                .filter(|&jobs| jobs > 0)
+        })
+        .unwrap_or(4)
+}
+
 fn run() -> Result<bool, String> {
     let mut mode = None;
-    // The host is shared: four cases at a time unless told otherwise.
-    let mut jobs = 4;
+    let mut jobs = None;
     let mut out = None;
     let mut filter = Filter::default();
     let mut bless = false;
@@ -209,7 +218,7 @@ fn run() -> Result<bool, String> {
                     };
                     engine = Some(Selected { class, runtime });
                 }
-                Long("jobs") => jobs = args.value()?.parse()?,
+                Long("jobs") => jobs = Some(args.value()?.parse()?),
                 Long("help") | Short('h') => return Ok(true),
                 _ => return Err(arg.unexpected()),
             }
@@ -220,6 +229,8 @@ fn run() -> Result<bool, String> {
         println!("{USAGE}");
         return Ok(true);
     }
+    let configured_jobs = std::env::var("HIRSEL_JOBS").ok();
+    let jobs = worker_count(configured_jobs.as_deref(), jobs);
     let root = common
         .root
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
@@ -964,6 +975,16 @@ mod tests {
                 "{runtime:?} regions {regions} {opt:?} missing from {names:?}"
             );
         }
+    }
+
+    #[test]
+    fn host_worker_limit_is_the_default_and_explicit_jobs_override_it() {
+        assert_eq!(worker_count(Some("2"), None), 2);
+        assert_eq!(worker_count(Some("2"), Some(1)), 1);
+        assert_eq!(worker_count(None, None), 4);
+        assert_eq!(worker_count(Some("invalid"), None), 4);
+        assert_eq!(worker_count(Some("0"), None), 4);
+        assert_eq!(worker_count(Some("invalid"), Some(3)), 3);
     }
 
     #[test]
