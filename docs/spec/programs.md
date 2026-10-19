@@ -103,6 +103,12 @@ An entry is any `pub fn` whose parameters are root capabilities (`Io`, `Args`, `
 `Unsafe`) and which returns `Result[(), E]`. A completed entry returning `Ok(())` exits 0;
 `Error(e)` exits 1, independently of `E`'s variant numbering.
 
+A **call entry** (planned) is the callee of a runner call: any top-level definition an
+`Entry` names ([RUN-3](runners.md#run-3-entries)). It is launched as its own run with
+`launch` `call`, its argument from the run record's `call` member, its capabilities from
+the place's grants and admission at the place ([RUN-10](runners.md#run-10-callee-runs)).
+Its outcome is reported to its caller, not as an exit status or launch report.
+
 When `main` returns `Error(e)`, the host writes `error: <e>` followed by a newline
 to standard error before exiting 1. String error values render as text; other error
 values render in debug/value form. This launch report requires no stderr grant and

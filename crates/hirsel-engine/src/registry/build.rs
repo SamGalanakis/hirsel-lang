@@ -11,37 +11,6 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         forget.signature("forget", SignatureKind::Function(signature), false),
         &mut out,
     );
-    // Core library overview fixtures are declarations too, never ambient authority.
-    for (name, generic, parameters, result) in [
-        (
-            "store.transact",
-            "R: inert,E: inert",
-            "db: Db, body: fn(tx: Tx) -> Result[R,E] uses {}",
-            "Result[R,TxFailure[E]]",
-        ),
-        ("stock.get", "", "tx: Tx,sku: Sku", "Result[u32,StockError]"),
-        (
-            "stock.put",
-            "",
-            "tx: Tx,sku: Sku,n: u32",
-            "Result[(),StockError]",
-        ),
-        (
-            "reservations.insert",
-            "",
-            "tx: Tx,value: Reservation",
-            "Result[Reservation,StockError]",
-        ),
-    ] {
-        let mut b = Builder::new(generic)
-            .with_declarations(&out)
-            .with_schema(super::schema(name));
-        let f = b.function(parameters, result, false);
-        publish(
-            b.signature(name, SignatureKind::Function(f), false),
-            &mut out,
-        );
-    }
     for name in [
         "Io",
         "Args",
@@ -60,7 +29,6 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         "Scope",
         "Arena",
         "Test",
-        "Db",
         "Tx",
     ] {
         let scoped = matches!(name, "Scope" | "Arena" | "Test" | "Tx");
@@ -90,21 +58,14 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         publish(b.signature(name, SignatureKind::Type(t), true), &mut out);
     }
     // These inert, plain views/positions have intrinsic loop/brand rules (docs/spec/core-library.md).
-    for name in [
-        "Instant",
-        "Path",
-        "StrPos",
-        "ScalarView",
-        "PositionView",
-        "Sku",
-    ] {
+    for name in ["Instant", "Path", "StrPos", "ScalarView", "PositionView"] {
         let b = Builder::new("").with_declarations(&out);
         let mut t = type_definition(vec![], None);
         t.bounds = vec![Bound::Copyable, Bound::Inert, Bound::NoallocDrop];
-        if matches!(name, "Instant" | "Path" | "StrPos" | "Sku") {
+        if matches!(name, "Instant" | "Path" | "StrPos") {
             t.bounds.push(Bound::Plain);
         }
-        if matches!(name, "Path" | "StrPos" | "Sku") {
+        if matches!(name, "Path" | "StrPos") {
             t.bounds.extend([Bound::Data, Bound::Key, Bound::Sendable]);
         }
         if name == "Instant" {
@@ -229,7 +190,6 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "Check()|Contract()|Depth()|OutOfSpace()|DeadMutex()",
         ),
-        ("StockError", "", "OutOfStock(Sku)"),
         ("TxFailure", "E", "Aborted(E)|Canceled(CancelCause)"),
         ("ShapeVisibility", "", "Private()|Public()|Opaque()"),
         (
@@ -309,7 +269,6 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
             "",
             "kind: FailureKind,rule: String,site: SourceSite,spawn: List[u64],cause: Option[box Failure]",
         ),
-        ("Reservation", "", "sku: Sku,count: u32"),
         (
             "Metadata",
             "",
@@ -954,7 +913,7 @@ fn shape_data_bounds() -> Vec<Bound> {
 /// bound on its parameters, so it is serializable exactly when its arguments are, proved
 /// after substitution. `Path` is transparent text: a Path is data, and its authority stays in
 /// the `Dir` it is used with. Capability holders (`Deadline`, `Command`), resources, other
-/// opaque types (`Instant`, `Sku`, so `StockError`) and test-script inputs stay out.
+/// opaque types (`Instant`) and test-script inputs stay out.
 fn serializable_core(name: &str, t: &mut TypeDefinition) {
     if matches!(
         name,
@@ -1250,7 +1209,6 @@ impl Builder {
                                 | "Scope"
                                 | "Arena"
                                 | "Test"
-                                | "Db"
                                 | "Tx"
                         ) =>
                     {

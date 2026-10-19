@@ -28,7 +28,6 @@ CAP/CAP-2-opaque-stdout-bad.hir # dependency-owned E/v20 follow-up: Diagnostics(
 CAP/CAP-2-opaque-stdout-ok.hir # dependency-owned H: LANG-7 line 14: opaque type cannot be constructed here
 CAP/CAP-2-testhelpers-property-accept.hir # dependency-owned D/fixture M: LANG-4 line 11
 CAP/CAP-3-net-restricted-body-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
-CAP/CAP-3-transaction-example.hir # dependency-owned E/v20 follow-up: NotImplemented
 CAP/CAP-4-atomic-create-bad.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 CAP/CAP-4-atomic-create-ok.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 CAP/CAP-5-seal-ceiling-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
@@ -171,7 +170,6 @@ MODE/MODE-5-local-capture-bad.hir # not done J: missing CLO-4 line 5
 MODE/MODE-5-once-capture-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-6-net-global-capture-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 MODE/MODE-6-net-test-capture-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
-MODE/MODE-6-spec-reserve.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-1-borrowed-directory-narrow-run.hir # dependency-owned D/fixture M: PROG-2 line 8
 PROV/PROV-1-mut-parameter-field-replace-run.hir # dependency-owned D/fixture M: LANG-4 line 17
 PROV/PROV-1-mut-parameter-net-field-replace-bad.hir # dependency-owned E/v20 follow-up: NotImplemented

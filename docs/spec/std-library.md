@@ -1429,6 +1429,11 @@ that can replace the stored key. Construction validates that the key is granted;
 but unset key stays distinct from a denied one. Facets receive actual grants and cannot
 reconstruct authority from a run record.
 
+### Stores
+
+`std@1/store`, an embedded transactional store written in Hirsel over a `Dir` grant, with
+typed tables, schema history and migrations, is specified in [storage](storage.md).
+
 ## HTTP server
 
 The server shares the client's wire parser and error type:

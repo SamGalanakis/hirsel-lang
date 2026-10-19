@@ -303,17 +303,56 @@ fn build(name: &str) -> Fixture {
             f.function(name, signature, Some(body), true);
         }
         "reserve" => {
-            let r = f.named("Reservation");
+            let u = f.named("u32");
             let e = f.named("StockError");
             let e = f.app("TxFailure", vec![e]);
-            let result = f.app("Result", vec![r, e]);
-            let signature = f.sig(&[("db", "Db"), ("sku", "Sku"), ("n", "u32")], Some(result));
-            let get = f.invoke("stock.get", &["tx", "sku"]);
-            let get = f.question(get, None);
+            let result = f.app("Result", vec![u, e]);
+            let mut signature = f.sig(
+                &[("s", "Store"), ("sku", "Sku"), ("n", "u32")],
+                Some(result),
+            );
+            signature.parameters[0].passing = PassingMode::Mut;
+            let tx = f.value("tx");
+            let stock = f.call("stock", vec![]);
+            let sku = f.value("sku");
+            let get = f.call("table.get", vec![tx, stock, sku]);
+            let get = f.question(get, Some("Db"));
             let have = f.binding("have", get, false, None);
-            let hv = f.value("have");
+            let scrutinee = f.value("have");
+            let some = f.path("Some");
+            let v = f.s("v");
+            let v = f.p(PatternKind::Binding(v));
+            let some = f.p(PatternKind::Constructor {
+                path: some,
+                fields: vec![PatternField {
+                    label: None,
+                    pattern: v,
+                }],
+                rest: false,
+            });
+            let none = f.s("None");
+            let none = f.p(PatternKind::Binding(none));
+            let v = f.value("v");
+            let zero = f.int("0");
+            let matched = f.e(ExprKind::Match {
+                value: scrutinee,
+                arms: vec![
+                    MatchArm {
+                        pattern: some,
+                        guard: None,
+                        body: v,
+                    },
+                    MatchArm {
+                        pattern: none,
+                        guard: None,
+                        body: zero,
+                    },
+                ],
+            });
+            let left = f.binding("left", matched, false, None);
+            let lv = f.value("left");
             let n = f.value("n");
-            let condition = f.bin(BinaryOp::Lt, hv, n);
+            let condition = f.bin(BinaryOp::Lt, lv, n);
             let out = f.invoke("OutOfStock", &["sku"]);
             let err = f.call("Error", vec![out]);
             let ret = f.e(ExprKind::Return(Some(err)));
@@ -324,44 +363,27 @@ fn build(name: &str) -> Fixture {
                 else_branch: None,
             });
             let if_ = f.st(StmtKind::Expr(if_));
-            let hv = f.value("have");
+            let lv = f.value("left");
             let n = f.value("n");
-            let sub = f.bin(BinaryOp::Sub, hv, n);
+            let sub = f.bin(BinaryOp::Sub, lv, n);
             let tx = f.value("tx");
+            let stock = f.call("stock", vec![]);
             let sku = f.value("sku");
-            let put = f.call("stock.put", vec![tx, sku, sub]);
-            let put = f.question(put, None);
+            let put = f.call("table.put", vec![tx, stock, sku, sub]);
+            let put = f.question(put, Some("Db"));
             let put = f.st(StmtKind::Expr(put));
-            let sku = f.value("sku");
+            let lv = f.value("left");
             let n = f.value("n");
-            let callee = f.value("Reservation");
-            let sl = f.s("sku");
-            let count = f.s("count");
-            let reservation = f.e(ExprKind::Call {
-                callee,
-                arguments: vec![
-                    Argument {
-                        label: Some(sl),
-                        value: sku,
-                    },
-                    Argument {
-                        label: Some(count),
-                        value: n,
-                    },
-                ],
-            });
-            let tx = f.value("tx");
-            let inserted = f.call("reservations.insert", vec![tx, reservation]);
-            let inserted = f.question(inserted, None);
-            let ok = f.call("Ok", vec![inserted]);
-            let body = f.block(vec![have, if_, put], Some(ok));
+            let sub = f.bin(BinaryOp::Sub, lv, n);
+            let ok = f.call("Ok", vec![sub]);
+            let body = f.block(vec![have, left, if_, put], Some(ok));
             let closure_sig = f.sig(&[("tx", "Tx")], None);
             let closure = f.e(ExprKind::Closure {
                 signature: closure_sig,
                 body,
             });
-            let db = f.value("db");
-            let transaction = f.call("store.transact", vec![db, closure]);
+            let store = f.unary(UnaryOp::Mut, "s");
+            let transaction = f.call("store.transact", vec![store, closure]);
             let body = f.block(vec![], Some(transaction));
             f.function(name, signature, Some(body), true);
         }

@@ -23,6 +23,12 @@ borrows valid data; decoding produces fresh owned data and reconstructs no loans
 identities, capability authority or allocation sharing. An opaque or validated domain type
 converts explicitly to a serializable data type and validates again on reconstruction.
 
+A function value never occurs in a serializable schema. A runner call (planned) carries
+the callee's identity (its definition path, signature fingerprint and code hash) beside
+the encoded argument ([RUN-8](runners.md#run-8-identity-and-arrival)). That identity is
+data designating code the receiving place already holds or fetches by hash; it is never
+decoded into a function or closure value and confers no authority.
+
 ```hirsel
 @serializable
 type Point { x: i32, y: i32 }
@@ -143,7 +149,13 @@ checked schema from its caller; it compares descriptor bytes exactly and checks 
 version and lengths before constructing data. It never loads a schema, constructor, owner
 or capability from incoming bytes. A descriptor digest may index tooling but never
 replaces this check or authorizes reconstructing a type or brand. Nested values carry
-their payload only, without nested envelopes.
+their payload only, without nested envelopes. Store tables (planned) are the one place
+descriptors are compared without exact Nominal version text: a table compares storage
+descriptors by names and shape, matching record fields by name, and stores payloads
+without envelopes ([STORE-7](storage.md#store-7-rows-and-storage-identity)). Every payload
+is still decoded with every validation below, and no type is ever reconstructed from
+stored bytes. Table keys use the separate order-preserving key encoding of
+[STORE-6](storage.md#store-6-key-encoding), not this codec.
 
 ### Validation
 
@@ -152,7 +164,9 @@ allocating; overflow, truncation, an invalid `bool`, `char`, tag, NaN or UTF-8, 
 map keys, noncanonical sets and trailing payload or envelope bytes are rejected. No
 partially decoded value is exposed, and no user constructor, callback or finalizer runs.
 Operational byte, value or work budgets may refuse service separately from malformed data;
-they are not language size or depth bounds. Decoder traversal counts zero-byte elements
+they are not language size or depth bounds. A budget refusal inside a runner call or a
+store operation is that operation's typed refusal (`NotRun(Rejected())`, `Limit(..)`),
+never the end of the process. Decoder traversal counts zero-byte elements
 and cannot loop forever on an uninhabited recursive schema. For canonical input,
 `encode(decode(bytes))` is byte-identical; `decode(encode(value))` preserves the specified
 data, with canonical NaNs, canonical `Set` order, fresh ownership and no sharing.

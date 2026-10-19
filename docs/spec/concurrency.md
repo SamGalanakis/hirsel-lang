@@ -89,7 +89,12 @@ and only then observes deadlines and provider outcomes (including resets, I/O er
 Nonblocking grant projections and clock sampling introduce no cancellation check and use
 their stated grant or source error variants. Joins (`task.await`, `task.await_any`,
 `task.await_at`, `task.cancel_all`) and mutex acquisition are not cancellation points: a
-cancelled scope cancels its children, so a join waits only for them. `Canceled` is returned only when the operation had no effect. Pure code
+cancelled scope cancels its children, so a join waits only for them. `Canceled` is returned only when the operation had no effect. A runner call (planned) is
+a cancellation point only until its request is sent; after that its scope's cancellation
+is forwarded to the place and the call waits for the acknowledgement
+([RUN-9](runners.md#run-9-cancellation)). A store transaction (planned) checks
+cancellation before its body starts; a body, once started, is not cancellable
+([STORE-3](storage.md#store-3-transaction-scope)). Pure code
 is not cancellable; `task.check_canceled(s)?` marks long loops. Each operation's signature
 states what it owns on success and on failure; a borrow or `mut` loan lasts until the call
 completes. Deadlines read the granted monotonic clock. A scope can carry a deadline:
@@ -180,3 +185,9 @@ of external operations. Reporting Blocked runs no user code, cancellation or des
 A receive on an empty channel with a live Sender keeps waiting even when the receiving task
 owns that Sender; whether the execution is Blocked is decided by this rule. Blocked is never
 returned from `receive`, `await` or `task.isolate`.
+
+Callee runs of in-process runner providers (planned) belong to their caller's execution
+for this rule; a request outstanding at an out-of-process place is an external event of
+unknown completion ([RUN-12](runners.md#run-12-quiescence-across-runners)). Blocked is
+never returned from a runner call; a callee Blocked at an out-of-process place reaches its
+caller as `InDoubt(Abandoned())`.

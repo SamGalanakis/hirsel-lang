@@ -277,7 +277,8 @@ holds its written unknown captures.
 
 ## Authority and errors
 
-`Io`, `Args`, `Env`, `Unsafe` and the global projections are plain capabilities; `Path` is
+`Io`, `Args`, `Env`, `Unsafe` and the global projections, the planned `Runner`
+([runners](runners.md)) included, are plain capabilities; `Path` is
 an inert, plain, immutable path value. `File` and `AtomicFile` carry `Dir` authority, task
 handles `Scope`, and `Mutex`, `Atomic` and channel handles `Tasks`. The latter use run-time
 scheduling-domain affinity, not an implicit static `of tasks` brand; an operation with
@@ -1308,21 +1309,13 @@ as insertion, completing comparisons before mutation. Comparator failure leaves 
 map unchanged. The existing sequence representation gives O(log n) comparisons and
 O(n) movement on successful removal; no second ordered container is introduced.
 
-## Example application definitions
+## Overview definitions
 
-The `reserve` example of [the first look](index.md#a-first-look) uses these signature-only
-fixtures: `Db` (a global capability), `Tx` (a scoped capability), an inert plain `Sku`,
-`Reservation { sku: Sku, count: u32 }`, `StockError = OutOfStock(Sku)` and
-`TxFailure[E] = Aborted(E) | Canceled(CancelCause)` (serializable when `E` is), with
-
-```text
-store.transact[R: inert, E: inert](db: Db, body: fn(tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
-stock.get(tx: Tx, sku: Sku) -> Result[u32, StockError]
-stock.put(tx: Tx, sku: Sku, n: u32) -> Result[(), StockError]
-reservations.insert(tx: Tx, value: Reservation) -> Result[Reservation, StockError]
-```
-
-They grant no ambient database authority. The overview's `CliError` is
+The [first look](index.md#a-first-look) declares its own `Sku` and `StockError` and uses
+the planned store operations of [storage](storage.md); there are no application fixtures.
+`core@1` still declares the scoped capability `Tx` and `TxFailure[E] = Aborted(E) |
+Canceled(CancelCause)` (serializable when `E` is), without operations, until `std@1/store`
+declares its own. The overview's `CliError` is
 `Usage(ArgError) | Files(FileError) | Output(OutputError)`.
 
 `type_shape.info` reads a compile-time `TypeShape[T]` as the `ShapeInfo` data of

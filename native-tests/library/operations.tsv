@@ -206,7 +206,6 @@ proc.spawn_pipeline	1cee34c119669fb6cd71a738720259d5468dd1f96f46eed615a4d49e8073
 proc.wait_group	5a1d9f34f02e701469f9de924138e220c47f9435a7e656ef9491536f0a2d16d8	0:b:n;1:t:n;2:b:n->n
 random.bytes	e39710af2db6defeb28c1ef50f1cd2965341d69faff536ff53f6fab68ba83552	0:b:n;1:b:n->n
 region.with	8adc31225084d866b1dac6aed6bb15af6fed65df7b7de481931de4f779750277	0:m:[0];1:b:a->[1]
-reservations.insert	a946f3a3b8b944467c6e320a367e7cb1ed9e7c83f46334c1223c6ba1a10fee78	0:b:n;1:b:n->n
 sender.dup	27a10d0afbf9bc40da71ce349b0237903028499fc18ff651c712846e6805388c	0:b:n;1:b:[0]->[0]
 set.contains	63dfd07e73d556f75293bf032305959ec5e2c42d67798512ee0b82fa44fcf00e	0:b:[0];1:b:[0]->n
 set.empty	51db0157bd4269127c373918f0527819ae57cd961db5b267eba9d5992f93899b	->[0]
@@ -228,9 +227,6 @@ sorted_map.insert	3d7be4288c2171304dba5fcd2389db49d73caca6edf5511af855e630aafadf
 sorted_map.len	058b874e4b61ca57c57cf4730a02e5d3e602b7dfc8a6207adfb5abbb2bdb8ae1	0:b:a;1:b:a->n
 sorted_map.remove	90c4487a9299535af8fb9b4d5cae54aeb0582b7631c95b9de3c71a4d6761d0a7	0:b:a;1:m:a;2:b:[0]->[1]
 stdin.read	40e2245cf3144f22dac4a31bc49b118f82512c4afe76fbf627ffe433ed39b6f5	0:b:n;1:m:n;2:b:n->n
-stock.get	8515b0d3d2f352baacec6ffc9b9ed8b282acccf3b9decfd13a8970792a413ed2	0:b:n;1:b:n->n
-stock.put	6588507958dbeb8dd0e095677ffce9cb8f6681f9e6ff1329633eabbdddaececb	0:b:n;1:b:n;2:b:n->n
-store.transact	412fbb4155cb5edcecb2d978644374de30b346c4974b650d7ade1baeb681916f	0:b:n;1:b:a->[0,1]
 string.as_bytes	c36eccfa3d22c7decd22e8f0080199f10187f9e5b7deefb06fcbbd0f0eebbb73	0:b:n->n
 string.byte_len	20a9c5294c314c92f7639986e3d2970ecbf3345476da1a427de6b2d04fa934db	0:b:n->n
 string.byte_offset	8e4ba085bac81a32a745678965f2286ecb18c0dd332f15baf2f9c3eb62674cb1	0:b:n;1:b:n->n

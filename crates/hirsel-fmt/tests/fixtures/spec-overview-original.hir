@@ -30,13 +30,14 @@ pub fn test_normalize(t: Test) {
 }
 
 // example: reserve
-pub fn reserve(db: Db, sku: Sku, n: u32)
-  -> Result[Reservation, TxFailure[StockError]] {
-  store.transact(db, fn(tx: Tx) {
-    let have = stock.get(tx, sku)?
-    if have < n { return Error(OutOfStock(sku)) }
-    stock.put(tx, sku, have - n)?
-    Ok(reservations.insert(tx, Reservation(sku: sku, count: n))?)
+pub fn reserve(mut s: Store, sku: Sku, n: u32)
+  -> Result[u32, TxFailure[StockError]] {
+  store.transact(mut s, fn(tx: Tx) {
+    let have = table.get(tx, stock(), sku) ? Db
+    let left = match have { Some(v) => v, None => 0 }
+    if left < n { return Error(OutOfStock(sku)) }
+    table.put(tx, stock(), sku, left - n) ? Db
+    Ok(left - n)
   })
 }
 

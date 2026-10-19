@@ -11,8 +11,9 @@ capability.
 
 This specification defines the language, its core library, its standard source library,
 its run and recording formats, the diagnostic policy and the prover-neutral proof seam.
-Code storage, builds, topology files, deployment and simulation tooling are built on top
-of it and are not specified here.
+Builds, topology files and deployment and simulation tooling are built on top of it and
+are not specified here; the provider contracts they rely on (runners, code stores and
+stores) are.
 
 ## Fixed goals
 
@@ -29,7 +30,7 @@ These goals decide between designs. A rule that would break one of them is wrong
    layer 2 (`Unsafe`) are opt-in and local. Using them in one definition never changes
    the meaning of code that does not.
 4. **Authority is explicit.** Files, network, clocks, randomness, tasks, output,
-   environment, arenas and `Unsafe` are values passed as parameters
+   environment, arenas, runners and `Unsafe` are values passed as parameters
    ([capabilities](capabilities.md)).
 5. **Deterministic.** Given the same capability inputs and run configuration, a program
    behaves identically, at every optimisation level and in every compilation topology
@@ -70,6 +71,8 @@ not use it. Cost reports (where layer-0 code counts, copies or keeps checks) are
 | [Memory](memory.md): counting, arenas, regions, layout, flat and packed data, slots | MEM-1 to MEM-14 |
 | [Capabilities and authority](capabilities.md) | CAP-1 to CAP-6 |
 | [Concurrency](concurrency.md) | CONC-1 to CONC-8 |
+| [Runners](runners.md) (planned): places functions run, entries, calls, outcomes, linked tapes, recording levels, provider seams | RUN-1 to RUN-14 |
+| [Storage](storage.md) (planned): stores over a directory, transactions, the output gate, typed tables, key encoding, schema history, the engine and its storage seam | STORE-1 to STORE-13 |
 | [Failure and destruction](failure.md) | FAIL-1 to FAIL-4, DROP-1 to DROP-4 |
 | [Determinism and replay](determinism.md): run configuration, recording, Blocked | DET-1 to DET-4 |
 | [Everyday semantics](semantics.md): integers, floats, strings, iteration, maps | SEM-1 to SEM-5 |
@@ -141,16 +144,26 @@ pub fn test_normalize(t: Test) {
   test.check(t, normalize_tree(dir) == Ok(1))
 }
 
-// library transaction: fn transact[R: inert, E: inert](db: Db,
-//   body: fn(tx: Tx) -> Result[R, E] uses {}) -> Result[R, TxFailure[E]]
-// Tx is a scoped capability (MODE-6): it cannot leave the body
-pub fn reserve(db: Db, sku: Sku, n: u32)
-  -> Result[Reservation, TxFailure[StockError]] {
-  store.transact(db, fn(tx: Tx) {
-    let have = stock.get(tx, sku)?
-    if have < n { return Error(OutOfStock(sku)) }
-    stock.put(tx, sku, have - n)?
-    Ok(reservations.insert(tx, Reservation(sku: sku, count: n))?)
+@serializable
+distinct type Sku(v: u64)
+
+@serializable
+type StockError = OutOfStock(Sku) | Db(TxError)
+
+fn stock() -> Table[Sku, u32] {
+  table.named("stock")
+}
+
+// a transaction (std@1/store, planned): the body holds only a scoped Tx
+// (MODE-6) and data, so all it can touch is the store; rows are typed
+pub fn reserve(mut s: Store, sku: Sku, n: u32)
+  -> Result[u32, TxFailure[StockError]] {
+  store.transact(mut s, fn(tx: Tx) {
+    let have = table.get(tx, stock(), sku) ? Db
+    let left = match have { Some(v) => v, None => 0 }
+    if left < n { return Error(OutOfStock(sku)) }
+    table.put(tx, stock(), sku, left - n) ? Db
+    Ok(left - n)
   })
 }
 
@@ -218,9 +231,10 @@ type Tree = Leaf | Node(left: box Tree, key: u64, right: box Tree)
 type Log { dir: Dir, file: File of .dir }
 ```
 
-The `reserve` example uses signature-only application definitions listed in
-[the core library](core-library.md#example-application-definitions); they are fixtures,
-not ambient database authority.
+The `reserve` example is planned: it uses the store of [storage](storage.md), which
+`std@1/store` will declare. A `Store` is opened over a `Dir` the run grants, so without
+that grant there is no database, and the same kind of body can run at another place
+through a runner ([runners](runners.md)).
 
 ## Not in Hirsel
 

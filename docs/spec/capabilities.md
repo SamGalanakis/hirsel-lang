@@ -10,7 +10,7 @@ Whether a capability is global or scoped is fixed by
 ### CAP-1: Authority
 
 Directories, network, processes, clocks, randomness, tasks, standard output, environment
-variables, allocation placement and `Unsafe` arrive only as typed parameters. `Io` is projected only
+variables, runners, allocation placement and `Unsafe` arrive only as typed parameters. `Io` is projected only
 into the grants the run configuration selects ([PROG-3](programs.md#prog-3-entry)); each
 projection requires an actual grant and cannot widen its resource restrictions. A path
 designates something within a grant and does not itself grant host access. An operation
@@ -85,6 +85,13 @@ program already holds; it grants nothing, and no implicit clock is read. The chi
 file system, network and process access is outside Hirsel's model: granting a program is
 trusting it with whatever the host lets it do ([processes](core-library.md#processes)).
 
+**Runners and stores** (planned). A `Runner` designates a place functions can run together
+with a grant set the run configuration fixes; it can only be narrowed, a call through it
+carries data and a definition's identity, never authority, and the callee's capabilities
+come only from the place ([runners](runners.md)). A store is opened over a `Dir`, and its
+authority is exactly that directory's; a transaction on it gives its body only a scoped
+`Tx` ([storage](storage.md)).
+
 Libraries define further capabilities and declare each global or scoped.
 
 ### CAP-2: Charged at use
@@ -118,7 +125,8 @@ no authority, while an omitted opaque bound clause is incomplete and rejected un
 
 ### CAP-3: Restriction
 
-A scope-forming library function (a transaction, a sandbox, a read-only query) gives its
+A scope-forming library function (a transaction, [STORE-3](storage.md#store-3-transaction-scope);
+a sandbox; a read-only query) gives its
 body a scoped capability, declares the body `uses {}`, and bounds the body's result
 `inert`. Together these mean the body holds only what it is passed, cannot keep it, and
 cannot return authority. Authority (`uses`), locality (`in`) and identity (`of`) are

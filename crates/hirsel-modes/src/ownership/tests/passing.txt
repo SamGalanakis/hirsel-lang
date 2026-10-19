@@ -1008,7 +1008,6 @@ MODE/MODE-6-escaping-capture-ok.hir
 MODE/MODE-6-net-global-capture-ok.hir
 MODE/MODE-6-scope-return-ok.hir
 MODE/MODE-6-scoped-body-keeps-capability.hir
-MODE/MODE-6-spec-reserve.hir
 MODE/MODE-6-store-scoped-ok.hir
 MODE/MODE-6-test-return-ok.hir
 MODE/MODE-6-tx-return-ok.hir

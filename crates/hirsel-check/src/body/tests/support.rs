@@ -211,7 +211,6 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
         "Stdout",
         "Tasks",
         "Build",
-        "Db",
     ] {
         registry.signatures.insert(
             core(name),
@@ -234,7 +233,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
             )),
         );
     }
-    for name in ["Path", "Sku", "StrPos", "Failure"] {
+    for name in ["Path", "StrPos", "Failure"] {
         registry.signatures.insert(
             core(name),
             Arc::new(type_signature(

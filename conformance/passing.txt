@@ -222,7 +222,6 @@ conformance/CAP/CAP-3-stdout-capture-under-io-bad.hir
 conformance/CAP/CAP-3-stdout-capture-under-stdout-ok.hir
 conformance/CAP/CAP-3-tasks-capture-bad.hir
 conformance/CAP/CAP-3-tasks-capture-ok.hir
-conformance/CAP/CAP-3-transaction-example.hir
 conformance/CAP/CAP-3-unrestricted-callback-value-bad.hir
 conformance/CAP/CAP-3-unrestricted-callback-value-ok.hir
 conformance/CAP/CAP-3-written-unrestricted-literal-binding-bad.hir
@@ -3478,7 +3477,6 @@ conformance/MODE/MODE-6-net-test-capture-bad.hir
 conformance/MODE/MODE-6-scope-return-bad.hir
 conformance/MODE/MODE-6-scope-return-ok.hir
 conformance/MODE/MODE-6-scoped-body-keeps-capability.hir
-conformance/MODE/MODE-6-spec-reserve.hir
 conformance/MODE/MODE-6-store-scoped-bad.hir
 conformance/MODE/MODE-6-store-scoped-ok.hir
 conformance/MODE/MODE-6-test-return-bad.hir

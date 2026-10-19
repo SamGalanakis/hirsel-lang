@@ -38,6 +38,8 @@ the extra restriction it introduces:
 | other closure construction and escape | CLO-1 for scoped values, CLO-4 for escaping capture and authority |
 | a restricted scope-forming callback's authority | CAP-3 |
 | a transparent scoped call's unknown or joined authority | CLO-2 |
+| entry formation from a definition name (planned) | RUN-3 |
+| table key schema (planned) | STORE-6 |
 
 These override the general properties they restate, not independent operand errors.
 
@@ -193,7 +195,8 @@ Missing implementation authority is CAP-5 at the seal declaration; representatio
 outside the exact owning package and version is PROG-2. Ordinary opaque summaries keep
 CAP-2. Exported structural-bound failures keep GEN-1 (`sendable` MODE-4, `inert` CAP-2);
 serialization schema admission and opt-in failures use SER-1 at the declaration or the
-encoding use, while malformed bytes are an expected decode error under SER-2. Declaration
+encoding use (a runner call's argument, result and error schemas at the call,
+[RUN-5](runners.md#run-5-placement-independence)), while malformed bytes are an expected decode error under SER-2. Declaration
 eligibility precedes dependent uses. Outside the owner, authority diagnostics name the seal
 and its declaration, never private representation paths or a suggested hidden grant. Owner
 ceiling failures show the field and destruction chain. Scoped lifetime, capture and

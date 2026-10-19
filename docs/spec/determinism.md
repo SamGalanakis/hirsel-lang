@@ -69,14 +69,16 @@ from omitting the root. A requested but absent root is a launch refusal under
 |---|---|
 | `schema` | Run-record format version (1). |
 | `program` | Digest of the selected semantic program revision: transitive source and core implementations, selected constant dependencies and the runtime's semantic contract. |
-| `entry`, `launch` | The entry's full versioned definition path, and `main` or `test`. |
-| `inputs` | `hash_seed`, `random_seed` and `test_seed`, each an explicit `u64`; and, for a simulation, a separate scheduler algorithm, version and seed. |
-| `io` | Absent or null, or a closed grant record: stdout sink, Tasks provider, monotonic clock, wall clock, Random provider, directory mounts, network grant and process grant. Each absent projection is denied. |
+| `entry`, `launch` | The entry's full versioned definition path, and `main` or `test`; planned: `call` for a callee run ([RUN-10](runners.md#run-10-callee-runs)). |
+| `call` | Planned. Present exactly when `launch` is `call`: the call form; the cause (the caller's run instance, request ordinal and request digest); and the argument bytes as lowercase hexadecimal. |
+| `inputs` | `hash_seed`, `random_seed` and `test_seed`, each an explicit `u64`; and, for a simulation, a separate scheduler algorithm, version and seed; planned: `fault_seed`, the seed of simulated providers' fault decisions. |
+| `io` | Absent or null, or a closed grant record: stdout sink, Tasks provider, monotonic clock, wall clock, Random provider, directory mounts, network grant and process grant; planned: runners (`runners`, [providers](runners.md#providers)). Each absent projection is denied. |
 | `args` | Absent or null, or the exact ordered UTF-8 snapshot, explicit empty included. |
 | `env` | Absent or null, or exact key-to-value entries, with null for a granted key that is unset; denied keys are distinguishable from granted unset keys. |
 | `unsafe` | Boolean explicit root grant, false by default. |
 | `admission` | Optional launch-only constraints: not-before, expiry, an external revocation reference and the code policy `code`, `admit.any@1` (the default when absent) or `admit.safe@1` ([CAP-6](capabilities.md#cap-6-safe-code)). The resolved decision and its evidence are captured in the validated record. |
 | `budgets` | Absent (`budgets.none@1`), or the host's resource budgets for the run (**Budgets** below). |
+| `recording` | Planned run-policy member: `none`, `record` or `durable` ([RUN-14](runners.md#run-14-recording-levels)); absent, the host's launcher chooses and the validated record states the choice. |
 
 **Directory mounts** are sorted, unique, portable virtual paths (the empty path is the
 virtual root), each with an explicit absolute host root designator and `read` or
@@ -107,6 +109,11 @@ or set by a `Command`; `env` may be omitted for none. For example
 replay: `stdout.bytes@1`, `random.splitmix64@1`, `random.system@1`, `clock.monotonic.ns@1`,
 `clock.wall.unix_ns@1`, `tasks.cooperative@1`, `net.stream@1`, `net.script@2`,
 `process.spawn@1`, `process.script@1`, `budgets.none@1` and `budgets.limits@1`.
+Planned: the runner providers `local.threads@1`, `local.process@1`, `sim@1` and
+`remote.tls@1` and the code stores `code.none@1`, `code.dir@1`, `code.object@1` and
+`code.sim@1`. Each is a seam under
+[RUN-13](runners.md#run-13-provider-seams): its choice changes cost, latency and crash
+survival, never meaning.
 `tasks.cooperative@1` supplies structured tasks with cooperative scheduling at the
 suspension points of [CONC-1](concurrency.md#conc-1-runtime). Host readiness waits
 suspend only their task; the provider waits for external readiness only when no task
@@ -204,7 +211,9 @@ compiler and native artifact choices and instance numbering are excluded.
 **Validated records.** The validated record states the effective grants, provider contracts
 and normalized snapshots; a recording embeds those canonical bytes and their digest. Its
 header also states the recording schema, the deterministic input model, the program
-identity and the execution origin. A native artifact digest is diagnostic provenance:
+identity and the execution origin; planned: the run instance, a 128-bit value fixed at
+admission that distinguishes runs of identical records and names the run in call keys and
+call streams ([RUN-11](runners.md#run-11-linked-tapes)). A native artifact digest is diagnostic provenance:
 replay agreement across native topologies and targets uses the semantic program digest
 rather than identical machine code. Observations carry the same program and run identity.
 Public signature digests alone are insufficient: a body change invalidates replay even when
@@ -215,7 +224,10 @@ replaces it during a run today. Any future live-swap feature must obey this rule
 replay reproduces which revision every call ran. A definition's selected revision may advance only at recorded swap points. A named
 function value follows its definition, so later calls use the current revision. A closure
 keeps the revision that created it. A run's tape records every swap point. See
-[PROG-1](programs.md#prog-1-names).
+[PROG-1](programs.md#prog-1-names). A runner's callee run (planned) executes the revision
+its place selects for the callee, and the place refuses a call whose code hash differs
+from the request's ([RUN-8](runners.md#run-8-identity-and-arrival)); a call never swaps the
+caller's revision.
 
 **Admission.** Optional time and revocation checks run once, before entry. The launcher
 records the decision and the evidence it used. An accepted grant is an endowment for the
@@ -229,7 +241,9 @@ no-effect rule. Resuming into real `Io` is a new admission that validates live h
 again; a recording is never authority to reconnect ([PROG-6](programs.md#prog-6-grant-admission)).
 
 **Seeds.** The hash placement seed affects only placement ([SEM-5](semantics.md#sem-5-maps)).
-The Random and Test seeds are separate even when a user chooses equal numbers. A scheduler
+The Random and Test seeds are separate even when a user chooses equal numbers, and so is
+the planned fault seed, which drives only simulated providers' fault decisions, each
+recorded as the outcome it produced, so replay never needs it. A scheduler
 seed describes simulator policy; the recorded event and scheduling trace is the
 authoritative replay input. A user `Hasher` receives only an explicit seed from its caller,
 never the hidden placement seed.
@@ -242,8 +256,12 @@ Invalid query names are expected `EnvError` values.
 ## Recording and resuming
 
 Ordinary execution and non-durable recording cannot be resumed. The optional durable
-recording profile uses the protocol below. **InDoubt** is a tooling recovery disposition,
-never a `Failure`, `Canceled` or a source `Result` variant.
+recording profile uses the protocol below; the planned run-record member `recording`
+selects `none`, `record` or `durable` ([RUN-14](runners.md#run-14-recording-levels)).
+**InDoubt** is a tooling recovery disposition for a request whose completion was never
+recorded, never a `Failure`, `Canceled` or a source `Result` variant. A runner call's
+`InDoubt` outcome ([RUN-6](runners.md#run-6-outcomes)) is a different thing: a live
+provider outcome, recorded as a completion and replayed like any other.
 
 Bind and durably create the header first. Allocate a run-local request ordinal and append
 `Prepared(id, anchor, task-path, request)`; make that record and its log location durable
@@ -266,7 +284,11 @@ issuance. A recording failure after issuance is environmental and leaves the req
 doubt; it is never returned as `Canceled` or as proof of no effect. A torn completion leaves
 its `Prepared` record in doubt; unrecoverable corruption refuses recovery rather than guess
 that a log prefix is complete. A crash after a durable preparation but before issuance may
-conservatively produce InDoubt although no effect happened.
+conservatively produce InDoubt although no effect happened. Planned exceptions: a compute
+runner call is recorded but not journaled, and recovery re-issues it, because its
+signature proves it has no effect ([RUN-7](runners.md#run-7-retry-classes)); and a store
+commit's in-doubt object create is resolved by reading the object back
+([STORE-10](storage.md#store-10-recording)).
 
 A terminal trailer proves a complete recording. Its absence alone does not make durable
 completions doubtful: recovery scans the valid records and distinguishes a completed
@@ -275,10 +297,20 @@ recordings cannot prove the absence of effects beyond their last durable bytes a
 labelled as having an unknown suffix. Completed operations replay only in simulation.
 Reconciling InDoubt requires external evidence or an explicit application or provider
 recovery procedure; it never defaults to a retry, even for apparently idempotent
-operations. An explicit live continuation is newly admitted and records its recovery
+operations. Call-key status queries and call streams
+([RUN-11](runners.md#run-11-linked-tapes)) are such provider procedures. An explicit live continuation is newly admitted and records its recovery
 decision. Generic resurrection of host file descriptors, channel state or arbitrary
 foreign resources is not promised; a provider must support reacquisition and reconciliation
 or continuation is refused.
+
+### Runner and store recording
+
+Runner calls (planned) are recorded as [RUN-11](runners.md#run-11-linked-tapes) specifies:
+one request and one completion at the caller, parked and readied under
+`tasks.cooperative@1` as network requests are, and replayed without contacting a place.
+Stores (planned) are Hirsel code over a `Dir`, so their effects are recorded as file
+effects ([STORE-10](storage.md#store-10-recording)), and replay never opens a real
+directory.
 
 ### Network recording
 

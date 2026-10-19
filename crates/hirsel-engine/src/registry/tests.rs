@@ -82,23 +82,13 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
             "{name}"
         );
     }
-    // DROP-4's forget and the core-library overview's transaction example are
-    // declared outside the ledger. Every other source-callable function must
-    // have a ledger row, so removing or forgetting one cannot hide in a total.
+    // DROP-4's forget is declared outside the ledger. Every other source-callable
+    // function must have a ledger row, so removing or forgetting one cannot hide
+    // in a total.
     let expected: BTreeSet<_> = names
         .into_iter()
         .map(hirsel_syntax::DefPath::core)
-        .chain(
-            [
-                "forget",
-                "reservations.insert",
-                "stock.get",
-                "stock.put",
-                "store.transact",
-            ]
-            .into_iter()
-            .map(hirsel_syntax::DefPath::core),
-        )
+        .chain(std::iter::once(hirsel_syntax::DefPath::core("forget")))
         .collect();
     let declared: BTreeSet<_> = registry
         .signatures()
