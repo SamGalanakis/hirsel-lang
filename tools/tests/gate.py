@@ -588,6 +588,11 @@ class NativePrograms(unittest.TestCase):
                          {'hirsel-llvm'}, self.root), ['smoke-a.hir', 'smoke-b.hir'])
         self.assertEqual(impact.native_programs([], {'hirsel-parser'}, self.root), [])
 
+    def test_a_plan_summary_names_each_binary_once(self):
+        plan = gating.Plan(tests={'root//:hirsel-cli-test-examples-shard-1', 'root//:hirsel-cli-test-examples-shard-2',
+                                  'root//:hirsel-lexer-unittest'}, campaigns={impact.AGREEMENT})
+        self.assertEqual(plan.summary(), ['hirsel-cli-test-examples (2 shards)', 'hirsel-lexer-unittest', 'agreement'])
+
     def test_chosen_native_programs_run_both_backends_with_one_filter(self):
         plan = gating.Plan(native={'conformance/MEM/soa.hir'})
         self.assertEqual(plan.campaign_targets(), ['root//:gate-native-changed', 'root//:gate-native-cranelift-changed'])

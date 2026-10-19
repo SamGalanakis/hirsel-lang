@@ -509,7 +509,12 @@ class Plan:
 
     def summary(self) -> list[str]:
         """The plan in a line per part, for the green record and tools/land."""
-        lines = sorted(short(t) for t in self.tests)
+        binaries = {}
+        for target in self.tests:
+            name = short(target)
+            binaries.setdefault(SHARD.sub(r'\1', name), set()).add(name)
+        lines = sorted(name if len(shards) == 1 and name in shards else f'{name} ({len(shards)} shards)'
+                       for name, shards in binaries.items())
         lines += sorted(name for name, campaign in WHOLE.items() if campaign in self.campaigns)
         for prefix, cases in ((CONFORMANCE_PREFIX, self.conformance), (AGREEMENT_PREFIX, self.agreement),
                               (NATIVE_PREFIX, self.native)):
