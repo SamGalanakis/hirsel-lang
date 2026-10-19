@@ -150,6 +150,28 @@ impl Checker<'_, '_> {
             Ok((None, ty))
         }
     }
+    /// The nominal type a chain of transparent aliases represents, with the
+    /// aliases' arguments substituted; any other type is returned unchanged.
+    pub(super) fn unalias(&mut self, ty: TypeId) -> Result<TypeId, QueryError> {
+        let mut current = ty;
+        let mut seen = BTreeSet::new();
+        while let TypeKind::Named { definition, .. } = self.kind(current) {
+            if !seen.insert(definition.clone()) {
+                break;
+            }
+            let alias = match self.snapshot(&definition) {
+                Ok(s) => s.metadata.alias,
+                Err(QueryError::Diagnostics(_)) => false,
+                Err(e) => return Err(e),
+            };
+            let representation = self.representation(current)?.1;
+            if !alias || !matches!(self.kind(representation), TypeKind::Named { .. }) {
+                break;
+            }
+            current = representation;
+        }
+        Ok(current)
+    }
     pub(super) fn inference_variable(&self, ty: TypeId) -> bool {
         matches!(self.kind(ty), TypeKind::Parameter(p) if self.inference_variables.contains(&p))
     }

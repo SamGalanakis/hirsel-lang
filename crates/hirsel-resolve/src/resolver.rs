@@ -1105,7 +1105,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 self.output.paths.push((site, binding.name));
                 return;
             }
-            if let Some((variant, _)) =
+            if let Some((variant, ..)) =
                 self.variant(path.segments[0], &expected, site.clone(), span)
             {
                 self.output
@@ -1273,7 +1273,60 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             }
             return shape_from_type(&signature.types, representation, arguments);
         }
-        if let Some(item) = self
+        self.type_header(owner, arguments, |this, body| match body {
+            TypeBody::Record(fields) => Shape {
+                fields: fields
+                    .into_iter()
+                    .map(|f| (this.spelling(f.name), this.syntax_expected(f.ty)))
+                    .collect(),
+                variants: vec![],
+            },
+            TypeBody::Variants(variants) => Shape {
+                fields: vec![],
+                variants: variants
+                    .into_iter()
+                    .map(|v| {
+                        (
+                            this.spelling(v.name),
+                            v.fields
+                                .into_iter()
+                                .map(|(n, t)| {
+                                    (n.map(|n| this.spelling(n)), this.syntax_expected(t))
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            },
+            TypeBody::Distinct { field, .. } => Shape {
+                fields: vec![(this.spelling(field.name), this.syntax_expected(field.ty))],
+                variants: vec![],
+            },
+            TypeBody::Alias(id) => {
+                if let ExpectedType::Named {
+                    definition,
+                    arguments,
+                } = this.syntax_expected(id)
+                {
+                    this.shape(&definition, &arguments)
+                } else {
+                    Shape::default()
+                }
+            }
+            TypeBody::Opaque => Shape::default(),
+        })
+        .unwrap_or_default()
+    }
+    /// Header-only adapter for written same-file type signatures: runs `f` on
+    /// the body of `owner`'s declaration with its generics bound to
+    /// `arguments`. Type IDs here belong to this SyntaxFile, not to a foreign store.
+    fn type_header<R>(
+        &mut self,
+        owner: &DefPath,
+        arguments: &[ExpectedType],
+        f: impl FnOnce(&mut Self, TypeBody) -> R,
+    ) -> Option<R> {
+        let item = self
             .file
             .tree
             .items
@@ -1285,73 +1338,64 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                         || *index == self.view.item().0 as usize)
             })
             .map(|(_, item)| item)
-            .cloned()
-            && let ItemKind::Type { generics, body, .. } = item.kind
-        {
-            // Header-only adapter for written same-file signatures.
-            // Type IDs here belong to this SyntaxFile, not to a foreign store.
-            let old_context = std::mem::replace(
-                &mut self.context,
-                FileContext {
-                    package: owner.0.package.clone(),
-                    modules: owner.0.modules.clone(),
+            .cloned()?;
+        let ItemKind::Type { generics, body, .. } = item.kind else {
+            return None;
+        };
+        let old_context = std::mem::replace(
+            &mut self.context,
+            FileContext {
+                package: owner.0.package.clone(),
+                modules: owner.0.modules.clone(),
+            },
+        );
+        let old_arguments = std::mem::replace(
+            &mut self.type_arguments,
+            generics
+                .iter()
+                .enumerate()
+                .map(|(i, g)| (g.name, arguments.get(i).cloned().unwrap_or_default()))
+                .collect(),
+        );
+        let result = f(self, body);
+        self.context = old_context;
+        self.type_arguments = old_arguments;
+        Some(result)
+    }
+    /// The nominal type a transparent alias chain represents, with its
+    /// arguments. Constructors and variants belong to that nominal, never to
+    /// an alias of it (LANG-7: aliases follow their representation).
+    fn represented(
+        &mut self,
+        owner: &DefPath,
+        arguments: &[ExpectedType],
+    ) -> (DefPath, Vec<ExpectedType>) {
+        let mut current = (owner.clone(), arguments.to_vec());
+        let mut seen = BTreeSet::new();
+        while seen.insert(current.0.clone()) {
+            let next = match self.signature(&current.0) {
+                Some(signature) => match &signature.kind {
+                    ty::SignatureKind::Type(declaration) if signature.metadata.alias => declaration
+                        .representation
+                        .map(|r| semantic_expected(&signature.types, r, &current.1, 0, 0)),
+                    _ => None,
                 },
-            );
-            let old_arguments = std::mem::replace(
-                &mut self.type_arguments,
-                generics
-                    .iter()
-                    .enumerate()
-                    .map(|(i, g)| (g.name, arguments.get(i).cloned().unwrap_or_default()))
-                    .collect(),
-            );
-            let shape = match body {
-                TypeBody::Record(fields) => Shape {
-                    fields: fields
-                        .into_iter()
-                        .map(|f| (self.spelling(f.name), self.syntax_expected(f.ty)))
-                        .collect(),
-                    variants: vec![],
-                },
-                TypeBody::Variants(variants) => Shape {
-                    fields: vec![],
-                    variants: variants
-                        .into_iter()
-                        .map(|v| {
-                            (
-                                self.spelling(v.name),
-                                v.fields
-                                    .into_iter()
-                                    .map(|(n, t)| {
-                                        (n.map(|n| self.spelling(n)), self.syntax_expected(t))
-                                    })
-                                    .collect(),
-                            )
-                        })
-                        .collect(),
-                },
-                TypeBody::Distinct { field, .. } => Shape {
-                    fields: vec![(self.spelling(field.name), self.syntax_expected(field.ty))],
-                    variants: vec![],
-                },
-                TypeBody::Alias(id) => {
-                    if let ExpectedType::Named {
-                        definition,
-                        arguments,
-                    } = self.syntax_expected(id)
-                    {
-                        self.shape(&definition, &arguments)
-                    } else {
-                        Shape::default()
-                    }
-                }
-                TypeBody::Opaque => Shape::default(),
+                None => self
+                    .type_header(&current.0, &current.1, |this, body| match body {
+                        TypeBody::Alias(id) => Some(this.syntax_expected(id)),
+                        _ => None,
+                    })
+                    .flatten(),
             };
-            self.context = old_context;
-            self.type_arguments = old_arguments;
-            return shape;
+            match next {
+                Some(ExpectedType::Named {
+                    definition,
+                    arguments,
+                }) => current = (definition, arguments),
+                _ => break,
+            }
         }
-        Shape::default()
+        current
     }
     fn syntax_expected(&mut self, id: TypeExprId) -> ExpectedType {
         let hint = self.hint(id);
@@ -1538,7 +1582,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         expected: &ExpectedType,
         site: NameSite,
         span: Span,
-    ) -> Option<(ty::VariantId, Vec<(Option<String>, ExpectedType)>)> {
+    ) -> Option<(ty::VariantId, Vec<(Option<String>, ExpectedType)>, DefPath)> {
         let ExpectedType::Named {
             definition: owner,
             arguments,
@@ -1556,6 +1600,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             return None;
         }
         let variant = ty::VariantId(i as u32);
+        let (owner, _) = self.represented(owner, arguments);
         self.output.contextual.push((
             site,
             ContextualName::Variant {
@@ -1563,7 +1608,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 variant,
             },
         ));
-        Some((variant, fields))
+        Some((variant, fields, owner))
     }
     fn defer(&mut self, site: NameSite, name: Symbol, span: Span) {
         self.output.deferred.push(DeferredName {
@@ -1843,7 +1888,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             }
             // #54: retain expected-type variant precedence over a same-named
             // package function pending the namespace-priority ruling.
-            if let Some((variant, _)) =
+            if let Some((variant, ..)) =
                 self.variant(name, &expected, NameSite::Expression(id), span)
             {
                 self.output
@@ -2092,7 +2137,10 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 ExpectedType::Named {
                     definition,
                     arguments,
-                } if *definition == owner => arguments.clone(),
+                } => match self.represented(definition, arguments) {
+                    (definition, arguments) if definition == owner => arguments,
+                    _ => vec![],
+                },
                 _ => vec![],
             };
             fields = self
@@ -2113,7 +2161,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 .into_iter()
                 .map(|(n, t)| (Some(n), t))
                 .collect();
-            owner_variant = Some((owner.clone(), None));
+            owner_variant = Some((self.represented(owner, arguments).0, None));
         }
         let parameters = if let ExpectedType::Function { parameters, .. } = &callee_type {
             parameters.clone()
@@ -2353,7 +2401,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 let mut identity = None;
                 if path.package.is_none()
                     && path.segments.len() == 1
-                    && let Some((variant, types)) = self.variant(
+                    && let Some((variant, types, owner)) = self.variant(
                         path.segments[0],
                         &expected,
                         NameSite::Pattern(id),
@@ -2361,12 +2409,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     )
                 {
                     field_types = types;
-                    if let ExpectedType::Named {
-                        definition: owner, ..
-                    } = expected
-                    {
-                        identity = Some((owner, Some(variant)));
-                    }
+                    identity = Some((owner, Some(variant)));
                 } else {
                     match self.lookup(&path, node.origin.span) {
                         Ok(owner) => {
@@ -2377,12 +2420,13 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                                     "pattern constructor is not a type",
                                 );
                             } else if self.representation_visible(&owner, node.origin.span) {
+                                let (owner, arguments) = self.represented(&owner, &[]);
                                 self.output.contextual.push((
                                     NameSite::Pattern(id),
                                     ContextualName::Constructor(owner.clone()),
                                 ));
                                 field_types = self
-                                    .shape(&owner, &[])
+                                    .shape(&owner, &arguments)
                                     .fields
                                     .into_iter()
                                     .map(|(n, t)| (Some(n), t))

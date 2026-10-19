@@ -1,0 +1,15 @@
+// rule: LANG-2
+// expect: reject LANG-2 at line 14
+// A bare variant under a transparent alias still names a variant of the
+// represented type; the accepted twin is LANG-7-alias-variant-construction-run.
+type Event = Bad(u64) | Good
+
+type Other = Missing(u64)
+
+type Alias = Event
+
+type Chain = Alias
+
+fn missing() -> Chain {
+  Missing(1)
+}

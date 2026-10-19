@@ -1,0 +1,62 @@
+// rule: LANG-7
+// expect: run
+// stdout: 3 7 5 9 4 2
+// "Aliases follow their representation": a bare variant, a record constructor
+// and a pattern under a transparent alias, a generic alias or an alias chain
+// construct and match the nominal type the alias names.
+type Event = Bad(u64) | Good
+
+type Alias = Event
+
+type Chain = Alias
+
+type Maybe[T] = Option[T]
+
+type Pair[T] {
+  a: T,
+  b: T,
+}
+
+type Ints = Pair[u64]
+
+fn bad(n: u64) -> Alias {
+  Bad(n)
+}
+
+fn good() -> Chain {
+  Good
+}
+
+fn some(n: u64) -> Maybe[u64] {
+  Some(n)
+}
+
+fn ints() -> Ints {
+  Ints(a: 4, b: 2)
+}
+
+fn value(e: Chain) -> u64 {
+  match e {
+    Bad(n) => n,
+    Good() => 7,
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let held: Alias = Bad(5)
+  let maybe = match some(9) {
+    Some(n) => n,
+    None() => 0,
+  }
+  let Ints(a: a, b: b) = ints()
+  let values: List[u64] = [value(bad(3)), value(good()), value(held), maybe, a, b]
+  let stdout = io.stdout(rt)?
+  for i in 0u64..list.len(values) {
+    if i > 0 {
+      let _ = out.print(stdout, " ")
+    }
+    let _ = out.print(stdout, u64.to_string(values[i]))
+  }
+  let _ = out.print(stdout, "\n")
+  Ok(())
+}

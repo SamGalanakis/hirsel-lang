@@ -1526,6 +1526,7 @@ conformance/LANG/LANG-15-mut-field-scalar-ok.hir
 conformance/LANG/LANG-15-mut-field-scalar-run.hir
 conformance/LANG/LANG-15-plain-copy.hir
 conformance/LANG/LANG-15-returned-closure-keeps-type.hir
+conformance/LANG/LANG-2-alias-variant-construction-bad.hir
 conformance/LANG/LANG-2-bare-generic-empty-record-bad.hir
 conformance/LANG/LANG-2-bare-generic-record-bad.hir
 conformance/LANG/LANG-2-boolean-context-bad.hir
@@ -1723,6 +1724,7 @@ conformance/LANG/LANG-6-track-caller-extern-bad.hir
 conformance/LANG/LANG-6-track-caller-extern-ok.hir
 conformance/LANG/LANG-7-alias-field-locality-bad.hir
 conformance/LANG/LANG-7-alias-field-locality-ok.hir
+conformance/LANG/LANG-7-alias-variant-construction-run.hir
 conformance/LANG/LANG-7-any-bad.hir
 conformance/LANG/LANG-7-any-ok.hir
 conformance/LANG/LANG-7-boxed-tree-example.hir

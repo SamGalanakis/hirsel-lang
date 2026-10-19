@@ -187,6 +187,8 @@ impl Checker<'_, '_> {
             _ => CallTarget::Value(callee),
         };
         let mut bad = self.invalid(callee_ty);
+        // A transparent alias constructs the nominal it represents (LANG-7).
+        let callee_ty = self.unalias(callee_ty)?;
         let f = match self.kind(callee_ty) {
             TypeKind::Function(f) => f,
             TypeKind::Named {
