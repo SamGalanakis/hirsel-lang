@@ -587,21 +587,43 @@ class Selection:
         """The examples whose import closure includes a changed std module."""
         if not self.std_dependents():
             return []
-        std = impact.Std(self.root)
-        changed = impact.changed_std_modules(self.paths, std)
-        reach = std.reach()
-        return [manifest.parent.name for manifest in sorted(self.root.glob('examples/*/hirsel.json'))
-                if (found := impact.package_std_reach(manifest, self.root, std, reach))
-                and (changed is None or found & changed)]
+        versions, changed = self.std_change()
+        examples = set()
+        for std in versions:
+            reach = std.reach()
+            for manifest in self.root.glob('examples/*/hirsel.json'):
+                found = impact.package_std_reach(manifest, self.root, std, reach)
+                if found and (changed is None or found & changed):
+                    examples.add(manifest.parent.name)
+        return sorted(examples)
+
+    def std_change(self):
+        """The current and, for a manifest edit, base import graphs and changed modules.
+
+        Retain the base graph so removing a source still selects its former
+        dependents, including transitive imports and shared core/std heads.
+        """
+        if not hasattr(self, '_std_change'):
+            std = impact.Std(self.root)
+            previous = None
+            if impact.STD_MANIFEST in self.paths:
+                old = subprocess.run(['git', 'show', f'{self.base}:{impact.STD_MANIFEST}'],
+                                     cwd=self.root, capture_output=True, text=True)
+                if old.returncode == 0:
+                    previous = impact.Std(self.root, read_text=lambda path: git(
+                        'show', f'{self.base}:{path}', root=self.root))
+            versions = [std, previous] if previous is not None else [std]
+            self._std_change = versions, impact.changed_std_modules(self.paths, std, previous)
+        return self._std_change
 
     def std_dependents(self) -> list[str]:
         """The corpus cases whose import closure includes a changed std module."""
         if not hasattr(self, '_std'):
             self._std, self.std_why = [], ''
             if any(p.startswith(impact.STD + '/') for p in self.paths):
-                std = impact.Std(self.root)
-                changed = impact.changed_std_modules(self.paths, std)
-                self._std = impact.std_dependents(changed, self.root, std)
+                versions, changed = self.std_change()
+                self._std = sorted({case for std in versions
+                                    for case in impact.std_dependents(changed, self.root, std)})
                 named = 'all of std' if changed is None else 'std ' + ', '.join(sorted('.'.join(m) for m in changed))
                 self.std_why = f'{len(self._std)} corpus cases whose import closure includes {named}'
         return self._std

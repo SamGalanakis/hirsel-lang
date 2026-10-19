@@ -388,17 +388,18 @@ class Std:
     module heads core and std share (`string.byte_len` is core's,
     `string.find` std's: LANG-4)."""
 
-    def __init__(self, root):
-        manifest = json.loads((root / STD_MANIFEST).read_text())
+    def __init__(self, root, read_text=None):
+        read_text = read_text or (lambda path: (root / path).read_text(errors='replace'))
+        self.manifest = manifest = json.loads(read_text(STD_MANIFEST))
         self.files = {f'{STD}/{source["path"]}': tuple(source['module']) for source in manifest['sources']}
         self.modules = set(self.files.values())
         self.members: dict[tuple[str, ...], set[str]] = {module: set() for module in self.modules}
         self.texts = {}
         for path, module in self.files.items():
-            self.texts[path] = (root / path).read_text(errors='replace')
+            self.texts[path] = read_text(path)
             self.members[module] |= set(DEFINITION.findall(self.texts[path]))
         self.core: dict[str, set[str]] = {}
-        for head, member in CORE_MEMBER.findall((root / CORE_SIGNATURES).read_text()):
+        for head, member in CORE_MEMBER.findall(read_text(CORE_SIGNATURES)):
             self.core.setdefault(head, set()).add(member)
 
     def mentioned(self, text: str, aliases=None) -> set[tuple[str, ...]]:
@@ -439,15 +440,32 @@ class Std:
         return reach
 
 
-def changed_std_modules(paths, std: Std) -> set[tuple[str, ...]] | None:
+def changed_std_modules(paths, std: Std, previous: Std | None = None) -> set[tuple[str, ...]] | None:
     """The std modules a change edits, or None when it changes std as a whole
-    (its manifest, or a file under std that is no module source)."""
+    (a manifest field outside sources, or a file that is no module source).
+    Compare source entries by path, so order and JSON formatting do not matter;
+    a re-pointed source changes both its old and its new module.
+    """
     changed = set()
+    if STD_MANIFEST in paths:
+        if previous is None:
+            return None
+        before, after = previous.manifest, std.manifest
+        if ({k: v for k, v in before.items() if k != 'sources'} !=
+                {k: v for k, v in after.items() if k != 'sources'}):
+            return None
+        old = {source['path']: source for source in before['sources']}
+        new = {source['path']: source for source in after['sources']}
+        for path in old.keys() | new.keys():
+            if old.get(path) != new.get(path):
+                changed |= {tuple(sources[path]['module']) for sources in (old, new) if path in sources}
     for path in paths:
-        if path.startswith(f'{STD}/'):
-            if path not in std.files:
+        if path.startswith(f'{STD}/') and path != STD_MANIFEST:
+            modules = {version.files[path] for version in (std, previous)
+                       if version is not None and path in version.files}
+            if not modules:
                 return None
-            changed.add(std.files[path])
+            changed |= modules
     return changed
 
 

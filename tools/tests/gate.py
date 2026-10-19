@@ -507,6 +507,113 @@ class Corpus(unittest.TestCase):
         self.assertIsNone(impact.changed_std_modules(['stdlib/std@1/new.hir'], std))
         self.assertEqual(impact.changed_std_modules(['stdlib/unicode16/x.txt'], std), set())
 
+    def manifest_change(self, manifest, files=None):
+        scratch_repo(self.root)
+        commit(self.root, {}, 'Base std')
+        files = {impact.STD_MANIFEST: json.dumps(manifest, indent=2, sort_keys=True), **(files or {})}
+        for path, text in files.items():
+            if text is None:
+                (self.root / path).unlink()
+            else:
+                self.write({path: text})
+        return Queries.selection(list(files), root=self.root)
+
+    def assert_std_floor(self, selection, previous, modules, cases):
+        self.assertEqual(impact.changed_std_modules(selection.paths, impact.Std(self.root), previous), modules)
+        floor, asked = Queries.run_query(gating.Selection.floor, selection)
+        self.assertEqual(asked, [])
+        self.assertEqual(floor.conformance, {f'conformance/SEM/{case}-run.hir' for case in cases})
+        self.assertEqual(floor.campaigns, set())
+        with patch.object(gating, 'owned_paths', lambda paths, root=None: list(paths)):
+            plan, _ = Queries.run_query(gating.Selection.suggest, selection)
+        self.assertEqual(plan.agreement, floor.conformance)
+        self.assertEqual(plan.campaigns, set())
+
+    def test_a_manifest_addition_selects_only_the_new_modules_cases(self):
+        previous = self.std()
+        manifest = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        manifest['sources'].append({'path': 'csv.hir', 'module': ['csv']})
+        case = 'conformance/SEM/csv-run.hir'
+        selection = self.manifest_change(manifest, {
+            'stdlib/std@1/csv.hir': 'pub fn parse(s: String) -> u64 { 0u64 }\n',
+            case: '// expect: run 0\nfn main() -> u64 { csv.parse("a") }\n',
+            case + '.json': self.sidecar(case, [(impact.STD_MANIFEST, 'std', [])]),
+        })
+        self.assert_std_floor(selection, previous, {('csv',)}, ['csv'])
+
+    def test_a_manifest_removal_retains_the_old_transitive_import_closure(self):
+        previous = self.std()
+        manifest = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        manifest['sources'] = [source for source in manifest['sources'] if source['path'] != 'format.hir']
+        selection = self.manifest_change(manifest, {'stdlib/std@1/format.hir': None})
+        self.assert_std_floor(selection, previous, {('internal', 'format')}, ['yaml'])
+
+    def test_a_manifest_removal_distinguishes_a_removed_std_member_from_core(self):
+        previous = self.std()
+        manifest = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        manifest['sources'] = [source for source in manifest['sources'] if source['path'] != 'list.hir']
+        selection = self.manifest_change(manifest, {'stdlib/std@1/list.hir': None})
+        self.assert_std_floor(selection, previous, {('list',)}, ['sort'])
+
+    def test_a_manifest_removal_of_one_source_still_changes_its_shared_module(self):
+        self.std()
+        manifest = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        manifest['sources'].append({'path': 'yaml_extra.hir', 'module': ['yaml']})
+        self.write({impact.STD_MANIFEST: json.dumps(manifest),
+                    'stdlib/std@1/yaml_extra.hir': 'pub fn extra() -> u64 { 0u64 }\n'})
+        previous = impact.Std(self.root)
+        manifest['sources'].pop()
+        selection = self.manifest_change(manifest, {'stdlib/std@1/yaml_extra.hir': None})
+        self.assert_std_floor(selection, previous, {('yaml',)}, ['yaml'])
+
+    def test_a_manifest_removal_keeps_cases_and_examples_using_an_exposed_alias(self):
+        previous = self.std()
+        example = 'examples/probe/main.hir'
+        self.write({example: 'fn main() -> u64 { std.identity(1u64) }\n',
+                    'examples/probe/hirsel.json': self.sidecar(example, [
+                        (impact.STD_MANIFEST, 'std', [{'head': 'std', 'module': ['probe']}])])})
+        manifest = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        manifest['sources'] = [source for source in manifest['sources'] if source['path'] != 'identity.hir']
+        selection = self.manifest_change(manifest, {'stdlib/std@1/identity.hir': None})
+        self.assert_std_floor(selection, previous, {('probe',)}, ['alias'])
+        self.assertEqual(selection.std_examples(), ['probe'])
+
+    def test_a_manifest_repoint_selects_both_old_and_new_modules(self):
+        previous = self.std()
+        manifest = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        manifest['sources'][0]['module'] = ['toml']
+        selection = self.manifest_change(manifest)
+        self.assert_std_floor(selection, previous, {('yaml',), ('toml',)}, ['yaml', 'toml'])
+
+    def test_a_manifest_source_path_repoint_selects_its_module(self):
+        previous = self.std()
+        manifest = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        manifest['sources'][1]['path'] = 'toml_new.hir'
+        selection = self.manifest_change(manifest, {
+            'stdlib/std@1/toml_new.hir': 'pub fn parse(s: String) -> u64 { 1u64 }\n',
+            'stdlib/std@1/toml.hir': None,
+        })
+        self.assert_std_floor(selection, previous, {('toml',)}, ['toml'])
+
+    def test_other_manifest_fields_still_change_all_of_std(self):
+        previous = self.std()
+        original = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        scratch_repo(self.root)
+        commit(self.root, {}, 'Base std')
+        for field, value in [('schema', 2), ('package', {'name': 'std', 'version': '2'}),
+                             ('dependencies', [{'manifest': '../other/hirsel.json'}]), ('new_field', True)]:
+            with self.subTest(field=field):
+                self.write({impact.STD_MANIFEST: json.dumps({**original, field: value})})
+                selection = Queries.selection([impact.STD_MANIFEST], root=self.root)
+                self.assert_std_floor(selection, previous, None, ['alias', 'sort', 'toml', 'yaml'])
+
+    def test_manifest_formatting_and_source_order_do_not_change_modules(self):
+        previous = self.std()
+        manifest = json.loads((self.root / impact.STD_MANIFEST).read_text())
+        manifest['sources'].reverse()
+        selection = self.manifest_change(manifest)
+        self.assert_std_floor(selection, previous, set(), [])
+
     def test_a_std_only_change_floors_its_closure_and_suggests_its_sample_but_no_whole_campaign(self):
         self.std()
         selection = Queries.selection(['stdlib/std@1/toml.hir'], root=self.root)
