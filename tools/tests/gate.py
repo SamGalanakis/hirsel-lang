@@ -2,6 +2,7 @@
 """tools/gate's selection, change identity and summary, and tools/land's loop,
 against scratch repositories with a fake Buck2."""
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -782,6 +783,99 @@ class Identity(unittest.TestCase):
 
 
 class Slots(unittest.TestCase):
+    def test_raising_the_count_admits_the_queued_head_into_the_new_slot(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch) / 'slots'
+            environ = {gating.GATE_SLOTS: f'{directory}:1'}
+            polls = []
+
+            class LaterWaiterBlocked(Exception):
+                pass
+
+            def later_poll(_):
+                raise LaterWaiterBlocked
+
+            def raise_count(_):
+                polls.append('head waited')
+                gating.write_gate_slot_count(directory, 2)
+                # A fresh gate with a larger env cap still cannot pass the head.
+                with patch.object(gating.time, 'sleep', later_poll):
+                    with self.assertRaises(LaterWaiterBlocked):
+                        with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:6'}):
+                            self.fail('a later gate passed the queued head')
+                self.assertEqual((directory / 'count').read_text(), '2\n')
+
+            with gating.gate_slot(environ):
+                with patch.object(gating.time, 'sleep', raise_count), contextlib.redirect_stdout(io.StringIO()):
+                    with gating.gate_slot(environ):
+                        self.assertEqual(polls, ['head waited'])
+                        for slot in (0, 1):
+                            with open(directory / f'slot-{slot}', 'a+') as handle:
+                                with self.assertRaises(BlockingIOError):
+                                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.assertEqual(list((directory / 'queue').iterdir()), [])
+
+    def test_lowering_the_count_keeps_held_slots_and_excludes_retired_slots(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch) / 'slots'
+            environ = {gating.GATE_SLOTS: f'{directory}:2'}
+            with contextlib.ExitStack() as first, contextlib.ExitStack() as second:
+                first.enter_context(gating.gate_slot(environ))
+                second.enter_context(gating.gate_slot(environ))
+                gating.write_gate_slot_count(directory, 1)
+                first.close()
+                with gating.gate_slot(environ):
+                    with open(directory / 'slot-1', 'a+') as handle:
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    second.close()
+                    # slot-1 is now free, but the lowered cap must exclude it.
+                    with patch.object(gating.time, 'sleep', side_effect=KeyboardInterrupt):
+                        with self.assertRaises(KeyboardInterrupt), contextlib.redirect_stdout(io.StringIO()):
+                            with gating.gate_slot(environ):
+                                self.fail('a gate acquired a retired slot')
+                self.assertEqual((directory / 'count').read_text(), '1\n')
+
+    def test_a_missing_count_falls_back_to_the_environment_on_the_next_poll(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch) / 'slots'
+            environ = {gating.GATE_SLOTS: f'{directory}:2'}
+            gating.write_gate_slot_count(directory, 1)
+            polls = []
+
+            def remove_count(_):
+                polls.append('waited')
+                (directory / 'count').unlink()
+
+            with gating.gate_slot(environ):
+                with patch.object(gating.time, 'sleep', remove_count), contextlib.redirect_stdout(io.StringIO()):
+                    with gating.gate_slot(environ):
+                        self.assertEqual(polls, ['waited'])
+                        self.assertFalse((directory / 'count').exists())
+                        self.assertTrue((directory / 'slot-1').exists())
+
+    def test_the_environment_seeds_only_an_absent_count(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch) / 'slots'
+            with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:2'}):
+                self.assertEqual((directory / 'count').read_text(), '2\n')
+            gating.write_gate_slot_count(directory, 1)
+            gating.write_gate_slot_count(directory, 6, seed=True)
+            with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:4'}):
+                self.assertEqual((directory / 'count').read_text(), '1\n')
+            self.assertEqual(list(directory.glob('.count-*')), [])
+
+    def test_an_invalid_count_is_refused_and_the_ticket_is_removed(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            directory = Path(scratch)
+            for value in ('', '0', '-1', 'six', '1.5'):
+                with self.subTest(value=value):
+                    (directory / 'count').write_text(value)
+                    with self.assertRaisesRegex(SystemExit, 'positive slot count'):
+                        with gating.gate_slot({gating.GATE_SLOTS: f'{directory}:2'}):
+                            self.fail('invalid host count was ignored')
+                    self.assertEqual(list((directory / 'queue').iterdir()), [])
+
     def test_a_gate_waits_while_every_slot_is_held_and_takes_the_first_freed(self):
         with tempfile.TemporaryDirectory() as scratch:
             environ = {gating.GATE_SLOTS: f'{scratch}/slots:2'}
@@ -1070,6 +1164,33 @@ class Scripts(unittest.TestCase):
     def sibling_pushes(self, files):
         commit(self.sibling, files, 'Sibling change')
         git(self.sibling, 'push', '-q', 'origin', 'HEAD:main')
+
+    def test_set_slots_updates_the_host_count_without_checks_or_a_slot(self):
+        directory = self.root.parent / 'slots'
+        env = {gating.GATE_SLOTS: f'{directory}:1'}
+        result, logged = self.run_tool('gate', '--set-slots', '2', env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((directory / 'count').read_text(), '2\n')
+        with gating.gate_slot(env), gating.gate_slot(env):
+            result, logged = self.run_tool('gate', '--set-slots', '1', env=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(logged, [])
+            self.assertEqual((directory / 'count').read_text(), '1\n')
+
+    def test_set_slots_refuses_invalid_counts_missing_configuration_and_gate_options(self):
+        directory = self.root.parent / 'slots'
+        env = {gating.GATE_SLOTS: f'{directory}:2'}
+        for arguments, config in [(('--set-slots', '0'), env),
+                                  (('--set-slots', '-1'), env),
+                                  (('--set-slots', 'six'), env),
+                                  (('--set-slots', '2'), {}),
+                                  (('--set-slots', '2', '--suggest'), env),
+                                  (('--set-slots', '2', '--why', 'check'), env)]:
+            with self.subTest(arguments=arguments, config=config):
+                result, logged = self.run_tool('gate', *arguments, env=config)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertEqual(logged, [])
+                self.assertFalse((directory / 'count').exists())
 
     def test_documentation_alone_runs_no_buck2_and_catches_broken_links(self):
         commit(self.root, {'docs/building.md': 'See [the grammar](grammar.md) and [x](gone.md).\n'}, 'Docs')

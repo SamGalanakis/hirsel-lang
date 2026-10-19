@@ -7,6 +7,7 @@
     tools/gate --extend [--tests ...] --why ...   # after an edit to a passed change
     tools/gate --base <commit> ...                # the change from <commit> (for example a replay)
     tools/gate --full                             # every stage, on demand at milestone cuts
+    tools/gate --set-slots N                      # change this host's cap, including queued gates
 
 The floor runs on every gate: documentation links and whitespace, the gate
 tooling's tests when it changed (the Lean model's checks when it or its
@@ -37,9 +38,10 @@ suite on a schedule: per-push selection and its floor are the routine net, and
 the paths whose change differs from the last recorded pass, the test targets
 that own them and any `--tests`, and records the edited change's identity.
 
-`$HIRSEL_GATE_SLOTS` (`dir:N`) caps a host's concurrent gates: the Buck2 work
-waits for one of N lock files in dir, and says it is waiting. Unset, there is
-no cap.
+`$HIRSEL_GATE_SLOTS` (`dir:N`) selects a host's slot directory. Its `count`
+file caps concurrent gates and is re-read on every poll; N seeds it only
+when absent. `--set-slots N` updates the count without running a gate.
+Lowering it leaves held slots running. Unset, there is no cap.
 
 A passing change is remembered by its identity (gating.change_identity: the
 patch-id of the lane's own diff without the generated docs/api.md, and the
@@ -561,7 +563,20 @@ def main():
     parser.add_argument('--tests', nargs='+', default=[], metavar='TEST', help='what to run beyond the floor (forms above)')
     parser.add_argument('--why', help='one line: why this selection suffices')
     parser.add_argument('--extend', action='store_true', help='add an edit to the last passed change')
+    parser.add_argument('--set-slots', type=int, metavar='N', help='set the host slot count; run no checks')
     args = parser.parse_args()
+    if args.set_slots is not None:
+        if args.full or args.suggest or args.tests or args.extend or args.why or args.base != 'origin/main':
+            parser.error('--set-slots takes no other option')
+        if args.set_slots < 1:
+            parser.error('--set-slots must be positive')
+        config = gating.gate_slot_config(os.environ)
+        if config is None:
+            parser.error('--set-slots requires HIRSEL_GATE_SLOTS=dir:N')
+        directory, _ = config
+        gating.write_gate_slot_count(directory, args.set_slots)
+        say(f'gate: set {directory / "count"} to {args.set_slots}')
+        return 0
     os.chdir(ROOT)
     if args.full:
         if args.suggest or args.tests or args.extend or args.base != 'origin/main':
