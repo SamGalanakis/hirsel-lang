@@ -478,7 +478,7 @@ fn lower<T>(
                     .unwrap_or((1, 1));
                 let scope = debug.function(
                     function,
-                    &source.path.to_string_lossy(),
+                    &source.logical_path().to_string_lossy(),
                     &unit.header.definition.to_string(),
                     line,
                 );

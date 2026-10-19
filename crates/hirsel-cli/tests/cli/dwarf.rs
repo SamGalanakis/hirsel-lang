@@ -98,7 +98,26 @@ fn function_lines(exe: &Path, source: &Path) -> BTreeMap<String, BTreeSet<u64>> 
     for row in text
         .split("debug_line[")
         .filter(|table| table.contains(file))
-        .flat_map(str::lines)
+        .flat_map(|table| {
+            // A Cranelift CU can contain several source files. Select rows by
+            // their file index, rather than every row in a matching table.
+            let files: BTreeSet<u64> = table
+                .split("file_names[")
+                .skip(1)
+                .filter_map(|entry| {
+                    let (index, entry) = entry.split_once("]:")?;
+                    let name = entry.split("name:").nth(1)?.split('"').nth(1)?;
+                    (Path::new(name).file_name()?.to_str() == Some(file))
+                        .then(|| index.trim().parse().ok())?
+                })
+                .collect();
+            table.lines().filter(move |row| {
+                row.split_whitespace()
+                    .nth(3)
+                    .and_then(|index| index.parse().ok())
+                    .is_some_and(|index| files.contains(&index))
+            })
+        })
         .filter(|row| row.starts_with("0x") && !row.contains("end_sequence") && !row.ends_with(']'))
     {
         let mut fields = row.split_whitespace();
@@ -243,5 +262,150 @@ fn cranelift_debug_lines_match_llvm_per_function_on_both_targets() {
             }
             std::fs::remove_file(source).unwrap();
         }
+    });
+}
+
+#[test]
+fn manifest_artifacts_are_identical_under_different_source_roots() {
+    hirsel_engine::with_compiler_stack(|| {
+        let root = super::file("");
+        std::fs::remove_file(&root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        let roots = [root.join("one"), root.join("different-root")];
+        for tree in &roots {
+            std::fs::create_dir_all(tree.join("app/src")).unwrap();
+            std::fs::create_dir_all(tree.join("dep/src")).unwrap();
+            std::fs::write(tree.join("app/src/main.hir"), "pub fn main() -> Result[(), ()] { let _ = helper@2/generated(); let _ = helper@2/value(); Ok(()) }\n").unwrap();
+            std::fs::write(tree.join("dep/src/helper.hir"), r#"fn generator() -> Result[Body[fn() -> u64 uses {}], String] { Ok(codegen.body("fn() -> u64 uses {} { 3u64 }")) }
+pub fn generated() -> u64 uses {} = comptime generator()
+pub fn value() -> u64 { failure.check(false, Arithmetic()); 0u64 }
+"#).unwrap();
+            std::fs::write(
+                tree.join("dep/hirsel.json"),
+                serde_json::json!({
+                    "schema":1, "package":{"name":"helper","version":"2"},
+                    "sources":[{"path":"src/helper.hir","module":[]}], "dependencies":[]
+                })
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::write(tree.join("app/hirsel.json"), serde_json::json!({
+                "schema":1, "package":{"name":"relocated","version":"1"},
+                "entry":{"module":[],"name":"main"},
+                "sources":[{"path":"src/main.hir","module":[]}],
+                "dependencies":[{"manifest":"../dep/hirsel.json", "package":{"name":"helper","version":"2"}, "expose":[]}]
+            }).to_string()).unwrap();
+        }
+        for backend in ["llvm", "cranelift"] {
+            for debug in [false, true] {
+                let mut artifacts = Vec::new();
+                for tree in &roots {
+                    let manifest = tree.join("app/hirsel.json");
+                    let flags = if debug {
+                        vec!["--backend", backend, "--debug"]
+                    } else {
+                        vec!["--backend", backend]
+                    };
+                    let exe = super::build_executable(&manifest, &flags);
+                    let mut files = vec![std::fs::read(&exe).unwrap()];
+                    if debug {
+                        let split = debug_file(&exe);
+                        // Linking tombstones discarded Rust-runtime code at address
+                        // zero. Check our linked address-to-source lookup here;
+                        // compiler-owned objects are verified separately below.
+                        let lines = function_lines(&exe, &tree.join("dep/src/helper.hir"));
+                        assert!(lines.contains_key("helper@2/value"), "{lines:?}");
+                        let info = dump(&split, "--debug-info");
+                        assert!(info.contains("helper@2"), "{info}");
+                        files.push(std::fs::read(split).unwrap());
+                    }
+                    // Inspect the artifacts themselves: dwarfdump prints the
+                    // physical output filename in its header, outside DWARF.
+                    for bytes in &files {
+                        for tree in &roots {
+                            assert!(
+                                !bytes
+                                    .windows(tree.as_os_str().len())
+                                    .any(|w| w == tree.to_str().unwrap().as_bytes()),
+                                "{backend}: source root in artifact"
+                            );
+                        }
+                    }
+                    let run = output(&mut Command::new(&exe));
+                    assert_eq!(run.status.code(), Some(2), "{run:?}");
+                    let failure = String::from_utf8(run.stderr).unwrap();
+                    assert!(failure.contains("helper@2/src/helper.hir"), "{failure}");
+                    artifacts.push(files);
+                }
+                assert!(
+                    artifacts[0] == artifacts[1],
+                    "{backend} debug={debug}: artifact bytes differ across roots"
+                );
+            }
+        }
+        // Measurement emits ProfileSite.file in rodata as well as DWARF.
+        // Compare actual LLVM objects, including generated-body source ownership.
+        let mut measured = Vec::new();
+        for tree in &roots {
+            use hirsel_driver::native::{self, Backend, OptLevel, Options, Partition, TargetSpec};
+            // Hosts have independent compiler sessions; neither build may
+            // adopt source products from the other root's package cache.
+            // Lane pkgcache-comptime owns generated token sources on cache adoption.
+            let mut loaded = hirsel_driver::load_program_source_with_cache(
+                &tree.join("app/hirsel.json"),
+                None,
+                &hirsel_engine::PackageCache::new(),
+            )
+            .unwrap();
+            loaded.check_for_execution().unwrap();
+            let generated = loaded
+                .engine
+                .generated_sources()
+                .find(|(definition, _)| definition.0.name == "generated")
+                .unwrap()
+                .1;
+            let source = loaded.engine.sources.file(generated.file).unwrap();
+            assert!(
+                source
+                    .logical_path()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("helper@2/src/helper.hir#")
+            );
+            let input = loaded.engine.export_native_input().unwrap();
+            let sources = native::profile_sources(&input);
+            let validated = loaded.engine.import_native_input(input).unwrap();
+            let ready = native::build(
+                &validated,
+                &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+            )
+            .unwrap();
+            let objects = native::emit_backend_objects(
+                &ready,
+                Backend::Llvm,
+                OptLevel::None,
+                Partition::Whole,
+                true,
+                Some(&sources),
+            )
+            .unwrap();
+            let bytes: Vec<_> = objects.into_iter().map(|o| o.bytes).collect();
+            for (index, object) in bytes.iter().enumerate() {
+                let path = tree.join(format!("measured-{index}.o"));
+                std::fs::write(&path, object).unwrap();
+                let verified = dump(&path, "--verify");
+                assert!(verified.contains("No errors."), "{verified}");
+            }
+            assert!(bytes.iter().any(|b| {
+                b.windows(b"helper@2/src/helper.hir".len())
+                    .any(|w| w == b"helper@2/src/helper.hir")
+            }));
+            measured.push(bytes);
+        }
+        assert!(
+            measured[0] == measured[1],
+            "measurement object bytes differ across roots"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     });
 }

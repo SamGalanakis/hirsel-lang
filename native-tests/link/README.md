@@ -6,8 +6,3 @@
 a different checkout, native cache and scratch root, and requires every
 executable and `<build-id>.debug` file to be byte-identical. A shipped
 executable depends on the program, the toolchain and the link kit only.
-
-A `fixed-root` row builds from a copy of its manifest, sources and dependency
-manifests at `/tmp/hirsel-link-hosts-root` on both hosts (one build at a time,
-under a lock), because manifest builds still embed absolute source paths in
-profile sites and DWARF; its native cache and scratch roots still differ.

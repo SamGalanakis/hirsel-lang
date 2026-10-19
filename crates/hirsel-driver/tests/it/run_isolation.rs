@@ -241,8 +241,11 @@ fn native_runs_that_block_stop_or_fail_end_alone_in_one_host_process_on_both_bac
             let [fails, fails_later] = reports.as_slice() else {
                 panic!("{backend:?}: {stderr}")
             };
-            assert!(fails.contains("(fails.hir:4:11)"), "{stderr}");
-            assert!(fails_later.contains("(fails-later.hir:5:11)"), "{stderr}");
+            assert!(fails.contains("(standalone@0/fails.hir:4:11)"), "{stderr}");
+            assert!(
+                fails_later.contains("(standalone@0/fails-later.hir:5:11)"),
+                "{stderr}"
+            );
             assert!(
                 stderr.contains("codec operational budget exhausted"),
                 "{stderr}"

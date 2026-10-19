@@ -210,7 +210,8 @@ impl QueryEngine {
         let file = match self.generated.get(definition) {
             Some(g) if g.text == text => g.file,
             _ => {
-                let origin = self.sources.file(site.file).unwrap().path.display();
+                let source = self.sources.file(site.file).unwrap();
+                let origin = source.path.display();
                 // An instance's source path already names its declaration and
                 // arguments; its hidden path would only repeat them.
                 let path = if definition.0.name.contains("$instance$") {
@@ -218,12 +219,21 @@ impl QueryEngine {
                 } else {
                     format!("{origin}#{definition}")
                 };
-                let file = self.sources.add(path, text.clone()).ok_or_else(|| {
-                    QueryError::Operational(hirsel_types::OperationalFailure {
-                        operation: "typed generation".into(),
-                        message: "generated source exceeds the source map".into(),
-                    })
-                })?;
+                let logical = source.logical_path().display();
+                let logical = if definition.0.name.contains("$instance$") {
+                    format!("{logical}#body")
+                } else {
+                    format!("{logical}#{definition}")
+                };
+                let file = self
+                    .sources
+                    .add_logical(path, logical, text.clone())
+                    .ok_or_else(|| {
+                        QueryError::Operational(hirsel_types::OperationalFailure {
+                            operation: "typed generation".into(),
+                            message: "generated source exceeds the source map".into(),
+                        })
+                    })?;
                 self.generated.insert(
                     definition.clone(),
                     GeneratedSource {

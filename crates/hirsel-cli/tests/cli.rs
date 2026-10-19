@@ -3225,13 +3225,17 @@ fn runtime_failure_reports_a_complete_site_in_human_and_json() {
 }
 
 #[test]
-fn native_runtime_failure_reports_match_the_interpreter_and_standalone() {
+fn native_runtime_failure_reports_keep_sites_and_standalone_uses_logical_files() {
     let path = file(
         "pub fn main() -> Result[(), ()] {\n  failure.check(false, Arithmetic())\n  Ok(())\n}\n",
     );
     let expected = format!(
         "runtime failure[SEM-1] at standalone@0/main ({}:2:3)\n",
         path.display()
+    );
+    let expected_standalone = format!(
+        "runtime failure[SEM-1] at standalone@0/main (standalone@0/{}:2:3)\n",
+        path.file_name().unwrap().to_string_lossy()
     );
     for backend in ["llvm", "cranelift"] {
         for json in [false, true] {
@@ -3263,7 +3267,10 @@ fn native_runtime_failure_reports_match_the_interpreter_and_standalone() {
         let exe = build_executable(&path, &["--debug", "--backend", backend]);
         let output = Command::new(&exe).output().unwrap();
         assert_eq!(output.status.code(), Some(2), "{backend}: {output:?}");
-        assert_eq!(String::from_utf8(output.stderr).unwrap(), expected);
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            expected_standalone
+        );
         std::fs::remove_file(exe).unwrap();
     }
     std::fs::remove_file(path).unwrap();
@@ -3429,6 +3436,11 @@ fn tracked_runtime_reports_keep_application_and_dependency_operation_sites() {
         source.display(),
         library.display()
     );
+    let expected_standalone = format!(
+        "runtime failure[SEM-1] at app@1/main (app@1/{}:2:11)\n  in dep@2/helper/fail (dep@2/{}:3:3)\n",
+        source.file_name().unwrap().to_string_lossy(),
+        library.file_name().unwrap().to_string_lossy()
+    );
     for backend in [None, Some("llvm"), Some("cranelift")] {
         for json in [false, true] {
             let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
@@ -3462,7 +3474,10 @@ fn tracked_runtime_reports_keep_application_and_dependency_operation_sites() {
             let exe = build_executable(&source, &["--debug", "--backend", backend]);
             let output = Command::new(&exe).output().unwrap();
             assert_eq!(output.status.code(), Some(2), "{backend}: {output:?}");
-            assert_eq!(String::from_utf8(output.stderr).unwrap(), expected);
+            assert_eq!(
+                String::from_utf8(output.stderr).unwrap(),
+                expected_standalone
+            );
             std::fs::remove_file(exe).unwrap();
         }
     }

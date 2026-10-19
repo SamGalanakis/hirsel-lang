@@ -326,3 +326,15 @@ in-process grant. A policy that requires later revocation is implemented as an e
 recorded capability input, or refused. Replaying an accepted admission does not revalidate
 it against the current host, while beginning or resuming real host execution requires a
 fresh admission under the host's authority ([admission](determinism.md#run-configuration)).
+
+### Native artifact source paths
+
+Native artifacts name source files as `<package>@<version>/<manifest-relative path>`
+in profiling, failure tables and DWARF, independently of host checkout roots.
+Standalone files use `standalone@0/<file name>`; generated bodies retain the
+logical name with their generation suffix. DWARF's compilation directory is the
+constant `/hirsel`; GDB substitutes the leading `<package>@<version>` in a
+relative source filename with that package's local manifest directory. This is source-prefix mapping,
+as with `-fdebug-prefix-map`; physical paths used for compiler diagnostics do
+not contribute to artifact bytes. The native link kit and toolchain still
+contribute to build identity.

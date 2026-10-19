@@ -46,11 +46,22 @@ pub struct LineColumn {
 /// Immutable source and its line-start index (LANG-1, SEM-3).
 #[derive(Clone, Debug)]
 pub struct SourceFile {
+    /// Physical path for diagnostics and reading source; never emit into artifacts.
     pub path: PathBuf,
+    logical_path: PathBuf,
     text: String,
     line_starts: Vec<u32>,
 }
 impl SourceFile {
+    /// Synthetic DWARF root, identical on every host. GDB remaps the package
+    /// prefix in relative file names to that package's local manifest directory.
+    pub const COMPILATION_DIRECTORY: &str = "/hirsel";
+    /// Root-independent source name for artifact strings and DWARF. Debuggers
+    /// remap the package prefix to the local manifest directory (like
+    /// `-fdebug-prefix-map`); the physical path remains available to diagnostics.
+    pub fn logical_path(&self) -> &Path {
+        &self.logical_path
+    }
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -85,6 +96,20 @@ pub struct SourceMap {
 impl SourceMap {
     /// Returns None when the u32 representation cannot contain this file/map.
     pub fn add(&mut self, path: impl AsRef<Path>, text: String) -> Option<FileId> {
+        let logical = Path::new("standalone@0").join(
+            path.as_ref()
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("<source>")),
+        );
+        self.add_logical(path, logical, text)
+    }
+    /// Add a snapshot with a package-qualified, manifest-relative artifact name.
+    pub fn add_logical(
+        &mut self,
+        path: impl AsRef<Path>,
+        logical_path: impl AsRef<Path>,
+        text: String,
+    ) -> Option<FileId> {
         u32::try_from(text.len()).ok()?;
         let id = FileId(u32::try_from(self.files.len()).ok()?);
         let mut line_starts = vec![0];
@@ -95,6 +120,7 @@ impl SourceMap {
         }
         self.files.push(SourceFile {
             path: path.as_ref().to_owned(),
+            logical_path: logical_path.as_ref().to_owned(),
             text,
             line_starts,
         });

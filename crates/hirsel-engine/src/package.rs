@@ -92,7 +92,11 @@ pub(crate) fn load_package_declarations(
             }
             let file = engine
                 .sources
-                .add(source, crate::tools::read_source(source)?)
+                .add_logical(
+                    source,
+                    &selected.logical_sources[source],
+                    crate::tools::read_source(source)?,
+                )
                 .ok_or(ToolError::SourceTooLarge)?;
             engine
                 .reparse_file(file, context)
@@ -738,7 +742,11 @@ pub(crate) fn load_program_source_with_cache(
     for ((source, context), text) in files.iter().zip(texts) {
         let file = engine
             .sources
-            .add(source, text)
+            .add_logical(
+                source,
+                &graph.packages[&context.package].logical_sources[source],
+                text,
+            )
             .ok_or(ToolError::SourceTooLarge)?;
         if source == &primary_path {
             primary = Some(file);
@@ -906,10 +914,29 @@ pub(crate) fn load_program_source_with_cache(
     Ok(program)
 }
 
+/// The manifest is canonical; the source retains its declared spelling (so a
+/// symlink does not leak its physical target into the artifact). Their relationship
+/// enters artifacts; no host root becomes part of a source name. This also
+/// supports sources outside the manifest directory and absolute manifest entries.
+fn logical_source_path(source: &Path, manifest: &Path, package: &PackageId) -> PathBuf {
+    let base = manifest.parent().unwrap();
+    let common = base
+        .ancestors()
+        .find(|ancestor| source.starts_with(ancestor))
+        .unwrap();
+    let mut relative = PathBuf::new();
+    for _ in base.strip_prefix(common).unwrap().components() {
+        relative.push("..");
+    }
+    relative.push(source.strip_prefix(common).unwrap());
+    PathBuf::from(format!("{}@{}", package.name, package.version)).join(relative)
+}
+
 struct SelectedPackage {
     path: PathBuf,
     manifest: Vec<u8>,
     sources: Vec<(PathBuf, FileContext)>,
+    logical_sources: BTreeMap<PathBuf, PathBuf>,
     exposures: Vec<DependencyExposure>,
     entry: Option<DefPath>,
     dependencies: Vec<PackageId>,
@@ -1008,11 +1035,25 @@ impl Graph {
         }
         self.active.push(path.clone());
         let base = path.parent().unwrap();
+        let mut logical_sources = BTreeMap::new();
         let sources = array(required(object, "sources")?)?
             .iter()
             .map(|s| {
                 let s = object_value(s, &["path", "module"])?;
-                let source = std::fs::canonicalize(base.join(string(required(s, "path")?)?))?;
+                let declared = Path::new(string(required(s, "path")?)?);
+                let source = std::fs::canonicalize(base.join(declared))?;
+                // Absolute entries may name the same directory through an alias
+                // such as /tmp. Compare canonical paths in that case; relative
+                // entries retain their declared names, including symlinks.
+                let logical = if declared.is_absolute() {
+                    source.clone()
+                } else {
+                    base.join(declared)
+                };
+                logical_sources.insert(
+                    source.clone(),
+                    logical_source_path(&logical, &path, &package),
+                );
                 let modules = modules(required(s, "module")?)?;
                 Ok((
                     source,
@@ -1096,6 +1137,7 @@ impl Graph {
                 path,
                 manifest: bytes,
                 sources,
+                logical_sources,
                 exposures,
                 entry,
                 dependencies,

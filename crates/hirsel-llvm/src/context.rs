@@ -1614,12 +1614,10 @@ impl<'m> DebugInfo<'m> {
         name: &str,
         line: u32,
     ) -> DebugScope {
-        let path = std::path::Path::new(path);
-        let file = path.file_name().unwrap_or_default().to_string_lossy();
-        let directory = path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_string_lossy();
+        // Keep the entire package-qualified name below a synthetic root. Using
+        // a host directory here would change both DWARF and the linked build ID.
+        let file = path;
+        let directory = hirsel_lir::profile::ProfileSource::COMPILATION_DIRECTORY;
         let mut length = 0;
         // SAFETY: LLVM returns the name bytes for the lifetime of the live function.
         let link = unsafe {

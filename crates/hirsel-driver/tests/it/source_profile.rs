@@ -70,7 +70,7 @@ fn two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .filter(|s| s["line"] == line && s["file"] == source.to_str().unwrap())
+                    .filter(|s| s["line"] == line && s["file"] == "standalone@0/known.hir")
                     .map(|s| s["counts"][kind].as_u64().unwrap_or(0))
                     .sum();
                 assert_eq!(sum, count, "line {line} {kind}: {report}");

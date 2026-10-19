@@ -115,6 +115,35 @@ A debug build writes its debug information beside the executable as
 `<build-id>.debug`, which the executable's `.gnu_debuglink` names; gdb finds it
 there. Keep the two files together.
 
+Artifact source names are logical: `<package>@<version>/<manifest-relative path>`
+(for example `std@1/json.hir`), including profiling strings and failure locations
+in both backends. Standalone sources use `standalone@0/<file name>`. Generated
+bodies append their declaration/instance suffix to the logical source name.
+Physical source paths remain available to compiler diagnostics. This prefix
+mapping, like `-fdebug-prefix-map`, makes artifacts independent of the checkout,
+cache and scratch directories.
+
+DWARF uses the constant compilation directory `/hirsel`. Remap each package
+prefix to its local manifest directory before setting breakpoints or listing
+source, including dependencies in other directories. GDB matches the package
+prefix in the relative filename. For a manifest declaring
+`src/main.hir` in `myapp@1`:
+
+```sh
+gdb ./app-debug
+# At the gdb prompt (replace /checkout/app with the local manifest directory):
+set substitute-path myapp@1 /checkout/app
+list myapp@1/src/main.hir:3
+break myapp@1/src/main.hir:3
+run
+```
+
+To check remapping manually, build with `--debug` for each backend, start gdb
+from a directory outside the checkout, set the substitution above, and confirm
+`list` shows the source line and `run` reaches the breakpoint. The split debug
+file must stay beside the executable. The two-root CLI regression compares
+executables and split debug files and verifies logical DWARF and failure paths.
+
 ```sh
 gdb -batch -ex 'break hello.hir:3' -ex run ./hello-clif
 llvm-dwarfdump --verify ./<build-id>.debug

@@ -309,7 +309,7 @@ pub fn failure_table(program: &ReadyProgram, sites: &Sites<'_>) -> FailureTable 
                     .files
                     .get(&definition)
                     .and_then(|id| sites.input.sources.file(*id))
-                    .map(|f| f.path.to_string_lossy().into_owned())
+                    .map(|f| f.logical_path().to_string_lossy().into_owned())
                     .unwrap_or_else(|| "<core>".into());
                 (code, definition.to_string(), line, column, file)
             })

@@ -1,13 +1,9 @@
-# The two-host link gate's program set (tools/buck2/link_hosts.py): a source or
-# manifest, its target and profile, and `fixed-root` for a row that still needs
-# equal source paths. Paths are relative to the repository root, which is a
-# different directory on each host. Manifest builds embed their sources'
-# absolute paths in profile sites and DWARF, so they build from a copy at one
-# fixed path; their cache and scratch roots still differ.
+# The two-host link gate program set: source or manifest, target and profile.
+# Checkout, native cache and scratch roots differ between hosts for every row.
 native-tests/link/hello.hir x86_64-linux default
 native-tests/link/hello.hir x86_64-linux debug
 native-tests/link/hello.hir aarch64-linux default
 native-tests/link/hello.hir aarch64-linux debug
-examples/todo-api/hirsel.json x86_64-linux default fixed-root
-examples/todo-api/hirsel.json aarch64-linux release fixed-root
-examples/wordscan/hirsel.json x86_64-linux debug fixed-root
+examples/todo-api/hirsel.json x86_64-linux default
+examples/todo-api/hirsel.json aarch64-linux release
+examples/wordscan/hirsel.json x86_64-linux debug

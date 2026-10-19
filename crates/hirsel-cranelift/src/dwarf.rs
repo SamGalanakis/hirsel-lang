@@ -62,7 +62,7 @@ impl DebugFunction {
                 &unit.header.definition,
                 Some(&unit.header.instance),
             ),
-            path: source.path.to_string_lossy().into_owned(),
+            path: source.logical_path().to_string_lossy().into_owned(),
             line: position(entry.start)?.line,
             size: code.code_buffer().len() as u64,
             rows,
@@ -108,7 +108,7 @@ pub(crate) fn write(product: &mut ObjectProduct, functions: Vec<DebugFunction>) 
     let mut lines = LineProgram::new(
         encoding,
         LineEncoding::default(),
-        LineString::String(b".".to_vec()),
+        LineString::String(ProfileSource::COMPILATION_DIRECTORY.as_bytes().to_vec()),
         None,
         LineString::String(first.path.as_bytes().to_vec()),
         None,
@@ -118,10 +118,10 @@ pub(crate) fn write(product: &mut ObjectProduct, functions: Vec<DebugFunction>) 
         gimli::DW_AT_name,
         AttributeValue::String(first.path.as_bytes().to_vec()),
     );
-    dwarf
-        .unit
-        .get_mut(root)
-        .set(gimli::DW_AT_comp_dir, AttributeValue::String(b".".to_vec()));
+    dwarf.unit.get_mut(root).set(
+        gimli::DW_AT_comp_dir,
+        AttributeValue::String(ProfileSource::COMPILATION_DIRECTORY.as_bytes().to_vec()),
+    );
     dwarf.unit.get_mut(root).set(
         gimli::DW_AT_producer,
         AttributeValue::String(crate::TOOLCHAIN.as_bytes().to_vec()),

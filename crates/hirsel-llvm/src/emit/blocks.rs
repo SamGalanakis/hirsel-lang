@@ -92,7 +92,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let mut strings = Vec::new();
             for (index, text) in [
                 self.unit.header.definition.0.package.name.as_str(),
-                &source.path.to_string_lossy(),
+                &source.logical_path().to_string_lossy(),
                 &self.unit.header.definition.to_string(),
                 operation,
             ]
