@@ -110,6 +110,23 @@ fn flate_large_vectors_execute_std_source() {
     });
 }
 
+// Go zip testdata readme.zip inflates past the corpus step budget.
+#[test]
+fn zip_large_vectors_execute_std_source() {
+    with_compiler_stack(|| {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/zip-large.hir");
+        let outcome = run_path_with_step_budget(
+            &path,
+            SimulationConfig::default(),
+            Some(5_000_000),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+    });
+}
+
 // zlib's output at window, block-split and stored-fallback scale runs only as
 // a built executable; the corpus covers every level on short inputs.
 #[test]

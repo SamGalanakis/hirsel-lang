@@ -1,5 +1,5 @@
-// tar.extract under a host Dir grant refuses paths through or onto symlinks
-// that lead out of the grant, and writes inside it.
+// tar.extract and zip.extract under a host Dir grant refuse paths through or
+// onto symlinks that lead out of the grant, and write inside it.
 type Source {
   data: Bytes,
   at: u64,
@@ -35,6 +35,15 @@ fn extract(into: Dir, take data: Bytes) -> Result[u64, tar.ExtractError[()]] {
   tar.extract(into, mut t, mut r, mut source, feed, 100)
 }
 
+fn zipped(take name: String) -> Bytes {
+  let mut w = zip.writer()
+  let mut out: List[u8] = []
+  let _ = zip.create(mut w, zip.entry(take name), 1, mut out)
+  let _ = zip.write(mut w, b"evil", mut out)
+  let _ = zip.close(mut w, "", mut out)
+  core@1/bytes.from_list(take out)
+}
+
 pub type Error = Files(FileError) | Grant(GrantError)
 
 pub fn main(rt: Io) -> Result[(), Error] {
@@ -42,9 +51,14 @@ pub fn main(rt: Io) -> Result[(), Error] {
   let through = extract(d, one("out/evil.txt")) == Error(Insecure("out/evil.txt"))
   let onto = extract(d, one("link.txt")) == Error(Insecure("link.txt"))
   let inside = extract(d, one("fine/ok.txt")) == Ok(1)
+  let zip_through = zip.extract(zipped("out/evil.txt"), d, 100) == Error(
+    Insecure("out/evil.txt")
+  )
+  let zip_onto = zip.extract(zipped("link.txt"), d, 100) == Error(Insecure("link.txt"))
+  let zip_inside = zip.extract(zipped("fine/zip.txt"), d, 100) == Ok(1)
   let _ = out.print(
     io.stdout(rt) ? Grant,
-    if through && onto && inside {
+    if through && onto && inside && zip_through && zip_onto && zip_inside {
       "ok\n"
     } else {
       "bad\n"

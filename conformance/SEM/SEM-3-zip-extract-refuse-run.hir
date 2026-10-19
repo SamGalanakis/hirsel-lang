@@ -1,0 +1,36 @@
+// rule: SEM-3
+// expect: run
+// zip.extract refuses names that would leave the grant (a ".." piece, an
+// absolute path) or hold a backslash as Insecure, and a Unix symlink entry
+// (Go testdata symlink.zip) as Unsupported, writing nothing for them; earlier
+// entries stay. SEM-3-zip-extract-run is the accepted twin.
+fn one(take name: String) -> Bytes {
+  let mut w = zip.writer()
+  let mut out: List[u8] = []
+  let mut e = zip.entry(take name)
+  e.method = Stored()
+  failure.check(zip.create(mut w, e, 0, mut out) == Ok(()), Bounds())
+  failure.check(zip.write(mut w, b"evil", mut out) == Ok(()), Bounds())
+  failure.check(zip.close(mut w, "", mut out) == Ok(()), Bounds())
+  core@1/bytes.from_list(take out)
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  let dir = test.dir(t, [])
+  test.check(
+    t,
+    zip.extract(one("a/../../evil"), dir, 100) == Error(Insecure("a/../../evil"))
+  )
+  test.check(t, zip.extract(one("/etc/evil"), dir, 100) == Error(Insecure("/etc/evil")))
+  test.check(t, zip.extract(one("..\\evil"), dir, 100) == Error(Insecure("..\\evil")))
+  test.check(
+    t,
+    zip.extract(
+      b"PK\x03\x04\x0a\x00\x00\x00\x00\x00\x18\x9fC@\xd1\xfa\x9e\x8e\x09\x00\x00\x00\x09\x00\x00\x00\x07\x00\x1c\x00symlinkUT\x09\x00\x03 X,O X,Oux\x0b\x00\x01\x04\xe8\x03\x00\x00\x04\xe8\x03\x00\x00../targetPK\x01\x02\x1e\x03\x0a\x00\x00\x00\x00\x00\x18\x9fC@\xd1\xfa\x9e\x8e\x09\x00\x00\x00\x09\x00\x00\x00\x07\x00\x18\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xa1\x00\x00\x00\x00symlinkUT\x05\x00\x03 X,Oux\x0b\x00\x01\x04\xe8\x03\x00\x00\x04\xe8\x03\x00\x00PK\x05\x06\x00\x00\x00\x00\x01\x00\x01\x00M\x00\x00\x00J\x00\x00\x00\x00\x00",
+      dir,
+      100
+    ) == Error(Unsupported("symlink"))
+  )
+  test.check(t, file.read_dir(dir, path.of("."))? == [])
+  Ok(())
+}

@@ -1,0 +1,26 @@
+// rule: SEM-3
+// expect: run
+// An entry declared at 5 GiB through zip.create_raw gets ZIP64 sizes in its
+// local and central headers and ZIP64 end records, which zip.entries reads
+// back; zip.read refuses it against a smaller limit before reading its data.
+pub fn main(t: Test) -> Result[(), zip.ZipError] {
+  let mut w = zip.writer()
+  let mut out: List[u8] = []
+  let mut e = zip.entry("big")
+  e.method = Stored()
+  e.size = 5368709120
+  e.compressed = 5368709120
+  test.check(t, zip.create_raw(mut w, e, mut out) == Ok(()))
+  test.check(t, zip.write(mut w, b"tiny", mut out) == Ok(()))
+  test.check(t, zip.close(mut w, "", mut out) == Ok(()))
+  let data = core@1/bytes.from_list(take out)
+  let es = zip.entries(data)?
+  test.check(
+    t,
+    list.len(es) == 1 && es[0].size == 5368709120 && es[0].compressed == 5368709120
+  )
+  test.check(t, zip.read(data, es[0], 1048576) == Error(TooLarge()))
+  // The local header carries the ZIP64 marker sizes and a 20-byte extra field.
+  test.check(t, data[18] == 255 && data[22] == 255 && data[28] == 20)
+  Ok(())
+}

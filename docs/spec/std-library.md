@@ -2309,6 +2309,91 @@ in `parse`, a DNS name or URI that is not ASCII, an address of neither 4 nor 16 
 a malformed OID are `Malformed(at)`, with `at` the byte offset of the element that fails.
 Both functions are pure ordinary source; outputs are owned.
 
+## Zip archives
+
+`std@1/zip` reads and writes zip archives (PKWARE APPNOTE 6.3) with stored and deflated
+entries, data descriptors and ZIP64. It is a port of Go `archive/zip` without
+encryption, disk spanning or custom compressors.
+
+```text
+Method = Stored | Deflate | Other(u64)
+Entry { name: String, comment: String, method: Method, flags: u64, creator: u64, external: u64, modified: Option[i64], dos_time: u64, crc: u32, compressed: u64, size: u64, offset: u64 }
+ZipError = Format(u64) | Encoding(u64) | Algorithm(String) | Checksum(String) | TooLarge | Data(flate.FlateError)
+FileZipError = Storage(FileError) | Archive(ZipError)
+WriteError = Field | Directory | Closed
+ExtractError = Read(ZipError) | Insecure(String) | Unsupported(String) | File(FileError)
+fn zip.entries(data: Bytes) -> Result[List[Entry],ZipError] uses {}
+fn zip.archive_comment(data: Bytes) -> Result[unique String,ZipError] uses {}
+fn zip.read(data: Bytes, e: Entry, limit: u64) -> Result[unique Bytes,ZipError] uses {}
+fn zip.file_entries(dir: Dir, mut f: File of dir, size: u64) -> Result[List[Entry],FileZipError]
+fn zip.file_read(dir: Dir, mut f: File of dir, e: Entry, limit: u64) -> Result[unique Bytes,FileZipError]
+fn zip.extract(data: Bytes, into: Dir, limit: u64) -> Result[u64,ExtractError]
+fn zip.file_extract(from: Dir, mut f: File of from, size: u64, into: Dir, limit: u64) -> Result[u64,ExtractError]
+fn zip.writer() -> unique Writer uses {}
+fn zip.entry(take name: String) -> Entry uses {}
+@preserves_unique(out) fn zip.create(mut w: Writer, h: Entry, level: u64, mut out: List[u8]) -> Result[(),WriteError] uses {}
+@preserves_unique(out) fn zip.create_raw(mut w: Writer, h: Entry, mut out: List[u8]) -> Result[(),WriteError] uses {}
+@preserves_unique(out) fn zip.write(mut w: Writer, data: Bytes, mut out: List[u8]) -> Result[(),WriteError] uses {}
+@preserves_unique(out) fn zip.close(mut w: Writer, comment: String, mut out: List[u8]) -> Result[(),WriteError] uses {}
+fn zip.flushed(mut w: Writer, count: u64) -> () uses {}
+```
+
+**Reading.** `entries` finds the end-of-central-directory record: the last one, searched
+in the final 1 KiB and then the final 65 KiB, whose comment fits in the data. When a
+record count, size or offset is at its 16- or 32-bit maximum, it follows a ZIP64
+locator just before the record (disk 0, one disk) to the ZIP64 end record. When the
+directory's recorded offset does not hold a directory header, the base offset is the
+gap between where the directory ends and where its size and offset say it should,
+which allows a prefix (a self-extracting stub) and junk after the archive. Entries are
+read in directory order, stopping at the first non-directory signature. The count must
+match the record count's low 16 bits. A ZIP64 extra field supplies the sizes and
+offset recorded as 0xFFFFFFFF, and an extended timestamp field (0x5455, modification
+flag) sets `modified`. `offset` is absolute in `data`. A malformed record is
+`Format(n)`. A name or comment that is not UTF-8 is `Encoding(n)` at its directory
+header: no legacy code page is decoded.
+
+`read` returns an entry's data. It is `TooLarge` before any decoding when `size`
+exceeds `limit`, which bounds a decompression bomb by its declared size. Stored data
+must be exactly `size` bytes. Deflated data is decoded with at most `size` bytes of
+output, so data that decodes past `size`, or a stream that ends early or late, is a
+`Format` error. The CRC-32 of the data must equal the entry's, unless that is zero
+with no data descriptor. With a data descriptor (flag 8), the descriptor's CRC-32,
+after an optional signature, must equal it too; otherwise the error is
+`Checksum(name)`. A directory entry (a name ending in `/`) has no data; one with a
+nonzero size is a `Format` error. `Other` methods are `Algorithm(name)`. `file_entries`
+and `file_read` read only the last 65 KiB, the central directory and the one entry, by
+seeking within the file.
+
+**Writing.** A `Writer` appends to `out`. A caller that drains `out` reports the
+drained count with `flushed`, so offsets stay right. `create` finishes the previous
+entry and writes a local header with flag 8 and zero sizes. Then come the entry's data,
+deflated at `level` through a `flate.Encoder` or stored, and on the next `create` or
+`close` a data descriptor with signature, CRC-32 and sizes (64-bit when either size is
+4 GiB or more). A name ending in `/` is a stored directory without a descriptor, and
+writing data to it is `Directory`. `create_raw` writes the given CRC-32 and sizes into
+the local header, with a ZIP64 extra field when a size exceeds 32 bits, and passes data
+through unchanged. Flag 0x800 marks a name or comment holding a byte below 0x20, above
+0x7D or a backslash. `modified` writes an extended timestamp extra field and the
+MS-DOS date and time in UTC; otherwise `dos_time` is written as given. The version made
+by keeps its high byte and records 2.0. `close` writes the central directory. It adds a
+ZIP64 extra field for any size or offset at or above 0xFFFFFFFF (version 4.5), then
+ZIP64 end and locator records when needed or when there are 65535 or more records, then
+the end record with `comment`. Names, comments and extra fields over 65535 bytes, and
+`Other` methods, are `Field`. Writes after `close` are `Closed`. The layout follows
+Go's `zip.Writer`; deflated bytes are those of `std@1/flate`, which match zlib rather
+than Go's compressor.
+
+**Extraction.** `extract` writes every directory entry and file of the archive into
+`into`, creating missing parent directories and replacing existing files; it returns
+the number of entries written. Names are refused as `Insecure(name)` by the rules of
+`tar.extract`, which also refuse a path through or onto an existing symlink. Entries
+whose creator is Unix (high byte 3) and whose mode is a symlink, device, FIFO or socket
+are `Unsupported(name)`. Each file's declared size counts against `limit` before it is
+decoded, and decoding never exceeds that size, so at most `limit` bytes are written:
+`Read(TooLarge())` is the expansion limit for zip bombs. One entry's data is held at a
+time. Permissions and times are not applied. The first refusal stops extraction with
+the entries before it in place.
+
 ## Cookies
 
 `std@1/cookie` parses Cookie request headers and formats Set-Cookie response

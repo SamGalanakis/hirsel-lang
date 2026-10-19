@@ -1269,7 +1269,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
 }
 
 #[test]
-fn tar_extract_never_follows_host_symlinks_out_of_the_grant_in_both_engines() {
+fn tar_and_zip_extract_never_follow_host_symlinks_out_of_the_grant_in_both_engines() {
     let source = std_file(include_str!("fixtures/tar-symlink-escape.hir"));
     let root = source.with_extension("root");
     let outside = source.with_extension("outside");
@@ -1292,6 +1292,7 @@ fn tar_extract_never_follows_host_symlinks_out_of_the_grant_in_both_engines() {
         assert_eq!(output.stdout, b"ok\n");
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
         assert_eq!(std::fs::read(root.join("fine/ok.txt")).unwrap(), b"evil");
+        assert_eq!(std::fs::read(root.join("fine/zip.txt")).unwrap(), b"evil");
         std::fs::remove_dir_all(root.join("fine")).unwrap();
         std::fs::remove_file(record).unwrap();
     }

@@ -1,0 +1,66 @@
+// Go src/archive/zip/reader_test.go TestReader (golang/go ebe2feef): a
+// 1096-byte deflated entry.
+fn method_text(m: zip.Method) -> String {
+  match m {
+    Stored() => "stored",
+    Deflate() => "deflate",
+    Other(_) => "other",
+  }
+}
+
+// The entry's fields, separated by `|`.
+fn summary(e: zip.Entry) -> String {
+  let mut out: List[u8] = []
+  text.append(mut out, e.name)
+  list.push(mut out, b'|')
+  text.append(mut out, method_text(e.method))
+  let numbers: List[u64] = [
+    e.flags,
+    e.size,
+    e.compressed,
+    core@1/int.widen(e.crc),
+    e.offset,
+    e.dos_time,
+    e.external
+  ]
+  for n in numbers {
+    list.push(mut out, b'|')
+    u64.format_into(n, mut out)
+  }
+  list.push(mut out, b'|')
+  match e.modified {
+    Some(seconds) => i64.format_into(seconds, mut out),
+    None() => text.append(mut out, "-"),
+  }
+  list.push(mut out, b'|')
+  text.append(mut out, e.comment)
+  text.finish_valid(take out)
+}
+
+// Every entry's summary and data.
+fn listing(data: Bytes) -> Result[List[(String, Bytes)], zip.ZipError] {
+  let mut out: List[(String, Bytes)] = []
+  for e in zip.entries(data)? {
+    let contents = zip.read(data, e, 1048576)?
+    list.push(mut out, (summary(e), contents))
+  }
+  Ok(out)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  // readme.zip
+  test.check(
+    t,
+    listing(
+      b"PK\x03\x04\x14\x00\x00\x00\x08\x00 _\x22=\xe0\x0a\x08\x82V\x02\x00\x00H\x04\x00\x00\x06\x00\x1c\x00READMEUT\x09\x00\x03K\xc9\x7fL\x92\xf5\xa1Lux\x0b\x00\x01\x04\xe8\x03\x00\x00\x04\xe8\x03\x00\x00mTMO\xdb@\x10\xbd\xef\xaf\x98\x03RAJlN\x1c\x22q\x80\x92\x02R!\x15\xd0C\x8fk{lo\xbb\xde\xb1\xf6#!\xff\xbe3k\xbb\x8dJ\xa3(\x07\xcf\x9b7o\xde\x1b\xe7\xad7\x01\xf8\x1b{\x84@\xc9\xd7\x0855\x08\x1eG\x0a&\x92?BK>\x97\xef\x09FO\x9d\xd7\xc3`\x5c\x07V\xbb.\xe9\x0e\x0b\x00\xa5\xbe0\xa6\xa1:\x0d\xe8\xa2\x8e\x86\x1c\xe8\x8aR\x84\x9e\x0e\x10\x09\x8c\x0bQ[\x0b\xda5\x90\x82P\xad\xd4\xde0?\xf41\x8e\x9b\xb2\xecH\xe8\x0a\xf2]\x09LeI7\xc2W\xce\x8dE\x1f\x07\xcb,pd\x89p\xc0\x0a*O\x87\x80\xbeP\xea\xa6\x8d\xe8\x97\x09\x22\x8c\xc9\x05\x07\xb5v\xb07x\x00\x0d\xce\xd4h\xf3&\x83\x8e\x11\x1b\xf5\x81\xbb:\x82O\xceI\x7fG\x5c\x85\xf5Z\xa4]o\xae.\xaf.\x95\xe8f\x0b\x84\x8fE\x0bh\xd6m\xa9\xd6\xb6\xa7\x103\xae\xfc\x97\x96\xe5}w\x16C\x00\xe2v\x7f0\xbc\xbb#\x16\xb0Z\x1c\x9d=o\x0d\xa3@{\x84\xc6\x84\xe8M\x95Der\x0dN\xde\xdf\xbe\xde\xadC<Z\x04\xcb\xab8\xa6i\x89\xabb\x89\x94\xbf>~\xde>\xbfn3\x0d\xcf\x5c\xaf\x95\xba5Nsxw\x0b\x9dd\xf2\xcc\xa3\x83R\x8fm\xf6\xa7\xd7{\x84\x9f)DH\x1c\x9a\xf7\xd8\xb0S\xd5\xd4\xc6\xca\x9a\x93\xce\xc9P\x87\x0c\xe14\x03F%S\xd1\xed\x8d''\x99\xc3^{\xa3+\xd6wv\xbf{\xd9\xed\xde\x04'\x986q\xec\xa3\x8e=P\x9b\x1ft\xa4\x1a\xe3\xb1\xce\xa7u.O\xc8\xc9\xcd\xb1\x04\x93\xed\x8fr\x91/\xdb\x9b\xbb\xa7\xed\x05\xdf\xd6\x8f9I\x1a\xf8Z\x18\xae\xfeL2\xd3\x1a\xc9\x8d\xba\xfe\x05\x5c5\x8e\x87\x96)\xf8)\x16>\xaa\x95\x1c\xd3\x8c\xf3X%c\x1b\xd5z\x1af\xdb\xc3i\xec\x92Y\xa5C\x0f\xe7\x01\xf1\xc3\xf1]\x14J\x94\x84\x9e\x92e\x9fl \xd0M\xb3\xa48\xbb\xf6w\xb1\xd9\x85\x92\x0b\x8aE\xe5\xb3\x0d=Z\xfb)d7\x8a\xe9\x95\xc1w=\x8c\x16W\x8bF|\x8f^\xd7\x11'b\x0e%':-v\xf6\xb0{\xda\xe6\x9d\x049\x98\xae\x8fjLqr\x99\xac\xa5\x83l\xb1\xbc#\x05\xbf\xaa\xd2\xbbQ\x0a\xf8\x83\xef#\xf9\x08\x93\xaa\xeb\x85\xea\xb4\xf4\xed\xe6\xed\xe1\xfaL~7\xa7\xe2\xd5\xeb\x7f\xcc\xc8\x7f\x09\x03\xc9\xb5\x22\xc7fC\xa1~\x03PK\x01\x02\x1e\x03\x14\x00\x00\x00\x08\x00 _\x22=\xe0\x0a\x08\x82V\x02\x00\x00H\x04\x00\x00\x06\x00\x18\x00\x00\x00\x00\x00\x01\x00\x00\x00\xa4\x81\x00\x00\x00\x00READMEUT\x05\x00\x03K\xc9\x7fLux\x0b\x00\x01\x04\xe8\x03\x00\x00\x04\xe8\x03\x00\x00PK\x05\x06\x00\x00\x00\x00\x01\x00\x01\x00L\x00\x00\x00\x96\x02\x00\x00e\x04This is the source code repository for the Go programming language.  \x0d\x0a\x0d\x0aFor documentation about how to install and use Go,\x0d\x0avisit https://golang.org/ or load doc/install.html in your web browser.\x0d\x0a\x0d\x0aAfter installing Go, you can view a nicely formatted\x0d\x0adoc/install.html by running godoc --http=:6060\x0d\x0aand then visiting http://localhost:6060/doc/install.html.\x0d\x0a\x0d\x0aUnless otherwise noted, the Go source files are distributed\x0d\x0aunder the BSD-style license found in the LICENSE file.\x0d\x0a\x0d\x0a--\x0d\x0a\x0d\x0aBinary Distribution Notes\x0d\x0a\x0d\x0aIf you have just untarred a binary Go distribution, you need to set\x0d\x0athe environment variable $GOROOT to the full path of the go\x0d\x0adirectory (the one containing this README).  You can omit the\x0d\x0avariable if you unpack it into /usr/local/go, or if you rebuild\x0d\x0afrom sources by running all.bash (see doc/install.html).\x0d\x0aYou should also add the Go binary directory $GOROOT/bin\x0d\x0ato your shell's path.\x0d\x0a\x0d\x0aFor example, if you extracted the tar file into $HOME/go, you might\x0d\x0aput the following in your .profile:\x0d\x0a\x0d\x0a    export GOROOT=$HOME/go\x0d\x0a    export PATH=$PATH:$GOROOT/bin\x0d\x0a\x0d\x0aSee doc/install.html for more details."
+    ) == Ok(
+      [
+        (
+          "README|deflate|0|1096|598|2181565152|0|1025662752|2175008768|1283443019|",
+          b"This is the source code repository for the Go programming language.  \x0a\x0aFor documentation about how to install and use Go,\x0avisit http://golang.org/ or load doc/install.html in your web browser.\x0a\x0aAfter installing Go, you can view a nicely formatted\x0adoc/install.html by running godoc --http=:6060\x0aand then visiting http://localhost:6060/doc/install.html.\x0a\x0aUnless otherwise noted, the Go source files are distributed\x0aunder the BSD-style license found in the LICENSE file.\x0a\x0a--\x0a\x0aBinary Distribution Notes\x0a\x0aIf you have just untarred a binary Go distribution, you need to set\x0athe environment variable $GOROOT to the full path of the go\x0adirectory (the one containing this README).  You can omit the\x0avariable if you unpack it into /usr/local/go, or if you rebuild\x0afrom sources by running all.bash (see doc/install.html).\x0aYou should also add the Go binary directory $GOROOT/bin\x0ato your shell's path.\x0a\x0aFor example, if you extracted the tar file into $HOME/go, you might\x0aput the following in your .profile:\x0a\x0a    export GOROOT=$HOME/go\x0a    export PATH=$PATH:$GOROOT/bin\x0a\x0aSee doc/install.html for more details.\x0a"
+        )
+      ]
+    )
+  )
+  Ok(())
+}

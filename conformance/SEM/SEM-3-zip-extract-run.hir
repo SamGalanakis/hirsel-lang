@@ -1,0 +1,34 @@
+// rule: SEM-3
+// expect: run
+// zip.extract writes directory entries and files into a Dir grant, creating
+// missing parents and replacing an existing file, accepting entries whose
+// sizes total exactly its limit, and returns the number of entries written.
+fn add(
+  mut w: zip.Writer,
+  take name: String,
+  method: zip.Method,
+  data: Bytes,
+  mut out: List[u8]
+) -> bool {
+  let mut e = zip.entry(take name)
+  e.method = method
+  zip.create(mut w, e, 1, mut out) == Ok(()) && zip.write(mut w, data, mut out) == Ok(
+    ()
+  )
+}
+
+pub fn main(t: Test) -> Result[(), FileError] {
+  let dir = test.dir(t, [(path.of("keep.txt"), b"old")])
+  let mut w = zip.writer()
+  let mut out: List[u8] = []
+  test.check(t, add(mut w, "docs/", Stored(), b"", mut out))
+  test.check(t, add(mut w, "./docs/a.txt", Deflate(), b"alpha", mut out))
+  test.check(t, add(mut w, "b/c/d.txt", Stored(), b"delta", mut out))
+  test.check(t, add(mut w, "keep.txt", Stored(), b"new", mut out))
+  test.check(t, zip.close(mut w, "", mut out) == Ok(()))
+  test.check(t, zip.extract(core@1/bytes.from_list(take out), dir, 13) == Ok(4))
+  test.check(t, file.read_bytes(dir, path.of("docs/a.txt"))? == b"alpha")
+  test.check(t, file.read_bytes(dir, path.of("b/c/d.txt"))? == b"delta")
+  test.check(t, file.read_bytes(dir, path.of("keep.txt"))? == b"new")
+  Ok(())
+}

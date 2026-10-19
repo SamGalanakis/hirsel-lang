@@ -1,0 +1,1163 @@
+// Zip archives: a port of Go src/archive/zip reader.go, writer.go and
+// struct.go (golang/go ebe2feef, BSD-3-Clause; third-party/NOTICES.md) for
+// stored and deflated entries, data descriptors, ZIP64 and archives with a
+// prefix. Deflated data uses std@1/flate, so written bytes follow zlib rather
+// than Go's compressor.
+/// An entry's compression method (APPNOTE 4.4.5).
+pub type Method = Stored | Deflate | Other(u64)
+
+/// One central directory entry. `offset` is the entry's local header offset
+/// within the data (including any prefix), `modified` the Unix time of an
+/// extended timestamp extra field, and `dos_time` the MS-DOS date (high 16
+/// bits) and time (low 16 bits). `creator` and `external` are the version
+/// made by and external attributes (Unix modes in the high 16 bits when the
+/// creator's high byte is 3).
+pub type Entry {
+  name: String,
+  comment: String,
+  method: Method,
+  flags: u64,
+  creator: u64,
+  external: u64,
+  modified: Option[i64],
+  dos_time: u64,
+  crc: u32,
+  compressed: u64,
+  size: u64,
+  offset: u64,
+}
+
+/// Malformed archive data: `Format(n)` at byte offset `n`, a name or
+/// comment that is not UTF-8 (`Encoding(n)`, the offset of its directory
+/// header), an unsupported method, data whose CRC-32 or size disagrees with
+/// its entry, or more data than `limit` allows.
+pub type ZipError = Format(u64) | Encoding(u64) | Algorithm(String) | Checksum(String) | TooLarge | Data(
+  flate.FlateError
+)
+
+/// A file operation failed or the archive is malformed.
+pub type FileZipError = Storage(FileError) | Archive(ZipError)
+
+/// Writing errors: a name, comment or extra field too long for its 16-bit
+/// length, data written to a directory entry, or a write after `close`.
+pub type WriteError = Field | Directory | Closed
+
+/// Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),
+/// the archive is malformed, or a file operation failed.
+pub type ExtractError = Read(ZipError) | Insecure(String) | Unsupported(String) | File(
+  FileError
+)
+
+/// Writing state: the central directory so far, the output offset and the
+/// entry being written.
+pub opaque type Writer: copyable + inert + noalloc_drop uses {} {
+  directory: List[Entry],
+  offset: u64,
+  open: bool,
+  raw: bool,
+  closed: bool,
+  encoder: flate.Encoder,
+  crc: crc32.State,
+  size: u64,
+  start: u64,
+}
+
+const LOCAL: u64 = 0x04034b50
+
+const CENTRAL: u64 = 0x02014b50
+
+const END: u64 = 0x06054b50
+
+const LOCATOR: u64 = 0x07064b50
+
+const END64: u64 = 0x06064b50
+
+const DESCRIPTOR: u64 = 0x08074b50
+
+const MAX16: u64 = 65535
+
+const MAX32: u64 = 4294967295
+
+@noalloc
+fn le16(b: Bytes, at: u64) -> u64 uses {} {
+  let lo: u64 = core@1/int.widen(b[at])
+  let hi: u64 = core@1/int.widen(b[at + 1])
+  lo | hi << 8
+}
+
+@noalloc
+fn le32(b: Bytes, at: u64) -> u64 uses {} {
+  le16(b, at) | le16(b, at + 2) << 16
+}
+
+@noalloc
+fn le64(b: Bytes, at: u64) -> u64 uses {} {
+  le32(b, at) | le32(b, at + 4) << 32
+}
+
+fn text_of(b: Bytes, start: u64, end: u64) -> Result[unique String, ()] uses {} {
+  let mut builder: List[u8] = []
+  let mut i = start
+  while i < end {
+    core@1/list.push(mut builder, b[i])
+    i += 1
+  }
+  match text.finish(take builder) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error(()),
+  }
+}
+
+fn method_of(code: u64) -> Method uses {} {
+  if code == 0 {
+    Stored()
+  } else if code == 8 {
+    Deflate()
+  } else {
+    Other(code)
+  }
+}
+
+fn method_code(m: Method) -> u64 uses {} {
+  match m {
+    Stored() => 0,
+    Deflate() => 8,
+    Other(code) => code,
+  }
+}
+
+// Go findSignatureInBlock: the last end-of-directory record whose comment
+// fits in the data, searched from 22 bytes before the end.
+fn find_end(data: Bytes, from: u64) -> Option[u64] uses {} {
+  let len = core@1/bytes.len(data)
+  if len < 22 {
+    return None()
+  }
+  let mut i = len - 22 + 1
+  while i > from {
+    i -= 1
+    if data[i] == 80 && data[i + 1] == 75 && data[i + 2] == 5 && data[i + 3] == 6 {
+      if le16(data, i + 20) + 22 + i > len {
+        return None()
+      }
+      return Some(i)
+    }
+  }
+  None()
+}
+
+// The central directory's records, size and offset, the end record's offset
+// and the archive comment: Go readDirectoryEnd and readDirectory64End.
+type Directory {
+  records: u64,
+  size: u64,
+  offset: u64,
+  end: u64,
+}
+
+fn directory_end(data: Bytes) -> Result[Directory, ZipError] uses {} {
+  let len = core@1/bytes.len(data)
+  // Go searches the last 1 KiB, then the last 65 KiB.
+  let near = if len > 1024 {
+    len - 1024
+  } else {
+    0
+  }
+  let far = if len > 66560 {
+    len - 66560
+  } else {
+    0
+  }
+  let at = match find_end(data, near) {
+    Some(at) => at,
+    None() => match find_end(data, far) {
+      Some(at) => at,
+      None() => return Error(Format(len)),
+    },
+  }
+  let mut d = Directory(
+    records: le16(data, at + 10),
+    size: le32(data, at + 12),
+    offset: le32(data, at + 16),
+    end: at
+  )
+  if d.records == MAX16 || d.size == MAX32 || d.offset == MAX32 {
+    // Go findDirectory64End: a locator just before the end record.
+    if at >= 20 && le32(data, at - 20) == LOCATOR && le32(data, at - 16) == 0 && le32(
+      data,
+      at - 4
+    ) == 1 {
+      let p = le64(data, at - 12)
+      if p > len || len - p < 56 || le32(data, p) != END64 {
+        return Error(Format(p))
+      }
+      d.records = le64(data, p + 32)
+      d.size = le64(data, p + 40)
+      d.offset = le64(data, p + 48)
+      d.end = p
+    }
+  }
+  if d.size >> 63 != 0 || d.offset >> 63 != 0 || d.size + d.offset > d.end {
+    return Error(Format(at))
+  }
+  Ok(d)
+}
+
+// Go readDirectoryHeader at `at`; None at a non-directory signature or the
+// end of the data.
+fn directory_entry(data: Bytes, at: u64, base: u64) -> Result[
+  Option[(Entry, u64)],
+  ZipError
+] uses {} {
+  let len = core@1/bytes.len(data)
+  if at > len || len - at < 46 || le32(data, at) != CENTRAL {
+    return Ok(None())
+  }
+  let name_len = le16(data, at + 28)
+  let extra_len = le16(data, at + 30)
+  let comment_len = le16(data, at + 32)
+  let name_at = at + 46
+  let extra_at = name_at + name_len
+  let comment_at = extra_at + extra_len
+  let next = comment_at + comment_len
+  if next > len {
+    return Ok(None())
+  }
+  let name = match text_of(data, name_at, extra_at) {
+    Ok(value) => value,
+    Error(_) => return Error(Encoding(at)),
+  }
+  let comment = match text_of(data, comment_at, next) {
+    Ok(value) => value,
+    Error(_) => return Error(Encoding(at)),
+  }
+  let crc: u32 = core@1/int.truncate(le32(data, at + 16))
+  let mut e = Entry(
+    name: name,
+    comment: comment,
+    method: method_of(le16(data, at + 10)),
+    flags: le16(data, at + 8),
+    creator: le16(data, at + 4),
+    external: le32(data, at + 38),
+    modified: None(),
+    dos_time: le16(data, at + 14) << 16 | le16(data, at + 12),
+    crc: crc,
+    compressed: le32(data, at + 20),
+    size: le32(data, at + 24),
+    offset: le32(data, at + 42)
+  )
+  // Go parseExtras: ZIP64 sizes and offset, and an extended timestamp.
+  let mut i = extra_at
+  while i + 4 <= comment_at {
+    let tag = le16(data, i)
+    let field = le16(data, i + 2)
+    let field_at = i + 4
+    if field_at + field > comment_at {
+      break
+    }
+    if tag == 1 {
+      let mut p = field_at
+      let field_end = field_at + field
+      if e.size == MAX32 {
+        if p + 8 > field_end {
+          return Error(Format(at))
+        }
+        e.size = le64(data, p)
+        p += 8
+      }
+      if e.compressed == MAX32 {
+        if p + 8 > field_end {
+          return Error(Format(at))
+        }
+        e.compressed = le64(data, p)
+        p += 8
+      }
+      if e.offset == MAX32 {
+        if p + 8 > field_end {
+          return Error(Format(at))
+        }
+        e.offset = le64(data, p)
+      }
+    } else if tag == 0x5455 && field >= 5 && data[field_at] & 1 != 0 {
+      let seconds: i64 = core@1/int.truncate(le32(data, field_at + 1))
+      e.modified = Some(seconds)
+    }
+    i = field_at + field
+  }
+  e.offset += base
+  Ok(Some((e, next)))
+}
+
+/// The archive comment of the end-of-central-directory record.
+pub fn archive_comment(data: Bytes) -> Result[unique String, ZipError] uses {} {
+  let len = core@1/bytes.len(data)
+  let near = if len > 66560 {
+    len - 66560
+  } else {
+    0
+  }
+  let at = match find_end(data, near) {
+    Some(at) => at,
+    None() => return Error(Format(len)),
+  }
+  match text_of(data, at + 22, at + 22 + le16(data, at + 20)) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error(Encoding(at)),
+  }
+}
+
+/// Go Reader.init: the entries of the archive in `data`, in central
+/// directory order. Data before the archive (a prefix such as a
+/// self-extracting stub) is allowed: offsets are relative to the end of the
+/// central directory when its recorded offset does not hold a directory
+/// header.
+pub fn entries(data: Bytes) -> Result[List[Entry], ZipError] uses {} {
+  let d = directory_end(data)?
+  let mut base = d.end - d.size - d.offset
+  if base > 0 && directory_entry(data, d.offset, 0)? != None() {
+    base = 0
+  }
+  let mut out: List[Entry] = []
+  let mut at = base + d.offset
+  while true {
+    match directory_entry(data, at, base)? {
+      Some((e, next)) => {
+        core@1/list.push(mut out, take e)
+        at = next
+      },
+      None() => break,
+    }
+  }
+  // Go compares only the low 16 bits of the record count.
+  if core@1/list.len(out) & MAX16 != d.records & MAX16 {
+    return Error(Format(at))
+  }
+  Ok(out)
+}
+
+// Go File.findBodyOffset: the offset of the entry's data.
+fn body(data: Bytes, e: Entry) -> Result[u64, ZipError] uses {} {
+  let len = core@1/bytes.len(data)
+  if e.offset > len || len - e.offset < 30 || le32(data, e.offset) != LOCAL {
+    return Error(Format(e.offset))
+  }
+  let start = e.offset + 30 + le16(data, e.offset + 26) + le16(data, e.offset + 28)
+  if start > len || len - start < e.compressed {
+    return Error(Format(e.offset))
+  }
+  Ok(start)
+}
+
+/// Go File.Open read to the end: the entry's data, which must decode to
+/// exactly its size with a matching CRC-32 (and, after a data descriptor,
+/// the descriptor's CRC-32). An entry whose size exceeds `limit` is
+/// `TooLarge` before any of it is decoded; a directory entry has no data.
+pub fn read(data: Bytes, e: Entry, limit: u64) -> Result[unique Bytes, ZipError] uses {} {
+  if string.ends_with(e.name, "/") {
+    if e.size != 0 {
+      return Error(Format(e.offset))
+    }
+    return Ok(b"")
+  }
+  if e.size > limit {
+    return Error(TooLarge())
+  }
+  let start = body(data, e)?
+  let packed = core@1/bytes.slice(data, start, start + e.compressed)
+  let out = match e.method {
+    Stored() => {
+      if e.compressed != e.size {
+        return Error(Format(start))
+      }
+      let mut copied: List[u8] = []
+      for byte in packed {
+        core@1/list.push(mut copied, byte)
+      }
+      core@1/bytes.from_list(take copied)
+    },
+    Deflate() => match flate.inflate(packed, e.size) {
+      Ok(value) => value,
+      Error(TooLarge()) => return Error(Format(start)),
+      Error(TrailingData(n)) => return Error(Format(start + n)),
+      Error(error) => return Error(Data(error)),
+    },
+    Other(_) => return Error(Algorithm(unique e.name)),
+  }
+  if core@1/bytes.len(out) != e.size {
+    return Error(Format(start))
+  }
+  let mut state = crc32.new()
+  crc32.update(mut state, out)
+  let actual = crc32.finish(take state)
+  // Go readDataDescriptor: the descriptor's CRC-32, after an optional
+  // signature, must match the directory's.
+  if e.flags & 8 != 0 {
+    let d = start + e.compressed
+    let len = core@1/bytes.len(data)
+    let at = if d + 4 <= len && le32(data, d) == DESCRIPTOR {
+      d + 4
+    } else {
+      d
+    }
+    if at + 4 > len {
+      return Error(Format(d))
+    }
+    let stored: u32 = core@1/int.truncate(le32(data, at))
+    if stored != e.crc || actual != e.crc {
+      return Error(Checksum(unique e.name))
+    }
+  } else if e.crc != 0u32 && actual != e.crc {
+    return Error(Checksum(unique e.name))
+  }
+  Ok(out)
+}
+
+// Reads `count` bytes of a file from `at`.
+fn file_bytes(dir: Dir, mut f: File of dir, at: u64, count: u64) -> Result[
+  Bytes,
+  FileError
+] {
+  core@1/file.seek(dir, mut f, at)?
+  let mut out: List[u8] = []
+  while core@1/list.len(out) < count {
+    let want = count - core@1/list.len(out)
+    if core@1/file.read(dir, mut f, mut out, want)? == 0 {
+      break
+    }
+  }
+  Ok(core@1/bytes.from_list(take out))
+}
+
+/// `entries` of a zip file of `size` bytes, reading only its last 65 KiB
+/// and its central directory.
+pub fn file_entries(dir: Dir, mut f: File of dir, size: u64) -> Result[
+  List[Entry],
+  FileZipError
+] {
+  let tail_start = if size > 66560 {
+    size - 66560
+  } else {
+    0
+  }
+  let tail = file_bytes(dir, mut f, tail_start, size - tail_start) ? Storage
+  let d = match directory_end(tail) {
+    Ok(d) => d,
+    Error(Format(n)) => return Error(Archive(Format(tail_start + n))),
+    Error(error) => return Error(Archive(error)),
+  }
+  let end = tail_start + d.end
+  let mut base = end - d.size - d.offset
+  let directory = file_bytes(dir, mut f, base + d.offset, d.size) ? Storage
+  if base > 0 {
+    let probe = file_bytes(dir, mut f, d.offset, 46) ? Storage
+    if core@1/bytes.len(probe) == 46 && le32(probe, 0) == CENTRAL {
+      base = 0
+    }
+  }
+  let mut out: List[Entry] = []
+  let mut at: u64 = 0
+  while true {
+    match directory_entry(directory, at, base) {
+      Ok(Some((e, next))) => {
+        core@1/list.push(mut out, take e)
+        at = next
+      },
+      Ok(None()) => break,
+      Error(error) => return Error(Archive(error)),
+    }
+  }
+  if core@1/list.len(out) & MAX16 != d.records & MAX16 {
+    return Error(Archive(Format(base + d.offset + at)))
+  }
+  Ok(out)
+}
+
+/// `read` of an entry of a zip file, reading only that entry: its local
+/// header, data and data descriptor.
+pub fn file_read(dir: Dir, mut f: File of dir, e: Entry, limit: u64) -> Result[
+  unique Bytes,
+  FileZipError
+] {
+  if e.size > limit {
+    return Error(Archive(TooLarge()))
+  }
+  let header = file_bytes(dir, mut f, e.offset, 30) ? Storage
+  if core@1/bytes.len(header) < 30 || le32(header, 0) != LOCAL {
+    return Error(Archive(Format(e.offset)))
+  }
+  let skip = 30 + le16(header, 26) + le16(header, 28)
+  // The local header, then the entry's data and up to a 16-byte descriptor,
+  // re-based so that `read` finds them at offset 0.
+  let region = file_bytes(dir, mut f, e.offset + skip, e.compressed + 16) ? Storage
+  let mut rebuilt: List[u8] = []
+  for byte in header {
+    core@1/list.push(mut rebuilt, byte)
+  }
+  rebuilt[26] = 0
+  rebuilt[27] = 0
+  rebuilt[28] = 0
+  rebuilt[29] = 0
+  for byte in region {
+    core@1/list.push(mut rebuilt, byte)
+  }
+  let mut shifted = unique e
+  shifted.offset = 0
+  match read(core@1/bytes.from_list(take rebuilt), shifted, limit) {
+    Ok(value) => Ok(value),
+    Error(Format(n)) => Error(Archive(Format(n + e.offset + skip - 30))),
+    Error(error) => Error(Archive(error)),
+  }
+}
+
+// A name extraction accepts, as for tar: relative, without "..", NUL or
+// backslash, and not only "." pieces; returns its components.
+fn local_parts(name: String) -> Option[unique List[String]] uses {} {
+  if name == "" || string.starts_with(name, "/") || string.contains(name, "\x00") || string.contains(
+    name,
+    "\\"
+  ) {
+    return None()
+  }
+  let mut parts: List[String] = []
+  let components = path.components(core@1/path.of(name))
+  for part in components {
+    if part == ".." {
+      return None()
+    }
+    if part != "." {
+      core@1/list.push(mut parts, unique part)
+    }
+  }
+  if core@1/list.len(parts) == 0 {
+    return None()
+  }
+  Some(take parts)
+}
+
+fn joined(parts: List[String], count: u64) -> unique String uses {} {
+  let mut builder: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    if i > 0 {
+      core@1/list.push(mut builder, 47)
+    }
+    text.append(mut builder, parts[i])
+    i += 1
+  }
+  text.finish_valid(take builder)
+}
+
+// Creates the directories `parts[0..count)` names; None refuses a symlink.
+fn directories(into: Dir, parts: List[String], count: u64) -> Result[
+  (),
+  Option[FileError]
+] {
+  let mut i: u64 = 1
+  while i <= count {
+    let p = core@1/path.of(joined(parts, i))
+    match core@1/file.metadata(into, p) {
+      Ok(meta) => match meta.kind {
+        Directory() => (),
+        Symlink() => return Error(None()),
+        _ => return Error(Some(NotDirectory())),
+      },
+      Error(NotFound()) => match core@1/file.mkdir(into, p) {
+        Ok(()) => (),
+        Error(error) => return Error(Some(error)),
+      },
+      Error(error) => return Error(Some(error)),
+    }
+    i += 1
+  }
+  Ok(())
+}
+
+// A Unix symlink, FIFO, device or socket: the creator's high byte is 3 and
+// the mode's file type is neither regular nor a directory.
+fn special(e: Entry) -> bool uses {} {
+  let kind = e.external >> 16 & 0o170000
+  e.creator >> 8 == 3 && kind != 0 && kind != 0o100000 && kind != 0o040000
+}
+
+// Extracts one entry whose data `contents` produces.
+fn place(into: Dir, e: Entry) -> Result[Option[unique List[String]], ExtractError] {
+  if special(e) {
+    return Error(Unsupported(unique e.name))
+  }
+  let parts = match local_parts(e.name) {
+    Some(parts) => parts,
+    None() => return Error(Insecure(unique e.name)),
+  }
+  let count = core@1/list.len(parts)
+  if string.ends_with(e.name, "/") {
+    match directories(into, parts, count) {
+      Ok(()) => (),
+      Error(None()) => return Error(Insecure(unique e.name)),
+      Error(Some(error)) => return Error(File(error)),
+    }
+    return Ok(None())
+  }
+  match directories(into, parts, count - 1) {
+    Ok(()) => (),
+    Error(None()) => return Error(Insecure(unique e.name)),
+    Error(Some(error)) => return Error(File(error)),
+  }
+  match core@1/file.metadata(into, core@1/path.of(joined(parts, count))) {
+    Ok(meta) => match meta.kind {
+      Symlink() => return Error(Insecure(unique e.name)),
+      _ => (),
+    },
+    Error(NotFound()) => (),
+    Error(error) => return Error(File(error)),
+  }
+  Ok(Some(take parts))
+}
+
+/// Extracts every entry of the archive in `data` into `into` and returns how
+/// many were written: directory entries (names ending in `/`) and files,
+/// creating missing parents and replacing existing files. Names are refused
+/// as for `tar.extract` (`Insecure`), as is a path through or onto an
+/// existing symlink; Unix symlink, device, FIFO and socket entries are
+/// `Unsupported`. Every entry's size counts against `limit` before it is
+/// decoded, and decoding never produces more than the size, so at most
+/// `limit` bytes are written. The first refusal stops extraction.
+pub fn extract(data: Bytes, into: Dir, limit: u64) -> Result[u64, ExtractError] {
+  let list = entries(data) ? Read
+  let mut written: u64 = 0
+  let mut count: u64 = 0
+  for e in list {
+    let parts = match place(into, e)? {
+      Some(parts) => parts,
+      None() => {
+        count += 1
+        continue
+      },
+    }
+    if e.size > limit - written {
+      return Error(Read(TooLarge()))
+    }
+    let contents = read(data, e, e.size) ? Read
+    let p = core@1/path.of(joined(parts, core@1/list.len(parts)))
+    match core@1/file.write_bytes(into, p, take contents) {
+      Ok(()) => (),
+      Error(error) => return Error(File(error)),
+    }
+    written += e.size
+    count += 1
+  }
+  Ok(count)
+}
+
+/// `extract` from a zip file of `size` bytes, holding one entry's data at a
+/// time.
+pub fn file_extract(from: Dir, mut f: File of from, size: u64, into: Dir, limit: u64) -> Result[
+  u64,
+  ExtractError
+] {
+  let list = match file_entries(from, mut f, size) {
+    Ok(list) => list,
+    Error(Archive(error)) => return Error(Read(error)),
+    Error(Storage(error)) => return Error(File(error)),
+  }
+  let mut written: u64 = 0
+  let mut count: u64 = 0
+  for e in list {
+    let parts = match place(into, e)? {
+      Some(parts) => parts,
+      None() => {
+        count += 1
+        continue
+      },
+    }
+    if e.size > limit - written {
+      return Error(Read(TooLarge()))
+    }
+    let contents = match file_read(from, mut f, e, e.size) {
+      Ok(value) => value,
+      Error(Archive(error)) => return Error(Read(error)),
+      Error(Storage(error)) => return Error(File(error)),
+    }
+    let p = core@1/path.of(joined(parts, core@1/list.len(parts)))
+    match core@1/file.write_bytes(into, p, take contents) {
+      Ok(()) => (),
+      Error(error) => return Error(File(error)),
+    }
+    written += e.size
+    count += 1
+  }
+  Ok(count)
+}
+
+pub fn writer() -> unique Writer uses {} {
+  Writer(
+    directory: [],
+    offset: 0,
+    open: false,
+    raw: false,
+    closed: false,
+    encoder: flate.encoder(Raw(), 6),
+    crc: crc32.new(),
+    size: 0,
+    start: 0
+  )
+}
+
+/// An entry to write: deflated, modified at Unix time 0, with no comment.
+pub fn entry(take name: String) -> Entry uses {} {
+  Entry(
+    name: name,
+    comment: "",
+    method: Deflate(),
+    flags: 0,
+    creator: 0,
+    external: 0,
+    modified: None(),
+    dos_time: 0,
+    crc: 0u32,
+    compressed: 0,
+    size: 0,
+    offset: 0
+  )
+}
+
+@preserves_unique(out)
+fn put16(mut out: List[u8], value: u64) -> () uses {} {
+  core@1/list.push(mut out, core@1/int.truncate(value & 255))
+  core@1/list.push(mut out, core@1/int.truncate(value >> 8 & 255))
+}
+
+@preserves_unique(out)
+fn put32(mut out: List[u8], value: u64) -> () uses {} {
+  put16(mut out, value & MAX16)
+  put16(mut out, value >> 16 & MAX16)
+}
+
+@preserves_unique(out)
+fn put64(mut out: List[u8], value: u64) -> () uses {} {
+  put32(mut out, value & MAX32)
+  put32(mut out, value >> 32)
+}
+
+@preserves_unique(out)
+fn put_text(mut out: List[u8], s: String) -> () uses {} {
+  text.append(mut out, s)
+}
+
+// Go detectUTF8: whether a name needs the UTF-8 flag.
+fn needs_utf8(s: String) -> bool uses {} {
+  for c in core@1/string.as_bytes(s) {
+    if c < 0x20 || c > 0x7d || c == 0x5c {
+      return true
+    }
+  }
+  false
+}
+
+// Howard Hinnant's civil_from_days: the UTC year, month and day of a day
+// count since 1970-01-01.
+fn civil(days: i64) -> (i64, i64, i64) uses {} {
+  let z = days + 719468
+  let era = if z >= 0 {
+    z / 146097
+  } else {
+    (z - 146096) / 146097
+  }
+  let doe = z - era * 146097
+  let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+  let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+  let mp = (5 * doy + 2) / 153
+  let day = doy - (153 * mp + 2) / 5 + 1
+  let month = if mp < 10 {
+    mp + 3
+  } else {
+    mp - 9
+  }
+  let year = yoe + era * 400 + if month <= 2 {
+    1
+  } else {
+    0
+  }
+  (year, month, day)
+}
+
+// Go timeToMsDosTime in UTC: date in the high 16 bits, time in the low.
+fn dos_of(seconds: i64) -> u64 uses {} {
+  let days = if seconds >= 0 {
+    seconds / 86400
+  } else {
+    (seconds - 86399) / 86400
+  }
+  let rest = seconds - days * 86400
+  let (year, month, day) = civil(days)
+  let date = day + (month << 5) + (year - 1980 << 9)
+  let time = rest % 60 / 2 + (rest / 60 % 60 << 5) + (rest / 3600 << 11)
+  let d: u64 = core@1/int.truncate(date & 0xffff)
+  let t: u64 = core@1/int.truncate(time & 0xffff)
+  d << 16 | t
+}
+
+// Go Writer.prepare and fileWriter.close: finishes the entry being written
+// with its data descriptor.
+@preserves_unique(out)
+fn finish_entry(mut w: Writer, mut out: List[u8]) -> () uses {} {
+  if !w.open {
+    return
+  }
+  w.open = false
+  let last = core@1/list.len(w.directory) - 1
+  if w.raw {
+    return
+  }
+  if string.ends_with(w.directory[last].name, "/") {
+    return
+  }
+  let method = w.directory[last].method
+  match method {
+    Deflate() => flate.finish(mut w.encoder, mut out),
+    _ => (),
+  }
+  let state = w.crc
+  let crc = crc32.finish(take state)
+  let compressed = w.offset + core@1/list.len(out) - w.start
+  let size = w.size
+  w.directory[last].crc = crc
+  w.directory[last].compressed = compressed
+  w.directory[last].size = size
+  put32(mut out, DESCRIPTOR)
+  put32(mut out, core@1/int.widen(crc))
+  if compressed > MAX32 || size > MAX32 {
+    put64(mut out, compressed)
+    put64(mut out, size)
+  } else {
+    put32(mut out, compressed)
+    put32(mut out, size)
+  }
+}
+
+// Go writeHeader: the local file header.
+@preserves_unique(out)
+fn local_header(mut out: List[u8], e: Entry, extra: List[u8], known: bool) -> () uses {} {
+  let big = known && (e.compressed > MAX32 || e.size > MAX32)
+  put32(mut out, LOCAL)
+  put16(
+    mut out,
+    if big {
+      45
+    } else {
+      20
+    }
+  )
+  put16(mut out, e.flags)
+  put16(mut out, method_code(e.method))
+  put16(mut out, e.dos_time & MAX16)
+  put16(mut out, e.dos_time >> 16)
+  if known {
+    put32(mut out, core@1/int.widen(e.crc))
+    if big {
+      put32(mut out, MAX32)
+      put32(mut out, MAX32)
+    } else {
+      put32(mut out, e.compressed)
+      put32(mut out, e.size)
+    }
+  } else {
+    put32(mut out, 0)
+    put32(mut out, 0)
+    put32(mut out, 0)
+  }
+  put16(mut out, string.byte_len(e.name))
+  put16(
+    mut out,
+    core@1/list.len(extra) + if big {
+      20
+    } else {
+      0
+    }
+  )
+  put_text(mut out, e.name)
+  for byte in extra {
+    core@1/list.push(mut out, byte)
+  }
+  if big {
+    put16(mut out, 1)
+    put16(mut out, 16)
+    put64(mut out, e.size)
+    put64(mut out, e.compressed)
+  }
+}
+
+// Go CreateHeader's flags, version and MS-DOS time.
+fn prepared(h: Entry) -> Entry uses {} {
+  let mut e = unique h
+  if needs_utf8(e.name) || needs_utf8(e.comment) {
+    e.flags = e.flags | 0x800
+  }
+  e.creator = e.creator & 0xff00 | 20
+  if let Some(seconds) = e.modified {
+    e.dos_time = dos_of(seconds)
+  }
+  e
+}
+
+// The extended timestamp extra field Go writes for a modification time.
+fn time_extra(modified: Option[i64]) -> unique List[u8] uses {} {
+  let mut extra: List[u8] = []
+  if let Some(seconds) = modified {
+    put16(mut extra, 0x5455)
+    put16(mut extra, 5)
+    core@1/list.push(mut extra, 1)
+    put32(mut extra, core@1/int.truncate(seconds & 0xffffffff))
+  }
+  take extra
+}
+
+/// Go Writer.CreateHeader: finishes the previous entry and starts `h`, whose
+/// data follows through `write`, compressed at `level` when `h.method` is
+/// `Deflate`; a name ending in `/` is a stored directory with no data. The
+/// CRC-32 and sizes follow the data in a data descriptor (flag 8). Other
+/// methods are `Field`.
+@preserves_unique(out)
+pub fn create(mut w: Writer, h: Entry, level: u64, mut out: List[u8]) -> Result[
+  (),
+  WriteError
+] uses {} {
+  if w.closed {
+    return Error(Closed())
+  }
+  finish_entry(mut w, mut out)
+  match h.method {
+    Other(_) => return Error(Field()),
+    _ => (),
+  }
+  if string.byte_len(h.name) > MAX16 || string.byte_len(h.comment) > MAX16 {
+    return Error(Field())
+  }
+  let mut e = prepared(h)
+  let extra = time_extra(e.modified)
+  e.offset = w.offset + core@1/list.len(out)
+  e.crc = 0u32
+  e.compressed = 0
+  e.size = 0
+  if string.ends_with(e.name, "/") {
+    e.method = Stored()
+    e.flags = e.flags & 0xfff7
+  } else {
+    e.flags = e.flags | 8
+  }
+  local_header(mut out, e, extra, false)
+  w.start = w.offset + core@1/list.len(out)
+  w.size = 0
+  w.crc = crc32.new()
+  w.raw = false
+  w.open = true
+  if e.method == Deflate() {
+    w.encoder = flate.encoder(Raw(), level)
+  }
+  core@1/list.push(mut w.directory, take e)
+  Ok(())
+}
+
+/// Go Writer.CreateRaw: starts `h` with its CRC-32 and sizes as given, its
+/// data written through `write` as already compressed, with no data
+/// descriptor; sizes of 4 GiB or more get a ZIP64 extra field.
+@preserves_unique(out)
+pub fn create_raw(mut w: Writer, h: Entry, mut out: List[u8]) -> Result[(), WriteError] uses {} {
+  if w.closed {
+    return Error(Closed())
+  }
+  finish_entry(mut w, mut out)
+  if string.byte_len(h.name) > MAX16 || string.byte_len(h.comment) > MAX16 {
+    return Error(Field())
+  }
+  let mut e = prepared(h)
+  let extra = time_extra(e.modified)
+  e.offset = w.offset + core@1/list.len(out)
+  e.flags = e.flags & 0xfff7
+  local_header(mut out, e, extra, true)
+  w.raw = true
+  w.open = true
+  core@1/list.push(mut w.directory, take e)
+  Ok(())
+}
+
+/// Appends data to the entry being written.
+@preserves_unique(out)
+pub fn write(mut w: Writer, data: Bytes, mut out: List[u8]) -> Result[(), WriteError] uses {} {
+  if w.closed {
+    return Error(Closed())
+  }
+  if !w.open {
+    return Error(Directory())
+  }
+  let last = core@1/list.len(w.directory) - 1
+  let e = w.directory[last]
+  if w.raw {
+    for byte in data {
+      core@1/list.push(mut out, byte)
+    }
+    return Ok(())
+  }
+  if string.ends_with(e.name, "/") {
+    if core@1/bytes.len(data) > 0 {
+      return Error(Directory())
+    }
+    return Ok(())
+  }
+  crc32.update(mut w.crc, data)
+  w.size += core@1/bytes.len(data)
+  match e.method {
+    Deflate() => flate.encode(mut w.encoder, data, mut out),
+    _ => {
+      for byte in data {
+        core@1/list.push(mut out, byte)
+      }
+    },
+  }
+  Ok(())
+}
+
+/// Go Writer.Close: finishes the last entry and appends the central
+/// directory, ZIP64 end records when an entry, the record count, the
+/// directory's size or its offset needs them, and the end record with
+/// `comment`. `offset` counts `out`'s bytes from the start of the archive,
+/// so a writer that drains `out` between calls reports it with `flushed`.
+@preserves_unique(out)
+pub fn close(mut w: Writer, comment: String, mut out: List[u8]) -> Result[
+  (),
+  WriteError
+] uses {} {
+  if w.closed {
+    return Error(Closed())
+  }
+  if string.byte_len(comment) > MAX16 {
+    return Error(Field())
+  }
+  finish_entry(mut w, mut out)
+  w.closed = true
+  let start = w.offset + core@1/list.len(out)
+  let mut zip64 = false
+  for e in w.directory {
+    let mut extra = time_extra(e.modified)
+    let mut version: u64 = 20
+    if e.compressed >= MAX32 || e.size >= MAX32 || e.offset >= MAX32 {
+      zip64 = true
+      version = 45
+      let mut field: u64 = 0
+      if e.size >= MAX32 {
+        field += 8
+      }
+      if e.compressed >= MAX32 {
+        field += 8
+      }
+      if e.offset >= MAX32 {
+        field += 8
+      }
+      put16(mut extra, 1)
+      put16(mut extra, field)
+      if e.size >= MAX32 {
+        put64(mut extra, e.size)
+      }
+      if e.compressed >= MAX32 {
+        put64(mut extra, e.compressed)
+      }
+      if e.offset >= MAX32 {
+        put64(mut extra, e.offset)
+      }
+    }
+    put32(mut out, CENTRAL)
+    put16(mut out, e.creator)
+    put16(mut out, version)
+    put16(mut out, e.flags)
+    put16(mut out, method_code(e.method))
+    put16(mut out, e.dos_time & MAX16)
+    put16(mut out, e.dos_time >> 16)
+    put32(mut out, core@1/int.widen(e.crc))
+    put32(
+      mut out,
+      if e.compressed < MAX32 {
+        e.compressed
+      } else {
+        MAX32
+      }
+    )
+    put32(
+      mut out,
+      if e.size < MAX32 {
+        e.size
+      } else {
+        MAX32
+      }
+    )
+    put16(mut out, string.byte_len(e.name))
+    put16(mut out, core@1/list.len(extra))
+    put16(mut out, string.byte_len(e.comment))
+    put32(mut out, 0)
+    put32(mut out, e.external)
+    put32(
+      mut out,
+      if e.offset < MAX32 {
+        e.offset
+      } else {
+        MAX32
+      }
+    )
+    put_text(mut out, e.name)
+    for byte in extra {
+      core@1/list.push(mut out, byte)
+    }
+    put_text(mut out, e.comment)
+  }
+  let end = w.offset + core@1/list.len(out)
+  let records = core@1/list.len(w.directory)
+  let size = end - start
+  if zip64 || records >= MAX16 || size >= MAX32 || start >= MAX32 {
+    put32(mut out, END64)
+    put64(mut out, 44)
+    put16(mut out, 45)
+    put16(mut out, 45)
+    put32(mut out, 0)
+    put32(mut out, 0)
+    put64(mut out, records)
+    put64(mut out, records)
+    put64(mut out, size)
+    put64(mut out, start)
+    put32(mut out, LOCATOR)
+    put32(mut out, 0)
+    put64(mut out, end)
+    put32(mut out, 1)
+  }
+  put32(mut out, END)
+  put32(mut out, 0)
+  let capped = if records < MAX16 {
+    records
+  } else {
+    MAX16
+  }
+  put16(mut out, capped)
+  put16(mut out, capped)
+  put32(
+    mut out,
+    if size < MAX32 {
+      size
+    } else {
+      MAX32
+    }
+  )
+  put32(
+    mut out,
+    if start < MAX32 {
+      start
+    } else {
+      MAX32
+    }
+  )
+  put16(mut out, string.byte_len(comment))
+  put_text(mut out, comment)
+  Ok(())
+}
+
+/// Records that the caller drained `count` bytes of output, keeping the
+/// offsets of later entries and the directory right.
+pub fn flushed(mut w: Writer, count: u64) -> () uses {} {
+  w.offset += count
+}
