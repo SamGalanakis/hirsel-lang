@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1333 exported definitions; 467 variants.
+1341 exported definitions; 489 variants.
 
 ## Types and roots
 
@@ -6922,6 +6922,224 @@ References: [`core@1/OutputError`](#def-core_401_2fOutputError), [`core@1/Result
 - `@noalloc pub fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool`
 
 References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/bool`](#def-core_401_2fbool)
+
+
+## markdown
+
+<a id="def-std_401_2fmarkdown_2fKind"></a>
+
+- `pub type markdown.Kind = Document | Paragraph | Heading(u64) | BlockQuote | ListBlock( bool, u64, bool ) | Item(Option[bool]) | CodeBlock(String, String) | HtmlBlock(String) | ThematicBreak | Text( String ) | SoftBreak | HardBreak | Code(String) | HtmlInline(String) | Emphasis | Strong | Link( String, String ) | Image(String, String) | Strikethrough | Table | TableRow(bool) | TableCell(u8)`
+
+Block and inline payloads. Table alignment: 0 none, 1 left, 2 center, 3 right.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fmarkdown_2fKind_23BlockQuote"></a>
+
+- `BlockQuote -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23Code"></a>
+
+- `Code(String) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmarkdown_2fKind_23CodeBlock"></a>
+
+- `CodeBlock(String, String) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmarkdown_2fKind_23Document"></a>
+
+- `Document -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23Emphasis"></a>
+
+- `Emphasis -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23HardBreak"></a>
+
+- `HardBreak -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23Heading"></a>
+
+- `Heading(u64) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmarkdown_2fKind_23HtmlBlock"></a>
+
+- `HtmlBlock(String) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmarkdown_2fKind_23HtmlInline"></a>
+
+- `HtmlInline(String) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmarkdown_2fKind_23Image"></a>
+
+- `Image(String, String) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmarkdown_2fKind_23Item"></a>
+
+- `Item(Option[bool]) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fmarkdown_2fKind_23Link"></a>
+
+- `Link( String, String ) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmarkdown_2fKind_23ListBlock"></a>
+
+- `ListBlock( bool, u64, bool ) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fmarkdown_2fKind_23Paragraph"></a>
+
+- `Paragraph -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23SoftBreak"></a>
+
+- `SoftBreak -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23Strikethrough"></a>
+
+- `Strikethrough -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23Strong"></a>
+
+- `Strong -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23Table"></a>
+
+- `Table -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fKind_23TableCell"></a>
+
+- `TableCell(u8) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fmarkdown_2fKind_23TableRow"></a>
+
+- `TableRow(bool) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fmarkdown_2fKind_23Text"></a>
+
+- `Text( String ) -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fmarkdown_2fKind_23ThematicBreak"></a>
+
+- `ThematicBreak -> markdown.Kind`
+
+Variant of markdown.Kind.
+
+<a id="def-std_401_2fmarkdown_2fNode"></a>
+
+- `pub type markdown.Node { kind: Kind, children: List[Node], }`
+
+An owned, editable tree. HTML rendering depends only on this AST.
+
+References: [`core@1/List`](#def-core_401_2fList), [`std@1/markdown/Kind`](#def-std_401_2fmarkdown_2fKind)
+
+<a id="def-std_401_2fmarkdown_2fOptions"></a>
+
+- `pub type markdown.Options { tables: bool, strikethrough: bool, autolinks: bool, task_lists: bool, }`
+
+Extensions are opt-in; default_options implements CommonMark 0.31.2.
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fmarkdown_2fdefault_5foptions"></a>
+
+- `pub fn markdown.default_options() -> Options uses {}`
+
+References: [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
+
+<a id="def-std_401_2fmarkdown_2fgfm_5foptions"></a>
+
+- `pub fn markdown.gfm_options() -> Options uses {}`
+
+References: [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
+
+<a id="def-std_401_2fmarkdown_2fparse"></a>
+
+- `pub fn markdown.parse(take source: String, options: Options) -> Node uses {}`
+
+Parse every String, including incomplete Markdown. NUL becomes U+FFFD;
+CRLF and bare CR become LF, as required by CommonMark preprocessing.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
+
+<a id="def-std_401_2fmarkdown_2frender_5fhtml"></a>
+
+- `pub fn markdown.render_html(document: Node) -> String uses {}`
+
+CommonMark HTML. Raw HTML nodes are emitted verbatim.
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Node`](#def-std_401_2fmarkdown_2fNode)
+
+<a id="def-std_401_2fmarkdown_2fto_5fhtml"></a>
+
+- `pub fn markdown.to_html(take source: String, options: Options) -> String uses {}`
+
+References: [`core@1/String`](#def-core_401_2fString), [`std@1/markdown/Options`](#def-std_401_2fmarkdown_2fOptions)
 
 
 ## md5
