@@ -1404,6 +1404,7 @@ conformance/LANG/LANG-13-native-strpat-minimal-run.hir
 conformance/LANG/LANG-13-native-strpat-strings-run.hir
 conformance/LANG/LANG-13-nested-match-on-binding-run.hir
 conformance/LANG/LANG-13-nested-ok-none-error-paths-run.hir
+conformance/LANG/LANG-13-nested-single-variant-pattern-run.hir
 conformance/LANG/LANG-13-nested-variant-payload-drop-run.hir
 conformance/LANG/LANG-13-or-choices-bad.hir
 conformance/LANG/LANG-13-or-choices-ok.hir
@@ -1436,6 +1437,13 @@ conformance/LANG/LANG-13-range-half-open-ok.hir
 conformance/LANG/LANG-13-range-pattern-run.hir
 conformance/LANG/LANG-13-range-type-bad.hir
 conformance/LANG/LANG-13-range-type-ok.hir
+conformance/LANG/LANG-13-recursive-list-member-pattern-run.hir
+conformance/LANG/LANG-13-recursive-list-pattern-run.hir
+conformance/LANG/LANG-13-recursive-loop-return-run.hir
+conformance/LANG/LANG-13-recursive-map-member-pattern-run.hir
+conformance/LANG/LANG-13-recursive-map-pattern-run.hir
+conformance/LANG/LANG-13-recursive-member-loop-return-run.hir
+conformance/LANG/LANG-13-recursive-tuple-match-run.hir
 conformance/LANG/LANG-13-refutable-let-bad.hir
 conformance/LANG/LANG-13-refutable-let-ok.hir
 conformance/LANG/LANG-13-tour-patterns-run.hir

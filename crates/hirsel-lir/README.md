@@ -326,6 +326,11 @@ inline index names an independently guarded part. C proves each incoming bit
 against its own absence masks, invalidates stale flags on overlapping writes,
 and refines only that part on a branch. An inactive variant's fields are absent;
 actual transfers remain separate so tag and sibling reads stay checked.
+An initialized variant alone does not prove a payload present: every incoming
+path must observe its tag or successfully prepare that variant's address before
+passing a constant payload flag. Joining an observed path with an unobserved one
+retains unknown presence. A true validated payload flag preserves that evidence
+when a later edge passes a constant true flag.
 
 `FinalizeBegin` and `FinalizeEnd` belong only to Ready. Rc and Reuse bodies are
 rejected with `FinalizationStage`, regardless of marker placement. Thus input

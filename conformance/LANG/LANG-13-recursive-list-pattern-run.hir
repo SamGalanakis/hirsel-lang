@@ -1,0 +1,24 @@
+// rule: LANG-13
+// expect: run
+type V = I(i64) | L(List[V]) | T(Map[String, V])
+
+fn table_size(fields: Map[String, V]) -> u64 {
+  map.len(fields)
+}
+
+fn count(items: List[V]) -> u64 {
+  let mut n = 0u64
+  for e in items {
+    if let T(m) = e {
+      n += table_size(m)
+    }
+  }
+  n
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut m: Map[String, V] = map.empty()
+  map.insert(mut m, unique "a", I(1))
+  failure.check(count([I(0), T(m), T(map.empty())]) == 1, TextInvariant())
+  Ok(())
+}

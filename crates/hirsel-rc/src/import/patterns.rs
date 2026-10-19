@@ -6,6 +6,23 @@ impl Importer<'_, '_> {
     /// so the last is entered without a test.
     pub(super) fn match_from(&mut self, table: tir::MatchTableId, from: u32) -> R<()> {
         let m = &self.body.matches[table.0 as usize];
+        // Product patterns short-circuit. Record their variant presence before
+        // any arm commits a transfer, including the components an earlier
+        // component's mismatch would otherwise leave unobserved. Cleanup's
+        // field flags then distinguish an inactive payload from an intact one.
+        if from == 0
+            && m.patterns.iter().any(|p| match &p.kind {
+                tir::MatchPatternKind::Tuple(_) | tir::MatchPatternKind::Record { .. } => true,
+                tir::MatchPatternKind::Variant { fields, .. } => {
+                    fields.iter().any(|(_, sub)| !irrefutable(m, *sub))
+                }
+                _ => false,
+            })
+        {
+            for arm in &m.arms {
+                self.observe_variants(m, arm.pattern)?;
+            }
+        }
         let arms = &m.arms[from as usize..];
         let Some((last, tested)) = arms.split_last() else {
             return malformed("a match continuation with no arms");
@@ -48,6 +65,59 @@ impl Importer<'_, '_> {
         }
         let e = self.enter(last.guard.unwrap_or(last.target));
         self.terminate(Terminator::Jump(e));
+        Ok(())
+    }
+
+    /// Observe nested tags only beneath the enclosing variant that holds them.
+    /// These non-consuming switches seed the ordinary initialization masks;
+    /// pattern selection and guard evaluation retain their original order.
+    fn observe_variants(&mut self, m: &tir::MatchTable, id: tir::MatchPatternId) -> R<()> {
+        use tir::MatchPatternKind as P;
+        let pattern = &m.patterns[id.0 as usize];
+        match &pattern.kind {
+            P::Tuple(fields) | P::Record { fields, .. } => {
+                for (_, sub) in fields {
+                    self.observe_variants(m, *sub)?;
+                }
+            }
+            P::Variant {
+                variant, fields, ..
+            } => {
+                let p = self.place(pattern.place)?;
+                if let Some(known) = self.proven_variant(&p) {
+                    if known == *variant {
+                        for (_, sub) in fields {
+                            self.observe_variants(m, *sub)?;
+                        }
+                    }
+                    return Ok(());
+                }
+                if let Some(tag) = &self.record(p.ty).tag
+                    && tag.variants.len() == 1
+                    && tag.variants[0].ordinal == *variant
+                {
+                    // No other tag can reach a mismatch block. Still emit the
+                    // observation so cleanup sees the selected payload.
+                    self.tag(pattern.place, *variant, self.current)?;
+                    for (_, sub) in fields {
+                        self.observe_variants(m, *sub)?;
+                    }
+                    return Ok(());
+                }
+                let facts = self.facts.clone();
+                let miss = self.block(BlockKind::Body);
+                let joined = self.block(BlockKind::Body);
+                self.tag(pattern.place, *variant, miss)?;
+                for (_, sub) in fields {
+                    self.observe_variants(m, *sub)?;
+                }
+                self.goto(joined);
+                self.current = miss;
+                self.goto(joined);
+                self.facts = facts;
+            }
+            _ => {}
+        }
         Ok(())
     }
 

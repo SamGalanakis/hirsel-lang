@@ -14,6 +14,99 @@ enum Mutation {
     UnguardedRead,
 }
 
+/// An untouched variant is initialized, but its payload is not necessarily
+/// active. A payload flag needs a tag observation on every incoming path.
+enum TagObservation {
+    EveryPath,
+    NoPath,
+    SomePaths,
+}
+
+fn variant_flag(observation: TagObservation) -> Vec<K> {
+    let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::OPT)], None);
+    let slot = t.slot(l::OPT, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    let whole = t.at(ENTRY, slot, &[], &[]);
+    let flag = t.flag(slot);
+    let path = [ProjectionStep::VariantField {
+        variant: 1,
+        field: 0,
+    }];
+    t.builder.unit.tables.init_flags.last_mut().unwrap().path =
+        PoolRange::push(&mut t.builder.unit.pools.projections, path);
+    let joined = t.builder.block(BlockKind::Body, &[flag]);
+    if !matches!(observation, TagObservation::NoPath) {
+        let none = t.builder.block(BlockKind::Body, &[]);
+        let some = t.builder.block(BlockKind::Body, &[]);
+        let probe = if matches!(observation, TagObservation::SomePaths) {
+            let probe = t.builder.block(BlockKind::Body, &[]);
+            t.branch(ENTRY, (probe, &[]), (some, &[]));
+            probe
+        } else {
+            ENTRY
+        };
+        let tag = t.read(probe, whole, version, ReadMode::Borrow, None);
+        let invalid = t.builder.block(BlockKind::Body, &[]);
+        t.builder.term(invalid, Terminator::Unreachable);
+        let no = t.bool_const(none, false);
+        let yes = t.bool_const(some, true);
+        t.builder.jump(none, joined, &[no]);
+        t.builder.jump(some, joined, &[yes]);
+        let arms = [
+            SwitchArm {
+                value: 0,
+                edge: t.builder.edge(none, &[]),
+            },
+            SwitchArm {
+                value: 1,
+                edge: t.builder.edge(some, &[]),
+            },
+        ];
+        let arms = PoolRange::push(&mut t.builder.unit.pools.switch_arms, arms);
+        let otherwise = t.builder.edge(invalid, &[]);
+        t.builder.term(
+            probe,
+            Terminator::Switch {
+                value: tag,
+                arms,
+                otherwise,
+            },
+        );
+    } else {
+        let yes = t.bool_const(ENTRY, true);
+        t.builder.jump(ENTRY, joined, &[yes]);
+    }
+    let full = t.builder.block(BlockKind::Body, &[]);
+    let done = t.builder.block(BlockKind::Body, &[]);
+    t.branch_on(joined, flag, (full, &[]), (done, &[]));
+    // Presence proved by a true flag survives forwarding before any address
+    // preparation could independently re-establish the active variant.
+    let forwarded = t.flag(slot);
+    t.builder.unit.tables.init_flags.last_mut().unwrap().path =
+        PoolRange::push(&mut t.builder.unit.pools.projections, path);
+    let present = t.builder.block(BlockKind::Body, &[forwarded]);
+    let yes = t.bool_const(full, true);
+    t.builder.jump(full, present, &[yes]);
+    let field = t.at(present, slot, &path, &[]);
+    t.read(present, field, version, ReadMode::Bits, None);
+    t.builder.jump(present, done, &[]);
+    t.builder.ret(done, None);
+    t.check()
+}
+
+#[test]
+fn a_variant_payload_flag_requires_observed_presence() {
+    assert_eq!(variant_flag(TagObservation::EveryPath), []);
+    for observation in [TagObservation::NoPath, TagObservation::SomePaths] {
+        let violations = variant_flag(observation);
+        assert!(
+            violations.iter().any(|v| matches!(v, K::InitFlag { .. })),
+            "{violations:?}"
+        );
+    }
+}
+
 fn field_flag(mutation: Mutation) -> Vec<K> {
     let mut t = Lir::<Ready>::new(&[(Passing::Take, l::PAY)], None);
     let value = t.plain(l::PAY);

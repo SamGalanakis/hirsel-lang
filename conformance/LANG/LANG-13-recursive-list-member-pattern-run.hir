@@ -1,0 +1,29 @@
+// rule: LANG-13
+// expect: run
+type V = I(i64) | T(Map[String, V])
+
+type Values = Items(List[V]) | Empty
+
+fn table_size(fields: Map[String, V]) -> u64 {
+  map.len(fields)
+}
+
+fn count(value: Values) -> u64 {
+  let mut n = 0u64
+  if let Items(items) = value {
+    for e in items {
+      if let T(m) = e {
+        n += table_size(m)
+      }
+    }
+  }
+  n
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut m: Map[String, V] = map.empty()
+  map.insert(mut m, unique "a", I(1))
+  failure.check(count(Items([I(0), T(m), T(map.empty())])) == 1, TextInvariant())
+  failure.check(count(Empty()) == 0, TextInvariant())
+  Ok(())
+}

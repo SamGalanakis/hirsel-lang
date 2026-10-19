@@ -212,20 +212,28 @@ fn part_content(s: &SlotState, path: &[Step]) -> Tri {
             }
         }
     }
+    // A live variant is not evidence that a particular payload is active.
+    // Switches and successful variant preparations explicitly record every
+    // selected field, including Tri::No for an intact active field.
+    for (n, step) in path.iter().enumerate() {
+        if matches!(step, Step::Variant(_, _)) && !s.moved.contains_key(&path[..=n]) {
+            state = Tri::Maybe;
+        }
+    }
     state
 }
 
 /// A part's state in one side's moved or taken rows: a part under a part
 /// moved out on that side is absent there too, so a join keeps a part
 /// absent on every path where some enclosing part is.
-fn absence(rows: &BTreeMap<Vec<Step>, Tri>, path: &[Step]) -> Tri {
+fn absence(rows: &BTreeMap<Vec<Step>, Tri>, path: &[Step], unknown: Tri) -> Tri {
     if rows
         .iter()
         .any(|(prefix, &t)| t == Tri::Yes && path.starts_with(prefix))
     {
         return Tri::Yes;
     }
-    rows.get(path).copied().unwrap_or(Tri::No)
+    rows.get(path).copied().unwrap_or(unknown)
 }
 
 fn join_slot(x: &mut SlotState, y: &SlotState) {
@@ -241,7 +249,12 @@ fn join_slot(x: &mut SlotState, y: &SlotState) {
             let keys: BTreeSet<_> = x.moved.keys().chain(y.moved.keys()).cloned().collect();
             let (l, r) = (x.moved.clone(), y.moved.clone());
             for key in keys {
-                let joined = absence(&l, &key).join(absence(&r, &key));
+                let unknown = if matches!(key.last(), Some(Step::Variant(_, _))) {
+                    Tri::Maybe
+                } else {
+                    Tri::No
+                };
+                let joined = absence(&l, &key, unknown).join(absence(&r, &key, unknown));
                 x.moved.insert(key, joined);
             }
         }
@@ -251,7 +264,7 @@ fn join_slot(x: &mut SlotState, y: &SlotState) {
             let keys: BTreeSet<_> = x.taken.keys().chain(y.taken.keys()).cloned().collect();
             let (l, r) = (x.taken.clone(), y.taken.clone());
             for key in keys {
-                let joined = absence(&l, &key).join(absence(&r, &key));
+                let joined = absence(&l, &key, Tri::No).join(absence(&r, &key, Tri::No));
                 x.taken.insert(key, joined);
             }
         }
@@ -805,6 +818,13 @@ impl<S: Stage> Walker<'_, '_, S> {
                     if !path.is_empty() {
                         s.moved.retain(|p, _| !path.starts_with(p));
                         s.taken.retain(|p, _| !path.starts_with(p));
+                        // A true payload flag proves its enclosing variants
+                        // active, even before an address is prepared.
+                        for (n, step) in path.iter().enumerate() {
+                            if matches!(step, Step::Variant(_, _)) {
+                                s.moved.insert(path[..=n].to_vec(), Tri::No);
+                            }
+                        }
                     }
                 } else if path.is_empty() {
                     s.init = Tri::No;

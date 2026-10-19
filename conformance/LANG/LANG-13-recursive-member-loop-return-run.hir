@@ -1,0 +1,30 @@
+// rule: LANG-13
+// expect: run
+type V = I(i64) | T(Map[String, V])
+
+type Values = Items(List[V]) | Empty
+
+fn all_tables(value: Values) -> bool {
+  if let Items(items) = value {
+    for e in items {
+      if let T(m) = e {
+        if map.len(m) > 0 {
+          return false
+        }
+      } else {
+        return false
+      }
+    }
+  }
+  true
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(all_tables(Items([T(map.empty()), T(map.empty())])), TextInvariant())
+  failure.check(!all_tables(Items([T(map.empty()), I(1)])), TextInvariant())
+  let mut m: Map[String, V] = map.empty()
+  map.insert(mut m, unique "a", I(1))
+  failure.check(!all_tables(Items([T(m)])), TextInvariant())
+  failure.check(all_tables(Empty()), TextInvariant())
+  Ok(())
+}

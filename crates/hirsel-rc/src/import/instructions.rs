@@ -167,18 +167,38 @@ impl Importer<'_, '_> {
         }
     }
 
-    pub(super) fn on_view(&self, kind: &tir::InstructionKind) -> bool {
+    pub(super) fn on_view(&mut self, kind: &tir::InstructionKind) -> R<bool> {
         use tir::InstructionKind as K;
         let view = |p: &tir::PlaceId| {
             let place = &self.body.places[p.0 as usize];
             place.projection.is_empty() && self.aliases[place.root.0 as usize].is_some()
         };
-        match kind {
+        Ok(match kind {
             K::StorageLive(local) => self.aliases[local.0 as usize].is_some(),
             K::StorageDead { place, .. } | K::Drop { place, .. } => view(place),
-            K::Assign { destination, .. } => view(destination),
+            K::Assign { destination, value } if view(destination) => {
+                let tir::Rvalue::Use(o) = &self.body.rvalues[value.0 as usize] else {
+                    return malformed("a view assigned other than a borrowed use");
+                };
+                // Keep computed-parent checks at the binding, even if the
+                // view is unused or a later child projection fails first.
+                if self.body.places[o.place.0 as usize]
+                    .projection
+                    .iter()
+                    .any(|p| {
+                        matches!(
+                            p,
+                            tir::Projection::Index(_) | tir::Projection::VariantField { .. }
+                        )
+                    })
+                {
+                    let p = self.place(o.place)?;
+                    self.address(&p)?;
+                }
+                true
+            }
             _ => false,
-        }
+        })
     }
 
     pub(super) fn instruction(&mut self, kind: &tir::InstructionKind) -> R<()> {
@@ -224,7 +244,7 @@ impl Importer<'_, '_> {
             }
             _ => {}
         }
-        if self.on_view(kind) {
+        if self.on_view(kind)? {
             return Ok(());
         }
         if self.on_joined(kind)? {

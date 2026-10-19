@@ -51,7 +51,7 @@ use hirsel_lir::ir::{
 use hirsel_lir::layout_types::{CopyRecipe, LayoutId, LayoutKind, LayoutTable};
 use hirsel_lir::stage::{Ready, Stage, StageKind};
 use hirsel_syntax::{ContentHash, DefPath};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The drop body of one resource layout: its instance and `FnAbi`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -152,7 +152,106 @@ pub fn lower<S: Stage>(
         join_read_versions(&mut ed, &mut facts, lay)?;
         retie_versions(&mut ed, &facts, lay);
     }
-    Ok(ed.finish())
+    let mut unit = ed.finish();
+    prune_unused_flags(&mut unit);
+    Ok(unit)
+}
+
+/// Whole-value releases can make a semantic drop's field flags unnecessary.
+/// Keep flags read by code or forwarded to a flag it reads, including cycles.
+/// Unused metadata must not assert an unobserved payload's presence on an edge.
+fn prune_unused_flags(unit: &mut LirUnit<Ready>) {
+    let flags: BTreeSet<ValueId> = unit.tables.init_flags.iter().map(|f| f.value).collect();
+    if flags.is_empty() {
+        return;
+    }
+    let mut used: BTreeSet<ValueId> = unit
+        .instructions
+        .iter()
+        .flat_map(|i| crate::liveness::inst_uses(unit, i))
+        .chain(
+            unit.terminators
+                .iter()
+                .flat_map(|t| crate::liveness::terminator_uses(unit, t)),
+        )
+        .chain(unit.parameters.iter().copied())
+        .chain(unit.captures.iter().copied())
+        .chain(unit.tables.failures.iter().flat_map(|f| {
+            f.dispose
+                .get(&unit.pools.values)
+                .unwrap_or(&[])
+                .iter()
+                .copied()
+        }))
+        .filter(|v| flags.contains(v))
+        .collect();
+    let mut inputs: BTreeMap<ValueId, Vec<ValueId>> = BTreeMap::new();
+    for edge in &unit.tables.edges {
+        let params = unit.blocks[edge.target.index()]
+            .parameters
+            .get(&unit.pools.values)
+            .unwrap_or(&[]);
+        let args = edge.arguments.get(&unit.pools.values).unwrap_or(&[]);
+        for (&param, &arg) in params.iter().zip(args) {
+            if flags.contains(&arg) {
+                if flags.contains(&param) {
+                    inputs.entry(param).or_default().push(arg);
+                } else {
+                    used.insert(arg);
+                }
+            }
+        }
+    }
+    let mut pending: Vec<ValueId> = used.iter().copied().collect();
+    while let Some(flag) = pending.pop() {
+        for &arg in inputs.get(&flag).into_iter().flatten() {
+            if used.insert(arg) {
+                pending.push(arg);
+            }
+        }
+    }
+    let removed: BTreeSet<ValueId> = flags.difference(&used).copied().collect();
+    if removed.is_empty() {
+        return;
+    }
+    let keep: Vec<Vec<bool>> = unit
+        .blocks
+        .iter()
+        .map(|b| {
+            b.parameters
+                .get(&unit.pools.values)
+                .unwrap_or(&[])
+                .iter()
+                .map(|v| !removed.contains(v))
+                .collect()
+        })
+        .collect();
+    for edge in &mut unit.tables.edges {
+        let args: Vec<ValueId> = edge
+            .arguments
+            .get(&unit.pools.values)
+            .unwrap_or(&[])
+            .iter()
+            .zip(&keep[edge.target.index()])
+            .filter_map(|(&v, &keep)| keep.then_some(v))
+            .collect();
+        edge.arguments = PoolRange::push(&mut unit.pools.values, args);
+    }
+    for (block, keep) in unit.blocks.iter_mut().zip(keep) {
+        let params: Vec<ValueId> = block
+            .parameters
+            .get(&unit.pools.values)
+            .unwrap_or(&[])
+            .iter()
+            .zip(keep)
+            .filter_map(|(&v, keep)| keep.then_some(v))
+            .collect();
+        block.parameters = PoolRange::push(&mut unit.pools.values, params);
+    }
+    unit.tables
+        .init_flags
+        .retain(|f| !removed.contains(&f.value));
+    crate::insert::compact_values(unit);
 }
 
 /// A completed inline finalization may retain plain bytes and their version.

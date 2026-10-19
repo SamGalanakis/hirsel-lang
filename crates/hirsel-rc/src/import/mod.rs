@@ -1196,9 +1196,10 @@ fn node_anchors(body: &tir::Body) -> Vec<(u32, u32)> {
 }
 
 /// Temporaries that only ever hold a view: assigned once by a borrowed use of
-/// a place under a loan (`_1 = use(Borrow _0@L0)`), never written, moved or
-/// lent mutably afterwards. Their reads go to the viewed place itself. A
-/// variant part is a pattern binding, read after its match tested the tag;
+/// a place under a direct or inherited loan (`_1 = use(Borrow _0@L0)`),
+/// never written, moved or lent mutably afterwards. Their reads go to the
+/// viewed place itself. A variant part is a pattern binding, read after its
+/// match tested the tag;
 /// the loan keeps the root's variant, so each later read's tag check holds
 /// as the first did (`let Obj(fields) = v else ..`, then a `match` on a key
 /// of `for (key, _) in fields`). An element (`_7 = use(Borrow _0[_5]@L0)`, a loop's
@@ -1218,7 +1219,10 @@ fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
     let mut out: Vec<Option<tir::PlaceId>> = (0..n)
         .map(|l| match single(l) {
             Some(ViewSource::Loaned(viewed)) => Some(viewed),
-            Some(ViewSource::Indexed(viewed, at)) if index_stable(body, l, viewed, at) => {
+            Some(ViewSource::Indexed(viewed, at))
+                if body.places[viewed.0 as usize].loan.is_some()
+                    && index_stable(body, l, viewed, at) =>
+            {
                 Some(viewed)
             }
             _ => None,
@@ -1229,8 +1233,16 @@ fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
     loop {
         let mut changed = false;
         for l in 0..n {
-            if let (None, Some(ViewSource::Nested(viewed))) = (out[l], single(l))
-                && out[body.places[viewed.0 as usize].root.0 as usize].is_some()
+            if out[l].is_some() {
+                continue;
+            }
+            let (viewed, indexed) = match single(l) {
+                Some(ViewSource::Nested(viewed)) => (viewed, None),
+                Some(ViewSource::Indexed(viewed, at)) => (viewed, Some(at)),
+                _ => continue,
+            };
+            if out[body.places[viewed.0 as usize].root.0 as usize].is_some()
+                && indexed.is_none_or(|at| index_stable(body, l, viewed, at))
             {
                 out[l] = Some(viewed);
                 changed = true;
@@ -1518,7 +1530,7 @@ enum ViewSource {
     /// A loanless part of another local, with no index: a view only while
     /// that local is one.
     Nested(tir::PlaceId),
-    /// An element of a place under its own loan, assigned at `(block,
+    /// An element under a direct or inherited loan, assigned at `(block,
     /// instruction)`: a view only while its index stays put.
     Indexed(tir::PlaceId, (usize, usize)),
     /// A whole move of another local: the view it holds, if it holds one.
@@ -1559,6 +1571,7 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool
                             assigned[r].push(match viewed.loan {
                                 Some(_) if !indexed => Some(ViewSource::Loaned(o.place)),
                                 Some(_) => Some(ViewSource::Indexed(o.place, (b, k))),
+                                None if indexed => Some(ViewSource::Indexed(o.place, (b, k))),
                                 None if !indexed && !viewed.projection.is_empty() => {
                                     Some(ViewSource::Nested(o.place))
                                 }

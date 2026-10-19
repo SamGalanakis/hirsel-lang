@@ -1,0 +1,26 @@
+// rule: LANG-13
+// expect: run
+type V = I(i64) | T(Map[String, V])
+
+fn count(value: V) -> u64 {
+  let mut n = 0u64
+  if let T(items) = value {
+    for (_, e) in items {
+      if let T(m) = e {
+        n += map.len(m)
+      }
+    }
+  }
+  n
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut child: Map[String, V] = map.empty()
+  map.insert(mut child, unique "a", I(1))
+  let mut m: Map[String, V] = map.empty()
+  map.insert(mut m, unique "first", I(0))
+  map.insert(mut m, unique "second", T(child))
+  failure.check(count(T(m)) == 1, TextInvariant())
+  failure.check(count(I(0)) == 0, TextInvariant())
+  Ok(())
+}

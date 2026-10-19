@@ -1,0 +1,16 @@
+// rule: LANG-13
+// expect: run
+type E = Only()
+
+fn choose(x: Result[u64, E]) -> u64 {
+  match x {
+    Ok(n) => n,
+    Error(Only()) => 0,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(choose(Ok(7)) == 7, TextInvariant())
+  failure.check(choose(Error(Only())) == 0, TextInvariant())
+  Ok(())
+}

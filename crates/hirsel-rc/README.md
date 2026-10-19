@@ -153,11 +153,16 @@ scope and mutation checks precede aliasing, and C/H check the resulting lifetime
   and each emission pass starts with none: value ids restart every pass.
   A pattern tag already proved at the current version is not tested again,
   avoiding infeasible edges that would restore absent payload fields.
+  Before a product or nested refutable pattern can short-circuit, non-consuming
+  tag observations establish its payload presence masks. Cleanup then distinguishes
+  an inactive field from an intact field even when another component mismatches.
   A temporary assigned once a view of a place under a loan is a view
   temporary, read through at the viewed place and never stored; one viewing an
   element (`for` loop's element matched on: `_7 = use(Borrow xs[_5])`) is one
   only while no path from its assignment writes an index local before its
-  storage ends. A temporary assigned views of places under loans on
+  storage ends. An indexed part of another view inherits that view's loan under
+  the same index-stability proof; it is not materialized into owning storage.
+  A temporary assigned views of places under loans on
   several paths is a joined view: an SSA value carried on edges and joined
   into a borrowed block parameter declaring the least of its loans, never
   stored or copied. A field of a flat value, or an element of a flat sequence, is a place at
@@ -467,6 +472,9 @@ true, false or the current flag. Cleanup branches on each flag before preparing
 and dropping that part, preserving reverse field order and failure cleanup.
 Field flags stop at counted storage; a Box retains its container ownership
 regardless of which payload variant is active.
+After lowering, flags unused by code or by a flag it reads are removed with their
+edge arguments. Whole-value releases require no per-field presence claims,
+including before nested tag observations and on unreachable default edges.
 Variants use ordinary absent-field masks, and fixed inline elements are handled
 individually. There is no moved-on-some-paths Unsupported case. C's existing address-layout
 checks exclude partial transfers from scalar/block-reference frame storage, and
@@ -675,9 +683,10 @@ Generation zero is reserved: the first id uses one, and removal at the maximum
 wraps to zero and retires that vacancy. Reads check both words before observing
 the payload. Ordinary placement, COW, counting and drop passes own all storage.
 
-Computed borrowed views (index or variant projections) materialize at their
-binding, keeping the parent check at its own source obligation before any child
-projection. Only total field paths flatten through a view alias.
+Computed borrowed views (index or variant projections) keep their parent check
+at the binding's own source obligation before any child projection. A single
+assignment under a direct or inherited loan can remain a view alias, with indexed
+paths requiring stable indices until the view ends; other computed views materialize.
 
 SoA Lists use the ordinary list library bodies and checked element slots.
 Construction, reserve, push, pop, remove, iteration and lengths retain the

@@ -1,0 +1,15 @@
+// rule: LANG-13
+// expect: run
+type V = I(i64) | T(Map[String, V])
+
+fn same(a: V, b: V) -> bool {
+  match (a, b) {
+    (T(xs), T(ys)) => map.len(xs) == map.len(ys),
+    _ => a == b,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(same(I(1), I(1)), TextInvariant())
+  Ok(())
+}

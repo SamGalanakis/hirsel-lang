@@ -15,7 +15,15 @@ conformance/LANG/LANG-13-loop-element-match-run.hir
 conformance/LANG/LANG-13-loop-tuple-payload-part-run.hir
 conformance/LANG/LANG-13-nested-match-on-binding-run.hir
 conformance/LANG/LANG-13-nested-ok-none-error-paths-run.hir
+conformance/LANG/LANG-13-nested-single-variant-pattern-run.hir
 conformance/LANG/LANG-13-nested-variant-payload-drop-run.hir
+conformance/LANG/LANG-13-recursive-list-member-pattern-run.hir
+conformance/LANG/LANG-13-recursive-list-pattern-run.hir
+conformance/LANG/LANG-13-recursive-loop-return-run.hir
+conformance/LANG/LANG-13-recursive-map-member-pattern-run.hir
+conformance/LANG/LANG-13-recursive-map-pattern-run.hir
+conformance/LANG/LANG-13-recursive-member-loop-return-run.hir
+conformance/LANG/LANG-13-recursive-tuple-match-run.hir
 conformance/LANG/LANG-3-take-temporaries-early-exit.hir
 conformance/OWN/OWN-2-callee-owns-on-error.hir
 conformance/PROV/PROV-1-copied-prefix-write-run.hir
