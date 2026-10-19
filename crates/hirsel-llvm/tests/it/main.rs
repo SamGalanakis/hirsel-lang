@@ -9,6 +9,7 @@ mod emit;
 mod glue;
 mod heap_fast_path;
 mod native;
+mod noalias;
 mod once_capture;
 mod ready;
 mod root_ssa;

@@ -1,0 +1,93 @@
+// rule: OWN-3
+// expect: run
+// stdout: 112
+// stdout: 289
+// stdout: 2361
+// stdout: 57
+// stdout: 10
+// stdout: 880
+// "No storage is passed twice": a callee given `mut` of a field, an element or a
+// whole value reaches it only through that address, so native code may keep it
+// in a register across writes through its other places. Every routine writes a
+// place through one address, and its caller reads it back after the call.
+type Inner {
+  xs: List[u64],
+  n: u64,
+}
+
+type Outer {
+  a: Inner,
+  b: Inner,
+  k: u64,
+}
+
+fn bump(mut n: u64, by: u64) -> () {
+  n += by
+}
+
+// A list and a count from sibling fields of one record.
+fn grow(mut xs: List[u64], mut n: u64) -> () {
+  let mut i = 0u64
+  while i < 4u64 {
+    list.push(mut xs, n + i)
+    n += list.len(xs)
+    i += 1u64
+  }
+}
+
+// Two sibling records, each written and read on every iteration.
+fn both(mut a: Inner, mut b: Inner) -> () {
+  let mut i = 0u64
+  while i < 3u64 {
+    list.push(mut a.xs, b.n)
+    list.push(mut b.xs, a.n)
+    a.n += 1u64
+    b.n += a.n
+    i += 1u64
+  }
+}
+
+// Reborrows: each iteration passes parts of `o` on as `mut` and reads them
+// between the calls.
+fn again(mut o: Outer) -> u64 {
+  let mut seen = 0u64
+  let mut i = 0u64
+  while i < 5u64 {
+    bump(mut o.k, i)
+    seen += o.k
+    bump(mut o.a.xs[0], o.k)
+    seen += o.a.xs[0]
+    grow(mut o.b.xs, mut o.a.n)
+    seen += o.a.n + list.len(o.b.xs)
+    i += 1u64
+  }
+  seen
+}
+
+fn sum(xs: List[u64]) -> u64 {
+  let mut s = 0u64
+  for x in xs {
+    s += x
+  }
+  s
+}
+
+fn line(out: Stdout, value: u64) -> () {
+  let _ = out.print(out, u64.to_string(value))
+  let _ = out.print(out, "\n")
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let mut o = Outer(a: Inner(xs: [1u64], n: 2u64), b: Inner(xs: [], n: 3u64), k: 0u64)
+  grow(mut o.a.xs, mut o.a.n)
+  both(mut o.a, mut o.b)
+  let seen = again(mut o)
+  line(out, sum(o.a.xs))
+  line(out, o.a.n)
+  line(out, sum(o.b.xs))
+  line(out, o.b.n)
+  line(out, o.k)
+  line(out, seen)
+  Ok(())
+}

@@ -11,6 +11,32 @@ pub(super) enum Hidden {
     Result,
 }
 
+/// What a Hirsel entry's declaration states about the memory its address parameters
+/// reach.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Aliasing {
+    /// No aliasing attribute: runtime primitives, whose bodies are the runtime's, and
+    /// every entry of a program that hands C a callback.
+    Unstated,
+    /// A `mut` place's address is `noalias`. Both checkers prove it for Hirsel
+    /// callers (OWN-3); the unit partition never changes it.
+    ExclusiveMut,
+}
+
+impl Aliasing {
+    /// The aliasing a program's Hirsel entries state. A program that names a C
+    /// callback states none: C holds a callback context's address for the whole extern
+    /// call and may hand it to a callback nested in an activation that still has it
+    /// (PROG-4), so the context place is reached by two addresses at once.
+    pub(super) fn of(inputs: &EmitInputs<'_>) -> Self {
+        if inputs.callbacks.is_empty() {
+            Self::ExclusiveMut
+        } else {
+            Self::Unstated
+        }
+    }
+}
+
 /// The LLVM signature of one `FnAbi`: hidden slots in ABI order, then each declared
 /// parameter's physical slots, returning a zero-extended `u8` status. A Hirsel entry whose
 /// result is a plain scalar (`register_result`) has no result pointer and returns
@@ -347,16 +373,35 @@ impl<'m, 'a> Signature<'m, 'a> {
         self.hidden.iter().position(which).map(|i| i as u32)
     }
 
+    /// The LLVM parameters that are a `mut` place's address (`ExclusiveAddress`): every
+    /// one but a root, which travels as the block pointer the place holds.
+    fn exclusive_addresses(&self) -> impl Iterator<Item = u32> + '_ {
+        self.abi
+            .parameters
+            .iter()
+            .enumerate()
+            .filter(|&(i, p)| {
+                p.passing == ParameterPassing::ExclusiveAddress && !self.roots.contains(&i)
+            })
+            .map(|(i, _)| self.first[i])
+    }
+
     /// The function `name` with this signature. Emitted code provides argument and status
     /// extension but never assumes it, since an AAPCS64 C caller or callee does not extend
     /// narrow integers: only a definition's status return is marked extended (it returns a
     /// constant), and parameters are extended at call sites (`attribute_call`).
+    ///
+    /// With `aliasing` (`Aliasing::of`), each `mut` place address is `noalias`: for
+    /// the whole call the callee reaches the place's bytes only through it
+    /// (`docs/spec/implementation.md`, Aliasing facts). The blocks those bytes point to
+    /// are loaded pointers, which the attribute does not cover.
     pub(super) fn declare(
         &self,
         module: &'m Module<'m>,
         name: &str,
         definition: &DefPath,
         defining: bool,
+        aliasing: Aliasing,
     ) -> Result<Function<'m>, CodegenError> {
         let function = module
             .function(name, self.ty)
@@ -367,6 +412,15 @@ impl<'m, 'a> Signature<'m, 'a> {
         module.add_attribute(function, AttributeSlot::Function, Attribute::NoUnwind);
         if defining && self.returns_status() {
             module.add_attribute(function, AttributeSlot::Return, Attribute::ZeroExt);
+        }
+        if aliasing == Aliasing::ExclusiveMut {
+            for index in self.exclusive_addresses() {
+                module.add_attribute(
+                    function,
+                    AttributeSlot::Parameter(index),
+                    Attribute::NoAlias,
+                );
+            }
         }
         Ok(function)
     }

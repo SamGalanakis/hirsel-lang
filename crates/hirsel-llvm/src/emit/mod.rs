@@ -74,7 +74,7 @@ mod values;
 
 pub(crate) use pair::{PairField, PairWord, REGISTER_PAIR, pair_type};
 use pair::{decode_word, encode_word, value_word};
-use signature::{Hidden, Signature};
+use signature::{Aliasing, Hidden, Signature};
 
 /// The pipeline LLVM runs between the two verifier passes.
 fn pipeline(opt: OptLevel) -> &'static str {
@@ -336,11 +336,23 @@ fn lower<T>(
             } else {
                 format!("{name}{ROOTS_SUFFIX}")
             };
-            let function = signature.declare(&module, &body_name, &unit.header.definition, true)?;
+            let function = signature.declare(
+                &module,
+                &body_name,
+                &unit.header.definition,
+                true,
+                Aliasing::of(inputs),
+            )?;
             let entry = if signature.roots.is_empty() {
                 function
             } else {
-                let entry = external.declare(&module, &name, &unit.header.definition, true)?;
+                let entry = external.declare(
+                    &module,
+                    &name,
+                    &unit.header.definition,
+                    true,
+                    Aliasing::of(inputs),
+                )?;
                 define_root_adapter(
                     &module,
                     entry,

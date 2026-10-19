@@ -1,0 +1,118 @@
+// rule: OWN-3
+// expect: run
+// stdout: 171
+// stdout: 405
+// stdout: 135
+// stdout: 415
+// stdout: 555
+// stdout: 98
+// "A scoped closure's captures count as arguments of the call": a callee given
+// `mut` of one list and a closure borrowing another, or a copy sharing its block,
+// reaches the `mut` place only through its address. A child task reads its own
+// copy, and a frozen value is read under `shared.with`, while the parent writes its
+// place by `mut`.
+fn output_error[E](take e: E) -> () {}
+
+fn fill(mut xs: List[u64], f: fn(u64) -> u64) -> () {
+  let mut i = 0u64
+  while i < 6u64 {
+    list.push(mut xs, f(i))
+    i += 1u64
+  }
+}
+
+fn apply(xs: List[u64], f: fn(u64) -> u64) -> u64 {
+  let mut s = 0u64
+  for x in xs {
+    s += f(x)
+  }
+  s
+}
+
+fn sum(xs: List[u64]) -> u64 {
+  let mut s = 0u64
+  for x in xs {
+    s += x
+  }
+  s
+}
+
+fn line(out: Stdout, value: u64) -> () {
+  let _ = out.print(out, u64.to_string(value))
+  let _ = out.print(out, "\n")
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let tasks = io.tasks(rt)?
+  let ys: List[u64] = [10u64, 20u64, 30u64]
+  let mut xs: List[u64] = []
+  // The closure borrows ys beside `mut xs`.
+  fill(
+    mut xs,
+    fn(i: u64) -> u64 {
+      ys[i % 3u64] + i
+    }
+  )
+  // After the write, a closure reads xs beside the borrowed xs itself.
+  let read = apply(
+    xs,
+    fn(x: u64) -> u64 {
+      x + list.len(xs)
+    }
+  )
+  // zs shares xs's block; the first push through `mut xs` detaches it.
+  let zs = copy xs
+  fill(
+    mut xs,
+    fn(i: u64) -> u64 {
+      zs[i] * 2u64
+    }
+  )
+  line(out, read)
+  line(out, sum(xs))
+  line(out, sum(zs))
+  // A child task sums its own unique copy while the parent grows xs.
+  let mine: unique List[u64] = unique xs
+  let first = xs[0]
+  let child: u64 = task.scope(
+    tasks,
+    fn(scope: Scope) -> u64 {
+      let handle = task.async(
+        scope,
+        fn() -> u64 {
+          let owned = take mine
+          sum(owned) + first
+        }
+      )
+      task.await(scope, take handle)
+    }
+  )
+  fill(
+    mut xs,
+    fn(i: u64) -> u64 {
+      i * first
+    }
+  )
+  line(out, child)
+  line(out, sum(xs))
+  // A frozen list read under `shared.with` fills a local by `mut`.
+  let mut thawed: unique List[u64] = [5u64, 6u64, 7u64]
+  list.push(mut thawed, list.len(xs))
+  let frozen: Shared[List[u64]] = shared.freeze(take thawed)
+  let shared_sum = shared.with(
+    frozen,
+    fn(c: List[u64]) -> u64 {
+      let mut acc: List[u64] = []
+      fill(
+        mut acc,
+        fn(i: u64) -> u64 {
+          c[i % 4u64] + i
+        }
+      )
+      sum(acc) + sum(c)
+    }
+  )
+  line(out, shared_sum)
+  Ok(())
+}

@@ -3750,6 +3750,9 @@ conformance/OWN/OWN-3-mut-block-copy-run.hir
 conformance/OWN/OWN-3-mut-block-ok.hir
 conformance/OWN/OWN-3-mut-borrowed-part-bad.hir
 conformance/OWN/OWN-3-mut-borrowed-part-ok.hir
+conformance/OWN/OWN-3-noalias-captures-run.hir
+conformance/OWN/OWN-3-noalias-loops-run.hir
+conformance/OWN/OWN-3-noalias-places-run.hir
 conformance/OWN/OWN-3-option-remove-run.hir
 conformance/OWN/OWN-3-parent-and-field-bad.hir
 conformance/OWN/OWN-3-parent-and-field-ok.hir

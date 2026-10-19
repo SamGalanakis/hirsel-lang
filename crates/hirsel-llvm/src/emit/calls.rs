@@ -360,8 +360,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Signature::of(self.module, self.inputs.layouts, abi, self.definition())?
         };
         let name = root_name.or(name);
+        // A runtime primitive's body is the runtime's, which states nothing.
+        let aliasing = match site.callee {
+            Callee::Operation(_) => Aliasing::Unstated,
+            _ => Aliasing::of(self.inputs),
+        };
         let function = match &name {
-            Some(name) => Some(signature.declare(self.module, name, self.definition(), false)?),
+            Some(name) => {
+                Some(signature.declare(self.module, name, self.definition(), false, aliasing)?)
+            }
             None => None,
         };
         let mut args = Vec::new();

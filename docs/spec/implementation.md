@@ -168,6 +168,51 @@ extern calls restore the enclosing callback context and site when they return.
 C-origin `FnPtr` values are opaque pass-back values; Hirsel cannot call them
 ([PROG-4](programs.md#prog-4-interop)).
 
+### Aliasing facts
+
+The native backends state an aliasing fact only where both checkers prove it. The fact
+derives from the parameter's passing mode in the specialized `FnAbi`, never from a
+callee's name, and the unit partition never changes it.
+
+| Passing | What is proved | What native code states |
+|---|---|---|
+| `mut x` (an exclusive address) | The source checker gives the argument a write loan from callee entry to return, and every overlapping access conflicts with it ([OWN-3](ownership.md#own-3-exclusive-access); a scoped closure's captures count as arguments). The IR checker re-proves it at every call (`CallAlias`): no other `mut` argument overlaps the place, and no other argument or callee value holds a loan on an overlapping place, whether through its own views, borrowed record fields or a closure's borrowed captures. | LLVM `noalias` on the address. For the whole call, the place's bytes are reached only through pointers derived from it. |
+| `mut x` where `x` is a Block or Box root of a private library body | The same | Nothing. The root travels by value as the block pointer the place holds, and that block may be shared. |
+| `take x` (an inline aggregate) | The caller passes a fresh copy of the moved value | Nothing |
+| `x` borrowed (an inline aggregate) | The caller passes a fresh read-only copy, and the IR checker rejects writes to borrowed storage | Nothing (no `readonly`). A drop wrapper passes the dying block's payload in place of a copy. |
+| Borrowed or taken scalars and block references | Values | Nothing. A block may have other holders. |
+| `unique` | A count fact ([MODE-2](ownership.md#mode-2-uniqueness)), not a loan | Only count tests and the detach postconditions that `llvm.assume` exposes |
+
+`noalias` covers only the place's own bytes: a list's root word, or an inline record's
+fields. It covers nothing reached through a pointer loaded from the place. Such a loaded
+child pointer can be a block that other arguments also reach, because a counted block can
+have several holders until a write detaches it.
+
+Where the facts stop:
+
+- **`Shared` interiors** are frozen and only ever borrowed
+  ([MEM-11](memory.md#mem-11-shared)). They are never a `mut` place and carry no attribute.
+- **Mutex interiors**: `mutex.with` moves the payload into a library local and lends `mut`
+  of that local. Any other task's access happens before the acquire or after the release,
+  which LLVM's `noalias` permits.
+- **`unsafe ffi`**: extern declarations and `Ptr[T]` words carry no attribute. A
+  callback context is the address of a Hirsel place that C holds for the whole extern call,
+  and C may hand it to a callback nested inside an activation that still has it
+  ([PROG-4](programs.md#prog-4-interop)). So a program that names any C callback states no
+  `noalias` on any `mut` parameter.
+- **Foreign callbacks**: the thunk passes C's context pointer straight to the entry, which is
+  why the program-wide exception above applies.
+- **Region and arena storage**: region references, arena tokens and caller destinations
+  travel by value with no attribute. Region and arena records are reached through the run
+  context and are never `mut` places.
+- **Runtime primitives**: a `RuntimePrimitive` declaration states nothing, since its body
+  is the runtime's.
+- **Checked-execution shadows** exist only in the interpreter. They audit executed paths
+  and are not evidence for any native attribute.
+
+Cranelift has no parameter aliasing attribute, so it states none of these facts. Both
+backends produce the same observations.
+
 ### Failure and cleanup
 
 Failures propagate by explicit status through compiler-generated cleanup code backed by
