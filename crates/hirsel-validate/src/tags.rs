@@ -230,14 +230,7 @@ impl Checker<'_> {
                     arguments,
                 } => {
                     if !expansions
-                        .enter(
-                            ty,
-                            0,
-                            |a, b| {
-                                hirsel_types::semantic_equal(store, a, store, b).unwrap_or(false)
-                            },
-                            |a, b| hirsel_types::nominal_arguments_grow(store, a, store, b),
-                        )
+                        .enter(ty, 0, |_| store)
                         .unwrap_or_else(|error| self.proof_failure(error, false))
                     {
                         return false;

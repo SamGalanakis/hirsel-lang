@@ -362,6 +362,11 @@ recursion at 128 active constructor-growth expansions, reporting
 `QueryError::Operational` with operation `type-proof-tooling-limit`.
 Homeomorphic embedding detects growth even inside a fixed outer constructor;
 shrinking actuals, argument permutations and finished siblings do not spend it.
+`enter(root, context, store)` takes the store holding each TypeId. It hash-conses
+every reached row once into a structural class (the edge-erased row as
+`semantic_equal` normalizes it, plus its children's classes) and a height, so the
+memo is a class lookup and only a same-declaration active instantiation no taller
+than the new root is checked for growth: nested instantiations cost linear work.
 Property-dependent contexts (inherited uniqueness or ownership state) remain
 part of the memo key. All property-dependent helpers and their declaration lookup
 callbacks return QueryError, so a tooling limit cannot become false evidence.

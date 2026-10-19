@@ -723,6 +723,47 @@ pub fn semantic_equal(
     semantic_equal_adjusted(a, a_root, None, b, b_root, None, false, None, false)
 }
 
+// Compare row data independently of arena identity; edge correspondence is
+// checked by the worklist. This also retains canonical erased-capture policy.
+pub(crate) fn without_edges(row: &Type, placeholder: TypeId) -> Type {
+    let mut row = row.clone();
+    if let Some(ErasedCaptures::FromArguments(ps)) = &mut row.erased_captures {
+        ps.sort();
+        ps.dedup();
+    }
+    if row.erased_captures == Some(ErasedCaptures::Known(AuthoritySummary::Unknown)) {
+        row.erased_captures = None;
+    }
+    match &mut row.kind {
+        TypeKind::Tuple(ts) => ts.fill(placeholder),
+        TypeKind::Box(t) => *t = placeholder,
+        TypeKind::Record(fs) => fs.iter_mut().for_each(|f| f.ty = placeholder),
+        TypeKind::Variant(vs) => vs
+            .iter_mut()
+            .flat_map(|v| &mut v.fields)
+            .for_each(|f| f.1 = placeholder),
+        TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
+            for argument in arguments {
+                if let GenericArgument::Type(t) = argument {
+                    *t = placeholder;
+                }
+            }
+        }
+        TypeKind::Function(f) => {
+            for parameter in &mut f.parameters {
+                parameter.name = None;
+                parameter.ty = placeholder;
+            }
+            f.result = placeholder;
+            if let Some(error) = &mut f.error {
+                *error = placeholder;
+            }
+        }
+        _ => (),
+    }
+    row
+}
+
 pub(crate) fn semantic_equal_adjusted(
     a: &TypeStore,
     a_root: TypeId,
@@ -781,46 +822,6 @@ pub(crate) fn semantic_equal_adjusted(
             );
         }
         Ok(())
-    }
-    // Compare row data independently of arena identity; edge correspondence is
-    // checked by the worklist. This also retains canonical erased-capture policy.
-    fn without_edges(row: &Type, placeholder: TypeId) -> Type {
-        let mut row = row.clone();
-        if let Some(ErasedCaptures::FromArguments(ps)) = &mut row.erased_captures {
-            ps.sort();
-            ps.dedup();
-        }
-        if row.erased_captures == Some(ErasedCaptures::Known(AuthoritySummary::Unknown)) {
-            row.erased_captures = None;
-        }
-        match &mut row.kind {
-            TypeKind::Tuple(ts) => ts.fill(placeholder),
-            TypeKind::Box(t) => *t = placeholder,
-            TypeKind::Record(fs) => fs.iter_mut().for_each(|f| f.ty = placeholder),
-            TypeKind::Variant(vs) => vs
-                .iter_mut()
-                .flat_map(|v| &mut v.fields)
-                .for_each(|f| f.1 = placeholder),
-            TypeKind::Named { arguments, .. } | TypeKind::Builtin { arguments, .. } => {
-                for argument in arguments {
-                    if let GenericArgument::Type(t) = argument {
-                        *t = placeholder;
-                    }
-                }
-            }
-            TypeKind::Function(f) => {
-                for parameter in &mut f.parameters {
-                    parameter.name = None;
-                    parameter.ty = placeholder;
-                }
-                f.result = placeholder;
-                if let Some(error) = &mut f.error {
-                    *error = placeholder;
-                }
-            }
-            _ => (),
-        }
-        row
     }
     // Both complete graphs must be valid even if their roots immediately differ.
     valid(a, a_root, a_row)?;

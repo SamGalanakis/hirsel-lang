@@ -127,12 +127,7 @@ pub(super) fn eligible(
                 {
                     return Ok(false);
                 }
-                if !expansions.enter(
-                    id,
-                    0,
-                    |a, b| semantic_equal(&store, a, &store, b).unwrap_or(false),
-                    |a, b| nominal_arguments_grow(&store, a, &store, b),
-                )? {
+                if !expansions.enter(id, 0, |_| &store)? {
                     continue;
                 }
                 pending.push((id, true));

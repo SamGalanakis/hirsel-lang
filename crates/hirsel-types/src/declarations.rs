@@ -69,12 +69,7 @@ pub fn structural_equality(
                 if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
                     return Ok(false);
                 }
-                if !nominals.enter(
-                    id,
-                    0,
-                    |a, b| store.equal(a, b),
-                    |a, b| nominal_arguments_grow(store.store(a), a, store.store(b), b),
-                )? {
+                if !nominals.enter(id, 0, |id| store.store(id))? {
                     continue;
                 }
                 pending.push((id, true));

@@ -197,12 +197,7 @@ pub fn has_owned_crossing_requirement(
                 definition,
                 arguments,
             } => {
-                if !nominals.enter(
-                    id,
-                    0,
-                    |a, b| semantic_equal(&store, a, &store, b).unwrap_or(false),
-                    |a, b| nominal_arguments_grow(&store, a, &store, b),
-                )? {
+                if !nominals.enter(id, 0, |_| &store)? {
                     continue;
                 }
                 pending.push((id, unique, true));
@@ -399,12 +394,7 @@ pub fn owned_crossing_receipts(
                 definition,
                 arguments,
             } => {
-                if !nominals.enter(
-                    id,
-                    0,
-                    |a, b| semantic_equal(&store, a, &store, b).unwrap_or(false),
-                    |a, b| nominal_arguments_grow(&store, a, &store, b),
-                )? {
+                if !nominals.enter(id, 0, |_| &store)? {
                     continue;
                 }
                 pending.push((id, path.clone(), true));

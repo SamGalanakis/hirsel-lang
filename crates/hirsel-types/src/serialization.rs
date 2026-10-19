@@ -217,12 +217,7 @@ fn schema_inner(
                 {
                     SchemaNode::Reference(memo[&previous])
                 } else {
-                    let fresh = expansions.enter(
-                        id,
-                        0,
-                        |a, b| store.equal(a, b),
-                        |a, b| nominal_arguments_grow(store.store(a), a, store.store(b), b),
-                    )?;
+                    let fresh = expansions.enter(id, 0, |id| store.store(id))?;
                     debug_assert!(fresh, "an entered nominal is referenced above");
                     entered.push(id);
                     pending.push((id, true));

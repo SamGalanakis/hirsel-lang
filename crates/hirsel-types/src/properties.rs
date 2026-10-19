@@ -474,12 +474,7 @@ fn prove(
                 if signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque {
                     return Ok(Sendability::NotSendable);
                 }
-                if !nominal_roots.enter(
-                    id,
-                    usize::from(unique),
-                    |a, b| store.equal(a, b),
-                    |a, b| nominal_arguments_grow(store.store(a), a, store.store(b), b),
-                )? {
+                if !nominal_roots.enter(id, usize::from(unique), |id| store.store(id))? {
                     continue;
                 }
                 pending.push((id, unique, plain_known, true));

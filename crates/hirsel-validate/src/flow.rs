@@ -3458,12 +3458,7 @@ impl Checker<'_> {
             }
             if matches!(store.get(ty).unwrap().kind, TypeKind::Named { .. }) {
                 if !nominals
-                    .enter(
-                        ty,
-                        index,
-                        |a, b| hirsel_types::semantic_equal(&store, a, &store, b).unwrap_or(false),
-                        |a, b| hirsel_types::nominal_arguments_grow(&store, a, &store, b),
-                    )
+                    .enter(ty, index, |_| &store)
                     .unwrap_or_else(|error| self.proof_failure(error, false))
                 {
                     continue;

@@ -17,6 +17,7 @@ mod scaling_h_places;
 mod scaling_headers;
 mod scaling_lower_bindings;
 mod scaling_lower_decisions;
+mod scaling_nested_generics;
 mod scaling_origin_dependencies;
 mod scaling_ownership_initial;
 mod scaling_ownership_slots;
