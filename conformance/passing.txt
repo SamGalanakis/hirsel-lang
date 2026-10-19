@@ -4565,6 +4565,7 @@ conformance/SEM/SEM-1-wrapping-add-unsigned.hir
 conformance/SEM/SEM-2-explicit-fused.hir
 conformance/SEM/SEM-2-f32-ties-even.hir
 conformance/SEM/SEM-2-f64-ties-even.hir
+conformance/SEM/SEM-2-float-parse-lemire-vectors.hir
 conformance/SEM/SEM-2-float-resize-run.hir
 conformance/SEM/SEM-2-format-into-float-appends-run.hir
 conformance/SEM/SEM-2-infinity.hir

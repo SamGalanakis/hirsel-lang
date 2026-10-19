@@ -395,6 +395,13 @@
       ]
     },
     {
+      "path": "float_lemire.hir",
+      "module": [
+        "internal",
+        "float_lemire"
+      ]
+    },
+    {
       "path": "superacc.hir",
       "module": [
         "internal",

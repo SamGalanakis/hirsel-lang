@@ -2,7 +2,8 @@
 // doi:10.1145/3192366.3192369; https://github.com/ulfjack/ryu/ryu/d2s.c).
 // Powers are computed exactly in fixed decimal limbs instead of cached products.
 // Nearest shortest selection and the even significand boundary test are identical.
-// Parser uses exact rational quotient/remainder rounding (Clinger, PLDI 1990,
+// Parser tries Eisel-Lemire (internal.float_lemire) first, then uses exact
+// rational quotient/remainder rounding (Clinger, PLDI 1990,
 // doi:10.1145/93542.93557), with a bounded significand and a sticky suffix.
 // Helpers live below internal/ and have no external package visibility.
 @noalloc
@@ -301,9 +302,8 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.Parse
   let mut integer_digits: u64 = 0
   let mut fractional_digits: u64 = 0
   let mut significant: u64 = 0
-  let mut kept: u64 = 0
-  let mut sticky: bool = false
-  let mut numerator = internal.big.big_from_word(0)
+  // The first 19 significant digits, exact in a u64.
+  let mut leading: u64 = 0
   let mut dot: bool = false
   while at < length {
     let byte = bytes[at]
@@ -325,12 +325,8 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.Parse
     }
     if byte != 48 || significant > 0 {
       significant += 1
-      if kept < 800 {
-        internal.big.big_mul(mut numerator, 10)
-        internal.big.big_add_small(mut numerator, core@1/int.widen(byte - 48))
-        kept += 1
-      } else {
-        sticky = sticky || byte != 48
+      if significant <= 19 {
+        leading = leading * 10 + core@1/int.widen(byte - 48)
       }
     }
     at += 1
@@ -338,6 +334,7 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.Parse
   if at == start || integer_digits == 0 || dot && fractional_digits == 0 {
     return Error(Invalid)
   }
+  let digits_end = at
   let mut decimal_exponent: i128 = 0
   if at < length && (bytes[at] == 101 || bytes[at] == 69) {
     at += 1
@@ -383,6 +380,47 @@ pub fn parse(text: String, fraction: u64, bias: i32) -> Result[u64, scalar.Parse
   }
   if order < -325 {
     return Ok(sign)
+  }
+  // Eisel-Lemire decides almost every input from the leading digits. With
+  // digits beyond the 19th, the next leading significand up must round the same.
+  let taken = if significant < 19 {
+    significant
+  } else {
+    19
+  }
+  let q: i64 = core@1/int.narrow(
+    decimal_exponent + core@1/int.widen(significant - taken)
+  )
+  match internal.float_lemire.compute(q, leading, fraction, bias) {
+    Some(bits) => {
+      if significant == taken {
+        return Ok(sign | bits)
+      }
+      match internal.float_lemire.compute(q, leading + 1, fraction, bias) {
+        Some(above) => if above == bits {
+          return Ok(sign | bits)
+        },
+        None => (),
+      }
+    },
+    None => (),
+  }
+  let mut kept: u64 = 0
+  let mut sticky: bool = false
+  let mut numerator = internal.big.big_from_word(0)
+  let mut scan = start
+  while scan < digits_end {
+    let byte = bytes[scan]
+    if byte != 46 && (byte != 48 || kept > 0 || sticky) {
+      if kept < 800 {
+        internal.big.big_mul(mut numerator, 10)
+        internal.big.big_add_small(mut numerator, core@1/int.widen(byte - 48))
+        kept += 1
+      } else {
+        sticky = sticky || byte != 48
+      }
+    }
+    scan += 1
   }
   decimal_exponent += core@1/int.widen(significant - kept)
   let power: i32 = core@1/int.narrow(decimal_exponent)

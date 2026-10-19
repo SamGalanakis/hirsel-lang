@@ -1,0 +1,80 @@
+// rule: SEM-2
+// expect: run
+// Rust core dec2flt lemire tests (near-halfway, shifted-exponent and largest
+// finite vectors) adapted to whole-text parsing, with subnormal, truncated
+// long-input and out-of-range cases decided by the exact path.
+@noalloc
+fn parsed_f64(t: Test, text: String, expected: u64) -> () {
+  match f64.parse(text) {
+    Ok(value) => core@1/test.check(t, core@1/f64.bits(value) == expected),
+    Error(_) => core@1/test.check(t, false),
+  }
+}
+
+@noalloc
+fn parsed_f32(t: Test, text: String, expected: u32) -> () {
+  match f32.parse(text) {
+    Ok(value) => core@1/test.check(t, core@1/f32.bits(value) == expected),
+    Error(_) => core@1/test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  parsed_f64(t, "9007199254740992", 4845873199050653696u64)
+  parsed_f64(t, "9007199254740993", 4845873199050653696u64)
+  parsed_f64(t, "9007199254740994", 4845873199050653697u64)
+  parsed_f64(t, "9007199254740995", 4845873199050653698u64)
+  parsed_f64(t, "9007199254740996", 4845873199050653698u64)
+  parsed_f64(t, "18014398509481984", 4850376798678024192u64)
+  parsed_f64(t, "18014398509481986", 4850376798678024192u64)
+  parsed_f64(t, "18014398509481988", 4850376798678024193u64)
+  parsed_f64(t, "18014398509481990", 4850376798678024194u64)
+  parsed_f64(t, "18014398509481992", 4850376798678024194u64)
+  parsed_f64(t, "9007199254740992000e-3", 4845873199050653696u64)
+  parsed_f64(t, "9007199254740993000e-3", 4845873199050653696u64)
+  parsed_f64(t, "9007199254740994000e-3", 4845873199050653697u64)
+  parsed_f64(t, "9007199254740995000e-3", 4845873199050653698u64)
+  parsed_f64(t, "9007199254740996000e-3", 4845873199050653698u64)
+  parsed_f64(t, "1e308", 9214871658872686752u64)
+  parsed_f64(t, "17976931348623157e292", 9218868437227405311u64)
+  parsed_f64(t, "1e300", 9094988921128908188u64)
+  parsed_f64(t, "4.9406564584124654e-324", 1u64)
+  parsed_f64(t, "2.2250738585072011e-308", 4503599627370495u64)
+  parsed_f64(t, "9007199254740993.0000000000000000001", 4845873199050653697u64)
+  parsed_f64(t, "9007199254740992.9999999999999999999", 4845873199050653696u64)
+  parsed_f64(t, "123456789012345678901234567890e-10", 4892433759222981601u64)
+  parsed_f64(t, "0.1", 4591870180066957722u64)
+  parsed_f64(t, "3.141592653589793", 4614256656552045848u64)
+  parsed_f64(t, "1e-320", 2024u64)
+  parsed_f64(t, "2.5e-323", 5u64)
+  parsed_f32(t, "16777216", 1266679808u32)
+  parsed_f32(t, "16777217", 1266679808u32)
+  parsed_f32(t, "16777218", 1266679809u32)
+  parsed_f32(t, "16777219", 1266679810u32)
+  parsed_f32(t, "16777220", 1266679810u32)
+  parsed_f32(t, "33554432", 1275068416u32)
+  parsed_f32(t, "33554434", 1275068416u32)
+  parsed_f32(t, "33554436", 1275068417u32)
+  parsed_f32(t, "33554438", 1275068418u32)
+  parsed_f32(t, "33554440", 1275068418u32)
+  parsed_f32(t, "167772160000000000e-10", 1266679808u32)
+  parsed_f32(t, "167772170000000000e-10", 1266679808u32)
+  parsed_f32(t, "167772180000000000e-10", 1266679809u32)
+  parsed_f32(t, "167772190000000000e-10", 1266679810u32)
+  parsed_f32(t, "167772200000000000e-10", 1266679810u32)
+  parsed_f32(t, "3e38", 2137108966u32)
+  parsed_f32(t, "3402823470000000000e20", 2139095039u32)
+  parsed_f32(t, "1e-45", 1u32)
+  parsed_f32(t, "1.1754942e-38", 8388607u32)
+  parsed_f32(t, "0.1", 1036831949u32)
+  parsed_f32(t, "16777217.000000000000000000001", 1266679809u32)
+  match f64.parse("2e308") {
+    Error(OutOfRange()) => (),
+    _ => core@1/test.check(t, false),
+  }
+  match f32.parse("4e38") {
+    Error(OutOfRange()) => (),
+    _ => core@1/test.check(t, false),
+  }
+  Ok(())
+}
