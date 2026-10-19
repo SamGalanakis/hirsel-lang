@@ -107,10 +107,8 @@ pub fn session(role: Role, header_limit: u64) -> Session uses {} {
 
 @preserves_unique(out)
 fn append(mut out: List[u8], data: Bytes) uses {} {
-  let mut i: u64 = 0
-  while i < core@1/bytes.len(data) {
-    core@1/list.push(mut out, data[i])
-    i += 1
+  for byte in data {
+    core@1/list.push(mut out, byte)
   }
 }
 
@@ -225,12 +223,10 @@ fn valid_headers(fields: List[hpack.Field], role: Role, trailers: bool) -> bool 
       }
       i += 1
     }
-    i = 0
-    while i < core@1/bytes.len(value) {
-      if value[i] == 0 || value[i] == 10 || value[i] == 13 {
+    for byte in value {
+      if byte <= 13 && (byte == 0 || byte == 10 || byte == 13) {
         return false
       }
-      i += 1
     }
     if core@1/bytes.len(value) > 0 && (value[0] == 32 || value[0] == 9 || value[core@1/bytes.len(
       value
@@ -732,15 +728,7 @@ fn handle(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses 
         return Error(Wire(StreamError(id, FlowControl())))
       }
       s.streams[index].send_window += amount
-    } else if id > if s.role == Client() {
-      if s.next_id > 1 {
-        s.next_id - 2
-      } else {
-        0
-      }
-    } else {
-      s.last_peer
-    } {
+    } else if idle_stream(s, id) {
       return Error(Wire(ConnectionError(Protocol())))
     }
     return Ok(Idle())
@@ -748,14 +736,15 @@ fn handle(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses 
   if frame.kind == 1 || frame.kind == 9 {
     if frame.kind == 1 {
       if let None() = stream_index(s, id) {
-        if s.role != Server() || id % 2 != 1 || id <= s.last_peer {
+        if id % 2 != 1 || s.role == Client() && id >= s.next_id {
           return Error(Wire(ConnectionError(Protocol())))
         }
-        s.last_peer = id
-        add_stream(mut s, id)
-      }
-      let Some(index) = stream_index(s, id) else {
-        return Error(UnknownStream())
+        if s.role == Server() && id > s.last_peer {
+          s.last_peer = id
+          add_stream(mut s, id)
+        }
+      // Retired streams still decode the block to keep the connection's
+      // compression state synchronized before reporting STREAM_CLOSED.
       }
       s.continuation = id
       s.header_end = frame.flags & 1 != 0
@@ -779,7 +768,21 @@ fn handle(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses 
       return Error(Wire(ConnectionError(FlowControl())))
     }
     let Some(index) = stream_index(s, id) else {
-      return Error(Wire(ConnectionError(Protocol())))
+      if idle_stream(s, id) {
+        return Error(Wire(ConnectionError(Protocol())))
+      }
+      if cost != 0 {
+        emit(
+          mut s,
+          http2_wire.Frame(
+            kind: 8,
+            flags: 0,
+            stream: 0,
+            payload: http2_wire.u32_bytes(cost)
+          )
+        )
+      }
+      return Error(Wire(StreamError(id, StreamClosed())))
     }
     let data = http2_wire.fragment(frame)
     let length = core@1/bytes.len(data)
@@ -828,15 +831,7 @@ fn handle(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses 
   }
   if frame.kind == 3 {
     let Some(index) = stream_index(s, id) else {
-      if id > if s.role == Client() {
-        if s.next_id > 1 {
-          s.next_id - 2
-        } else {
-          0
-        }
-      } else {
-        s.last_peer
-      } {
+      if idle_stream(s, id) {
         return Error(Wire(ConnectionError(Protocol())))
       }
       return Ok(Idle())
@@ -873,7 +868,17 @@ pub fn receive(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] 
       s.failed = true
     },
     Error(Wire(StreamError(id, code))) => {
-      let _ = reset(mut s, id, code)
+      if let Error(UnknownStream()) = reset(mut s, id, code) {
+        emit(
+          mut s,
+          http2_wire.Frame(
+            kind: 3,
+            flags: 0,
+            stream: id,
+            payload: http2_wire.u32_bytes(http2_wire.code_number(code))
+          )
+        )
+      }
     },
     _ => (),
   }
@@ -1127,4 +1132,13 @@ fn active_streams(s: Session) -> u64 uses {} {
     }
   }
   count
+}
+
+@noalloc
+fn idle_stream(s: Session, id: u32) -> bool uses {} {
+  id % 2 != 1 || if s.role == Client() {
+    id >= s.next_id
+  } else {
+    id > s.last_peer
+  }
 }

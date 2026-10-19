@@ -501,3 +501,74 @@ fn concurrency_limit_excludes_closed_bodies(t: Test) {
   test.check(t, std@1/http2.open(mut client, request_fields(), true) == Ok(3))
   test.check(t, std@1/http2.consumed(mut client, 1, 2) == Ok(()))
 }
+
+@test
+fn retired_stream_preserves_compression(t: Test) {
+  let mut server = std@1/http2.session(Server(), 65536)
+  let mut encoder = std@1/hpack.encoder(4096)
+  let _ = std@1/http2.receive(
+    mut server,
+    std@1/http2_wire.Frame(kind: 4, flags: 0, stream: 0, payload: b"")
+  )
+  let first = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 1,
+    payload: std@1/hpack.encode(mut encoder, request_fields())
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, first) == Ok(Headers(1, request_fields(), true))
+  )
+  test.check(
+    t,
+    std@1/http2.headers(mut server, 1, [field(b":status", b"200")], true) == Ok(())
+  )
+  let _ = std@1/http2.output(mut server)
+  let closed = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 1,
+    payload: std@1/hpack.encode(mut encoder, [field(b"x", b"new")])
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, closed) == Error(
+      Wire(StreamError(1, StreamClosed()))
+    )
+  )
+  let (prefix, resets) = std@1/http2.drain_frames(mut server)
+  test.check(t, prefix == b"" && list.len(resets) == 1 && resets[0].kind == 3)
+  let mut fields = request_fields()
+  list.push(mut fields, field(b"x", b"new"))
+  let next = std@1/http2_wire.Frame(
+    kind: 1,
+    flags: 5,
+    stream: 3,
+    payload: std@1/hpack.encode(mut encoder, fields)
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, next) == Ok(Headers(3, take fields, true))
+  )
+  let late = std@1/http2_wire.Frame(kind: 0, flags: 1, stream: 1, payload: b"x")
+  test.check(
+    t,
+    std@1/http2.receive(mut server, late) == Error(Wire(StreamError(1, StreamClosed())))
+  )
+  let (_, credit) = std@1/http2.drain_frames(mut server)
+  test.check(
+    t,
+    list.len(credit) == 2 && credit[0].kind == 8 && credit[0].stream == 0 && credit[1].kind == 3
+  )
+  let idle = std@1/http2_wire.Frame(
+    kind: 8,
+    flags: 0,
+    stream: 2,
+    payload: b"\x00\x00\x00\x01"
+  )
+  test.check(
+    t,
+    std@1/http2.receive(mut server, idle) == Error(Wire(ConnectionError(Protocol())))
+  )
+}
