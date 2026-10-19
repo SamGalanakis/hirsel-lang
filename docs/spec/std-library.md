@@ -1602,7 +1602,9 @@ fn http.sse_event(event: Option[String], data: List[String], id: Option[String],
 `respond_head` starts a response without a known length, after `receive_request`
 (or as the final response to a failed request). It accepts final statuses 200–599,
 validates headers, and reserves Content-Length, Transfer-Encoding and Connection
-just as `respond` does. It emits the request's HTTP version and no Content-Length.
+just as `respond` does. It emits the validated request's HTTP version and no
+Content-Length. Before a head is validated, it falls back to HTTP/1.0 with close
+delimiting; neither version nor HEAD semantics carry over from a previous request.
 Following [RFC 9112 sections 6.3 and 7.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3),
 HTTP/1.1 bodies use Transfer-Encoding: chunked; HTTP/1.0 bodies use close delimiting,
 with Connection: close even when the request asked for keep-alive. HEAD, 204 and 304

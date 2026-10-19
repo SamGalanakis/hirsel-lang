@@ -705,6 +705,7 @@ fn streaming_http_scripts_replay_writes_completion_and_drop() {
         for relative in [
             "conformance/SEM/SEM-1-http-server-stream-run.hir",
             "conformance/SEM/SEM-1-http-server-stream-drop-run.hir",
+            "conformance/SEM/SEM-1-http-server-stream-malformed-run.hir",
             "conformance/SEM/SEM-1-http-client-stream-run.hir",
             "conformance/SEM/SEM-1-http-headers-many-run.hir",
             "conformance/SEM/SEM-1-http-headers-limits-run.hir",

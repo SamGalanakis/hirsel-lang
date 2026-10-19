@@ -1927,6 +1927,10 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
     return Error(OutOfOrder())
   }
   c.state = 3
+  // Until the next head is validated, no peer version or HEAD semantics
+  // may carry over from the preceding request. HTTP/1.0 is the safe fallback.
+  c.version = Http10()
+  c.head_request = false
   let mut idle = c.served && bufio.buffered(c.input) == 0
   // Validate the configuration and clock even when the connection starts idle.
   let initial_deadline = http_server_deadline(clock, c.config.read_timeout)?
