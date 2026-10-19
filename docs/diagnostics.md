@@ -166,3 +166,9 @@ Typical fix: To keep a copyable counted value available while passing an owned a
 Resources, task handles, Receivers, once closures, arenas, regions and values containing them can only be moved or borrowed.
 
 Typical fix: Borrow the value when the callee only reads it. To transfer an owned value at its last use, write `take value`; change a borrowed parameter to a `take` parameter if the function must consume it. `copy value` cannot repair a noncopyable type.
+
+## OWN-7: Published storage
+
+Published Shared and region storage is immutable.
+
+Typical fix: Read frozen contents with `shared.with`. To modify Shared contents, consume the owning handle with `shared.thaw(take value)` and handle its still-shared Error result before mutating the unique Ok value. Modify region contents before publication.
