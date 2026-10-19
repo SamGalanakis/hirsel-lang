@@ -9,7 +9,7 @@
 //! a generation; dropping one closes it through [`close`], reached from the handle close of
 //! `finalize.rs` instead of the Io adapter.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ptr::NonNull;
 
 use crate::{Header, fault};
@@ -26,6 +26,10 @@ struct Channel {
     queue: VecDeque<NonNull<Header>>,
     senders: u32,
     receivers: u32,
+    /// The tasks parked receiving, by their place in park order.
+    waiting: BTreeMap<u64, u32>,
+    /// A send or a sender's close since the last scheduling point.
+    touched: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -43,6 +47,8 @@ pub(crate) struct Channels {
     endpoints: Vec<Option<Endpoint>>,
     vacant_endpoints: Vec<u32>,
     generation: u32,
+    /// The channels whose `touched` is set.
+    touched: Vec<u32>,
 }
 
 impl Channels {
@@ -52,6 +58,8 @@ impl Channels {
             queue: VecDeque::new(),
             senders: 1,
             receivers: 1,
+            waiting: BTreeMap::new(),
+            touched: false,
         };
         let channel = match self.vacant_channels.pop() {
             Some(index) => {
@@ -124,7 +132,45 @@ impl Channels {
             return CLOSED;
         }
         row.queue.push_back(message);
+        self.touch(channel);
         DONE
+    }
+
+    /// A parked receiver may be served: the next scheduling point wakes it.
+    fn touch(&mut self, channel: u32) {
+        let row = self.row(channel);
+        if !row.waiting.is_empty() && !row.touched {
+            row.touched = true;
+            self.touched.push(channel);
+        }
+    }
+
+    /// The channels touched since the last scheduling point.
+    pub(crate) fn take_touched(&mut self) -> Vec<u32> {
+        let touched = std::mem::take(&mut self.touched);
+        for &channel in &touched {
+            if let Some(Some(row)) = self.channels.get_mut(channel as usize) {
+                row.touched = false;
+            }
+        }
+        touched
+    }
+
+    /// `task` parked receiving on `channel` at park place `at`.
+    pub(crate) fn wait(&mut self, channel: u32, at: u64, task: u32) {
+        self.row(channel).waiting.insert(at, task);
+    }
+    /// The receiver parked at `at` is no longer waiting.
+    pub(crate) fn unwait(&mut self, channel: u32, at: u64) {
+        if let Some(Some(row)) = self.channels.get_mut(channel as usize) {
+            row.waiting.remove(&at);
+        }
+    }
+    /// A live channel's queued message count, whether no sender is left, and its parked
+    /// receivers in park order.
+    pub(crate) fn waiting(&self, channel: u32) -> Option<(usize, bool, &BTreeMap<u64, u32>)> {
+        let row = self.channels.get(channel as usize)?.as_ref()?;
+        Some((row.queue.len(), row.senders == 0, &row.waiting))
     }
 
     /// The oldest queued message, `Err(CLOSED)` once the queue is empty and no sender is left,
@@ -156,9 +202,13 @@ impl Channels {
                 left = std::mem::take(&mut row.queue);
             }
         }
-        if row.senders == 0 && row.receivers == 0 {
+        let (senders, receivers) = (row.senders, row.receivers);
+        if senders == 0 && receivers == 0 {
             self.channels[endpoint.channel as usize] = None;
             self.vacant_channels.push(endpoint.channel);
+        } else if senders == 0 && endpoint.sender {
+            // The parked receivers now see Closed.
+            self.touch(endpoint.channel);
         }
         left
     }

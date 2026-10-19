@@ -469,33 +469,38 @@ impl Adapter for RealIo {
             log.finish(token);
         }
     }
+    fn parked(&mut self, token: u64) {
+        if let Some((readiness, log)) = &mut self.cooperative {
+            readiness.parked(token);
+            log.parked(token);
+        }
+    }
     fn cancellable(&self, token: u64) -> bool {
         self.cooperative
             .as_ref()
             .is_none_or(|(readiness, _)| readiness.cancellable(token))
     }
-    fn ready(&mut self, token: u64) -> Result<bool, AdapterError> {
+    /// The tokens the Readiness finds ready, each recorded as its wait's `ready` event, in
+    /// token (so ordinal) order, before any of them is re-issued.
+    fn ready(&mut self) -> Result<Ready, AdapterError> {
         let Some((readiness, log)) = &mut self.cooperative else {
-            return Ok(true);
+            return Ok(Ready::Tokens(Vec::new()));
         };
-        let ready = readiness.ready(token)?;
-        let Some(row) = log.row(token) else {
-            return Ok(ready);
-        };
-        if !ready {
-            row.polls += 1;
-            return Ok(false);
+        log.point();
+        let tokens = readiness.ready()?;
+        let events: Vec<Event> = tokens
+            .iter()
+            .filter_map(|&token| log.ready(token))
+            .map(|(wait, points)| Event {
+                request: Request::Ready { wait, points },
+                completion: Completion::Ready,
+                fault: None,
+            })
+            .collect();
+        for event in events {
+            self.record(event)?;
         }
-        let event = Event {
-            request: Request::Ready {
-                wait: row.ordinal,
-                polls: std::mem::take(&mut row.polls),
-            },
-            completion: Completion::Ready,
-            fault: None,
-        };
-        self.record(event)?;
-        Ok(true)
+        Ok(Ready::Tokens(tokens))
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         match &self.cooperative {

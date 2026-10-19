@@ -488,10 +488,11 @@ pub enum Request {
         path: String,
     },
     /// A scheduling input of cooperative runs, never a capability request: the parked
-    /// request of wait `wait` (creation ordinal) became ready after `polls` failed polls.
+    /// request of wait `wait` (creation ordinal) was ready at the scheduling point after the
+    /// `points` it waited through since it parked or was last ready, and was re-issued there.
     Ready {
         wait: u64,
-        polls: u64,
+        points: u64,
     },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1862,18 +1863,40 @@ pub trait Adapter {
     fn enter(&mut self, _token: u64) {}
     /// The request under `token` completed or was canceled.
     fn finish(&mut self, _token: u64) {}
+    /// The task of the request that blocked under `token` parked (an armed scope deadline
+    /// parks at once): it waits from the next scheduling point on.
+    fn parked(&mut self, _token: u64) {}
     /// Whether the request parked under `token` has committed no effect yet.
     fn cancellable(&self, _token: u64) -> bool {
         true
     }
-    /// A poll of the request parked under `token`: whether to re-issue it.
-    fn ready(&mut self, _token: u64) -> Result<bool, AdapterError> {
-        Ok(true)
+    /// A scheduling point with a parked request: the requests to re-issue now. A
+    /// cooperative host answers the tokens whose interest is ready, in token order; the
+    /// default (a scripted world) re-issues every parked request.
+    fn ready(&mut self) -> Result<Ready, AdapterError> {
+        Ok(Ready::Every)
     }
     /// With no runnable task, wait until some parked request may be ready. False when no
     /// source can make one ready.
     fn wait(&mut self) -> Result<bool, AdapterError> {
         Ok(false)
+    }
+}
+
+/// The parked requests a scheduling point re-issues ([`Adapter::ready`]).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Ready {
+    /// Every parked request.
+    Every,
+    /// Exactly these tokens, in token order.
+    Tokens(Vec<u64>),
+}
+impl Ready {
+    pub fn contains(&self, token: u64) -> bool {
+        match self {
+            Ready::Every => true,
+            Ready::Tokens(tokens) => tokens.binary_search(&token).is_ok(),
+        }
     }
 }
 

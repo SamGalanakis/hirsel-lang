@@ -247,8 +247,31 @@ fn name_of(
     from_c(&storage)
 }
 
+/// A TCP socket for a connect or a listen, with Nagle's algorithm off (`no_delay`).
 fn new_socket(ip: std::net::IpAddr) -> Result<OwnedFd, NetError> {
-    new_socket_kind(ip, libc::SOCK_STREAM)
+    let socket = new_socket_kind(ip, libc::SOCK_STREAM)?;
+    no_delay(socket.as_raw_fd())?;
+    Ok(socket)
+}
+/// `TCP_NODELAY` on a TCP stream: a write is sent at once instead of waiting for the ACK of
+/// an earlier small segment, which a peer's delayed ACK holds for tens of milliseconds
+/// (an HTTP response's head and body, a request after a keep-alive response).
+fn no_delay(fd: libc::c_int) -> Result<(), NetError> {
+    let on: libc::c_int = 1;
+    // SAFETY: TCP_NODELAY reads one int.
+    if unsafe {
+        libc::setsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_NODELAY,
+            (&raw const on).cast(),
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    } == -1
+    {
+        return Err(error(errno()));
+    }
+    Ok(())
 }
 fn new_socket_kind(ip: std::net::IpAddr, kind: libc::c_int) -> Result<OwnedFd, NetError> {
     let family = if ip.is_ipv4() {
@@ -797,6 +820,9 @@ impl NetProvider for HostNet {
                 // SAFETY: a fresh descriptor owned by nobody else.
                 let socket = unsafe { OwnedFd::from_raw_fd(accepted) };
                 let peer = from_c(&storage)?;
+                if libc::c_int::from(storage.ss_family) != libc::AF_UNIX {
+                    no_delay(accepted)?;
+                }
                 assert!(self.sockets.insert(id, socket).is_none());
                 return Ok(peer);
             }

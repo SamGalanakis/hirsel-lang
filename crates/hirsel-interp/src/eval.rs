@@ -460,6 +460,7 @@ fn execute_frames(
             match result {
                 OperationResult::Park { token, wait } => {
                     frame.operation = Some((OperationResult::Park { token, wait }, state));
+                    operations.parked(token);
                     parked.push((
                         task,
                         std::mem::take(&mut frames),

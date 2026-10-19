@@ -33,7 +33,7 @@ use crate::failure::{
     hirsel_rt_v2_failure_primary,
 };
 use crate::io::{
-    Adapter, AdapterError, Binding, ClockError, Completion, Event, IoError, Request, Tree,
+    Adapter, AdapterError, Binding, ClockError, Completion, Event, IoError, Ready, Request, Tree,
     hirsel_rt_v2_io_close,
 };
 use crate::io_real::RealIo;
@@ -120,8 +120,11 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn cancellable(&self, token: u64) -> bool {
         self.0.borrow().cancellable(token)
     }
-    fn ready(&mut self, token: u64) -> Result<bool, AdapterError> {
-        self.0.borrow_mut().ready(token)
+    fn parked(&mut self, token: u64) {
+        self.0.borrow_mut().parked(token);
+    }
+    fn ready(&mut self) -> Result<Ready, AdapterError> {
+        self.0.borrow_mut().ready()
     }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         self.0.borrow_mut().wait()

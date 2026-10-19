@@ -549,9 +549,9 @@ impl crate::io::State {
         self.net_world = NetWorld::Script(0);
         Ok(())
     }
-    fn net_grant(&self, net: u64) -> Result<(BTreeSet<NetRule>, NetWorld), AdapterError> {
+    fn net_grant(&self, net: u64) -> Result<(&BTreeSet<NetRule>, NetWorld), AdapterError> {
         match self.handles.rows.get(&net) {
-            Some(crate::handles::Grant::Net { rules, world }) => Ok((rules.clone(), *world)),
+            Some(crate::handles::Grant::Net { rules, world }) => Ok((rules, *world)),
             _ => Err(AdapterError::InvalidHandle(net)),
         }
     }
@@ -851,6 +851,8 @@ impl crate::io::State {
             }
             R::UdpRecv { net, socket, max } => {
                 let (rules, world) = self.net_grant(*net)?;
+                // A receive loop drops refused datagrams while the world is borrowed mutably.
+                let rules = rules.clone();
                 loop {
                     let value = provided(self.world(world, host)?.udp_recv(*socket))?;
                     match value {

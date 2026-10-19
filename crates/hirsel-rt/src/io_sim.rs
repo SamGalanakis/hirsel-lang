@@ -162,48 +162,59 @@ impl Adapter for SimIo {
     fn finish(&mut self, token: u64) {
         self.waits.finish(token);
     }
+    fn parked(&mut self, token: u64) {
+        self.waits.parked(token);
+    }
     fn cancellable(&self, token: u64) -> bool {
         self.waits.rows_of(token).is_none_or(|row| !row.committed)
     }
-    /// Ready exactly at the poll the recording made ready: the next event is its `ready`
-    /// with this many failed polls.
-    fn ready(&mut self, token: u64) -> Result<bool, AdapterError> {
-        let next = self.tape.get(self.position).map(|event| &event.request);
-        let Some(row) = self.waits.row(token) else {
-            return Ok(true);
-        };
-        if next
-            == Some(&Request::Ready {
-                wait: row.ordinal,
-                polls: row.polls,
-            })
+    /// The waits the recording re-issued at this scheduling point: the `ready` events at
+    /// the tape's head whose wait has waited through exactly the recorded points.
+    fn ready(&mut self) -> Result<Ready, AdapterError> {
+        self.waits.point();
+        let mut tokens = Vec::new();
+        while let Some(Request::Ready { wait, points }) =
+            self.tape.get(self.position).map(|event| &event.request)
         {
-            row.polls = 0;
+            let Some(token) = self
+                .waits
+                .token_of(*wait)
+                .filter(|&t| self.waits.rows_of(t).is_some_and(|row| row.parked))
+            else {
+                break;
+            };
+            let waited = self.waits.points(token).unwrap();
+            if waited < *points {
+                break;
+            }
+            if waited > *points {
+                return Err(AdapterError::ReplayMismatch(self.position));
+            }
+            self.waits.ready(token);
             self.position += 1;
-            return Ok(true);
+            tokens.push(token);
         }
-        row.polls += 1;
-        Ok(false)
+        tokens.sort_unstable();
+        Ok(Ready::Tokens(tokens))
     }
-    /// No host wait: idle polls continue only toward the next recorded `ready`, which must
-    /// belong to a parked request that has not been polled past it.
+    /// No host wait: idle scheduling points continue only toward the next recorded `ready`,
+    /// which must belong to a parked request that has not waited past it.
     fn wait(&mut self) -> Result<bool, AdapterError> {
-        if self.waits.rows().next().is_none() {
+        if self.waits.is_empty() {
             return Ok(false);
         }
-        let Some(Request::Ready { wait, polls }) =
+        let Some(Request::Ready { wait, points }) =
             self.tape.get(self.position).map(|event| &event.request)
         else {
             return Err(AdapterError::MissingInput(self.position));
         };
-        if self
+        match self
             .waits
-            .rows()
-            .any(|row| row.ordinal == *wait && row.polls <= *polls)
+            .token_of(*wait)
+            .and_then(|t| self.waits.next_points(t))
         {
-            Ok(true)
-        } else {
-            Err(AdapterError::ReplayMismatch(self.position))
+            Some(waited) if waited <= *points => Ok(true),
+            _ => Err(AdapterError::ReplayMismatch(self.position)),
         }
     }
     fn replay_stderr(&self) -> Vec<u8> {

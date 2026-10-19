@@ -1,13 +1,17 @@
-//! Host readiness for the interpreter's cooperative scheduler. A host operation that
-//! would block (a socket, a resolver wakeup, stdin) records its descriptor interest under
-//! the scheduler's opaque wait token; the scheduler polls one token at suspension points
-//! and, with no runnable task, waits on every recorded interest at once. A timer wait
-//! is a deadline with no descriptor interest.
+//! Host readiness for the cooperative schedulers (the interpreter's and the compiled run's).
+//! A host operation that would block (a socket, a resolver wakeup, stdin, a process job)
+//! records its descriptor interest or deadline under the scheduler's opaque wait token. The
+//! interests live in one persistent epoll set and the deadlines in a timer heap, so a
+//! scheduling point asks [`Readiness::ready`] for exactly the tokens that are ready, at a cost
+//! independent of how many operations are parked, and with no runnable task
+//! [`Readiness::wait`] sleeps in one `epoll_wait` until a descriptor is ready or the earliest
+//! deadline passes. A timer wait is a deadline with no descriptor interest.
 use crate::io::AdapterError;
 use crate::net::{NetError, SocketAddr};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
-use std::os::fd::OwnedFd;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
@@ -20,6 +24,23 @@ struct ReadyState {
     current: u64,
     virtual_time: Option<u64>,
     pending: BTreeMap<u64, Pending>,
+    /// Tokens whose Pending a provider borrowed since the last scheduling point: their
+    /// interest and deadline are registered before the next readiness question.
+    touched: BTreeSet<u64>,
+    /// The epoll set, created at the first descriptor interest.
+    epoll: Option<OwnedFd>,
+    /// Each registered descriptor's tokens and the events each waits for; the descriptor's
+    /// registration is the union.
+    fds: HashMap<libc::c_int, Vec<(u64, libc::c_short)>>,
+    /// Deadlines by time, then token; an entry whose token no longer has that deadline is
+    /// stale and skipped.
+    timers: BinaryHeap<Reverse<(Instant, u64)>>,
+    virtual_timers: BinaryHeap<Reverse<(u64, u64)>>,
+    /// Parked tokens with neither interest nor deadline, or whose descriptor epoll cannot
+    /// watch (a regular file): ready at every scheduling point, as a poll(2) of them is.
+    always: BTreeSet<u64>,
+    /// Tokens the idle wait found ready, for the next scheduling point.
+    woken: BTreeSet<u64>,
 }
 /// One parked operation's interest plus the progress a retried network
 /// operation keeps across readiness waits (CooperativeNet).
@@ -36,6 +57,12 @@ pub(crate) struct Pending {
     pub(crate) committed: bool,
     /// A host process operation running on its helper thread; dropping it kills the child.
     pub(crate) process: Option<crate::process::HostJob>,
+    /// Its task parked ([`Readiness::parked`]): only then is it reported ready.
+    parked: bool,
+    /// What the epoll set and the timer heaps hold for this token.
+    registered: Option<(libc::c_int, libc::c_short)>,
+    timer: Option<Instant>,
+    virtual_timer: Option<u64>,
 }
 impl Readiness {
     /// Harness-only virtual time: samples are stable while runnable work remains.
@@ -49,7 +76,9 @@ impl Readiness {
     }
     pub(crate) fn pending(&self) -> std::cell::RefMut<'_, Pending> {
         std::cell::RefMut::map(self.0.borrow_mut(), |state| {
-            state.pending.entry(state.current).or_default()
+            let token = state.current;
+            state.touched.insert(token);
+            state.pending.entry(token).or_default()
         })
     }
 
@@ -58,7 +87,33 @@ impl Readiness {
         self.0.borrow_mut().current = token;
     }
     pub fn finish(&self, token: u64) {
-        self.0.borrow_mut().pending.remove(&token);
+        let mut state = self.0.borrow_mut();
+        state.touched.remove(&token);
+        state.always.remove(&token);
+        state.woken.remove(&token);
+        if let Some(pending) = state.pending.remove(&token)
+            && let Some((fd, _)) = pending.registered
+        {
+            state.unregister(token, fd);
+        }
+    }
+    /// The task of the request blocked under `token` parked: from the next scheduling point
+    /// on, [`ready`](Self::ready) reports the token when its interest is ready.
+    pub fn parked(&self, token: u64) {
+        let mut state = self.0.borrow_mut();
+        let virtual_time = state.virtual_time;
+        let Some(pending) = state.pending.get_mut(&token) else {
+            return;
+        };
+        pending.parked = true;
+        // A deadline that passed before the park left the heap unreported.
+        let due = match (virtual_time, pending.virtual_deadline) {
+            (Some(now), Some(deadline)) => now >= deadline,
+            _ => pending.deadline.is_some_and(|d| Instant::now() >= d),
+        };
+        if due {
+            state.woken.insert(token);
+        }
     }
     /// After a packet is sent or a write is accepted, the operation must complete
     /// with its own outcome rather than report an effect-free cancellation.
@@ -69,36 +124,29 @@ impl Readiness {
             .get(&token)
             .is_none_or(|p| !p.committed)
     }
-    pub fn ready(&self, token: u64) -> Result<bool, AdapterError> {
-        let state = self.0.borrow();
-        let Some(pending) = state.pending.get(&token) else {
-            return Ok(true);
-        };
-        if let Some(deadline) = pending.virtual_deadline {
-            return Ok(state.virtual_time.is_some_and(|now| now >= deadline));
+    /// A scheduling point: the parked tokens that are ready now (a watched descriptor is
+    /// ready, a deadline passed, or the token waits on nothing epoll can watch), in token
+    /// order. Never blocks; each ready token's operation is re-issued by the caller.
+    pub fn ready(&self) -> Result<Vec<u64>, AdapterError> {
+        let mut state = self.0.borrow_mut();
+        state.sync()?;
+        let mut ready = std::mem::take(&mut state.woken);
+        ready.extend(state.always.iter().copied());
+        if !state.fds.is_empty() {
+            state.epoll_events(0, &mut ready)?;
         }
-        if pending.deadline.is_some_and(|d| Instant::now() >= d) {
-            return Ok(true);
-        }
-        let Some((fd, events)) = pending.interest else {
-            // A timer is ready only at its deadline.
-            return Ok(pending.deadline.is_none());
-        };
-        let mut row = libc::pollfd {
-            fd,
-            events,
-            revents: 0,
-        };
-        loop {
-            // SAFETY: row contains a live descriptor retained by the provider or Pending.
-            let n = unsafe { libc::poll(&mut row, 1, 0) };
-            if n >= 0 {
-                return Ok(n != 0);
-            }
-            if errno() != libc::EINTR {
-                return Err(AdapterError::Unsupported("host readiness poll".into()));
-            }
-        }
+        state.due(&mut ready);
+        let (parked, waiting): (Vec<u64>, Vec<u64>) = ready
+            .into_iter()
+            .filter(|token| state.pending.contains_key(token))
+            .partition(|token| state.pending[token].parked);
+        // The idle wait's findings for a request whose task has not parked yet stay.
+        let waiting: Vec<u64> = waiting
+            .into_iter()
+            .filter(|t| !state.always.contains(t))
+            .collect();
+        state.woken.extend(waiting);
+        Ok(parked)
     }
     /// A timer wait for CLOCK_MONOTONIC `deadline` nanoseconds under the entered token:
     /// true once it has passed (the token's interest is then finished), otherwise the
@@ -131,57 +179,281 @@ impl Readiness {
         self.pending().deadline = Some(Instant::now() + left);
         Ok(false)
     }
-    /// Called only with no runnable task. A false result means this provider has
-    /// no external readiness source (e.g. the remaining waits are scripted).
+    /// Called only with no runnable task: sleep until a parked token may be ready. A false
+    /// result means this provider has no external readiness source (e.g. the remaining waits
+    /// are scripted).
     pub fn wait(&self) -> Result<bool, AdapterError> {
-        {
-            let mut state = self.0.borrow_mut();
-            if let Some(now) = state.virtual_time {
-                let next = state
-                    .pending
-                    .values()
-                    .filter_map(|p| p.virtual_deadline)
-                    .min();
-                if let Some(next) = next {
-                    state.virtual_time = Some(now.max(next));
-                    return Ok(true);
-                }
-                return Ok(false);
-            }
-        }
-        let state = self.0.borrow();
-        let mut rows: Vec<_> = state
-            .pending
-            .values()
-            .filter_map(|p| {
-                p.interest.map(|(fd, events)| libc::pollfd {
-                    fd,
-                    events,
-                    revents: 0,
-                })
-            })
-            .collect();
-        // No descriptor and no timer: nothing external can make progress. With only
-        // timers left, the poll below sleeps until the earliest is due.
-        if rows.is_empty() && state.pending.values().all(|p| p.deadline.is_none()) {
-            return Ok(false);
-        }
-        loop {
-            let deadline = state.pending.values().filter_map(|p| p.deadline).min();
-            let timeout = deadline.map_or(-1, |d| {
-                let left = d.saturating_duration_since(Instant::now());
-                left.as_millis()
-                    .saturating_add(u128::from(!left.is_zero()))
-                    .min(libc::c_int::MAX as u128) as libc::c_int
-            });
-            // SAFETY: all rows borrow descriptors whose owners outlive this poll.
-            if unsafe { libc::poll(rows.as_mut_ptr(), rows.len() as libc::nfds_t, timeout) } >= 0 {
+        let mut state = self.0.borrow_mut();
+        state.sync()?;
+        if let Some(now) = state.virtual_time {
+            let next = state.next_virtual();
+            if let Some(next) = next {
+                state.virtual_time = Some(now.max(next));
                 return Ok(true);
             }
-            if errno() != libc::EINTR {
-                return Err(AdapterError::Unsupported("host readiness poll".into()));
+            return Ok(false);
+        }
+        if !state.always.is_empty() || !state.woken.is_empty() {
+            return Ok(true);
+        }
+        let deadline = state.next_timer();
+        // No descriptor and no timer: nothing external can make progress. With only
+        // timers left, the wait below sleeps until the earliest is due.
+        if state.fds.is_empty() && deadline.is_none() {
+            return Ok(false);
+        }
+        let timeout = deadline.map_or(-1, |d| {
+            let left = d.saturating_duration_since(Instant::now());
+            left.as_millis()
+                .saturating_add(u128::from(!left.is_zero()))
+                .min(libc::c_int::MAX as u128) as libc::c_int
+        });
+        let mut woken = std::mem::take(&mut state.woken);
+        if state.fds.is_empty() {
+            // SAFETY: a plain sleep; no descriptor is involved. A signal restarts it.
+            while unsafe { libc::poll(std::ptr::null_mut(), 0, timeout) } < 0 {
+                if errno() != libc::EINTR {
+                    return Err(AdapterError::Unsupported("host readiness poll".into()));
+                }
+            }
+        } else {
+            state.epoll_events(timeout, &mut woken)?;
+        }
+        state.woken = woken;
+        Ok(true)
+    }
+}
+
+impl ReadyState {
+    /// Register the interest and deadline of every token a provider touched.
+    fn sync(&mut self) -> Result<(), AdapterError> {
+        for token in std::mem::take(&mut self.touched) {
+            let Some(pending) = self.pending.get_mut(&token) else {
+                continue;
+            };
+            let (interest, registered) = (pending.interest, pending.registered);
+            let mut timers = Vec::new();
+            if let Some(deadline) = pending.deadline
+                && pending.timer != Some(deadline)
+            {
+                pending.timer = Some(deadline);
+                timers.push(deadline);
+            }
+            let mut virtual_timer = None;
+            if let Some(deadline) = pending.virtual_deadline
+                && pending.virtual_timer != Some(deadline)
+            {
+                pending.virtual_timer = Some(deadline);
+                virtual_timer = Some(deadline);
+            }
+            let watched = interest.is_some() || pending.deadline.is_some();
+            let timed = pending.virtual_deadline.is_some();
+            for deadline in timers {
+                self.timers.push(Reverse((deadline, token)));
+            }
+            if let Some(deadline) = virtual_timer {
+                self.virtual_timers.push(Reverse((deadline, token)));
+            }
+            if let Some((fd, _)) = registered
+                && interest.is_none_or(|(new, _)| new != fd)
+            {
+                self.unregister(token, fd);
+            }
+            let mut always = !watched && !timed;
+            if let Some((fd, events)) = interest {
+                // Re-registered on every park, even unchanged: a descriptor closed and
+                // reopened under the same number left the epoll set when it closed.
+                let entry = self.fds.entry(fd).or_default();
+                match entry.iter_mut().find(|(t, _)| *t == token) {
+                    Some(row) => row.1 = events,
+                    None => entry.push((token, events)),
+                }
+                let union = entry.iter().fold(0, |all, (_, e)| all | *e);
+                if self.control(fd, union)? {
+                    self.pending.get_mut(&token).unwrap().registered = Some((fd, events));
+                } else {
+                    // A descriptor epoll cannot watch is always ready, as poll(2) reports it.
+                    self.forget(token, fd);
+                    self.pending.get_mut(&token).unwrap().registered = None;
+                    always = true;
+                }
+            }
+            if always {
+                self.always.insert(token);
+            } else {
+                self.always.remove(&token);
             }
         }
+        Ok(())
+    }
+    /// Drop `token` from descriptor `fd`'s watchers and update or remove its registration.
+    fn unregister(&mut self, token: u64, fd: libc::c_int) {
+        if let Some(pending) = self.pending.get_mut(&token) {
+            pending.registered = None;
+        }
+        let Some(rows) = self.fds.get_mut(&fd) else {
+            return;
+        };
+        rows.retain(|(t, _)| *t != token);
+        if rows.is_empty() {
+            self.fds.remove(&fd);
+            if let Some(epoll) = &self.epoll {
+                // A descriptor already closed left the set by itself (ENOENT or EBADF).
+                // SAFETY: plain epoll control call on our own set.
+                unsafe {
+                    libc::epoll_ctl(
+                        epoll.as_raw_fd(),
+                        libc::EPOLL_CTL_DEL,
+                        fd,
+                        std::ptr::null_mut(),
+                    )
+                };
+            }
+        } else {
+            let union = rows.iter().fold(0, |all, (_, e)| all | *e);
+            // An unwatchable or closed descriptor cannot be registered; its remaining
+            // tokens keep their rows and the next park re-registers them.
+            let _ = self.control(fd, union);
+        }
+    }
+    fn forget(&mut self, token: u64, fd: libc::c_int) {
+        if let Some(rows) = self.fds.get_mut(&fd) {
+            rows.retain(|(t, _)| *t != token);
+            if rows.is_empty() {
+                self.fds.remove(&fd);
+            }
+        }
+    }
+    /// Watch `fd` for `events` (poll(2) bits, which epoll shares): modify its registration,
+    /// adding it when absent. False when epoll cannot watch the descriptor.
+    fn control(&mut self, fd: libc::c_int, events: libc::c_short) -> Result<bool, AdapterError> {
+        let epoll = match &self.epoll {
+            Some(epoll) => epoll.as_raw_fd(),
+            None => {
+                // SAFETY: plain epoll creation; the descriptor is owned at once.
+                let created = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+                if created == -1 {
+                    return Err(AdapterError::Unsupported("host readiness epoll".into()));
+                }
+                // SAFETY: a fresh descriptor owned by nobody else.
+                self.epoll = Some(unsafe { OwnedFd::from_raw_fd(created) });
+                created
+            }
+        };
+        let mut event = libc::epoll_event {
+            events: events as u16 as u32,
+            u64: fd as u64,
+        };
+        for op in [libc::EPOLL_CTL_MOD, libc::EPOLL_CTL_ADD] {
+            // SAFETY: event is a valid epoll_event; fd is a live descriptor its provider holds.
+            if unsafe { libc::epoll_ctl(epoll, op, fd, &mut event) } == 0 {
+                return Ok(true);
+            }
+            match errno() {
+                libc::ENOENT if op == libc::EPOLL_CTL_MOD => continue,
+                libc::EPERM => return Ok(false),
+                _ => return Err(AdapterError::Unsupported("host readiness epoll".into())),
+            }
+        }
+        unreachable!()
+    }
+    /// Add the tokens of descriptors epoll reports ready within `timeout` milliseconds.
+    fn epoll_events(
+        &mut self,
+        timeout: libc::c_int,
+        ready: &mut BTreeSet<u64>,
+    ) -> Result<(), AdapterError> {
+        const BATCH: usize = 256;
+        let epoll = self.epoll.as_ref().unwrap().as_raw_fd();
+        let mut events = [libc::epoll_event { events: 0, u64: 0 }; BATCH];
+        let mut timeout = timeout;
+        loop {
+            // SAFETY: events holds BATCH writable entries.
+            let n = unsafe { libc::epoll_wait(epoll, events.as_mut_ptr(), BATCH as i32, timeout) };
+            if n < 0 {
+                if errno() == libc::EINTR {
+                    continue;
+                }
+                return Err(AdapterError::Unsupported("host readiness epoll".into()));
+            }
+            for event in &events[..n as usize] {
+                let fd = event.u64 as libc::c_int;
+                let revents = event.events;
+                for (token, wanted) in self.fds.get(&fd).into_iter().flatten() {
+                    let wanted =
+                        (*wanted as u16 as u32) | libc::EPOLLERR as u32 | libc::EPOLLHUP as u32;
+                    if revents & wanted != 0 {
+                        ready.insert(*token);
+                    }
+                }
+            }
+            if (n as usize) < BATCH {
+                return Ok(());
+            }
+            // A full batch: take the rest without waiting.
+            timeout = 0;
+        }
+    }
+    /// Add the tokens whose deadline has passed.
+    fn due(&mut self, ready: &mut BTreeSet<u64>) {
+        if let Some(now) = self.virtual_time {
+            while let Some(&Reverse((deadline, token))) = self.virtual_timers.peek() {
+                if deadline > now {
+                    break;
+                }
+                self.virtual_timers.pop();
+                if let Some(pending) = self.pending.get_mut(&token)
+                    && pending.virtual_timer == Some(deadline)
+                {
+                    pending.virtual_timer = None;
+                    ready.insert(token);
+                }
+            }
+            return;
+        }
+        if self.timers.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        while let Some(&Reverse((deadline, token))) = self.timers.peek() {
+            if deadline > now {
+                break;
+            }
+            self.timers.pop();
+            if let Some(pending) = self.pending.get_mut(&token)
+                && pending.timer == Some(deadline)
+            {
+                pending.timer = None;
+                ready.insert(token);
+            }
+        }
+    }
+    /// The earliest live deadline, dropping stale heap entries.
+    fn next_timer(&mut self) -> Option<Instant> {
+        while let Some(&Reverse((deadline, token))) = self.timers.peek() {
+            if self
+                .pending
+                .get(&token)
+                .is_some_and(|p| p.timer == Some(deadline))
+            {
+                return Some(deadline);
+            }
+            self.timers.pop();
+        }
+        None
+    }
+    fn next_virtual(&mut self) -> Option<u64> {
+        while let Some(&Reverse((deadline, token))) = self.virtual_timers.peek() {
+            if self
+                .pending
+                .get(&token)
+                .is_some_and(|p| p.virtual_timer == Some(deadline))
+            {
+                return Some(deadline);
+            }
+            self.virtual_timers.pop();
+        }
+        None
     }
 }
 
@@ -191,18 +463,26 @@ fn errno() -> libc::c_int {
 
 /// The deterministic identity of cooperative waits, kept alike by live recording (`RealIo`)
 /// and replay (`SimIo`): the request that first blocks under a token gets the run's next
-/// creation ordinal, and the failed polls since it parked or was last ready are counted.
-/// Tapes carry `blocked` completions and `ready <ordinal> <polls>` events from it (DET-1).
+/// creation ordinal, and each wait counts the scheduling points it waited through since its
+/// task parked or it was last ready. Tapes carry `blocked` completions and, at a scheduling point,
+/// one `ready <ordinal> <points>` event per wait it re-issues, in ordinal order (DET-1).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WaitLog {
     current: u64,
     next: u64,
+    /// Scheduling points with a parked wait so far.
+    point: u64,
     rows: BTreeMap<u64, WaitRow>,
+    /// Each row's token by its ordinal.
+    ordinals: BTreeMap<u64, u64>,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct WaitRow {
     pub(crate) ordinal: u64,
-    pub(crate) polls: u64,
+    /// The scheduling point at which its task parked or it was last ready.
+    since: u64,
+    /// Its task parked.
+    pub(crate) parked: bool,
     pub(crate) committed: bool,
 }
 impl WaitLog {
@@ -210,32 +490,66 @@ impl WaitLog {
         self.current = token;
     }
     pub(crate) fn finish(&mut self, token: u64) {
-        self.rows.remove(&token);
+        if let Some(row) = self.rows.remove(&token) {
+            self.ordinals.remove(&row.ordinal);
+        }
     }
     pub(crate) fn current(&self) -> u64 {
         self.current
     }
     /// The entered request blocked: its row, created with the next ordinal the first time.
     pub(crate) fn park(&mut self, committed: bool) -> &mut WaitRow {
-        let next = &mut self.next;
+        let (next, point) = (&mut self.next, self.point);
         let row = self.rows.entry(self.current).or_insert_with(|| {
             *next += 1;
             WaitRow {
                 ordinal: *next - 1,
-                polls: 0,
+                since: point,
+                parked: false,
                 committed,
             }
         });
         row.committed = committed;
+        self.ordinals.insert(row.ordinal, self.current);
         row
+    }
+    /// The task of `token`'s blocked request parked at this point.
+    pub(crate) fn parked(&mut self, token: u64) {
+        let point = self.point;
+        if let Some(row) = self.rows.get_mut(&token) {
+            row.since = point;
+            row.parked = true;
+        }
     }
     pub(crate) fn rows_of(&self, token: u64) -> Option<&WaitRow> {
         self.rows.get(&token)
     }
-    pub(crate) fn row(&mut self, token: u64) -> Option<&mut WaitRow> {
-        self.rows.get_mut(&token)
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rows.is_empty()
     }
-    pub(crate) fn rows(&self) -> impl Iterator<Item = &WaitRow> {
-        self.rows.values()
+    /// A new scheduling point.
+    pub(crate) fn point(&mut self) {
+        self.point += 1;
+    }
+    /// The scheduling points `token`'s wait has waited through before this one.
+    pub(crate) fn points(&self, token: u64) -> Option<u64> {
+        let row = self.rows.get(&token)?;
+        Some(self.point - row.since - 1)
+    }
+    /// The points `token`'s wait will have waited through at the next scheduling point.
+    pub(crate) fn next_points(&self, token: u64) -> Option<u64> {
+        Some(self.point - self.rows.get(&token)?.since)
+    }
+    /// `token`'s wait is ready at this scheduling point: its `ready` event's wait and points.
+    pub(crate) fn ready(&mut self, token: u64) -> Option<(u64, u64)> {
+        let points = self.points(token)?;
+        let point = self.point;
+        let row = self.rows.get_mut(&token)?;
+        row.since = point;
+        Some((row.ordinal, points))
+    }
+    /// The parked token of wait `ordinal`.
+    pub(crate) fn token_of(&self, ordinal: u64) -> Option<u64> {
+        self.ordinals.get(&ordinal).copied()
     }
 }

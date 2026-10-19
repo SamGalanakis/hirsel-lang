@@ -16,6 +16,8 @@ mod ergonomics;
 mod exit_report;
 #[path = "cli/https.rs"]
 mod https;
+#[path = "cli/ready_together.rs"]
+mod ready_together;
 #[path = "cli/replay.rs"]
 mod replay;
 #[path = "cli/select_race.rs"]

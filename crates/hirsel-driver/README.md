@@ -112,8 +112,9 @@ enforcement, in the order native code issues them, so one tape replays in either
 The interpreter has no host effects: live stdout and stderr are written by the runtime
 adapter, and a replay copies its recorded output to the process's streams. HostLibrary
 drives cooperative waits only through the adapter (`Adapter::enter`, `finish`,
-`cancellable`, `ready` and `wait`): live, RealIo polls its Readiness and records each park
-and ready poll; in replay, SimIo parks and readies tasks exactly where the tape says, so a
+`cancellable`, `parked`, `ready` and `wait`): at each scheduling point it asks `ready` once
+for the parked requests to re-issue; live, RealIo asks its Readiness and records each park
+and ready wait; in replay, SimIo parks and readies tasks exactly where the tape says, so a
 run whose tasks interleave host requests by readiness replays its own schedule. Pure calls and
 recorded Args/Env snapshots use the ordinary Library. `run_path`, `run_path_with_simulation` and `run_file` are the fake-provider
 entry points for semantic fixtures. Production native runs pass the same validated record

@@ -204,7 +204,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         LocalAddr { net: n.wrapping_add(17), listener: n.wrapping_add(13) },
         UnixConnect { net: n.wrapping_add(17), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         UnixListen { net: n.wrapping_add(17), path: if n == 0 { String::new() } else { format!("{text}#path") } },
-        Ready { wait: n.wrapping_add(30), polls: n.wrapping_add(20) }
+        Ready { wait: n.wrapping_add(30), points: n.wrapping_add(20) }
     }
 }
 

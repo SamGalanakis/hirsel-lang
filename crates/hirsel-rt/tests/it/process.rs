@@ -752,7 +752,8 @@ fn a_cooperative_run_parks_until_its_child_exits() {
         Completion::Blocked { committed: false }
     );
     assert!(io.cancellable(3));
-    while !io.ready(3).unwrap() {
+    io.parked(3);
+    while !io.ready().unwrap().contains(3) {
         assert!(io.wait().unwrap());
     }
     io.enter(3);
@@ -1114,7 +1115,8 @@ fn cooperative_reads_and_waits_park_and_a_cancelled_wait_kills_its_child() {
     io.enter(5);
     assert_eq!(io.call(read(p, c, 64)), Err(AdapterError::Blocked));
     assert!(io.cancellable(5));
-    while !io.ready(5).unwrap() {
+    io.parked(5);
+    while !io.ready().unwrap().contains(5) {
         assert!(io.wait().unwrap());
     }
     io.enter(5);
@@ -1132,7 +1134,8 @@ fn cooperative_reads_and_waits_park_and_a_cancelled_wait_kills_its_child() {
     let status = loop {
         match io.call(wait.clone()) {
             Err(AdapterError::Blocked) => {
-                while !io.ready(6).unwrap() {
+                io.parked(6);
+                while !io.ready().unwrap().contains(6) {
                     assert!(io.wait().unwrap());
                 }
                 io.enter(6);
@@ -1269,7 +1272,8 @@ fn parked(io: &mut RealIo, token: u64, request: Request) -> Result<Completion, A
     let completion = loop {
         match io.call(request.clone()) {
             Err(AdapterError::Blocked) => {
-                while !io.ready(token).unwrap() {
+                io.parked(token);
+                while !io.ready().unwrap().contains(token) {
                     assert!(io.wait().unwrap());
                 }
                 io.enter(token);

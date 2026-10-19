@@ -10,17 +10,19 @@
 //! descriptor interest or deadline under the token, and in replay the tape recorded the park.
 //! The task then parks ([`crate::tasks::park_host`]): a network request yields first and parks
 //! when it is next at the front, while a stdin read parks at once, as the interpreter parks
-//! them. The scheduler polls timer waits by deadline (ties by suspension order), and other
-//! waits in park order ([`poll`]). When the task is
-//! canceled while its request has committed no effect, or the adapter finds the token ready,
-//! the poll re-issues the request, so the effect and its tape event happen at the poll; the
+//! them; the park tells the adapter ([`parked`]). Each scheduling point asks the adapter once
+//! for the parked tokens that are ready ([`ready`]), so its cost does not grow with the parked
+//! count, and the scheduler polls only those tasks and the canceled ones: timer waits by
+//! deadline (ties by suspension order), other waits in park order ([`poll`]). When the task
+//! is canceled while its request has committed no effect, or the token is ready, the poll
+//! re-issues the request, so the effect and its tape event happen at the poll; the
 //! completion waits here for the task to resume. With no runnable task the scheduler sleeps
 //! in [`wait`] on every interest and the earliest deadline. Without cooperative admission a
 //! host request blocks the thread, as it always did.
 use std::collections::BTreeMap;
 
 use crate::RunCtx;
-use crate::io::{AdapterError, Binding, Completion, Request};
+use crate::io::{AdapterError, Binding, Completion, Ready, Request};
 use crate::stop::{Stop, Stopped};
 
 /// The parked requests of one run.
@@ -33,6 +35,8 @@ pub(crate) struct Waits {
 }
 struct Parked {
     request: Request,
+    /// The task that issued it, once it parked.
+    task: Option<u32>,
     /// The re-issued request's outcome, from the poll that ended the wait.
     completion: Option<Result<Completion, AdapterError>>,
 }
@@ -100,6 +104,7 @@ pub(crate) unsafe fn issue(
         token,
         Parked {
             request: retry,
+            task: None,
             completion: None,
         },
     );
@@ -137,6 +142,7 @@ pub(crate) unsafe fn arm(
     };
     match binding.adapter.call(request.clone()) {
         Err(AdapterError::Blocked) => {
+            binding.adapter.parked(token);
             binding.waits.armed.insert(token, (scope, request));
             Ok(Some(token))
         }
@@ -149,12 +155,12 @@ pub(crate) unsafe fn arm(
     }
 }
 
-/// The scopes whose deadline a poll finds due, by deadline with ties in arming order; each
-/// leaves the armed set.
+/// The scopes whose deadline is due at this scheduling point (`ready`), by deadline with ties
+/// in arming order; each leaves the armed set.
 ///
 /// # Safety
 /// `ctx` is live; with no Binding bound nothing is armed.
-pub(crate) unsafe fn expired(ctx: *mut RunCtx) -> Stopped<Vec<u32>> {
+pub(crate) unsafe fn expired(ctx: *mut RunCtx, ready: &Ready) -> Stopped<Vec<u32>> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
         return Ok(Vec::new());
@@ -167,6 +173,7 @@ pub(crate) unsafe fn expired(ctx: *mut RunCtx) -> Stopped<Vec<u32>> {
         .waits
         .armed
         .iter()
+        .filter(|(token, _)| ready.contains(**token))
         .map(|(token, (_, request))| match request {
             Request::SleepUntil { deadline, .. } => (*deadline, *token),
             _ => crate::fault("an armed deadline that is not a timer"),
@@ -175,11 +182,6 @@ pub(crate) unsafe fn expired(ctx: *mut RunCtx) -> Stopped<Vec<u32>> {
     armed.sort_unstable();
     let mut due = Vec::new();
     for (_, token) in armed {
-        match binding.adapter.ready(token) {
-            Ok(true) => {}
-            Ok(false) => continue,
-            Err(error) => return Err(Stop::refusal(error)),
-        }
         let (scope, request) = binding.waits.armed[&token].clone();
         binding.adapter.enter(token);
         match binding.adapter.call(request) {
@@ -217,19 +219,78 @@ pub(crate) unsafe fn deadline(ctx: *mut RunCtx, token: u64) -> Option<u64> {
     }
 }
 
-/// The scheduler's poll of a task parked on `token`, `cause` its cancellation: whether the
-/// wait is over, after re-issuing its request when it is.
+/// Task `task` parked on the request blocked under `token`.
+///
+/// # Safety
+/// `ctx` is live, its Binding bound, and `token` blocked.
+pub(crate) unsafe fn park(ctx: *mut RunCtx, token: u64, task: u32) {
+    let binding = unsafe { Binding::get(ctx) };
+    match binding.waits.parked.get_mut(&token) {
+        Some(parked) => parked.task = Some(task),
+        None => crate::fault("a park of an unknown host wait"),
+    }
+    binding.adapter.parked(token);
+}
+
+/// A scheduling point: the parked tokens to re-issue, asked of the adapter once while a host
+/// request is parked or a scope deadline armed.
+///
+/// # Safety
+/// `ctx` is live and no borrow of the Binding is held.
+pub(crate) unsafe fn ready(ctx: *mut RunCtx) -> Stopped<Ready> {
+    // SAFETY: the context is live.
+    if unsafe { (*ctx).io_data() }.is_null() {
+        return Ok(Ready::Tokens(Vec::new()));
+    }
+    let binding = unsafe { Binding::get(ctx) };
+    if binding.waits.parked.is_empty() && binding.waits.armed.is_empty() {
+        return Ok(Ready::Tokens(Vec::new()));
+    }
+    binding.adapter.ready().map_err(Stop::refusal)
+}
+
+/// The parked tasks whose request `ready` names, in token order.
+///
+/// # Safety
+/// `ctx` is live; with no Binding bound nothing is parked.
+pub(crate) unsafe fn woken(ctx: *mut RunCtx, ready: &Ready) -> Vec<u32> {
+    // SAFETY: the context is live.
+    if unsafe { (*ctx).io_data() }.is_null() {
+        return Vec::new();
+    }
+    let waits = &unsafe { Binding::get(ctx) }.waits;
+    match ready {
+        Ready::Every => waits.parked.values().filter_map(|p| p.task).collect(),
+        Ready::Tokens(tokens) => tokens
+            .iter()
+            .filter_map(|token| waits.parked.get(token)?.task)
+            .collect(),
+    }
+}
+
+/// The scheduler's poll of a task parked on `token`, `cause` its cancellation and `ready`
+/// whether this scheduling point found the token ready: whether the wait is over, after
+/// re-issuing its request when it is.
 ///
 /// # Safety
 /// `ctx` is live, its Binding bound, and `token` parked.
-pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> Stopped<bool> {
+pub(crate) unsafe fn poll(
+    ctx: *mut RunCtx,
+    token: u64,
+    cause: Option<u32>,
+    ready: bool,
+) -> Stopped<bool> {
     let binding = unsafe { Binding::get(ctx) };
+    // A request that already committed part of its effect completes with its own outcome.
+    let cause = cause.filter(|_| binding.adapter.cancellable(token));
+    if cause.is_none() && !ready {
+        return Ok(false);
+    }
     let request = match binding.waits.parked.get(&token) {
         Some(parked) => parked.request.clone(),
         None => crate::fault("a poll of an unknown host wait"),
     };
-    // A request that already committed part of its effect completes with its own outcome.
-    let completion = match cause.filter(|_| binding.adapter.cancellable(token)) {
+    let completion = match cause {
         Some(cause) => {
             binding.adapter.finish(token);
             // SAFETY: no borrow of the Binding is held across this call.
@@ -239,11 +300,6 @@ pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> S
             }
         }
         None => {
-            match binding.adapter.ready(token) {
-                Ok(true) => {}
-                Ok(false) => return Ok(false),
-                Err(error) => return Err(Stop::refusal(error)),
-            }
             binding.adapter.enter(token);
             match binding.adapter.call(request) {
                 Err(AdapterError::Blocked) => return Ok(false),
@@ -262,7 +318,7 @@ pub(crate) unsafe fn poll(ctx: *mut RunCtx, token: u64, cause: Option<u32>) -> S
 }
 
 /// With no runnable task: sleep until some parked request's descriptor is ready or the
-/// earliest deadline passes (in replay, until the recording's next ready poll). False when
+/// earliest deadline passes (in replay, until the recording's next `ready`). False when
 /// nothing can wake a task.
 ///
 /// # Safety

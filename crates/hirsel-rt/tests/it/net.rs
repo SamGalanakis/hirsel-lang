@@ -934,7 +934,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             fault: None,
         })
         .collect();
-    // Cooperative scheduling inputs: a parked request and a ready poll.
+    // Cooperative scheduling inputs: a parked request and a ready one.
     let mut events = events;
     events.extend([
         Event {
@@ -948,7 +948,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             fault: None,
         },
         Event {
-            request: Request::Ready { wait: 1, polls: 7 },
+            request: Request::Ready { wait: 1, points: 7 },
             completion: Completion::Ready,
             fault: None,
         },
@@ -999,7 +999,8 @@ fn cooperative_accept_read_timeout_and_interleaved_handles() {
     ready.enter(2);
     let accept = Request::Accept { net: n, listener };
     assert_eq!(io.call(accept.clone()), Err(AdapterError::Blocked));
-    assert!(!ready.ready(2).unwrap());
+    ready.parked(2);
+    assert!(ready.ready().unwrap().is_empty());
     // No identity was published by the blocked accept. An unrelated projection
     // can allocate the next identity before this accept completes.
     let other_net = net(&mut io);
@@ -1018,7 +1019,8 @@ fn cooperative_accept_read_timeout_and_interleaved_handles() {
         max: 4,
     };
     assert_eq!(io.call(read.clone()), Err(AdapterError::Blocked));
-    assert!(!ready.ready(3).unwrap());
+    ready.parked(3);
+    assert!(ready.ready().unwrap().is_empty());
     peer.write_all(b"ping").unwrap();
     assert!(ready.wait().unwrap());
     assert_eq!(
@@ -1392,7 +1394,8 @@ fn cooperative_unix_connect_parks_on_a_full_backlog_and_the_stale_probe_never_wa
     };
     assert!(!held.is_empty());
     assert!(ready.cancellable(waiting));
-    assert!(!ready.ready(waiting).unwrap());
+    ready.parked(waiting);
+    assert!(ready.ready().unwrap().is_empty());
     ready.enter(waiting + 1);
     assert_eq!(
         io.call(Request::UnixListen {
@@ -1403,7 +1406,7 @@ fn cooperative_unix_connect_parks_on_a_full_backlog_and_the_stale_probe_never_wa
     );
     ready.finish(waiting + 1);
     let accepted = listener.accept().unwrap();
-    while !ready.ready(waiting).unwrap() {
+    while !ready.ready().unwrap().contains(&waiting) {
         assert!(ready.wait().unwrap());
     }
     ready.enter(waiting);

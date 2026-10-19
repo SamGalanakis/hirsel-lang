@@ -1921,8 +1921,21 @@ pub fn respond(
       "\r\nConnection: close\r\n\r\n"
     }
   )
-  core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take out)) ? http_net_error
-  core@1/net.write_all(n, mut c.stream, body) ? http_net_error
+  // One write carries the head and a small body, so they leave in one segment; a large
+  // body follows the head in its own write rather than being copied.
+  let size = core@1/bytes.len(body)
+  if size <= 65536 {
+    core@1/list.reserve(mut out, core@1/list.len(out) + size)
+    let mut i: u64 = 0
+    while i < size {
+      core@1/list.push(mut out, body[i])
+      i += 1
+    }
+    core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take out)) ? http_net_error
+  } else {
+    core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take out)) ? http_net_error
+    core@1/net.write_all(n, mut c.stream, body) ? http_net_error
+  }
   c.served = true
   if keep {
     c.state = 0

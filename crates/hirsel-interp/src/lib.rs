@@ -301,6 +301,9 @@ operation_boundary! {
     fn take_yield(&mut self) -> bool {
         false
     }
+    /// The task of the operation that returned `Park { token }` parked: polled from the
+    /// next scheduling point on.
+    fn parked(&mut self, _token: u64) {}
     fn poll(&mut self,
         _token: u64,
         _context: &mut OperationContext<'_>) -> Result<Option<OperationResult>, Error> {

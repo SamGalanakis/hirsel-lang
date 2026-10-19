@@ -163,7 +163,8 @@ fn a_cooperative_wait_parks_on_a_readiness_timer_until_due() {
                 Completion::Blocked { committed: false }
             );
             assert_eq!(real.tape().len(), parked + 1);
-            while !real.ready(7).unwrap() {
+            real.parked(7);
+            while !real.ready().unwrap().contains(7) {
                 assert!(real.wait().unwrap());
             }
             assert!(matches!(
@@ -194,7 +195,8 @@ fn a_cooperative_wait_parks_on_a_readiness_timer_until_due() {
         }),
         Err(AdapterError::Blocked)
     );
-    assert!(!real.ready(8).unwrap());
+    real.parked(8);
+    assert_eq!(real.ready().unwrap(), Ready::Tokens(vec![]));
     real.finish(8);
     assert!(!real.wait().unwrap());
 }

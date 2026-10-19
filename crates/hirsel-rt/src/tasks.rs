@@ -15,11 +15,17 @@
 //! - after every capability operation ([`yield_now`]) the running task, when another is
 //!   runnable, joins the back and the front runs;
 //! - a task that must wait (a join, a scope exit) parks with what it waits for ([`Wait`]).
-//!   Parked tasks are polled at every yield and whenever the running task stops
-//!   (it parked, holds its result or completed). Timers go in deadline order (ties in park
-//!   order), other waits in park order. A successful poll performs the wait's effect
-//!   and moves the task to the back of the queue. An operation that parks yields first, and its
-//!   task parks when it is next at the front.
+//!   Scheduling points are every yield and whenever the running task stops (it parked, holds
+//!   its result or completed). At each, the parked tasks whose wait may be over are polled:
+//!   a task that just parked, and those an event woke ([`Scheduler::wake`]): a child that
+//!   holds its result or completed wakes its joiner, its scope's exit and its sets' waits, a
+//!   send or a closed channel wakes as many receivers as it can serve, a cancellation wakes
+//!   the canceled tasks, and the adapter reports the host requests that are ready. Each point
+//!   thus costs what happened, never the number of parked tasks, and polls exactly the tasks
+//!   whose poll could succeed, so the schedule is the one polling every parked task gives.
+//!   Timers go in deadline order (ties in park order), other waits in park order. A
+//!   successful poll performs the wait's effect and moves the task to the back of the queue.
+//!   An operation that parks yields first, and its task parks when it is next at the front.
 //!
 //! A child runs the compiled `$native.task_main` closure the spawn received, which drops the
 //! callable (and so its captures) once it returns. On success that body hands its `Some(result)`
@@ -35,7 +41,7 @@
 //! Handles are run-local: a Scope or Task word is a table index with a generation, so a stale
 //! or foreign word is an invariant fault rather than another task's row.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ptr::NonNull;
 
 use crate::context::RunCtx;
@@ -164,6 +170,12 @@ struct Task {
     failure: Option<Vec<Chained>>,
     /// Its place in completion order (CONC-2), set when it holds its result or failed.
     completed: u64,
+    /// While parked: its place in park order, and whether it is to be polled at the next
+    /// scheduling point.
+    parked_at: u64,
+    woken: bool,
+    /// The task parked joining it.
+    awaited_by: Option<u32>,
 }
 
 /// A task set (CONC-2): its scope and its members' Task words in add order, `None` once
@@ -204,8 +216,13 @@ pub(crate) struct Scheduler {
     generation: u32,
     current: u32,
     runnable: VecDeque<u32>,
-    /// Parked tasks, in park order.
-    parked: Vec<u32>,
+    /// Parked tasks by their place in park order.
+    parked: BTreeMap<u64, u32>,
+    parks: u64,
+    /// Parked tasks to poll at the next scheduling point.
+    woken: Vec<u32>,
+    /// Tasks parked in `task.await_any` or `task.cancel_all`.
+    set_waiters: Vec<u32>,
     pub(crate) channels: crate::channels::Channels,
     sync: crate::sync::Synchronizers,
     /// The chain the last `task.isolate` caught, which its body reads (`isolate.rs`).
@@ -269,32 +286,133 @@ impl Scheduler {
         self.canceled_task(current, ctx_shield)
     }
     /// `task`'s cancellation, with `shield` its finalizer shield (the context's while it runs).
-    fn canceled_task(&mut self, task: u32, shield: u32) -> Option<u32> {
-        if shield > 0 {
-            return None;
-        }
-        let task = self.task(task);
-        if let Some(cause) = task.canceled {
-            return Some(cause);
-        }
-        let scopes = task.scopes.clone();
-        scopes
-            .iter()
-            .rev()
-            .find_map(|&s| self.scopes[s as usize].as_ref().and_then(|s| s.canceled))
+    fn canceled_task(&self, task: u32, shield: u32) -> Option<u32> {
+        canceled_in(&self.tasks, &self.scopes, task, shield)
     }
     /// Cancel `task` with `cause` and its descendants with `Parent`; an earlier cause stays.
+    /// Each canceled parked task is woken: its cancellation may end its wait.
     fn cancel(&mut self, task: u32, cause: u32) {
         let path = self.task(task).path.clone();
-        for row in self.tasks.iter_mut().flatten() {
+        let mut parked = Vec::new();
+        for (index, row) in self.tasks.iter_mut().enumerate() {
+            let Some(row) = row else { continue };
             if row.path.starts_with(&path) && row.scope.is_some() {
                 row.canceled.get_or_insert(if row.path.len() == path.len() {
                     cause
                 } else {
                     CANCEL_PARENT
                 });
+                parked.push(index as u32);
             }
         }
+        for task in parked {
+            self.wake(task);
+        }
+    }
+    /// Poll parked `task` at the next scheduling point: an event may have ended its wait.
+    fn wake(&mut self, task: u32) {
+        if let Some(Some(row)) = self.tasks.get_mut(task as usize)
+            && row.state == State::Parked
+            && row.wait.is_some()
+            && !row.woken
+        {
+            row.woken = true;
+            self.woken.push(task);
+        }
+    }
+    /// `scope` was canceled: its owner's cancellation may end the owner's wait.
+    fn wake_owner(&mut self, scope: u32) {
+        let owner = self.scope(scope).owner;
+        self.wake(owner);
+    }
+    /// `child` holds its result or completed: wake its joiner, its scope's exit and the set
+    /// waits of its scope.
+    fn settle(&mut self, child: u32) {
+        let row = self.task(child);
+        let (awaiter, scope) = (row.awaited_by, row.scope);
+        if let Some(awaiter) = awaiter {
+            self.wake(awaiter);
+        }
+        let Some(scope) = scope else { return };
+        let owner = self.scope(scope).owner;
+        if matches!(self.task(owner).wait, Some(Wait::Exit { scope: s }) if s == scope) {
+            self.wake(owner);
+        }
+        for i in 0..self.set_waiters.len() {
+            let waiter = self.set_waiters[i];
+            if let Some(Wait::Any { set } | Wait::Drain { set }) = self.task(waiter).wait
+                && self.sets[set as usize]
+                    .as_ref()
+                    .is_some_and(|row| row.scope == scope)
+            {
+                self.wake(waiter);
+            }
+        }
+    }
+    /// For each channel a send or a sender's close touched: wake the receivers its poll
+    /// serves in park order, as many as it holds messages (the canceled ones, which a
+    /// cancellation woke, take none), or every one once no sender is left.
+    fn wake_receivers(&mut self) {
+        for channel in self.channels.take_touched() {
+            let Some((queued, closed, waiting)) = self.channels.waiting(channel) else {
+                continue;
+            };
+            let mut wake = Vec::new();
+            let mut served = 0;
+            for &task in waiting.values() {
+                if !closed && served == queued {
+                    break;
+                }
+                let shield = self.tasks[task as usize]
+                    .as_ref()
+                    .map_or(0, |t| t.saved.shield);
+                if canceled_in(&self.tasks, &self.scopes, task, shield).is_none() {
+                    served += 1;
+                }
+                wake.push(task);
+            }
+            for task in wake {
+                self.wake(task);
+            }
+        }
+    }
+    /// The running task parks on `wait`: it is polled at the next scheduling point, and
+    /// registered where the events that can end its wait find it.
+    fn park(&mut self, wait: Wait) {
+        let current = self.current;
+        let at = self.parks;
+        self.parks += 1;
+        let row = self.task(current);
+        row.state = State::Parked;
+        row.wait = Some(wait);
+        row.parked_at = at;
+        row.woken = true;
+        self.parked.insert(at, current);
+        self.woken.push(current);
+        match wait {
+            Wait::Join { child, .. } => self.task(child).awaited_by = Some(current),
+            Wait::Receive { channel, .. } => self.channels.wait(channel, at, current),
+            Wait::Any { .. } | Wait::Drain { .. } => self.set_waiters.push(current),
+            Wait::Exit { .. } | Wait::Host { .. } => {}
+        }
+    }
+    /// A poll ended parked `task`'s wait: it leaves every registration and joins the queue.
+    fn unpark(&mut self, task: u32) {
+        let row = self.task(task);
+        let (at, wait) = (row.parked_at, row.wait.take());
+        row.state = State::Ready;
+        self.parked.remove(&at);
+        match wait {
+            Some(Wait::Join { child, .. }) => {
+                if let Some(Some(child)) = self.tasks.get_mut(child as usize) {
+                    child.awaited_by = None;
+                }
+            }
+            Some(Wait::Receive { channel, .. }) => self.channels.unwait(channel, at),
+            Some(Wait::Any { .. } | Wait::Drain { .. }) => self.set_waiters.retain(|&t| t != task),
+            _ => {}
+        }
+        self.runnable.push_back(task);
     }
     /// `scope`'s deadline fired (CONC-3): the scope is canceled `DeadlineExceeded`, as is each
     /// of its children, and the children of the scopes its owner entered inside it `Parent`.
@@ -310,6 +428,7 @@ impl Scheduler {
         deadline.token = None;
         row.canceled.get_or_insert(CANCEL_DEADLINE);
         let (owner, children) = (row.owner, row.children.clone());
+        self.wake(owner);
         for child in children {
             self.cancel(child, CANCEL_DEADLINE);
         }
@@ -420,8 +539,34 @@ impl Task {
             detached: false,
             failure: None,
             completed: 0,
+            parked_at: 0,
+            woken: false,
+            awaited_by: None,
         }
     }
+}
+
+/// `task`'s cancellation, with `shield` its finalizer shield: its own, else its innermost
+/// canceled scope's.
+fn canceled_in(
+    tasks: &[Option<Task>],
+    scopes: &[Option<Scope>],
+    task: u32,
+    shield: u32,
+) -> Option<u32> {
+    if shield > 0 {
+        return None;
+    }
+    let task = tasks[task as usize]
+        .as_ref()
+        .unwrap_or_else(|| fault("a vacant task row"));
+    if let Some(cause) = task.canceled {
+        return Some(cause);
+    }
+    task.scopes
+        .iter()
+        .rev()
+        .find_map(|&s| scopes[s as usize].as_ref().and_then(|s| s.canceled))
 }
 
 /// The run's scheduler, created with the root task at the first scope.
@@ -500,49 +645,56 @@ fn recycle(ctx: *mut RunCtx) {
     }
 }
 
-/// Poll parked tasks: timers by deadline (ties by park order), other waits by park order.
-/// Each whose wait is over has its effect performed and
-/// joins the back of the queue.
+/// A scheduling point: poll the parked tasks whose wait may be over (those that just parked,
+/// those an event woke, those whose host request the adapter reports ready), timers by
+/// deadline (ties by park order), other waits by park order. Each whose wait is over has its
+/// effect performed and joins the back of the queue.
 ///
 /// # Safety
 /// `ctx` is live.
 unsafe fn poll_parked(ctx: *mut RunCtx) -> Stopped<()> {
-    // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
     // SAFETY: the context is live.
-    for scope in unsafe { crate::host_waits::expired(ctx) }? {
+    let ready = unsafe { crate::host_waits::ready(ctx) }?;
+    // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
+    for scope in unsafe { crate::host_waits::expired(ctx, &ready) }? {
         scheduler(ctx).expire(scope);
     }
+    for task in unsafe { crate::host_waits::woken(ctx, &ready) } {
+        scheduler(ctx).wake(task);
+    }
     let s = scheduler(ctx);
-    let mut parked = std::mem::take(&mut s.parked);
+    s.wake_receivers();
+    if s.woken.is_empty() {
+        return Ok(());
+    }
+    let mut woken = std::mem::take(&mut s.woken);
     // Original request ticks preserve exact ties; readiness's host Instant is
     // only for sleeping and may have rounding or sampling skew.
-    parked.sort_by_cached_key(|task| match scheduler(ctx).task(*task).wait {
-        Some(Wait::Host { token }) => unsafe { crate::host_waits::deadline(ctx, token) },
-        _ => None,
+    woken.sort_by_cached_key(|&task| {
+        let row = scheduler(ctx).task(task);
+        let deadline = match row.wait {
+            // SAFETY: the context is live and `token` parked.
+            Some(Wait::Host { token }) => unsafe { crate::host_waits::deadline(ctx, token) },
+            _ => None,
+        };
+        (deadline, row.parked_at)
     });
-    let mut waiting = Vec::with_capacity(parked.len());
-    for task in parked {
+    for task in woken {
+        scheduler(ctx).task(task).woken = false;
         // SAFETY: the context is live and `task` is parked.
-        if unsafe { poll(ctx, task) }? {
-            let s = scheduler(ctx);
-            let row = s.task(task);
-            row.state = State::Ready;
-            row.wait = None;
-            s.runnable.push_back(task);
-        } else {
-            waiting.push(task);
+        if unsafe { poll(ctx, task, &ready) }? {
+            scheduler(ctx).unpark(task);
         }
     }
-    // A poll never parks a task.
-    scheduler(ctx).parked = waiting;
     Ok(())
 }
 
-/// Whether parked `task`'s wait is over, after performing its effect if it is.
+/// Whether parked `task`'s wait is over, after performing its effect if it is; `ready` is the
+/// scheduling point's ready host requests.
 ///
 /// # Safety
 /// `ctx` is live and `task` is parked; a join's slot is in its frame.
-unsafe fn poll(ctx: *mut RunCtx, task: u32) -> Stopped<bool> {
+unsafe fn poll(ctx: *mut RunCtx, task: u32, ready: &crate::io::Ready) -> Stopped<bool> {
     let s = scheduler(ctx);
     Ok(match s.task(task).wait {
         Some(Wait::Join { child, slot, size }) => match s.task(child).state {
@@ -571,7 +723,7 @@ unsafe fn poll(ctx: *mut RunCtx, task: u32) -> Stopped<bool> {
             let shield = s.task(task).saved.shield;
             let cause = s.canceled_task(task, shield);
             // SAFETY: the context is live and `token` is this task's parked request.
-            unsafe { crate::host_waits::poll(ctx, token, cause) }?
+            unsafe { crate::host_waits::poll(ctx, token, cause, ready.contains(token)) }?
         }
         Some(Wait::Any { set }) => s.first_completed(set).is_some(),
         // SAFETY: the parked task holds the set's row.
@@ -663,11 +815,12 @@ unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool) -> Stopped<()> 
         }
     }
     let s = scheduler(ctx);
-    let current = s.current;
-    let row = s.task(current);
-    row.state = State::Parked;
-    row.wait = Some(wait);
-    s.parked.push(current);
+    s.park(wait);
+    if let Wait::Host { token } = wait {
+        let current = s.current;
+        // SAFETY: the context is live, its Binding bound, and `token` blocked.
+        unsafe { crate::host_waits::park(ctx, token, current) };
+    }
     // SAFETY: the context is live; a poll makes this task runnable again.
     unsafe { run_next(ctx) }
 }
@@ -759,12 +912,14 @@ unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> Stopped<u32> {
         let scope_row = s.scope(scope);
         scope_row.canceled.get_or_insert(CANCEL_CHILD_FAILED);
         let siblings = scope_row.children.clone();
+        s.wake_owner(scope);
         for sibling in siblings {
             if sibling != index {
                 s.cancel(sibling, CANCEL_CHILD_FAILED);
             }
         }
     }
+    s.settle(index);
     if detached && !failed {
         // A detached child's result is gone at its completion; only live children stay rows.
         s.scope(scope).children.retain(|&c| c != index);
@@ -1067,6 +1222,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     row.slot = Some(held);
     row.state = State::Holding;
     s.order(current);
+    s.settle(current);
     // SAFETY: the context is live; a join or a discard hands control back here.
     unsafe { crate::stop::check(ctx, run_next(ctx)) };
     STATUS_OK

@@ -6,7 +6,7 @@ use hirsel_interp::{
 };
 use hirsel_rt::process::{PipelineOutcome, ProcessFailure, ProcessOutcome};
 use hirsel_rt::{
-    io::{Adapter, Completion as C, Request as R},
+    io::{Adapter, Completion as C, Ready, Request as R},
     io_real::RealIo,
     io_sim::SimIo,
     net::*,
@@ -273,6 +273,8 @@ pub(crate) struct HostLibrary {
     waits: BTreeMap<u64, HostWait>,
     /// Armed scope deadlines (CONC-3), in entry order: token, scope and its timer request.
     armed: Vec<(u64, u64, R)>,
+    /// The host requests the current scheduling point found ready.
+    ready: Ready,
     yield_now: bool,
 }
 struct HostWait {
@@ -319,6 +321,7 @@ impl HostLibrary {
             next_wait: 1 << 62,
             waits: BTreeMap::new(),
             armed: Vec::new(),
+            ready: Ready::Tokens(Vec::new()),
             yield_now: false,
             library,
             io,
@@ -637,6 +640,7 @@ impl HostLibrary {
         self.io.adapter().enter(token);
         match self.host_cancelable(request.clone(), None) {
             Err(Error::Blocked(_)) => {
+                self.io.adapter().parked(token);
                 self.armed.push((token, scope, request));
                 Ok(())
             }
@@ -1737,8 +1741,10 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         let host = std::mem::take(&mut self.yield_now);
         self.library.take_yield() || host
     }
-    /// Poll the armed scope deadlines by deadline, ties in entry order; a scope that
-    /// exited first removes its timer and records nothing.
+    /// A scheduling point: a scope that exited first removes its timer and records nothing,
+    /// the adapter reports the parked requests that are ready (asked once, while a host
+    /// request is parked or a deadline armed), and the due scope deadlines expire by
+    /// deadline, ties in entry order.
     fn expire_deadlines(&mut self, cx: &mut OperationContext<'_>) -> Result<(), Error> {
         let mut armed = std::mem::take(&mut self.armed);
         armed.retain(|(token, scope, _)| {
@@ -1748,17 +1754,20 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             }
             live
         });
+        self.ready = if self.waits.is_empty() && armed.is_empty() {
+            Ready::Tokens(Vec::new())
+        } else {
+            self.io
+                .adapter()
+                .ready()
+                .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))?
+        };
         armed.sort_by_key(|(token, _, request)| match request {
             R::SleepUntil { deadline, .. } => (*deadline, *token),
             _ => (u64::MAX, *token),
         });
         for (token, scope, request) in armed {
-            let ready = self
-                .io
-                .adapter()
-                .ready(token)
-                .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))?;
-            if !ready {
+            if !self.ready.contains(token) {
                 self.armed.push((token, scope, request));
                 continue;
             }
@@ -1784,6 +1793,13 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             .wait()
             .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))
     }
+    fn parked(&mut self, token: u64) {
+        if self.waits.contains_key(&token) {
+            self.io.adapter().parked(token);
+        } else {
+            self.library.parked(token);
+        }
+    }
     fn poll(
         &mut self,
         token: u64,
@@ -1793,13 +1809,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             return self.library.poll(token, cx);
         };
         let canceled = self.library.cancellation().is_some() && self.io.cancellable(token);
-        if !canceled
-            && !self
-                .io
-                .adapter()
-                .ready(token)
-                .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))?
-        {
+        if !canceled && !self.ready.contains(token) {
             return Ok(None);
         }
         let name = wait.name.clone();

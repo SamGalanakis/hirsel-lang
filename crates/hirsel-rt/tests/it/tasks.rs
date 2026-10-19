@@ -229,7 +229,7 @@ fn cancel_names_a_child_of_its_scope_and_stacks_are_reused() {
 // its clock is the blocking step before the first poll at which any timer is due.
 #[test]
 fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
-    use hirsel_rt::io::{Adapter, AdapterError, Binding, Completion, Request, UnitResult};
+    use hirsel_rt::io::{Adapter, AdapterError, Binding, Completion, Ready, Request, UnitResult};
     use std::{cell::Cell, rc::Rc};
     struct Clock(Rc<Cell<u64>>);
     impl Adapter for Clock {
@@ -247,8 +247,12 @@ fn overdue_timers_resume_by_deadline_with_suspension_order_for_ties() {
                 Err(AdapterError::Blocked)
             }
         }
-        fn ready(&mut self, _: u64) -> Result<bool, AdapterError> {
-            Ok(self.0.get() == 100)
+        fn ready(&mut self) -> Result<Ready, AdapterError> {
+            Ok(if self.0.get() == 100 {
+                Ready::Every
+            } else {
+                Ready::Tokens(vec![])
+            })
         }
     }
     unsafe extern "C" fn sleeper(

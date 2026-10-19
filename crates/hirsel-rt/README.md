@@ -523,8 +523,14 @@ single-threaded, with the reference interpreter's schedule:
 - one FIFO queue of runnable tasks;
 - a yield after every capability operation (`yield_now`, called by the Io entries and the task entries);
 - a task that must wait (a join, a scope exit) parks with what it waits for;
-- parked tasks are polled at every yield and whenever the running task stops; timer waits
-  use deadline order (ties by suspension order), other waits use park order;
+- every yield and every stop of the running task is a scheduling point, which polls the
+  parked tasks whose wait may be over: one that just parked, and those an event woke since
+  (a child holding its result or completing wakes its joiner, its scope's exit and its
+  scope's set waits; a send or a sender's last close wakes the receivers it can serve, in
+  park order; a cancellation wakes the canceled tasks; the adapter reports the ready host
+  requests). The cost of a point is what happened, not the parked count, and the polls that
+  could succeed are exactly the ones a poll of every parked task finds; timer waits use
+  deadline order (ties by suspension order), other waits use park order;
 - a successful poll performs the wait's effect (a join's poll moves the result) and queues the task.
 
 Host requests park too (`host_waits.rs`). Every capability request goes through
@@ -535,11 +541,14 @@ The same checks serve RealIo, SimIo and ScriptIo (the H model). After valid argu
 a canceled task's blocking request (including file, process and timer calls) completes
 `Canceled` without reaching the provider (CONC-3), as the interpreter's HostLibrary does.
 A stdin or network request that the adapter answers `AdapterError::Blocked` parks its task (`Wait::Host`): a network request after
-its yield, a stdin read at once, as the interpreter parks them. Its poll re-issues it when the
-task is canceled before the request committed an effect, or when the adapter finds it ready,
-so the effect and its tape event happen at the poll, and the resumed operation does not yield
-again. With nothing runnable the scheduler sleeps in the adapter's `wait` on every parked
-descriptor and the earliest deadline, then polls again.
+its yield, a stdin read at once, as the interpreter parks them, and the park tells the
+adapter (`Adapter::parked`). While a host request is parked or a scope deadline armed, each
+scheduling point asks the adapter once for the parked tokens that are ready
+(`Adapter::ready`). A poll re-issues the request when the task is canceled before the
+request committed an effect, or when its token is ready, so the effect and its tape event
+happen at the poll, and the resumed operation does not yield again. With nothing runnable
+the scheduler sleeps in the adapter's `wait` on every parked descriptor and the earliest
+deadline, then polls again.
 
 All tasks of a run share its one heap. A value crossing tasks moves by copying its root, and
 the checker's sendability rules keep each counted value owned by one task. What is a task's own
@@ -576,7 +585,10 @@ it completes, or at the detach if it already has; only live children keep scope 
 - A send fails `Canceled` when the running task is canceled, else `Closed` when no receiver is
   left.
 - A receive returns `Canceled`, else the oldest message, else `Closed` once no sender is left,
-  else parks; its poll performs the receive.
+  else parks on the channel's list of waiting receivers; its poll performs the receive. A
+  send, or the close of the last sender, touches the channel, and the next scheduling point
+  wakes as many of its waiting receivers, oldest first, as it has messages (every one once
+  no sender is left).
 - Sender and Receiver are run-local handle words with bit 63 set. Their drop's handle close
   reaches the scheduler instead of the Io adapter, and the last receiver's close releases the
   messages nobody received, oldest first.
@@ -1001,9 +1013,17 @@ refusal; output and stdin keep their own fault domains. The Result ABI keeps the
 existing FileFault/Canceled/NotGranted ordinals and appends the portable nullary variants.
 
 `net_host::CooperativeNet` reuses HostNet's socket conventions and immediate operations
-with nonblocking sockets, retained connect/write/TLS progress and readiness tokens.
-`readiness::Readiness` holds every parked host operation's descriptor interest under its
-token and exposes zero-wait polling and an idle-only wait to the interpreter's driver.
+with nonblocking sockets, retained connect/write/TLS progress and readiness tokens. Every
+TCP stream it or HostNet connects or accepts has `TCP_NODELAY` set, so a small write (an
+HTTP response, the request after a keep-alive response) is sent at once instead of waiting
+for the peer's delayed ACK of an earlier segment.
+`readiness::Readiness` holds every parked host operation's descriptor interest and deadline
+under its token: the interests a provider recorded are registered in one persistent epoll
+set (a descriptor's registration is the union of its tokens' events, re-registered at every
+park because a closed and reopened descriptor number left the set), deadlines in a timer
+heap. `ready` reports the parked tokens whose descriptor epoll finds ready, whose deadline
+passed, or which wait on nothing epoll can watch (a regular file), with no syscall per
+parked token; the idle-only `wait` is one `epoll_wait` until the earliest deadline.
 `host_stdin::CooperativeStdin` pins a close-on-exec duplicate of descriptor 0 at admission:
 a pipe, socket or character device becomes nonblocking (restored on drop) and an empty
 read records POLLIN interest; a regular file or block device is read directly and always
@@ -1016,8 +1036,10 @@ record grants `io.tasks`) install CooperativeNet and CooperativeStdin over one R
 which `RealIo::set_cooperative` also receives; without tasks a native run keeps the blocking
 providers. RealIo answers the `Adapter` wait methods from that Readiness and records a
 `blocked` completion for every request that parks (with whether it already committed part
-of its effect) and a `ready <wait> <polls>` event for every ready poll: the wait's creation
-ordinal and the failed polls since it parked or was last ready (`readiness::WaitLog`).
+of its effect) and, at a scheduling point, a `ready <wait> <points>` event for each ready
+token, in creation order before any is re-issued: the wait's creation ordinal and the
+scheduling points it waited through since its task parked or it was last ready
+(`readiness::WaitLog`).
 SimIo serves both forms, so replay parks and readies tasks as the recording did and never
 waits; an idle replay whose next event is not a parked wait's `ready` is missing input.
 
