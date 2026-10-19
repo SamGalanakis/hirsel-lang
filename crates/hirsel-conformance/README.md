@@ -512,3 +512,15 @@ the entry, comptime limits and verification before and after, and O3's claims.
 `tools/arch_deletions.py` lists what survives of the design's deletion list
 (zero at the cutover); `--present` checks that every mechanical entry finds
 something in a tree from before it.
+
+The B2 generated differential rotates 64 successes and 64 directed failures per
+campaign seed (`--seed N`); per-push smoke samples eight of each and now runs
+those same generated programs on Cranelift as well as LLVM and the interpreter.
+The default seed follows the compiler identity unless the test runner supplies
+`PROPTEST_RNG_SEED`. Every program exercises u8/u16/u32/u64/u128,
+i8/i16/i32/i64/i128, f32 and f64, including signed minima and unsigned maxima.
+Integer inputs and computed values are printed; float results print their exact
+bits. This catches narrowing, signedness and arithmetic errors that parity-only
+output can hide. The full generated matrix includes Cranelift parity too.
+`--filter generated/success-0` reconstructs that exact witness under smoke,
+full or Cranelift parity independently of the rotating window.

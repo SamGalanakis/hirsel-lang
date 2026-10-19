@@ -9,7 +9,8 @@ use hirsel_cli_args::{
 };
 use hirsel_conformance::native::{self, Case, Class, artifact};
 use hirsel_driver::native::{
-    Configuration, Outcome, TargetSpec, Toolchain, full_matrix, smoke_matrix, topology_matrix,
+    Configuration, Options, Outcome, TargetSpec, Toolchain, full_matrix, smoke_matrix,
+    topology_matrix,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -75,6 +76,21 @@ fn listed(root: &Path, list: &str) -> Result<Vec<Case>, String> {
         .collect()
 }
 
+/// Exact generated IDs stay replayable after the rotating window moves.
+fn generated_cases(seed: u64, count: u64, filter: &Filter) -> Vec<Case> {
+    let mut cases = native::generate::cases(seed, count);
+    for case in filter
+        .0
+        .iter()
+        .filter_map(|id| native::generate::from_id(id))
+    {
+        if !cases.iter().any(|existing| existing.id == case.id) {
+            cases.push(case);
+        }
+    }
+    cases
+}
+
 /// An explicit smoke selection exercises the same programs on both backends.
 /// Unfiltered smoke retains its smaller fixed Cranelift control set.
 fn smoke_cranelift_cases(
@@ -83,7 +99,14 @@ fn smoke_cranelift_cases(
     selected: &[Case],
 ) -> Result<Vec<Case>, String> {
     if filter.is_empty() {
-        listed(root, native::cranelift::SMOKE)
+        let mut cases = listed(root, native::cranelift::SMOKE)?;
+        cases.extend(
+            selected
+                .iter()
+                .filter(|case| case.id.starts_with("generated/"))
+                .cloned(),
+        );
+        Ok(cases)
     } else {
         Ok(selected
             .iter()
@@ -143,7 +166,9 @@ fn run() -> Result<bool, String> {
     let mut seed = std::env::var("PROPTEST_RNG_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or_else(|| {
+            u64::from_le_bytes(hirsel_driver::COMPILER_IDENTITY[..8].try_into().unwrap())
+        });
     let mut engine = None;
     let mut common = CommonOptions::default();
     let help = parse_or_exit((|| {
@@ -207,15 +232,18 @@ fn run() -> Result<bool, String> {
     if filter.1.is_some() && mode != "--full" && mode != "--cranelift" {
         return Err("--shard requires --full or --cranelift".into());
     }
+    eprintln!("native: generator seed {seed}; reproduce with --seed {seed}");
     match mode.as_str() {
         "--smoke" => {
             let matrix = seeded(smoke_matrix(), hash_seed);
             let mut cases = if filter.is_empty() {
                 let mut cases = listed(&root, "native-tests/regressions/smoke.txt")?;
-                cases.extend(native::generate::cases(8));
+                cases.extend(generated_cases(seed, 8, &filter));
                 cases
             } else {
-                native::cranelift::cases(&root)?
+                let mut cases = native::cranelift::cases(&root)?;
+                cases.extend(generated_cases(seed, 64, &filter));
+                cases
             };
             cases.retain(|c| filter.keeps(&c.id));
             if cases.is_empty() {
@@ -277,7 +305,7 @@ fn run() -> Result<bool, String> {
             } else {
                 TargetSpec::x86_64_unknown_linux_gnu()
             };
-            cranelift(&root, jobs, &filter, hash_seed, clif, target)
+            cranelift(&root, jobs, &filter, hash_seed, clif, target, seed)
         }
         "--cranelift-times" => cranelift_times(&root, jobs, &filter),
         "--sanitize" => {
@@ -289,7 +317,7 @@ fn run() -> Result<bool, String> {
             let cases = if filter.is_empty() {
                 let mut cases = listed(&root, "native-tests/regressions/smoke.txt")?;
                 cases.extend(listed(&root, "native-tests/regressions/memcheck.txt")?);
-                cases.extend(native::generate::cases(8));
+                cases.extend(generated_cases(seed, 8, &filter));
                 cases
             } else {
                 let mut cases = native::baseline(&root)?;
@@ -372,11 +400,13 @@ fn cranelift(
     hash_seed: u64,
     clif: bool,
     target: TargetSpec,
+    seed: u64,
 ) -> Result<bool, String> {
     use native::cranelift;
     let list = cranelift::parity_list(&target);
     let matrix = seeded(cranelift::matrix(target), hash_seed);
     let mut cases = cranelift::cases(root)?;
+    cases.extend(generated_cases(seed, 64, filter));
     let empty_fails = filter.empty_fails(cases.iter().map(|c| c.id.as_str()));
     cases.retain(|c| filter.keeps(&c.id));
     if clif {
@@ -577,7 +607,7 @@ fn full(
     let exclusions = native::read_exclusions(root)?;
     let mut cases = native::baseline(root)?;
     let baseline_before = cases.len();
-    let mut generated = native::generate::cases(64);
+    let mut generated = generated_cases(seed, 64, &filter);
     let mut partitioned = listed(root, "native-tests/topology/cases.txt")?;
     let empty_fails = filter.empty_fails(
         cases
@@ -746,13 +776,18 @@ fn full(
         &native::scratch("generated")?,
         jobs,
         |case, dir| {
-            let selected = native::diet::configurations(
+            let mut selected = native::diet::configurations(
                 &matrix,
                 &case.id,
                 seed,
                 exhaustive,
                 &native::Exclusions::new(),
             );
+            if engine.is_none() {
+                selected.push(native::cranelift::cranelift(Options::new(
+                    TargetSpec::x86_64_unknown_linux_gnu(),
+                )));
+            }
             case.run(&selected, &toolchain, dir)
         },
     );
@@ -933,7 +968,7 @@ mod tests {
 
     #[test]
     fn filtered_smoke_uses_the_callers_programs_for_cranelift() {
-        let cases = ["new-program.hir", "unrelated.hir"].map(|id| Case {
+        let cases = ["new-program.hir", "unrelated.hir", "generated/success-0"].map(|id| Case {
             id: id.into(),
             source: String::new(),
             path: None,
@@ -946,7 +981,8 @@ mod tests {
         assert_eq!(selected[0].id, "new-program.hir");
 
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let fixed = listed(&root, native::cranelift::SMOKE).unwrap();
+        let mut fixed = listed(&root, native::cranelift::SMOKE).unwrap();
+        fixed.push(cases[2].clone());
         let default = smoke_cranelift_cases(&root, &Filter::default(), &cases).unwrap();
         assert!(!default.is_empty());
         assert_eq!(

@@ -357,6 +357,28 @@ fn generated_programs_are_valid_and_directed_failures_fail_by_their_rule() {
     });
 }
 
+/// The larger generated window is reserved for the on-demand full gate.
+#[test]
+#[ignore = "on-demand generated program validity window"]
+fn full_gate_generated_program_window_runs_by_the_reference() {
+    on_compiler(|| {
+        let seed = std::env::var("PROPTEST_RNG_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        for case in hirsel_conformance::native::generate::cases(seed, 64) {
+            let observed = artifact::reference(&case.source, None)
+                .unwrap_or_else(|| panic!("{} does not run:\n{}", case.id, case.source));
+            assert_eq!(
+                observed.exit_code,
+                Some(if case.id.contains("success-") { 0 } else { 2 }),
+                "{}",
+                case.id
+            );
+        }
+    });
+}
+
 #[test]
 fn stored_configuration_retains_independent_seeds_and_baseline_names() {
     for config in hirsel_driver::native::full_matrix()

@@ -445,7 +445,7 @@ fn finish(root: &Path, c: Collected) -> Result<serde_json::Value, String> {
         .filter_map(|p| costs.get(p))
         .map(|n| (*n).min(budget))
         .sum();
-    let generated = native::generate::cases(64);
+    let generated = native::generate::cases(0, 64);
     let generated_plans: Vec<_> = generated
         .iter()
         .map(|case| hirsel_driver::native::pairwise_matrix(&matrix, &case.id, 1))

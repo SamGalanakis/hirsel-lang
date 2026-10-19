@@ -1,6 +1,6 @@
 //! Seeded programs for the differential gate: each is valid by
-//! construction, never prints a number (the interpreter is the oracle, and
-//! output is chosen by comparisons), and exercises records, variants and
+//! construction, prints computed values (the interpreter is the oracle),
+//! and exercises every integer and float width, records, variants and
 //! `match`, an inline array read, a generic function, a closure with a
 //! capture, a self-tail loop and a resource whose finalizer prints.
 //!
@@ -111,6 +111,40 @@ fn small(a: u64) -> u64
             "fn f{h}(a: u64, b: u64) -> u64 {{\n  {body}\n}}\n"
         ));
     }
+    for signed in [false, true] {
+        for width in [8, 16, 32, 64, 128] {
+            let ty = format!("{}{width}", if signed { 'i' } else { 'u' });
+            text.push_str(&format!(
+                "fn calc_{ty}(x: {ty}) -> {ty} {{ ((x >> 1{ty}) ^ 3{ty}) % 97{ty} + 2{ty} }}\n"
+            ));
+            let negative = if signed {
+                format!("n <= -10{ty} || ")
+            } else {
+                String::new()
+            };
+            let digit = if signed {
+                format!("if r < 0{ty} {{ -r }} else {{ r }}")
+            } else {
+                "r".to_owned()
+            };
+            text.push_str(&format!(
+                "fn digits_{ty}(s: Stdout, n: {ty}) {{\n  if {negative}n >= 10{ty} {{ digits_{ty}(s, n / 10{ty}) }}\n  let r = n % 10{ty}\n  let d = {digit}\n  let _ = out.print(s, match d {{ 0{ty} => \"0\", 1{ty} => \"1\", 2{ty} => \"2\", 3{ty} => \"3\", 4{ty} => \"4\", 5{ty} => \"5\", 6{ty} => \"6\", 7{ty} => \"7\", 8{ty} => \"8\", _ => \"9\" }})\n}}\n"
+            ));
+            let sign = if signed {
+                format!("  if n < 0{ty} {{ let _ = out.print(s, \"-\") }}\n")
+            } else {
+                String::new()
+            };
+            text.push_str(&format!(
+                "fn print_{ty}(s: Stdout, n: {ty}) {{\n{sign}  digits_{ty}(s, n)\n}}\n"
+            ));
+        }
+    }
+    for ty in ["f32", "f64"] {
+        text.push_str(&format!(
+            "fn calc_{ty}(x: {ty}) -> {ty} {{ (x * 0.5{ty} + 0.25{ty}) / 2.0{ty} }}\n"
+        ));
+    }
     text.push_str(
         "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let s = io.stdout(rt)?\n",
     );
@@ -118,6 +152,44 @@ fn small(a: u64) -> u64
         "  let g = Guard(out: s, id: {}u64)\n",
         rng.below(100)
     ));
+    // B2: parity-only output hides wrong answers that keep the same low bit.
+    // Keep full-width inputs in function parameters so folding cannot replace the
+    // operations whose native lowering this campaign exercises.
+    for signed in [false, true] {
+        for width in [8, 16, 32, 64, 128] {
+            let ty = format!("{}{width}", if signed { 'i' } else { 'u' });
+            let bits = ((rng.next() as u128) << 64) | rng.next() as u128;
+            let value = if signed {
+                let maximum = (1u128 << (width - 1)) - 1;
+                let magnitude = bits & maximum;
+                if rng.below(2) == 0 {
+                    format!("-{magnitude}{ty}")
+                } else {
+                    format!("{magnitude}{ty}")
+                }
+            } else {
+                let mask = u128::MAX >> (128 - width);
+                format!("{}{ty}", bits & mask)
+            };
+            let value = match seed % 4 {
+                0 if signed => format!("-{}{ty}", 1u128 << (width - 1)),
+                0 => format!("{}{ty}", u128::MAX >> (128 - width)),
+                1 if signed => format!("{}{ty}", (1u128 << (width - 1)) - 1),
+                1 => format!("0{ty}"),
+                _ => value,
+            };
+            text.push_str(&format!(
+                "  let x_{ty}: {ty} = {value}\n  print_{ty}(s, x_{ty})\n  let _ = out.print(s, \" \")\n  let y_{ty} = calc_{ty}(x_{ty})\n  print_{ty}(s, y_{ty})\n  let _ = out.print(s, \"\\n\")\n"
+            ));
+        }
+    }
+    for ty in ["f32", "f64"] {
+        // Dyadic operands make exact, finite float arithmetic at both widths.
+        let value = rng.below(10000);
+        text.push_str(&format!(
+            "  let x_{ty}: {ty} = {value}.25{ty}\n  print_u64(s, int.widen({ty}.bits(calc_{ty}(x_{ty}))))\n  let _ = out.print(s, \"\\n\")\n"
+        ));
+    }
     let mut names: Vec<String> = Vec::new();
     let statements = 4 + rng.below(5);
     let fault_at = rng.below(statements);
@@ -155,6 +227,9 @@ fn small(a: u64) -> u64
             _ => format!("  let k{i}: u64 = {value}\n  let {name} = keep(take k{i})\n"),
         };
         text.push_str(&line);
+        text.push_str(&format!(
+            "  print_u64(s, {name})\n  let _ = out.print(s, \"\\n\")\n"
+        ));
         names.push(name.clone());
         let other = &names[rng.below(names.len() as u64) as usize];
         text.push_str(&match rng.below(3) {
@@ -187,11 +262,12 @@ fn small(a: u64) -> u64
     text
 }
 
-/// `count` successes and `count` directed failures (the faults in turn),
-/// named by kind and seed.
-pub fn cases(count: u64) -> Vec<super::Case> {
+/// A fresh, reproducible window per campaign seed; IDs retain the program seed
+/// so a single generated witness can be selected and replayed.
+pub fn cases(campaign_seed: u64, count: u64) -> Vec<super::Case> {
     let mut cases = Vec::new();
-    for seed in 0..count {
+    for offset in 0..count {
+        let seed = campaign_seed.wrapping_mul(64).wrapping_add(offset);
         cases.push(super::Case {
             path: None,
             id: format!("generated/success-{seed}"),
@@ -205,4 +281,24 @@ pub fn cases(count: u64) -> Vec<super::Case> {
         });
     }
     cases
+}
+
+/// Reconstruct one generated witness independently of the current campaign window.
+pub fn from_id(id: &str) -> Option<super::Case> {
+    let (kind, seed) = id.strip_prefix("generated/")?.rsplit_once('-')?;
+    let seed: u64 = seed.parse().ok()?;
+    let fault = if kind == "success" {
+        None
+    } else {
+        Some(
+            *FAULTS
+                .iter()
+                .find(|fault| format!("{fault:?}").to_lowercase() == kind)?,
+        )
+    };
+    Some(super::Case {
+        path: None,
+        id: id.into(),
+        source: program(seed, fault),
+    })
 }
