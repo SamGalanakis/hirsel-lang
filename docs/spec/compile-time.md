@@ -37,9 +37,11 @@ them. Only materializable data crosses this boundary: resource, capability and c
 graphs fail CT-2 at the enclosing initializer or explicit comptime expression. An
 explicit comptime result must have a data type, checked statically after ordinary
 type checking, including in unselected generic definitions. Never and recovery
-types do not impose this check; evaluation failures retain CT-1 precedence there. This does not forbid evaluating a
-callable internally and publishing its data result. Named constants materialize dependency
-first, with ties broken by stable source path and declaration position, and decode once
+types do not impose this check; evaluation failures retain CT-1 precedence there.
+Evaluation may create and call callable values internally (closures and function
+references); only the published result must be data. Publishing callable results is
+reserved. Named constants materialize dependency first, with ties broken by stable source
+path and declaration position, and decode once
 into immutable storage that lives for the whole program, before entry. Reads share that
 value and construct nothing in a noalloc reading frame; startup runs no initializer code.
 Finite evaluated data trees have no materialization depth cutoff.
@@ -236,9 +238,9 @@ implicitly.
 
 ## Reserved for future compile-time features
 
-Generating declarations at compile time and compile-time evaluation of callable values are
-reserved, not excluded. Their APIs, ownership and staging contracts are for a future
-revision of this specification. Generated function bodies are [CT-5](#ct-5-generation).
+Generating declarations at compile time is reserved, not excluded; its API, ownership and
+staging contracts are for a future revision. Callable materialization follows
+[CT-2](#ct-2-materialisation); generated function bodies are [CT-5](#ct-5-generation).
 
 - **Syntax.** The `comptime` keyword and the `comptime` prefix stay syntactically reserved
   where unsupported, with no other meaning

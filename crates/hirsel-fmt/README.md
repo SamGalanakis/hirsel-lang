@@ -72,10 +72,9 @@ Safety boundary:
   **dev-dependencies only** for roundtrip/corpus oracles once those tasks land;
   driver composition still owns all production cross-phase imports.
 
-The spec oracle builds the 19 executable file items of the overview in
-docs/spec/index.md and the closure examples in docs/spec/closures.md by hand and
-formats their source. Seven match exactly; 12 differ under the rules above. The
-golden is `tests/fixtures/spec-overview.hir`.
+The formatter oracle builds the retained overview and closure snippets in
+`tests/fixtures/spec-overview-original.hir` by hand and formats their source. The
+canonical output is `tests/fixtures/spec-overview.hir`.
 
 - `normalize_tree`, `Percent`, `map`: collapse aligned trailing-comment padding.
 - `reserve`, `sizes`: put the arrow beside the parameters, expand short blocks,

@@ -1874,8 +1874,6 @@ hirsel_library(
     srcs = glob(["crates/hirsel-fmt/src/**"]) + [
         "crates/hirsel-fmt/tests/fixtures/spec-overview-original.hir",
         "crates/hirsel-fmt/tests/fixtures/spec-overview.hir",
-        "docs/spec/closures.md",
-        "docs/spec/index.md",
     ],
     features = [],
     manifest_dir = "crates/hirsel-fmt",
@@ -1899,8 +1897,6 @@ hirsel_test(
     srcs = glob(["crates/hirsel-fmt/src/**"]) + [
         "crates/hirsel-fmt/tests/fixtures/spec-overview-original.hir",
         "crates/hirsel-fmt/tests/fixtures/spec-overview.hir",
-        "docs/spec/closures.md",
-        "docs/spec/index.md",
     ],
     features = [],
     manifest_dir = "crates/hirsel-fmt",

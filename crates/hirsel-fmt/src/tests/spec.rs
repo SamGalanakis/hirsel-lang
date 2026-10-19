@@ -1,5 +1,4 @@
-//! Hand-built ASTs for the 19 executable file items of the spec's overview and closure examples.
-//! Schematic parse { .. } and three top-level let sketches are excluded by #25.
+//! Hand-built ASTs for the retained overview and closure examples.
 use super::*;
 impl Fixture {
     fn call(&mut self, name: &str, args: Vec<ExprId>) -> ExprId {
@@ -127,26 +126,8 @@ impl Fixture {
         );
     }
 }
-/// The spec's overview and closure examples, each fenced `hirsel` block
-/// followed by a blank line.
-fn pre_text() -> String {
-    let mut result = String::new();
-    for part in [
-        include_str!("../../../../docs/spec/index.md"),
-        include_str!("../../../../docs/spec/closures.md"),
-    ] {
-        let mut rest = part;
-        while let Some((_, after)) = rest.split_once("\n```hirsel\n") {
-            let (block, next) = after.split_once("\n```").unwrap();
-            result.push_str(block);
-            result.push_str("\n\n\n");
-            rest = next;
-        }
-    }
-    result
-}
 fn source(name: &str) -> String {
-    let text = pre_text();
+    let text = include_str!("../../tests/fixtures/spec-overview-original.hir");
     let needle = if [
         "Item",
         "Order",

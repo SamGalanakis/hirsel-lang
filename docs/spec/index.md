@@ -38,9 +38,8 @@ These goals decide between designs. A rule that would break one of them is wrong
 6. **One meaning.** No flag, build mode, prover, optimiser or topology changes what the
    checker accepts or what a program means
    ([DET-3](determinism.md#det-3-no-switches)).
-7. **Every diagnostic cites one rule.** Rule IDs such as `OWN-6` are stable and never
-   reused; each is defined exactly once in this specification, and the first diagnostic
-   for a program is fixed by [the diagnostic policy](diagnostics.md).
+7. **Every diagnostic cites one rule.** The first diagnostic for a program is fixed
+   by [the diagnostic policy](diagnostics.md); rule IDs follow the reading convention below.
 
 ## Layers
 
@@ -54,8 +53,7 @@ generational slots, explicit arenas and regions, `Shared[T]`, `Inline[T, n]`, `@
 
 **Layer 2** is `Unsafe`: raw pointers, manual memory and foreign functions.
 
-Using a lower layer in one type or definition never changes the meaning of code that does
-not use it. Cost reports (where layer-0 code counts, copies or keeps checks) are tooling.
+Cost reports (where layer-0 code counts, copies or keeps checks) are tooling.
 
 ## Contents
 
@@ -90,8 +88,8 @@ For complete runnable examples, start with the [language tour](../tour.md).
 ## Reading this specification
 
 A rule is a heading `RULE-N: Title` followed by its normative statement. Rule IDs are
-stable: a retired rule keeps its ID and is never reused. A diagnostic cites exactly one
-rule ID; conformance tests are filed under the rule they test.
+stable and defined exactly once: a retired rule keeps its ID and is never reused. A
+diagnostic cites exactly one rule ID; conformance tests are filed under the rule they test.
 
 Complete definitions in `hirsel` code blocks parse under the grammar. Fragments written
 inline, omitted surrounding declarations, ellipses and call-and-result arrows such as
@@ -105,156 +103,57 @@ deterministic language failure ([FAIL-1](failure.md#fail-1-kinds)). An item mark
 **Unspecified** is a contract this specification does not yet fix; an implementation may
 not invent a language-visible answer for it.
 
+## Glossary
+
+These terms name distinct contracts; the linked rules define them.
+
+| Term | Meaning |
+|---|---|
+| Definition | A named declaration checked against the signatures it uses ([LANG-6](language.md#lang-6-signatures)). |
+| Passing mode | Borrow, `mut` or `take`: how a call accesses an argument ([OWN-1](ownership.md#own-1-borrow) to OWN-3). |
+| Place; loan | Tracked storage or scope; a read, write, identity or bound dependency on it ([places and loans](ownership.md#places-and-loans)). |
+| Relation | A lifetime and placement contract, written `T in S` ([MODE-1](ownership.md#mode-1-locality)). |
+| Brand | An identity contract, written `T of p` ([PROV-1](brands.md#prov-1-brands)). |
+| Capability; authority summary | A value granting access; the capabilities a value holds ([CAP-1](capabilities.md#cap-1-authority), [CAP-2](capabilities.md#cap-2-charged-at-use)). |
+| Resource | A noncopyable value with defined destruction points ([DROP-2](failure.md#drop-2-resources)). |
+| Error; failure | An expected `Error` value in a `Result`; a deterministic bug outcome ([LANG-8](language.md#lang-8-errors), [FAIL-1](failure.md#fail-1-kinds)). |
+| Provider | A versioned capability contract selected by the run configuration ([providers](determinism.md#run-configuration)). |
+| Run | An execution bound to a selected program revision, entry and validated configuration ([DET-1](determinism.md#det-1-contract)). |
+
 ## A first look
 
-A program selects the standard library explicitly. Save the example below as `main.hir`
-and select it with this manifest, whose dependency path is relative to the manifest
-([packages](programs.md#package-selection)):
-
-```json
-{"schema":1,"package":{"name":"application","version":"1"},"entry":{"module":[],"name":"main"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[{"manifest":"stdlib/hirsel.json","package":{"name":"std","version":"1"},"expose":[]}]}
-```
-
 ```hirsel
-pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
-  let root = arg.path(args, 0) ? Usage
-  let dir = io.dir(rt, root) ? Files
-  let n = normalize_tree(dir) ? Files
-  out.print(io.stdout(rt), u64.to_string(n)) ? Output
+pub fn main() -> Result[(), String] {
   Ok(())
 }
-
-pub fn normalize_tree(dir: Dir) -> Result[u64, FileError] {
-  let mut changed: u64 = 0
-  let walk = file.walk(dir)?              // opening may fail
-  for step in take walk {                // items are Result[Path, FileError]
-    let path = step?
-    let old = file.read_bytes(dir, path)?   // owned result; locality follows dir at this call
-    let new = bytes.replace(old, b"\r\n", b"\n")
-    if new != old {
-      file.write_bytes(dir, path, take new)?
-      changed += 1
-    }
-  }
-  Ok(changed)
-}
-
-pub fn test_normalize(t: Test) {
-  let dir = test.dir(t, [(path.of("a.txt"), b"x\r\ny")])
-  test.check(t, normalize_tree(dir) == Ok(1))
-}
-
-@serializable
-distinct type Sku(v: u64)
-
-@serializable
-type StockError = OutOfStock(Sku) | Db(TxError)
-
-fn stock() -> Table[Sku, u32] {
-  table.named("stock")
-}
-
-// a transaction (std@1/store, planned): the body holds only a scoped Tx
-// (MODE-6) and data, so all it can touch is the store; rows are typed
-pub fn reserve(mut s: Store, sku: Sku, n: u32)
-  -> Result[u32, TxFailure[StockError]] {
-  store.transact(mut s, fn(tx: Tx) {
-    let have = table.get(tx, stock(), sku) ? Db
-    let left = match have { Some(v) => v, None => 0 }
-    if left < n { return Error(OutOfStock(sku)) }
-    table.put(tx, stock(), sku, left - n) ? Db
-    Ok(left - n)
-  })
-}
-
-// structured tasks: children capture sendable values (Dir, Path are plain)
-pub fn sizes(tasks: Tasks, dir: Dir, a: Path, b: Path)
-  -> Result[(u64, u64), FileError] {
-  task.scope(tasks, fn(s: Scope) {
-    let ha = task.async(s, fn() { file.size(dir, a) })   // Task[..] of s
-    let hb = task.async(s, fn() { file.size(dir, b) })
-    Ok((task.await(s, take ha)?, task.await(s, take hb)?))
-  })
-}
-
-// a getter: the result is no longer-lived than m; with a heap map
-// at the call site it is an ordinary heap value
-pub fn get[K: key, V](m: Map[K, V], k: K) -> Option[V] in m
 ```
 
-Layer 1 and declarations:
-
-```hirsel
-@noalloc
-pub fn saxpy[n: size](a: f32, x: Inline[f32, n],
-                      mut y: Inline[f32, n]) {
-  for i in 0..n { y[i] = a * x[i] + y[i] }   // no checks: lengths equal by type
-}
-
-@incomplete
-pub fn parse(arena: Arena, src: Bytes)
-  -> Result[Ast, ParseError] in arena { todo }
-
-// layer 1: flat data is one contiguous block; serialization is a separate opt-in
-flat type Item { sku: String, qty: u32 }
-flat type Order { id: u64, customer: String, items: List[Item] }
-
-// layer 1: generational ids for lifetimes that do not nest
-fn remember(mut nodes: Slots[Node], take node: Node) -> Option[Node] in nodes {
-  let id = slots.insert(mut nodes, take node)      // SlotId[Node] of nodes
-  slots.get(nodes, id)                             // Option: None once removed
-}
-
-// layer 1: read-only data many tasks share; thaw when done
-fn publish(take built: unique Index) -> Shared[Index] {
-  shared.freeze(take built)
-}
-
-resource type AtomicFile { dir: Dir, tmp: Path, dst: Path }
-  drop(f) { let _ = file.remove(f.dir, f.tmp) }
-
-pub fn save(dir: Dir, p: Path, data: Bytes)
-  -> Result[(), FileError] {
-  let mut f = file.create_atomic(dir, p)?   // AtomicFile of dir
-  file.write_all(dir, mut f, data)?            // data borrowed for the call
-  file.commit(dir, take f)                 // rename; fallible
-}
-
-pub fn at[T](xs: Array[T], i: u64) -> T in xs
-  requires i < array.len(xs)
-pub fn append[T](mut xs: List[T], take x: T)
-  ensures list.len(xs) == before(list.len(xs)) + 1
-
-distinct type Percent(v: u8) where v <= 100   // plain, data, key
-@layout(c) type Header { magic: u32, len: u16, flags: u16 }
-type Tree = Leaf | Node(left: box Tree, key: u64, right: box Tree)
-type Log { dir: Dir, file: File of .dir }
-```
-
-The `reserve` example is planned: it uses the store of [storage](storage.md), which
-`std@1/store` will declare. A `Store` is opened over a `Dir` the run grants, so without
-that grant there is no database, and the same kind of body can run at another place
-through a runner ([runners](runners.md)).
+This root-free entry needs no grants. For programs with I/O, manifests and tests, see the
+[runnable language tour](../tour.md). Rule-specific examples accompany
+[ownership](ownership.md), [memory](memory.md) and [structured tasks](concurrency.md).
+The planned transactional store and runner interfaces have examples in
+[storage](storage.md) and [runners](runners.md).
 
 ## Not in Hirsel
 
-These are excluded by design. Future typed compile-time generation and callable evaluation
+These are excluded by design. Compile-time declaration generation and callable results
 are reserved ([compile time](compile-time.md#reserved-for-future-compile-time-features)),
-not excluded; compile-time type-shape inspection is [CT-3](compile-time.md#ct-3-shapes).
+not excluded; type-shape inspection is [CT-3](compile-time.md#ct-3-shapes), generated
+function bodies are [CT-5](compile-time.md#ct-5-generation), and conditional lets are
+[LANG-13](language.md#lang-13-patterns).
 
 - Files as the unit of code; import statements; ambient I/O, globals and implicit
   contexts.
 - User-visible references, lifetime variables, weak references and aliasable mutable
   cells; tracing garbage collection and cycle collection; implicit sharing of counted
   memory between tasks and run-time marking.
-- Arithmetic operator variants (`+%`, `+|`), a conditional operator, `if let`, optional
+- Arithmetic operator variants (`+%`, `+|`), a conditional operator, optional
   labels, qualified variant names, overloading including per-variant overload sets, and a
   test sublanguage.
 - Pipe operators, methods as chaining, an implicit `it`, and `using`-style field import.
 - Textual macro expansion, type classes, implicit conversions, exceptions, universal
-  equality and literal defaulting; compile-time reflection on source definitions and
-  generation of declarations or bodies. No part of a signature is inferred from an
-  implementation body.
+  equality and literal defaulting; compile-time reflection on function bodies or source
+  text. No part of a signature is inferred from an implementation body.
 - Local recursion, polymorphic recursion, closure-owned mutable state, capture of
   `let mut` names or borrowed parameters by escaping closures, borrowing counted data into
   child tasks, partially unique values (`aliased` fields), list handles, and facts over
@@ -271,8 +170,8 @@ than supply a language-visible answer.
 
 - The logical frame-byte table behind `Depth` ([LANG-10](language.md#lang-10-recursion))
   and the structural scratch levels ([MEM-3](memory.md#mem-3-freeing)).
-- The logical size table charged by bounded arenas
-  ([MEM-6](memory.md#mem-6-bounded-arenas)) and the frame charges of arenas and scratch.
+- The frame charges of arenas and scratch. The bounded-arena logical size table is
+  normative under [MEM-6](memory.md#mem-6-bounded-arenas).
 - The optimizer-independent compile-time step budget and its charges
   ([CT-4](compile-time.md#ct-4-order)).
 - Constructor-tail loop eligibility ([LANG-10](language.md#lang-10-recursion)).
@@ -281,13 +180,5 @@ than supply a language-visible answer.
 
 ## Prior art
 
-Hirsel adapts ideas from OxCaml (modes, locality, uniqueness, once, portability), Koka's
-Perceus and Lean 4 (reference counting, reuse, freeing worklists), Goose (data stacks,
-segments that never move, flat types, variable-size variants, share-nothing tasks),
-Gleam (visibility, labelled arguments), Swift and Hylo (value semantics), Mojo (origins
-by argument name, `mut`), Zig (`Io`, destruction, cancellation), Rust (contracts, `Arc` as
-`Shared`, scoped tasks), Ada and C++26 (contracts, `'Old`), Kotlin (inline closure
-specialisation), Flix and Effekt (authority at use), Wasm and WASI (handles, directory
-capabilities, float determinism), Trio (cancel scopes, nurseries), Jai (compile-time
-execution), MLton and Swift whole-module optimisation, Unison and rustc (content-addressed,
-query-based incrementality), and Vx (rule-linked conformance).
+The design draws on value semantics, modes, reference counting, capability-based I/O,
+structured concurrency and content-addressed compilation.
