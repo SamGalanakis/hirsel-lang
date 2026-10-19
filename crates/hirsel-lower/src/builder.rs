@@ -558,6 +558,18 @@ impl<'a, 'b> Builder<'a, 'b> {
             b.span = span;
         }
     }
+    /// OWN-8: a nonplain part read through its owner keeps the owner's bounds.
+    pub(super) fn part_type(&mut self, owner: TypeId, part: TypeId) -> TypeId {
+        if self.input.ownership.plain_types.contains(&part) {
+            return part;
+        }
+        let mut row = self.types.get(part).unwrap().clone();
+        row.modes.relation = row
+            .modes
+            .relation
+            .union(&self.types.get(owner).unwrap().modes.relation);
+        self.types.push(row)
+    }
     pub(super) fn plain(&self, ty: TypeId) -> bool {
         self.input.ownership.plain_types.contains(&ty)
             || hirsel_types::structural_property(

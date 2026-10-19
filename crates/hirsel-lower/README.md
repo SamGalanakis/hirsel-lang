@@ -26,7 +26,9 @@ map the evaluated inputs to declaration order. `CheckedBody.calls` supplies exac
 positional named calls. Each source-order argument carries its formal ordinal and
 specialized parameter requirement; recovery is explicit.
 `Plans.propagation` carries nominal Result ordinals/identity, never guessed from
-spelling. Shapes and materialized comptime constants use explicit producer plans.
+spelling. `?` reads both payloads through the Result, so a nonplain payload of a
+borrowed Result keeps its bound (OWN-8, as `box` payloads do), and builds the
+propagated `Error` at its error's locality before returning it. Shapes and materialized comptime constants use explicit producer plans.
 Local functions use a producer-provided closure expression/capture identity.
 Error mapper plans retain their declared passing mode. Lowering moves the error
 payload into owned temporary storage, then lends it under a read loan for a

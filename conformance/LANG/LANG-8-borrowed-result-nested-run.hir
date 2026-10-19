@@ -1,0 +1,63 @@
+// rule: LANG-8
+// expect: run
+// entry: test_borrowed_nested
+// Chains of `?` over Results borrowed from one input, across functions and
+// nested inside a single expression.
+fn skip(data: Bytes) -> Result[Bytes, u64] in data {
+  if bytes.len(data) == 0 {
+    return Error(0)
+  }
+  Ok(bytes.slice(data, 1, bytes.len(data)))
+}
+
+fn skip_two(data: Bytes) -> Result[u64, u64] {
+  let first = skip(data)?
+  let second = skip(first)?
+  Ok(bytes.len(second))
+}
+
+fn skip_three(data: Bytes) -> Result[u64, u64] {
+  let rest = skip(skip(skip(data)?)?)?
+  Ok(bytes.len(rest))
+}
+
+fn tail(data: Bytes) -> Result[Bytes, Bytes] in data {
+  if bytes.len(data) == 0 {
+    return Error(data)
+  }
+  Ok(bytes.slice(data, 1, bytes.len(data)))
+}
+
+fn tail_len(data: Bytes) -> Result[u64, Bytes] in data {
+  let rest = tail(data)?
+  Ok(bytes.len(rest))
+}
+
+fn tail_len_plus(data: Bytes) -> Result[u64, Bytes] in data {
+  let n = tail_len(data)?
+  Ok(n + 100)
+}
+
+pub fn test_borrowed_nested(t: Test) -> Result[(), ()] {
+  test.check(t, skip_two(b"abc") == Ok(1))
+  test.check(t, skip_two(b"a") == Error(0))
+  test.check(t, skip_three(b"abcde") == Ok(2))
+  test.check(t, skip_three(b"abc") == Ok(0))
+  test.check(t, skip_three(b"ab") == Error(0))
+  test.check(t, skip_three(b"") == Error(0))
+  test.check(
+    t,
+    match tail_len_plus(b"xyz") {
+      Ok(n) => n == 102,
+      Error(_) => false,
+    }
+  )
+  test.check(
+    t,
+    match tail_len_plus(b"") {
+      Ok(_) => false,
+      Error(e) => bytes.len(e) == 0,
+    }
+  )
+  Ok(())
+}

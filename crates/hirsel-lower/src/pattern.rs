@@ -32,14 +32,7 @@ impl Builder<'_, '_> {
         // #98 uses the existing physical Field(0), including nested boxes.
         let mut ty = self.body.places[place.0 as usize].ty;
         while let hirsel_types::TypeKind::Box(part) = self.types.get(ty).unwrap().kind {
-            let mut payload = self.types.get(part).unwrap().clone();
-            if !self.input.ownership.plain_types.contains(&part) {
-                payload.modes.relation = payload
-                    .modes
-                    .relation
-                    .union(&self.types.get(ty).unwrap().modes.relation);
-            }
-            ty = self.types.push(payload);
+            ty = self.part_type(ty, part);
             place = self.project(place, Projection::Field(0), ty);
         }
         place

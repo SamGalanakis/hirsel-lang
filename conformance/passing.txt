@@ -1829,6 +1829,10 @@ conformance/LANG/LANG-7-wave2-f64-sum-type-bad.hir
 conformance/LANG/LANG-7-wave2-f64-sum-type-ok.hir
 conformance/LANG/LANG-7-wave2-f64-sum_exact-type-bad.hir
 conformance/LANG/LANG-7-wave2-f64-sum_exact-type-ok.hir
+conformance/LANG/LANG-8-borrowed-result-bytes-error-run.hir
+conformance/LANG/LANG-8-borrowed-result-nested-run.hir
+conformance/LANG/LANG-8-borrowed-result-string-error-run.hir
+conformance/LANG/LANG-8-borrowed-result-u64-error-run.hir
 conformance/LANG/LANG-8-counted-error-borrow-mapper-ok.hir
 conformance/LANG/LANG-8-counted-error-borrow-mapper-run.hir
 conformance/LANG/LANG-8-function-map.hir

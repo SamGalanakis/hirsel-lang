@@ -1105,6 +1105,7 @@ impl Builder<'_, '_> {
             return Ok(None);
         };
         let value = self.transport(value, Storage::Temporary, span);
+        let carrier = self.body.places[value.place.0 as usize].ty;
         let yes = self.block(span);
         let no = self.block(span);
         let bad = self.block(span);
@@ -1143,13 +1144,14 @@ impl Builder<'_, '_> {
             if block == bad {
                 self.terminate(Terminator::Unreachable, span);
             } else if block == no {
+                let ty = self.part_type(carrier, plan.error_type);
                 let error = self.project(
                     value.place,
                     Projection::VariantField {
                         variant: plan.error_variant,
                         field: 0,
                     },
-                    plan.error_type,
+                    ty,
                 );
                 let mut error = Value {
                     checked_ty: None,
@@ -1235,6 +1237,21 @@ impl Builder<'_, '_> {
                         };
                     }
                 }
+                // As `return Error(e)`: the propagated Result is as local as
+                // its error, and returning it checks that against the result.
+                let mut propagated = self.types.get(self.body.result).unwrap().clone();
+                propagated.modes.relation = self
+                    .types
+                    .get(self.body.places[error.place.0 as usize].ty)
+                    .unwrap()
+                    .modes
+                    .relation
+                    .clone();
+                let propagated = if propagated.modes.relation.is_global() {
+                    self.body.result
+                } else {
+                    self.types.push(propagated)
+                };
                 let failure = self.cleanup();
                 let operand = self.consume(error);
                 let rv = Rvalue::Construct {
@@ -1243,19 +1260,20 @@ impl Builder<'_, '_> {
                         field: 0,
                         value: operand,
                     }],
-                    destination: self.row_destination(self.body.result),
+                    destination: self.row_destination(propagated),
                 };
-                let result = self.rvalue_with_failure(self.body.result, rv, span, failure);
+                let result = self.rvalue_with_failure(propagated, rv, span, failure);
                 self.return_value(result, span, bodies)?;
             }
         }
+        let success = self.part_type(carrier, plan.success_type);
         let payload = self.project(
             value.place,
             Projection::VariantField {
                 variant: plan.success_variant,
                 field: 0,
             },
-            plan.success_type,
+            success,
         );
         Ok(Some(self.transport_typed(
             Value {

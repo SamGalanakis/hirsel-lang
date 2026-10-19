@@ -1,0 +1,38 @@
+// rule: LANG-8
+// expect: run
+// entry: test_borrowed_u64_error
+// `?` on a Result borrowed from `data` with a plain error: the payload stays
+// bounded by `data` and the error propagates by copy.
+type Short = TooShort(u64)
+
+fn header(data: Bytes) -> Result[Bytes, u64] in data {
+  if bytes.len(data) < 2 {
+    return Error(bytes.len(data))
+  }
+  Ok(bytes.slice(data, 0, 2))
+}
+
+fn header_len(data: Bytes) -> Result[u64, u64] {
+  let h = header(data)?
+  Ok(bytes.len(h) + 10)
+}
+
+fn checked_header(data: Bytes) -> Result[u64, Short] {
+  let h = header(data) ? TooShort
+  Ok(bytes.len(h))
+}
+
+fn discard(data: Bytes) -> Result[(), u64] {
+  let _ = header(data)?
+  Ok(())
+}
+
+pub fn test_borrowed_u64_error(t: Test) -> Result[(), ()] {
+  test.check(t, header_len(b"abc") == Ok(12))
+  test.check(t, header_len(b"a") == Error(1))
+  test.check(t, checked_header(b"xyz") == Ok(2))
+  test.check(t, checked_header(b"") == Error(TooShort(0)))
+  test.check(t, discard(b"ok") == Ok(()))
+  test.check(t, discard(b"") == Error(0))
+  Ok(())
+}

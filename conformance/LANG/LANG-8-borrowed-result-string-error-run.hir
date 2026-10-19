@@ -1,0 +1,46 @@
+// rule: LANG-8
+// expect: run
+// entry: test_borrowed_string_error
+// `?` on a Result borrowed from `s` whose error is a String: the propagated
+// error keeps the bound, so the enclosing result names `in s`.
+fn nonempty(s: String) -> Result[String, String] in s {
+  if string.byte_len(s) == 0 {
+    return Error(s)
+  }
+  Ok(s)
+}
+
+fn width(s: String) -> Result[u64, String] in s {
+  let checked = nonempty(s)?
+  Ok(string.byte_len(checked))
+}
+
+fn same(s: String) -> Result[String, String] in s {
+  let checked = nonempty(s)?
+  Ok(checked)
+}
+
+pub fn test_borrowed_string_error(t: Test) -> Result[(), ()] {
+  test.check(
+    t,
+    match width("hirsel") {
+      Ok(n) => n == 6,
+      Error(_) => false,
+    }
+  )
+  test.check(
+    t,
+    match width("") {
+      Ok(_) => false,
+      Error(e) => e == "",
+    }
+  )
+  test.check(
+    t,
+    match same("text") {
+      Ok(v) => v == "text",
+      Error(_) => false,
+    }
+  )
+  Ok(())
+}

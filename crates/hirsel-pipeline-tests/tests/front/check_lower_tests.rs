@@ -213,3 +213,55 @@ fn an_owned_related_yield_can_return_without_copying_it() {
         }
     }
 }
+
+#[test]
+fn propagation_reads_borrowed_result_payloads_through_their_carrier() {
+    let d = source_definition(
+        "fn part(s: String) -> Result[String, String] in s { Ok(s) }\nfn main(s: String) -> Result[u64, String] in s { let _ = part(s)?\nOk(1) }",
+    );
+    let body = &d.bodies[d.entry.0 as usize];
+    let relation = |ty: hirsel_types::TypeId| d.types.get(ty).unwrap().modes.relation.clone();
+    // OWN-8: both payload places of the `in s` carrier keep its bound.
+    let payloads: Vec<_> = (0..body.places.len())
+        .filter(|&i| {
+            let projection = &body.places[i].projection;
+            projection.len() == 1
+                && matches!(
+                    projection.first(),
+                    Some(Projection::VariantField { field: 0, .. })
+                )
+        })
+        .collect();
+    assert_eq!(payloads.len(), 2, "{payloads:?}");
+    for &payload in &payloads {
+        let place = &body.places[payload];
+        let carrier = relation(body.locals[place.root.0 as usize].ty);
+        assert!(!carrier.is_global());
+        assert_eq!(relation(place.ty), carrier, "{place:?}");
+    }
+    // As `return Error(e)`: the propagated Result is built at its error's
+    // locality, and returning it checks that against `in s`.
+    let built = body
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instructions)
+        .find_map(|i| match i.kind {
+            InstructionKind::Assign { destination, value } => match &body.rvalues[value.0 as usize]
+            {
+                Rvalue::Construct { fields, .. }
+                    if fields.len() == 1
+                        && payloads.contains(&(fields[0].value.place.0 as usize)) =>
+                {
+                    Some((destination, fields[0].value.place))
+                }
+                _ => None,
+            },
+            _ => None,
+        });
+    let (destination, error) = built.expect("propagated Error construction");
+    assert_eq!(
+        relation(body.places[destination.0 as usize].ty),
+        relation(body.places[error.0 as usize].ty)
+    );
+    assert_ne!(body.places[destination.0 as usize].ty, body.result);
+}

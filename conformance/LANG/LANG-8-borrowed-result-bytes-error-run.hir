@@ -1,0 +1,53 @@
+// rule: LANG-8
+// expect: run
+// entry: test_borrowed_bytes_error
+// `?` on a Result borrowed from `data` whose error is a Bytes view of `data`:
+// both payloads keep the bound, so the propagated error needs `in data`.
+fn split(data: Bytes) -> Result[Bytes, Bytes] in data {
+  if bytes.len(data) < 4 {
+    return Error(data)
+  }
+  Ok(bytes.slice(data, 4, bytes.len(data)))
+}
+
+fn body_len(data: Bytes) -> Result[u64, Bytes] in data {
+  let rest = split(data)?
+  Ok(bytes.len(rest))
+}
+
+fn body(data: Bytes) -> Result[Bytes, Bytes] in data {
+  let rest = split(data)?
+  Ok(rest)
+}
+
+pub fn test_borrowed_bytes_error(t: Test) -> Result[(), ()] {
+  test.check(
+    t,
+    match body_len(b"headbody") {
+      Ok(n) => n == 4,
+      Error(_) => false,
+    }
+  )
+  test.check(
+    t,
+    match body_len(b"hea") {
+      Ok(_) => false,
+      Error(e) => e == b"hea",
+    }
+  )
+  test.check(
+    t,
+    match body(b"head!") {
+      Ok(rest) => rest == b"!",
+      Error(_) => false,
+    }
+  )
+  test.check(
+    t,
+    match body(b"") {
+      Ok(_) => false,
+      Error(e) => bytes.len(e) == 0,
+    }
+  )
+  Ok(())
+}

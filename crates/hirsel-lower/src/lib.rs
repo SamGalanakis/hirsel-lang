@@ -58,9 +58,10 @@ pub struct RangePlan {
 pub struct TryPlan {
     pub success_variant: u32,
     pub error_variant: u32,
-    /// The source Result's own payload arguments: the projected places keep
-    /// the declared part types, and the success payload is then received at
-    /// the `?` expression's checked type (MODE-2 retained uniqueness).
+    /// The source Result's own payload arguments. The projected places read
+    /// them through the Result, keeping its bounds (OWN-8), and the success
+    /// payload is then received at the `?` expression's checked type (MODE-2
+    /// retained uniqueness).
     pub success_type: TypeId,
     pub error_type: TypeId,
     pub result_constructor: Constructor,
