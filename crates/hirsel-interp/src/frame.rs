@@ -120,6 +120,8 @@ pub(crate) struct Frame {
     pub bounded: Option<crate::bounded::Boundary>,
     /// The next block start charges fuel: the frame was entered or jumped back.
     pub fuel_due: bool,
+    /// This body's dispatch form in the run's `Codes`, resolved at its first step.
+    pub code: Option<u32>,
 }
 impl Frame {
     /// Replace value storage while retaining the lexical size environment and
@@ -237,6 +239,7 @@ impl Frame {
             check: None,
             bounded: None,
             fuel_due: true,
+            code: None,
         })
     }
     pub fn body(&self) -> &Body {
@@ -659,6 +662,35 @@ impl Frame {
             _ => slot.clone(),
         }
         .ok_or_else(|| invalid("use of dead storage").into())
+    }
+    /// A whole local's live inert value, when reading it as `local` cannot fail.
+    pub fn peek(&self, local: crate::code::Local) -> Option<&Value> {
+        let value = self.slots.get(local.slot as usize)?.as_ref()?;
+        (value.inert() && !(local.once && local.usage == UseKind::Copy)).then_some(value)
+    }
+    /// Finish reading a peeked local: a move empties the slot, as `extract` does.
+    pub fn commit(&mut self, local: crate::code::Local) {
+        if local.usage == UseKind::Take && !self.preserves(local.slot) {
+            self.slots[local.slot as usize] = None;
+        }
+    }
+    /// The operand of a whole local, as `extract` gives it, when that needs no walk
+    /// and cannot fail: a move or borrow of a live value or a copy of an inert one.
+    /// None leaves the slot as it was.
+    pub fn local_operand(&mut self, local: crate::code::Local) -> Option<Value> {
+        let value = self.slots.get(local.slot as usize)?.as_ref()?;
+        match local.usage {
+            UseKind::Copy => (value.inert() && !local.once).then(|| value.clone()),
+            UseKind::Take if !self.preserves(local.slot) => self.slots[local.slot as usize].take(),
+            _ => Some(value.clone()),
+        }
+    }
+    /// A move out of a `mut` parameter holding inline bits leaves it in place.
+    fn preserves(&self, slot: u32) -> bool {
+        self.mut_parameters.contains(&LocalId(slot))
+            && self.slots[slot as usize]
+                .as_ref()
+                .is_some_and(Value::inline_bits)
     }
     pub fn assign(&mut self, destination: PlaceId, value: Value) -> Result<(), AccessError> {
         self.assign_shadow(destination, value, Default::default())

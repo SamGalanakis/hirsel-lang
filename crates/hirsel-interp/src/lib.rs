@@ -7,6 +7,7 @@ pub mod aggregate;
 mod bounded;
 mod budget;
 pub mod checked;
+mod code;
 mod constants;
 pub mod conversion;
 mod eval;

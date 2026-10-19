@@ -580,6 +580,10 @@ impl Clone for Value {
             }
         }
         let mut result = shallow(self);
+        // A block's copy shares its elements already.
+        if self.block().is_some() || self.fields().is_none_or(<[_]>::is_empty) {
+            return result;
+        }
         let mut copied = 0;
         let mut work = vec![(self, &mut result)];
         while let Some((source, target)) = work.pop() {
@@ -610,6 +614,9 @@ impl Value {
     }
     /// Add a root to every `Shared` root an owned copy of this value reaches.
     pub(crate) fn acquire_roots(&self) {
+        if self.inert() {
+            return;
+        }
         let mut work = vec![self];
         while let Some(value) = work.pop() {
             match value {
@@ -651,6 +658,9 @@ impl Value {
     /// Free a simulation tree without running finalizers or recursing in Rust.
     /// Engines use the cleanup worklist; this is for consuming tooling snapshots.
     pub fn discard(self) {
+        if self.inert() {
+            return;
+        }
         let mut work = vec![self];
         while let Some(mut value) = work.pop() {
             let fields = match &mut value {
@@ -753,6 +763,9 @@ impl Value {
     /// until that one is, and copying that one on its write gives each child a
     /// second holder.
     pub(crate) fn share_arena_storage(&self) {
+        if self.inert() {
+            return;
+        }
         let mut work = vec![self];
         while let Some(v) = work.pop() {
             if let Some(arena) = v.arena_storage() {
@@ -789,6 +802,21 @@ impl Value {
             | Self::Bytes(_) => true,
             _ => false,
         }
+    }
+    /// A scalar with no fields, roots, handle or arena storage: copying it walks
+    /// nothing and releasing it runs nothing.
+    pub(crate) fn inert(&self) -> bool {
+        matches!(
+            self,
+            Self::Unit
+                | Self::Bool(_)
+                | Self::Integer(_)
+                | Self::F32(_)
+                | Self::F64(_)
+                | Self::Char(_)
+                | Self::String(_)
+                | Self::Bytes(_)
+        )
     }
     pub(crate) fn inline_bits(&self) -> bool {
         let mut work = vec![self];

@@ -208,6 +208,8 @@ pub(crate) struct Scheduler {
     parked: Vec<(u64, Vec<Frame>, Vec<crate::observation::FailureRecord>)>,
     frames: Vec<Frame>,
     constants: crate::constants::Constants,
+    /// The dispatch forms of the bodies its frames run.
+    codes: crate::code::Codes,
 }
 impl Scheduler {
     pub(crate) fn new(
@@ -224,6 +226,7 @@ impl Scheduler {
             parked: vec![],
             frames: vec![frame],
             constants,
+            codes: Default::default(),
         }
     }
     /// The waits of its parked tasks, in suspension order (CONC-8).
@@ -265,6 +268,7 @@ pub(crate) fn execute_frames(
         mut parked,
         mut frames,
         mut constants,
+        mut codes,
     } = state
         .take()
         .ok_or_else(|| invalid("a finished run resumed"))?;
@@ -470,6 +474,7 @@ pub(crate) fn execute_frames(
                     parked,
                     frames,
                     constants,
+                    codes,
                 });
                 return Ok(Step::Idle);
             }
@@ -1567,6 +1572,29 @@ pub(crate) fn execute_frames(
             }
         }
         let frame = frames.last_mut().unwrap();
+        let code = match frame.code {
+            Some(code) => code,
+            None => {
+                let code = codes.id(&frame.definition, frame.body_id);
+                frame.code = Some(code);
+                code
+            }
+        };
+        if !dispatch(
+            frame,
+            codes.get(code),
+            depth,
+            limits,
+            runtime.trace_mode,
+            execution,
+        ) {
+            continue;
+        }
+        let call = codes
+            .get(code)
+            .op(frame.block, frame.instruction)
+            .call
+            .clone();
         // The step reads its code through its own handle on the immutable
         // definition, so the frame stays free for mutation without a copy.
         let definition = frame.definition.clone();
@@ -1666,7 +1694,7 @@ pub(crate) fn execute_frames(
                     site,
                 });
             }
-            execute_terminator(frame, terminator, runtime, &mut budgets)
+            execute_terminator(frame, terminator, call.as_ref(), runtime, &mut budgets)
         };
         match result {
             Err(EvalError::Scalar(ScalarError::InvalidOperation)) => {
@@ -1774,11 +1802,6 @@ pub(crate) fn execute_frames(
                 returns,
                 on_failure,
             }) => {
-                let caller = if forward_caller && frame.definition.tracks_caller(frame.body_id) {
-                    frame.caller.clone()
-                } else {
-                    Some(CallerSite::new(frame, site, sources)?)
-                };
                 let operation_caller = if forward_caller {
                     frame.caller.clone()
                 } else {
@@ -1787,7 +1810,8 @@ pub(crate) fn execute_frames(
                 let (callee, closes_arena, bounded) =
                     checked_callee(frame, callee, &mut arguments, &mut checks, &mut budgets)?;
                 let mut closure_check = None;
-                let mut invocation_types = Default::default();
+                let mut invocation_types;
+                let mut callee_code = None;
                 let (definition, body, captures, sizes) = match callee {
                     RuntimeCallee::Closure {
                         definition,
@@ -1817,49 +1841,41 @@ pub(crate) fn execute_frames(
                         (definition, body, captures, sizes)
                     }
                     RuntimeCallee::Definition {
-                        mut path,
-                        mut generics,
+                        path,
+                        generics,
                         types,
                     } => {
-                        let mut call_types = None;
-                        if let Some(types) = types {
-                            let mut merged = frame.definition.types.clone();
-                            for argument in &mut generics {
-                                if let hirsel_types::GenericArgument::Type(ty) = argument {
-                                    *ty = hirsel_types::import_type(&types, *ty, &mut merged)
-                                        .map_err(|_| invalid("function reference generic type"))?;
+                        let target = match (path, types) {
+                            (CalleePath::Site(call), None)
+                                if call.closed
+                                    && (generics.is_empty() || frame.type_arguments.is_empty()) =>
+                            {
+                                match call.target.get() {
+                                    Some(target) => target.clone(),
+                                    None => {
+                                        let target = std::rc::Rc::new(target(
+                                            frame,
+                                            provider,
+                                            runtime,
+                                            call.callee.clone(),
+                                            generics,
+                                            None,
+                                        )?);
+                                        let _ = call.target.set(target.clone());
+                                        target
+                                    }
                                 }
                             }
-                            call_types = Some(merged);
-                        }
-                        let mut concrete = crate::type_arguments::concrete(
-                            call_types.as_ref().unwrap_or(&frame.definition.types),
-                            &generics,
-                            &frame.type_arguments,
-                        )?;
-                        // CT-5: a generic generated declaration runs the
-                        // monomorphic body of its selected instance.
-                        if let Some(instance) = provider
-                            .instance_body(&path, &concrete.types, &concrete.arguments)
-                            .map_err(Error::Query)?
-                        {
-                            path = instance;
-                            concrete.arguments.clear();
-                        }
-                        generics = concrete.arguments.clone();
-                        call_types = Some((*concrete.types).clone());
-                        let tail = frame
-                            .body()
-                            .tail_sites
-                            .iter()
-                            .find(|tail| {
-                                tail.call_block == frame.block
-                                    && tail.owner_body == frame.body_id
-                                    && tail.kind == TailKind::SelfTail
-                            })
-                            .cloned();
-                        if forward_caller && path == frame.definition.path && tail.is_some() {
-                            let tail = tail.unwrap();
+                            (path, types) => std::rc::Rc::new(target(
+                                frame,
+                                provider,
+                                runtime,
+                                path.into_path(),
+                                generics,
+                                types,
+                            )?),
+                        };
+                        if forward_caller && let Some(tail) = &target.tail {
                             let released = frame.loop_owned.len();
                             for (value, anchor) in frame.loop_owned.drain(..).rev() {
                                 frame.work.push_back(crate::resources::Work::Release(
@@ -1868,7 +1884,7 @@ pub(crate) fn execute_frames(
                                     frame.caller.clone(),
                                 ));
                             }
-                            for (_, place) in tail.owned_loop_arguments {
+                            for &(_, place) in &tail.owned_loop_arguments {
                                 let value = frame
                                     .slot(place)?
                                     .take()
@@ -1885,7 +1901,7 @@ pub(crate) fn execute_frames(
                             Frame::bind_sizes(
                                 &mut frame.sizes,
                                 scope,
-                                generics.iter().map(|arg| match arg {
+                                target.actuals.arguments.iter().map(|arg| match arg {
                                     hirsel_types::GenericArgument::Size(
                                         hirsel_types::Size::Constant(n),
                                     ) => Some(*n),
@@ -1895,7 +1911,7 @@ pub(crate) fn execute_frames(
                             crate::type_arguments::bind(
                                 &mut frame.type_arguments,
                                 scope,
-                                concrete.clone(),
+                                target.actuals.clone(),
                             );
                             frame.restart_tail(arguments)?;
                             if let Some(old) = frame.check.take() {
@@ -1905,8 +1921,8 @@ pub(crate) fn execute_frames(
                             }
                             continue;
                         }
-
-                        if runtime.forget.as_ref() == Some(&path) {
+                        let path = &target.path;
+                        if target.forget {
                             if arguments.len() != 1 || !mut_places.is_empty() {
                                 return Err(invalid("forget arity/mode"));
                             }
@@ -1940,23 +1956,24 @@ pub(crate) fn execute_frames(
                             frame.goto(next);
                             continue;
                         }
+                        let call_types = target.types.as_deref().unwrap_or(&frame.definition.types);
                         // A diverging operation is offered a Never result row.
+                        let mut never = None;
                         let result_type = match returns {
                             Some(r) => frame.place(r.destination)?.ty,
-                            None => call_types
-                                .get_or_insert_with(|| frame.definition.types.clone())
-                                .push(hirsel_types::Type {
-                                    kind: hirsel_types::TypeKind::Primitive(
-                                        hirsel_types::Primitive::Never,
-                                    ),
-                                    ..hirsel_types::Type::unit()
-                                }),
+                            None => never.insert(call_types.clone()).push(hirsel_types::Type {
+                                kind: hirsel_types::TypeKind::Primitive(
+                                    hirsel_types::Primitive::Never,
+                                ),
+                                ..hirsel_types::Type::unit()
+                            }),
                         };
-                        let types = call_types.as_ref().unwrap_or(&frame.definition.types);
+                        let types = never.as_ref().unwrap_or(call_types);
                         // MEM-11: freezing needs the sole owner, which checked
                         // execution counts by holders, independently of the
                         // static uniqueness proof.
-                        if path.is_core("shared.freeze")
+                        if target.core
+                            && path.is_core("shared.freeze")
                             && let Some(check) = &frame.check
                             && !checks.first().is_none_or(|input| input.shadow.sole_owner())
                         {
@@ -1967,7 +1984,9 @@ pub(crate) fn execute_frames(
                         }
                         // MEM-6: a copy into a bounded arena charges its whole tree first,
                         // and builds every List and Array of it unshared there.
-                        let exhausted = if path.is_core("copy_to") {
+                        let exhausted = if !target.core {
+                            None
+                        } else if path.is_core("copy_to") {
                             copy_to_arena(
                                 runtime,
                                 types,
@@ -1976,9 +1995,9 @@ pub(crate) fn execute_frames(
                                 &mut budgets,
                             )?
                         } else {
-                            list_write(&path, &mut arguments, &mut budgets)
-                                .or_else(|| keyed_write(&path, &mut arguments, &mut budgets))
-                                .or_else(|| read_write(&path, &mut arguments, &mut budgets))
+                            list_write(path, &mut arguments, &mut budgets)
+                                .or_else(|| keyed_write(path, &mut arguments, &mut budgets))
+                                .or_else(|| read_write(path, &mut arguments, &mut budgets))
                         };
                         let result = if let Some(arena) = exhausted {
                             budgets.exhausted(arena, execution.failures.len());
@@ -1992,8 +2011,8 @@ pub(crate) fn execute_frames(
                             operations.call(
                                 OperationCall {
                                     runtime,
-                                    path: &path,
-                                    generics: &generics,
+                                    path,
+                                    generics: &target.actuals.arguments,
                                     arguments: &mut arguments,
                                     result_type,
                                     types,
@@ -2013,7 +2032,7 @@ pub(crate) fn execute_frames(
                             let bounds = frame.check.as_ref().map(|check| {
                                 operation_bounds(
                                     &check.state.borrow().config,
-                                    &path,
+                                    path,
                                     &checks,
                                     &mut_places,
                                     &taken,
@@ -2042,37 +2061,63 @@ pub(crate) fn execute_frames(
                         // Generic TIR executes parametrically: scalar values retain
                         // their widths and aggregates retain their runtime shape.
                         // Static bounds and call types were checked at publication.
-                        let d = provider.definition(&path).map_err(Error::Query)?;
-                        let entry = d.entry;
-                        let actuals = generics
-                            .iter()
-                            .map(|argument| match argument {
-                                hirsel_types::GenericArgument::Size(
-                                    hirsel_types::Size::Constant(n),
-                                ) => Some(*n),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>();
-                        let mut sizes = Default::default();
-                        Frame::bind_sizes(
-                            &mut sizes,
-                            d.bodies[entry.0 as usize].parameter_scope,
-                            actuals,
-                        );
-                        crate::type_arguments::bind(
-                            &mut invocation_types,
-                            d.bodies[entry.0 as usize].parameter_scope,
-                            concrete,
-                        );
-                        (d, entry, vec![], sizes)
+                        let entry = match target.entry.get() {
+                            Some(entry) => entry,
+                            None => {
+                                let definition = provider.definition(path).map_err(Error::Query)?;
+                                let body = definition.entry;
+                                let scope = definition.bodies[body.0 as usize].parameter_scope;
+                                let mut sizes = Default::default();
+                                Frame::bind_sizes(
+                                    &mut sizes,
+                                    scope,
+                                    target.actuals.arguments.iter().map(
+                                        |argument| match argument {
+                                            hirsel_types::GenericArgument::Size(
+                                                hirsel_types::Size::Constant(n),
+                                            ) => Some(*n),
+                                            _ => None,
+                                        },
+                                    ),
+                                );
+                                let mut type_arguments = Default::default();
+                                crate::type_arguments::bind(
+                                    &mut type_arguments,
+                                    scope,
+                                    target.actuals.clone(),
+                                );
+                                let code = codes.id(&definition, body);
+                                target.entry.get_or_init(|| crate::code::Entry {
+                                    definition,
+                                    body,
+                                    sizes,
+                                    type_arguments,
+                                    code,
+                                })
+                            }
+                        };
+                        invocation_types = entry.type_arguments.clone();
+                        callee_code = Some(entry.code);
+                        (
+                            entry.definition.clone(),
+                            entry.body,
+                            vec![],
+                            entry.sizes.clone(),
+                        )
                     }
                 };
-                let path = definition.path.clone();
+                let path = (runtime.trace_mode == TraceMode::Full).then(|| definition.path.clone());
                 let mut callee = Frame::new_body(definition, body, arguments, captures, sizes)?;
                 if callee.definition.tracks_caller(body) {
-                    callee.caller = caller;
+                    callee.caller =
+                        if forward_caller && frame.definition.tracks_caller(frame.body_id) {
+                            frame.caller.clone()
+                        } else {
+                            Some(CallerSite::new(frame, site, sources)?)
+                        };
                 }
                 callee.type_arguments = invocation_types;
+                callee.code = callee_code;
                 let writebacks = mut_places
                     .into_iter()
                     .map(|(i, p)| {
@@ -2106,7 +2151,7 @@ pub(crate) fn execute_frames(
                     writebacks,
                 });
                 frames.push(callee);
-                if runtime.trace_mode == TraceMode::Full {
+                if let Some(path) = path {
                     execution.trace.push(TraceEvent::Enter {
                         path,
                         depth: depth + 1,
@@ -2114,6 +2159,212 @@ pub(crate) fn execute_frames(
                 }
             }
         }
+    }
+}
+/// Step the top frame through its resolved ops while each one completes without
+/// failure, a call or queued work, with exactly the general step's effects, step
+/// count and trace. Returns true when the general step must execute the current op,
+/// and false when the scheduler must look at the frame again first (a jump that
+/// charges fuel).
+fn dispatch(
+    frame: &mut Frame,
+    code: &crate::code::Code,
+    depth: usize,
+    limits: Limits,
+    trace_mode: TraceMode,
+    execution: &mut Execution,
+) -> bool {
+    use crate::code::{CleanupStep, OpKind};
+    loop {
+        if frame.depth_failure || frame.check.is_some() || limits.steps == Some(execution.steps) {
+            return true;
+        }
+        let op = code.op(frame.block, frame.instruction);
+        // Each arm decides whether its op completes before changing anything; `step`
+        // then counts and traces it exactly as the general step does.
+        let step = |frame: &Frame, execution: &mut Execution, terminator: bool| {
+            execution.steps = execution.steps.saturating_add(1);
+            if trace_mode == TraceMode::Full {
+                execution.trace.push(if terminator {
+                    TraceEvent::Terminator {
+                        depth,
+                        block: frame.block,
+                        site: op.site,
+                    }
+                } else {
+                    TraceEvent::Instruction {
+                        depth,
+                        block: frame.block,
+                        index: frame.instruction as u32,
+                        site: op.site,
+                    }
+                });
+            }
+        };
+        match &op.kind {
+            OpKind::General => return true,
+            OpKind::Nop => step(frame, execution, false),
+            &OpKind::Live(slot) => {
+                if frame.slots[slot as usize].is_some() {
+                    return true;
+                }
+                step(frame, execution, false);
+            }
+            &OpKind::Dead { slot, if_live } => {
+                if frame.slots[slot as usize].is_none() && !if_live {
+                    return true;
+                }
+                step(frame, execution, false);
+                frame.slots[slot as usize] = None;
+            }
+            OpKind::EndScope(slots) => {
+                step(frame, execution, false);
+                for &slot in slots.iter() {
+                    frame.slots[slot as usize] = None;
+                }
+            }
+            OpKind::Constant { slot, value } => {
+                if frame.slots[*slot as usize].is_some() {
+                    return true;
+                }
+                step(frame, execution, false);
+                frame.slots[*slot as usize] = Some(value.clone());
+            }
+            &OpKind::Use { slot, value } => {
+                if frame.slots[slot as usize].is_some() {
+                    return true;
+                }
+                let Some(value) = frame.local_operand(value) else {
+                    return true;
+                };
+                step(frame, execution, false);
+                frame.slots[slot as usize] = Some(value);
+            }
+            &OpKind::Unary { op, slot, value } => {
+                let Some(operand) = frame.peek(value) else {
+                    return true;
+                };
+                if frame.slots[slot as usize].is_some() {
+                    return true;
+                }
+                let Ok(result) = scalar::unary(op, operand.clone()) else {
+                    return true;
+                };
+                step(frame, execution, false);
+                frame.commit(value);
+                frame.slots[slot as usize] = Some(result);
+            }
+            &OpKind::Binary {
+                op,
+                slot,
+                left,
+                right,
+            } => {
+                let (Some(a), Some(b)) = (frame.peek(left), frame.peek(right)) else {
+                    return true;
+                };
+                let moved = left.usage == hirsel_types::UseKind::Take
+                    || right.usage == hirsel_types::UseKind::Take;
+                if moved && left.slot == right.slot || frame.slots[slot as usize].is_some() {
+                    return true;
+                }
+                let result = if matches!(
+                    op,
+                    hirsel_syntax::BinaryOp::Eq
+                        | hirsel_syntax::BinaryOp::Ne
+                        | hirsel_syntax::BinaryOp::Lt
+                        | hirsel_syntax::BinaryOp::Le
+                        | hirsel_syntax::BinaryOp::Gt
+                        | hirsel_syntax::BinaryOp::Ge
+                ) {
+                    crate::structural::binary(op, a, b).ok()
+                } else {
+                    scalar::binary(op, a.clone(), b.clone()).ok()
+                };
+                let Some(result) = result else {
+                    return true;
+                };
+                step(frame, execution, false);
+                frame.commit(left);
+                frame.commit(right);
+                frame.slots[slot as usize] = Some(result);
+            }
+            &OpKind::Replace {
+                slot,
+                value,
+                displaced,
+                if_live,
+            } => {
+                if !if_live && frame.slots[slot as usize].is_none()
+                    || frame.slots[displaced as usize].is_some()
+                    || value.slot == displaced
+                {
+                    return true;
+                }
+                let Some(value) = frame.local_operand(value) else {
+                    return true;
+                };
+                step(frame, execution, false);
+                if let Some(old) = frame.slots[slot as usize].replace(value) {
+                    frame.slots[displaced as usize] = Some(old);
+                }
+            }
+            &OpKind::Check(condition) => {
+                if !matches!(frame.peek(condition), Some(Value::Bool(true))) {
+                    return true;
+                }
+                step(frame, execution, false);
+                frame.commit(condition);
+            }
+            OpKind::Cleanup { id, steps } => {
+                // Dropping a dead `if_live` slot or an inert value queues nothing
+                // and releases nothing, so the whole list runs here, in order.
+                let inert = steps.iter().all(|step| match *step {
+                    CleanupStep::Drop { slot, if_live } => frame.slots[slot as usize]
+                        .as_ref()
+                        .map_or(if_live, Value::inert),
+                    CleanupStep::EndLoan => true,
+                });
+                if !inert {
+                    return true;
+                }
+                step(frame, execution, false);
+                if trace_mode == TraceMode::Full {
+                    for action in frame.body().cleanup_actions(*id) {
+                        execution.trace.push(TraceEvent::Cleanup {
+                            depth,
+                            action: action.clone(),
+                        });
+                    }
+                }
+                for step in steps.iter() {
+                    if let CleanupStep::Drop { slot, .. } = *step {
+                        frame.slots[slot as usize] = None;
+                    }
+                }
+            }
+            &OpKind::Goto(block) => {
+                step(frame, execution, true);
+                frame.goto(block);
+                if frame.fuel_due {
+                    return false;
+                }
+                continue;
+            }
+            &OpKind::Branch { condition, yes, no } => {
+                let Some(&Value::Bool(value)) = frame.peek(condition) else {
+                    return true;
+                };
+                step(frame, execution, true);
+                frame.commit(condition);
+                frame.goto(if value { yes } else { no });
+                if frame.fuel_due {
+                    return false;
+                }
+                continue;
+            }
+        }
+        frame.instruction += 1;
     }
 }
 fn failure(sources: &SourceMap, site: Span, rule: &str, kind: &str) -> Result<Failure, Error> {
@@ -3237,6 +3488,7 @@ fn execute_instruction(
 fn execute_terminator(
     frame: &mut Frame,
     terminator: &Terminator,
+    call: Option<&std::rc::Rc<crate::code::CallSite>>,
     runtime: &crate::aggregate::RuntimeTypes,
     budgets: &mut crate::bounded::Budgets,
 ) -> Result<Action, EvalError> {
@@ -3336,7 +3588,10 @@ fn execute_terminator(
                         })
                         .collect::<Result<Vec<_>, Error>>()?;
                     RuntimeCallee::Definition {
-                        path: path.clone(),
+                        path: match call {
+                            Some(call) => CalleePath::Site(call.clone()),
+                            None => CalleePath::Value(path.clone()),
+                        },
                         generics,
                         types: None,
                     }
@@ -3351,7 +3606,7 @@ fn execute_terminator(
                     value.begin_call();
                     match value {
                         Value::FunctionReference(reference) => RuntimeCallee::Definition {
-                            path: reference.definition,
+                            path: CalleePath::Value(reference.definition),
                             generics: reference.arguments,
                             types: Some(reference.types),
                         },
@@ -3476,9 +3731,110 @@ fn execute_terminator(
     })
 }
 
+/// A named callee: a direct call's site, or a function reference's definition.
+enum CalleePath {
+    Site(std::rc::Rc<crate::code::CallSite>),
+    Value(hirsel_syntax::DefPath),
+}
+impl CalleePath {
+    fn path(&self) -> &hirsel_syntax::DefPath {
+        match self {
+            Self::Site(call) => &call.callee,
+            Self::Value(path) => path,
+        }
+    }
+    fn into_path(self) -> hirsel_syntax::DefPath {
+        match self {
+            Self::Site(call) => call.callee.clone(),
+            Self::Value(path) => path,
+        }
+    }
+}
+/// Resolve a direct callee for a call from `frame`: close its generic arguments,
+/// select its CT-5 instance and classify the call. Arguments that name no binder
+/// of the frame close as written, in the caller's store.
+fn target(
+    frame: &Frame,
+    provider: &mut (impl TirProvider + ?Sized),
+    runtime: &crate::aggregate::RuntimeTypes,
+    mut path: hirsel_syntax::DefPath,
+    mut generics: Vec<hirsel_types::GenericArgument>,
+    types: Option<std::sync::Arc<hirsel_types::TypeStore>>,
+) -> Result<crate::code::Target, Error> {
+    let (mut actuals, types) =
+        if types.is_none() && (generics.is_empty() || frame.type_arguments.is_empty()) {
+            let types = if generics.is_empty() {
+                Default::default()
+            } else {
+                std::sync::Arc::new(frame.definition.types.clone())
+            };
+            (
+                hirsel_types::Actuals {
+                    types,
+                    arguments: generics,
+                },
+                None,
+            )
+        } else {
+            let mut merged = None;
+            if let Some(types) = types {
+                let mut store = frame.definition.types.clone();
+                for argument in &mut generics {
+                    if let hirsel_types::GenericArgument::Type(ty) = argument {
+                        *ty = hirsel_types::import_type(&types, *ty, &mut store)
+                            .map_err(|_| invalid("function reference generic type"))?;
+                    }
+                }
+                merged = Some(store);
+            }
+            let concrete = crate::type_arguments::concrete(
+                merged.as_ref().unwrap_or(&frame.definition.types),
+                &generics,
+                &frame.type_arguments,
+            )?;
+            let types = concrete.types.clone();
+            (concrete, Some(types))
+        };
+    // CT-5: a generic generated declaration runs the monomorphic body of its
+    // selected instance.
+    if let Some(instance) = provider
+        .instance_body(
+            &path,
+            types.as_deref().unwrap_or(&frame.definition.types),
+            &actuals.arguments,
+        )
+        .map_err(Error::Query)?
+    {
+        path = instance;
+        actuals.arguments.clear();
+    }
+    let tail = (path == frame.definition.path)
+        .then(|| {
+            frame
+                .body()
+                .tail_sites
+                .iter()
+                .find(|tail| {
+                    tail.call_block == frame.block
+                        && tail.owner_body == frame.body_id
+                        && tail.kind == TailKind::SelfTail
+                })
+                .cloned()
+        })
+        .flatten();
+    Ok(crate::code::Target {
+        forget: runtime.forget.as_ref() == Some(&path),
+        core: path.package_is("core", "1"),
+        path,
+        actuals,
+        types,
+        tail,
+        entry: Default::default(),
+    })
+}
 enum RuntimeCallee {
     Definition {
-        path: hirsel_syntax::DefPath,
+        path: CalleePath,
         generics: Vec<hirsel_types::GenericArgument>,
         types: Option<std::sync::Arc<hirsel_types::TypeStore>>,
     },
@@ -3509,6 +3865,7 @@ fn checked_callee(
     let RuntimeCallee::Definition { path, .. } = &callee else {
         return Ok((callee, None, None));
     };
+    let path = path.path();
     let bounded = path.is_core(crate::library::ARENA_BOUNDED_OPERATION);
     let Some(check) = &frame.check else {
         if !bounded && !path.is_core(crate::library::ARENA_WITH_OPERATION) {
