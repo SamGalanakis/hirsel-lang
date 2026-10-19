@@ -1,0 +1,25 @@
+// A 64 KiB WebSocket frame takes RFC 6455's 64-bit length form (section 5.2,
+// the 65536-byte binary example of section 5.7). It runs as a built executable:
+// the interpreter's per-byte list building is too slow at this size.
+fn filled(count: u64) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    list.push(mut out, core@1/int.narrow(i % 251))
+    i += 1
+  }
+  bytes.from_list(take out)
+}
+
+pub fn main() -> Result[(), ()] {
+  let message = websocket.Frame(fin: true, opcode: Binary(), payload: filled(65536))
+  let wire = websocket.encode_frame(message, None())
+  failure.check(bytes.len(wire) == 65546, Arithmetic())
+  let head: Bytes = b"\x82\x7f\x00\x00\x00\x00\x00\x01\x00\x00"
+  failure.check(bytes.slice(wire, 0, 10) == head, Arithmetic())
+  failure.check(
+    websocket.decode_frame(wire, 65536) == Ok(Some((message, false, 65546u64))),
+    Arithmetic()
+  )
+  Ok(())
+}

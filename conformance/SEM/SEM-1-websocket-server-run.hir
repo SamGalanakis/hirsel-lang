@@ -1,0 +1,79 @@
+// rule: SEM-1
+// expect: run
+// entry: main
+// RFC 6455 sections 1.3 and 5.7: the opening handshake example, where the server
+// selects the client's first offered protocol it supports, the masked "Hello", a
+// fragmented text with an interleaved ping, a 16-bit length and the closing
+// handshake, played by a scripted client against an echo server.
+pub type AppError = Network(NetError) | Http(http.HttpError) | Ws(websocket.WsError)
+
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+}
+
+pub fn main(t: Test) -> Result[(), AppError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: 8080u16,
+        clients: [
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40001u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET /chat HTTP/1.1\r\nHost: server.example.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: chat, superchat\r\nSec-WebSocket-Version: 13\r\nOrigin: http://example.com\r\n\r\n\x81\x857\xfa!=\x7f\x9fMQX"
+              ),
+              Expect(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Protocol: chat\r\n\r\n"
+              ),
+              Expect(b"\x81\x05Hello"),
+              Send(
+                b"\x01\x837\xfa!=\x7f\x9fM\x89\x857\xfa!=\x7f\x9fMQX\x80\x82\x01\x02\x03\x04mm"
+              ),
+              Expect(b"\x8a\x05Hello"),
+              Expect(b"\x81\x05Hello"),
+              Send(
+                b"\x82\xfe\x01,7\xfa!=7\xfb#>3\xff':?\xf3+6;\xf7/2'\xeb3.#\xef7*/\xe3;&+\xe7?\"\x17\xdb\x03\x1e\x13\xdf\x07\x1a\x1f\xd3\x0b\x16\x1b\xd7\x0f\x12\x07\xcb\x13\x0e\x03\xcf\x17\n\x0f\xc3\x1b\x06\x0b\xc7\x1f\x02w\xbbc~s\xbfgz\x7f\xb3kv{\xb7org\xabsnc\xafwjo\xa3{fk\xa7\x7fbW\x9bC^S\x9fGZ_\x93KV[\x97ORG\x8bSNC\x8fWJO\x83[FK\x87_B\xb7{\xa3\xbe\xb3\x7f\xa7\xba\xbfs\xab\xb6\xbbw\xaf\xb2\xa7k\xb3\xae\xa3o\xb7\xaa\xafc\xbb\xa6\xabg\xbf\xa2\x97[\x83\x9e\x93_\x87\x9a\x9fS\x8b\x96\x9bW\x8f\x92\x87K\x93\x8e\x83O\x97\x8a\x8fC\x9b\x86\x8bG\x9f\x82\xf7;\xe3\xfe\xf3?\xe7\xfa\xff3\xeb\xf6\xfb7\xef\xf2\xe7+\xf3\xee\xe3/\xf7\xea\xef#\xfb\xe6\xeb'\xff\xe2\xd7\x1b\xc3\xde\xd3\x1f\xc7\xda\xdf\x13\xcb\xd6\xdb\x17\xcf\xd2\xc7\x0b\xd3\xce\xc3\x0f\xd7\xca\xcf\x03\xdb=6\xf8\"92\xfc&5>\xf0*1:\xf4.-&\xe82)\"\xec6%.\xe0:!*\xe4>\x1d\x16\xd8\x02\x19\x12\xdc\x06\x15\x1e\xd0\n\x11\x1a\xd4\x0e\r"
+              ),
+              Expect(
+                b"\x82~\x01,\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\x7f\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f\xa0\xa1\xa2\xa3\xa4\xa5\xa6\xa7\xa8\xa9\xaa\xab\xac\xad\xae\xaf\xb0\xb1\xb2\xb3\xb4\xb5\xb6\xb7\xb8\xb9\xba\xbb\xbc\xbd\xbe\xbf\xc0\xc1\xc2\xc3\xc4\xc5\xc6\xc7\xc8\xc9\xca\xcb\xcc\xcd\xce\xcf\xd0\xd1\xd2\xd3\xd4\xd5\xd6\xd7\xd8\xd9\xda\xdb\xdc\xdd\xde\xdf\xe0\xe1\xe2\xe3\xe4\xe5\xe6\xe7\xe8\xe9\xea\xeb\xec\xed\xee\xef\xf0\xf1\xf2\xf3\xf4\xf5\xf6\xf7\xf8\xf9\xfa\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\n\x0b\x0c\r\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f !\"#$%&'()*+,-./0"
+              ),
+              Send(b"\x8a\x8b7\xfa!=B\x94RR[\x93BTC\x9fE\x88\x857\xfa!=4\x12CDR"),
+              Expect(b"\x88\x02\x03\xe8"),
+              Close()
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, home()) ? Network
+  let (stream, _) = net.accept(n, mut listener) ? Network
+  let mut connection = http.server_connection(n, take stream, http.default_config())
+  let request = http.receive_request(mut connection, None()) ? Http
+  test.check(t, request.target == "/chat")
+  let mut config = websocket.default_config()
+  config.protocols = ["superchat", "chat"]
+  let mut ws = websocket.accept(take connection, request, config) ? Ws
+  test.check(t, websocket.protocol(ws) == Some("chat"))
+  let mut count: u64 = 0
+  while let Some(message) = websocket.receive(mut ws) ? Ws {
+    count += 1
+    match message {
+      Text(text) => websocket.send_text(mut ws, text) ? Ws,
+      Binary(data) => {
+        test.check(t, bytes.len(data) == 300 && data[299] == 48)
+        websocket.send_binary(mut ws, data) ? Ws
+      },
+    }
+  }
+  test.check(t, count == 3)
+  test.check(t, websocket.peer_close(ws) == Some((1000u16, "bye")))
+  test.check(t, websocket.receive(mut ws) == Error(Closed()))
+  test.check(t, websocket.send_text(mut ws, "late") == Error(Closed()))
+  Ok(())
+}

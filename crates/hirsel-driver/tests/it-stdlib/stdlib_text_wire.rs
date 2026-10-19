@@ -350,6 +350,34 @@ fn diff_is_ordinary_source() {
 }
 
 #[test]
+fn websocket_is_ordinary_source() {
+    source_codec(
+        "websocket",
+        "websocket",
+        &["accept_key", "encode_frame", "decode_frame", "decode_close"],
+    );
+}
+
+// A 64 KiB frame takes the 64-bit length form; building one in the interpreter
+// is too slow for any budget, so it runs only as a built executable.
+#[test]
+#[ignore = "full gate: native 64-bit length frame"]
+fn full_gate_websocket_large_frame_native() {
+    with_compiler_stack(|| {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/websocket-large.hir");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let outcome = native::run_path_native(&path, &mut stdout, &mut stderr)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+        assert!(stdout.is_empty(), "{stdout:?}");
+        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+    });
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",

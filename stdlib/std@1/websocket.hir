@@ -1,0 +1,905 @@
+// RFC 6455 WebSocket client and server, adapted from golang.org/x/net/websocket
+// hybi.go (hybiFrameReaderFactory, hybiFrameWriter, hybiClientHandshake and
+// hybiServerHandshaker), golang/net 7e562009b3884a0845019b5f886f0242a7c0b970
+// (BSD-3-Clause), and Zig lib/std/http/Server.zig WebSocket, ziglang/zig
+// bff490a23889750de7096d9057c0a432efc929a8 (MIT); third-party/NOTICES.md.
+// Unlike x/net, received messages are reassembled and checked as the Autobahn
+// testsuite's framing cases require: reserved bits and opcodes, control frame
+// limits, continuation order, UTF-8 text and close codes.
+pub type Opcode = Continuation | Text | Binary | Close | Ping | Pong
+
+/// One frame with its payload unmasked.
+pub type Frame {
+  fin: bool,
+  opcode: Opcode,
+  payload: Bytes,
+}
+
+/// A complete data message.
+pub type Message = Text(String) | Binary(Bytes)
+
+pub type HandshakeError = UnsupportedScheme | Status(u16) | NotWebSocket | BadAccept | UnexpectedProtocol | UnexpectedExtension | MethodNotGet | MissingKey | BadKey | BadVersion | ReservedHeader
+
+pub type ProtocolError = ReservedBits | ReservedOpcode(u8) | MaskRequired | UnexpectedMask | ControlTooLong | FragmentedControl | UnexpectedContinuation | ExpectedContinuation | BadCloseCode(
+  u16
+) | BadClosePayload | LengthOverflow | InvalidUtf8 | TooLarge
+
+pub type WsError = Http(http.HttpError) | Net(NetError) | Random(RandomError) | Handshake(
+  HandshakeError
+) | Protocol(ProtocolError) | Truncated | Closed
+
+/// `transport` dials the client and bounds its handshake head (`max_head_bytes`);
+/// its read and write timeouts bound every socket wait on both sides.
+/// `protocols` are offered by a client and, in preference order of the client's
+/// offer, accepted by a server. A message, and so each frame, holds at most
+/// `max_message_bytes`.
+pub type Config {
+  transport: http.Config,
+  protocols: List[String],
+  max_message_bytes: u64,
+}
+
+/// x/net's default 32 MiB message bound over `http.default_config()`.
+pub fn default_config() -> Config uses {} {
+  Config(transport: http.default_config(), protocols: [], max_message_bytes: 33554432)
+}
+
+// state: 0 open, 1 close sent (awaiting the peer's), 2 closed. fragment holds a
+// message whose final frame has not arrived; fragment_kind is 1 text, 2 binary.
+pub opaque resource type Conn: noalloc_drop uses {Net, Random} {
+  link: http.Detached,
+  random: Option[Random],
+  config: Config,
+  protocol: Option[String],
+  state: u8,
+  fragment: List[u8],
+  fragment_kind: u8,
+  peer_close: Option[(u16, String)],
+}
+@noalloc drop(self) {}
+
+const GUID: String = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+/// The Sec-WebSocket-Accept value for a Sec-WebSocket-Key: base64 of the SHA-1 of
+/// the key followed by the RFC 6455 GUID.
+pub fn accept_key(key: String) -> unique String uses {} {
+  let mut state = sha1.new()
+  sha1.update(mut state, core@1/string.as_bytes(key))
+  sha1.update(mut state, core@1/string.as_bytes(GUID))
+  base64.encode(bytes.from_inline(sha1.finish(take state)), Standard(), Required())
+}
+
+@noalloc
+fn opcode_byte(opcode: Opcode) -> u8 uses {} {
+  match opcode {
+    Continuation() => 0,
+    Text() => 1,
+    Binary() => 2,
+    Close() => 8,
+    Ping() => 9,
+    Pong() => 10,
+  }
+}
+
+@noalloc
+fn is_control(opcode: Opcode) -> bool uses {} {
+  match opcode {
+    Close() | Ping() | Pong() => true,
+    _ => false,
+  }
+}
+
+// The first two header bytes: fin, opcode, mask bit and the 7-bit length.
+fn frame_head(b0: u8, b1: u8) -> Result[(bool, Opcode, bool, u8), ProtocolError] uses {} {
+  if b0 & 0x70 != 0 {
+    return Error(ReservedBits())
+  }
+  let fin = b0 & 0x80 != 0
+  let opcode: Opcode = match b0 & 0x0f {
+    0 => Continuation(),
+    1 => Text(),
+    2 => Binary(),
+    8 => Close(),
+    9 => Ping(),
+    10 => Pong(),
+    other => return Error(ReservedOpcode(other)),
+  }
+  let length = b1 & 0x7f
+  if is_control(opcode) {
+    if !fin {
+      return Error(FragmentedControl())
+    }
+    if length > 125 {
+      return Error(ControlTooLong())
+    }
+  }
+  Ok((fin, opcode, b1 & 0x80 != 0, length))
+}
+
+@noalloc
+fn extended_size(length: u8) -> u64 uses {} {
+  if length == 126 {
+    2
+  } else if length == 127 {
+    8
+  } else {
+    0
+  }
+}
+
+// The payload length from the 7-bit length and its big-endian extension.
+fn payload_size(length: u8, extension: Bytes, max: u64) -> Result[u64, ProtocolError] uses {} {
+  let mut size: u64 = core@1/int.widen(length)
+  if length >= 126 {
+    if extension[0] & 0x80 != 0 {
+      return Error(LengthOverflow())
+    }
+    size = 0
+    for b in extension {
+      size = size << 8 | core@1/int.widen(b)
+    }
+  }
+  if size > max {
+    return Error(TooLarge())
+  }
+  Ok(size)
+}
+
+fn unmask(payload: Bytes, offset: u64, size: u64, key: Option[Inline[u8, 4]]) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, size)
+  let mut i: u64 = 0
+  while i < size {
+    let b = payload[offset + i]
+    core@1/list.push(
+      mut out,
+      match key {
+        Some(k) => b ^ k[i % 4],
+        None() => b,
+      }
+    )
+    i += 1
+  }
+  core@1/bytes.from_list(take out)
+}
+
+/// Decodes the frame at the start of `buf`: the frame, whether it was masked and its
+/// encoded length, or `None()` while incomplete. A payload above `max_payload` is
+/// `TooLarge()`; reserved bits, reserved opcodes, a fragmented or long control frame
+/// and a 64-bit length with its top bit set are rejected.
+pub fn decode_frame(buf: Bytes, max_payload: u64) -> Result[
+  Option[(Frame, bool, u64)],
+  ProtocolError
+] uses {} {
+  let have = core@1/bytes.len(buf)
+  if have < 2 {
+    return Ok(None())
+  }
+  let (fin, opcode, masked, length) = frame_head(buf[0], buf[1])?
+  let extra = extended_size(length)
+  let key_size: u64 = if masked {
+    4
+  } else {
+    0
+  }
+  if have < 2 + extra + key_size {
+    return Ok(None())
+  }
+  let mut extension: List[u8] = []
+  let mut i: u64 = 0
+  while i < extra {
+    core@1/list.push(mut extension, buf[2 + i])
+    i += 1
+  }
+  let size = payload_size(length, core@1/bytes.from_list(take extension), max_payload)?
+  let start = 2 + extra + key_size
+  if have - start < size {
+    return Ok(None())
+  }
+  let key: Option[Inline[u8, 4]] = if masked {
+    Some([buf[start - 4], buf[start - 3], buf[start - 2], buf[start - 1]])
+  } else {
+    None()
+  }
+  let frame = Frame(fin: fin, opcode: opcode, payload: unmask(buf, start, size, key))
+  Ok(Some((frame, masked, start + size)))
+}
+
+/// Encodes `frame` with the minimal length form, masked with `mask` when present
+/// (a client masks every frame; a server never does).
+pub fn encode_frame(frame: Frame, mask: Option[Inline[u8, 4]]) -> unique Bytes uses {} {
+  let size = core@1/bytes.len(frame.payload)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, size + 14)
+  let fin: u8 = if frame.fin {
+    0x80
+  } else {
+    0
+  }
+  core@1/list.push(mut out, fin | opcode_byte(frame.opcode))
+  let mask_bit: u8 = match mask {
+    Some(_) => 0x80,
+    None() => 0,
+  }
+  if size <= 125 {
+    core@1/list.push(mut out, mask_bit | core@1/int.narrow(size))
+  } else if size < 65536 {
+    core@1/list.push(mut out, mask_bit | 126)
+    core@1/list.push(mut out, core@1/int.narrow(size >> 8))
+    core@1/list.push(mut out, core@1/int.narrow(size & 0xff))
+  } else {
+    core@1/list.push(mut out, mask_bit | 127)
+    let mut shift: u64 = 56
+    while true {
+      core@1/list.push(mut out, core@1/int.narrow(size >> shift & 0xff))
+      if shift == 0 {
+        break
+      }
+      shift -= 8
+    }
+  }
+  match mask {
+    Some(k) => {
+      core@1/list.push(mut out, k[0])
+      core@1/list.push(mut out, k[1])
+      core@1/list.push(mut out, k[2])
+      core@1/list.push(mut out, k[3])
+      let mut i: u64 = 0
+      while i < size {
+        core@1/list.push(mut out, frame.payload[i] ^ k[i % 4])
+        i += 1
+      }
+    },
+    None() => {
+      for b in frame.payload {
+        core@1/list.push(mut out, b)
+      }
+    },
+  }
+  core@1/bytes.from_list(take out)
+}
+
+// RFC 6455 section 7.4: the codes an endpoint may receive. 1004-1006 and 1015
+// are never sent; 1012-1014 are IANA-registered server codes.
+@noalloc
+fn valid_close_code(code: u16) -> bool uses {} {
+  code >= 1000 && code <= 1003 || code >= 1007 && code <= 1014 || code >= 3000 && code <= 4999
+}
+
+/// Decodes a close frame's payload: `None()` when empty, otherwise the code and the
+/// UTF-8 reason. A one-byte payload, an invalid code or a non-UTF-8 reason is rejected.
+pub fn decode_close(payload: Bytes) -> Result[Option[(u16, String)], ProtocolError] uses {} {
+  let size = core@1/bytes.len(payload)
+  if size == 0 {
+    return Ok(None())
+  }
+  if size == 1 {
+    return Error(BadClosePayload())
+  }
+  let code = core@1/int.widen(payload[0]) * 256u16 + core@1/int.widen(payload[1])
+  if !valid_close_code(code) {
+    return Error(BadCloseCode(code))
+  }
+  let mut reason: List[u8] = []
+  let mut i: u64 = 2
+  while i < size {
+    core@1/list.push(mut reason, payload[i])
+    i += 1
+  }
+  match text.finish(take reason) {
+    Ok(s) => Ok(Some((code, take s))),
+    Error(_) => Error(InvalidUtf8()),
+  }
+}
+
+fn close_payload(code: u16, reason: String) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  core@1/list.push(mut out, core@1/int.narrow(code >> 8))
+  core@1/list.push(mut out, core@1/int.narrow(code & 0xff))
+  text.append(mut out, reason)
+  core@1/bytes.from_list(take out)
+}
+
+// The close code a failure sends: 1007 for bad text, 1009 for an oversized
+// message and 1002 for every other protocol violation.
+@noalloc
+fn failure_code(error: ProtocolError) -> u16 uses {} {
+  match error {
+    InvalidUtf8() => 1007,
+    TooLarge() => 1009,
+    _ => 1002,
+  }
+}
+
+fn timeout(value: Option[time.Duration]) -> Result[NetTimeout, WsError] uses {} {
+  match value {
+    None() => Ok(Unbounded()),
+    Some(d) => {
+      if d.nanoseconds <= 0 || d.nanoseconds > 18446744073709551615i128 {
+        return Error(Net(InvalidInput()))
+      }
+      Ok(Nanos(core@1/int.narrow(d.nanoseconds)))
+    },
+  }
+}
+
+fn read_error(error: bufio.ReadError[NetError]) -> WsError uses {} {
+  match error {
+    Source(e) => Net(e),
+    InvalidRead() => Net(InvalidInput()),
+    _ => Truncated(),
+  }
+}
+
+@noalloc
+fn same(a: String, b: String) -> bool uses {} {
+  let x = core@1/string.as_bytes(a)
+  let y = core@1/string.as_bytes(b)
+  if core@1/bytes.len(x) != core@1/bytes.len(y) {
+    return false
+  }
+  let mut i: u64 = 0
+  while i < core@1/bytes.len(x) {
+    if ascii.to_lower(x[i]) != ascii.to_lower(y[i]) {
+      return false
+    }
+    i += 1
+  }
+  true
+}
+
+// Whether any field named `name` lists `token` among its comma-separated values.
+fn has_token(headers: List[http.Header], name: String, token: String) -> bool uses {} {
+  for h in headers {
+    if same(h.name, name) {
+      for part in string.split(unique h.value, ",") {
+        if same(string.trim(part), token) {
+          return true
+        }
+      }
+    }
+  }
+  false
+}
+
+// The handshake owns these fields; a caller's copy would contradict it.
+fn reserved_header(name: String) -> bool uses {} {
+  same(name, "host") || same(name, "upgrade") || same(name, "connection") || same(
+    name,
+    "sec-websocket-key"
+  ) || same(name, "sec-websocket-version") || same(name, "sec-websocket-protocol") || same(
+    name,
+    "sec-websocket-accept"
+  ) || same(name, "sec-websocket-extensions")
+}
+
+fn write(mut c: Conn, frame: Frame) -> Result[(), WsError] {
+  let mask: Option[Inline[u8, 4]] = match c.random {
+    Some(r) => {
+      let k = core@1/random.bytes(r, 4) ? random_error
+      Some([k[0], k[1], k[2], k[3]])
+    },
+    None() => None(),
+  }
+  let n = c.link.net
+  core@1/net.write_all(n, mut c.link.stream, encode_frame(frame, mask)) ? net_error
+  Ok(())
+}
+
+fn read_frame(mut c: Conn) -> Result[(Frame, bool), WsError] {
+  let n = c.link.net
+  let mut head: List[u8] = []
+  bufio.stream_read_exact(n, mut c.link.stream, mut c.link.input, mut head, 2) ? read_error
+  let (fin, opcode, masked, length) = frame_head(head[0], head[1]) ? Protocol
+  let mut extension: List[u8] = []
+  bufio.stream_read_exact(
+    n,
+    mut c.link.stream,
+    mut c.link.input,
+    mut extension,
+    extended_size(length)
+  ) ? read_error
+  let size = payload_size(
+    length,
+    core@1/bytes.from_list(take extension),
+    c.config.max_message_bytes
+  ) ? Protocol
+  let mut key_bytes: List[u8] = []
+  if masked {
+    bufio.stream_read_exact(n, mut c.link.stream, mut c.link.input, mut key_bytes, 4) ? read_error
+  }
+  let mut payload: List[u8] = []
+  bufio.stream_read_exact(n, mut c.link.stream, mut c.link.input, mut payload, size) ? read_error
+  let key: Option[Inline[u8, 4]] = if masked {
+    Some([key_bytes[0], key_bytes[1], key_bytes[2], key_bytes[3]])
+  } else {
+    None()
+  }
+  let data = core@1/bytes.from_list(take payload)
+  Ok((Frame(fin: fin, opcode: opcode, payload: unmask(data, 0, size, key)), masked))
+}
+
+// Fails the connection (RFC 6455 section 7.1.7): one close frame with the
+// failure's code when none was sent yet, then no further traffic.
+fn fail[T](mut c: Conn, error: ProtocolError) -> Result[T, WsError] {
+  if c.state == 0 {
+    let payload = close_payload(failure_code(error), "")
+    let _ = write(mut c, Frame(fin: true, opcode: Close(), payload: payload))
+  }
+  c.state = 2
+  Error(Protocol(error))
+}
+
+fn conn(
+  take link: http.Detached,
+  random: Option[Random],
+  config: Config,
+  selected: Option[String]
+) -> Conn {
+  Conn(
+    link: take link,
+    random: random,
+    config: unique config,
+    protocol: unique selected,
+    state: 0,
+    fragment: [],
+    fragment_kind: 0,
+    peer_close: None()
+  )
+}
+
+/// Opens a client connection to a `ws` or `wss` URL: dials it as `http` or `https`
+/// under `config.transport`, sends the RFC 6455 opening handshake with a key drawn
+/// from `r`, the offered protocols and `headers` (which may not set a field the
+/// handshake sets: `ReservedHeader()`), and checks the 101 response: the upgrade
+/// fields, the accept key, no extensions and a protocol only among those offered.
+/// Every frame the connection sends is masked with a fresh key from `r`.
+pub fn connect(
+  n: Net,
+  r: Random,
+  url: String,
+  headers: List[http.Header],
+  config: Config
+) -> Result[Conn, WsError] {
+  http.validate_headers(headers) ? Http
+  for h in headers {
+    if reserved_header(h.name) {
+      return Error(Handshake(ReservedHeader()))
+    }
+  }
+  let mut target = uri.parse(url) ? http_url
+  target.scheme = if same(target.scheme, "ws") {
+    "http"
+  } else if same(target.scheme, "wss") {
+    "https"
+  } else {
+    return Error(Handshake(UnsupportedScheme()))
+  }
+  let mut stream = http.dial(n, config.transport, target) ? Http
+  let key = base64.encode(
+    core@1/random.bytes(r, 16) ? random_error,
+    Standard(),
+    Required()
+  )
+  let mut out: List[u8] = []
+  text.append(mut out, "GET ")
+  text.append(mut out, http.request_target(target))
+  text.append(mut out, " HTTP/1.1\r\nHost: ")
+  text.append(mut out, http.host_header(target) ? Http)
+  text.append(
+    mut out,
+    "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: "
+  )
+  text.append(mut out, key)
+  text.append(mut out, "\r\nSec-WebSocket-Version: 13\r\n")
+  if list.len(config.protocols) > 0 {
+    http.validate_headers(
+      [
+        http.Header(
+          name: "sec-websocket-protocol",
+          value: string.join(config.protocols, ", ")
+        )
+      ]
+    ) ? Http
+    text.append(mut out, "Sec-WebSocket-Protocol: ")
+    text.append(mut out, string.join(config.protocols, ", "))
+    text.append(mut out, "\r\n")
+  }
+  for h in headers {
+    text.append(mut out, h.name)
+    text.append(mut out, ": ")
+    text.append(mut out, h.value)
+    text.append(mut out, "\r\n")
+  }
+  text.append(mut out, "\r\n")
+  core@1/net.write_all(n, mut stream, core@1/bytes.from_list(take out)) ? net_error
+  let mut input = bufio.new(4096)
+  let max = config.transport.max_head_bytes
+  let mut response: Option[http.ResponseHead] = None()
+  while response == None() {
+    let buf = bufio.contents(input)
+    if let Some((head, end)) = http.parse_response_head(buf, config.transport) ? Http {
+      if end > max {
+        return Error(Http(HeadTooLarge()))
+      }
+      bufio.consume(mut input, end)
+      response = Some(take head)
+    } else {
+      let have = bufio.buffered(input)
+      if have >= max {
+        return Error(Http(HeadTooLarge()))
+      }
+      let space = max - have
+      let more = bufio.stream_read_more(
+        n,
+        mut stream,
+        mut input,
+        if space > 4096 {
+          4096
+        } else {
+          space
+        }
+      ) ? read_error
+      if more == 0 {
+        return Error(Truncated())
+      }
+    }
+  }
+  let Some(head) = response else {
+    return Error(Truncated())
+  }
+  if head.status != 101 {
+    return Error(Handshake(Status(head.status)))
+  }
+  if !has_token(head.headers, "upgrade", "websocket") || !has_token(
+    head.headers,
+    "connection",
+    "upgrade"
+  ) {
+    return Error(Handshake(NotWebSocket()))
+  }
+  match http.header(head.headers, "sec-websocket-accept") {
+    Some(value) if value == accept_key(key) => (),
+    _ => return Error(Handshake(BadAccept())),
+  }
+  if http.header(head.headers, "sec-websocket-extensions") != None() {
+    return Error(Handshake(UnexpectedExtension()))
+  }
+  let selected = http.header(head.headers, "sec-websocket-protocol")
+  if let Some(chosen) = selected {
+    let mut offered = false
+    for p in config.protocols {
+      if p == chosen {
+        offered = true
+      }
+    }
+    if !offered {
+      return Error(Handshake(UnexpectedProtocol()))
+    }
+  }
+  Ok(
+    conn(
+      http.Detached(net: n, stream: take stream, input: take input),
+      Some(r),
+      config,
+      selected
+    )
+  )
+}
+
+fn net_error(error: NetError) -> WsError uses {} {
+  Net(error)
+}
+
+fn random_error(error: RandomError) -> WsError uses {} {
+  Random(error)
+}
+
+fn http_url(error: uri.UriError) -> WsError uses {} {
+  Http(Url(error))
+}
+
+// Answers a rejected opening handshake and reports why.
+fn refuse(
+  take c: http.ServerConnection,
+  status: u16,
+  headers: List[http.Header],
+  error: HandshakeError
+) -> Result[Conn, WsError] {
+  let mut connection = take c
+  http.respond(mut connection, status, headers, b"", true) ? Http
+  Error(Handshake(error))
+}
+
+/// Completes the server side of the opening handshake for `request`, the request
+/// `c` last received. A request that is not a version-13 WebSocket upgrade is
+/// answered and refused: 405 for a method other than GET, 426 with
+/// `Sec-WebSocket-Version: 13` for another version, 400 otherwise. The selected
+/// protocol is the client's first offer among `config.protocols`. Bytes already read
+/// past the request belong to the connection; `config.transport`'s read and write
+/// timeouts replace the HTTP request's.
+pub fn accept(
+  take c: http.ServerConnection,
+  request: http.ServerRequest,
+  config: Config
+) -> Result[Conn, WsError] {
+  if request.method != "GET" {
+    return refuse(
+      take c,
+      405,
+      [http.Header(name: "Allow", value: "GET")],
+      MethodNotGet()
+    )
+  }
+  if !has_token(request.headers, "upgrade", "websocket") || !has_token(
+    request.headers,
+    "connection",
+    "upgrade"
+  ) {
+    return refuse(take c, 400, [], NotWebSocket())
+  }
+  match http.header(request.headers, "sec-websocket-version") {
+    Some(v) if string.trim(v) == "13" => (),
+    _ => return refuse(
+      take c,
+      426,
+      [http.Header(name: "Sec-WebSocket-Version", value: "13")],
+      BadVersion()
+    ),
+  }
+  let Some(raw_key) = http.header(request.headers, "sec-websocket-key") else {
+    return refuse(take c, 400, [], MissingKey())
+  }
+  let key = string.trim(raw_key)
+  match base64.decode(key, Standard(), Required()) {
+    Ok(nonce) if core@1/bytes.len(nonce) == 16 => (),
+    _ => return refuse(take c, 400, [], BadKey()),
+  }
+  let mut selected: Option[String] = None()
+  'offers: for h in request.headers {
+    if same(h.name, "sec-websocket-protocol") {
+      for offer in string.split(unique h.value, ",") {
+        let name = string.trim(offer)
+        for supported in config.protocols {
+          if supported == name {
+            selected = Some(unique name)
+            break 'offers
+          }
+        }
+      }
+    }
+  }
+  let mut link = http.detach(take c) ? Http
+  let n = link.net
+  core@1/net.set_read_timeout(
+    n,
+    mut link.stream,
+    timeout(config.transport.read_timeout)?
+  ) ? net_error
+  core@1/net.set_write_timeout(
+    n,
+    mut link.stream,
+    timeout(config.transport.write_timeout)?
+  ) ? net_error
+  let mut out: List[u8] = []
+  text.append(
+    mut out,
+    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: "
+  )
+  text.append(mut out, accept_key(key))
+  text.append(mut out, "\r\n")
+  if let Some(p) = selected {
+    text.append(mut out, "Sec-WebSocket-Protocol: ")
+    text.append(mut out, p)
+    text.append(mut out, "\r\n")
+  }
+  text.append(mut out, "\r\n")
+  core@1/net.write_all(n, mut link.stream, core@1/bytes.from_list(take out)) ? net_error
+  Ok(conn(take link, None(), config, selected))
+}
+
+/// The protocol the handshake selected, if any.
+pub fn protocol(c: Conn) -> Option[unique String] uses {} {
+  match c.protocol {
+    Some(p) => Some(unique p),
+    None() => None(),
+  }
+}
+
+/// The code and reason of the close frame the peer sent, once one was received:
+/// 1005 with an empty reason when its close frame carried no code.
+pub fn peer_close(c: Conn) -> Option[(u16, unique String)] uses {} {
+  match c.peer_close {
+    Some((code, reason)) => Some((code, unique reason)),
+    None() => None(),
+  }
+}
+
+/// Sends one frame: a client masks it. Control frames must be final and carry at
+/// most 125 bytes (`Protocol(...)` otherwise, sending nothing). After a close frame
+/// is sent or received, sending is `Closed()`.
+pub fn send_frame(mut c: Conn, frame: Frame) -> Result[(), WsError] {
+  if c.state != 0 {
+    return Error(Closed())
+  }
+  if is_control(frame.opcode) {
+    if !frame.fin {
+      return Error(Protocol(FragmentedControl()))
+    }
+    if core@1/bytes.len(frame.payload) > 125 {
+      return Error(Protocol(ControlTooLong()))
+    }
+  }
+  if frame.opcode == Close() {
+    decode_close(frame.payload) ? Protocol
+    c.state = 1
+  }
+  write(mut c, frame)
+}
+
+/// Sends `message` as one text frame.
+pub fn send_text(mut c: Conn, message: String) -> Result[(), WsError] {
+  send_frame(
+    mut c,
+    Frame(fin: true, opcode: Text(), payload: core@1/string.as_bytes(message))
+  )
+}
+
+/// Sends `data` as one binary frame.
+pub fn send_binary(mut c: Conn, data: Bytes) -> Result[(), WsError] {
+  send_frame(mut c, Frame(fin: true, opcode: Binary(), payload: data))
+}
+
+/// Sends a ping carrying at most 125 bytes; the peer's pong is consumed by `receive`.
+pub fn ping(mut c: Conn, data: Bytes) -> Result[(), WsError] {
+  send_frame(mut c, Frame(fin: true, opcode: Ping(), payload: data))
+}
+
+/// Receives the next data message, reassembling fragments. It answers each ping
+/// with a pong carrying its payload and skips pongs. A close frame from the peer is
+/// answered with a close frame echoing its code (when this side had not closed) and
+/// returns `None()`; `peer_close` then reports it. A protocol violation sends a close
+/// frame with code 1002 (1007 for text that is not UTF-8, 1009 for a message above
+/// `max_message_bytes`) and returns `Protocol(...)`. End of stream before a close
+/// frame is `Truncated()`; receiving after the closing handshake is `Closed()`.
+pub fn receive(mut c: Conn) -> Result[Option[Message], WsError] {
+  if c.state == 2 {
+    return Error(Closed())
+  }
+  while true {
+    let (frame, masked) = match read_frame(mut c) {
+      Ok(read) => read,
+      Error(Protocol(error)) => return fail(mut c, error),
+      Error(error) => {
+        c.state = 2
+        return Error(error)
+      },
+    }
+    let server = match c.random {
+      Some(_) => false,
+      None() => true,
+    }
+    if server && !masked {
+      return fail(mut c, MaskRequired())
+    }
+    if !server && masked {
+      return fail(mut c, UnexpectedMask())
+    }
+    match frame.opcode {
+      Ping() => {
+        if c.state == 0 {
+          write(mut c, Frame(fin: true, opcode: Pong(), payload: frame.payload))?
+        }
+      },
+      Pong() => (),
+      Close() => {
+        let status = match decode_close(frame.payload) {
+          Ok(status) => status,
+          Error(error) => return fail(mut c, error),
+        }
+        if c.state == 0 {
+          let reply = match status {
+            Some((code, _)) => close_payload(code, ""),
+            None() => b"",
+          }
+          let _ = write(mut c, Frame(fin: true, opcode: Close(), payload: reply))
+        }
+        c.peer_close = match status {
+          Some((code, reason)) => Some((code, unique reason)),
+          None() => Some((1005u16, "")),
+        }
+        c.state = 2
+        return Ok(None())
+      },
+      Continuation() => {
+        if c.fragment_kind == 0 {
+          return fail(mut c, UnexpectedContinuation())
+        }
+        if list.len(c.fragment) + core@1/bytes.len(frame.payload) > c.config.max_message_bytes {
+          return fail(mut c, TooLarge())
+        }
+        for b in frame.payload {
+          core@1/list.push(mut c.fragment, b)
+        }
+        if frame.fin {
+          let kind = c.fragment_kind
+          c.fragment_kind = 0
+          let data = replace(mut c.fragment, [])
+          if let Some(message) = finish_message(
+            mut c,
+            kind,
+            core@1/bytes.from_list(take data)
+          )? {
+            return Ok(Some(take message))
+          }
+        }
+      },
+      Text() | Binary() => {
+        if c.fragment_kind != 0 {
+          return fail(mut c, ExpectedContinuation())
+        }
+        let kind: u8 = if frame.opcode == Text() {
+          1
+        } else {
+          2
+        }
+        if frame.fin {
+          if let Some(message) = finish_message(mut c, kind, frame.payload)? {
+            return Ok(Some(take message))
+          }
+        } else {
+          c.fragment_kind = kind
+          for b in frame.payload {
+            core@1/list.push(mut c.fragment, b)
+          }
+        }
+      },
+    }
+  }
+  Error(Truncated())
+}
+
+// A complete message, or None() when this side has closed and discards data.
+fn finish_message(mut c: Conn, kind: u8, data: Bytes) -> Result[
+  Option[Message],
+  WsError
+] {
+  if kind == 2 {
+    return Ok(
+      if c.state == 0 {
+        Some(Binary(unique data))
+      } else {
+        None()
+      }
+    )
+  }
+  match string.from_bytes(unique data) {
+    Ok(s) => Ok(
+      if c.state == 0 {
+        Some(Text(take s))
+      } else {
+        None()
+      }
+    ),
+    Error(_) => fail(mut c, InvalidUtf8()),
+  }
+}
+
+/// Starts the closing handshake with `code` and a UTF-8 `reason` of at most 123
+/// bytes, then reads until the peer's close frame, discarding data messages, and
+/// returns. Closing a connection whose peer already closed returns at once.
+pub fn close(mut c: Conn, code: u16, reason: String) -> Result[(), WsError] {
+  if c.state == 2 {
+    return Ok(())
+  }
+  if c.state == 0 {
+    send_frame(
+      mut c,
+      Frame(fin: true, opcode: Close(), payload: close_payload(code, reason))
+    )?
+  }
+  while c.state != 2 {
+    let _ = receive(mut c)?
+  }
+  Ok(())
+}

@@ -1,0 +1,50 @@
+// rule: SEM-1
+// expect: run
+// entry: main
+// A WebSocket client starts the closing handshake (RFC 6455 section 7.1.2): its
+// masked close carries the code and reason, the server's reply ends the connection
+// and later sends are refused. The key and mask come from the run's Random,
+// splitmix64 with seed 0 here.
+pub type AppError = Grant(GrantError) | Ws(websocket.WsError)
+
+fn origin() -> List[http.Header] uses {} {
+  [http.Header(name: "Origin", value: "http://echo.test")]
+}
+
+pub fn main(t: Test, rt: Io) -> Result[(), AppError] {
+  let r = io.random(rt) ? Grant
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "echo.test",
+        port: 80u16,
+        resolves_to: [V4([192u8, 0u8, 2u8, 7u8])],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"GET /chat?x=1 HTTP/1.1\r\nHost: echo.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: r80dezmoIOL0Zbmhap54bg==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: chat\r\nOrigin: http://echo.test\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: iHMz0/J1GsQtRh2NfVC0Q7CZKMQ=\r\nSec-WebSocket-Protocol: chat\r\n\r\n"
+              ),
+              Expect(b"\x88\x85OE\x09\x80L\xack\xf9*"),
+              Send(b"\x88\x02\x03\xe9")
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let url = "ws://echo.test/chat?x=1"
+  let mut config = websocket.default_config()
+  config.protocols = ["chat"]
+  let mut second = websocket.connect(n, r, url, origin(), config) ? Ws
+  websocket.close(mut second, 1001, "bye") ? Ws
+  test.check(t, websocket.peer_close(second) == Some((1001u16, "")))
+  test.check(t, websocket.send_text(mut second, "late") == Error(Closed()))
+  Ok(())
+}

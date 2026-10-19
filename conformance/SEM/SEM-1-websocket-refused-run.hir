@@ -1,0 +1,127 @@
+// rule: SEM-1
+// expect: run
+// entry: main
+// Opening handshakes a server refuses (RFC 6455 section 4.2.1): a method other
+// than GET is 405, a missing upgrade token or key, or a key that is not 16 bytes,
+// is 400, and another version is 426 naming version 13. The last request's
+// upgrade tokens are mixed case among others, and it is accepted.
+pub type AppError = Network(NetError) | Http(http.HttpError)
+
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 9002u16)
+}
+
+pub fn main(t: Test) -> Result[(), AppError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: 9002u16,
+        clients: [
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 41000u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"POST / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 405 \r\nAllow: GET\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+              )
+            ]
+          ),
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 41001u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+              ),
+              Expect(b"HTTP/1.1 400 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            ]
+          ),
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 41002u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: keep-alive\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+              ),
+              Expect(b"HTTP/1.1 400 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            ]
+          ),
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 41003u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 8\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 426 \r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+              )
+            ]
+          ),
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 41004u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Version: 13\r\n\r\n"
+              ),
+              Expect(b"HTTP/1.1 400 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            ]
+          ),
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 41005u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: c2hvcnQ=\r\nSec-WebSocket-Version: 13\r\n\r\n"
+              ),
+              Expect(b"HTTP/1.1 400 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            ]
+          ),
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 41006u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: WebSocket, h2c\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n\x88\x82\x01\x02\x03\x04\x02\xea"
+              ),
+              Expect(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n\x88\x02\x03\xe8"
+              )
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  let expected: List[Option[websocket.HandshakeError]] = [
+    Some(MethodNotGet()),
+    Some(NotWebSocket()),
+    Some(NotWebSocket()),
+    Some(BadVersion()),
+    Some(MissingKey()),
+    Some(BadKey()),
+    None()
+  ]
+  let mut listener = net.listen(n, home()) ? Network
+  for refusal in expected {
+    let (stream, _) = net.accept(n, mut listener) ? Network
+    let mut connection = http.server_connection(n, take stream, http.default_config())
+    let request = http.receive_request(mut connection, None()) ? Http
+    match websocket.accept(take connection, request, websocket.default_config()) {
+      Ok(ws) => {
+        let mut conn = take ws
+        test.check(t, refusal == None() && websocket.receive(mut conn) == Ok(None()))
+      },
+      Error(Handshake(e)) => test.check(t, refusal == Some(e)),
+      Error(_) => test.check(t, false),
+    }
+  }
+  Ok(())
+}

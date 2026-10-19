@@ -228,6 +228,11 @@ the license named in its row; the license texts follow once each.
 | imara-diff | `src/myers.rs` and `src/myers/{preprocess,slice,middle_snake}.rs` Myers search with preprocessing and cost cutoff; `src/histogram.rs` and `src/histogram/lcs.rs` histogram diff; `src/lib.rs` common head and tail; `src/postprocess.rs` and `src/util.rs` hunk sliding without a slider heuristic; `src/tests.rs` myers_is_even and myers_is_odd vectors. Changes: worklists in place of recursion, a linked occurrence chain in place of the list pool, i64 positions | `stdlib/std@1/diff.hir`, `conformance/SEM/SEM-3-diff-*`, `crates/hirsel-driver/tests/fixtures/diff-large.hir` | pascalkuthe/imara-diff `f02e46a737c43c0d9c65a42e5e08046bd10fd739` | Apache-2.0 (text below, without the LLVM exception) |
 | Go standard library | `src/internal/diff/testdata/*.txt` input pairs (expected output from git and imara-diff) | `conformance/SEM/SEM-3-diff-*` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
 | git | `t/lib-diff-alternative.sh` test_diff_frobnitz and test_diff_unique inputs and expected output (test data only; no code adapted) | `conformance/SEM/SEM-3-diff-{pairs-4,context-2,alternative}*` | git/git 2.43.0 | GPL-2.0 (test data) |
+| Go standard library | `src/internal/diff/diff.go` tgs unique-line anchoring and longest increasing subsequence; `testdata/*.txt` input pairs (expected output from git) | `stdlib/std@1/diff.hir`, `conformance/SEM/SEM-3-diff-*` | golang/go `ebe2feefc400f813aefdc8a036e66d2619da6649` | BSD-3-Clause (Go) |
+| Go supplementary networking | `websocket/hybi.go` hybiFrameReaderFactory and hybiFrameWriter frame header layout, masking and length forms, hybiClientHandshake and hybiServerHandshaker key, accept and upgrade checks | `stdlib/std@1/websocket.hir`, WebSocket conformance | golang/net `7e562009b3884a0845019b5f886f0242a7c0b970` | BSD-3-Clause (Go) |
+| Zig standard library | `lib/std/http/Server.zig` respondWebSocket upgrade response, readSmallMessage masked-frame reading (MissingMaskBit) and control-frame handling | `stdlib/std@1/websocket.hir` | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
+| RFC 6455 | sections 1.3 and 5.7 handshake, accept key and frame examples; section 7.4 close code ranges | `conformance/SEM/SEM-{1,3}-websocket-*`, `crates/hirsel-driver/tests/fixtures/websocket-large.hir` | RFC 6455 (December 2011) | Simplified BSD (IETF Trust code components) |
+| Autobahn testsuite | `autobahntestsuite/case/case{1,2,3,4,5,6,7,9}_*.py` framing, ping/pong, reserved bit and opcode, fragmentation, UTF-8, close and limit cases, adapted to scripted clients with RFC 6455's example key | `conformance/SEM/SEM-1-websocket-autobahn-*` | crossbario/autobahn-testsuite `ff462c0a7ccb6512ad8442d09dab371a3c40a843` | Apache-2.0 |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -290,6 +295,8 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
   Mannix, Christopher Armstrong, Dylan DPC, Hunar Roop Kahlon
 - semver: Copyright (c) David Tolnay and semver contributors
 - node-semver: Copyright (c) Isaac Z. Schlueter and Contributors
+- RFC 6455: Copyright (c) 2011 IETF Trust and the persons identified as the document authors
+- Autobahn testsuite: Copyright (c) typedef int GmbH
 
 ## Zlib License (zlib)
 
@@ -1462,3 +1469,9 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
+
+## Apache License 2.0 (Autobahn testsuite)
+
+The Autobahn testsuite is used under the Apache License, Version 2.0, whose terms
+are reproduced in the Cranelift section above through "END OF TERMS AND
+CONDITIONS"; the LLVM exceptions there do not apply to it.

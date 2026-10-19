@@ -4841,6 +4841,19 @@ conformance/SEM/SEM-1-wave2-u64-success.hir
 conformance/SEM/SEM-1-wave2-u8-boundary.hir
 conformance/SEM/SEM-1-wave2-u8-errors.hir
 conformance/SEM/SEM-1-wave2-u8-success.hir
+conformance/SEM/SEM-1-websocket-autobahn-1-run.hir
+conformance/SEM/SEM-1-websocket-autobahn-2-run.hir
+conformance/SEM/SEM-1-websocket-autobahn-3-run.hir
+conformance/SEM/SEM-1-websocket-autobahn-4-run.hir
+conformance/SEM/SEM-1-websocket-autobahn-5-run.hir
+conformance/SEM/SEM-1-websocket-autobahn-6-run.hir
+conformance/SEM/SEM-1-websocket-autobahn-7-run.hir
+conformance/SEM/SEM-1-websocket-autobahn-run.hir
+conformance/SEM/SEM-1-websocket-client-close-run.hir
+conformance/SEM/SEM-1-websocket-client-refused-run.hir
+conformance/SEM/SEM-1-websocket-client-run.hir
+conformance/SEM/SEM-1-websocket-refused-run.hir
+conformance/SEM/SEM-1-websocket-server-run.hir
 conformance/SEM/SEM-1-widen-boundary.hir
 conformance/SEM/SEM-1-widen-zero.hir
 conformance/SEM/SEM-1-width-shift-count.hir
@@ -5954,6 +5967,7 @@ conformance/SEM/SEM-3-wave2-starts_with-run.hir
 conformance/SEM/SEM-3-wave2-text-slice-run.hir
 conformance/SEM/SEM-3-wave2-trim-empty-run.hir
 conformance/SEM/SEM-3-wave2-trim-run.hir
+conformance/SEM/SEM-3-websocket-run.hir
 conformance/SEM/SEM-3-x509-der-run.hir
 conformance/SEM/SEM-3-x509-go-domains-run.hir
 conformance/SEM/SEM-3-x509-go-names-run.hir

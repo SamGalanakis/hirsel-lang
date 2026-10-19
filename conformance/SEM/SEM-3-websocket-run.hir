@@ -1,0 +1,179 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// RFC 6455 section 5.7 frame examples and the section 1.3 accept key, with the
+// header rejections of Autobahn cases 2.5 (long ping), 3.x (reserved bits),
+// 4.x (reserved opcodes), 5.1-5.2 (fragmented control) and 7.x (close payloads).
+fn mask() -> Option[Inline[u8, 4]] uses {} {
+  Some([0x37u8, 0xfau8, 0x21u8, 0x3du8])
+}
+
+fn frame(fin: bool, opcode: websocket.Opcode, take payload: Bytes) -> websocket.Frame uses {} {
+  websocket.Frame(fin: fin, opcode: opcode, payload: take payload)
+}
+
+fn decodes(t: Test, wire: Bytes, expected: websocket.Frame, masked: bool) {
+  match websocket.decode_frame(wire, 1048576) {
+    Ok(Some((got, was_masked, size))) => test.check(
+      t,
+      got == expected && was_masked == masked && size == bytes.len(wire)
+    ),
+    _ => test.check(t, false),
+  }
+}
+
+fn rejects(t: Test, wire: Bytes, expected: websocket.ProtocolError) {
+  test.check(t, websocket.decode_frame(wire, 1048576) == Error(expected))
+}
+
+fn filled(count: u64) -> unique Bytes uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    list.push(mut out, core@1/int.narrow(i % 251))
+    i += 1
+  }
+  bytes.from_list(take out)
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  test.check(
+    t,
+    websocket.accept_key("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+  )
+  // A single-frame unmasked text message, then the same message masked.
+  let hello = frame(true, Text(), b"Hello")
+  test.check(t, websocket.encode_frame(hello, None()) == b"\x81\x05Hello")
+  test.check(t, websocket.encode_frame(hello, mask()) == b"\x81\x857\xfa!=\x7f\x9fMQX")
+  decodes(t, b"\x81\x05Hello", hello, false)
+  decodes(t, b"\x81\x857\xfa!=\x7f\x9fMQX", hello, true)
+  // A fragmented unmasked text message, an unmasked ping and a masked pong.
+  test.check(
+    t,
+    websocket.encode_frame(frame(false, Text(), b"Hel"), None()) == b"\x01\x03Hel"
+  )
+  test.check(
+    t,
+    websocket.encode_frame(frame(true, Continuation(), b"lo"), None()) == b"\x80\x02lo"
+  )
+  decodes(t, b"\x01\x03Hel", frame(false, Text(), b"Hel"), false)
+  decodes(t, b"\x80\x02lo", frame(true, Continuation(), b"lo"), false)
+  test.check(
+    t,
+    websocket.encode_frame(frame(true, Ping(), b"Hello"), None()) == b"\x89\x05Hello"
+  )
+  test.check(
+    t,
+    websocket.encode_frame(frame(true, Pong(), b"Hello"), mask()) == b"\x8a\x857\xfa!=\x7f\x9fMQX"
+  )
+  // 256 bytes take the 16-bit length.
+  let medium = websocket.encode_frame(frame(true, Binary(), filled(256)), None())
+  test.check(
+    t,
+    bytes.len(medium) == 260 && medium[1] == 126 && medium[2] == 1 && medium[3] == 0
+  )
+  decodes(t, medium, frame(true, Binary(), filled(256)), false)
+  // The 64-bit length form (a 64 KiB frame runs in the driver's large fixture):
+  // a minimal length is not required to decode, and the length is read in full.
+  decodes(
+    t,
+    b"\x82\x7f\x00\x00\x00\x00\x00\x00\x00\x02hi",
+    frame(true, Binary(), b"hi"),
+    false
+  )
+  test.check(
+    t,
+    websocket.decode_frame(b"\x82\x7f\x00\x00\x00\x00\x00\x01\x00\x00", 65536) == Ok(
+      None()
+    )
+  )
+  rejects(t, b"\x82\x7f\x00\x00\x00\x01\x00\x00\x00\x00", TooLarge())
+  // 125 bytes still fit the 7-bit length; 126 do not.
+  test.check(
+    t,
+    bytes.len(websocket.encode_frame(frame(true, Binary(), filled(125)), None())) == 127
+  )
+  test.check(
+    t,
+    bytes.len(websocket.encode_frame(frame(true, Binary(), filled(126)), None())) == 130
+  )
+  // Incomplete input asks for more at every split point.
+  let mut cut: u64 = 0
+  while cut < 11 {
+    let prefix = bytes.slice(b"\x81\x857\xfa!=\x7f\x9fMQX", 0, cut)
+    test.check(t, websocket.decode_frame(prefix, 1048576) == Ok(None()))
+    cut += 1
+  }
+  // A frame larger than the limit, and a 64-bit length with its top bit set.
+  test.check(t, websocket.decode_frame(medium, 255) == Error(TooLarge()))
+  test.check(t, websocket.decode_frame(medium, 256) != Error(TooLarge()))
+  rejects(t, b"\x82\x7f\x80\x00\x00\x00\x00\x00\x00\x00", LengthOverflow())
+  // Autobahn 3.1-3.7: RSV1, RSV2 and RSV3 without a negotiated extension.
+  rejects(t, b"\xc1\x00", ReservedBits())
+  rejects(t, b"\xa1\x00", ReservedBits())
+  rejects(t, b"\x91\x00", ReservedBits())
+  rejects(t, b"\xf9\x00", ReservedBits())
+  // Autobahn 4.1-4.2: reserved non-control and control opcodes.
+  rejects(t, b"\x83\x00", ReservedOpcode(3))
+  rejects(t, b"\x87\x00", ReservedOpcode(7))
+  rejects(t, b"\x8b\x00", ReservedOpcode(11))
+  rejects(t, b"\x8f\x00", ReservedOpcode(15))
+  // Autobahn 2.5 and 5.1-5.2: a 126-byte ping and fragmented control frames.
+  rejects(t, b"\x89\x7e\x00\x7e", ControlTooLong())
+  rejects(t, b"\x09\x00", FragmentedControl())
+  rejects(t, b"\x0a\x00", FragmentedControl())
+  rejects(t, b"\x08\x00", FragmentedControl())
+  // Close payloads (Autobahn 7.3, 7.5, 7.7 and 7.9).
+  test.check(t, websocket.decode_close(b"") == Ok(None()))
+  test.check(t, websocket.decode_close(b"\x03\xe8") == Ok(Some((1000u16, ""))))
+  test.check(t, websocket.decode_close(b"\x03\xe8bye") == Ok(Some((1000u16, "bye"))))
+  test.check(t, websocket.decode_close(b"\x03") == Error(BadClosePayload()))
+  test.check(
+    t,
+    websocket.decode_close(
+      b"\x03\xe8\xce\xba\xe1\xbd\xb9\xcf\x83\xce\xbc\xce\xb5\xed\xa0\x80edited"
+    ) == Error(InvalidUtf8())
+  )
+  let valid: List[u16] = [
+    1000,
+    1001,
+    1002,
+    1003,
+    1007,
+    1008,
+    1009,
+    1010,
+    1011,
+    3000,
+    3999,
+    4000,
+    4999
+  ]
+  for code in valid {
+    let payload: Bytes = bytes.from_list(
+      [core@1/int.narrow(code >> 8), core@1/int.narrow(code & 0xff)]
+    )
+    test.check(t, websocket.decode_close(payload) == Ok(Some((code, ""))))
+  }
+  let invalid: List[u16] = [
+    0,
+    999,
+    1004,
+    1005,
+    1006,
+    1015,
+    1016,
+    1100,
+    2000,
+    2999,
+    5000,
+    65535
+  ]
+  for code in invalid {
+    let payload: Bytes = bytes.from_list(
+      [core@1/int.narrow(code >> 8), core@1/int.narrow(code & 0xff)]
+    )
+    test.check(t, websocket.decode_close(payload) == Error(BadCloseCode(code)))
+  }
+  Ok(())
+}

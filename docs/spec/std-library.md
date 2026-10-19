@@ -3503,6 +3503,96 @@ is `InsecureSameSiteNone()`, since clients reject it (RFC 6265bis section 4.1.2.
 Domain, Expires and Partitioned attributes, Set-Cookie parsing and cookie jars are
 not provided.
 
+## WebSocket
+
+`std@1/websocket` is an RFC 6455 client and server over `http`, adapted from
+golang.org/x/net/websocket's hybi framing and handshakes and Zig's `std.http.Server`
+WebSocket, and tested against RFC 6455's examples and the Autobahn testsuite's framing,
+fragmentation, control-frame, UTF-8 and close cases:
+
+```text
+Opcode         = Continuation | Text | Binary | Close | Ping | Pong
+Frame          = { fin: bool, opcode: Opcode, payload: Bytes }
+Message        = Text(String) | Binary(Bytes)
+HandshakeError = UnsupportedScheme | Status(u16) | NotWebSocket | BadAccept | UnexpectedProtocol
+               | UnexpectedExtension | MethodNotGet | MissingKey | BadKey | BadVersion | ReservedHeader
+ProtocolError  = ReservedBits | ReservedOpcode(u8) | MaskRequired | UnexpectedMask | ControlTooLong
+               | FragmentedControl | UnexpectedContinuation | ExpectedContinuation | BadCloseCode(u16)
+               | BadClosePayload | LengthOverflow | InvalidUtf8 | TooLarge
+WsError        = Http(http.HttpError) | Net(NetError) | Random(RandomError)
+               | Handshake(HandshakeError) | Protocol(ProtocolError) | Truncated | Closed
+Config         = { transport: http.Config, protocols: List[String], max_message_bytes: u64 }
+pub opaque resource type Conn: noalloc_drop uses {Net, Random}
+
+fn default_config() -> Config uses {}
+fn accept_key(key: String) -> unique String uses {}
+fn encode_frame(frame: Frame, mask: Option[Inline[u8, 4]]) -> unique Bytes uses {}
+fn decode_frame(buf: Bytes, max_payload: u64) -> Result[Option[(Frame, bool, u64)], ProtocolError] uses {}
+fn decode_close(payload: Bytes) -> Result[Option[(u16, String)], ProtocolError] uses {}
+fn connect(n: Net, r: Random, url: String, headers: List[http.Header], config: Config) -> Result[Conn, WsError]
+fn accept(take c: http.ServerConnection, request: http.ServerRequest, config: Config) -> Result[Conn, WsError]
+fn protocol(c: Conn) -> Option[unique String] uses {}
+fn peer_close(c: Conn) -> Option[(u16, unique String)] uses {}
+fn send_frame(mut c: Conn, frame: Frame) -> Result[(), WsError]
+fn send_text(mut c: Conn, message: String) -> Result[(), WsError]
+fn send_binary(mut c: Conn, data: Bytes) -> Result[(), WsError]
+fn ping(mut c: Conn, data: Bytes) -> Result[(), WsError]
+fn receive(mut c: Conn) -> Result[Option[Message], WsError]
+fn close(mut c: Conn, code: u16, reason: String) -> Result[(), WsError]
+```
+
+`default_config()` is `http.default_config()`, no subprotocols and a 32 MiB message
+limit. `accept_key` is the base64 SHA-1 of the key and RFC 6455's GUID.
+
+`encode_frame` writes the shortest length form (7-bit, 16-bit, then 64-bit) and, given a
+mask, sets the mask bit and XORs the payload. `decode_frame` reads one frame from the
+start of `buf`: the frame unmasked, whether it was masked, and its length on the wire,
+or `None()` while incomplete. It refuses set RSV bits (`ReservedBits()`, since no
+extension is negotiated), opcodes 3-7 and 11-15, a control frame over 125 bytes or
+without FIN, a 64-bit length with its top bit set (`LengthOverflow()`) and a payload over
+`max_payload` (`TooLarge()`), each as soon as the header shows it. `decode_close` reads a
+close payload: empty is `None()`; otherwise a two-byte code in 1000-1003, 1007-1014 or
+3000-4999 (`BadCloseCode(code)` otherwise; one byte is `BadClosePayload()`) and a UTF-8
+reason.
+
+`connect` takes a `ws` or `wss` URL (others are `Handshake(UnsupportedScheme())`), dials
+it as `http`/`https` with `config.transport`, and sends a GET with Host, `Upgrade:
+websocket`, `Connection: Upgrade`, a key of 16 bytes drawn from `r`, version 13, the
+offered `config.protocols`, and then the caller's headers, which may not name any of
+those fields or `Sec-WebSocket-Accept` or `Sec-WebSocket-Extensions`
+(`Handshake(ReservedHeader())`, before connecting). The response must be 101 (`Status(code)` otherwise) with
+the upgrade and connection tokens (`NotWebSocket()`), the matching accept value
+(`BadAccept()`), no extension (`UnexpectedExtension()`), and no protocol or one offered
+(`UnexpectedProtocol()`). The client masks every frame with 4 bytes drawn from `r`, so a
+deterministic Random seam fixes its wire bytes.
+
+`accept` upgrades a request received on a server connection. A method other than GET is
+answered 405 with `Allow: GET` (`MethodNotGet()`); missing upgrade or connection tokens
+or a missing key are answered 400 (`NotWebSocket()`, `MissingKey()`), as is a key that is
+not 16 bytes of base64 (`BadKey()`); a version other than 13 is answered 426 with
+`Sec-WebSocket-Version: 13` (`BadVersion()`). Tokens match case-insensitively within
+comma-separated values. Otherwise it detaches the connection, sets the stream's timeouts
+from `config.transport`, selects the client's first offered protocol that is in
+`config.protocols`, and writes the 101 response. The server does not mask and requires
+masked frames (`MaskRequired()`); the client refuses masked ones (`UnexpectedMask()`).
+
+`send_frame` writes one frame, refusing an invalid control frame and anything after a
+close was sent (`Closed()`); sending a close validates its payload with `decode_close`.
+`send_text`, `send_binary` and `ping` send one unfragmented frame. `receive` returns the
+next message: it reassembles fragments up to `max_message_bytes` (`TooLarge()`), checks
+that text is UTF-8 once complete, answers pings with a pong carrying the same payload,
+skips pongs, and refuses a continuation with no message open or a new data frame while
+one is (`UnexpectedContinuation()`, `ExpectedContinuation()`). A close from the peer is
+answered with a close echoing its code (none when it sent none), after which `receive`
+returns `None()` and `peer_close` reports the code and reason (1005 when it sent no
+code). A protocol error sends a close with 1002, 1007 for invalid UTF-8, or 1009 for an
+oversized message, before returning `Protocol(error)`. End of stream before a close is
+`Truncated()`; any call once closed is `Closed()`. `close` sends a close with `code` and
+`reason` and receives until the peer's close arrives, discarding messages. Dropping a
+`Conn` closes the stream without a closing handshake.
+
+Extensions, permessage-deflate included, are not negotiated.
+
 ## Arbitrary-precision integers
 
 `bigint` is exact integer arithmetic of any size, in ordinary std source:

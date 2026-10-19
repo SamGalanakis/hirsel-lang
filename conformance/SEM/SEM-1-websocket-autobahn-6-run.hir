@@ -1,0 +1,112 @@
+// rule: SEM-1
+// expect: run
+// entry: main
+// Autobahn testsuite cases 7.3.1, 7.3.2, 7.5.1 (crossbario/autobahn-testsuite
+// ff462c0a7ccb6512ad8442d09dab371a3c40a843): empty close; one-byte close; close
+// reason not UTF-8. Scripted clients play them against an echo server with a
+// 1000-byte message limit; each case is its own connection and handshake, so a
+// program holds three within the corpus step budget.
+pub type AppError = Network(NetError) | Http(http.HttpError)
+
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 9001u16)
+}
+
+// Echoes every message; returns the peer's close code or the receive error.
+fn echo(take ws: websocket.Conn) -> Result[u16, websocket.WsError] {
+  let mut conn = take ws
+  while let Some(message) = websocket.receive(mut conn)? {
+    match message {
+      Text(text) => websocket.send_text(mut conn, text)?,
+      Binary(data) => websocket.send_binary(mut conn, data)?,
+    }
+  }
+  match websocket.peer_close(conn) {
+    Some((code, _)) => Ok(code),
+    None() => Ok(0u16),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), AppError] {
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: 9001u16,
+        clients: [
+          // Autobahn 7.3.1 empty close
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40000u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
+              ),
+              Send(b"\x88\x80\x124Vx"),
+              Expect(b"\x88\x00")
+            ]
+          ),
+          // Autobahn 7.3.2 one-byte close
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40001u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
+              ),
+              Send(b"\x88\x81\x124Vx\x11"),
+              Expect(b"\x88\x02\x03\xea")
+            ]
+          ),
+          // Autobahn 7.5.1 close reason not UTF-8
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40002u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
+              ),
+              Send(
+                b"\x88\x96\x124Vx\x11\xdc\x98\xc2\xf3\x89\xef\xb7\x91\xfa\xea\xb6\xa7\xd9\xf6\xf8wP?\x0cwP"
+              ),
+              Expect(b"\x88\x02\x03\xef")
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  let expected: List[Result[u16, websocket.WsError]] = [
+    Ok(1005u16),
+    Error(Protocol(BadClosePayload())),
+    Error(Protocol(InvalidUtf8()))
+  ]
+  let mut config = websocket.default_config()
+  config.max_message_bytes = 1000
+  let mut listener = net.listen(n, home()) ? Network
+  for outcome in expected {
+    let (stream, _) = net.accept(n, mut listener) ? Network
+    let mut connection = http.server_connection(n, take stream, http.default_config())
+    let request = http.receive_request(mut connection, None()) ? Http
+    let ws = match websocket.accept(take connection, request, config) {
+      Ok(ws) => ws,
+      Error(_) => {
+        test.check(t, false)
+        return Ok(())
+      },
+    }
+    test.check(t, echo(take ws) == outcome)
+  }
+  Ok(())
+}

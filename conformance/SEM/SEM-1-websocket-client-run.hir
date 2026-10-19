@@ -1,0 +1,55 @@
+// rule: SEM-1
+// expect: run
+// entry: main
+// A WebSocket client against a scripted server: the RFC 6455 opening handshake
+// with a selected protocol, masked frames, a ping answered while receiving and the
+// server's closing handshake. The key and every mask come from the run's Random,
+// splitmix64 with seed 0 here, so the script names the exact bytes.
+pub type AppError = Grant(GrantError) | Ws(websocket.WsError)
+
+fn origin() -> List[http.Header] uses {} {
+  [http.Header(name: "Origin", value: "http://echo.test")]
+}
+
+pub fn main(t: Test, rt: Io) -> Result[(), AppError] {
+  let r = io.random(rt) ? Grant
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "echo.test",
+        port: 80u16,
+        resolves_to: [V4([192u8, 0u8, 2u8, 7u8])],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"GET /chat?x=1 HTTP/1.1\r\nHost: echo.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: r80dezmoIOL0Zbmhap54bg==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: chat\r\nOrigin: http://echo.test\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: iHMz0/J1GsQtRh2NfVC0Q7CZKMQ=\r\nSec-WebSocket-Protocol: chat\r\n\r\n\x81\x07welcome"
+              ),
+              Expect(b"\x81\x82OE\x09\x80',"),
+              Send(b"\x81\x02hi\x89\x01p\x88\x02\x03\xe8"),
+              Expect(b"\x8a\x81\xec\x81Lr\x9c"),
+              Expect(b"\x88\x82\x9bt\xa8Q\x98\x9c")
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  let url = "ws://echo.test/chat?x=1"
+  let mut config = websocket.default_config()
+  config.protocols = ["chat"]
+  let mut ws = websocket.connect(n, r, url, origin(), config) ? Ws
+  test.check(t, websocket.protocol(ws) == Some("chat"))
+  test.check(t, websocket.receive(mut ws) == Ok(Some(Text("welcome"))))
+  websocket.send_text(mut ws, "hi") ? Ws
+  test.check(t, websocket.receive(mut ws) == Ok(Some(Text("hi"))))
+  test.check(t, websocket.receive(mut ws) == Ok(None()))
+  test.check(t, websocket.peer_close(ws) == Some((1000u16, "")))
+  Ok(())
+}
