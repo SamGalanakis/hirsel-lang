@@ -52,6 +52,22 @@ unsafe fn canceled(ctx: *mut RunCtx, request: &Request, cause: u32) -> Stopped<O
     crate::io_checks::cancel(binding.adapter.as_mut(), request, cause).map_err(Stop::refusal)
 }
 
+/// The name of a parked request for host test reporting.
+/// # Safety
+/// The context and its binding are live.
+pub(crate) unsafe fn kind(ctx: *mut RunCtx, token: u64) -> &'static str {
+    let binding = unsafe { Binding::get(ctx) };
+    match binding.waits.parked.get(&token).map(|p| &p.request) {
+        Some(Request::SleepUntil { .. }) => "clock.sleep_until",
+        Some(Request::ReadStdin { .. }) => "stdin.read",
+        Some(Request::Accept { .. }) => "net.accept",
+        Some(Request::Read { .. }) => "net.read",
+        Some(Request::ChildWait { .. }) => "child.wait",
+        Some(Request::GroupWait { .. }) => "proc.wait_group",
+        _ => "provider request",
+    }
+}
+
 /// Whether `request` can wait for the host and so park its task: a stdin read, a timer
 /// wait, a process run or pipeline, a child or group write, read or wait, or a network
 /// request.

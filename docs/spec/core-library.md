@@ -80,6 +80,7 @@ N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
 N fn test.seed(t: Test) -> u64
 N fn test.tasks(t: Test) -> Tasks
+N fn test.clock(t: Test) -> MonotonicClock
 N fn test.log(t: Test, text: String) -> ()
 N fn test.expect_snapshot(t: Test, name: String, text: String) -> ()
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
@@ -601,6 +602,11 @@ entries; `test.net` creates a fake `Net` served by scripted peers ([below](#netw
 atomics, scheduled by the run's scheduler (`inputs.scheduler` in
 [determinism.md](determinism.md#run-configuration)); it grants no host authority, and every
 call returns an equivalent capability.
+
+`test.clock(t)` returns a fake monotonic clock starting at zero nanoseconds. Repeated
+projections share the test's clock; sampling it does not advance time. Only the simulated
+scheduler advances it, to the earliest live timer when no task is runnable. It grants no
+host clock authority. A blocked test fails with its outstanding waits in the runner report.
 
 ## Concurrency
 

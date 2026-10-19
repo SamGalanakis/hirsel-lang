@@ -666,6 +666,12 @@ impl Io {
                     }),
                 }
             }
+            (Some("test"), "clock", [OpValue::Handle(test)])
+                if matches!(self.grants.get(test), Some(IoGrant::Test)) =>
+            {
+                self.monotonic.get_or_insert(0);
+                OpValue::Handle(self.grant(IoGrant::Monotonic))
+            }
             (Some("clock"), "monotonic", [OpValue::Handle(clock)]) => {
                 match self.monotonic(*clock) {
                     Some(now) => io_ok(OpValue::Handle(now)),

@@ -1555,6 +1555,7 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::TestCheck { .. } => false,
             Request::TestCheckCase { .. } => false,
             Request::TestFail { .. } => false,
+            Request::TestClock { .. } => false,
             Request::TestSeed { .. } => false,
             Request::TestTasks { .. } => false,
             Request::TestLog { .. } => false,

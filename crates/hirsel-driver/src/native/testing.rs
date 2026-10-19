@@ -124,7 +124,10 @@ impl Executable {
             Ok(observation) if observation.exit_code == Some(1) => Some("returned Error".into()),
             Ok(observation) => Some(match observation.failures.first() {
                 Some(failure) => sites.report(failure, false)?,
-                None => "runtime failure: blocked".into(),
+                None => {
+                    let waits = String::from_utf8_lossy(&launched.stderr);
+                    format!("runtime failure: blocked{}", waits.trim_end())
+                }
             }),
             Err(error) => Some(format!("runtime error: {error}")),
         };

@@ -377,6 +377,7 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
                 format!("check_case {test} {} {case}", u8::from(*condition))
             }
             Request::TestFail { test } => format!("fail {test}"),
+            Request::TestClock { test } => format!("test_clock {test}"),
             Request::TestSeed { test } => format!("test_seed {test}"),
             Request::TestTasks { test } => format!("test_tasks {test}"),
             Request::TestLog { test, text } => format!("test_log {test} {}", hex(text.as_bytes())),
@@ -683,6 +684,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                     case: number(index)?,
                 },
                 ["fail", t] => Request::TestFail { test: number(t)? },
+                ["test_clock", t] => Request::TestClock { test: number(t)? },
                 ["test_seed", t] => Request::TestSeed { test: number(t)? },
                 ["test_tasks", t] => Request::TestTasks { test: number(t)? },
                 ["test_log", t, text] => Request::TestLog {
@@ -1937,6 +1939,11 @@ pub(crate) unsafe fn execute(
         record.push_str("audit unavailable\n");
     } else {
         // A stopped run's tasks still hold their storage: no exit audit (CONC-8).
+        if entry.is_test() && matches!(outcome, hirsel_run_config::RunOutcome::Blocked) {
+            let waits = crate::tasks::test_waits(ctx);
+            sinks.report.clone().write_all(waits.as_bytes())
+                .map_err(|e| format!("test wait report: {e}"))?;
+        }
         unsafe { (*ctx).abandon() };
         match &outcome {
             hirsel_run_config::RunOutcome::Blocked => record.push_str("blocked\n"),

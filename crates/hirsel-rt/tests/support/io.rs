@@ -205,6 +205,7 @@ pub fn replay_interpreter_with_fixture(
                     ],
                 ),
                 Request::TestFail { test } => ("test.fail", vec![handle("Test", *test)]),
+                Request::TestClock { test } => ("test.clock", vec![handle("Test", *test)]),
                 Request::TestSeed { test } => ("test.seed", vec![handle("Test", *test)]),
                 Request::TestTasks { test } => ("test.tasks", vec![handle("Test", *test)]),
                 Request::TestLog { test, text } => (

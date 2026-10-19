@@ -184,6 +184,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "test.check"
         | "test.check_case"
         | "test.fail"
+        | "test.clock"
         | "test.seed"
         | "test.tasks"
         | "test.log"
@@ -318,6 +319,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "io.stdout"
             | "io.tasks"
             | "io.net"
+            | "test.clock"
             | "test.dir"
             | "test.net"
             | "io.process"
@@ -1374,6 +1376,13 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_test_clock",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_test_seed",
         destination: false,
         result: Some((8, 8)),
@@ -2046,6 +2055,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "task.scope",
     "task.scope_until",
     "task.set",
+    "test.clock",
     "test.check",
     "test.check_case",
     "test.crash",

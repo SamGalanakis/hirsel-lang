@@ -555,6 +555,9 @@ impl Adapter for RealIo {
 }
 impl RealIo {
     fn perform(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        if matches!(request, Request::TestClock { .. }) && self.cooperative.is_none() {
+            self.set_cooperative(Default::default());
+        }
         let fake = self.state.is_fake_request(&request);
         let mut fault = if self.state.preflight(&request)?.is_some()
             || self.state.denied_projection(&request)
@@ -622,6 +625,10 @@ impl RealIo {
                     }
                 }
             }
+            Request::Monotonic { clock } if self.state.test_clocks.contains(clock) => {
+                let ticks = self.cooperative.as_ref().unwrap().0.test_time();
+                self.state.sample(&request, Completion::Monotonic(Ok(ticks)))
+            }
             Request::Monotonic { .. } | Request::Wall { .. } => {
                 let input = match (&request, fault.as_ref(), &self.cooperative) {
                     (Request::Monotonic { .. }, None, Some((readiness, _)))
@@ -641,6 +648,12 @@ impl RealIo {
                     self.state.random.draw(*count)
                 };
                 self.state.sample(&request, Completion::Random(input))
+            }
+            Request::SleepUntil { clock, deadline } if self.state.test_clocks.contains(clock) => {
+                if !self.cooperative.as_ref().unwrap().0.test_timer(*deadline) {
+                    return Err(AdapterError::Blocked);
+                }
+                self.state.sample(&request, Completion::Wait(Ok(())))
             }
             Request::SleepUntil { clock, deadline } => {
                 self.state

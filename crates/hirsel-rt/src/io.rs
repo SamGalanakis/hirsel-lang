@@ -218,6 +218,10 @@ pub enum Request {
     TestFail {
         test: u64,
     },
+    /// A test-local simulated monotonic clock.
+    TestClock {
+        test: u64,
+    },
     TestSeed {
         test: u64,
     },
@@ -805,6 +809,8 @@ pub(crate) struct State {
     pub(crate) monotonic_granted: bool,
     pub(crate) wall_granted: bool,
     pub(crate) last_monotonic: Option<u64>,
+    pub(crate) test_last_monotonic: Option<u64>,
+    pub(crate) test_clocks: BTreeSet<u64>,
     pub(crate) random: RandomSource,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -843,6 +849,8 @@ impl Default for State {
             monotonic_granted: false,
             wall_granted: false,
             last_monotonic: None,
+            test_last_monotonic: None,
+            test_clocks: Default::default(),
             random: RandomSource::SplitMix64(0),
             stdout: vec![],
             stderr: Vec::new(),
@@ -1153,10 +1161,15 @@ impl State {
             (Request::Monotonic { clock }, Completion::Monotonic(value)) => {
                 self.expect(*clock, Grant::MonotonicClock)?;
                 if let Ok(ticks) = value {
-                    if self.last_monotonic.is_some_and(|last| *ticks < last) {
+                    let last = if self.test_clocks.contains(clock) {
+                        &mut self.test_last_monotonic
+                    } else {
+                        &mut self.last_monotonic
+                    };
+                    if last.is_some_and(|last| *ticks < last) {
                         return Err(AdapterError::InvalidCompletion);
                     }
-                    self.last_monotonic = Some(*ticks);
+                    *last = Some(*ticks);
                 }
             }
             (Request::Wall { clock }, Completion::Wall(_)) => {
@@ -1270,6 +1283,14 @@ impl State {
                     return Err(AdapterError::InvalidHandle(*test));
                 }
                 Ok(C::Checked(false))
+            }
+            R::TestClock { test } => {
+                if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
+                    return Err(AdapterError::InvalidHandle(*test));
+                }
+                let clock = self.handles.insert(Grant::MonotonicClock);
+                self.test_clocks.insert(clock);
+                Ok(C::Handle(Ok(clock)))
             }
             R::TestSeed { test } => {
                 let Some(Grant::Test { seed }) = self.handles.rows.get(test) else {
@@ -3194,6 +3215,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_tasks(
         crate::fault("Test completion mismatch");
     };
     unsafe { out.write(tasks) };
+    crate::STATUS_OK
+}
+
+/// # Safety
+/// A live Test grant is borrowed; out is writable capability storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_test_clock(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    test: *const u64,
+) -> u8 {
+    let Ok(Completion::Handle(Ok(clock))) = (unsafe {
+        capability_call(ctx, Request::TestClock { test: test.read() })
+    }) else {
+        return crate::STATUS_FAILURE;
+    };
+    unsafe { out.write(clock) };
     crate::STATUS_OK
 }
 

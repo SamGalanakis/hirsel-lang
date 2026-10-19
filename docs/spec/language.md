@@ -354,7 +354,10 @@ interpreted little endian; an explicit runner seed overrides it. Assertions are 
 (`test.check(t, cond)`); property tests are a library call over an explicit generator
 (`test.property(t, gen, law, show)`) whose seed comes from `Test` and whose failures shrink
 to a minimal counterexample. Fakes, such as a confined directory or a scripted network, are
-created from `Test`. A false check fails LANG-9. The zero-argument `@bench` attribute
+created from `Test`. `test.tasks(t)` supplies deterministic simulated tasks driven by the
+test's seed; `test.clock(t)` supplies a fake monotonic clock that advances only through
+simulation. A blocked or deadlocked test fails and reports its outstanding waits.
+A false check fails LANG-9. The zero-argument `@bench` attribute
 selects a benchmark under the same signature rules; the runner calls it only when asked for
 benches, and a function carrying both `@test` and `@bench` is LANG-9.
 

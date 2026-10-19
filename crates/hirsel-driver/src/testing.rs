@@ -540,7 +540,13 @@ pub(crate) fn outcome_failure(outcome: &RunOutcome) -> Option<String> {
     match outcome {
         RunOutcome::Exit(0) => None,
         RunOutcome::Exit(1) => Some("returned Error".into()),
-        RunOutcome::Blocked(_) => Some("runtime failure: blocked".into()),
+        RunOutcome::Blocked(waits) => {
+            let mut report = String::from("runtime failure: blocked");
+            for wait in waits {
+                report.push_str(&format!("\n  task {:?}: {}", wait.spawn_path, wait.kind));
+            }
+            Some(report)
+        }
         RunOutcome::Failure {
             rule,
             site,
