@@ -521,7 +521,8 @@ The default seed follows the compiler identity unless the test runner supplies
 i8/i16/i32/i64/i128, f32 and f64, including signed minima and unsigned maxima.
 An explicit Args observation keeps native operands dynamic through optimization.
 Integer inputs and computed values are printed; float results print their exact
-bits. This catches narrowing, signedness and arithmetic errors that parity-only
-output can hide. The full generated matrix includes Cranelift parity too.
+bits. f64 inputs exceed f32's exact precision, so accidental narrowing is visible.
+This catches narrowing, signedness and arithmetic errors that parity-only output
+can hide. The full generated matrix includes Cranelift parity too.
 `--filter generated/success-0` reconstructs that exact witness under smoke,
 full or Cranelift parity independently of the rotating window.

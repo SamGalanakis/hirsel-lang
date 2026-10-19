@@ -185,7 +185,8 @@ fn small(a: u64) -> u64
     }
     for ty in ["f32", "f64"] {
         // Dyadic operands make exact, finite float arithmetic at both widths.
-        let value = rng.below(10000);
+        // The f64 fraction above 2^24 cannot survive accidental f32 narrowing.
+        let value = rng.below(10000) + if ty == "f64" { 1 << 24 } else { 0 };
         text.push_str(&format!(
             "  let x_{ty}: {ty} = {value}.25{ty} + (if salt == 0u64 {{ 0.0{ty} }} else {{ 0.5{ty} }})\n  print_u64(s, int.widen({ty}.bits(calc_{ty}(x_{ty}))))\n  let _ = out.print(s, \"\\n\")\n"
         ));
