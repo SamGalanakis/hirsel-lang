@@ -44,7 +44,7 @@ impl QueryEngine {
     /// Select the same semantic program for interpreter, checked heap and native
     /// launches. No native export, instance graph, compiler options or artifact
     /// identity participates. All checked reads include private implementations;
-    /// compile-time reads and implicit type/finalizer dependencies also close.
+    /// compile-time reads, implicit type/finalizer dependencies and type facts also close.
     pub fn semantic_program_revision(
         &mut self,
         entry: &DefPath,
@@ -207,6 +207,11 @@ impl QueryEngine {
         }
         if let SignatureKind::Type(declaration) = &signature.value.kind {
             dependencies.extend(declaration.drop.iter().cloned());
+            // FACT-2: construction runs the fact's helper, which closes over
+            // what its predicate calls.
+            if declaration.fact.is_some() {
+                dependencies.insert(hirsel_check_protocol::fact::fact_path(path));
+            }
         }
         Ok((content, dependencies))
     }

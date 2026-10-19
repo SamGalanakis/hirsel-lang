@@ -1,6 +1,6 @@
 //! Frozen native handoff: all owners are retained; no provider reaches a backend.
 use crate::*;
-use hirsel_syntax::{ExprId, ItemKind};
+use hirsel_syntax::ExprId;
 use hirsel_tir::DefinitionRef;
 use hirsel_tir::Materialized;
 use hirsel_types::{SignatureKind, SignatureRef};
@@ -136,30 +136,6 @@ impl QueryEngine {
             }
             if matches!(signature.value.kind, SignatureKind::Const { ty: _, .. }) {
                 constants.insert(path.clone(), self.materialize_value(&path)?);
-            }
-            if matches!(
-                &source.kind,
-                ItemKind::Type {
-                    body: hirsel_syntax::TypeBody::Distinct { fact: Some(_), .. },
-                    ..
-                }
-            ) {
-                let helper = hirsel_check_protocol::fact::fact_path(&path);
-                let signature = self.item_signature(&helper)?;
-                signature_dependencies.insert(helper.clone(), signature.dependencies);
-                definitions.insert(helper.clone(), self.lower_to_tir(&helper)?.value);
-                let (file, item) = self.parse_definition(&helper)?.value;
-                let revision = file.tree.items[item.0 as usize].text_hash;
-                audits.insert(helper.clone(), self.source_audit(&helper)?);
-                signatures.insert(helper.clone(), signature.value);
-                source_owners.insert(
-                    helper,
-                    NativeSource {
-                        syntax: file,
-                        item,
-                        implementation_revision: revision,
-                    },
-                );
             }
         }
         let diagnostics = crate::generic_graph::check(self)?;

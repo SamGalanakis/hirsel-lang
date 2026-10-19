@@ -34,7 +34,7 @@ Compose phases through per-definition queries; record dependency fingerprints fo
 
 `QueryEngine::semantic_program_revision(entry)` produces the shared run-config
 `ProgramRevision` for interpreter, heap and native launch. It follows checked
-signature/resolver reads, private representations, implicit finalizers and
+signature/resolver reads, private representations, implicit finalizers, type fact helpers and
 compile-time execution reads; every reached source declaration contributes its
 signature and complete token content, including private bodies and constants.
 Comments/spaces, source positions, file order, compiler provenance and native
