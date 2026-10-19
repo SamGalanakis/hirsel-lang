@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1346 exported definitions; 491 variants.
+1347 exported definitions; 491 variants.
 
 ## Types and roots
 
@@ -6743,7 +6743,7 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401
 
 <a id="def-std_401_2flist_2fbinary_5fsearch"></a>
 
-- `@noalloc pub fn list.binary_search[T]( xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {} ) -> Option[u64] uses {}`
+- `@noalloc pub fn list.binary_search[T](xs: List[T], value: T, by: @noalloc fn(T, T) -> i32 uses {}) -> Option[ u64 ] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_401_2fi32), [`core@1/u64`](#def-core_401_2fu64)
 
@@ -6828,6 +6828,17 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_
 <a id="def-std_401_2flist_2fsort"></a>
 
 - `@noalloc pub fn list.sort[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {}`
+
+Sorts in place without allocation. Equal elements may change order.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32)
+
+<a id="def-std_401_2flist_2fsort_5fstable"></a>
+
+- `@noalloc pub fn list.sort_stable[T](mut xs: unique List[T], by: @noalloc fn(T, T) -> i32 uses {}) -> () uses {}`
+
+Stable merge sort. Equal elements retain their input order. Elements are
+rearranged only by swaps, including move-only elements; no allocation.
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_2fi32)
 
