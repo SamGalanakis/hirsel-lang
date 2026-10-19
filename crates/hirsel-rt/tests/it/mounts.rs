@@ -160,7 +160,7 @@ fn another_mount_does_not_grant_work_and_empty_io_needs_no_directory() {
 }
 
 #[test]
-fn a_read_directory_denies_atomic_mutation_before_consumption_or_effect() {
+fn a_foreign_atomic_file_is_refused_before_rights_consumption_or_effect() {
     let scratch = Scratch::new();
     let mut real = Library(scratch.io(&[
         ("read", Access::Read, "one"),
@@ -169,6 +169,8 @@ fn a_read_directory_denies_atomic_mutation_before_consumption_or_effect() {
     let read = real.directory(Io(1), "read").unwrap().unwrap();
     let write = real.directory(Io(1), "write").unwrap().unwrap();
     let mut atomic = real.create_atomic(write, "saved").unwrap().unwrap();
+    let handles = real.0.handles().clone();
+    let tape_len = real.0.tape().len();
     for request in [
         R::WriteAll {
             directory: read.0,
@@ -180,9 +182,12 @@ fn a_read_directory_denies_atomic_mutation_before_consumption_or_effect() {
             file: atomic.0,
         },
     ] {
-        assert_eq!(real.0.call(request), Ok(C::Unit(Err(IoError::NotGranted))));
-        assert!(real.0.handles().observed().contains_key(&atomic.0));
-        assert!(real.0.tape().last().unwrap().fault.is_none());
+        assert_eq!(
+            real.0.call(request),
+            Err(AdapterError::InvalidHandle(atomic.0))
+        );
+        assert_eq!(real.0.handles(), &handles);
+        assert_eq!(real.0.tape().len(), tape_len);
     }
     assert!(!scratch.0.join("two/saved").exists());
     real.write_all(write, &mut atomic, b"good")
