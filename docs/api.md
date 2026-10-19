@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1359 exported definitions; 494 variants.
+1363 exported definitions; 494 variants.
 
 ## Types and roots
 
@@ -7034,6 +7034,26 @@ References: [`core@1/OutputError`](#def-core_401_2fOutputError), [`core@1/Result
 - `@noalloc pub fn map.same_entries[K: key, V: data](a: Map[K, V], b: Map[K, V]) -> bool`
 
 References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fmap_2fupdate"></a>
+
+- `@preserves_unique(m) pub fn map.update[K: key, V]( mut m: unique Map[K, V], k: K, change: fn(mut value: unique V) -> () uses {} ) -> bool uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-core_401_2fmap_2fupdate_5fwith"></a>
+
+- `@preserves_unique(m) @unretained(k, update) fn map.update_with[K: key, V](mut m: unique Map[K, V], k: K, update: fn(mut value: unique V) -> () uses {}) -> bool`
+
+<a id="def-std_401_2fmap_2fupsert"></a>
+
+- `@preserves_unique(m) pub fn map.upsert[K: key, V]( mut m: unique Map[K, V], k: K, initial: fn() -> unique V uses {}, change: fn(mut value: unique V) -> () uses {} ) -> () uses {}`
+
+References: [`core@1/Map`](#def-core_401_2fMap)
+
+<a id="def-core_401_2fmap_2fupsert_5fwith"></a>
+
+- `@preserves_unique(m) @unretained(k, initial, update) fn map.upsert_with[K: key, V](mut m: unique Map[K, V], k: K, initial: fn() -> unique V uses {}, update: fn(mut value: unique V) -> () uses {}) -> ()`
 
 
 ## markdown
