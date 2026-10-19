@@ -520,12 +520,24 @@ impl<C> Snapshot<C> for ContentHash {
 /// that only carry tables keep the empty default.
 pub trait Observe {
     fn def_path(&mut self, _path: &DefPath) {}
+    /// The text written in place of `path`, for an encoding that identifies
+    /// definitions by something other than their names. Such text is written
+    /// as a `(Ref "...")` node and is never decoded.
+    fn reference(&mut self, _path: &DefPath) -> Option<String> {
+        None
+    }
 }
 impl Observe for () {}
 
 impl<C: Observe> Snapshot<C> for DefPath {
     fn write(&self, w: &mut Writer<C>) {
         w.context.def_path(self);
+        if let Some(reference) = w.context.reference(self) {
+            w.open("Ref");
+            w.text(&reference);
+            w.close();
+            return;
+        }
         let p = &self.0;
         w.open("DefPath");
         w.text(&p.package.name);
