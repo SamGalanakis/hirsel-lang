@@ -472,6 +472,7 @@ conformance/CLO/CLO-4-iter-called-closure-part-run.hir
 conformance/CLO/CLO-4-kept-heap-capture-run.hir
 conformance/CLO/CLO-4-lexical-generic-uses-bad.hir
 conformance/CLO/CLO-4-lexical-generic-uses-ok.hir
+conformance/CLO/CLO-4-once-take-capture-unique-run.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-bad.hir
 conformance/CLO/CLO-4-outer-let-mut-capture-ok.hir
 conformance/CLO/CLO-4-parameter-authority.hir
@@ -524,6 +525,7 @@ conformance/CONC/CONC-2-task-set-scope-body-capture-bad.hir
 conformance/CONC/CONC-2-task-set-scope-body-capture-run.hir
 conformance/CONC/CONC-2-task-set-unconsumed-bad.hir
 conformance/CONC/CONC-2-task-set-unconsumed-ok.hir
+conformance/CONC/CONC-2-task-take-capture-freeze-run.hir
 conformance/CONC/CONC-2-tour-11-concurrency-run.hir
 conformance/CONC/CONC-2-tour-11-task-all-run.hir
 conformance/CONC/CONC-2-unconsumed-handle-bad.hir
@@ -1388,6 +1390,7 @@ conformance/LANG/LANG-13-or-let-refutable-bad.hir
 conformance/LANG/LANG-13-or-let-refutable-ok.hir
 conformance/LANG/LANG-13-or-names-bad.hir
 conformance/LANG/LANG-13-or-names-ok.hir
+conformance/LANG/LANG-13-or-pattern-after-guard-run.hir
 conformance/LANG/LANG-13-or-pattern-run.hir
 conformance/LANG/LANG-13-or-types-bad.hir
 conformance/LANG/LANG-13-or-types-ok.hir
@@ -3539,6 +3542,7 @@ conformance/OWN/OWN-1-caller-keeps-on-error.hir
 conformance/OWN/OWN-1-cursor-borrowed-item-take.hir
 conformance/OWN/OWN-1-if-let-take-bad.hir
 conformance/OWN/OWN-1-if-let-take-ok.hir
+conformance/OWN/OWN-1-joined-borrow-scrutinee-run.hir
 conformance/OWN/OWN-1-let-else-take-bad.hir
 conformance/OWN/OWN-1-let-else-take-ok.hir
 conformance/OWN/OWN-1-local-result-annotated-closure-bad.hir
