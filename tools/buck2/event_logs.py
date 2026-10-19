@@ -1,9 +1,11 @@
 """Shared, bounded Buck2 event history for gates, landing and pool audits."""
 from contextlib import contextmanager, nullcontext
+import csv
 import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import sys
@@ -13,6 +15,50 @@ ROOT = Path(__file__).resolve().parents[2]
 BUCK2 = ROOT / '.buck2/bin/buck2'
 MAX_AGE = 3 * 86400
 MAX_BYTES = 4 * 1024**3
+CASE_COST = re.compile(r'^test (\S+)(?: - should panic)? \.\.\. ok <(\d+(?:\.\d+)?)s>')
+
+
+def case_costs(details):
+    """Successful per-case timings in one libtest result (failures stay unpriced)."""
+    return {match[1]: float(match[2]) for line in details.splitlines() if (match := CASE_COST.match(line))}
+
+
+class NoTestHistory:
+    def append(self, rows):
+        pass
+
+
+class TsvTestHistory:
+    """Append-only compact results, independently of compressed-log retention."""
+    FIELDS = ('gate', 'target', 'shard', 'duration_seconds', 'date', 'status', 'case_costs')
+
+    def __init__(self, path):
+        self.path = Path(path).expanduser()
+
+    def append(self, rows):
+        if not rows:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open('a+', newline='') as out:
+            fcntl.flock(out, fcntl.LOCK_EX)
+            out.seek(0, os.SEEK_END)
+            writer = csv.DictWriter(out, fieldnames=self.FIELDS, delimiter='\t', lineterminator='\n')
+            if out.tell() == 0:
+                writer.writeheader()
+            writer.writerows(rows)
+
+
+def test_history():
+    """Host-selected file sink (default) or explicit opt-out; no fsync per row."""
+    configured = os.environ.get('HIRSEL_TEST_HISTORY', str(Path.home() / '.cache/hirsel-buck2/test-results.tsv'))
+    return NoTestHistory() if configured == 'none' else TsvTestHistory(configured)
+
+
+def test_history_rows(path):
+    """Read complete TSV rows while other gates may be appending large cost maps."""
+    with Path(path).open(newline='') as source:
+        fcntl.flock(source, fcntl.LOCK_SH)
+        yield from csv.DictReader(source, delimiter='\t')
 
 
 def directory():

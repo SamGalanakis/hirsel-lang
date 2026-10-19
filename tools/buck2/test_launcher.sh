@@ -147,6 +147,16 @@ shard=""
 if [ -n "${TEST_TOTAL_SHARDS:-}" ]; then shard="$((TEST_SHARD_INDEX + 1))/$TEST_TOTAL_SHARDS"; fi
 costs="${HIRSEL_TEST_COSTS:-}"
 case "$costs" in "" | /*) ;; *) costs="$root/$costs" ;; esac
+# Keep per-case costs in ordinary gate output, including an unsharded binary
+# that has a cost table. Libtest times each case, not the surrounding launcher.
+if [ -n "$costs" ]; then
+  export RUSTC_BOOTSTRAP=1
+  report_time=false
+  for argument in "$@"; do
+    case "$argument" in --report-time | --report-time=*) report_time=true ;; esac
+  done
+  if ! "$report_time"; then set -- "$@" -Zunstable-options --report-time; fi
+fi
 test_binary="${HIRSEL_TEST_BINARY:-}"
 unset HIRSEL_TEST_TMPDIR HIRSEL_TEST_CWD HIRSEL_TEST_BIN_EXES HIRSEL_TEST_BIN_EXE_DIR HIRSEL_TEST_COSTS HIRSEL_TEST_POOL HIRSEL_TEST_RELOCATE
 unset HIRSEL_TEST_BINARY

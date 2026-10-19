@@ -24,6 +24,9 @@ sys.path.insert(0, str(TOOLS / 'buck2'))
 import gating  # noqa: E402
 import impact  # noqa: E402
 
+# Scratch gates must never contaminate the host's real timing history.
+os.environ['HIRSEL_TEST_HISTORY'] = 'none'
+
 MEMBERS = {'hirsel-lexer', 'hirsel-llvm', 'hirsel-cli', 'hirsel-types'}
 BUCK = '''# @generated
 load("//tools/buck2:defs.bzl", "hirsel_library", "hirsel_test")
@@ -1221,6 +1224,28 @@ class Summary(unittest.TestCase):
                             lines[1])
             self.assertNotIn('--program', lines[1])
             self.assertEqual(lines[-1], f'.buck2/bin/buck2 test //:{target}')
+
+
+class TestResultHistory(unittest.TestCase):
+    def test_every_result_is_recorded_with_gate_target_shard_duration_and_date(self):
+        records = []
+        class SimulatedHistory:
+            def append(self, rows):
+                records.extend(rows)
+        def event(name, duration, status):
+            return json.dumps({'Event': {'timestamp': [0, 0], 'data': {'Instant': {'data': {
+                'TestResult': {'name': name, 'duration_us': duration, 'status': status,
+                               'details': 'test macro::case ... ok <0.123s>' if status == gating.PASS else ''}}}}}})
+        output = '\n'.join([event('root//:driver-shard-2 (config)', 1250000, gating.PASS),
+                            event('root//:whole', 500000, gating.FAIL)])
+        with patch.object(gating.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output)):
+            results = gating.test_results(Path('/logs/gate-123.pb.zst'), history=SimulatedHistory())
+        self.assertEqual(results['driver-shard-2']['seconds'], 1.25)
+        self.assertEqual(records, [dict(gate='gate-123', target='driver', shard='2', duration_seconds=1.25,
+                                      date='1970-01-01T00:00:00+00:00', status=gating.PASS,
+                                      case_costs='{"macro::case":0.123}'),
+                                   dict(gate='gate-123', target='whole', shard='', duration_seconds=0.5,
+                                      date='1970-01-01T00:00:00+00:00', status=gating.FAIL, case_costs='')])
 
 
 FAKE_BUCK2 = '''#!/usr/bin/env bash

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 sys.dont_write_bytecode = True
@@ -19,6 +20,31 @@ SPEC.loader.exec_module(logs)
 
 
 class Retention(unittest.TestCase):
+    def test_history_survives_rotation_and_concurrent_appends_have_one_header(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            sink = logs.TsvTestHistory(root / 'history/results.tsv')
+            def append(index):
+                sink.append([dict(gate=str(index), target='driver', shard=1,
+                                  duration_seconds=2.5, date='2026-10-19', status=1)])
+            with ThreadPoolExecutor(max_workers=8) as workers:
+                list(workers.map(append, range(40)))
+            logs.prune(root / 'logs', max_age=0, max_bytes=0)
+            rows = sink.path.read_text().splitlines()
+            self.assertEqual(len(rows), 41)
+            self.assertEqual(rows[0], '\t'.join(sink.FIELDS))
+            self.assertEqual({row.split('\t')[0] for row in rows[1:]}, {str(i) for i in range(40)})
+            self.assertEqual(len(list(logs.test_history_rows(sink.path))), 40)
+
+    def test_history_sink_is_host_configurable_and_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / 'timings.tsv'
+            with patch.dict(os.environ, {'HIRSEL_TEST_HISTORY': str(path)}):
+                self.assertEqual(logs.test_history().path, path)
+            with patch.dict(os.environ, {'HIRSEL_TEST_HISTORY': 'none'}):
+                logs.test_history().append([{'not': 'a TSV row'}])
+            self.assertFalse(path.exists())
+
     def test_age_and_size_prune_oldest_but_protect_live_writers_and_readers(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)

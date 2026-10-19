@@ -17,17 +17,34 @@ cases longest first. The report lists each target's wall time and the slowest
 cases.
 """
 import argparse
+import json
 from pathlib import Path
 import re
+import statistics
 
-from sync import SHARDED, shards
+import event_logs
+
+from sync import SHARDED
 
 HERE = Path(__file__).resolve().parent
 TABLES = HERE / 'test-costs'
 ANSI = re.compile(r'\x1b\[[0-9;]*m')
 TIMESTAMP = re.compile(r'^\[[^\]]+\]\s*')
 TARGET = re.compile(r'^\S+ (Pass|Fail|Timeout|Fatal): root//:(\S+) \(([^)]*)\)')
-CASE = re.compile(r'^test (\S+)(?: - should panic)? \.\.\. ok <(\d+(?:\.\d+)?)s>')
+CASE = event_logs.CASE_COST
+
+
+def inventory(lines):
+    """Libtest --list output grouped by Buck2's target headers."""
+    cases, binary = {}, None
+    for line in lines:
+        line = TIMESTAMP.sub('', ANSI.sub('', line)).rstrip()
+        if match := TARGET.match(line):
+            binary = re.sub(r'-shard-\d+$', '', match[2])
+            binary = binary if binary in SHARDED else None
+        elif binary and (match := re.fullmatch(r'(\S+): test', line)):
+            cases.setdefault(binary, set()).add(match[1])
+    return cases
 
 
 def seconds(text):
@@ -62,17 +79,86 @@ def read_table(path):
     return rows
 
 
+def configured_shards(binary):
+    """The graph that produced the log, before re-sizing from its new costs."""
+    buck = (HERE.parents[1] / 'BUCK').read_text()
+    block = re.search(r'hirsel_test\(\n    name = "' + re.escape(binary) + r'",(.*?)\n\)', buck, re.S)
+    if not block:
+        raise ValueError(f'no generated test target: {binary}')
+    count = re.search(r'\n    shards = (\d+),', block[1])
+    return int(count[1]) if count else 1
+
+
 def write_table(path, rows):
     path.parent.mkdir(exist_ok=True)
-    path.write_text(''.join(f'{case}\t{cost:.1f}\n' for case, cost in sorted(rows.items())))
+    path.write_text(''.join(f'{case}\t{cost:.3f}\n' for case, cost in sorted(rows.items())))
+
+
+def history_report(path, binary, since, min_gates):
+    """Descriptive gate durations, not a cross-session performance verdict."""
+    samples = {}
+    for row in event_logs.test_history_rows(path):
+        if row['target'] == binary and row['date'] >= since:
+            samples.setdefault(row['shard'], {})[row['gate']] = float(row['duration_seconds'])
+    if not samples:
+        raise SystemExit(f'no timing history for {binary} since {since or "the beginning"}')
+    print('shard\tgates\tmedian_seconds\tmax_seconds')
+    for shard, gates in sorted(samples.items(), key=lambda row: int(row[0] or 0)):
+        values = list(gates.values())
+        print(f'{shard or "whole"}\t{len(gates)}\t{statistics.median(values):.1f}\t{max(values):.1f}')
+    if any(len(gates) < min_gates for gates in samples.values()):
+        raise SystemExit(f'not enough history: need at least {min_gates} distinct gates per shard')
+
+
+def history_costs(path, binary, since):
+    """Latest measured cases, including successful cases of incomplete gates."""
+    rows, latest = {}, {}
+    for row in event_logs.test_history_rows(path):
+        target, date = row['target'], row['date']
+        if target not in SHARDED or (binary != 'all' and target != binary) or date < since:
+            continue
+        for case, cost in json.loads(row.get('case_costs') or '{}').items():
+            key = target, case
+            if date >= latest.get(key, ''):
+                latest[key] = date
+                rows.setdefault(target, {})[case] = cost
+    return rows
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('logs', nargs='+', type=Path)
+    parser.add_argument('logs', nargs='*', type=Path)
     parser.add_argument('--report-only', action='store_true', help='print the report, write no table')
     parser.add_argument('--slowest', type=int, default=15)
+    parser.add_argument('--history', nargs='?', const='', help='report the durable TSV (default: configured sink)')
+    parser.add_argument('--from-history', nargs='?', const='', help='merge per-case timings from the durable TSV')
+    parser.add_argument('--binary', default='hirsel-driver-test-it', help='binary to report or refresh (all for --from-history)')
+    parser.add_argument('--since', default='', help='inclusive ISO-8601 UTC date/time, for example 2026-10-19')
+    parser.add_argument('--min-gates', type=int, default=5)
     args = parser.parse_args()
+    if args.history is not None or args.from_history is not None:
+        if args.logs:
+            parser.error('history options cannot be combined with cost logs')
+        if args.history is not None and args.from_history is not None:
+            parser.error('--history and --from-history are mutually exclusive')
+        chosen = args.history if args.history is not None else args.from_history
+        sink = event_logs.TsvTestHistory(chosen) if chosen else event_logs.test_history()
+        if not isinstance(sink, event_logs.TsvTestHistory):
+            parser.error('test history is disabled; pass an explicit TSV path')
+        if args.history is not None:
+            history_report(sink.path, args.binary, args.since, args.min_gates)
+            return
+        costs = history_costs(sink.path, args.binary, args.since)
+        if not costs:
+            parser.error('no per-case costs in the selected history; wait for real gate results')
+        for binary, rows in sorted(costs.items()):
+            print(f'{binary}: {len(rows)} measured cases from gate history')
+            if not args.report_only:
+                path = TABLES / f'{binary}.tsv'
+                write_table(path, read_table(path) | rows)
+        return
+    if not args.logs:
+        parser.error('provide cost logs, --history or --from-history')
     walls, costs = {}, {}
     for log in args.logs:
         with log.open(errors='replace') as lines:
@@ -88,7 +174,7 @@ def main():
             print(f'{cost:8.1f} s  {case}')
         if not args.report_only:
             path = TABLES / f'{binary}.tsv'
-            count, _ = shards(binary)
+            count = configured_shards(binary)
             complete = all(walls.get(f'{binary}-shard-{i}', ('',))[0] == 'Pass' for i in range(1, count + 1)) \
                 if count > 1 else walls.get(binary, ('',))[0] == 'Pass'
             write_table(path, rows if complete else read_table(path) | rows)

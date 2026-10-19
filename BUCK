@@ -1429,7 +1429,7 @@ hirsel_test(
         "//third-party:sha2",
     ],
     bin_exes = {},
-    shards = 5,
+    shards = 27,
     costs = "//tools/buck2:test-costs/hirsel-driver-test-it.tsv",
     data = glob([
         "conformance/**",
@@ -1655,7 +1655,7 @@ hirsel_test(
         "//third-party:sha2",
     ],
     bin_exes = {},
-    shards = 6,
+    shards = 12,
     costs = "//tools/buck2:test-costs/hirsel-driver-test-it-stdlib.tsv",
     data = glob([
         "conformance/**",
@@ -2951,6 +2951,7 @@ hirsel_test(
         "//third-party:tempfile",
     ],
     bin_exes = {},
+    shards = 2,
     costs = "//tools/buck2:test-costs/hirsel-pipeline-tests-test-front.tsv",
     data = glob([
         "conformance/**",
@@ -3031,7 +3032,7 @@ hirsel_test(
         "//third-party:tempfile",
     ],
     bin_exes = {},
-    shards = 4,
+    shards = 7,
     costs = "//tools/buck2:test-costs/hirsel-pipeline-tests-test-rc.tsv",
     data = glob([
         "conformance/**",

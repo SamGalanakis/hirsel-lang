@@ -246,7 +246,7 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
             name = name if shards == 1 else "{}-shard-{}".format(name, shard + 1),
             shard_index = shard,
             shards = shards if shards > 1 else 0,
-            costs = costs if shards > 1 else None,
+            costs = costs,
             labels = [],
             exec_compatible_with = _test_platform(name),
             pool = not TESTS_ON_HOST,

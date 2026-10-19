@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import contextlib
 import fcntl
 import json
@@ -962,18 +963,30 @@ PASS, FAIL, SKIP, OMITTED, FATAL, TIMED_OUT = 1, 2, 3, 4, 5, 6
 STATUS = {PASS: 'pass', FAIL: 'FAIL', SKIP: 'skip', OMITTED: 'omitted', FATAL: 'FATAL', TIMED_OUT: 'TIMEOUT'}
 
 
-def test_results(event_log) -> dict[str, dict]:
+def test_results(event_log, *, history=None) -> dict[str, dict]:
     """Each test's TestResult event from a `buck2 test` event log, by short name."""
     events = subprocess.run([str(BUCK2), 'log', 'show', str(event_log)], cwd=ROOT, check=True,
                             stdout=subprocess.PIPE, text=True, errors='replace').stdout
-    results = {}
+    results, rows = {}, []
     for line in events.splitlines():
         if '"TestResult"' not in line:
             continue
-        data = json.loads(line).get('Event', {}).get('data', {}).get('Instant', {}).get('data', {})
+        event = json.loads(line).get('Event', {})
+        data = event.get('data', {}).get('Instant', {}).get('data', {})
         if result := data.get('TestResult'):
-            results[short(result['name'])] = dict(status=result.get('status'), details=result.get('details') or '',
-                                                  seconds=(result.get('duration_us') or 0) / 1e6)
+            stamp = event.get('timestamp')
+            date = (datetime.fromtimestamp(stamp[0] + stamp[1] / 1e9, timezone.utc) if stamp
+                    else datetime.now(timezone.utc)).isoformat()
+            name = short(result['name'])
+            seconds = (result.get('duration_us') or 0) / 1e6
+            results[name] = dict(status=result.get('status'), details=result.get('details') or '', seconds=seconds)
+            match = re.fullmatch(r'(.+)-shard-(\d+)', name)
+            costs = event_logs.case_costs(result.get('details') or '')
+            rows.append(dict(gate=Path(event_log).name.removesuffix('.pb.zst'),
+                             target=match[1] if match else name, shard=match[2] if match else '',
+                             duration_seconds=seconds, date=date, status=result.get('status'),
+                             case_costs=json.dumps(costs, sort_keys=True, separators=(',', ':')) if costs else ''))
+    (event_logs.test_history() if history is None else history).append(rows)
     return results
 
 

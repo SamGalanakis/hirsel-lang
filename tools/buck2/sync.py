@@ -177,7 +177,7 @@ def seeded(source_dir: pathlib.Path, crate_root: pathlib.Path) -> bool:
 
 # Test binaries whose cases are split over parallel targets. Each has a table of
 # measured seconds per case on the pool (test-costs/<binary>.tsv, written by
-# test_costs.py). A binary gets enough shards that its total over TEST_THREADS
+# test_costs.py). A binary gets enough shards that its total over its granted CPUs
 # concurrent cases is at most SHARD_SECONDS per shard, and test_launcher.sh
 # deals the cases out longest first. SHARD_SECONDS leaves room for the slow
 # worker class, for pool load (the same case measured up to 4x slower on a
@@ -198,9 +198,11 @@ SHARDED = [
 CASE_SHARDED = {
     "hirsel-cli-test-examples": "crates/hirsel-cli/tests/examples.rs",
 }
-TEST_THREADS = 4
 SHARD_SECONDS = 40
 COSTS = HERE / "test-costs"
+# The other tables are stale too. Until real gate runs refresh them, the host
+# keeps their coverage advisory rather than starting four measurement campaigns.
+REQUIRED_COSTS = {"hirsel-driver-test-it"}
 
 
 def shards(binary: str) -> tuple[int, str | None]:
@@ -217,7 +219,49 @@ def shards(binary: str) -> tuple[int, str | None]:
     if not table.is_file():
         raise SystemExit(f"{binary} is sharded but has no {relative(table)}; measure it (tools/buck2/test_costs.py)")
     total = sum(float(line.split("\t")[1]) for line in table.read_text().splitlines())
-    return max(1, math.ceil(total / (TEST_THREADS * SHARD_SECONDS))), f"//tools/buck2:{table.relative_to(HERE)}"
+    sizes = json.loads((HERE / "test-sizes.json").read_text())
+    cpu = sizes[binary]["cpu_count"]
+    if type(cpu) is not int or not 1 <= cpu <= 4:
+        raise ValueError(f"{binary}: cpu_count must be in 1..4 (test launcher's thread ceiling)")
+    return max(1, math.ceil(total / (cpu * SHARD_SECONDS))), f"//tools/buck2:{table.relative_to(HERE)}"
+
+
+def cost_coverage(inventories: dict[str, set[str]]) -> list[str]:
+    """Only live cases count toward coverage; stale cost rows cannot hide gaps."""
+    errors = []
+    for binary in SHARDED:
+        cases = inventories.get(binary, set())
+        measured = {line.split("\t")[0] for line in (COSTS / f"{binary}.tsv").read_text().splitlines()}
+        missing = cases - measured
+        message = None
+        if not cases:
+            message = f"{binary}: no case inventory returned"
+        elif len(missing) * 100 > len(cases) * 5:
+            message = (f"{binary}: {len(missing)}/{len(cases)} cases ({len(missing) / len(cases):.1%}) "
+                       f"have no cost row; re-measure with tools/buck2/test_costs.py: " + ", ".join(sorted(missing)))
+        if message:
+            if binary in REQUIRED_COSTS:
+                errors.append(message)
+            else:
+                print(f"warning: {message}", file=sys.stderr)
+    return errors
+
+
+def check_cost_coverage() -> list[str]:
+    """Ask libtest on the pool, including macro-generated and ignored cases.
+
+    An empty positional filter makes shard 1 list the whole binary. This runs
+    no test bodies, and avoids maintaining a second Rust/macro parser here.
+    """
+    from test_costs import configured_shards, inventory
+
+    targets = [f"//:{binary}-shard-1" if configured_shards(binary) > 1 else f"//:{binary}" for binary in SHARDED]
+    command = [str(ROOT / ".buck2/bin/buck2"), "test", "-c", "hirsel.tests=focus", *targets, "--",
+               "--test-arg=--list", "--test-arg=--include-ignored", "--test-arg=--format=terse", "--test-arg="]
+    result = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode:
+        return ["cost inventory failed:\n" + result.stdout]
+    return cost_coverage(inventory(result.stdout.splitlines()))
 
 
 def dev_opt_levels() -> dict[str, int]:
@@ -862,6 +906,9 @@ def main() -> int:
                  or (ROOT / path).read_bytes() != (scratch / path).read_bytes()]
     if stale:
         print("Buck2 build files are stale; run python3 tools/buck2/sync.py: " + ", ".join(stale), file=sys.stderr)
+        return 1
+    if errors := check_cost_coverage():
+        print("\n".join(errors), file=sys.stderr)
         return 1
     return 0
 

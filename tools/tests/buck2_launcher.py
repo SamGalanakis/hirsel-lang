@@ -23,7 +23,7 @@ CASES = {
 HARNESS = '''#!/usr/bin/env python3
 import argparse, json, os, sys
 parser = argparse.ArgumentParser()
-for option in ('ignored', 'include-ignored', 'exact', 'list', 'nocapture', 'show-output', 'quiet'):
+for option in ('ignored', 'include-ignored', 'exact', 'list', 'nocapture', 'show-output', 'quiet', 'report-time'):
     parser.add_argument('--' + option, action='store_true')
 parser.add_argument('--skip', action='append', default=[])
 for option in ('format', 'color', 'test-threads', 'logfile', 'shuffle-seed'):
@@ -41,7 +41,7 @@ if args.list:
     for name in selected: print(name + ': test')
 else:
     with open(os.environ['OBSERVED'], 'w') as output:
-        json.dump(dict(argv=sys.argv[1:], cases=[name for name in selected
+        json.dump(dict(argv=sys.argv[1:], bootstrap=os.environ.get('RUSTC_BOOTSTRAP'), cases=[name for name in selected
                   if args.ignored or args.include_ignored or not cases[name]]), output)
     for name in selected:
         status = 'ok' if args.ignored or args.include_ignored or not cases[name] else 'ignored'
@@ -128,6 +128,18 @@ class LauncherSelection(LauncherFixture):
             shards[shard] = set(result['cases'])
         self.assertEqual(shards, {'1/2': {'pool::full_gate_heap', 'pool::full_gate_prefix'},
                                   '2/2': {'pool::full_gate_prefix_host', 'pool::other', 'pool::smoke'}})
+
+    def test_cost_tables_enable_timing_once_including_unsharded_binaries(self):
+        costs = self.root / 'costs.tsv'
+        costs.write_text('pool::smoke\t1\n')
+        self.env['HIRSEL_TEST_COSTS'] = str(costs)
+        for shard in ('', '1/2'):
+            result, _ = self.run_cases(shard=shard)
+            self.assertIn('--report-time', result['argv'])
+            self.assertIn('-Zunstable-options', result['argv'])
+            self.assertEqual(result['bootstrap'], '1')
+        result, _ = self.run_cases('-Z', 'unstable-options', '--report-time')
+        self.assertEqual(result['argv'].count('--report-time'), 1)
 
     def test_flags_and_values_do_not_select_cases(self):
         actual = []

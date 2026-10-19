@@ -307,8 +307,8 @@ The gate selects every shard, so independent examples can run in parallel withou
 one long action holding the whole examples suite's reservation.
 
 A binary in `SHARDED` (`sync.py`) has a table of measured seconds per case,
-`test-costs/<binary>.tsv`. `sync.py` gives it `ceil(total / (TEST_THREADS *
-SHARD_SECONDS))` shards, and `test_launcher.sh` deals its listed cases out
+`test-costs/<binary>.tsv`. `sync.py` gives it `ceil(total / (cpu_count *
+SHARD_SECONDS))` shards using its pool grant from `test-sizes.json`, and `test_launcher.sh` deals its listed cases out
 longest first to the least loaded shard; a case without a row costs the
 table's mean. After tests are added, slowed or sped up, re-measure every
 shard of the binary with libtest's timing report and regenerate:
@@ -322,6 +322,68 @@ python3 tools/buck2/sync.py
 
 Shard flags never select cases; only positional filters do, and a filtered
 run executes in shard 1.
+
+After checking generated files, `sync.py --check` lists each cost-balanced
+binary's cases on the pool (including ignored and macro-generated cases, without
+running test bodies). It fails if more than 5% of the driver's cases have no
+cost row, or if listing fails. The stdlib, front, rc and rt binaries warn at
+the same threshold until real gate results refresh their stale tables; no extra
+measurement campaigns run for them. Stale rows do not contribute to coverage. Prepare the worktree first;
+the listing can build changed harnesses. Measure costs before regenerating the
+graph so `test_costs.py` can recognize a complete set of the old shards and
+remove deleted cases.
+
+Each gate appends every Buck2 TestResult to
+`~/.cache/hirsel-buck2/test-results.tsv`: `gate`, `target`, `shard`,
+`duration_seconds`, `date` (UTC), and `status` (Buck2's numeric status).
+The gate identifier is its unique event-log filename without `.pb.zst`.
+Unsharded targets have an empty shard. This compact file survives the compressed
+event logs' three-day rotation. The host selects the sink with
+`HIRSEL_TEST_HISTORY=/path/to/results.tsv`, or disables it with
+`HIRSEL_TEST_HISTORY=none`. The default file implementation locks concurrent
+appends and flushes on close; it does not fsync each row. Tests can inject a
+simulated sink into `gating.test_results`.
+
+Cost-balanced binaries emit libtest's per-case `--report-time` output in normal
+gates, including when their current graph needs only one shard. The launcher
+enables the pinned harness's unstable timing option through `RUSTC_BOOTSTRAP=1`.
+The TSV's additional `case_costs` column holds a JSON object of successful case
+names to seconds (empty for results without timings). Refresh a table from real
+gates without another measurement run:
+
+```sh
+python3 tools/buck2/test_costs.py --from-history --binary hirsel-rt-test-it
+python3 tools/buck2/sync.py
+```
+
+`--binary all` merges every cost-balanced binary; `--since` restricts the
+history and `--report-only` leaves tables untouched. The newest observation of
+each successful case wins; unobserved cases retain their existing cost. Historical
+rows without per-case timings cannot supply missing costs.
+
+For a cheap report-time overhead probe, compile the existing profile harness
+and run its single assertion case, interleaving the command below with the same
+command plus `-Zunstable-options --report-time`. Use ten seeded pairs, hold
+`cpu31-timing.lock` for the session, and record CPU 15's busy share from
+`/proc/stat` around every sample:
+
+```sh
+tools/capped tools/buck2/toolchains/rust-files/bin/rustc --test tools/tests/test_tool_profile.rs -o /tmp/report-time-probe
+tools/capped env RUSTC_BOOTSTRAP=1 taskset -c 31 perf stat -e cycles,instructions,task-clock \
+  /tmp/report-time-probe debug_assertions_are_enabled --exact
+```
+
+Report shard medians and maxima over at least five distinct gates per shard:
+
+```sh
+python3 tools/buck2/test_costs.py --history --since 2026-10-19T20:00:00+00:00
+```
+
+Use `--history /path/to/results.tsv` for another file, `--binary <target>` for
+another binary, or `--min-gates 1` to inspect early data. The report prints
+partial data but exits unsuccessfully until every observed shard has enough
+gates. Gate durations describe pool experience; they are not a cross-session
+performance verdict. Keep before/after histories separate when shard counts change.
 
 ## Prelude overlay
 
