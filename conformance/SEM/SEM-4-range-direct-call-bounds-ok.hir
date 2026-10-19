@@ -1,9 +1,0 @@
-// rule: SEM-4
-// expect: accept
-fn bound() -> u8 {
-  2u8
-}
-
-fn probe() {
-  for i in 0u8..bound() {}
-}

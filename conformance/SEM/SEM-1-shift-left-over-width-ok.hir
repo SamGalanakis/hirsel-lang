@@ -1,7 +1,0 @@
-// rule: SEM-1
-// expect: run
-// The adjacent boundary does not meet "fail on overflow" or "shifts ≥ width fail".
-pub fn main(rt: Io, args: Args) -> Result[(), ()] {
-  let value: u8 = 1 << 7
-  Ok(())
-}

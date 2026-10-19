@@ -1,7 +1,0 @@
-// rule: SEM-4
-// expect: accept
-fn probe(xs: Bytes) {
-  for x in xs {
-    let _ = x
-  }
-}

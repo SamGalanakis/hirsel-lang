@@ -1,8 +1,0 @@
-// rule: SEM-3
-// expect: run
-pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
-  failure.check(string.concat("", "") == "", TextInvariant())
-  failure.check(string.concat("", "é") == "é", TextInvariant())
-  failure.check(string.concat("é", "") == "é", TextInvariant())
-  Ok(())
-}

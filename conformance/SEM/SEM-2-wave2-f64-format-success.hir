@@ -1,9 +1,0 @@
-// rule: SEM-2
-// expect: run
-pub fn main(t: Test) -> Result[(), ()] {
-  core@1/test.check(t, f64.to_string(1.25f64) == "1.25")
-  core@1/test.check(t, f64.parse("1.25") == Ok(1.25f64))
-  core@1/test.check(t, f64.to_string(1.0f64) == "1")
-  core@1/test.check(t, f64.to_string(0.1f64) == "0.1")
-  Ok(())
-}

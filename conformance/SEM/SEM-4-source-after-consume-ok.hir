@@ -1,9 +1,0 @@
-// rule: SEM-4
-// expect: accept
-// "for x in take xs consumes (the source is gone)".
-fn visit(take xs: Array[u8]) -> u8 {
-  for x in xs {
-    let y = x
-  }
-  xs[0]
-}

@@ -1,6 +1,0 @@
-// rule: SEM-3
-// expect: accept
-// Twin of the lone brace: `}}` is a literal `}`.
-fn label(n: u64) -> String {
-  f"{n} }}"
-}

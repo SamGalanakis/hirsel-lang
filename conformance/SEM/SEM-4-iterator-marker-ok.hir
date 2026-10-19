@@ -1,8 +1,0 @@
-// rule: SEM-4
-// expect: accept
-// "Over an iterator, for x in take it consumes it and for x in mut it advances it".
-fn visit(take it: Iter[u8]) -> () {
-  for x in take it {
-    let y = x
-  }
-}

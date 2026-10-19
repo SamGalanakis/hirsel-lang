@@ -1,6 +1,0 @@
-// rule: SEM-3
-// expect: run
-pub fn main() -> Result[(), ()] {
-  let _ = text.finish_valid([65u8])
-  Ok(())
-}

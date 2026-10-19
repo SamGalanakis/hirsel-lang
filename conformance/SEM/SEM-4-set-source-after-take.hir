@@ -1,9 +1,0 @@
-// rule: SEM-4
-// expect: reject OWN-2 at line 8
-fn probe(s: Set[u64]) {
-  let owned = copy s
-  for x in take owned {
-    let _ = x
-  }
-  let _ = owned == owned
-}

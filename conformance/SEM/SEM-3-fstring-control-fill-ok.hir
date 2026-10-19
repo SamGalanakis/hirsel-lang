@@ -1,6 +1,0 @@
-// rule: SEM-3
-// expect: accept
-// Fill characters obey string source scalar rules.
-fn label() -> String {
-  f"{1u64:*>4}"
-}

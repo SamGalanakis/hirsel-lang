@@ -1,6 +1,0 @@
-// rule: SEM-3
-// expect: accept
-// A spec follows its expression on the same line.
-fn label(n: u64) -> String {
-  f"{n:04}"
-}

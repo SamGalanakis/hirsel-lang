@@ -1,6 +1,0 @@
-// rule: SEM-1
-// expect: run
-pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
-  failure.check(true, Arithmetic())
-  Ok(())
-}

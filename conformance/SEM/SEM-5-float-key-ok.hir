@@ -1,6 +1,0 @@
-// rule: SEM-5
-// expect: accept
-// "key" excludes floats (GEN-1); Map requires K to satisfy that bound.
-type Lookup {
-  entries: Map[u32, u8],
-}

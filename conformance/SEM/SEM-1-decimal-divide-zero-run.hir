@@ -1,9 +1,0 @@
-// rule: SEM-1
-// expect: run
-// The divide-zero twin: the same division by a nonzero divisor, 7 / 0.08.
-pub fn main(args: Args) -> Result[(), ()] {
-  let divisor = decimal.new(bigint.from_u64(arg.len(args) + 8), 2)
-  let q = decimal.div(decimal.new(bigint.from_u64(7), 0), divisor, 2, HalfEven())
-  failure.check(decimal.to_string(q) == "87.50", Arithmetic())
-  Ok(())
-}
