@@ -1,4 +1,5 @@
 use super::super::*;
+use hirsel_intern::Symbol;
 use hirsel_resolve::{ManifestFixture, ManifestIndex};
 use hirsel_span::SourceMap;
 use std::sync::Arc;
@@ -86,17 +87,8 @@ impl SignatureProvider for Registry {
             .cloned()
             .ok_or(QueryError::NotImplemented)
     }
-    fn lookup(
-        &mut self,
-        context: &ast::FileContext,
-        path: &ast::Path,
-        symbols: &Interner,
-    ) -> LookupOutput {
-        let names: Vec<_> = path
-            .segments
-            .iter()
-            .map(|s| symbols.resolve(*s).unwrap())
-            .collect();
+    fn lookup(&mut self, context: &ast::FileContext, path: &ast::Path) -> LookupOutput {
+        let names: Vec<_> = path.segments.iter().map(|s| s.as_str()).collect();
         let mut p = self::path(&names.join("."));
         if let Some(package) = &path.package {
             p.0.package = package.clone();
@@ -107,7 +99,7 @@ impl SignatureProvider for Registry {
         }
         let result = self
             .index
-            .lookup(context, path, symbols)
+            .lookup(context, path)
             .ok()
             .or_else(|| self.signatures.contains_key(&p).then_some(p))
             .or_else(|| self.signatures.contains_key(&core).then_some(core))
@@ -124,12 +116,11 @@ pub(super) fn parse(
 ) -> (ast::SyntaxFile, SourceMap, Vec<Diagnostic>) {
     let mut map = SourceMap::default();
     let file = map.add("body.hir", source.into()).unwrap();
-    let mut symbols = Interner::default();
     for s in symbol_seed {
-        symbols.intern(s);
+        Symbol::intern(s);
     }
-    let lex = hirsel_lexer::lex(file, &map, &mut symbols);
-    let parsed = hirsel_parser::parse(file, lex.tokens, &context(), &map, &symbols);
+    let lex = hirsel_lexer::lex(file, &map);
+    let parsed = hirsel_parser::parse(file, lex.tokens, &context(), &map);
     let mut ds = lex.diagnostics;
     ds.extend(parsed.diagnostics);
     (parsed.syntax, map, ds)
@@ -320,7 +311,7 @@ pub(super) fn registry(file: &ast::SyntaxFile) -> Registry {
                 td.generics = generics
                     .iter()
                     .map(|g| GenericParameter::Type {
-                        name: types.symbols.resolve(g.name).unwrap().into(),
+                        name: g.name.as_str().into(),
                         bounds: vec![].into(),
                     })
                     .collect();
@@ -479,13 +470,7 @@ pub(super) fn normalize_file(
     for _ in 0..file.roots.len() + 1 {
         let mut next = vec![];
         for id in pending {
-            let r = hirsel_resolve::resolve_item(
-                file,
-                id,
-                &file.symbols,
-                &registry.index.clone(),
-                registry,
-            );
+            let r = hirsel_resolve::resolve_item(file, id, &registry.index.clone(), registry);
             let item = &file.tree.items[id.0 as usize];
             let ctx = ast::FileContext {
                 package: item.definition.0.package.clone(),
@@ -495,7 +480,6 @@ pub(super) fn normalize_file(
                 hirsel_check_protocol::header::Input {
                     tree: &file.tree,
                     item: id,
-                    symbols: &file.symbols,
                     context: &ctx,
                     resolution: &r,
                     metadata: &metadata,
@@ -534,13 +518,8 @@ pub(super) fn check_source(source: &str) -> (Vec<Diagnostic>, Vec<Output>, Sourc
     }
     let mut outputs = vec![];
     for id in &file.roots {
-        let resolution = hirsel_resolve::resolve_item(
-            &file,
-            *id,
-            &file.symbols,
-            &registry.index.clone(),
-            &mut registry,
-        );
+        let resolution =
+            hirsel_resolve::resolve_item(&file, *id, &registry.index.clone(), &mut registry);
         assert!(
             resolution.query.diagnostics.is_empty(),
             "resolver {source}: {:?}",
@@ -552,7 +531,6 @@ pub(super) fn check_source(source: &str) -> (Vec<Diagnostic>, Vec<Output>, Sourc
                 body: Input {
                     tree: &file.tree,
                     item: *id,
-                    symbols: &file.symbols,
                     context: &context(),
                     resolution: &resolution,
                     signature: &sig,

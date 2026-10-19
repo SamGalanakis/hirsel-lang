@@ -6,20 +6,19 @@ Allowed dependencies: hirsel-span, hirsel-intern, hirsel-syntax, hirsel-diag; sh
 
 Invariants and boundary:
 
-- Consumes FileId + SourceMap and mutable Interner; produces Vec<Token> plus diagnostics.
+- Consumes FileId + SourceMap; produces Vec<Token> plus diagnostics. Identifiers and labels are interned as process-global `Symbol`s.
 - Keep raw trivia/newlines and invalid tokens; no semicolon insertion (LANG-1).
 - Longest-match punctuation and literal grammar follow docs/spec/syntax.md, including invalid suffixes (SEM-1/3).
 - No parser, type information or filesystem assumptions; Invalid UTF-8 is SEM-3 at its original valid-prefix boundary; the driver rejects it before lexing. Oversize input is a tooling error.
 
 Public API:
 
-- `lex(file: FileId, sources: &SourceMap, interner: &mut Interner) -> LexOutput`;
+- `lex(file: FileId, sources: &SourceMap) -> LexOutput`;
   `LexOutput` owns `tokens: Vec<Token>` and `diagnostics: Vec<Diagnostic>`.
 - Lexing never inserts semicolons or decides whether a statement is complete; a
   parser that needs physical LF/CRLF boundaries scans the token's source range.
-- Every identifier and every emitted keyword spelling is interned. Keywords stay
-  `Keyword` even after `.`; the parser can recover a member's `Symbol` from its
-  immutable interner snapshot for spellings such as `x.type`. A keyword used as
+- Every identifier and label is interned. Keywords stay `Keyword` even after
+  `.`; the parser interns a member's spelling such as `x.type`. A keyword used as
   a declaration name is a parser LANG-14 error, not a lexer error. Literal spelling stays in the source span;
   numeric range/type checking and escape decoding belong to later phases.
 
@@ -59,9 +58,8 @@ stack of open holes counts the braces each hole's expression opens, so a hole cl
 at the first `}` that closes none. Piece text follows string rules plus `{{`/`}}`;
 a lone `}` is SEM-3. Inside a hole, a quote that closes no string on its line is the
 f-string's own quote: one SEM-3 diagnostic for the missing `}` and one Invalid
-token. A hole still open at EOF is SEM-3. Each head interns `List`, `u8`,
-`$fmt<depth>` and `$mark<depth>`, and each spec token interns its `name$` names,
-for the parser's desugaring, which reads an immutable snapshot.
+token. A hole still open at EOF is SEM-3. The parser's desugaring interns the names
+it introduces (`List`, `u8`, `$fmt<depth>`, `$mark<depth>` and spec `name$` names).
 
 A top-level hole colon starts one raw `Format(Spec)` token through the options,
 ending before `}`; delimiters inside the expression protect their own colons.

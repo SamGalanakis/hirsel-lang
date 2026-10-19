@@ -102,7 +102,7 @@ impl<'a> Printer<'a> {
         }
     }
     fn name(&self, s: Symbol) -> Printed {
-        Some(token(self.file.symbols.resolve(s)?))
+        Some(token(s.as_str()))
     }
     fn path(&self, p: &Path) -> Printed {
         let mut ds = Vec::new();
@@ -639,7 +639,7 @@ impl<'a> Printer<'a> {
         let Some(label) = label else {
             return Some(cat([]));
         };
-        let spelling = self.file.symbols.resolve(label)?;
+        let spelling = label.as_str();
         Some(if declaration {
             cat([token(format!("'{spelling}")), token(":"), Space])
         } else {

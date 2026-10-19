@@ -23,7 +23,7 @@ mod metadata;
 pub use iteration::*;
 mod properties;
 pub use authority::*;
-use hirsel_intern::{Interner, Symbol};
+use hirsel_intern::Symbol;
 use hirsel_syntax::FileContext;
 pub use hirsel_syntax::{Bound, PassingMode};
 use hirsel_syntax::{ContentHash, ContractKind, DefPath, ExprId, PatternId, TypeExprId};
@@ -1084,12 +1084,7 @@ pub struct LookupOutput {
 /// Failed lookups must record the manifest hash, so adding a name invalidates failures.
 pub trait SignatureProvider {
     fn signature(&mut self, definition: &DefPath) -> Result<SignatureRef, QueryError>;
-    fn lookup(
-        &mut self,
-        context: &FileContext,
-        path: &hirsel_syntax::Path,
-        symbols: &Interner,
-    ) -> LookupOutput;
+    fn lookup(&mut self, context: &FileContext, path: &hirsel_syntax::Path) -> LookupOutput;
 }
 
 #[cfg(test)]

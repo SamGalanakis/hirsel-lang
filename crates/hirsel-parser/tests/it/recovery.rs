@@ -57,25 +57,23 @@ fn nesting_is_an_incomplete_tooling_outcome() {
 }
 
 #[test]
-fn stale_spans_and_missing_keyword_symbols_are_diagnosed_without_panicking() {
-    use hirsel_intern::Interner;
+fn stale_spans_are_diagnosed_and_hand_built_keyword_members_parse() {
+    use hirsel_intern::Symbol;
     use hirsel_span::{FileId, SourceMap, Span};
     let mut sources = SourceMap::default();
     let file = sources
         .add("stale.hir", "fn f() { x.type }".into())
         .unwrap();
-    let mut names = Interner::default();
-    let mut tokens = support::tokenize(file, sources.file(file).unwrap().text(), &mut names);
+    let mut tokens = support::tokenize(file, sources.file(file).unwrap().text());
     for token in &mut tokens {
         token.span.file = FileId(u32::MAX);
         token.span.start = u32::MAX;
         token.span.end = 0;
     }
-    let out = hirsel_parser::parse(file, tokens, &support::context(), &sources, &names);
+    let out = hirsel_parser::parse(file, tokens, &support::context(), &sources);
     assert!(!out.diagnostics.is_empty());
-    let mut names = Interner::default();
-    let f = names.intern("f");
-    let x = names.intern("x");
+    let f = Symbol::intern("f");
+    let x = Symbol::intern("x");
     let kinds = [
         TokenKind::Keyword(Keyword::Fn),
         TokenKind::Ident(f),
@@ -106,19 +104,15 @@ fn stale_spans_and_missing_keyword_symbols_are_diagnosed_without_panicking() {
             span: Span { file, start, end },
         })
         .collect();
-    let out = hirsel_parser::parse(file, tokens, &support::context(), &sources, &names);
-    assert!(
-        out.diagnostics
-            .iter()
-            .any(|d| d.message.contains("symbol snapshot"))
-    );
+    // No lexer ran, so nothing interned `type`: the parser interns the member.
+    let out = hirsel_parser::parse(file, tokens, &support::context(), &sources);
+    assert!(out.diagnostics.is_empty(), "{:?}", out.diagnostics);
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
     #[test]
     fn arbitrary_token_sequences_never_panic(words in prop::collection::vec(0usize..99, 0..512), corrupt in any::<bool>()) {
-        use hirsel_intern::Interner;
         use hirsel_span::{FileId, SourceMap};
         // Covers every punctuation/keyword category, trivia, invalids, literals,
         // identifiers and EOF at arbitrary positions, independent of lexical validity.
@@ -133,25 +127,23 @@ proptest! {
         let source = words.iter().map(|&i| WORDS[i]).collect::<Vec<_>>().join(" ");
         let mut sources = SourceMap::default();
         let file = sources.add("random.hir", source.clone()).unwrap();
-        let mut names = Interner::default();
         // Build each entry individually so concatenation cannot change token categories.
         let mut tokens = vec![];
         let mut offset = 0u32;
         for &i in &words {
-            let mut entry = support::tokenize(file, WORDS[i], &mut names);
+            let mut entry = support::tokenize(file, WORDS[i]);
             if !WORDS[i].is_empty() { entry.pop(); }
             for mut token in entry {
                 token.span.start += offset; token.span.end += offset;
                 if corrupt {
                     token.span.file = FileId(u32::MAX);
-                    if matches!(token.kind, TokenKind::Ident(_)) { token.kind = TokenKind::Ident(hirsel_intern::Symbol(u32::MAX)); }
                 }
                 tokens.push(token);
             }
             offset += WORDS[i].len() as u32 + 1;
         }
         let original = tokens.clone();
-        let output = hirsel_parser::parse(file, tokens, &support::context(), &sources, &names);
+        let output = hirsel_parser::parse(file, tokens, &support::context(), &sources);
         prop_assert_eq!(&output.syntax.tokens, &original);
         for expr in &output.syntax.tree.expressions {
             prop_assert!(expr.origin.tokens.start <= expr.origin.tokens.end);

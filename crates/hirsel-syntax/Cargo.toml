@@ -10,3 +10,10 @@ serde = { version = "1", features = ["derive", "rc"] }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-intern = { path = "../hirsel-intern" }
 sha2 = "0.10"
+
+[features]
+# Seeded session id assignment (hirsel_intern's id-salt) for oracle O1.
+id-salt = ["hirsel-intern/id-salt"]
+
+[dev-dependencies]
+hirsel-syntax = { path = ".", features = ["id-salt"] }

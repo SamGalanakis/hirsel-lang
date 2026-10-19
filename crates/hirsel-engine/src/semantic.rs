@@ -253,7 +253,6 @@ impl ResolverPhase for ResolverAdapter {
         &self,
         file: Arc<SyntaxFile>,
         id: ItemId,
-        symbols: &Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
         let item = &file.tree.items[id.0 as usize];
@@ -261,7 +260,6 @@ impl ResolverPhase for ResolverAdapter {
         let result = hirsel_resolve::resolve_view(
             &file,
             hirsel_resolve::ResolveView::Item(id),
-            symbols,
             &index,
             provider,
             &resolver_expected(),
@@ -287,7 +285,6 @@ impl SignaturePhase for SignatureAdapter {
     fn signature_items(
         &self,
         candidates: &[(Arc<SyntaxFile>, ItemId)],
-        symbols: &Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         // Visit the later duplicate first so normalization reports overloading before
@@ -296,16 +293,15 @@ impl SignaturePhase for SignatureAdapter {
             .get(1)
             .or_else(|| candidates.first())
             .ok_or(QueryError::NotImplemented)?;
-        self.signature_with_candidates(file.clone(), *id, symbols, provider, Some(candidates))
+        self.signature_with_candidates(file.clone(), *id, provider, Some(candidates))
     }
     fn signature(
         &self,
         file: Arc<SyntaxFile>,
         id: ItemId,
-        symbols: &Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        self.signature_with_candidates(file, id, symbols, provider, None)
+        self.signature_with_candidates(file, id, provider, None)
     }
 }
 impl SignatureAdapter {
@@ -313,7 +309,6 @@ impl SignatureAdapter {
         &self,
         file: Arc<SyntaxFile>,
         id: ItemId,
-        symbols: &Interner,
         provider: &mut dyn SignatureProvider,
         candidates: Option<&[(Arc<SyntaxFile>, ItemId)]>,
     ) -> Result<QueryOutput<Signature>, QueryError> {
@@ -362,7 +357,6 @@ impl SignatureAdapter {
             Some(hirsel_resolve::resolve_view(
                 &file,
                 hirsel_resolve::ResolveView::Header(id),
-                symbols,
                 &index,
                 provider,
                 &resolver_expected(),
@@ -392,7 +386,6 @@ impl SignatureAdapter {
             hirsel_check_protocol::header::Input {
                 tree: &file.tree,
                 item: id,
-                symbols,
                 context: &context,
                 resolution: &resolution,
                 metadata: &module.metadata,

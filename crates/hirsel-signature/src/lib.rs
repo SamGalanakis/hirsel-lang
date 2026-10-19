@@ -100,11 +100,11 @@ fn normalize_inner(
         && item
             .attributes
             .iter()
-            .any(|a| input.symbols.resolve(a.name) == Some("capability"))
+            .any(|a| a.name.as_str() == "capability")
         && item
             .attributes
             .iter()
-            .any(|a| input.symbols.resolve(a.name) == Some("serializable"))
+            .any(|a| a.name.as_str() == "serializable")
     {
         return Err(diagnostic(
             const { RuleId::of("SER-1") },
@@ -131,7 +131,7 @@ fn normalize_inner(
             let selected: Vec<_> = item
                 .attributes
                 .iter()
-                .filter_map(|a| input.symbols.resolve(a.name))
+                .map(|a| a.name.as_str())
                 .filter(|name| matches!(*name, "test" | "bench"))
                 .collect();
             if selected.len() > 1 {
@@ -306,7 +306,7 @@ fn normalize_inner(
                 n.dependencies = public_deps.clone();
             }
             if let ast::TypeBody::Distinct { field, .. } = body {
-                n.parameters = vec![Some(n.name(field.name)?)];
+                n.parameters = vec![Some(field.name.as_str().to_owned())];
             }
             let fact = if let ast::TypeBody::Distinct { fact: Some(e), .. } = body {
                 if !repr.is_some_and(|r| n.satisfies(r, Bound::Plain)) {
@@ -383,7 +383,7 @@ fn normalize_inner(
                                             span: field.origin.span,
                                             message: format!(
                                                 "field `{}` and its destruction retain {held:?}",
-                                                n.name(field.name)?
+                                                field.name
                                             ),
                                         });
                                     }
@@ -632,22 +632,9 @@ impl Normalizer<'_, '_> {
         self.proof_failure.borrow_mut().get_or_insert(error);
         fallback
     }
-    fn name(&self, s: hirsel_intern::Symbol) -> Result<String, QueryError> {
-        self.input
-            .symbols
-            .resolve(s)
-            .map(str::to_owned)
-            .ok_or_else(|| {
-                diagnostic(
-                    const { RuleId::of("LANG-6") },
-                    self.span,
-                    "symbol does not belong to input interner",
-                )
-            })
-    }
     fn path_name(&self, p: &ast::Path) -> Option<&str> {
         if p.package.is_none() && p.segments.len() == 1 {
-            self.input.symbols.resolve(p.segments[0])
+            Some(p.segments[0].as_str())
         } else {
             None
         }
@@ -659,7 +646,7 @@ impl Normalizer<'_, '_> {
         let mut names = BTreeSet::new();
         gs.iter()
             .map(|g| {
-                let name = self.name(g.name)?;
+                let name = g.name.as_str().to_owned();
                 if !names.insert(name.clone()) {
                     return Err(diagnostic(
                         const { RuleId::of("GEN-1") },
@@ -690,7 +677,7 @@ impl Normalizer<'_, '_> {
         let mut result = Attributes::default();
         let mut seen = BTreeSet::new();
         for a in as_ {
-            let name = self.name(a.name)?;
+            let name = a.name.as_str().to_owned();
             if !seen.insert(name.clone()) {
                 return Err(diagnostic(
                     const { RuleId::of("LANG-6") },
@@ -770,7 +757,7 @@ impl Normalizer<'_, '_> {
                 }
                 "layout" => {
                     if let [ast::AttributeArgument::Name(s)] = a.arguments.as_slice() {
-                        if self.name(*s)? != "c" {
+                        if s.as_str() != "c" {
                             return Err(diagnostic(
                                 const { RuleId::of("LANG-7") },
                                 a.origin.span,
@@ -835,10 +822,7 @@ impl Normalizer<'_, '_> {
         &mut self,
         attributes: &[ast::Attribute],
     ) -> Result<Option<LoopSourceDeclaration>, QueryError> {
-        let Some(a) = attributes
-            .iter()
-            .find(|a| self.input.symbols.resolve(a.name) == Some("loop_source"))
-        else {
+        let Some(a) = attributes.iter().find(|a| a.name.as_str() == "loop_source") else {
             return Ok(None);
         };
         let [ast::AttributeArgument::LoopSource(s)] = a.arguments.as_slice() else {
@@ -865,10 +849,7 @@ impl Normalizer<'_, '_> {
         &mut self,
         attributes: &[ast::Attribute],
     ) -> Result<Option<ast::DefPath>, QueryError> {
-        let Some(a) = attributes
-            .iter()
-            .find(|a| self.input.symbols.resolve(a.name) == Some("format"))
-        else {
+        let Some(a) = attributes.iter().find(|a| a.name.as_str() == "format") else {
             return Ok(None);
         };
         let [ast::AttributeArgument::Format(s)] = a.arguments.as_slice() else {
@@ -927,8 +908,8 @@ impl Normalizer<'_, '_> {
         self.parameters = s
             .parameters
             .iter()
-            .map(|p| p.name.map(|n| self.name(n)).transpose())
-            .collect::<Result<_, _>>()?;
+            .map(|p| p.name.map(|n| n.as_str().to_owned()))
+            .collect();
         let mut names = BTreeSet::new();
         let mut labels = BTreeSet::new();
         for p in &s.parameters {
@@ -967,7 +948,7 @@ impl Normalizer<'_, '_> {
             && let Some(name) = s
                 .attributes
                 .iter()
-                .filter_map(|a| self.input.symbols.resolve(a.name))
+                .map(|a| a.name.as_str())
                 .find(|name| matches!(*name, "test" | "bench"))
         {
             return Err(diagnostic(
@@ -980,7 +961,7 @@ impl Normalizer<'_, '_> {
             && let Some(attribute) = s
                 .attributes
                 .iter()
-                .find(|a| self.input.symbols.resolve(a.name) == Some("track_caller"))
+                .find(|a| a.name.as_str() == "track_caller")
         {
             return Err(diagnostic(
                 const { RuleId::of("LANG-6") },
@@ -1007,8 +988,8 @@ impl Normalizer<'_, '_> {
                 self.current_parameter = current;
                 let ty = ty?;
                 Ok(Parameter {
-                    name: p.name.map(|n| self.name(n)).transpose()?,
-                    label: p.label.map(|n| self.name(n)).transpose()?,
+                    name: p.name.map(|n| n.as_str().to_owned()),
+                    label: p.label.map(|n| n.as_str().to_owned()),
                     passing: p.passing,
                     ty,
                 })
@@ -1290,9 +1271,7 @@ impl Normalizer<'_, '_> {
                 return Ok(d.clone());
             }
         }
-        self.provider
-            .lookup(self.input.context, p, self.input.symbols)
-            .result
+        self.provider.lookup(self.input.context, p).result
     }
     /// A SER-1 proof expands every nominal representation its schema reaches, not
     /// only the declarations this item names, so load (and depend on) those first.
@@ -1757,16 +1736,13 @@ impl Normalizer<'_, '_> {
             ast::TypeBody::Distinct { field, .. } => TypeKind::Record(
                 vec![Field {
                     growable: field.growable,
-                    name: self.name(field.name)?,
+                    name: field.name.as_str().to_owned(),
                     ty: self.part(field.ty)?,
                 }]
                 .into(),
             ),
             ast::TypeBody::Record(fs) => {
-                self.siblings = fs
-                    .iter()
-                    .map(|f| self.name(f.name))
-                    .collect::<Result<_, _>>()?;
+                self.siblings = fs.iter().map(|f| f.name.as_str().to_owned()).collect();
                 let mut seen = BTreeSet::new();
                 let mut fields = vec![];
                 for f in fs {
@@ -1779,7 +1755,7 @@ impl Normalizer<'_, '_> {
                     }
                     fields.push(Field {
                         growable: f.growable,
-                        name: self.name(f.name)?,
+                        name: f.name.as_str().to_owned(),
                         ty: self.part(f.ty)?,
                     });
                 }
@@ -1807,10 +1783,10 @@ impl Normalizer<'_, '_> {
                                 "variant payload labels must be uniform and unique",
                             ));
                         }
-                        fields.push((name.map(|s| self.name(s)).transpose()?, self.part(*t)?));
+                        fields.push((name.map(|s| s.as_str().to_owned()), self.part(*t)?));
                     }
                     variants.push(Variant {
-                        name: self.name(v.name)?,
+                        name: v.name.as_str().to_owned(),
                         fields: fields.into(),
                     });
                 }
@@ -1858,7 +1834,7 @@ impl Normalizer<'_, '_> {
                 "empty origin path",
             ));
         }
-        let name = self.name(p.segments[0])?;
+        let name = p.segments[0].as_str().to_owned();
         let root = if sibling {
             OriginRoot::Sibling(FieldId(
                 self.siblings
@@ -1905,7 +1881,7 @@ impl Normalizer<'_, '_> {
         };
         let mut fields = vec![];
         for s in p.segments.iter().skip(1) {
-            let name = self.name(*s)?;
+            let name = s.as_str().to_owned();
             let id = current.ok_or_else(|| {
                 diagnostic(
                     const { RuleId::of("LANG-6") },
@@ -2188,7 +2164,7 @@ impl Normalizer<'_, '_> {
                 && item
                     .attributes
                     .iter()
-                    .any(|a| self.input.symbols.resolve(a.name) == Some("capability"))
+                    .any(|a| a.name.as_str() == "capability")
             {
                 // The nominal identity is fixed by the declaration before its
                 // implementation ceiling is checked. Reading its unpublished
@@ -2203,7 +2179,7 @@ impl Normalizer<'_, '_> {
                 && !self.input.tree.items[self.input.item.0 as usize]
                     .attributes
                     .iter()
-                    .any(|a| self.input.symbols.resolve(a.name) == Some("capability"))
+                    .any(|a| a.name.as_str() == "capability")
             {
                 return Err(diagnostic(
                     const { RuleId::of("PROG-2") },
@@ -2231,7 +2207,7 @@ impl Normalizer<'_, '_> {
         if item
             .attributes
             .iter()
-            .any(|a| self.input.symbols.resolve(a.name) == Some("capability"))
+            .any(|a| a.name.as_str() == "capability")
         {
             return self.authority_proof(
                 root,
@@ -2474,7 +2450,7 @@ impl Normalizer<'_, '_> {
             let opted = item
                 .attributes
                 .iter()
-                .any(|a| self.input.symbols.resolve(a.name) == Some("serializable"));
+                .any(|a| a.name.as_str() == "serializable");
             Ok(Some(std::sync::Arc::new(Signature {
                 definition: path.clone(),
                 metadata: SignatureMetadata {

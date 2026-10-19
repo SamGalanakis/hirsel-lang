@@ -619,6 +619,9 @@ dependencies = [
 [[package]]
 name = "hirsel-intern"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+]
 
 [[package]]
 name = "hirsel-interp"
@@ -894,6 +897,7 @@ version = "0.1.0"
 dependencies = [
  "hirsel-intern",
  "hirsel-span",
+ "hirsel-syntax",
  "serde",
  "sha2",
 ]

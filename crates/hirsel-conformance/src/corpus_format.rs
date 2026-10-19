@@ -23,7 +23,7 @@ fn tape(engine: &mut QueryEngine, file: FileId) -> Result<Vec<Token>, String> {
         .lexer
         .as_ref()
         .ok_or("missing lexer")?
-        .lex(file, &engine.sources, &mut engine.symbols)
+        .lex(file, &engine.sources)
         .map_err(|e| format!("{e:?}"))?;
     let source = engine.sources.file(file).ok_or("missing source")?;
     let syntax = if lexed
@@ -42,7 +42,6 @@ fn tape(engine: &mut QueryEngine, file: FileId) -> Result<Vec<Token>, String> {
                         lexed.value.clone(),
                         &hirsel_engine::default_context(),
                         &engine.sources,
-                        &engine.symbols,
                     )
                     .ok()
             })
@@ -119,7 +118,7 @@ fn parsed(engine: &mut QueryEngine, source: &str) -> Result<SyntaxFile, String> 
         .lexer
         .as_ref()
         .ok_or("missing lexer")?
-        .lex(file, &engine.sources, &mut engine.symbols)
+        .lex(file, &engine.sources)
         .map_err(|e| format!("{e:?}"))?;
     if !lexed.diagnostics.is_empty() {
         return Err("formatter input/output has lexical errors".into());
@@ -134,7 +133,6 @@ fn parsed(engine: &mut QueryEngine, source: &str) -> Result<SyntaxFile, String> 
             lexed.value,
             &hirsel_engine::default_context(),
             &engine.sources,
-            &engine.symbols,
         )
         .map_err(|e| format!("{e:?}"))?;
     if parsed.value.has_syntax_errors || !parsed.diagnostics.is_empty() {

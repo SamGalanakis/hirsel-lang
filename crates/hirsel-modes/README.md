@@ -213,7 +213,7 @@ evidence keeps its proof beside a handle part that leaves the aggregate aliased.
 
 `authority::check_file_with_clauses(file, item, signature, body, provider,
 intrinsics, loops, clauses)` consumes the checked body and returns `AuthorityOutput`.
-Argument labels resolve through the retained immutable symbol snapshot. Tests
+Argument labels are their `Symbol` spellings. Tests
 supply the same syntax and producer tables as production callers.
 The caller must reject diagnostics or `failure` before publishing the body.
 

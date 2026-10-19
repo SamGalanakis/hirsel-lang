@@ -90,13 +90,8 @@ fn iterator_plan_uses_provider_option_tags_without_assuming_order() {
     option.fingerprint = ast::ContentHash::of_bytes(b"manufactured reversed Option tags");
     support::normalize_file(&file, &mut provider).unwrap();
     let item = file.roots[0];
-    let resolution = hirsel_resolve::resolve_item(
-        &file,
-        item,
-        &file.symbols,
-        &provider.index.clone(),
-        &mut provider,
-    );
+    let resolution =
+        hirsel_resolve::resolve_item(&file, item, &provider.index.clone(), &mut provider);
     assert!(resolution.query.diagnostics.is_empty());
     let signature = provider.signatures[&file.tree.items[item.0 as usize].definition].clone();
     let output = check_with_loop_protocols(
@@ -104,7 +99,6 @@ fn iterator_plan_uses_provider_option_tags_without_assuming_order() {
             body: Input {
                 tree: &file.tree,
                 item,
-                symbols: &file.symbols,
                 context: &support::context(),
                 resolution: &resolution,
                 signature: &signature,
@@ -146,18 +140,12 @@ fn intrinsic_domains_follow_the_callee_metadata_instead_of_its_name() {
     let callee = &file.tree.items[file.roots[0].0 as usize].definition;
     let main = file.roots[1];
     let signature = registry.signatures[&file.tree.items[main.0 as usize].definition].clone();
-    let resolution = hirsel_resolve::resolve_item(
-        &file,
-        main,
-        &file.symbols,
-        &registry.index.clone(),
-        &mut registry,
-    );
+    let resolution =
+        hirsel_resolve::resolve_item(&file, main, &registry.index.clone(), &mut registry);
     let context = support::context();
     let input = || Input {
         tree: &file.tree,
         item: main,
-        symbols: &file.symbols,
         context: &context,
         resolution: &resolution,
         signature: &signature,

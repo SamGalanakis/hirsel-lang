@@ -1,6 +1,5 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
-use hirsel_intern::Interner;
 use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::*;
 use std::rc::Rc;
@@ -14,7 +13,6 @@ impl ParserPhase for EmptyFunction {
         tokens: Vec<Token>,
         context: &FileContext,
         sources: &SourceMap,
-        symbols: &Interner,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
         let source = sources.file(file).unwrap().text();
         let name = tokens
@@ -65,7 +63,6 @@ impl ParserPhase for EmptyFunction {
         Ok(QueryOutput {
             value: SyntaxFile {
                 has_syntax_errors: false,
-                symbols: std::sync::Arc::new(symbols.clone()),
 
                 file,
                 tokens,
@@ -131,7 +128,6 @@ fn formatter_fallback_is_unavailable_and_never_a_clean_format_check_on_compiler_
     let file = sources.add("damaged.hir", "fn main() {\n".into()).unwrap();
     let damaged = SyntaxFile {
         has_syntax_errors: false,
-        symbols: Default::default(),
 
         file,
         tokens: vec![],

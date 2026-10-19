@@ -8,20 +8,20 @@ fn f() { call(fn(x: T) -> U uses {x} requires true ensures result > 0 { return x
 item 0 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "f" }) Origin { span: Span { file: FileId(0), start: 0, end: 105 }, tokens: TokenRange { start: 0, end: 66 } } TokenRange { start: 0, end: 66 } hash=[bc, 53, f4, bf, 47, c6, e0, e7, f3, 0e, 69, fd, 9c, 21, 1a, 51, cd, 2d, 27, ab, 4a, 61, 87, c6, 8c, 52, 49, f5, 25, 17, 4f, c8]
   Private []
   Function { signature: FunctionSyntax { attributes: [], generics: [], parameters: [], result: None, uses: None, contracts: [] }, body: Some(ExprId(13)), abi: None }
-expr 0 Origin { span: Span { file: FileId(0), start: 9, end: 13 }, tokens: TokenRange { start: 8, end: 9 } }: Path(Path { package: None, segments: [Symbol(2)] })
+expr 0 Origin { span: Span { file: FileId(0), start: 9, end: 13 }, tokens: TokenRange { start: 8, end: 9 } }: Path(Path { package: None, segments: [Symbol("call")] })
 expr 1 Origin { span: Span { file: FileId(0), start: 46, end: 50 }, tokens: TokenRange { start: 30, end: 31 } }: Literal(Bool(true))
 expr 2 Origin { span: Span { file: FileId(0), start: 59, end: 65 }, tokens: TokenRange { start: 34, end: 35 } }: Result
 expr 3 Origin { span: Span { file: FileId(0), start: 68, end: 69 }, tokens: TokenRange { start: 38, end: 39 } }: Literal(Integer("0"))
 expr 4 Origin { span: Span { file: FileId(0), start: 59, end: 69 }, tokens: TokenRange { start: 34, end: 39 } }: Binary { op: Gt, left: ExprId(2), right: ExprId(3) }
-expr 5 Origin { span: Span { file: FileId(0), start: 79, end: 80 }, tokens: TokenRange { start: 44, end: 45 } }: Path(Path { package: None, segments: [Symbol(3)] })
+expr 5 Origin { span: Span { file: FileId(0), start: 79, end: 80 }, tokens: TokenRange { start: 44, end: 45 } }: Path(Path { package: None, segments: [Symbol("x")] })
 expr 6 Origin { span: Span { file: FileId(0), start: 72, end: 80 }, tokens: TokenRange { start: 42, end: 45 } }: Return(Some(ExprId(5)))
 expr 7 Origin { span: Span { file: FileId(0), start: 70, end: 82 }, tokens: TokenRange { start: 40, end: 47 } }: Block { statements: [], tail: Some(ExprId(6)) }
-expr 8 Origin { span: Span { file: FileId(0), start: 14, end: 82 }, tokens: TokenRange { start: 10, end: 47 } }: Closure { signature: FunctionSyntax { attributes: [], generics: [], parameters: [Parameter { label: None, name: Some(Symbol(3)), passing: Borrow, ty: TypeExprId(0) }], result: Some(TypeExprId(1)), uses: Some([Path { package: None, segments: [Symbol(3)] }]), contracts: [ContractSyntax { kind: Requires, expression: ExprId(1) }, ContractSyntax { kind: Ensures, expression: ExprId(4) }] }, body: ExprId(7) }
+expr 8 Origin { span: Span { file: FileId(0), start: 14, end: 82 }, tokens: TokenRange { start: 10, end: 47 } }: Closure { signature: FunctionSyntax { attributes: [], generics: [], parameters: [Parameter { label: None, name: Some(Symbol("x")), passing: Borrow, ty: TypeExprId(0) }], result: Some(TypeExprId(1)), uses: Some([Path { package: None, segments: [Symbol("x")] }]), contracts: [ContractSyntax { kind: Requires, expression: ExprId(1) }, ContractSyntax { kind: Ensures, expression: ExprId(4) }] }, body: ExprId(7) }
 expr 9 Origin { span: Span { file: FileId(0), start: 9, end: 83 }, tokens: TokenRange { start: 8, end: 48 } }: Call { callee: ExprId(0), arguments: [Argument { label: None, value: ExprId(8) }] }
 expr 10 Origin { span: Span { file: FileId(0), start: 92, end: 93 }, tokens: TokenRange { start: 56, end: 57 } }: Literal(Integer("1"))
 expr 11 Origin { span: Span { file: FileId(0), start: 90, end: 95 }, tokens: TokenRange { start: 54, end: 59 } }: Block { statements: [], tail: Some(ExprId(10)) }
 expr 12 Origin { span: Span { file: FileId(0), start: 85, end: 103 }, tokens: TokenRange { start: 50, end: 64 } }: Closure { signature: FunctionSyntax { attributes: [], generics: [], parameters: [], result: None, uses: Some([]), contracts: [] }, body: ExprId(11) }
 expr 13 Origin { span: Span { file: FileId(0), start: 7, end: 105 }, tokens: TokenRange { start: 6, end: 66 } }: Block { statements: [StmtId(0)], tail: Some(ExprId(12)) }
 stmt 0 Origin { span: Span { file: FileId(0), start: 9, end: 83 }, tokens: TokenRange { start: 8, end: 50 } }: Expr(ExprId(9))
-type 0 Origin { span: Span { file: FileId(0), start: 20, end: 21 }, tokens: TokenRange { start: 15, end: 16 } }: Named { path: Path { package: None, segments: [Symbol(4)] }, arguments: [] }
-type 1 Origin { span: Span { file: FileId(0), start: 26, end: 27 }, tokens: TokenRange { start: 20, end: 21 } }: Named { path: Path { package: None, segments: [Symbol(5)] }, arguments: [] }
+type 0 Origin { span: Span { file: FileId(0), start: 20, end: 21 }, tokens: TokenRange { start: 15, end: 16 } }: Named { path: Path { package: None, segments: [Symbol("T")] }, arguments: [] }
+type 1 Origin { span: Span { file: FileId(0), start: 26, end: 27 }, tokens: TokenRange { start: 20, end: 21 } }: Named { path: Path { package: None, segments: [Symbol("U")] }, arguments: [] }

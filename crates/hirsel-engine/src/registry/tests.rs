@@ -1,5 +1,6 @@
 use super::review::*;
 use super::*;
+use hirsel_intern::Symbol;
 use hirsel_syntax::PackageId;
 use hirsel_types::core_roles::{intrinsic_roles, loop_protocols};
 use std::collections::BTreeSet;
@@ -83,10 +84,9 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
 #[test]
 fn roles_and_provider_lookup_are_nominal_and_read_only() {
     let mut registry = BuiltinRegistry::new();
-    let mut symbols = Interner::default();
     let path = hirsel_syntax::Path {
         package: None,
-        segments: vec![symbols.intern("out"), symbols.intern("print")],
+        segments: vec![Symbol::intern("out"), Symbol::intern("print")],
     };
     let context = FileContext {
         package: PackageId {
@@ -95,7 +95,7 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
         },
         modules: vec![],
     };
-    let lookup = registry.lookup(&context, &path, &symbols);
+    let lookup = registry.lookup(&context, &path);
     assert_eq!(
         lookup.result.unwrap(),
         hirsel_syntax::DefPath::core("out.print")
@@ -103,12 +103,7 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
     assert_eq!(lookup.manifest, registry.revision());
     let mut foreign = path.clone();
     foreign.package = Some(context.package.clone());
-    assert!(
-        registry
-            .lookup(&context, &foreign, &symbols)
-            .result
-            .is_err()
-    );
+    assert!(registry.lookup(&context, &foreign).result.is_err());
     let role = registry
         .get(&hirsel_syntax::DefPath::core("Unsafe"))
         .unwrap();
@@ -122,7 +117,6 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
     let r = BuiltinRegistry::new();
     assert_eq!(loop_protocols().len(), 6);
     assert_eq!(r.signatures().count(), 429);
-    let mut symbols = Interner::default();
     for ((protocol, open, next), generics) in loop_protocols().into_iter().zip([2, 2, 1, 1, 1, 2]) {
         assert_eq!(open.0.modules, ["$intrinsic"]);
         assert_eq!(open.0.name, format!("{protocol}_open"));
@@ -134,9 +128,9 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
             );
             let source = Path {
                 package: Some(path.0.package.clone()),
-                segments: vec![symbols.intern("$intrinsic"), symbols.intern(&path.0.name)],
+                segments: vec![Symbol::intern("$intrinsic"), Symbol::intern(&path.0.name)],
             };
-            assert!(r.lookup_name(&source, &symbols).is_none());
+            assert!(r.lookup_name(&source).is_none());
             let mut lex_sources = hirsel_span::SourceMap::default();
             let file = lex_sources
                 .add(
@@ -144,11 +138,7 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
                     format!("fn main() -> () {{ core@1/$intrinsic.{}() }}", path.0.name),
                 )
                 .unwrap();
-            assert!(
-                !hirsel_lexer::lex(file, &lex_sources, &mut symbols)
-                    .diagnostics
-                    .is_empty()
-            );
+            assert!(!hirsel_lexer::lex(file, &lex_sources).diagnostics.is_empty());
         }
         let open = r.get(&open).unwrap();
         let SignatureKind::Function(f) = &open.kind else {
@@ -410,12 +400,11 @@ fn heap_operation_declares_the_canonical_ambient_allocator() {
             .unwrap()
             .is_heap_target(&nominal_roles())
     );
-    let mut symbols = Interner::default();
     let source = Path {
         package: Some(role.operation.0.package.clone()),
-        segments: vec![symbols.intern("$intrinsic"), symbols.intern("heap")],
+        segments: vec![Symbol::intern("$intrinsic"), Symbol::intern("heap")],
     };
-    assert!(registry.lookup_name(&source, &symbols).is_none());
+    assert!(registry.lookup_name(&source).is_none());
 }
 
 #[test]

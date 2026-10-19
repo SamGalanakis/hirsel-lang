@@ -1,6 +1,6 @@
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_engine::*;
-use hirsel_intern::Interner;
+use hirsel_intern::Symbol;
 use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::Origin;
 use hirsel_syntax::*;
@@ -52,11 +52,10 @@ impl LexerPhase for Fake {
         &self,
         file: FileId,
         sources: &SourceMap,
-        symbols: &mut Interner,
     ) -> Result<QueryOutput<Vec<Token>>, QueryError> {
         self.event("lex");
         for line in sources.file(file).unwrap().text().lines() {
-            symbols.intern(line.split_whitespace().nth(1).unwrap());
+            Symbol::intern(line.split_whitespace().nth(1).unwrap());
         }
         let mut result = out(vec![]);
         if self.reject == Some("lex") {
@@ -75,7 +74,6 @@ impl ParserPhase for Fake {
         tokens: Vec<Token>,
         context: &FileContext,
         sources: &SourceMap,
-        _symbols: &Interner,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
         self.event("parse");
         let text = sources.file(file).unwrap().text();
@@ -101,7 +99,7 @@ impl ParserPhase for Fake {
 
                 origin,
                 owned_tokens: TokenRange::default(),
-                name: hirsel_intern::Symbol(0),
+                name: Symbol::intern("item"),
                 definition: DefPath(ItemPath {
                     package: context.package.clone(),
                     modules: context.modules.clone(),
@@ -125,7 +123,6 @@ impl ParserPhase for Fake {
         let roots = (0..tree.items.len()).map(|n| ItemId(n as u32)).collect();
         let mut result = out(SyntaxFile {
             has_syntax_errors: false,
-            symbols: Default::default(),
 
             file,
             tree,
@@ -146,7 +143,6 @@ impl ResolverPhase for Fake {
         &self,
         file: Arc<SyntaxFile>,
         item: ItemId,
-        symbols: &Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError> {
         let item = &file.tree.items[item.0 as usize];
@@ -155,15 +151,13 @@ impl ResolverPhase for Fake {
             provider.signature(&path("a"))?;
         }
         if self.missing_lookup {
-            let mut symbols = symbols.clone();
-            let name = symbols.intern("missing");
+            let name = Symbol::intern("missing");
             let _ = provider.lookup(
                 &default_context(),
                 &Path {
                     package: None,
                     segments: vec![name],
                 },
-                &symbols,
             );
             let _ = provider.signature(&path("missing"));
             return Err(error(item.origin.span));
@@ -176,7 +170,6 @@ impl SignaturePhase for Fake {
         &self,
         file: Arc<SyntaxFile>,
         item: ItemId,
-        _symbols: &Interner,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let item = &file.tree.items[item.0 as usize];
@@ -590,7 +583,6 @@ impl SignaturePhase for ContractSignatures {
         &self,
         file: Arc<SyntaxFile>,
         item: ItemId,
-        _symbols: &Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let item = &file.tree.items[item.0 as usize];
@@ -705,7 +697,6 @@ impl SignaturePhase for ObserveDuplicates {
         &self,
         _file: Arc<SyntaxFile>,
         _item: ItemId,
-        _symbols: &Interner,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         unreachable!("candidate-aware entry point must be used")
@@ -713,7 +704,6 @@ impl SignaturePhase for ObserveDuplicates {
     fn signature_items(
         &self,
         candidates: &[(Arc<SyntaxFile>, ItemId)],
-        _symbols: &Interner,
         _provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         assert_eq!(candidates.len(), 2);
@@ -792,15 +782,14 @@ fn provider_results_share_graphs_and_manifest_misses_have_revisions_on_compiler_
     let a = engine.definition(&path("a")).unwrap();
     let b = engine.definition(&path("a")).unwrap();
     assert!(std::sync::Arc::ptr_eq(&a, &b));
-    let mut symbols = Interner::default();
     let lookup = Path {
         package: None,
-        segments: vec![symbols.intern("missing")],
+        segments: vec![Symbol::intern("missing")],
     };
-    let before = engine.lookup(&default_context(), &lookup, &symbols);
+    let before = engine.lookup(&default_context(), &lookup);
     assert!(before.result.is_err());
     parse(&mut engine, "fn a {}\nfn missing {}\n");
-    let after = engine.lookup(&default_context(), &lookup, &symbols);
+    let after = engine.lookup(&default_context(), &lookup);
     assert!(after.result.is_ok());
     assert_ne!(before.manifest, after.manifest);
 }
@@ -820,7 +809,6 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
             &self,
             file: Arc<SyntaxFile>,
             item: ItemId,
-            symbols: &Interner,
             provider: &mut dyn SignatureProvider,
         ) -> Result<QueryOutput<Signature>, QueryError> {
             self.calls.set(self.calls.get() + 1);
@@ -830,7 +818,7 @@ fn operational_signature_failures_retry_and_are_not_rejection_cache_entries_on_c
                     message: "temporarily offline".into(),
                 }));
             }
-            self.original.signature(file, item, symbols, provider)
+            self.original.signature(file, item, provider)
         }
     }
     let (mut engine, _) = make_engine(None, false);

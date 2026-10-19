@@ -288,7 +288,7 @@ pub fn discover(
             if item
                 .attributes
                 .iter()
-                .any(|a| parsed.value.symbols.resolve(a.name) == Some(selection.attribute()))
+                .any(|a| a.name.as_str() == selection.attribute())
                 && (filters.is_empty()
                     || filters
                         .iter()

@@ -96,18 +96,10 @@ pub fn check_file_with_clauses(
     loops: &[CursorPlan],
     clauses: &[(ExprId, TypeId)],
 ) -> AuthorityOutput {
-    walk::Checker::new(
-        &file.tree,
-        item,
-        signature,
-        body,
-        provider,
-        intrinsics,
-        &file.symbols,
-    )
-    .with_cursor_loops(loops)
-    .with_clauses(clauses)
-    .run()
+    walk::Checker::new(&file.tree, item, signature, body, provider, intrinsics)
+        .with_cursor_loops(loops)
+        .with_clauses(clauses)
+        .run()
 }
 
 #[cfg(test)]

@@ -53,7 +53,6 @@ impl Place {
 /// summaries of the same rows as the callable types, and are normalised with them.
 pub fn check_ownership_with_clauses(
     tree: &SyntaxTree,
-    symbols: &hirsel_intern::Interner,
     item: ItemId,
     signature: &Signature,
     body: &mut CheckedBody,
@@ -171,7 +170,6 @@ pub fn check_ownership_with_clauses(
             let mut proof_diagnostics = Vec::new();
             flow::check(
                 tree,
-                symbols,
                 signature,
                 &mut proof_body,
                 &signatures,
@@ -209,7 +207,6 @@ pub fn check_ownership_with_clauses(
     for graph in &graphs {
         let checked = flow::check(
             tree,
-            symbols,
             signature,
             body,
             &signatures,

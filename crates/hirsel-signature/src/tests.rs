@@ -1,5 +1,5 @@
 use super::*;
-use hirsel_intern::Interner;
+use hirsel_intern::Symbol;
 use hirsel_run_config::hex;
 use hirsel_types::encoding::{EncodingError, canonical_encoding};
 fn def(name: &str) -> ast::DefPath {
@@ -34,19 +34,14 @@ impl SignatureProvider for Fake {
         })()
         .map(std::sync::Arc::new)
     }
-    fn lookup(
-        &mut self,
-        c: &ast::FileContext,
-        p: &ast::Path,
-        s: &Interner,
-    ) -> hirsel_types::LookupOutput {
+    fn lookup(&mut self, c: &ast::FileContext, p: &ast::Path) -> hirsel_types::LookupOutput {
         hirsel_types::LookupOutput {
             manifest: Default::default(),
             result: (|| {
                 let mut segments = p
                     .segments
                     .iter()
-                    .map(|s_| s.resolve(*s_).unwrap().to_owned())
+                    .map(|s| s.as_str().to_owned())
                     .collect::<Vec<_>>();
                 let name = segments.pop().unwrap();
                 Ok(ast::DefPath(ast::ItemPath {
@@ -65,7 +60,6 @@ impl SignatureProvider for Fake {
 struct Fixture {
     item: ast::ItemId,
     tree: ast::SyntaxTree,
-    symbols: Interner,
     resolution: Resolution,
     metadata: Metadata,
     provider: Fake,
@@ -73,8 +67,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let mut symbols = Interner::default();
-        let name = symbols.intern("example");
+        let name = Symbol::intern("example");
         Self {
             item: ast::ItemId(0),
             tree: ast::SyntaxTree {
@@ -97,7 +90,6 @@ impl Fixture {
                 }],
                 ..Default::default()
             },
-            symbols,
             resolution: Default::default(),
             metadata: Default::default(),
             provider: Default::default(),
@@ -133,7 +125,7 @@ impl Fixture {
         })
     }
     fn named(&mut self, n: &str) -> ast::TypeExprId {
-        let s = self.symbols.intern(n);
+        let s = Symbol::intern(n);
         self.ty(ast::TypeExprKind::Named {
             path: ast::Path {
                 package: None,
@@ -143,7 +135,7 @@ impl Fixture {
         })
     }
     fn application(&mut self, n: &str, args: Vec<ast::TypeArgument>) -> ast::TypeExprId {
-        let s = self.symbols.intern(n);
+        let s = Symbol::intern(n);
         self.ty(ast::TypeExprKind::Named {
             path: ast::Path {
                 package: None,
@@ -159,7 +151,7 @@ impl Fixture {
         }
     }
     fn param(&mut self, n: &str, t: ast::TypeExprId, passing: PassingMode) {
-        let n = self.symbols.intern(n);
+        let n = Symbol::intern(n);
         self.f().parameters.push(ast::Parameter {
             name: Some(n),
             label: None,
@@ -168,7 +160,7 @@ impl Fixture {
         });
     }
     fn attr(&mut self, n: &str) {
-        let n = self.symbols.intern(n);
+        let n = Symbol::intern(n);
         self.tree.items[0].attributes.push(ast::Attribute {
             name: n,
             arguments: vec![],
@@ -183,7 +175,6 @@ impl Fixture {
             Input {
                 tree: &self.tree,
                 item: self.item,
-                symbols: &self.symbols,
                 context: &self.context,
                 resolution: &self.resolution,
                 metadata: &self.metadata,
@@ -265,7 +256,7 @@ impl Fixture {
         ast::FieldSyntax {
             growable: false,
 
-            name: self.symbols.intern(n),
+            name: Symbol::intern(n),
             ty: t,
             origin: origin(),
         }
@@ -361,7 +352,7 @@ fn diagnostic_lang7_repeated_modifier_cites_type_span() {
 fn diagnostic_gen1_size_as_type_cites_type_span() {
     let mut f = Fixture::new();
     let ty = f.named("n");
-    let name = f.symbols.intern("n");
+    let name = Symbol::intern("n");
     f.f().generics.push(ast::GenericParam {
         name,
         kind: ast::GenericKind::Size,
@@ -374,7 +365,7 @@ fn diagnostic_gen1_size_as_type_cites_type_span() {
 #[test]
 fn diagnostic_gen4_generic_ffi_cites_header_span() {
     let mut f = Fixture::new();
-    let name = f.symbols.intern("T");
+    let name = Symbol::intern("T");
     f.f().generics.push(ast::GenericParam {
         name,
         kind: ast::GenericKind::Type(vec![]),
@@ -406,8 +397,8 @@ fn diagnostic_prog4_extern_requires_package_metadata() {
 fn diagnostics_validate_variant_labels_and_generic_bounds() {
     let mut f = Fixture::new();
     let ty = f.named("u8");
-    let name = f.symbols.intern("Some");
-    let label = f.symbols.intern("x");
+    let name = Symbol::intern("Some");
+    let label = Symbol::intern("x");
     f.declaration(
         ast::TypeBody::Variants(vec![ast::VariantSyntax {
             name,
@@ -629,7 +620,7 @@ fn hash_ignores_locations_whitespace_comments_and_text_hash() {
 #[test]
 fn hash_changes_with_each_mode() {
     let mut f = Fixture::new();
-    let name = f.symbols.intern("T");
+    let name = Symbol::intern("T");
     f.f().generics.push(ast::GenericParam {
         name,
         kind: ast::GenericKind::Type(vec![]),
@@ -640,7 +631,7 @@ fn hash_changes_with_each_mode() {
     let s = f.sig();
     let x = ast::Path {
         package: None,
-        segments: vec![f.symbols.intern("x")],
+        segments: vec![Symbol::intern("x")],
     };
     for (modifiers, places) in [
         (vec![], Some(vec![ast::RelationPlace::Path(x)])),
@@ -664,7 +655,7 @@ fn hash_changes_with_each_mode() {
 #[test]
 fn hash_changes_with_one_bound() {
     let mut f = Fixture::new();
-    let name = f.symbols.intern("T");
+    let name = Symbol::intern("T");
     f.f().generics.push(ast::GenericParam {
         name,
         kind: ast::GenericKind::Type(vec![]),
@@ -721,7 +712,7 @@ fn hash_changes_with_used_signature() {
 fn contract_dependencies_are_resolved_and_hashed() {
     let mut f = Fixture::new();
     let d = f.dependency("predicate", None, true);
-    let symbol = f.symbols.intern("predicate");
+    let symbol = Symbol::intern("predicate");
     let callee = f.expression(ast::ExprKind::Path(ast::Path {
         package: None,
         segments: vec![symbol],
@@ -747,7 +738,7 @@ fn contract_dependencies_are_resolved_and_hashed() {
 #[test]
 fn contract_code_hashes_nested_blocks_patterns_and_bound_variables() {
     let mut f = Fixture::new();
-    let symbol = f.symbols.intern("x");
+    let symbol = Symbol::intern("x");
     let bind = ast::PatternId(0);
     f.tree.patterns.push(ast::Pattern {
         origin: origin(),
@@ -785,7 +776,7 @@ fn contract_code_hashes_nested_blocks_patterns_and_bound_variables() {
 fn hash_sorts_and_deduplicates_sets_and_dependencies() {
     let mut f = Fixture::new();
     let t = f.named("T");
-    let name = f.symbols.intern("T");
+    let name = Symbol::intern("T");
     f.f().generics.push(ast::GenericParam {
         name,
         kind: ast::GenericKind::Type(vec![Bound::Data, Bound::Copyable]),
@@ -911,8 +902,8 @@ fn golden_fixtures() -> Vec<(&'static str, Signature)> {
     );
     let record = f.sig();
     let mut f = Fixture::new();
-    let a = f.symbols.intern("A");
-    let b = f.symbols.intern("B");
+    let a = Symbol::intern("A");
+    let b = Symbol::intern("B");
     f.declaration(
         ast::TypeBody::Variants(vec![
             ast::VariantSyntax {
@@ -1062,7 +1053,7 @@ fn duplicate_module_names_are_rejected_at_the_later_name_across_files() {
 fn public_opaque_authority_cannot_expose_a_private_capability() {
     let mut f = Fixture::new();
     f.dependency("PrivateCap", Some(CapabilityKind::Global), false);
-    let symbol = f.symbols.intern("PrivateCap");
+    let symbol = Symbol::intern("PrivateCap");
     f.declaration(ast::TypeBody::Opaque, ast::TypeFlavor::Ordinary);
     f.tree.items[0].visibility = ast::Visibility::PublicOpaque;
     if let ast::ItemKind::Type { bounds, .. } = &mut f.tree.items[0].kind {
@@ -1213,7 +1204,7 @@ fn hash_changes_with_declared_resource_authority() {
     let original = f.sig().fingerprint;
     let path = ast::Path {
         package: None,
-        segments: vec![f.symbols.intern("Dir")],
+        segments: vec![Symbol::intern("Dir")],
     };
     if let ast::ItemKind::Type { authority, .. } = &mut f.tree.items[0].kind {
         *authority = Some(vec![path]);
@@ -1238,9 +1229,9 @@ fn generic_cleanup_conjunctions_keep_mixed_ordinals_and_bound_proofs() {
     let u = f.named("U");
     let list = f.application("List", vec![ast::TypeArgument::Type(t)]);
     let tuple = f.ty(ast::TypeExprKind::Tuple(vec![u, list, t]));
-    let ts = f.symbols.intern("T");
-    let ns = f.symbols.intern("n");
-    let us = f.symbols.intern("U");
+    let ts = Symbol::intern("T");
+    let ns = Symbol::intern("n");
+    let us = Symbol::intern("U");
     f.f().generics = vec![
         ast::GenericParam {
             name: ts,
@@ -1297,7 +1288,6 @@ fn ordinary_opaque_self_references_keep_the_exported_plain_cleanup_proof() {
         Input {
             tree: &f.tree,
             item: f.item,
-            symbols: &f.symbols,
             context: &f.context,
             resolution: &f.resolution,
             metadata: &f.metadata,
@@ -1465,7 +1455,7 @@ fn taken_resource_property_proofs_read_transitive_nominal_declarations() {
         }
         let base = f.named("Resource");
         let base = if branded {
-            let dir = f.symbols.intern("dir");
+            let dir = Symbol::intern("dir");
             f.qualified(
                 base,
                 vec![],
@@ -1502,8 +1492,8 @@ fn parameter_projection_contracts_hash_fields_without_definition_queries() {
         let mut f = Fixture::new();
         let base = f.named("u8");
         let field = f.field("v", base);
-        let v = f.symbols.intern("v");
-        let member = f.symbols.intern(field_name);
+        let v = Symbol::intern("v");
+        let member = Symbol::intern(field_name);
         let projection = f.expression(ast::ExprKind::Path(ast::Path {
             package: None,
             segments: vec![v, member],
@@ -1534,8 +1524,8 @@ fn nested_authority_names_its_lexical_binder_and_shadowing_is_local() {
         f.dependency("Io", Some(CapabilityKind::Global), true);
         let io = f.named("Io");
         f.param("outer", io, PassingMode::Borrow);
-        let name = f.symbols.intern(if shadow { "outer" } else { "inner" });
-        let outer = f.symbols.intern("outer");
+        let name = Symbol::intern(if shadow { "outer" } else { "inner" });
+        let outer = Symbol::intern("outer");
         let callback = f.ty(ast::TypeExprKind::Function(ast::FunctionSyntax {
             parameters: vec![ast::Parameter {
                 name: Some(name),
@@ -1612,7 +1602,6 @@ impl Fixture {
         let input = Input {
             tree: &self.tree,
             item: self.item,
-            symbols: &self.symbols,
             context: &self.context,
             resolution: &self.resolution,
             metadata: &self.metadata,

@@ -32,7 +32,7 @@ positive/negative reads and namespace facts drive cache validation. No package-w
 reservation table or special cache input is needed. `for_package` selects a current
 package while sharing immutable tables.
 
-`resolve_item(file, item, symbols, index, provider)` resolves one definition at a
+`resolve_item(file, item, index, provider)` resolves one definition at a
 time. This makes lexical IDs independent of top-level declaration order. The
 provider supplies shared immutable SignatureRef snapshots; the resolver never reads another item's body.
 Same-file written type/function headers also supply nominal expected context. Cross-file representation information comes

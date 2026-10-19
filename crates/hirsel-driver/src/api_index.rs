@@ -352,14 +352,14 @@ fn source_entries(
                         "[{}]",
                         generics
                             .iter()
-                            .map(|g| syntax.symbols.resolve(g.name).unwrap())
+                            .map(|g| g.name.as_str())
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
                 };
                 let spans = syntax.variant_name_spans(item.origin);
                 for (i, variant) in variants.iter().enumerate() {
-                    let variant_name = syntax.symbols.resolve(variant.name).unwrap();
+                    let variant_name = variant.name.as_str();
                     let start = spans[i].start;
                     let end = spans.get(i + 1).map_or(end, |s| s.start);
                     let text = token_text(&syntax, start, end, &engine.sources)
@@ -440,7 +440,7 @@ fn source_links(
         {
             continue;
         }
-        let Ok(definition) = package.lookup(context, path, &syntax.symbols) else {
+        let Ok(definition) = package.lookup(context, path) else {
             continue;
         };
         if definition == item.definition || !package.is_exported(&definition) {

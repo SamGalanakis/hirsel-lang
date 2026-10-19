@@ -1,6 +1,6 @@
 use crate::{LookupError, ManifestIndex, Namespace};
 use hirsel_diag::{Diagnostic, Label, RuleId};
-use hirsel_intern::{Interner, Symbol};
+use hirsel_intern::Symbol;
 use hirsel_span::Span;
 use hirsel_syntax::*;
 use hirsel_types::{
@@ -98,18 +98,10 @@ struct Shape {
 pub fn resolve_item(
     file: &SyntaxFile,
     item: ItemId,
-    symbols: &Interner,
     index: &ManifestIndex,
     provider: &mut (impl SignatureProvider + ?Sized),
 ) -> ResolveOutput {
-    resolve_item_with_expected(
-        file,
-        item,
-        symbols,
-        index,
-        provider,
-        &ExpectedTypes::default(),
-    )
+    resolve_item_with_expected(file, item, index, provider, &ExpectedTypes::default())
 }
 
 /// Syntax read domain. File permits local header fixtures; Item and Header
@@ -131,26 +123,17 @@ impl ResolveView {
 pub fn resolve_item_with_expected(
     file: &SyntaxFile,
     item: ItemId,
-    symbols: &Interner,
     index: &ManifestIndex,
     provider: &mut (impl SignatureProvider + ?Sized),
     expected: &ExpectedTypes,
 ) -> ResolveOutput {
-    resolve_view(
-        file,
-        ResolveView::File(item),
-        symbols,
-        index,
-        provider,
-        expected,
-    )
+    resolve_view(file, ResolveView::File(item), index, provider, expected)
 }
 
 /// Resolve the selected domain without modifying syntax or its arena identities.
 pub fn resolve_view(
     file: &SyntaxFile,
     view: ResolveView,
-    symbols: &Interner,
     index: &ManifestIndex,
     provider: &mut (impl SignatureProvider + ?Sized),
     expected: &ExpectedTypes,
@@ -160,7 +143,6 @@ pub fn resolve_view(
     let mut resolver = Resolver {
         file,
         view,
-        symbols,
         index,
         provider,
         expected,
@@ -212,7 +194,6 @@ pub fn resolve_view(
 struct Resolver<'a, P: ?Sized> {
     file: &'a SyntaxFile,
     view: ResolveView,
-    symbols: &'a Interner,
     index: &'a ManifestIndex,
     provider: &'a mut P,
     expected: &'a ExpectedTypes,
@@ -245,10 +226,7 @@ struct Resolver<'a, P: ?Sized> {
 
 impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
     fn spelling(&self, symbol: Symbol) -> String {
-        self.symbols
-            .resolve(symbol)
-            .unwrap_or("<invalid symbol>")
-            .to_owned()
+        symbol.as_str().to_owned()
     }
     fn diagnostic(&mut self, rule: RuleId, span: Span, message: impl Into<String>) {
         self.output
@@ -257,29 +235,29 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             .push(Diagnostic::error(rule, span, message));
     }
     fn lookup(&mut self, path: &Path, _span: Span) -> Result<DefPath, LookupError> {
-        self.lookup_using(path, self.symbols)
+        self.lookup_using(path)
     }
-    fn lookup_using(&mut self, path: &Path, symbols: &Interner) -> Result<DefPath, LookupError> {
+    fn lookup_using(&mut self, path: &Path) -> Result<DefPath, LookupError> {
         let segments = path
             .segments
             .iter()
-            .map(|s| symbols.resolve(*s).unwrap_or("<invalid symbol>").to_owned())
+            .map(|s| s.as_str().to_owned())
             .collect::<Vec<_>>();
-        let mut result = self.index.lookup(&self.context, path, symbols);
+        let mut result = self.index.lookup(&self.context, path);
         // The provider can supply builtin/driver-owned names absent from this
         // manifest snapshot. It is never allowed to override ambiguity/privacy.
         if matches!(
             result,
             Err(LookupError::Missing | LookupError::MissingMember(_))
         ) {
-            let lookup = self.provider.lookup(&self.context, path, symbols);
+            let lookup = self.provider.lookup(&self.context, path);
             self.output.reads.push(DependencyRead::ProviderLookup {
                 context: self.context.clone(),
                 package: path.package.clone(),
                 segments: path
                     .segments
                     .iter()
-                    .map(|s| symbols.resolve(*s).unwrap_or("").to_owned())
+                    .map(|s| s.as_str().to_owned())
                     .collect(),
                 output: lookup.clone(),
             });
@@ -473,19 +451,18 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         // Probe exactly the declaration module. Ordinary value lookup may fall
         // back to the package root; a local is allowed to shadow that fallback.
         // The normal lookup read records both absence and namespace for caching.
-        let mut symbols = Interner::default();
         let mut segments: Vec<_> = self
             .context
             .modules
             .iter()
-            .map(|m| symbols.intern(m))
+            .map(|m| Symbol::intern(m))
             .collect();
-        segments.push(symbols.intern(&self.spelling(name)));
+        segments.push(Symbol::intern(&self.spelling(name)));
         let path = Path {
             package: Some(self.context.package.clone()),
             segments,
         };
-        let read = self.lookup_using(&path, &symbols);
+        let read = self.lookup_using(&path);
         let provider_value = if let Ok(definition) = &read {
             definition.0.package == self.context.package
                 && definition.0.modules == self.context.modules
@@ -538,11 +515,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             .iter()
             .map(|p| match &p.kind {
                 GenericKind::Type(bounds) => ty::GenericParameter::Type {
-                    name: self.symbols.resolve(p.name).unwrap_or("").to_owned(),
+                    name: p.name.as_str().to_owned(),
                     bounds: bounds.clone().into(),
                 },
                 GenericKind::Size => ty::GenericParameter::Size {
-                    name: self.symbols.resolve(p.name).unwrap_or("").to_owned(),
+                    name: p.name.as_str().to_owned(),
                 },
             })
             .collect();
@@ -646,7 +623,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 };
                 let spelling = self.spelling(item.name);
                 if !item.definition.package_is("core", "1")
-                    && (native_type(&path, self.symbols) || primitive(&spelling).is_some())
+                    && (native_type(&path) || primitive(&spelling).is_some())
                 {
                     self.diagnostic(const { RuleId::of("LANG-7") }, item.name_span,
                         &format!("type `{spelling}` conflicts with a builtin type name; choose a domain name for the type"));
@@ -1034,7 +1011,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     ExpectedType::nominal(definition)
                 }
             }
-            Err(LookupError::Missing) if native_type(path, self.symbols) => {
+            Err(LookupError::Missing) if native_type(path) => {
                 // These constructors already have TypeKind::Builtin semantics.
                 // No shared ResolvedName variant denotes them; keep their failed
                 // reads, without inventing a nominal library identity. An indexed
@@ -1588,11 +1565,7 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
         self.output.deferred.push(DeferredName {
             site,
             span,
-            name: self
-                .symbols
-                .resolve(name)
-                .unwrap_or("<invalid symbol>")
-                .to_owned(),
+            name: name.as_str().to_owned(),
         });
     }
     fn expr(&mut self, id: ExprId, expected: ExpectedType) -> ExpectedType {
@@ -2544,33 +2517,31 @@ fn primitive(name: &str) -> Option<ty::Primitive> {
 
 // Compiler-native type constructors, matching the semantic TypeKind vocabulary.
 // Qualified library names remain ordinary lookups and never use this fallback.
-fn native_type(path: &Path, symbols: &Interner) -> bool {
+fn native_type(path: &Path) -> bool {
     path.package.is_none()
         && path.segments.len() == 1
         && matches!(
-            symbols.resolve(path.segments[0]),
-            Some(
-                "Array"
-                    | "List"
-                    | "Map"
-                    | "Set"
-                    | "SortedMap"
-                    | "Inline"
-                    | "Simd"
-                    | "Packed"
-                    | "Shared"
-                    | "Slots"
-                    | "SlotId"
-                    | "Region"
-                    | "Iter"
-                    | "Task"
-                    | "Sender"
-                    | "Receiver"
-                    | "Mutex"
-                    | "Atomic"
-                    | "Ptr"
-                    | "FnPtr"
-                    | "TypeShape"
-            )
+            path.segments[0].as_str(),
+            "Array"
+                | "List"
+                | "Map"
+                | "Set"
+                | "SortedMap"
+                | "Inline"
+                | "Simd"
+                | "Packed"
+                | "Shared"
+                | "Slots"
+                | "SlotId"
+                | "Region"
+                | "Iter"
+                | "Task"
+                | "Sender"
+                | "Receiver"
+                | "Mutex"
+                | "Atomic"
+                | "Ptr"
+                | "FnPtr"
+                | "TypeShape"
         )
 }

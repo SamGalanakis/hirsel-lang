@@ -8,13 +8,10 @@ use crate::explain::{
 
 impl Checker<'_> {
     pub(super) fn sites(&self) -> Sites<'_> {
-        Sites {
-            tree: self.tree,
-            symbols: self.symbols,
-        }
+        Sites { tree: self.tree }
     }
     pub(super) fn spelled(&self, e: ExprId) -> Option<String> {
-        crate::explain::spell(self.tree, self.symbols, e)
+        crate::explain::spell(self.tree, e)
     }
     /// A function type's source spelling for a quoted type or a suggested
     /// annotation: its header with scalar and tuple parts. None where a part

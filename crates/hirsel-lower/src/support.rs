@@ -108,7 +108,10 @@ impl Fixture {
                 place.expression = id;
                 place.projections.push(hirsel_types::SourceProjection {
                     expression: id,
-                    kind: hirsel_types::SourceProjectionKind::Field(hirsel_types::FieldId(field.0)),
+                    // Fixture fields are spelled by their ordinal.
+                    kind: hirsel_types::SourceProjectionKind::Field(hirsel_types::FieldId(
+                        field.as_str().parse().expect("a fixture field ordinal"),
+                    )),
                 });
             }
             ExprKind::Index { base, index } => {
@@ -220,7 +223,7 @@ impl Fixture {
         self.next_local += 1;
         self.tree.patterns.push(Pattern {
             origin: origin(1),
-            kind: PatternKind::Binding(Symbol(local.0)),
+            kind: PatternKind::Binding(Symbol::intern(&format!("local{}", local.0))),
         });
         self.checked.patterns.push(PatternDecision {
             pattern,
@@ -660,12 +663,12 @@ pub fn function(parameters: Vec<hirsel_types::Parameter>, result: TypeId) -> Fun
     }
 }
 
-/// Runs deep fixtures on a thread with the compiler's stack size
-/// (`hirsel_engine::COMPILER_STACK_BYTES`), without linking the driver.
+/// Runs deep fixtures on a thread with the compiler's stack size, without
+/// linking the driver.
 pub fn with_large_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
-            .stack_size(128 * 1024 * 1024)
+            .stack_size(hirsel_intern::jobs::COMPILER_STACK_BYTES)
             .spawn_scoped(scope, work)
             .expect("fixture thread creation failed")
             .join()

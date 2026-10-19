@@ -1,23 +1,20 @@
 use super::*;
-use hirsel_intern::{Interner, Symbol};
+use hirsel_intern::Symbol;
 use hirsel_span::{FileId, Span};
 
 /// Test-only token fixtures: the trees themselves are built by hand, never parsed.
 struct Fixture {
     file: SyntaxFile,
     sources: SourceMap,
-    names: Interner,
 }
 impl Fixture {
     fn new(source: &str) -> Self {
         let mut sources = SourceMap::default();
         let file = sources.add("test.hir", source.into()).unwrap();
-        let mut names = Interner::default();
-        let tokens = tape(source, file, &mut names);
+        let tokens = tape(source, file);
         Self {
             file: SyntaxFile {
                 has_syntax_errors: false,
-                symbols: std::sync::Arc::new(names.clone()),
 
                 file,
                 tokens,
@@ -25,13 +22,10 @@ impl Fixture {
                 roots: vec![],
             },
             sources,
-            names,
         }
     }
     fn s(&mut self, s: &str) -> Symbol {
-        let symbol = self.names.intern(s);
-        self.file.symbols = std::sync::Arc::new(self.names.clone());
-        symbol
+        Symbol::intern(s)
     }
     fn path(&mut self, s: &str) -> Path {
         let (package, s) = match s.split_once('@') {
@@ -191,7 +185,7 @@ impl Fixture {
     }
 }
 // This fixture scanner only supplies tape spans and names, not AST structure.
-fn tape(source: &str, file: FileId, names: &mut Interner) -> Vec<Token> {
+fn tape(source: &str, file: FileId) -> Vec<Token> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < source.len() {
@@ -327,7 +321,10 @@ fn tape(source: &str, file: FileId, names: &mut Interner) -> Vec<Token> {
                 "false" => Some(False),
                 _ => None,
             };
-            kw.map_or_else(|| TokenKind::Ident(names.intern(word)), TokenKind::Keyword)
+            kw.map_or_else(
+                || TokenKind::Ident(Symbol::intern(word)),
+                TokenKind::Keyword,
+            )
         } else {
             use Punct::*;
             let punctuation = [
@@ -1493,7 +1490,7 @@ fn type_sizes_and_path_separators_have_one_spelling() {
     f.check("fn main() -> pkg@1/mod.T[16]\n");
 }
 #[test]
-fn error_patterns_types_missing_ids_and_names_leave_source_intact() {
+fn error_patterns_types_and_missing_ids_leave_source_intact() {
     let mut f = Fixture::new("fn main() {}");
     let body = f.block(vec![], None);
     f.item(
@@ -1504,7 +1501,7 @@ fn error_patterns_types_missing_ids_and_names_leave_source_intact() {
             abi: None,
         },
     );
-    for case in 0..4 {
+    for case in 0..3 {
         let mut file = f.file.clone();
         match case {
             0 => file.tree.patterns.push(Pattern {
@@ -1515,13 +1512,7 @@ fn error_patterns_types_missing_ids_and_names_leave_source_intact() {
                 origin: f.origin(),
                 kind: TypeExprKind::Error,
             }),
-            2 => file.roots = vec![ItemId(99)],
-            _ => {
-                file.tree.expressions[body.0 as usize].kind = ExprKind::Path(Path {
-                    package: None,
-                    segments: vec![Symbol(99)],
-                })
-            }
+            _ => file.roots = vec![ItemId(99)],
         };
         let r = format(&file, &f.sources);
         assert!(r.unchanged);
@@ -1681,7 +1672,7 @@ fn hand_tree_comment_layout_is_a_fixed_point() {
         .add("formatted.hir", first.source.clone())
         .unwrap();
     f.file.file = file;
-    f.file.tokens = tape(&first.source, file, &mut f.names);
+    f.file.tokens = tape(&first.source, file);
     let origin = f.origin();
     for item in &mut f.file.tree.items {
         item.origin = origin;

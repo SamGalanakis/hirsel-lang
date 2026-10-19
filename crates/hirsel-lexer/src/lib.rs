@@ -1,7 +1,7 @@
 //! Lossless, iterative tokenization of the M0 grammar (LANG-1, SEM-1/2/3).
 //! Newlines remain physical source boundaries; statement completion is parser-owned.
 use hirsel_diag::{Diagnostic, RuleId};
-use hirsel_intern::Interner;
+use hirsel_intern::Symbol;
 use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::{FormatPiece, Keyword, Punct, Token, TokenKind, TriviaKind};
 
@@ -14,11 +14,11 @@ pub struct LexOutput {
 
 /// Tokenize an immutable UTF-8 source snapshot. A stale FileId yields an empty
 /// EOF tape and a LANG-1 diagnostic, rather than indexing another snapshot.
-pub fn lex(file: FileId, sources: &SourceMap, interner: &mut Interner) -> LexOutput {
+pub fn lex(file: FileId, sources: &SourceMap) -> LexOutput {
     match sources.file(file) {
-        Some(source) => scan(file, source.text().as_bytes(), interner),
+        Some(source) => scan(file, source.text().as_bytes()),
         None => {
-            let mut scanner = Scanner::new(file, &[], interner);
+            let mut scanner = Scanner::new(file, &[]);
             scanner.error(
                 const { RuleId::of("LANG-1") },
                 0,
@@ -32,8 +32,8 @@ pub fn lex(file: FileId, sources: &SourceMap, interner: &mut Interner) -> LexOut
 
 // The same byte scanner is exercised on arbitrary bytes by fuzz tests. Production
 // rejects invalid UTF-8/oversize files before SourceMap creation (SEM-3, #21).
-fn scan(file: FileId, bytes: &[u8], interner: &mut Interner) -> LexOutput {
-    let mut scanner = Scanner::new(file, bytes, interner);
+fn scan(file: FileId, bytes: &[u8]) -> LexOutput {
+    let mut scanner = Scanner::new(file, bytes);
     while scanner.pos < bytes.len() {
         scanner.next();
     }
@@ -44,7 +44,6 @@ struct Scanner<'a> {
     file: FileId,
     bytes: &'a [u8],
     pos: usize,
-    interner: &'a mut Interner,
     output: LexOutput,
     /// Open f-string holes, innermost last (SEM-3).
     holes: Vec<Hole>,
@@ -57,12 +56,11 @@ struct Hole {
     groups: u32,
 }
 impl<'a> Scanner<'a> {
-    fn new(file: FileId, bytes: &'a [u8], interner: &'a mut Interner) -> Self {
+    fn new(file: FileId, bytes: &'a [u8]) -> Self {
         Self {
             file,
             bytes,
             pos: 0,
-            interner,
             output: LexOutput::default(),
             holes: Vec::new(),
         }
@@ -141,17 +139,6 @@ impl<'a> Scanner<'a> {
                 {
                     self.literal_unit(false);
                 }
-                // A `name$` width or precision becomes a path the parser builds.
-                let spec = String::from_utf8_lossy(&self.bytes[start..self.pos]).into_owned();
-                for (end, _) in spec.match_indices('$') {
-                    let name = spec[..end]
-                        .rsplit(|c: char| !(c == '_' || c.is_ascii_alphanumeric()))
-                        .next()
-                        .unwrap_or("");
-                    if name.starts_with(|c: char| c == '_' || c.is_ascii_alphabetic()) {
-                        self.interner.intern(name);
-                    }
-                }
                 TokenKind::Format(FormatPiece::Spec)
             }
             b'}' if self.holes.last().is_some_and(|h| h.braces == 0) => self.format_text(false),
@@ -174,10 +161,10 @@ impl<'a> Scanner<'a> {
                 }
                 // Identifier bytes are ASCII by construction.
                 let text = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap_or("");
-                // Keyword members such as x.type need Symbols in the AST;
-                // the parser receives only an immutable interner snapshot.
-                let symbol = self.interner.intern(text);
-                keyword(text).map_or(TokenKind::Ident(symbol), TokenKind::Keyword)
+                keyword(text).map_or_else(
+                    || TokenKind::Ident(Symbol::intern(text)),
+                    TokenKind::Keyword,
+                )
             }
             _ => {
                 if let Some((len, punct)) = punctuation(&self.bytes[self.pos..]) {
@@ -238,7 +225,7 @@ impl<'a> Scanner<'a> {
         let start = self.pos;
         self.pos = self.label_end().expect("checked label prefix");
         let name = std::str::from_utf8(&self.bytes[start + 1..self.pos]).unwrap();
-        let symbol = self.interner.intern(name);
+        let symbol = Symbol::intern(name);
         if name == "_" || keyword(name).is_some() {
             self.error(
                 const { RuleId::of("LANG-1") },
@@ -580,15 +567,6 @@ impl<'a> Scanner<'a> {
     /// `{{` and `}}` are literal braces; a lone `}` is SEM-3.
     fn format_text(&mut self, head: bool) -> TokenKind {
         let start = self.pos;
-        if head {
-            // The parser desugars every f-string into a block that binds its builder
-            // as `$fmt<depth>: List[u8]` and a padded hole's start as `$mark<depth>`;
-            // it reads names from an immutable snapshot.
-            self.interner.intern("List");
-            self.interner.intern("u8");
-            self.interner.intern(&format!("$fmt{}", self.holes.len()));
-            self.interner.intern(&format!("$mark{}", self.holes.len()));
-        }
         self.pos += if head { 2 } else { 1 };
         let (open, closed) = loop {
             match self.bytes.get(self.pos) {

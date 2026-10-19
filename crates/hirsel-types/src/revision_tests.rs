@@ -228,7 +228,7 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
         }],
         generics: vec![GenericBinding {
             owner: owner.clone(),
-            name: Symbol(0),
+            name: Symbol::intern("T"),
             parameter: GenericParameterName::Type(TypeParameterRef::bound(TypeParamId(0))),
         }],
         reference_scopes: vec![(NameSite::Type(TypeExprId(0)), owner)],

@@ -3,7 +3,13 @@
 use hirsel_intern::Symbol;
 use hirsel_span::{FileId, Span};
 use sha2::{Digest, Sha256};
+mod ids;
 mod origins;
+
+pub use hirsel_intern::IdHasher;
+#[cfg(feature = "id-salt")]
+pub use hirsel_intern::salt_ids;
+pub use ids::{DefId, DefMap};
 
 /// Stable SHA-256 digest of domain-separated, length-framed inputs (PROG-5).
 #[derive(
@@ -1063,8 +1069,6 @@ impl SyntaxTree {
 /// Parser output retains invalid tokens and orphan/EOF trivia for round-trip formatting (LANG-1).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SyntaxFile {
-    /// Owning symbol snapshot; all AST symbols refer here.
-    pub symbols: std::sync::Arc<hirsel_intern::Interner>,
     /// Includes recovery diagnostics which have no Error node.
     pub has_syntax_errors: bool,
     pub file: FileId,
@@ -1136,7 +1140,7 @@ mod tests {
 
             origin,
             owned_tokens: TokenRange::default(),
-            name: Symbol(0),
+            name: Symbol::intern("main"),
             definition: path("main"),
             text_hash: ContentHash::of_bytes(b"fn main() { () }"),
             visibility: Visibility::Public,
@@ -1177,8 +1181,7 @@ mod revision_tests {
     use super::*;
     #[test]
     fn v20_header_facts_and_parse_status_survive_snapshot_transport() {
-        let mut symbols = hirsel_intern::Interner::default();
-        let name = symbols.intern("Marker");
+        let name = Symbol::intern("Marker");
         let span = Span::new(FileId(0), 16, 22).unwrap();
         let mut item = Item {
             name_span: span,
@@ -1224,7 +1227,6 @@ mod revision_tests {
         }
         assert_ne!(item, stated);
         let file = SyntaxFile {
-            symbols: std::sync::Arc::new(symbols.clone()),
             has_syntax_errors: true,
             file: FileId(0),
             tokens: vec![],
@@ -1234,12 +1236,7 @@ mod revision_tests {
                 ..Default::default()
             },
         };
-        symbols.intern("later");
-        assert_eq!(file.symbols.len(), 1);
-        assert_eq!(
-            file.symbols.resolve(file.tree.items[0].name),
-            Some("Marker")
-        );
+        assert_eq!(file.tree.items[0].name.as_str(), "Marker");
         assert_eq!(file.tree.items[0].name_span, span);
         assert!(file.has_syntax_errors);
         assert_eq!(file, file.clone());

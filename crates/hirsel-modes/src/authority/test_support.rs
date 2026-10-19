@@ -1,6 +1,6 @@
 //! Manufactured revision-1 checked bodies. These fixtures do not implement a checker.
 use super::*;
-use hirsel_intern::Interner;
+use hirsel_intern::Symbol;
 use hirsel_syntax::{
     ContentHash, Expr, ExprKind, FunctionSyntax, Item, ItemKind, ItemPath, PackageId, Pattern,
     PatternKind, Stmt, StmtKind, TokenRange, UnaryOp, Visibility,
@@ -83,12 +83,7 @@ impl SignatureProvider for Provider {
             .cloned()
             .ok_or(QueryError::NotImplemented)
     }
-    fn lookup(
-        &mut self,
-        _: &hirsel_syntax::FileContext,
-        _: &hirsel_syntax::Path,
-        _: &Interner,
-    ) -> LookupOutput {
+    fn lookup(&mut self, _: &hirsel_syntax::FileContext, _: &hirsel_syntax::Path) -> LookupOutput {
         panic!("authority must not perform name lookup")
     }
 }
@@ -99,7 +94,6 @@ pub struct Fixture {
     pub provider: Provider,
     pub intrinsics: Intrinsics,
     pub unit: TypeId,
-    pub symbols: Interner,
 }
 impl Fixture {
     pub fn new() -> Self {
@@ -132,7 +126,6 @@ impl Fixture {
             provider: Provider::default(),
             intrinsics: Intrinsics::new(),
             unit,
-            symbols: Interner::default(),
         }
     }
     pub fn ty(&mut self, kind: TypeKind) -> TypeId {
@@ -166,9 +159,7 @@ impl Fixture {
         mutable: bool,
     ) -> ExprId {
         let ty = bind_parameter_scopes(&mut self.body.types, ty, &[owner]).unwrap();
-        let symbol = self
-            .symbols
-            .intern(&format!("binding{}", self.body.bindings.len()));
+        let symbol = Symbol::intern(&format!("binding{}", self.body.bindings.len()));
         let p = hirsel_syntax::PatternId(self.tree.patterns.len() as u32);
         self.tree.patterns.push(Pattern {
             origin: node_origin(50 + p.0),
@@ -196,7 +187,7 @@ impl Fixture {
         self.reference(name, ty, owner)
     }
     pub fn reference(&mut self, name: ResolvedName, ty: TypeId, owner: NameSite) -> ExprId {
-        let symbol = self.symbols.intern("ref");
+        let symbol = Symbol::intern("ref");
         let e = self.expr(
             ExprKind::Path(hirsel_syntax::Path {
                 package: None,
@@ -401,8 +392,8 @@ impl Fixture {
                 state: CallState::Complete,
             });
         }
-        publish_places(&self.tree, &mut self.body, &self.symbols);
-        let name = self.symbols.intern("example");
+        publish_places(&self.tree, &mut self.body);
+        let name = Symbol::intern("example");
         self.tree.items.push(Item {
             name,
             name_span: node_origin(1).span,
@@ -420,7 +411,6 @@ impl Fixture {
             generated: None,
         });
         let file = hirsel_syntax::SyntaxFile {
-            symbols: std::sync::Arc::new(self.symbols),
             has_syntax_errors: false,
             file: hirsel_span::FileId(0),
             tokens: vec![],
@@ -462,7 +452,7 @@ pub fn rejected(out: &AuthorityOutput, rule: &str) {
 }
 
 /// Manufacture the checked storage rows specified by these typed test fixtures.
-pub(crate) fn publish_places(tree: &SyntaxTree, body: &mut CheckedBody, symbols: &Interner) {
+pub(crate) fn publish_places(tree: &SyntaxTree, body: &mut CheckedBody) {
     let specified = body.places.clone();
     body.places.clear();
     for row in &body.expressions.clone() {
@@ -565,9 +555,9 @@ pub(crate) fn publish_places(tree: &SyntaxTree, body: &mut CheckedBody, symbols:
                     let field = match &body.types.get(ty).unwrap().kind {
                         TypeKind::Record(fields) => fields
                             .iter()
-                            .position(|f| Some(f.name.as_str()) == symbols.resolve(*field))
+                            .position(|f| f.name.as_str() == field.as_str())
                             .unwrap() as u32,
-                        TypeKind::Tuple(_) => symbols.resolve(*field).unwrap().parse().unwrap(),
+                        TypeKind::Tuple(_) => field.as_str().parse().unwrap(),
                         _ => panic!("fixture field needs checked ordinal"),
                     };
                     SourceProjectionKind::Field(FieldId(field))

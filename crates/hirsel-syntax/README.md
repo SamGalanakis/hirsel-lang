@@ -7,6 +7,13 @@ Allowed dependencies: hirsel-span, hirsel-intern, sha2; no phase implementation 
 Invariants and boundary:
 
 - IDs are u32 indices into the owning Vec; no node borrows another crate's storage.
+- `DefId(NonZeroU32)` is the process-global session identity of a DefPath
+  (`ids.rs`). Its table caches each path's fingerprint and Display form. Eq and
+  Hash compare ids; Ord compares DefPaths, so a `BTreeMap<DefId, _>` iterates in
+  path order under any id assignment. `DefMap<T>` is a `HashMap` keyed by id in
+  unspecified order: sort before any output. DefPath stays the persisted,
+  hashed, printed and mangled form. `salt_ids` (feature `id-salt`) is
+  hirsel-intern's, re-exported.
 - The token tape covers every source byte once, in order, plus empty EOF; comments and invalid tokens remain (LANG-1).
 - Origin ranges cover significant syntax. Item.owned_tokens includes leading trivia and trailing same-line comments; the file owns leftover EOF trivia.
 - A top-level item's text_hash hashes the exact bytes covered by owned_tokens, including attributes, contracts and drop; no newline normalization.
@@ -35,7 +42,7 @@ Revision 1 adds Item.name_span (exact declared name), FieldSyntax.growable and
 DropSyntax.noalloc. Bound::NoallocDrop is contextual; no token/keyword was added.
 Type declaration bounds are Option<Vec<Bound>>: None is omission, Some([]) is the
 explicit `: ()` promise. Field growability is never a type qualifier. SyntaxFile
-owns an Arc<Interner> snapshot and has_syntax_errors, which includes recovery
+owns has_syntax_errors, which includes recovery
 errors lacking AST Error nodes. Formatters must honor it. SourceMap ownership
 still belongs to the driver. The parser follow-up implements the four new forms;
 this revision adds transport without changing the conformance pending list.

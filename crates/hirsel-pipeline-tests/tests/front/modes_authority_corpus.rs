@@ -73,7 +73,7 @@ fn divergent_alias_joins_publish_fresh_identities_and_preserve_original_owners()
                     let ResolvedName::Local(local) = binding.binding else {
                         return None;
                     };
-                    (file.symbols.resolve(name) == Some("r")).then_some(OriginRoot::Local(local))
+                    (name.as_str() == "r").then_some(OriginRoot::Local(local))
                 })
                 .expect("r binding");
             assert_eq!(

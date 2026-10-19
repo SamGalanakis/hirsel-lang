@@ -1,6 +1,7 @@
 use crate::source_std;
 use hirsel_driver::*;
 use hirsel_engine::*;
+use hirsel_intern::Symbol;
 fn path(name: &str) -> DefPath {
     let mut p = entry_path(&default_context());
     p.0.name = name.into();
@@ -229,20 +230,14 @@ fn registry_fallback_records_reads_and_respects_program_definitions_on_compiler_
     assert!(
         matches!(&signature.types.get(f.parameters[0].ty).unwrap().kind,hirsel_types::TypeKind::Named { definition, .. } if *definition==path("Io"))
     );
-    let mut symbols = hirsel_intern::Interner::default();
     let hidden = hirsel_syntax::Path {
         package: None,
         segments: vec![
-            symbols.intern("$intrinsic"),
-            symbols.intern("unicode_scalars_open"),
+            Symbol::intern("$intrinsic"),
+            Symbol::intern("unicode_scalars_open"),
         ],
     };
-    assert!(
-        engine
-            .lookup(&default_context(), &hidden, &symbols)
-            .result
-            .is_err()
-    );
+    assert!(engine.lookup(&default_context(), &hidden).result.is_err());
 }
 
 #[test]

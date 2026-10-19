@@ -41,10 +41,9 @@ impl SignaturePhase for MalformedUnrelated {
             std::sync::Arc<hirsel_syntax::SyntaxFile>,
             hirsel_syntax::ItemId,
         )],
-        symbols: &hirsel_intern::Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<hirsel_types::Signature>, QueryError> {
-        let mut output = self.0.signature_items(items, symbols, provider)?;
+        let mut output = self.0.signature_items(items, provider)?;
         if output.value.definition.0.name == "poison" {
             // A malformed unreachable row must be checked even if the producer
             // incorrectly retains its original semantic fingerprint.
@@ -58,10 +57,9 @@ impl SignaturePhase for MalformedUnrelated {
         &self,
         file: std::sync::Arc<hirsel_syntax::SyntaxFile>,
         item: hirsel_syntax::ItemId,
-        symbols: &hirsel_intern::Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<hirsel_types::Signature>, QueryError> {
-        self.signature_items(&[(file, item)], symbols, provider)
+        self.signature_items(&[(file, item)], provider)
     }
 }
 fn poisoned_engine() -> QueryEngine {

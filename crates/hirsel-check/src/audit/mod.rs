@@ -1,7 +1,6 @@
 //! Source allocation and representation obligations, before TIR lowering.
 //! Inputs are producer decisions; this pass does not infer modes or call effects.
 use hirsel_diag::{Diagnostic, RuleId};
-use hirsel_intern::Interner;
 use hirsel_intern::work::{self, Counter};
 use hirsel_syntax::{self as ast, ExprId, ItemId};
 use hirsel_types::*;
@@ -13,7 +12,6 @@ mod packed;
 
 pub struct Input<'a> {
     pub tree: &'a ast::SyntaxTree,
-    pub symbols: &'a Interner,
     pub item: ItemId,
     pub signature: &'a Signature,
     pub call_allocations: &'a [(ExprId, Allocation)],

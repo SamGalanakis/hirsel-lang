@@ -1,5 +1,5 @@
 use super::super::*;
-use hirsel_intern::Interner;
+use hirsel_intern::Symbol;
 use hirsel_syntax::{self as s, *};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -28,7 +28,7 @@ impl SignatureProvider for Provider {
             .cloned()
             .ok_or(QueryError::NotImplemented)
     }
-    fn lookup(&mut self, _: &FileContext, _: &Path, _: &Interner) -> LookupOutput {
+    fn lookup(&mut self, _: &FileContext, _: &Path) -> LookupOutput {
         panic!("ownership must not resolve names")
     }
 }
@@ -71,7 +71,6 @@ pub struct Fixture {
     pub body: CheckedBody,
     pub signature: Signature,
     pub provider: Provider,
-    pub symbols: Interner,
     pub bytes: TypeId,
     pub scalar: TypeId,
     pub unit: TypeId,
@@ -93,8 +92,7 @@ impl Fixture {
             kind: SignatureKind::Function(function(vec![], unit)),
             fingerprint: Default::default(),
         };
-        let mut symbols = Interner::default();
-        let name = symbols.intern("example");
+        let name = Symbol::intern("example");
         let tree = SyntaxTree {
             items: vec![Item {
                 name_span: origin(0).span,
@@ -130,7 +128,6 @@ impl Fixture {
             },
             signature,
             provider: Provider::default(),
-            symbols,
             bytes,
             scalar,
             unit,
@@ -214,7 +211,7 @@ impl Fixture {
         id
     }
     pub fn read(&mut self, binding: usize) -> ExprId {
-        let name = self.symbols.intern(&format!("b{binding}"));
+        let name = Symbol::intern(&format!("b{binding}"));
         let ty = self.body.bindings[binding].ty;
         let id = self.expr(
             ExprKind::Path(Path {
@@ -253,7 +250,7 @@ impl Fixture {
         self.statements.push(stmt);
     }
     pub fn bind(&mut self, value: ExprId, mutable: bool) -> usize {
-        let name = self.symbols.intern(&format!("local{}", self.next_local));
+        let name = Symbol::intern(&format!("local{}", self.next_local));
         let pattern = PatternId(self.tree.patterns.len() as u32);
         self.tree.patterns.push(Pattern {
             origin: origin(pattern.0 + 300),
@@ -332,7 +329,7 @@ impl Fixture {
         self.provider
             .signatures
             .insert(path(name), Arc::new(signature));
-        let symbol = self.symbols.intern(name);
+        let symbol = Symbol::intern(name);
         let callee = self.expr(
             ExprKind::Path(Path {
                 package: None,
@@ -401,10 +398,9 @@ impl Fixture {
         if let ItemKind::Function { body, .. } = &mut self.tree.items[0].kind {
             *body = Some(root);
         }
-        crate::authority::test_support::publish_places(&self.tree, &mut self.body, &self.symbols);
+        crate::authority::test_support::publish_places(&self.tree, &mut self.body);
         check_ownership_with_clauses(
             &self.tree,
-            &self.symbols,
             ItemId(0),
             &self.signature,
             &mut self.body,

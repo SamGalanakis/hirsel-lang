@@ -837,7 +837,7 @@ impl Explanation {
                     .enumerate()
                     .find_map(|(i, e)| {
                         (e.origin.span == fact.span)
-                            .then(|| spell(sites.tree, sites.symbols, ExprId(i as u32)))
+                            .then(|| spell(sites.tree, ExprId(i as u32)))
                             .flatten()
                     });
                 fact.names.push(name.unwrap_or_else(|| prose("the value")));
@@ -1036,11 +1036,10 @@ pub(crate) fn root_key(definition: &DefPath, root: impl Hash) -> u64 {
 /// an empty span instead of failing the check.
 pub(crate) struct Sites<'a> {
     pub tree: &'a SyntaxTree,
-    pub symbols: &'a hirsel_intern::Interner,
 }
 impl Sites<'_> {
     pub fn name(&self, symbol: hirsel_intern::Symbol) -> String {
-        self.symbols.resolve(symbol).unwrap_or("_").to_owned()
+        symbol.as_str().to_owned()
     }
     pub fn signature(&self, owner: NameSite) -> Option<&hirsel_syntax::FunctionSyntax> {
         match owner {
@@ -1143,12 +1142,8 @@ impl Sites<'_> {
 }
 
 /// Short source spellings for headlines; None where a label shows the site.
-pub(crate) fn spell(
-    tree: &SyntaxTree,
-    symbols: &hirsel_intern::Interner,
-    expression: ExprId,
-) -> Option<String> {
-    let name = |s| symbols.resolve(s).map(str::to_owned);
+pub(crate) fn spell(tree: &SyntaxTree, expression: ExprId) -> Option<String> {
+    let name = |s: hirsel_intern::Symbol| Some(s.as_str().to_owned());
     let mut depth = 0;
     fn go(
         tree: &SyntaxTree,

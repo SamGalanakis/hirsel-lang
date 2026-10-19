@@ -4,3 +4,10 @@ version.workspace = true
 edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+[features]
+# Seeded permutation of session id assignment, for the id-invariance oracle (O1).
+id-salt = []
+
+[dev-dependencies]
+proptest = "1"

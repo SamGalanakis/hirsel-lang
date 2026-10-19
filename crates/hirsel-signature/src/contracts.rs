@@ -35,29 +35,23 @@ impl Normalizer<'_, '_> {
     ) -> Result<(), QueryError> {
         // A dot path rooted in the declared parameter is a projection, not a
         // provider definition. Preserve each field spelling in contract identity.
-        if p.package.is_none() {
-            if let Some(root) = p
-                .segments
-                .first()
-                .and_then(|s| self.input.symbols.resolve(*s))
-            {
-                if let Some(ordinal) = self
-                    .parameters
-                    .iter()
-                    .position(|name| name.as_deref() == Some(root))
-                {
-                    e.tag("parameter");
-                    e.number(ordinal as u64);
-                    if p.segments.len() > 1 {
-                        e.tag("projection");
-                        e.number((p.segments.len() - 1) as u64);
-                        for field in &p.segments[1..] {
-                            e.tag(&self.name(*field)?);
-                        }
-                    }
-                    return Ok(());
+        if p.package.is_none()
+            && let Some(root) = p.segments.first()
+            && let Some(ordinal) = self
+                .parameters
+                .iter()
+                .position(|name| name.as_deref() == Some(root.as_str()))
+        {
+            e.tag("parameter");
+            e.number(ordinal as u64);
+            if p.segments.len() > 1 {
+                e.tag("projection");
+                e.number((p.segments.len() - 1) as u64);
+                for field in &p.segments[1..] {
+                    e.tag(field.as_str());
                 }
             }
+            return Ok(());
         }
         if let Some(id) = id {
             if let Some((_, name)) = self
@@ -189,16 +183,14 @@ impl Normalizer<'_, '_> {
                 self.expression(*callee, e, active, locals)?;
                 e.number(arguments.len() as u64);
                 for a in arguments {
-                    e.option(a.label, |e, s| {
-                        e.tag(self.input.symbols.resolve(s).unwrap_or("<invalid>"))
-                    });
+                    e.option(a.label, |e, s| e.tag(s.as_str()));
                     self.expression(a.value, e, active, locals)?;
                 }
             }
             ast::ExprKind::Field { base, field } => {
                 e.tag("field");
                 self.expression(*base, e, active, locals)?;
-                e.tag(&self.name(*field)?);
+                e.tag(field.as_str());
             }
             ast::ExprKind::Index { base, index } => {
                 e.tag("index");
@@ -298,14 +290,14 @@ impl Normalizer<'_, '_> {
                 e.tag("break");
                 if let Some(label) = label {
                     e.tag("label");
-                    e.tag(&self.name(*label)?);
+                    e.tag(label.as_str());
                 }
             }
             ast::ExprKind::Continue(label) => {
                 e.tag("continue");
                 if let Some(label) = label {
                     e.tag("label");
-                    e.tag(&self.name(*label)?);
+                    e.tag(label.as_str());
                 }
             }
             ast::ExprKind::Shape(t) => {
@@ -420,7 +412,7 @@ impl Normalizer<'_, '_> {
                 e.tag("while");
                 if let Some(label) = label {
                     e.tag("label");
-                    e.tag(&self.name(*label)?);
+                    e.tag(label.as_str());
                 }
                 self.expression(*condition, e, active, locals)?;
                 self.expression(*body, e, active, locals)?;
@@ -434,7 +426,7 @@ impl Normalizer<'_, '_> {
                 e.tag("for");
                 if let Some(label) = s.kind.loop_label() {
                     e.tag("label");
-                    e.tag(&self.name(label)?);
+                    e.tag(label.as_str());
                 }
                 self.expression(*source, e, active, locals)?;
                 let mut scoped = locals.clone();
@@ -447,7 +439,7 @@ impl Normalizer<'_, '_> {
                 body,
             } => {
                 e.tag("local-function");
-                e.tag(&self.name(*name)?);
+                e.tag(name.as_str());
                 let f = self.function(signature, &Attributes::default(), true)?;
                 e.function(&f, &self.types).map_err(|_| {
                     diagnostic(
@@ -460,7 +452,7 @@ impl Normalizer<'_, '_> {
                 self.parameters = f.parameters.iter().map(|p| p.name.clone()).collect();
                 self.expression(*body, e, active, locals)?;
                 self.parameters = old;
-                locals.insert(self.name(*name)?);
+                locals.insert(name.as_str().to_owned());
             }
         }
         Ok(())
@@ -495,7 +487,7 @@ impl Normalizer<'_, '_> {
         match &p.kind {
             ast::PatternKind::Wildcard => e.tag("wildcard"),
             ast::PatternKind::Binding(s) => {
-                let n = self.name(*s)?;
+                let n = s.as_str().to_owned();
                 e.tag("binding");
                 e.tag(&n);
                 locals.insert(n);
@@ -515,7 +507,7 @@ impl Normalizer<'_, '_> {
                 for f in fields {
                     e.boolean(f.label.is_some());
                     if let Some(s) = f.label {
-                        e.tag(&self.name(s)?);
+                        e.tag(s.as_str());
                     }
                     self.pattern(f.pattern, e, locals, active)?;
                 }

@@ -3,7 +3,6 @@
 use hirsel_engine::registry::review::describe_function;
 use hirsel_engine::registry::*;
 use hirsel_engine::*;
-use hirsel_intern::Interner;
 use hirsel_types::*;
 
 #[test]
@@ -81,10 +80,9 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
             );
             let mut sources = SourceMap::default();
             let file = sources.add("catalogue.hir", source).unwrap();
-            let mut symbols = Interner::default();
-            let lexed = hirsel_lexer::lex(file, &sources, &mut symbols);
+            let lexed = hirsel_lexer::lex(file, &sources);
             assert!(lexed.diagnostics.is_empty());
-            let parsed = hirsel_parser::parse(file, lexed.tokens, &context, &sources, &symbols);
+            let parsed = hirsel_parser::parse(file, lexed.tokens, &context, &sources);
             assert!(
                 parsed.diagnostics.is_empty(),
                 "{qualified}: {:?}",
@@ -94,7 +92,6 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                 Input {
                     tree: &parsed.syntax.tree,
                     item: parsed.syntax.roots[0],
-                    symbols: &symbols,
                     context: &context,
                     resolution: &Resolution::default(),
                     metadata: &metadata,
@@ -255,10 +252,9 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
         };
         let mut sources = SourceMap::default();
         let file = sources.add("ledger.hir", source).unwrap();
-        let mut symbols = Interner::default();
-        let lexed = hirsel_lexer::lex(file, &sources, &mut symbols);
+        let lexed = hirsel_lexer::lex(file, &sources);
         assert!(lexed.diagnostics.is_empty());
-        let parsed = hirsel_parser::parse(file, lexed.tokens, &context, &sources, &symbols);
+        let parsed = hirsel_parser::parse(file, lexed.tokens, &context, &sources);
         assert!(
             parsed.diagnostics.is_empty(),
             "{name}: {:?}",
@@ -286,7 +282,6 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
             Input {
                 tree: &parsed.syntax.tree,
                 item: parsed.syntax.roots[0],
-                symbols: &symbols,
                 context: &context,
                 resolution: &Resolution::default(),
                 metadata: &metadata,

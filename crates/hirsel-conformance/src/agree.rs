@@ -516,7 +516,7 @@ impl Catalogue<'_> {
     fn signature(&mut self, sig: &FunctionSyntax, outer: &[Binding]) -> Vec<Binding> {
         let mut scope = outer.to_vec();
         for p in &sig.parameters {
-            if let Some(name) = p.name.and_then(|n| self.file.symbols.resolve(n)) {
+            if let Some(name) = p.name.map(|n| n.as_str()) {
                 scope.push(Binding {
                     name: name.into(),
                     ty: Some(self.type_text(p.ty)),
@@ -567,7 +567,7 @@ impl Catalogue<'_> {
     ) {
         match &self.file.tree.patterns[id.0 as usize].kind {
             PatternKind::Binding(n) => scope.push(Binding {
-                name: self.file.symbols.resolve(*n).unwrap().into(),
+                name: n.as_str().into(),
                 ty: ty.map(|t| self.type_text(t)),
                 base: ty.map(|t| self.base_type_text(t)),
                 mutable,
@@ -645,7 +645,7 @@ impl Catalogue<'_> {
                 .tree
                 .items
                 .iter()
-                .filter(|i| self.file.symbols.resolve(i.name) == Some(ty.trim()))
+                .filter(|i| i.name.as_str() == ty.trim())
                 .filter_map(|i| match &i.kind {
                     ItemKind::Type {
                         body: TypeBody::Record(f),
@@ -654,12 +654,7 @@ impl Catalogue<'_> {
                     _ => None,
                 })
                 .flatten()
-                .map(|f| {
-                    (
-                        self.file.symbols.resolve(f.name).unwrap().to_owned(),
-                        self.type_text(f.ty),
-                    )
-                })
+                .map(|f| (f.name.as_str().to_owned(), self.type_text(f.ty)))
                 .collect();
             for (field, field_ty) in fields {
                 for value in scope.iter().filter(|v| v.ty.as_ref() == Some(&field_ty)) {
@@ -793,7 +788,7 @@ impl Catalogue<'_> {
         let ([segment], None) = (&path.segments[..], &path.package) else {
             return;
         };
-        let name = self.file.symbols.resolve(*segment).unwrap();
+        let name = segment.as_str();
         // A sequence literal takes its type from the holder's annotation.
         let Some(base) = scope
             .iter()
@@ -867,7 +862,7 @@ impl Catalogue<'_> {
         if path.package.is_some() {
             return;
         }
-        let name = self.file.symbols.resolve(segment).unwrap();
+        let name = segment.as_str();
         // A written relation already covers this binding (annotation/relation).
         let Some(ty) = scope
             .iter()
@@ -916,7 +911,7 @@ impl Catalogue<'_> {
         match node.kind {
             ExprKind::Path(ref p) => {
                 if p.package.is_none() && p.segments.len() == 1 {
-                    let name = self.file.symbols.resolve(p.segments[0]).unwrap();
+                    let name = p.segments[0].as_str();
                     if let Some(b) = scope.iter().rev().find(|b| b.name == name) {
                         for other in scope
                             .iter()
@@ -1194,7 +1189,7 @@ impl Catalogue<'_> {
                                 .tree
                                 .items
                                 .iter()
-                                .filter(|i| self.file.symbols.resolve(i.name) == Some(ty.trim()))
+                                .filter(|i| i.name.as_str() == ty.trim())
                                 .filter_map(|i| match &i.kind {
                                     ItemKind::Type {
                                         body: TypeBody::Record(f),
@@ -1203,7 +1198,7 @@ impl Catalogue<'_> {
                                     _ => None,
                                 })
                                 .flatten()
-                                .map(|f| self.file.symbols.resolve(f.name).unwrap().to_owned())
+                                .map(|f| f.name.as_str().to_owned())
                                 .collect();
                             for field in fields {
                                 self.add(
@@ -1309,7 +1304,7 @@ impl Catalogue<'_> {
                     place = *base;
                 }
                 ExprKind::Path(p) if indexed && p.package.is_none() && p.segments.len() == 1 => {
-                    return self.file.symbols.resolve(p.segments[0]).map(Into::into);
+                    return Some(p.segments[0].as_str().into());
                 }
                 _ => return None,
             }

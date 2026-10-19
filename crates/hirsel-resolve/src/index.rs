@@ -1,5 +1,4 @@
 use hirsel_diag::{Diagnostic, Label, RuleId};
-use hirsel_intern::Interner;
 use hirsel_span::Span;
 use hirsel_syntax::*;
 use std::{
@@ -289,22 +288,13 @@ impl ManifestIndex {
             })
     }
 
-    pub fn lookup(
-        &self,
-        context: &FileContext,
-        path: &Path,
-        symbols: &Interner,
-    ) -> Result<DefPath, LookupError> {
-        let segments: Option<Vec<_>> = path
+    pub fn lookup(&self, context: &FileContext, path: &Path) -> Result<DefPath, LookupError> {
+        let segments: Vec<_> = path
             .segments
             .iter()
-            .map(|s| symbols.resolve(*s).map(str::to_owned))
+            .map(|s| s.as_str().to_owned())
             .collect();
-        self.lookup_spelling(
-            context,
-            path.package.as_ref(),
-            &segments.ok_or(LookupError::Missing)?,
-        )
+        self.lookup_spelling(context, path.package.as_ref(), &segments)
     }
 
     pub fn lookup_spelling(

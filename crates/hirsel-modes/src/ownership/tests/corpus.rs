@@ -69,13 +69,8 @@ fn run_with_authority(
     let mut diagnostics = vec![];
     let mut authority_diagnostics = vec![];
     for item in &file.roots {
-        let resolution = hirsel_resolve::resolve_item(
-            &file,
-            *item,
-            &file.symbols,
-            &registry.index.clone(),
-            &mut registry,
-        );
+        let resolution =
+            hirsel_resolve::resolve_item(&file, *item, &registry.index.clone(), &mut registry);
         if let Some(d) = resolution.query.diagnostics.first() {
             return Err(format!(
                 "dependency-owned resolver: {} line {}",
@@ -89,7 +84,6 @@ fn run_with_authority(
                 body: hirsel_check::body::Input {
                     tree: &file.tree,
                     item: *item,
-                    symbols: &file.symbols,
                     context: &support::context(),
                     resolution: &resolution,
                     signature: &signature,
@@ -184,7 +178,6 @@ fn run_with_authority(
         let mut checked = authority.body;
         let output = check_ownership_with_clauses(
             &file.tree,
-            &file.symbols,
             *item,
             &signature,
             &mut checked,

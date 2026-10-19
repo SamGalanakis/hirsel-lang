@@ -109,7 +109,7 @@ contains only diagnostics. Do not cache a partial result as a successful definit
 Implemented session API:
 
 - `QueryEngine::new(QueryEnvironment, PhaseAdapters)` owns the immutable source
-  map, one interner, the manifest index and per-definition caches. Call
+  map, the manifest index and per-definition caches. Call
   `parse_file` for each source snapshot with its manifest-assigned `FileContext`.
   Replacing a source path removes deleted names; adding names changes the identity
   revision. Package/module identity is explicit; standalone CLI files use
@@ -674,8 +674,7 @@ deep-cloning and rebasing them.
   check time without a walk; an open package is still revalidated per engine.
   New lowerings extend an image incrementally.
 - **Install and isolation.** Engine caches are `Layered` maps: a local overlay
-  over the image's immutable `Arc` base. Installing is O(1) per map, the
-  interner continues from the image's snapshot, and only program-package files
+  over the image's immutable `Arc` base. Installing is O(1) per map, and only program-package files
   are lexed and parsed. All engine writes, including retiring a dependency entry
   after an in-engine edit, go to its overlay (tombstones), so no engine
   observes another's mutations and an image never changes. Dropping an engine

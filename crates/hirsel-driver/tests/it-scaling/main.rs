@@ -30,5 +30,4 @@ mod scaling_scope_locals;
 mod scaling_signatures;
 mod scaling_source_rows;
 mod scaling_successful_depth;
-mod scaling_symbols;
 mod scaling_v_roots;

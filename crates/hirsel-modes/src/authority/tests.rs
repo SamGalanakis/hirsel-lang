@@ -1,5 +1,6 @@
 use super::test_support::*;
 use super::*;
+use hirsel_intern::Symbol;
 use hirsel_syntax::{ExprKind, Literal, StmtKind, UnaryOp};
 use proptest::prelude::*;
 
@@ -448,7 +449,7 @@ fn local_named_functions_publish_empty_and_nonempty_capture_rows() {
             Some(unit),
             f.unit,
         );
-        let name = f.symbols.intern("local");
+        let name = Symbol::intern("local");
         let mut callback = function(f.unit);
         callback.parameters = vec![parameter(scalar, PassingMode::Borrow)].into();
         let function_type = f.ty(TypeKind::Function(callback));

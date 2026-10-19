@@ -207,8 +207,8 @@ pub(crate) fn association_diagnostics(
     for item in &parsed.value.roots {
         let source = &parsed.value.tree.items[item.0 as usize];
         for attribute in &source.attributes {
-            let name = parsed.value.symbols.resolve(attribute.name);
-            if !matches!(name, Some("loop_source" | "format")) {
+            let name = attribute.name.as_str();
+            if !matches!(name, "loop_source" | "format") {
                 continue;
             }
             let phases = engine
@@ -220,7 +220,7 @@ pub(crate) fn association_diagnostics(
             let result = engine
                 .item_signature(&source.definition)
                 .and_then(|signature| {
-                    if name == Some("format") {
+                    if name == "format" {
                         phases.validate_format(&signature.value, span, engine)
                     } else {
                         phases.validate_loop_source(&signature.value, span, engine)

@@ -38,17 +38,15 @@ pub trait SignaturePhase {
     fn signature_items(
         &self,
         items: &[(Arc<SyntaxFile>, ItemId)],
-        symbols: &Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let (file, item) = items.first().ok_or(QueryError::NotImplemented)?;
-        self.signature(file.clone(), *item, symbols, provider)
+        self.signature(file.clone(), *item, provider)
     }
     fn signature(
         &self,
         file: Arc<SyntaxFile>,
         item: ItemId,
-        symbols: &Interner,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError>;
 }
@@ -137,7 +135,6 @@ pub struct QueryEngine {
     /// Selected instances of generic generated declarations (CT-5).
     pub(crate) instance_bodies: hirsel_tir::InstanceBodies,
     pub sources: SourceMap,
-    pub symbols: Interner,
     pub environment: QueryEnvironment,
     pub adapters: PhaseAdapters,
     items: Layered<DefPath, Vec<ItemSnapshot>>,
@@ -280,7 +277,6 @@ impl QueryEngine {
             generated: BTreeMap::new(),
             instance_bodies: hirsel_tir::InstanceBodies::default(),
             sources: SourceMap::default(),
-            symbols: Interner::default(),
             environment,
             adapters,
             items: Layered::default(),
@@ -426,7 +422,6 @@ impl QueryEngine {
         }
         let key = self.key(definition, QueryKind::Signature)?;
         self.start(definition, QueryKind::Signature)?;
-        let symbols = self.symbols.clone();
         let candidates = self.definition_items(definition)?;
         let adapter = self.adapters.signature.clone();
         let mut recorder = Recorder {
@@ -438,7 +433,7 @@ impl QueryEngine {
         };
         recorder.engine.signature_stack.push(definition.clone());
         let result = match adapter {
-            Some(adapter) => adapter.signature_items(&candidates, &symbols, &mut recorder),
+            Some(adapter) => adapter.signature_items(&candidates, &mut recorder),
             None => recorder.engine.missing(QueryKind::Signature),
         };
         recorder.engine.signature_stack.pop();
@@ -733,7 +728,7 @@ impl QueryEngine {
             // Duplicate paths keep one semantic identity and multiple addressable items.
             // Task E diagnoses overloading as LANG-7 at the later definition's name.
             if let Some((helper_file, helper_item)) =
-                crate::facts::snapshot(&snapshot.file, snapshot.item, &mut self.symbols)
+                crate::facts::snapshot(&snapshot.file, snapshot.item)
             {
                 let helper = &helper_file.tree.items[helper_item.0 as usize];
                 affected.insert(helper.definition.clone());
@@ -951,7 +946,6 @@ impl QueryEngine {
         }
         self.start(definition, QueryKind::Resolve)?;
         let snapshot = self.snapshot(definition)?;
-        let symbols = self.symbols.clone();
         let adapter = self.adapters.resolver.clone();
         let mut recorder = Recorder {
             owner: definition.clone(),
@@ -961,12 +955,7 @@ impl QueryEngine {
             reads: DependencyReads::default(),
         };
         let result = match adapter {
-            Some(adapter) => adapter.resolve(
-                snapshot.file.clone(),
-                snapshot.item,
-                &symbols,
-                &mut recorder,
-            ),
+            Some(adapter) => adapter.resolve(snapshot.file.clone(), snapshot.item, &mut recorder),
             None => recorder.engine.missing(QueryKind::Resolve),
         };
         let representations = recorder.representations;
@@ -1315,7 +1304,7 @@ impl DefinitionQueries for QueryEngine {
             return self.missing(QueryKind::Lex);
         };
         self.last_phase = Some(QueryKind::Lex);
-        let tokens = lexer.lex(file, &self.sources, &mut self.symbols)?;
+        let tokens = lexer.lex(file, &self.sources)?;
         if has_errors(&tokens.diagnostics) {
             let result = Err(QueryError::Diagnostics(tokens.diagnostics));
             self.parsed.insert(
@@ -1328,13 +1317,7 @@ impl DefinitionQueries for QueryEngine {
             return self.missing(QueryKind::Parse);
         };
         self.last_phase = Some(QueryKind::Parse);
-        let mut output = match parser.parse(
-            file,
-            tokens.value,
-            context,
-            &self.sources,
-            &self.symbols,
-        ) {
+        let mut output = match parser.parse(file, tokens.value, context, &self.sources) {
             Ok(output) => output,
             Err(error) => {
                 // This fixed implementation limit is deterministic for an exact
@@ -1479,7 +1462,6 @@ impl SignatureProvider for QueryEngine {
         &mut self,
         context: &FileContext,
         path: &hirsel_syntax::Path,
-        symbols: &Interner,
     ) -> hirsel_types::LookupOutput {
         hirsel_types::LookupOutput {
             manifest: ContentHash::of_parts(
@@ -1490,20 +1472,19 @@ impl SignatureProvider for QueryEngine {
                 ],
             ),
             result: (|| {
-                if path.segments.iter().any(|segment| {
-                    symbols
-                        .resolve(*segment)
-                        .is_some_and(|s| s.starts_with('$'))
-                }) {
+                if path
+                    .segments
+                    .iter()
+                    .any(|segment| segment.as_str().starts_with('$'))
+                {
                     return Err(QueryError::NotImplemented);
                 }
-                let definition =
-                    lookup_path(context, path, symbols).ok_or(QueryError::NotImplemented)?;
+                let definition = lookup_path(context, path).ok_or(QueryError::NotImplemented)?;
                 if self.items.contains_key(&definition) || self.builtins.contains_key(&definition) {
                     Ok(definition)
                 } else {
                     self.registry
-                        .lookup_name(path, symbols)
+                        .lookup_name(path)
                         .ok_or(QueryError::NotImplemented)
                 }
             })(),
@@ -1657,9 +1638,8 @@ impl SignatureProvider for Recorder<'_> {
         &mut self,
         context: &FileContext,
         path: &hirsel_syntax::Path,
-        symbols: &Interner,
     ) -> hirsel_types::LookupOutput {
-        let result = self.engine.lookup(context, path, symbols);
+        let result = self.engine.lookup(context, path);
         self.reads
             .manifest_lookups
             .push(hirsel_types::DependencyRead::ProviderLookup {
@@ -1668,29 +1648,25 @@ impl SignatureProvider for Recorder<'_> {
                 segments: path
                     .segments
                     .iter()
-                    .map(|s| symbols.resolve(*s).unwrap_or("<invalid symbol>").to_owned())
+                    .map(|s| s.as_str().to_owned())
                     .collect(),
                 output: result.clone(),
             });
         if let Err(QueryError::Operational(error)) = &result.result {
             self.reads.operational_failure = Some(error.clone());
         }
-        if let Some(path) = lookup_path(context, path, symbols) {
+        if let Some(path) = lookup_path(context, path) {
             self.reads.lookups.push((path, result.result.is_ok()));
         }
         result
     }
 }
-fn lookup_path(
-    context: &FileContext,
-    path: &hirsel_syntax::Path,
-    symbols: &Interner,
-) -> Option<DefPath> {
+fn lookup_path(context: &FileContext, path: &hirsel_syntax::Path) -> Option<DefPath> {
     let mut segments: Vec<_> = path
         .segments
         .iter()
-        .map(|s| symbols.resolve(*s).map(str::to_owned))
-        .collect::<Option<_>>()?;
+        .map(|s| s.as_str().to_owned())
+        .collect();
     let name = segments.pop()?;
     let modules = if path.package.is_none() && segments.is_empty() {
         context.modules.clone()

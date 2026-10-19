@@ -1,10 +1,9 @@
-use hirsel_intern::Interner;
 use hirsel_span::{SourceMap, Span};
 use hirsel_syntax::*;
-fn parse(source: &str, names: &mut Interner) -> (SyntaxFile, SourceMap, bool) {
+fn parse(source: &str) -> (SyntaxFile, SourceMap, bool) {
     let mut sources = SourceMap::default();
     let file = sources.add("test.hir", source.into()).unwrap();
-    let lex = hirsel_lexer::lex(file, &sources, names);
+    let lex = hirsel_lexer::lex(file, &sources);
     let context = FileContext {
         package: PackageId {
             name: "formatter_test".into(),
@@ -12,7 +11,7 @@ fn parse(source: &str, names: &mut Interner) -> (SyntaxFile, SourceMap, bool) {
         },
         modules: vec![],
     };
-    let parsed = hirsel_parser::parse(file, lex.tokens, &context, &sources, names);
+    let parsed = hirsel_parser::parse(file, lex.tokens, &context, &sources);
     (
         parsed.syntax,
         sources,
@@ -141,12 +140,11 @@ fn adversarial_comment_newline_and_projection_boundaries_roundtrip() {
         "fn main() { let Some(x) = (match c { _ => a }) else { return } }",
         "/// doc\nfn a() {} // end\n\n/// next\nfn b() {}\n// orphan",
     ] {
-        let mut names = Interner::default();
-        let (original, sources, errors) = parse(source, &mut names);
+        let (original, sources, errors) = parse(source);
         assert!(!errors, "{source}");
         let first = hirsel_fmt::format(&original, &sources);
         assert!(!first.unchanged, "{source}");
-        let (reparsed, new_sources, errors) = parse(&first.source, &mut names);
+        let (reparsed, new_sources, errors) = parse(&first.source);
         assert!(!errors, "{}", first.source);
         let before_comments = comments(&original, &sources);
         assert_eq!(
@@ -165,8 +163,7 @@ fn adversarial_comment_newline_and_projection_boundaries_roundtrip() {
 #[test]
 fn real_spec_examples_reparse_to_equal_trees_and_match_the_hand_built_goldens() {
     let source = include_str!("fixtures/spec-overview-original.hir");
-    let mut names = Interner::default();
-    let (original, sources, errors) = parse(source, &mut names);
+    let (original, sources, errors) = parse(source);
     assert!(!errors);
     let formatted = hirsel_fmt::format(&original, &sources);
     assert!(!formatted.unchanged);
@@ -177,7 +174,7 @@ fn real_spec_examples_reparse_to_equal_trees_and_match_the_hand_built_goldens() 
             include_str!("fixtures/spec-overview.hir").trim_end()
         )
     );
-    let (reparsed, new_sources, errors) = parse(&formatted.source, &mut names);
+    let (reparsed, new_sources, errors) = parse(&formatted.source);
     assert!(!errors);
     assert_eq!(
         comments(&original, &sources),
@@ -201,12 +198,11 @@ fn outer_uses_survives_function_typed_results() {
         "type F = fn() -> (fn() -> fn()) uses {a}",
         "type F = fn() -> (fn() -> fn() uses {}) uses {a}",
     ] {
-        let mut names = Interner::default();
-        let (original, sources, errors) = parse(source, &mut names);
+        let (original, sources, errors) = parse(source);
         assert!(!errors, "{source}");
         let first = hirsel_fmt::format(&original, &sources);
         assert!(!first.unchanged, "{source}");
-        let (reparsed, new_sources, errors) = parse(&first.source, &mut names);
+        let (reparsed, new_sources, errors) = parse(&first.source);
         assert!(!errors, "{}", first.source);
         assert_eq!(
             normalized(original.tree),

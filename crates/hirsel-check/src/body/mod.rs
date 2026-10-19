@@ -16,7 +16,6 @@ mod type_display;
 mod types;
 use hirsel_check_protocol::body::*;
 use hirsel_diag::{Diagnostic, RuleId};
-use hirsel_intern::Interner;
 use hirsel_intern::work::{self, Counter};
 use hirsel_span::Span;
 use hirsel_syntax as ast;
@@ -26,7 +25,6 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Input<'a> {
     pub tree: &'a ast::SyntaxTree,
     pub item: ast::ItemId,
-    pub symbols: &'a Interner,
     pub context: &'a ast::FileContext,
     pub resolution: &'a Resolution,
     pub signature: &'a Signature,

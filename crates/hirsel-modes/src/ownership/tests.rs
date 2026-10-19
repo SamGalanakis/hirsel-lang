@@ -2,6 +2,7 @@ mod corpus;
 mod source_support;
 mod support;
 use super::*;
+use hirsel_intern::Symbol;
 use hirsel_syntax::{ExprKind, PassingMode, UnaryOp};
 use support::*;
 
@@ -178,7 +179,7 @@ fn guarded_moving_patterns_test_borrows_and_commit_takes() {
             read
         };
         let pattern = PatternId(0);
-        let symbol = f.symbols.intern("payload");
+        let symbol = Symbol::intern("payload");
         f.tree.patterns.push(Pattern {
             origin: origin(300),
             kind: PatternKind::Binding(symbol),
@@ -306,7 +307,7 @@ fn published_shared_storage_is_immutable_but_the_handle_can_be_replaced() {
         let x = f.parameter(shared, PassingMode::Mut);
         let lhs = f.read(x);
         let lhs = if nested {
-            let field = f.symbols.intern("root");
+            let field = Symbol::intern("root");
             let field = f.expr(ExprKind::Field { base: lhs, field }, f.bytes);
             f.body.places.push(SourcePlace {
                 expression: field,
@@ -345,8 +346,8 @@ proptest::proptest! {
         orders in proptest::collection::vec(proptest::bool::ANY, 1..24),
     ) {
         fn run(padding:usize,reverse:bool,orders:&[bool])->(OwnershipFacts,Vec<hirsel_diag::Diagnostic>,Vec<SignatureDependency>,Vec<(UseKind,Modes)>,Vec<(ExprId,hirsel_types::Type)>,Vec<(usize,hirsel_types::Type)>,Vec<usize>) {
-            let mut f=Fixture::new();for i in 0..padding {f.symbols.intern(&format!("noise{i}"));}
-            let record=f.new_type(TypeKind::Record(vec![Field {name:"a".into(),ty:f.bytes,growable:false},Field {name:"b".into(),ty:f.bytes,growable:false}].into()),unique());let x=f.parameter(record,PassingMode::Take);let read=f.read(x);let field=f.symbols.intern("a");let projection=f.expr(ExprKind::Field {base:read,field},f.bytes);let owned=f.unary(UnaryOp::Unique,projection);let local=f.bind(owned,true);
+            let mut f=Fixture::new();for i in 0..padding {Symbol::intern(&format!("noise{i}"));}
+            let record=f.new_type(TypeKind::Record(vec![Field {name:"a".into(),ty:f.bytes,growable:false},Field {name:"b".into(),ty:f.bytes,growable:false}].into()),unique());let x=f.parameter(record,PassingMode::Take);let read=f.read(x);let field=Symbol::intern("a");let projection=f.expr(ExprKind::Field {base:read,field},f.bytes);let owned=f.unary(UnaryOp::Unique,projection);let local=f.bind(owned,true);
             for (index,swap) in orders.iter().enumerate() {let read=f.read(local);let read=if *swap{f.unary(UnaryOp::Mut,read)}else{read};let call=f.call(&format!("callee{index}"),vec![read],vec![if *swap{PassingMode::Mut}else{PassingMode::Borrow}],vec![local_modes()],Modes::global());f.expr_stmt(call);}
             let mut rows:Vec<_>=std::mem::take(&mut f.provider.signatures).into_iter().collect();if reverse{rows.reverse();}for (path,signature) in rows{f.provider.signatures.insert(path,signature);}
             let mut out=f.check();let physical=std::mem::take(&mut out.value.physical_projections).into_iter().map(|(e,ty)|(e,f.body.types.get(ty).unwrap().clone())).collect();let plain=std::mem::take(&mut out.value.plain_types).into_iter().map(|ty|(ty.index(),f.body.types.get(ty).unwrap().clone())).collect();let silent:Vec<usize>=std::mem::take(&mut out.value.silent_drop_types).into_iter().map(|ty|ty.index()).collect();let decisions=f.body.expressions.iter().map(|e|(e.usage,f.body.types.get(e.ty).unwrap().modes.clone())).collect();(out.value,out.diagnostics,out.dependencies,decisions,physical,plain,silent)
@@ -495,7 +496,7 @@ fn plain_pattern_payload_retains_its_declared_modes() {
         unreachable!()
     };
     let child = hirsel_syntax::PatternId(f.tree.patterns.len() as u32);
-    let name = f.symbols.intern("payload");
+    let name = Symbol::intern("payload");
     f.tree.patterns.push(hirsel_syntax::Pattern {
         origin: f.tree.patterns[root.0 as usize].origin.clone(),
         kind: hirsel_syntax::PatternKind::Binding(name),

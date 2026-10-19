@@ -1,7 +1,7 @@
 # hirsel-fmt
 
 `format(&SyntaxFile, &SourceMap) -> FormatResult` prints the indexed AST. Names
-come from the immutable SyntaxFile.symbols snapshot (including reserved members); literals
+are the AST's `Symbol` spellings (including reserved members); literals
 keep their spelling. `source` is the result and `unchanged` marks conservative
 fallback. `format` uses SyntaxFile.has_syntax_errors, including diagnostics without
 Invalid/Error nodes. External error-status and tape-spelling adapters have been retired.

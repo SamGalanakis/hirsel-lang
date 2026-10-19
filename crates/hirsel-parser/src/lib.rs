@@ -1,6 +1,6 @@
 //! Recovery parser for the frozen grammar, independent of lexing and name lookup.
 use hirsel_diag::{Diagnostic, RuleId};
-use hirsel_intern::{Interner, Symbol};
+use hirsel_intern::Symbol;
 use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::*;
 
@@ -26,15 +26,13 @@ pub struct ParseOutput {
     pub nesting_limit: Option<Span>,
 }
 
-/// Parse a lexer-owned tape without mutating either source or symbol snapshot.
-/// Invalid/missing EOF, spans and symbols are handled without indexing panics.
-/// Keyword member spellings must be present in `symbols` (as lexer identifiers are).
+/// Parse a lexer-owned tape without mutating the source.
+/// Invalid/missing EOF and spans are handled without indexing panics.
 pub fn parse(
     file: FileId,
     tokens: Vec<Token>,
     context: &FileContext,
     sources: &SourceMap,
-    symbols: &Interner,
 ) -> ParseOutput {
     let significant = tokens
         .iter()
@@ -47,7 +45,6 @@ pub fn parse(
         significant,
         pos: 0,
         sources,
-        symbols,
         tree: SyntaxTree::default(),
         diagnostics: vec![],
         recovered_names: std::collections::BTreeSet::new(),
@@ -82,8 +79,6 @@ pub fn parse(
                     .tokens
                     .iter()
                     .any(|t| matches!(t.kind, TokenKind::Invalid)),
-            symbols: std::sync::Arc::new(symbols.clone()),
-
             file,
             tokens: parser.tokens,
             tree: parser.tree,
@@ -100,7 +95,6 @@ struct Parser<'a> {
     significant: Vec<usize>,
     pos: usize,
     sources: &'a SourceMap,
-    symbols: &'a Interner,
     tree: SyntaxTree,
     diagnostics: Vec<Diagnostic>,
     recovered_names: std::collections::BTreeSet<String>,
@@ -230,7 +224,7 @@ impl Parser<'_> {
     }
     fn name(&mut self) -> Parsed<Symbol> {
         match self.token(0).map(|t| &t.kind) {
-            Some(TokenKind::Ident(s)) if self.symbols.resolve(*s).is_some_and(|s| s != "_") => {
+            Some(TokenKind::Ident(s)) if s.as_str() != "_" => {
                 let s = *s;
                 self.pos += 1;
                 Ok(s)
@@ -269,17 +263,8 @@ impl Parser<'_> {
                         format!("`{spelling}` is reserved for {role}; choose another name"),
                     ));
                 }
-                let symbol = (0..self.symbols.len())
-                    .map(|i| Symbol(i as u32))
-                    .find(|s| self.symbols.resolve(*s) == Some(spelling.as_str()));
                 self.pos += 1;
-                symbol.ok_or_else(|| {
-                    self.diagnostics.push(Diagnostic::error(
-                        const { RuleId::of("LANG-14") },
-                        self.span(),
-                        "keyword spelling is unavailable",
-                    ));
-                })
+                Ok(Symbol::intern(&spelling))
             }
             _ => self.fail(const { RuleId::of("LANG-4") }, "expected a name"),
         }
@@ -289,18 +274,9 @@ impl Parser<'_> {
             return self.name();
         }
         if matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::Keyword(_))) {
-            let spelling = self.text_at(0);
-            if let Some(s) = (0..self.symbols.len())
-                .map(|i| Symbol(i as u32))
-                .find(|&s| self.symbols.resolve(s) == Some(spelling))
-            {
-                self.pos += 1;
-                return Ok(s);
-            }
-            return self.fail(
-                const { RuleId::of("LANG-1") },
-                "keyword member spelling is missing from the symbol snapshot",
-            );
+            let member = Symbol::intern(self.text_at(0));
+            self.pos += 1;
+            return Ok(member);
         }
         self.name()
     }
@@ -529,7 +505,7 @@ impl Parser<'_> {
             self.pos += 1;
             self.expect("/", const { RuleId::of("LANG-4") })?;
             package = Some(PackageId {
-                name: self.symbols.resolve(segments[0]).unwrap_or("").into(),
+                name: segments[0].as_str().into(),
                 version,
             });
             segments = vec![self.name()?];

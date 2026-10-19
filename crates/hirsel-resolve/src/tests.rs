@@ -1,5 +1,5 @@
 use super::*;
-use hirsel_intern::{Interner, Symbol};
+use hirsel_intern::Symbol;
 use hirsel_span::{SourceMap, Span};
 use hirsel_syntax::*;
 use hirsel_types::{self as ty, QueryError, ResolvedName, SignatureProvider};
@@ -55,18 +55,13 @@ impl Fake {
     }
 }
 impl SignatureProvider for Fake {
-    fn lookup(
-        &mut self,
-        context: &FileContext,
-        path: &Path,
-        symbols: &Interner,
-    ) -> hirsel_types::LookupOutput {
+    fn lookup(&mut self, context: &FileContext, path: &Path) -> hirsel_types::LookupOutput {
         hirsel_types::LookupOutput {
             manifest: Default::default(),
             result: (|| {
                 self.lookups += 1;
                 self.lookup_index
-                    .lookup(context, path, symbols)
+                    .lookup(context, path)
                     .map_err(|_| QueryError::NotImplemented)
             })(),
         }
@@ -85,7 +80,6 @@ impl SignatureProvider for Fake {
 
 struct Tree {
     file: SyntaxFile,
-    symbols: Interner,
     source: String,
 }
 impl Tree {
@@ -94,14 +88,12 @@ impl Tree {
         Self {
             file: SyntaxFile {
                 has_syntax_errors: false,
-                symbols: Default::default(),
 
                 file,
                 tokens: vec![],
                 tree: SyntaxTree::default(),
                 roots: vec![],
             },
-            symbols: Interner::default(),
             source: source.into(),
         }
     }
@@ -125,7 +117,7 @@ impl Tree {
         }
     }
     fn name(&mut self, name: &str) -> Symbol {
-        self.symbols.intern(name)
+        Symbol::intern(name)
     }
     fn path(&mut self, name: &str) -> Path {
         Path {
@@ -294,7 +286,7 @@ impl Tree {
     fn run(&self, item: ItemId) -> ResolveOutput {
         let index = self.index();
         let mut fake = Fake::new(&index);
-        resolve_item(&self.file, item, &self.symbols, &index, &mut fake)
+        resolve_item(&self.file, item, &index, &mut fake)
     }
 }
 fn clean(output: &ResolveOutput) {
@@ -336,14 +328,7 @@ fn loop_source_paths_resolve_without_operation_signature_reads() {
         ResolveView::Header(item),
     ] {
         let mut fake = Fake::new(&index);
-        let output = resolve_view(
-            &t.file,
-            view,
-            &t.symbols,
-            &index,
-            &mut fake,
-            &ExpectedTypes::default(),
-        );
+        let output = resolve_view(&t.file, view, &index, &mut fake, &ExpectedTypes::default());
         clean(&output);
         assert!(fake.reads.is_empty(), "{:?}", fake.reads);
         assert!(output.query.dependencies.is_empty());
@@ -394,7 +379,6 @@ fn constant(d: DefPath, kind: ty::TypeKind) -> ty::Signature {
 
 #[test]
 fn exposure_is_a_module_head_not_an_unqualified_value_import() {
-    let mut names = Interner::default();
     let d = definition(package("json", "1"), &["value"], "parse");
     let mut f = fixture(vec![entry(d.clone(), Namespace::Value, Visibility::Public)]);
     f.exposures.push(DependencyExposure {
@@ -407,16 +391,15 @@ fn exposure_is_a_module_head_not_an_unqualified_value_import() {
         package: package("test", "1"),
         modules: vec![],
     };
-    let v = names.intern("v");
-    let parse = names.intern("parse");
+    let v = Symbol::intern("v");
+    let parse = Symbol::intern("parse");
     assert_eq!(
         index.lookup(
             &context,
             &Path {
                 package: None,
                 segments: vec![v, parse]
-            },
-            &names
+            }
         ),
         Ok(d)
     );
@@ -426,8 +409,7 @@ fn exposure_is_a_module_head_not_an_unqualified_value_import() {
             &Path {
                 package: None,
                 segments: vec![parse]
-            },
-            &names
+            }
         ),
         Err(LookupError::Missing)
     );
@@ -516,7 +498,7 @@ fn unresolved_ambiguous_and_private_uses_have_rule_and_use_span() {
     }
     let (index, _) = ManifestIndex::new(fixture);
     let mut provider = Fake::new(&index);
-    let output = resolve_item(&t.file, item, &t.symbols, &index, &mut provider);
+    let output = resolve_item(&t.file, item, &index, &mut provider);
     assert_eq!(output.query.diagnostics.len(), 3);
     for (d, (rule, line)) in
         output
@@ -574,7 +556,7 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
     let mut fake = Fake::new(&index);
     let signature = constant(own("good"), ty::TypeKind::Primitive(ty::Primitive::U32));
     fake.signatures.insert(own("good"), signature.clone());
-    let output = resolve_item(&t.file, item, &t.symbols, &index, &mut fake);
+    let output = resolve_item(&t.file, item, &index, &mut fake);
     assert_eq!(
         output.query.dependencies,
         vec![ty::SignatureDependency {
@@ -685,12 +667,7 @@ proptest::proptest! {
 fn failed_provider_diagnostics_are_silent_for_reservations_and_emitted_once_at_use() {
     struct ReportingProvider;
     impl SignatureProvider for ReportingProvider {
-        fn lookup(
-            &mut self,
-            _: &FileContext,
-            _: &Path,
-            _: &Interner,
-        ) -> hirsel_types::LookupOutput {
+        fn lookup(&mut self, _: &FileContext, _: &Path) -> hirsel_types::LookupOutput {
             hirsel_types::LookupOutput {
                 manifest: Default::default(),
                 result: (|| {
@@ -720,13 +697,7 @@ fn failed_provider_diagnostics_are_silent_for_reservations_and_emitted_once_at_u
         Visibility::Private,
         3,
     );
-    let output = resolve_item(
-        &t.file,
-        item,
-        &t.symbols,
-        &t.index(),
-        &mut ReportingProvider,
-    );
+    let output = resolve_item(&t.file, item, &t.index(), &mut ReportingProvider);
     assert_eq!(output.query.diagnostics.len(), 1);
     error_at(&output, "LANG-4", t.origin(2).span);
     assert_eq!(

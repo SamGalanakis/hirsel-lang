@@ -34,7 +34,7 @@ mod queries;
 mod tools;
 pub use admission::{admit_run, bind_run, entry_roots, read_run_record};
 use hirsel_diag::{Diagnostic, RuleId};
-use hirsel_intern::Interner;
+use hirsel_intern::Symbol;
 pub use hirsel_interp::library::SimulationConfig;
 use hirsel_span::{FileId, SourceMap};
 pub use hirsel_syntax::DefPath;
@@ -289,12 +289,8 @@ pub trait DefinitionQueries {
 /// Shared leaf phase signatures; implementations may expose equivalent free functions (LANG-1).
 /// These traits live in the driver boundary; implementation crates need only the data crates.
 pub trait LexerPhase {
-    fn lex(
-        &self,
-        file: FileId,
-        sources: &SourceMap,
-        symbols: &mut Interner,
-    ) -> Result<QueryOutput<Vec<Token>>, QueryError>;
+    fn lex(&self, file: FileId, sources: &SourceMap)
+    -> Result<QueryOutput<Vec<Token>>, QueryError>;
 }
 /// Parsing receives tokens and file naming context; it does not resolve types (LANG-1/2).
 pub trait ParserPhase {
@@ -304,7 +300,6 @@ pub trait ParserPhase {
         tokens: Vec<Token>,
         context: &FileContext,
         sources: &SourceMap,
-        symbols: &Interner,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError>;
 }
 /// Formatting uses the complete token tape including error recovery and comments (LANG-1).
@@ -321,7 +316,6 @@ pub trait ResolverPhase {
         &self,
         file: std::sync::Arc<SyntaxFile>,
         item: ItemId,
-        symbols: &Interner,
         signatures: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Resolution>, QueryError>;
 }

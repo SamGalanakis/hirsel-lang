@@ -107,8 +107,8 @@ impl Parser<'_> {
             while self.at("@") {
                 let attr = self.attribute()?;
                 if !matches!(
-                    self.symbols.resolve(attr.name),
-                    Some("noalloc" | "advance_only" | "preserves_captures" | "captures")
+                    attr.name.as_str(),
+                    "noalloc" | "advance_only" | "preserves_captures" | "captures"
                 ) {
                     return self.fail(
                         const { RuleId::of("LANG-7") },
@@ -282,7 +282,7 @@ impl Parser<'_> {
                     .map(|p| {
                         p.segments
                             .iter()
-                            .map(|s| self.symbols.resolve(*s).unwrap_or("_"))
+                            .map(|s| s.as_str())
                             .collect::<Vec<_>>()
                             .join(".")
                     })

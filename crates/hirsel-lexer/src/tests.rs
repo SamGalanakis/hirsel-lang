@@ -1,12 +1,11 @@
 use super::*;
 
-fn fixture(text: &str) -> (SourceMap, Interner, LexOutput) {
+fn fixture(text: &str) -> (SourceMap, LexOutput) {
     let mut sources = SourceMap::default();
     let file = sources.add("test.hir", text.into()).unwrap();
-    let mut interner = Interner::default();
-    let output = lex(file, &sources, &mut interner);
+    let output = lex(file, &sources);
     round_trip(text.as_bytes(), &output);
-    (sources, interner, output)
+    (sources, output)
 }
 fn round_trip(bytes: &[u8], output: &LexOutput) {
     let mut end = 0;
@@ -41,7 +40,7 @@ fn significant(output: &LexOutput) -> Vec<&TokenKind> {
         .collect()
 }
 fn single(text: &str, kind: TokenKind) {
-    let (_, _, output) = fixture(text);
+    let (_, output) = fixture(text);
     assert!(
         output.diagnostics.is_empty(),
         "{text:?}: {:?}",
@@ -50,7 +49,7 @@ fn single(text: &str, kind: TokenKind) {
     assert_eq!(significant(&output), vec![&kind], "{text:?}");
 }
 fn error(text: &str, rule: &str, start: u32, end: u32) {
-    let (sources, _, output) = fixture(text);
+    let (sources, output) = fixture(text);
     let diagnostic = &output.diagnostics[0];
     assert_eq!(diagnostic.rule.as_str(), rule, "{text:?}");
     assert_eq!(
@@ -72,27 +71,6 @@ fn error(text: &str, rule: &str, start: u32, end: u32) {
 }
 
 #[test]
-fn every_keyword_spelling_is_available_in_the_immutable_interner() {
-    let text = "fn let mut match if else for in while break continue return take copy unique type distinct flat resource drop box pub opaque const comptime shape heap before requires ensures result where uses of local global once todo extern unsafe true false";
-    let (_, interner, output) = fixture(text);
-    assert!(output.diagnostics.is_empty());
-    assert!(
-        significant(&output)
-            .iter()
-            .all(|kind| matches!(kind, TokenKind::Keyword(_)))
-    );
-    assert_eq!(interner.len(), text.split_whitespace().count());
-    for spelling in text.split_whitespace() {
-        // Use only the immutable snapshot API, as the parser does. Calling
-        // intern here would hide a missing keyword spelling in the lexer.
-        let symbol = (0..interner.len())
-            .map(|index| hirsel_intern::Symbol(index as u32))
-            .find(|symbol| interner.resolve(*symbol) == Some(spelling));
-        assert!(symbol.is_some(), "keyword {spelling:?} was not interned");
-    }
-}
-
-#[test]
 fn integer_bases_separators_and_every_suffix() {
     let suffixes = [
         "", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128",
@@ -110,7 +88,7 @@ fn integer_bases_separators_and_every_suffix() {
     ] {
         single(core, TokenKind::Integer);
     }
-    let (_, _, output) = fixture("-128i8 1..2 1..=2 1. .1");
+    let (_, output) = fixture("-128i8 1..2 1..=2 1. .1");
     assert_eq!(
         significant(&output),
         vec![
@@ -156,13 +134,13 @@ fn malformed_numbers_are_one_token_with_rule_and_span() {
         "1u7", "1i256", "1name", "123u8x", "0b1f32",
     ] {
         error(text, "SEM-1", 0, text.len() as u32);
-        assert_eq!(significant(&fixture(text).2), vec![&TokenKind::Invalid]);
+        assert_eq!(significant(&fixture(text).1), vec![&TokenKind::Invalid]);
     }
     for text in [
         "1e", "1e+", "1e-", "1e_2", "1.2_", "1.2i32", "1e2u8", "1f16", "1f32x", "1_f64", "1e2_f32",
     ] {
         error(text, "SEM-2", 0, text.len() as u32);
-        assert_eq!(significant(&fixture(text).2), vec![&TokenKind::Invalid]);
+        assert_eq!(significant(&fixture(text).1), vec![&TokenKind::Invalid]);
     }
 }
 
@@ -231,7 +209,7 @@ fn invalid_literal_scalars_and_unterminated_literals() {
 
 #[test]
 fn trivia_doc_comments_nesting_and_physical_newlines() {
-    let (_, _, output) =
+    let (_, output) =
         fixture(" \t\n\r\n// c\n/// d\r\n//// d\n/* a\n/* b */\r\nz */ /**/ /** d */");
     assert!(output.diagnostics.is_empty());
     assert_eq!(
@@ -300,7 +278,7 @@ fn forbidden_source_controls_everywhere_and_unicode_boundaries() {
 
 #[test]
 fn errors_continue_to_eof_and_leave_following_statements() {
-    let (_, _, output) = fixture("$ 0b2 \"bad\\q\"\n\"open\nlet valid = 2\n/* open");
+    let (_, output) = fixture("$ 0b2 \"bad\\q\"\n\"open\nlet valid = 2\n/* open");
     assert_eq!(
         output
             .diagnostics
@@ -320,10 +298,10 @@ fn errors_continue_to_eof_and_leave_following_statements() {
 
 #[test]
 fn empty_input_and_stale_file_id_do_not_panic() {
-    let (_, _, output) = fixture("");
+    let (_, output) = fixture("");
     assert_eq!(output.tokens.len(), 1);
     assert!(output.diagnostics.is_empty());
-    let output = lex(FileId(42), &SourceMap::default(), &mut Interner::default());
+    let output = lex(FileId(42), &SourceMap::default());
     assert_eq!(output.diagnostics[0].rule.as_str(), "LANG-1");
     assert_eq!(
         output.tokens,
@@ -350,7 +328,7 @@ fn deterministic_fuzz_arbitrary_bytes_never_panics_and_round_trips() {
             state ^= state << 17;
             bytes.push((state >> 24) as u8);
         }
-        let output = scan(FileId(0), &bytes, &mut Interner::default());
+        let output = scan(FileId(0), &bytes);
         round_trip(&bytes, &output);
         for diagnostic in &output.diagnostics {
             assert!(diagnostic.primary.end as usize <= bytes.len());
@@ -375,7 +353,7 @@ fn escaped_newline_reports_one_error_and_recovers_through_the_quote() {
     for head in ["\"", "b\""] {
         for newline in ["\n", "\r\n"] {
             let text = format!("{head}a\\{newline}b\"\nfn f() {{}}");
-            let (_, _, output) = fixture(&text);
+            let (_, output) = fixture(&text);
             assert_eq!(
                 output.diagnostics.len(),
                 1,
@@ -406,7 +384,7 @@ fn malformed_character_and_byte_literals_recover_as_one_token() {
         ("b'é'", "byte literal"),
         ("b'\\x80'", "byte literal"),
     ] {
-        let (sources, _, output) = fixture(&format!("let scalar = {literal}\nfn later() {{}}"));
+        let (sources, output) = fixture(&format!("let scalar = {literal}\nfn later() {{}}"));
         assert_eq!(
             output.diagnostics.len(),
             1,

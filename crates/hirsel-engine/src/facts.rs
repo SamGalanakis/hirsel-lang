@@ -2,11 +2,7 @@
 use crate::*;
 use hirsel_syntax::*;
 use std::sync::Arc;
-pub(crate) fn snapshot(
-    file: &SyntaxFile,
-    id: ItemId,
-    symbols: &mut Interner,
-) -> Option<(Arc<SyntaxFile>, ItemId)> {
+pub(crate) fn snapshot(file: &SyntaxFile, id: ItemId) -> Option<(Arc<SyntaxFile>, ItemId)> {
     let source = &file.tree.items[id.0 as usize];
     let ItemKind::Type {
         generics,
@@ -20,10 +16,9 @@ pub(crate) fn snapshot(
         return None;
     };
     let path = hirsel_check_protocol::fact::fact_path(&source.definition);
-    let name = symbols.intern(&path.0.name);
-    let boolean = symbols.intern("bool");
+    let name = Symbol::intern(&path.0.name);
+    let boolean = Symbol::intern("bool");
     let mut adapted = file.clone();
-    adapted.symbols = Arc::new(symbols.clone());
     let result = TypeExprId(adapted.tree.types.len() as u32);
     adapted.tree.types.push(TypeExpr {
         origin: field.origin,

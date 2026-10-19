@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use hirsel_intern::Symbol;
 use hirsel_interp::{Outcome, TraceEvent, Value};
 use hirsel_syntax::MatchArm;
 use hirsel_syntax::*;
@@ -329,7 +330,7 @@ fn snapshot_shape_comptime_todo_and_local_function() {
     });
     let stmt = f.stmt(
         StmtKind::Function {
-            name: hirsel_intern::Symbol(0),
+            name: Symbol::intern("item"),
             signature: FunctionSyntax::default(),
             body,
         },

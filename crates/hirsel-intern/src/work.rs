@@ -6,8 +6,6 @@ use std::cell::Cell;
 /// One measured kind of work, named for its owner and unit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Counter {
-    /// Spelling rows copied when a shared interner snapshot extends.
-    CopiedSymbols,
     /// Type rows copied when a shared store detaches on append or truncate.
     CopiedTypeRows,
     /// Declaration rows copied into shared generic declaration snapshots.
@@ -106,4 +104,23 @@ pub fn count_by(counter: Counter, rows: u64) {
 /// Cumulative `counter` units on this thread.
 pub fn read(counter: Counter) -> u64 {
     COUNTERS.with(|counters| counters[counter as usize].get())
+}
+
+/// Every counter's value on one thread, carried to another by `jobs::map`.
+pub struct Tally([u64; VARIANTS]);
+
+impl Tally {
+    /// This thread's cumulative counters.
+    pub fn read() -> Tally {
+        Tally(COUNTERS.with(|counters| counters.each_ref().map(Cell::get)))
+    }
+
+    /// Add these counters to this thread's.
+    pub fn add(&self) {
+        COUNTERS.with(|counters| {
+            for (cell, rows) in counters.iter().zip(self.0) {
+                cell.set(cell.get() + rows);
+            }
+        });
+    }
 }

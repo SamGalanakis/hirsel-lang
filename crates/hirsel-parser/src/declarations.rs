@@ -333,7 +333,7 @@ impl Parser<'_> {
         let definition = DefPath(ItemPath {
             package: context.package.clone(),
             modules: context.modules.clone(),
-            name: self.symbols.resolve(name).unwrap_or("").to_owned(),
+            name: name.as_str().to_owned(),
         });
         Ok(Item {
             name_span: self.tokens[self.significant[start]
@@ -401,7 +401,7 @@ impl Parser<'_> {
             );
         }
         for attr in attrs {
-            let valid = match self.symbols.resolve(attr.name).unwrap_or("") {
+            let valid = match attr.name.as_str() {
                 "test" | "bench" | "track_caller" | "noalloc" | "incomplete" | "advance_only"
                 | "preserves_captures" | "preserves_unique" | "captures" => {
                     matches!(kind, ItemKind::Function { .. })

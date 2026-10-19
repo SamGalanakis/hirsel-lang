@@ -39,7 +39,6 @@ struct Adopted {
 }
 
 pub(crate) struct PackageImage {
-    symbols: Interner,
     source_revision: u64,
     cache_sequence: u64,
     items: Base<DefPath, Vec<ItemSnapshot>>,
@@ -330,7 +329,6 @@ impl PackageImage {
         let state = engine.adapters.compiler_state.take().unwrap();
         let mut state = state.borrow_mut();
         PackageImage {
-            symbols: engine.symbols.clone(),
             source_revision: engine.source_revision,
             cache_sequence: engine.cache_sequence,
             items: engine.items.freeze(),
@@ -362,10 +360,9 @@ impl PackageImage {
 }
 
 impl QueryEngine {
-    /// Start this engine's caches, interner and source revision from `image`.
+    /// Start this engine's caches and source revision from `image`.
     /// The engine's sources must hold the image's files at the same FileIds.
     pub(crate) fn install_image(&mut self, image: &PackageImage) {
-        self.symbols = image.symbols.clone();
         self.source_revision = image.source_revision;
         self.cache_sequence = image.cache_sequence;
         self.items = Layered::shared(image.items.clone());

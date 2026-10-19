@@ -82,12 +82,11 @@ impl QueryEngine {
         package: &Option<PackageId>,
         segments: &[String],
     ) -> Result<DefPath, QueryError> {
-        let mut symbols = Interner::default();
         let path = Path {
             package: package.clone(),
-            segments: segments.iter().map(|s| symbols.intern(s)).collect(),
+            segments: segments.iter().map(|s| Symbol::intern(s)).collect(),
         };
-        self.lookup(context, &path, &symbols).result
+        self.lookup(context, &path).result
     }
     fn lookup_result(
         &mut self,

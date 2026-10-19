@@ -7,7 +7,6 @@ mod loops;
 pub mod review;
 #[cfg(test)]
 mod tests;
-use hirsel_intern::Interner;
 use hirsel_syntax::{ContentHash, DefPath, FileContext, Path};
 use hirsel_types::*;
 use std::{
@@ -73,7 +72,7 @@ impl BuiltinRegistry {
     }
     /// Provider fallback only: the caller resolves locals/own-package definitions
     /// first. Explicitly versioned paths never fall back to another package.
-    pub fn lookup_name(&self, path: &Path, symbols: &Interner) -> Option<DefPath> {
+    pub fn lookup_name(&self, path: &Path) -> Option<DefPath> {
         if path
             .package
             .as_ref()
@@ -84,8 +83,8 @@ impl BuiltinRegistry {
         let name = path
             .segments
             .iter()
-            .map(|s| symbols.resolve(*s))
-            .collect::<Option<Vec<_>>>()?
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
             .join(".");
         let path = hirsel_syntax::DefPath::core(&name);
         if path.0.modules.iter().any(|m| m.starts_with('$')) {
@@ -98,12 +97,10 @@ impl SignatureProvider for BuiltinRegistry {
     fn signature(&mut self, path: &DefPath) -> Result<SignatureRef, QueryError> {
         self.get(path).ok_or(QueryError::NotImplemented)
     }
-    fn lookup(&mut self, _: &FileContext, path: &Path, symbols: &Interner) -> LookupOutput {
+    fn lookup(&mut self, _: &FileContext, path: &Path) -> LookupOutput {
         LookupOutput {
             manifest: self.revision,
-            result: self
-                .lookup_name(path, symbols)
-                .ok_or(QueryError::NotImplemented),
+            result: self.lookup_name(path).ok_or(QueryError::NotImplemented),
         }
     }
 }

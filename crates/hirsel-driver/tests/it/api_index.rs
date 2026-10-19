@@ -80,11 +80,7 @@ fn published_index_matches_every_core_and_std_export() {
                 } = &item.kind
                 {
                     for variant in variants {
-                        exports.insert(format!(
-                            "{}#{}",
-                            item.definition,
-                            syntax.symbols.resolve(variant.name).unwrap()
-                        ));
+                        exports.insert(format!("{}#{}", item.definition, variant.name.as_str()));
                     }
                 }
             }

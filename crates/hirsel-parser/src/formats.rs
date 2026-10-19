@@ -28,15 +28,8 @@ impl Parser<'_> {
             specs,
         } = parts?;
         let whole = self.origin(start);
-        let names = [format!("$fmt{}", self.formats), "List".into(), "u8".into()]
-            .map(|name| self.symbols.get(&name));
-        let [Some(builder), Some(list), Some(byte)] = names else {
-            return self.fail_at(
-                const { RuleId::of("LANG-1") },
-                whole.span,
-                "f-string builder names are missing from the symbol snapshot",
-            );
-        };
+        let builder = Symbol::intern(&format!("$fmt{}", self.formats));
+        let [list, byte] = ["List", "u8"].map(Symbol::intern);
         let named = |segment| TypeExprKind::Named {
             path: Path {
                 package: None,
@@ -189,33 +182,18 @@ impl Parser<'_> {
         let spec = self.token_origin(position);
         let count = |parser: &mut Self, name: Option<String>, value: u64| -> Parsed<ExprId> {
             Ok(match name {
-                Some(name) => {
-                    let Some(symbol) = parser.symbols.get(&name) else {
-                        return parser.fail_at(
-                            const { RuleId::of("LANG-1") },
-                            spec.span,
-                            "f-string width names are missing from the symbol snapshot",
-                        );
-                    };
-                    parser.synthetic_expr(
-                        spec,
-                        ExprKind::Path(Path {
-                            package: None,
-                            segments: vec![symbol],
-                        }),
-                    )
-                }
+                Some(name) => parser.synthetic_expr(
+                    spec,
+                    ExprKind::Path(Path {
+                        package: None,
+                        segments: vec![Symbol::intern(&name)],
+                    }),
+                ),
                 None => parser.constant(origin, value),
             })
         };
         if flags == 0 && kind == 0 {
-            let Some(mark) = self.symbols.get(&format!("$mark{}", self.formats)) else {
-                return self.fail_at(
-                    const { RuleId::of("LANG-1") },
-                    origin.span,
-                    "f-string mark names are missing from the symbol snapshot",
-                );
-            };
+            let mark = Symbol::intern(&format!("$mark{}", self.formats));
             let place = self.synthetic_expr(
                 origin,
                 ExprKind::Path(Path {

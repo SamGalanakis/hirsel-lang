@@ -1,7 +1,7 @@
 use super::*;
 impl Checker<'_, '_> {
     pub(super) fn name(&self, symbol: hirsel_intern::Symbol) -> String {
-        self.input.symbols.resolve(symbol).unwrap_or("").to_owned()
+        symbol.as_str().to_owned()
     }
     pub(super) fn snapshot(&mut self, path: &ast::DefPath) -> Result<SignatureRef, QueryError> {
         if let Some(s) = self.snapshots.get(path) {

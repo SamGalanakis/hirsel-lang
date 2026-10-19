@@ -53,13 +53,10 @@ impl Checker<'_> {
         self.tree.expressions[expression.0 as usize].origin.span
     }
     pub(super) fn spelled(&self, expression: ExprId) -> Option<String> {
-        spell(self.tree, self.symbols, expression)
+        spell(self.tree, expression)
     }
     pub(super) fn sites(&self) -> Sites<'_> {
-        Sites {
-            tree: self.tree,
-            symbols: self.symbols,
-        }
+        Sites { tree: self.tree }
     }
     /// A binding's name and the site that declares it: a parameter's type,
     /// or the pattern that binds it.

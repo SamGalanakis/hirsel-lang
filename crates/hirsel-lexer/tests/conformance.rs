@@ -1,5 +1,4 @@
 //! Every corpus program must survive the lossless tape, independently of parsing.
-use hirsel_intern::Interner;
 use hirsel_lexer::lex;
 use hirsel_span::SourceMap;
 use hirsel_syntax::TokenKind;
@@ -41,7 +40,7 @@ fn every_conformance_file_round_trips_and_positive_headers_lex_cleanly() {
             .unwrap();
         let mut sources = SourceMap::default();
         let file = sources.add(path, text.clone()).unwrap();
-        let output = lex(file, &sources, &mut Interner::default());
+        let output = lex(file, &sources);
         let mut reconstructed = Vec::new();
         let mut cursor = 0;
         for token in &output.tokens {

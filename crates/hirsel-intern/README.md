@@ -1,26 +1,36 @@
 # hirsel-intern
 
-Intern repeated spellings into a compact symbol arena.
+Process-global session identities, deterministic fan-out and work counters.
 
 Allowed dependencies: std only.
 
 Invariants and boundary:
 
-- Symbol is a u32 index into exactly one Interner (LANG-4).
-- Equal spellings yield equal symbols in that interner.
-- Intern order is not semantic and symbols never enter persistent identity/hash encodings.
+- `Symbol(NonZeroU32)` comes from one append-only, process-global spelling
+  interner (LANG-4). Equal spellings yield equal symbols for the life of the
+  process; `Symbol::intern` and `Symbol::as_str` need no interner handle, and
+  `as_str` returns the leaked `&'static str` without taking a lock.
+- Eq and Hash compare ids; Ord and Debug use the spelling, so ordered
+  collections and printed values never depend on intern order. Ids never enter
+  persistent identity, hash encodings or output.
 - No source-normalization or name-resolution policy is hidden here.
+- `AppendTable` is the lock-free, never-moving row store behind every
+  process-global id table (Symbol here, `DefId` in hirsel-syntax). `IdHasher`
+  (FxHash) hashes dense ids for `DefMap` and the spelling index.
+- `Scramble` is how every id kind (Symbol, DefId, and later TypeId and Anchor)
+  turns a dense table position into an id. Under the `id-salt` feature,
+  `salt_ids(seed)` multiplies those positions by an odd per-kind constant, which
+  moves hash order and relative id order; seed 0 is the unsalted assignment.
+  It must run before any id is assigned. `under_salts` reruns one test in a
+  child process per seed and returns each run's output, for the O1 invariance
+  tests.
 
-SyntaxFile now retains an Arc<Interner> snapshot cloned after lexing. Interner
-supports Eq/PartialEq for snapshot data; equality does not establish cross-session
-symbol identity. New spellings in the session interner do not mutate a published
-snapshot. All emitted keyword spellings are interned by the lexer for members.
-
-Interner clones share immutable spelling rows. Interning an existing spelling does
-not detach them; a new spelling detaches only when a published snapshot still
-shares the rows. `work::read(Counter::CopiedSymbols)` counts actual spelling rows
-copied on this thread for deterministic query-scaling tests. Snapshot equality and
-Debug retain the previous value semantics and strings/indices shape.
+`jobs::map(jobs, tasks, cost, work)` is the one fan-out path. Tasks start
+longest first by `cost`, ties by input index; results come back in input order.
+One worker (or one task) runs on the caller's thread; otherwise workers are
+scoped threads with `COMPILER_STACK_BYTES` stacks, and each worker's work
+counters are added to the caller's when it finishes. After a panic no new task
+starts, and the earliest-started panicking task's payload is resumed on the caller.
 
 `work` is the shared work registry: the lowest crate every phase reaches, so one
 `Counter` enum plus `count`/`count_by`/`read` serves all per-thread deterministic

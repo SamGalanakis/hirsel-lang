@@ -152,7 +152,6 @@ fn real_phase_corpus_ratchet() {
                     let resolution = hirsel_resolve::resolve_item(
                         &file,
                         *id,
-                        &file.symbols,
                         &registry.index.clone(),
                         &mut registry,
                     );
@@ -170,7 +169,6 @@ fn real_phase_corpus_ratchet() {
                             body: body::Input {
                                 tree: &file.tree,
                                 item: *id,
-                                symbols: &file.symbols,
                                 context: &support::context(),
                                 resolution: &resolution,
                                 signature: &sig,
@@ -367,13 +365,8 @@ fn check_source_phases(
     let mut registry = support::registry(&file);
     support::normalize_file(&file, &mut registry).unwrap();
     let item = last_function(&file);
-    let resolution = hirsel_resolve::resolve_item(
-        &file,
-        item,
-        &file.symbols,
-        &registry.index.clone(),
-        &mut registry,
-    );
+    let resolution =
+        hirsel_resolve::resolve_item(&file, item, &registry.index.clone(), &mut registry);
     assert!(
         resolution.query.diagnostics.is_empty(),
         "{:?}",
@@ -385,7 +378,6 @@ fn check_source_phases(
             body: body::Input {
                 tree: &file.tree,
                 item,
-                symbols: &file.symbols,
                 context: &support::context(),
                 resolution: &resolution,
                 signature: &signature,
@@ -539,7 +531,6 @@ fn ownership_retains_named_function_type_separately_from_its_body_result() {
     assert!(!parameters.is_empty());
     let owned = crate::ownership::check_ownership_with_clauses(
         &file.tree,
-        &file.symbols,
         item,
         &signature,
         &mut out.body,

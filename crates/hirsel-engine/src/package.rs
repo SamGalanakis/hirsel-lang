@@ -43,7 +43,6 @@ impl PackageDeclarations {
         &self,
         context: &FileContext,
         path: &hirsel_syntax::Path,
-        symbols: &Interner,
     ) -> Result<DefPath, hirsel_types::LookupError> {
         let state = self
             .engine
@@ -53,12 +52,12 @@ impl PackageDeclarations {
             .unwrap()
             .borrow();
         let index = state.index(context.package.clone());
-        match index.lookup(context, path, symbols) {
+        match index.lookup(context, path) {
             Err(hirsel_types::LookupError::Missing)
                 if path.package.is_none() && path.segments.len() == 1 =>
             {
                 let definition = registry::BuiltinRegistry::new()
-                    .lookup_name(path, symbols)
+                    .lookup_name(path)
                     .ok_or(hirsel_types::LookupError::Missing)?;
                 index.access(context, &definition)
             }
@@ -1178,8 +1177,7 @@ fn identifier(v: &Value) -> Result<String, ToolError> {
     }
     let mut sources = SourceMap::default();
     let file = sources.add("manifest identifier", s.into()).unwrap();
-    let mut symbols = Interner::default();
-    let tokens = hirsel_lexer::lex(file, &sources, &mut symbols);
+    let tokens = hirsel_lexer::lex(file, &sources);
     if !tokens.diagnostics.is_empty()
         || !matches!(
             tokens.tokens.first().map(|t| &t.kind),

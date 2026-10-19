@@ -9,9 +9,8 @@ impl LexerPhase for LexerAdapter {
         &self,
         file: FileId,
         sources: &SourceMap,
-        symbols: &mut Interner,
     ) -> Result<QueryOutput<Vec<Token>>, QueryError> {
-        let result = hirsel_lexer::lex(file, sources, symbols);
+        let result = hirsel_lexer::lex(file, sources);
         Ok(QueryOutput {
             value: result.tokens,
             diagnostics: result.diagnostics,
@@ -27,9 +26,8 @@ impl ParserPhase for ParserAdapter {
         tokens: Vec<Token>,
         context: &FileContext,
         sources: &SourceMap,
-        symbols: &Interner,
     ) -> Result<QueryOutput<SyntaxFile>, QueryError> {
-        let result = hirsel_parser::parse(file, tokens, context, sources, symbols);
+        let result = hirsel_parser::parse(file, tokens, context, sources);
         if let Some(span) = result.nesting_limit {
             let location = sources.location(span);
             return Err(QueryError::Operational(hirsel_types::OperationalFailure {

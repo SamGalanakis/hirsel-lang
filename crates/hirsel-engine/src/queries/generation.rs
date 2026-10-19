@@ -264,12 +264,12 @@ impl QueryEngine {
         let site = snapshot.file.tree.expressions[body.0 as usize].origin;
         let helper = renamed(definition, "generator");
         let mut file = (*snapshot.file).clone();
-        let core = |name: &str, symbols: &mut Interner| Path {
+        let core = |name: &str| Path {
             package: Some(PackageId {
                 name: "core".into(),
                 version: "1".into(),
             }),
-            segments: vec![symbols.intern(name)],
+            segments: vec![Symbol::intern(name)],
         };
         let push = |kind: TypeExprKind, tree: &mut hirsel_syntax::SyntaxTree| {
             tree.types.push(TypeExpr { origin: site, kind });
@@ -296,28 +296,27 @@ impl QueryEngine {
         );
         let body_type = push(
             TypeExprKind::Named {
-                path: core("Body", &mut self.symbols),
+                path: core("Body"),
                 arguments: vec![TypeArgument::Type(function)],
             },
             &mut file.tree,
         );
         let string = push(
             TypeExprKind::Named {
-                path: core("String", &mut self.symbols),
+                path: core("String"),
                 arguments: vec![],
             },
             &mut file.tree,
         );
         let ty = push(
             TypeExprKind::Named {
-                path: core("Result", &mut self.symbols),
+                path: core("Result"),
                 arguments: vec![TypeArgument::Type(body_type), TypeArgument::Type(string)],
             },
             &mut file.tree,
         );
         let mut item = source.clone();
-        item.name = self.symbols.intern(&helper.0.name);
-        file.symbols = Arc::new(self.symbols.clone());
+        item.name = Symbol::intern(&helper.0.name);
         item.definition = helper.clone();
         item.visibility = Visibility::Private;
         item.attributes.clear();
@@ -328,7 +327,6 @@ impl QueryEngine {
         let id = ItemId(file.tree.items.len() as u32);
         file.tree.items.push(item);
         let file = Arc::new(file);
-        let symbols = self.symbols.clone();
         let adapters = (
             self.adapters.signature.clone(),
             self.adapters.resolver.clone(),
@@ -338,9 +336,8 @@ impl QueryEngine {
         let (Some(signer), Some(resolver), Some(checker), Some(modes)) = adapters else {
             return Err(QueryError::NotImplemented);
         };
-        let constant = self.recorded(definition, reads, |r| {
-            signer.signature(file.clone(), id, &symbols, r)
-        })?;
+        let constant =
+            self.recorded(definition, reads, |r| signer.signature(file.clone(), id, r))?;
         if has_errors(&constant.diagnostics) {
             return Err(QueryError::Diagnostics(constant.diagnostics));
         }
@@ -352,9 +349,8 @@ impl QueryEngine {
                     message: format!("generator signature: {e:?}"),
                 })
             })?;
-        let resolution = self.recorded(definition, reads, |r| {
-            resolver.resolve(file.clone(), id, &symbols, r)
-        })?;
+        let resolution =
+            self.recorded(definition, reads, |r| resolver.resolve(file.clone(), id, r))?;
         if has_errors(&resolution.diagnostics) {
             return Err(QueryError::Diagnostics(resolution.diagnostics));
         }
@@ -444,7 +440,7 @@ impl QueryEngine {
         ) else {
             return Err(QueryError::NotImplemented);
         };
-        let lexed = lexer.lex(generated, &self.sources, &mut self.symbols)?;
+        let lexed = lexer.lex(generated, &self.sources)?;
         if has_errors(&lexed.diagnostics) {
             return Err(QueryError::Diagnostics(lexed.diagnostics));
         }
@@ -479,8 +475,7 @@ impl QueryEngine {
         let mut tape = tokens[..=fn_index].to_vec();
         tape.push(name);
         tape.extend_from_slice(&tokens[fn_index + 1..]);
-        let symbols = self.symbols.clone();
-        let parsed = parser.parse(generated, tape, &context, &self.sources, &symbols)?;
+        let parsed = parser.parse(generated, tape, &context, &self.sources)?;
         if has_errors(&parsed.diagnostics) {
             return Err(QueryError::Diagnostics(parsed.diagnostics));
         }
@@ -549,13 +544,13 @@ impl QueryEngine {
         let header = Arc::new(header);
         let literal = Arc::new(literal);
         let normalized = self.recorded(definition, reads, |r| {
-            signer.signature(literal.clone(), literal_item, &symbols, r)
+            signer.signature(literal.clone(), literal_item, r)
         })?;
         if has_errors(&normalized.diagnostics) {
             return Err(QueryError::Diagnostics(normalized.diagnostics));
         }
         let declared = self.recorded(definition, reads, |r| {
-            signer.signature(header.clone(), header_id, &symbols, r)
+            signer.signature(header.clone(), header_id, r)
         })?;
         if has_errors(&declared.diagnostics) {
             return Err(QueryError::Diagnostics(declared.diagnostics));
@@ -593,7 +588,7 @@ impl QueryEngine {
         let mut tape: Vec<_> = written[start..end].to_vec();
         // literal token i >= fn_index + 2 is generated token i - 1.
         tape.extend_from_slice(&tokens[body_start - 1..]);
-        let parsed = parser.parse(snapshot.file.file, tape, &context, &self.sources, &symbols)?;
+        let parsed = parser.parse(snapshot.file.file, tape, &context, &self.sources)?;
         if has_errors(&parsed.diagnostics) {
             return Err(QueryError::Diagnostics(parsed.diagnostics));
         }
@@ -615,9 +610,8 @@ impl QueryEngine {
             item.generated = Some(Generated::Body(parameters));
         }
         let file = Arc::new(file);
-        let resolution = self.recorded(definition, reads, |r| {
-            resolver.resolve(file.clone(), id, &symbols, r)
-        })?;
+        let resolution =
+            self.recorded(definition, reads, |r| resolver.resolve(file.clone(), id, r))?;
         if has_errors(&resolution.diagnostics) {
             return Err(QueryError::Diagnostics(resolution.diagnostics));
         }
@@ -738,11 +732,10 @@ impl QueryEngine {
             fingerprint: signature.value.fingerprint,
         });
         self.start(definition, QueryKind::Check)?;
-        let symbols = self.symbols.clone();
         let item = snapshot.item;
         let result = self
             .recorded(definition, &mut reads, |r| {
-                resolver.resolve(file.clone(), item, &symbols, r)
+                resolver.resolve(file.clone(), item, r)
             })
             .and_then(|resolution| {
                 if has_errors(&resolution.diagnostics) {
@@ -912,12 +905,11 @@ impl QueryEngine {
             package: declaration.0.package.clone(),
             modules: declaration.0.modules.clone(),
         };
-        let lexed = lexer.lex(file, &self.sources, &mut self.symbols)?;
+        let lexed = lexer.lex(file, &self.sources)?;
         if has_errors(&lexed.diagnostics) {
             return Err(QueryError::Diagnostics(lexed.diagnostics));
         }
-        let symbols = self.symbols.clone();
-        let parsed = parser.parse(file, lexed.value, &context, &self.sources, &symbols)?;
+        let parsed = parser.parse(file, lexed.value, &context, &self.sources)?;
         if has_errors(&parsed.diagnostics) {
             return Err(QueryError::Diagnostics(parsed.diagnostics));
         }

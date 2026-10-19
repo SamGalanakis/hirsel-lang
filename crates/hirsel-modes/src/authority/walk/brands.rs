@@ -1320,7 +1320,7 @@ impl Checker<'_> {
         let name = path
             .segments
             .first()
-            .and_then(|name| self.symbols.resolve(*name))
+            .map(|name| name.as_str())
             .map(str::to_owned);
         let binding = resolved
             .as_ref()
@@ -1370,7 +1370,7 @@ impl Checker<'_> {
                             syntax
                                 .and_then(|s| s.parameters.get(p.0 as usize))
                                 .and_then(|p| p.name)
-                                .and_then(|p| self.symbols.resolve(p))
+                                .map(|p| p.as_str())
                                 .is_some_and(|n| n == name)
                                 && b.owner == owner
                         }
@@ -1378,7 +1378,7 @@ impl Checker<'_> {
                             NameSite::Pattern(p) => {
                                 match self.tree.patterns.get(p.0 as usize).map(|p| &p.kind) {
                                     Some(hirsel_syntax::PatternKind::Binding(s)) => {
-                                        self.symbols.resolve(*s).is_some_and(|n| n == name)
+                                        s.as_str() == name
                                     }
                                     _ => false,
                                 }
@@ -1420,7 +1420,7 @@ impl Checker<'_> {
         };
         let mut path_fields = vec![];
         for field in path.segments.iter().skip(1) {
-            let name = self.symbols.resolve(*field)?.to_owned();
+            let name = field.as_str().to_owned();
             let fields = self.fields(ty?)?;
             let ordinal = fields.iter().position(|f| f.name == name)?;
             path_fields.push(FieldId(ordinal as u32));
@@ -1504,7 +1504,7 @@ impl Checker<'_> {
                 function.allocation = if signature
                     .attributes
                     .iter()
-                    .any(|a| self.symbols.resolve(a.name) == Some("noalloc"))
+                    .any(|a| a.name.as_str() == "noalloc")
                 {
                     Allocation::NoAlloc
                 } else {
@@ -1670,7 +1670,7 @@ impl Checker<'_> {
                         let mut ty = self.origin_binding(&origin)?.ty;
                         let mut fields = vec![];
                         for segment in path.segments.iter().skip(1) {
-                            let name = self.symbols.resolve(*segment)?.to_owned();
+                            let name = segment.as_str().to_owned();
                             let declared = self.fields(ty)?;
                             let ordinal = declared.iter().position(|f| f.name == name)?;
                             fields.push(FieldId(ordinal as u32));

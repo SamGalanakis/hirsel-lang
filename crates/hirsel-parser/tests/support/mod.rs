@@ -1,9 +1,9 @@
 //! Deliberately small corpus fixture; product parsing never imports this tokenizer.
-use hirsel_intern::Interner;
+use hirsel_intern::Symbol;
 use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::*;
 
-pub fn tokenize(file: FileId, source: &str, names: &mut Interner) -> Vec<Token> {
+pub fn tokenize(file: FileId, source: &str) -> Vec<Token> {
     let mut tokens = vec![];
     let mut pos = 0;
     // Braces each open f-string hole has opened, innermost last.
@@ -61,13 +61,6 @@ pub fn tokenize(file: FileId, source: &str, names: &mut Interner) -> Vec<Token> 
             TokenKind::Character
         } else if rest.starts_with("f\"") || (rest.starts_with('}') && holes.last() == Some(&0)) {
             let head = rest.starts_with('f');
-            if head {
-                // The parser's f-string desugaring reads these names (SEM-3).
-                names.intern("List");
-                names.intern("u8");
-                names.intern(&format!("$fmt{}", holes.len()));
-                names.intern(&format!("$mark{}", holes.len()));
-            }
             pos += if head { 2 } else { 1 };
             let mut open = false;
             while pos < source.len() {
@@ -157,7 +150,7 @@ pub fn tokenize(file: FileId, source: &str, names: &mut Interner) -> Vec<Token> 
                 .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
                 .count();
             let text = &source[start..pos];
-            let symbol = names.intern(text); // Keyword members need the same immutable snapshot.
+            let symbol = Symbol::intern(text);
             match text {
                 "fn" => TokenKind::Keyword(Keyword::Fn),
                 "let" => TokenKind::Keyword(Keyword::Let),
@@ -300,21 +293,20 @@ pub fn context() -> FileContext {
 pub fn parse(source: &str) -> (hirsel_parser::ParseOutput, SourceMap) {
     let mut sources = SourceMap::default();
     let file = sources.add("fixture.hir", source.into()).unwrap();
-    let mut names = Interner::default();
-    let tokens = tokenize(file, source, &mut names);
+    let tokens = tokenize(file, source);
     (
-        hirsel_parser::parse(file, tokens, &context(), &sources, &names),
+        hirsel_parser::parse(file, tokens, &context(), &sources),
         sources,
     )
 }
 
-/// Runs deep-nesting probes on a thread with the compiler's stack size
-/// (`hirsel_engine::COMPILER_STACK_BYTES`), without linking the driver. The
-/// driver's own tests check that the parser limit fits that stack.
+/// Runs deep-nesting probes on a thread with the compiler's stack size, without
+/// linking the driver. The driver's own tests check that the parser limit fits
+/// that stack.
 pub fn with_compiler_stack<T: Send>(work: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         std::thread::Builder::new()
-            .stack_size(128 * 1024 * 1024)
+            .stack_size(hirsel_intern::jobs::COMPILER_STACK_BYTES)
             .spawn_scoped(scope, work)
             .expect("probe thread creation failed")
             .join()

@@ -90,7 +90,6 @@ pub(super) struct Checker<'a> {
     signature: &'a Signature,
     provider: &'a mut dyn SignatureProvider,
     intrinsics: &'a Intrinsics,
-    symbols: &'a hirsel_intern::Interner,
     receiving: Option<Receiving>,
     expression_origins: BTreeMap<ExprId, Origin>,
     out: AuthorityOutput,
@@ -241,7 +240,6 @@ impl<'a> Checker<'a> {
         mut body: CheckedBody,
         provider: &'a mut dyn SignatureProvider,
         intrinsics: &'a Intrinsics,
-        symbols: &'a hirsel_intern::Interner,
     ) -> Self {
         let source_rows = super::source_rows::SourceRows::new(&body);
         let closures = super::closure_rows::ClosureRows::new(std::mem::take(&mut body.closures));
@@ -333,7 +331,6 @@ impl<'a> Checker<'a> {
             signature,
             provider,
             intrinsics,
-            symbols,
             receiving: None,
             expression_origins: BTreeMap::new(),
             out: AuthorityOutput {
@@ -2518,7 +2515,6 @@ mod limit_tests {
                     f.body,
                     &mut f.provider,
                     &f.intrinsics,
-                    &f.symbols,
                 );
                 assert_eq!(c.contains_resource(root), resource);
                 assert!(c.out.failure.is_none());
@@ -2548,7 +2544,6 @@ mod limit_tests {
                 f.body,
                 &mut f.provider,
                 &f.intrinsics,
-                &f.symbols,
             );
             assert!(!c.contains_resource(root));
             assert_eq!(c.layout(root), Some(TypeKind::Primitive(Primitive::U8)));

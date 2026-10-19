@@ -17,7 +17,7 @@ call edges for the driver's topology-independent GEN-5 graph check. Signature
 normalization belongs to [hirsel-signature](../hirsel-signature/README.md).
 
 `body::check_with_loop_protocols(body::LoopInput { body: Input { tree, item,
-symbols, context, resolution, signature }, protocols }, provider)` returns
+context, resolution, signature }, protocols }, provider)` returns
 `Result<body::Output, QueryError>`, containing checked rows and lowering plans. Inputs are one
 retained syntax snapshot and its declared signature. Recovery returns typed rows
 plus sorted rule/span diagnostics; callers must reject diagnostics before modes or

@@ -1194,7 +1194,7 @@ impl<'a> Audit<'a, '_> {
                                 let noalloc = signature
                                     .attributes
                                     .iter()
-                                    .any(|a| self.input.symbols.resolve(a.name) == Some("noalloc"));
+                                    .any(|a| a.name.as_str() == "noalloc");
                                 result.nested.join(
                                     self.local_frame(
                                         NameSite::Statement(*s),

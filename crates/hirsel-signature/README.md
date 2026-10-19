@@ -11,7 +11,7 @@ annotations, and its `fact` module owns private predicate conventions.
 
 `hirsel_signature::normalize(Input, &mut dyn SignatureProvider)` returns an owned
 `QueryOutput<Signature>` or rule/span diagnostics. Input (`hirsel_check_protocol::header`) contains the item/tree,
-interner, FileContext, shared Resolution, shared Metadata and ordered declaration
+FileContext, shared Resolution, shared Metadata and ordered declaration
 sites for the queried owner. Metadata supplies
 public visibility and alias status per DefPath, canonical Unsafe/Result roles,
 the selected `unsafe ffi` packages and their declared safe wrappers; an extern's

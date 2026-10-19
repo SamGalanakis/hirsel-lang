@@ -22,13 +22,8 @@ fn run(
     }
     support::normalize_file(&file, &mut provider).unwrap();
     let item = file.roots[0];
-    let resolution = hirsel_resolve::resolve_item(
-        &file,
-        item,
-        &file.symbols,
-        &provider.index.clone(),
-        &mut provider,
-    );
+    let resolution =
+        hirsel_resolve::resolve_item(&file, item, &provider.index.clone(), &mut provider);
     assert!(
         resolution.query.diagnostics.is_empty(),
         "{:?}",
@@ -42,7 +37,6 @@ fn run(
             body: Input {
                 tree: &file.tree,
                 item,
-                symbols: &file.symbols,
                 context: &support::context(),
                 resolution: &resolution,
                 signature: &signature,

@@ -77,7 +77,6 @@ impl CheckerPhase for BodyAdapter {
                 body: body::Input {
                     tree: &file.tree,
                     item,
-                    symbols: &file.symbols,
                     context: &context,
                     resolution: &resolution,
                     signature,
@@ -175,7 +174,6 @@ impl ModesPhase for ModeAdapter {
         // Run I even when J reports source errors: availability can own the obligation.
         let owned = ownership::check_ownership_with_clauses(
             &file.tree,
-            &file.symbols,
             item,
             signature,
             &mut output.body,
@@ -257,7 +255,6 @@ impl ModesPhase for ModeAdapter {
         let audited = hirsel_check::audit::check(
             hirsel_check::audit::Input {
                 tree: &file.tree,
-                symbols: &file.symbols,
                 item,
                 signature,
                 checked: &output.body,

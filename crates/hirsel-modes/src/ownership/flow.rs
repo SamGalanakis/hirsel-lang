@@ -1150,7 +1150,6 @@ impl InitialStorage {
 struct Checker<'a> {
     proof_error: std::cell::RefCell<Option<QueryError>>,
     tree: &'a SyntaxTree,
-    symbols: &'a hirsel_intern::Interner,
     /// Diagnostics of this graph awaiting their causes (R1).
     explanations: Vec<(usize, causes::Pending)>,
     /// Sites logged by the trace pass of a graph that reported a diagnostic.
@@ -1513,7 +1512,6 @@ pub(super) fn capture_crossing_uses(
 
 pub(super) fn check(
     tree: &SyntaxTree,
-    symbols: &hirsel_intern::Interner,
     own: &Signature,
     body: &mut CheckedBody,
     signatures: &super::properties::Signatures,
@@ -1580,7 +1578,6 @@ pub(super) fn check(
         arenas,
         source_rows,
         tree,
-        symbols,
         explanations: vec![],
         trace: None,
         node: 0,
@@ -5004,7 +5001,7 @@ impl Checker<'_> {
                         let pattern_node = &self.tree.patterns[pattern.0 as usize];
                         let name = match pattern_node.kind {
                             hirsel_syntax::PatternKind::Binding(symbol) => {
-                                self.symbols.resolve(symbol).unwrap_or("_").to_owned()
+                                symbol.as_str().to_owned()
                             }
                             _ => "_".into(),
                         };

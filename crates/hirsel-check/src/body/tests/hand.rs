@@ -1,4 +1,5 @@
 use super::super::*;
+use hirsel_intern::Symbol;
 use std::sync::Arc;
 struct Provider {
     signatures: BTreeMap<ast::DefPath, SignatureRef>,
@@ -16,13 +17,12 @@ impl SignatureProvider for Provider {
             .cloned()
             .ok_or(QueryError::NotImplemented)
     }
-    fn lookup(&mut self, _: &ast::FileContext, _: &ast::Path, _: &Interner) -> LookupOutput {
+    fn lookup(&mut self, _: &ast::FileContext, _: &ast::Path) -> LookupOutput {
         panic!("resolved hand-built bodies must not look up names again")
     }
 }
 struct Fixture {
     tree: ast::SyntaxTree,
-    symbols: Interner,
     resolution: Resolution,
     signature: Signature,
     provider: Provider,
@@ -55,8 +55,7 @@ impl Fixture {
     fn new(kind: TypeKind) -> Self {
         let mut store = TypeStore::default();
         let result = store.push(row(kind));
-        let mut symbols = Interner::default();
-        let name = symbols.intern("main");
+        let name = Symbol::intern("main");
         let tree = ast::SyntaxTree {
             items: vec![ast::Item {
                 name_span: origin(0).span,
@@ -78,7 +77,6 @@ impl Fixture {
         };
         Self {
             tree,
-            symbols,
             resolution: Resolution::default(),
             signature: Signature {
                 metadata: Default::default(),
@@ -122,13 +120,13 @@ impl Fixture {
         id
     }
     fn binding(&mut self, name: &str, local: u32) -> ast::PatternId {
-        let name = self.symbols.intern(name);
+        let name = Symbol::intern(name);
         let p = self.pattern(ast::PatternKind::Binding(name));
         self.resolution.bindings.push((p, name, LocalId(local)));
         p
     }
     fn path(&mut self, name: &str, r: ResolvedName) -> ast::ExprId {
-        let symbol = self.symbols.intern(name);
+        let symbol = Symbol::intern(name);
         let e = self.expr(ast::ExprKind::Path(ast::Path {
             package: None,
             segments: vec![symbol],
@@ -137,7 +135,7 @@ impl Fixture {
         e
     }
     fn parameter(&mut self, name: &str, ty: TypeId, passing: ast::PassingMode) {
-        let symbol = self.symbols.intern(name);
+        let symbol = Symbol::intern(name);
         let syntax_id = ast::TypeExprId(self.tree.types.len() as u32);
         self.tree.types.push(ast::TypeExpr {
             origin: origin(200),
@@ -169,7 +167,6 @@ impl Fixture {
                 body: Input {
                     tree: &self.tree,
                     item: ast::ItemId(0),
-                    symbols: &self.symbols,
                     context: &super::support::context(),
                     resolution: &self.resolution,
                     signature: &self.signature,
@@ -456,7 +453,7 @@ fn manufactured_result_tags_and_constructor_calls_keep_declared_ordinals() {
 #[test]
 fn finalizer_consumes_resolver_identity_instead_of_first_local() {
     let mut f = Fixture::new(TypeKind::Tuple(vec![].into()));
-    let binder = f.symbols.intern("self_value");
+    let binder = Symbol::intern("self_value");
     let root = f.block(vec![], None);
     f.tree.items[0].kind = ast::ItemKind::Type {
         flavor: ast::TypeFlavor::Resource,
@@ -531,7 +528,6 @@ fn heap_requires_its_complete_private_producer_contract() {
                 body: Input {
                     tree: &fixture.tree,
                     item: ast::ItemId(0),
-                    symbols: &fixture.symbols,
                     context: &super::support::context(),
                     resolution: &fixture.resolution,
                     signature: &fixture.signature,

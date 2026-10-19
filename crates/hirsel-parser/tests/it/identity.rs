@@ -1,5 +1,5 @@
 use crate::support;
-use hirsel_intern::Interner;
+use hirsel_intern::Symbol;
 use hirsel_span::SourceMap;
 use hirsel_syntax::*;
 
@@ -8,12 +8,11 @@ fn identity_ignores_file_positions_and_symbol_order_while_hashes_include_comment
     fn item(source: &str, path: &str, prefix_symbols: &[&str]) -> Item {
         let mut sources = SourceMap::default();
         let file = sources.add(path, source.into()).unwrap();
-        let mut symbols = Interner::default();
         for name in prefix_symbols {
-            symbols.intern(name);
+            Symbol::intern(name);
         }
-        let tokens = support::tokenize(file, source, &mut symbols);
-        let output = hirsel_parser::parse(file, tokens, &support::context(), &sources, &symbols);
+        let tokens = support::tokenize(file, source);
+        let output = hirsel_parser::parse(file, tokens, &support::context(), &sources);
         assert!(output.diagnostics.is_empty());
         output
             .syntax
@@ -85,17 +84,16 @@ fn changing_manifest_context_changes_identity_without_changing_text_hash() {
     let source = "fn f() {}";
     let mut sources = SourceMap::default();
     let file = sources.add("f.hir", source.into()).unwrap();
-    let mut symbols = Interner::default();
-    let tokens = support::tokenize(file, source, &mut symbols);
+    let tokens = support::tokenize(file, source);
     let mut context = support::context();
-    let a = hirsel_parser::parse(file, tokens.clone(), &context, &sources, &symbols)
+    let a = hirsel_parser::parse(file, tokens.clone(), &context, &sources)
         .syntax
         .tree
         .items
         .remove(0);
     context.package.version = "2".into();
     context.modules.push("nested".into());
-    let b = hirsel_parser::parse(file, tokens, &context, &sources, &symbols)
+    let b = hirsel_parser::parse(file, tokens, &context, &sources)
         .syntax
         .tree
         .items

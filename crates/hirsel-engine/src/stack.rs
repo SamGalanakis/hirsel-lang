@@ -1,9 +1,5 @@
 //! The engine is single threaded; its whole lifetime belongs on this stack.
-// Debug x86-64 GDB entry-to-entry rsp measurements on 1,024-level trees:
-// parser 7,440 B, resolver 8,424 B, printer 9,496 B, authority 14,128 B,
-// lowering 20,256 B per level (including its expression/inner/block helpers).
-// Reserve 24 KiB per level, plus a fourfold margin for phase/helper changes.
-pub const COMPILER_STACK_BYTES: usize = 128 * 1024 * 1024;
+pub use hirsel_intern::jobs::COMPILER_STACK_BYTES;
 thread_local! { static COMPILER_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 /// Construct and use the engine inside this closure, including incremental edits.

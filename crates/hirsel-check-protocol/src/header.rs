@@ -1,6 +1,5 @@
 //! One written header's normalization request and result, shared by the
 //! signature phase and the query engine that drives it through a trait object.
-use hirsel_intern::Interner;
 use hirsel_syntax as ast;
 use hirsel_types::{
     DeclarationSite, Metadata, QueryOutput, Resolution, Signature, TypeDefinition, TypeStore,
@@ -10,7 +9,6 @@ use hirsel_types::{
 pub struct Input<'a> {
     pub tree: &'a ast::SyntaxTree,
     pub item: ast::ItemId,
-    pub symbols: &'a Interner,
     pub context: &'a ast::FileContext,
     pub resolution: &'a Resolution,
     pub metadata: &'a Metadata,
