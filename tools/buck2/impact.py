@@ -11,7 +11,8 @@ A changed path is one of:
 - the Lean RC model (PROOFS): its audit and vector replay on the host;
 - a build-wide input (BUILD_WIDE): every test and every campaign;
 - anything else: the Buck2 tests that read it, directly or through any
-  dependency (`rdeps(//..., owner(<paths>))`), and a crate's library source
+  dependency (the owners' reverse dependencies in graph.py's static reading of
+  the root BUCK), and a crate's library source
   the campaigns in CRATE_CAMPAIGNS. Campaign data selects by case: a corpus
   case its twins (changed_programs), a std module the cases whose import
   closure includes it (Std, std_dependents), a package fixture the cases that
@@ -156,7 +157,7 @@ TOOL_PATHS = (
     'tools/gate', 'tools/land', 'tools/capped', 'tools/main-stall-alarm', 'tools/*.sh', 'tools/*.py', 'tools/tests/*',
     *(f'tools/buck2/{name}.py' for name in (
         'action_sizes_from_log', 'agree', 'clippy', 'conformance', 'fmt', 'full_gate_counts',
-        'event_logs', 'gating', 'impact', 'merging', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
+        'event_logs', 'gating', 'graph', 'impact', 'merging', 'pool_usage', 'sync', 'test_costs', 'test_sizes_from_usage')),
     'tools/known-failures.tsv',
     'tools/buck2/test-sizes.json',
     'tools/buck2/test_sizes.bzl',

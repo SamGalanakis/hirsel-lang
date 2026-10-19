@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Land throughput and gate time to first failure, from the logs tools/land
+and tools/gate append in the clone's common git directory.
+
+    tools/gate_land_stats.py [--since 2026-10-19T15:00:00Z] [--until ...]
+
+Lands per hour counts landed changes (`hirsel-landings.jsonl`) over the span
+from the first to the last in the window, beside the median land wait and,
+for batched landings, the batch sizes. Gate time to first failure is
+`first_failure_seconds` of each failed gate (`hirsel-gates.jsonl`), with the
+floor time and the queue wait, so a red floor that never queued shows as such.
+"""
+
+import argparse
+import json
+from pathlib import Path
+import statistics
+import subprocess
+import time
+
+
+def rows(path, since, until):
+    try:
+        lines = path.read_text().splitlines()
+    except FileNotFoundError:
+        return []
+    found = [json.loads(line) for line in lines if line.strip()]
+    return [row for row in found if since <= row.get('at', '') <= until]
+
+
+def stamp(text):
+    return time.mktime(time.strptime(text, '%Y-%m-%dT%H:%M:%SZ'))
+
+
+def median(values):
+    values = [value for value in values if value is not None]
+    return f'{statistics.median(values) / 60:.1f} min' if values else '-'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--since', default='')
+    parser.add_argument('--until', default='9')
+    args = parser.parse_args()
+    common = Path(subprocess.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                                 capture_output=True, text=True, check=True).stdout.strip())
+    lands = rows(common / 'hirsel-landings.jsonl', args.since, args.until)
+    if lands:
+        hours = max(stamp(lands[-1]['at']) - stamp(lands[0]['at']), 1) / 3600
+        batched = [row['batch'] for row in lands if row.get('batch')]
+        print(f'lands: {len(lands)} from {lands[0]["at"]} to {lands[-1]["at"]}: {len(lands) / hours:.1f} per hour; '
+              f'median wait {median(r.get("land_wait_seconds") for r in lands)}, '
+              f'median held {median(r.get("land_held_seconds") for r in lands if r.get("land_held_seconds"))}'
+              + (f'; {len(batched)} in batches of {statistics.mean(len(b) for b in batched):.1f} on average'
+                 if batched else ''))
+    else:
+        print('lands: none in the window')
+    gates = rows(common / 'hirsel-gates.jsonl', args.since, args.until)
+    failed = [row for row in gates if not row.get('passed')]
+    print(f'gates: {len(gates)}, {len(failed)} failed; time to first failure: median '
+          f'{median(r.get("first_failure_seconds") for r in failed)}; of those, '
+          f'{sum(r.get("slot_wait_seconds") is None for r in failed)} failed in the floor before queueing; '
+          f'median queue wait {median(r.get("slot_wait_seconds") for r in gates)}')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

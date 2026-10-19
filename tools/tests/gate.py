@@ -25,6 +25,7 @@ sys.path.insert(0, str(TOOLS / 'buck2'))
 import gating  # noqa: E402
 import impact  # noqa: E402
 import merging  # noqa: E402
+import graph  # noqa: E402
 
 # Scratch gates must never contaminate the host's real timing history.
 os.environ['HIRSEL_TEST_HISTORY'] = 'none'
@@ -46,6 +47,18 @@ hirsel_test(
     name = "hirsel-lexer-test-it",
     data = glob([
         "conformance/**",
+    ]),
+)
+'''
+
+
+# The scratch clone's test target `a`, which reads the test code the Scripts change.
+SCRIPT_BUCK = BUCK + '''
+hirsel_test(
+    name = "a",
+    data = glob([
+        "crates/hirsel-span/tests/**",
+        "crates/hirsel-lexer/tests/**",
     ]),
 )
 '''
@@ -166,8 +179,9 @@ class Classification(unittest.TestCase):
         self.assertEqual(impact.buck_targets(BUCK, added), {'hirsel-llvm-test-it'})
         self.assertEqual(impact.buck_targets(BUCK, BUCK), set())
         self.assertIs(impact.buck_targets(BUCK, BUCK.replace('"hirsel_test")', '"hirsel_test", "x")')), True)
-        self.assertEqual(gating.macro_targets({'a-test-it'}),
-                         'attrregexfilter(name, "^(a\\-test\\-it)(-harness|-host|-shard-[0-9]+)?$", root//:)')
+        self.assertEqual(graph.Graph(QUERY_BUCK).macro_targets({'hirsel-driver-test-it'}),
+                         {'hirsel-driver-test-it-harness', 'hirsel-driver-test-it-shard-1',
+                          'hirsel-driver-test-it-shard-2'})
 
     def test_the_generated_buck_parses_into_every_rule(self):
         header, rules = impact.buck_rules((REPO / 'BUCK').read_text())
@@ -295,8 +309,104 @@ class Workspace(unittest.TestCase):
             self.assertIn(f'    skips = {json.dumps(cases)},\n', rules[binary])
 
 
+# A root BUCK for selections over the real repository: a library, its tests
+# and a binary's test that reaches it through the driver.
+QUERY_BUCK = '''# @generated
+hirsel_library(
+    name = "hirsel-check",
+    srcs = glob(["crates/hirsel-check/src/**"]),
+    crate_root = "crates/hirsel-check/src/lib.rs",
+)
+hirsel_library(
+    name = "hirsel-checker",
+    srcs = glob(["crates/hirsel-checker/src/**"]),
+)
+hirsel_test(
+    name = "hirsel-check-unittest",
+    srcs = glob(["crates/hirsel-check/src/**"]),
+    deps = ["//:hirsel-check"],
+)
+hirsel_test(
+    name = "hirsel-checker-unittest",
+    deps = ["//:hirsel-checker"],
+)
+hirsel_library(
+    name = "hirsel-driver",
+    srcs = glob(["crates/hirsel-driver/src/**"]),
+    deps = ["//:hirsel-check"],
+)
+hirsel_binary(
+    name = "hirsel-cli-bin-hirsel",
+    srcs = glob(["crates/hirsel-cli/src/**"]),
+    deps = ["//:hirsel-driver"],
+)
+hirsel_test(
+    name = "hirsel-cli-test-cli",
+    bin_exes = {"hirsel": "//:hirsel-cli-bin-hirsel"},
+)
+hirsel_test(
+    name = "hirsel-cli-test-examples",
+    shards = 2,
+    bin_exes = {"hirsel": "//:hirsel-cli-bin-hirsel"},
+    data = glob(["examples/**"]),
+)
+hirsel_library(
+    name = "hirsel-lexer",
+    srcs = glob(["crates/hirsel-lexer/src/**"]),
+    doctests = True,
+)
+hirsel_test(
+    name = "hirsel-lexer-test-it",
+    srcs = glob(["crates/hirsel-lexer/tests/**"]),
+    data = ["crates/hirsel-lexer/tests/conformance.rs"],
+    deps = ["//:hirsel-lexer"],
+)
+hirsel_test(
+    name = "hirsel-driver-test-it",
+    shards = 2,
+    deps = ["//:hirsel-driver"],
+)
+hirsel_command_test(
+    name = "gate-conformance-shard-1",
+    binary = "//:hirsel-cli-bin-hirsel",
+    data = glob(["conformance/**"]),
+)
+'''
+
+
+class Graph(unittest.TestCase):
+    """graph.py's static reading of the root BUCK."""
+
+    def test_the_repositorys_buck_expands_every_macro(self):
+        found = graph.Graph((REPO / 'BUCK').read_text(), REPO)
+        tests = found.all_tests()
+        self.assertIn('hirsel-driver-test-it-shard-1', tests)
+        self.assertNotIn('hirsel-driver-test-it', tests)
+        self.assertFalse(any(name.startswith('gate-') for name in tests))
+        self.assertTrue(found.owners(['crates/hirsel-lexer/src/lib.rs']) >= {'hirsel-lexer'})
+
+    def test_globs_follow_buck2(self):
+        glob = graph.Glob(('crates/**/src/*.rs', 'docs/**'), ('docs/spec/**',))
+        self.assertTrue(glob.matches('crates/a/b/src/lib.rs'))
+        self.assertTrue(glob.matches('crates/src/lib.rs'))
+        self.assertFalse(glob.matches('crates/a/src/x/lib.rs'))
+        self.assertTrue(glob.matches('docs/tour.md'))
+        self.assertFalse(glob.matches('docs/spec/rules.md'))
+        # A subpackage's files belong to it, not to the root's globs.
+        self.assertFalse(graph.Glob(('**',)).matches('tools/buck2/defs.bzl'))
+
+    def test_a_test_reaches_what_its_harness_and_binaries_depend_on(self):
+        found = graph.Graph(QUERY_BUCK)
+        self.assertEqual(found.tests(found.rdeps({'hirsel-driver'})),
+                         {'hirsel-cli-test-cli', 'hirsel-cli-test-examples-shard-1', 'hirsel-cli-test-examples-shard-2',
+                          'hirsel-driver-test-it-shard-1', 'hirsel-driver-test-it-shard-2'})
+        self.assertEqual(found.crate_tests({'hirsel-lexer'}), {'hirsel-lexer', 'hirsel-lexer-test-it'})
+        with self.assertRaisesRegex(ValueError, 'unknown macro'):
+            graph.Graph('hirsel_new_rule(name = "x")\n')
+
+
 class Queries(unittest.TestCase):
-    """The floor, the suggestion and a lane's choice, with uquery recorded."""
+    """The floor, the suggestion and a lane's choice, over graph.py's static BUCK."""
 
     @staticmethod
     def selection(paths, root=None, buck=False):
@@ -304,21 +414,20 @@ class Queries(unittest.TestCase):
         selection.base = 'HEAD'
         selection.root = root or REPO
         selection.paths = paths
+        selection.graph = graph.Graph(QUERY_BUCK, selection.root)
         selection.classified = impact.classify(paths, MEMBERS | {'hirsel-check', 'hirsel-driver'}, BUCK)
         if buck:
             selection.classified.buck = buck
         return selection
 
     @staticmethod
-    def run_query(method, selection, answers=None):
+    def run_query(method, selection):
+        """The plan, and the Buck2 queries it asked (it must ask none)."""
         asked = []
 
         def uquery(expression):
             asked.append(expression)
-            for key, value in (answers or {}).items():
-                if key in expression:
-                    return list(value)
-            return ['root//:t-unittest']
+            return []
         with patch.object(gating, 'uquery', uquery):
             plan = method(selection)
         return plan, asked
@@ -326,52 +435,52 @@ class Queries(unittest.TestCase):
     def test_a_crates_source_floors_its_own_tests_and_suggests_its_campaigns(self):
         selection = self.selection(['crates/hirsel-check/src/lib.rs'])
         floor, asked = self.run_query(gating.Selection.floor, selection)
-        self.assertEqual(asked, [gating.crate_tests({'hirsel-check'})])
+        self.assertEqual(asked, [])
+        # A crate's tests, not a longer-named crate's.
+        self.assertEqual(floor.tests, {'root//:hirsel-check-unittest'})
         self.assertEqual((floor.campaigns, floor.conformance), (set(), set()))
         plan, _ = self.run_query(gating.Selection.suggest, selection)
         self.assertEqual(plan.campaigns, {impact.CONFORMANCE, impact.AGREEMENT})
+        # Every test reading it through a dependency, but not the examples.
+        self.assertEqual(plan.tests, {'root//:hirsel-check-unittest', 'root//:hirsel-cli-test-cli',
+                                      'root//:hirsel-driver-test-it-shard-1', 'root//:hirsel-driver-test-it-shard-2'})
         expected = [f'root//:gate-{name}-shard-{index}'
                     for name, count in [('conformance', gating.CONFORMANCE_SHARDS),
                                         ('agree', gating.AGREE_SHARDS)]
                     for index in range(1, count + 1)]
         self.assertCountEqual(plan.campaign_targets(), expected)
-        # A crate's tests, not a longer-named crate's.
-        query = gating.crate_tests({'hirsel-check'})
-        self.assertIn('"^(hirsel\\-check)-(unittest|test-.+|bin-.+-unittest)$"', query)
 
     def test_changed_test_code_floors_only_the_tests_that_own_it(self):
-        selection = self.selection(['crates/hirsel-lexer/tests/it/keywords.rs'])
-        with patch.object(gating, 'owned_paths', lambda paths, root=None: list(paths)):
-            floor, asked = self.run_query(gating.Selection.floor, selection)
-        self.assertEqual(asked, ['kind("_rust_test", owner("crates/hirsel-lexer/tests/it/keywords.rs"))'
-                                 ' - attrfilter(labels, gate, //...)'])
-        self.assertEqual(floor.tests, {'root//:t-unittest'})
+        selection = self.selection(['crates/hirsel-lexer/tests/conformance.rs'])
+        floor, asked = self.run_query(gating.Selection.floor, selection)
+        self.assertEqual(asked, [])
+        self.assertEqual(floor.tests, {'root//:hirsel-lexer-test-it'})
 
     def test_a_build_wide_edit_suggests_every_test_and_campaign(self):
         plan, asked = self.run_query(gating.Selection.suggest, self.selection(['.buckconfig']))
-        self.assertEqual(asked, [gating.ALL_TESTS])
+        self.assertEqual(asked, [])
+        self.assertEqual(plan.tests, {f'root//:{name}' for name in graph.Graph(QUERY_BUCK).all_tests()})
+        self.assertIn('root//:hirsel-lexer', plan.tests)  # a library with doctests
+        self.assertNotIn('root//:gate-conformance-shard-1', plan.tests)
         self.assertEqual(plan.campaigns, set(impact.CAMPAIGNS))
 
     def test_resizing_suggests_runs_without_rdeps_or_unrelated_campaigns(self):
         selection = self.selection([])
         selection.classified = impact.Classified(test_requests={
             'hirsel-cli-test-cli', 'gate-conformance', 'gate-native-full'})
-        plan, asked = self.run_query(gating.Selection.suggest, selection, {'kind': ['root//:hirsel-cli-test-cli']})
+        plan, _ = self.run_query(gating.Selection.suggest, selection)
         self.assertEqual(plan.tests, {'root//:hirsel-cli-test-cli'})
         self.assertEqual(plan.campaigns, {impact.CONFORMANCE})
-        self.assertFalse(any('rdeps' in a for a in asked))
 
     def test_the_examples_run_only_for_the_cli_the_driver_or_an_example(self):
-        examples = ['root//:hirsel-cli-test-examples-shard-1', 'root//:hirsel-cli-test-examples-shard-2']
-        answers = {'rdeps': examples + ['root//:hirsel-cli-test-cli']}
-        with patch.object(gating, 'owned_paths', lambda paths, root=None: list(paths)):
-            plan, _ = self.run_query(gating.Selection.suggest, self.selection(['crates/hirsel-check/src/lib.rs']), answers)
-            self.assertEqual(plan.tests & set(examples), set())
-            self.assertIn('root//:hirsel-cli-test-cli', plan.tests)
-            for path in ['crates/hirsel-driver/src/lib.rs', 'crates/hirsel-cli/src/main.rs', 'examples/todo/main.hir']:
-                with self.subTest(path=path):
-                    plan, _ = self.run_query(gating.Selection.suggest, self.selection([path]), answers)
-                    self.assertTrue(set(examples) <= plan.tests)
+        examples = {'root//:hirsel-cli-test-examples-shard-1', 'root//:hirsel-cli-test-examples-shard-2'}
+        plan, _ = self.run_query(gating.Selection.suggest, self.selection(['crates/hirsel-check/src/lib.rs']))
+        self.assertEqual(plan.tests & examples, set())
+        self.assertIn('root//:hirsel-cli-test-cli', plan.tests)
+        for path in ['crates/hirsel-driver/src/lib.rs', 'crates/hirsel-cli/src/main.rs']:
+            with self.subTest(path=path):
+                plan, _ = self.run_query(gating.Selection.suggest, self.selection([path]))
+                self.assertTrue(examples <= plan.tests)
 
     def test_a_lane_names_targets_campaigns_corpus_cases_and_programs(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -380,19 +489,18 @@ class Queries(unittest.TestCase):
                 (root / case).parent.mkdir(parents=True, exist_ok=True)
                 (root / case).write_text('// expect: run\n')
             selection = self.selection([], root=root)
-            answers = {gating.ALL_TESTS: ['root//:hirsel-driver-test-it-shard-1', 'root//:hirsel-driver-test-it-shard-2',
-                                          'root//:hirsel-lexer-unittest']}
             plan, _ = self.run_query(lambda s: s.choose([
-                '//:hirsel-driver-test-it', 'hirsel-lexer-unittest', 'agreement', 'conformance:conformance/MODE/',
-                'agreement:conformance/SEM/x-run.hir', 'native:conformance/SEM/x-run.hir']), selection, answers)
+                '//:hirsel-driver-test-it', 'hirsel-check-unittest', 'agreement', 'conformance:conformance/MODE/',
+                'agreement:conformance/SEM/x-run.hir', 'native:conformance/SEM/x-run.hir']), selection)
             self.assertEqual(plan.tests, {'root//:hirsel-driver-test-it-shard-1', 'root//:hirsel-driver-test-it-shard-2',
-                                          'root//:hirsel-lexer-unittest'})
+                                          'root//:hirsel-check-unittest'})
             self.assertEqual(plan.campaigns, {impact.AGREEMENT})
             self.assertEqual(plan.conformance, {'conformance/MODE/MODE-1-a-ok.hir', 'conformance/MODE/MODE-1-a-bad.hir'})
             self.assertEqual(plan.native, {'conformance/SEM/x-run.hir'})
-            for token in ['hirsel-nothing', 'conformance:conformance/NONE', 'native:conformance/none.hir']:
+            for token in ['hirsel-nothing', 'gate-conformance-shard-1', 'conformance:conformance/NONE',
+                          'native:conformance/none.hir']:
                 with self.subTest(token=token), self.assertRaises(SystemExit):
-                    self.run_query(lambda s: s.choose([token]), selection, answers)
+                    self.run_query(lambda s: s.choose([token]), selection)
 
     def test_generated_program_ids_select_both_native_backends(self):
         kinds = ['success', 'overflow', 'underflow', 'dividebyzero', 'index', 'requires']
@@ -1481,14 +1589,14 @@ class Scripts(unittest.TestCase):
         self.root = top / 'lane'
         self.root.mkdir()
         scratch_repo(self.root)
-        files = {'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\n', 'BUCK': BUCK, 'README.md': 'Hirsel\n',
+        files = {'Cargo.toml': '[workspace]\nmembers = ["crates/*"]\n', 'BUCK': SCRIPT_BUCK, 'README.md': 'Hirsel\n',
                  'docs/building.md': 'See [the grammar](grammar.md).\n', 'docs/grammar.md': 'grammar\n',
                  'docs/api.md': 'index\n', 'docs/catalogue.md': 'index\n',
                  **{f'crates/{crate}/Cargo.toml': f'[package]\nname = "{crate}"\n' for crate in impact.CRATE_CAMPAIGNS},
                  '.gitignore': (REPO / '.gitignore').read_text()}
         for name in ('gate', 'land'):
             files[f'tools/{name}'] = (TOOLS / name).read_text()
-        for name in ('gating', 'impact', 'merging', 'clippy', 'agree', 'conformance', 'event_logs'):
+        for name in ('gating', 'graph', 'impact', 'merging', 'clippy', 'agree', 'conformance', 'event_logs'):
             files[f'tools/buck2/{name}.py'] = (TOOLS / 'buck2' / f'{name}.py').read_text()
         for name in ('sync', 'prepare', 'fmt'):
             files[f'tools/buck2/{name}.py'] = FAKE_SCRIPT.replace('{name}', f'{name}.py').replace('{upper}', name.upper())
@@ -1613,15 +1721,12 @@ Local.start = traced_local_check
         self.assertIn('Buck2 daemon cleanup failed', result.stderr)
         self.assert_daemons_stopped()
 
-    def test_suggestion_cleans_up_after_a_query_exception_and_honors_the_environment_isolation(self):
+    def test_suggestion_is_static_and_leaves_the_worktrees_daemon_alone(self):
         self.daemon_change('gate')
-        result, _ = self.run_tool('gate', '--suggest', env=self.daemon_env() | {
-            'FAIL_QUERY': '1', 'BUCK_ISOLATION_DIR': 'interactive-inspection',
-        })
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('buck2 uquery failed', result.stderr)
-        self.assertEqual(self.daemon_trace()[-2:],
-                         [f'kill interactive-inspection {self.root}', f'kill buck2-bootstrap {self.root}'])
+        result, logged = self.run_tool('gate', '--suggest', env=self.daemon_env() | {'FAIL_QUERY': '1'})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((logged, self.daemon_trace()), ([], []))
+        self.assertIn('1 test targets: a', result.stdout)
 
     def test_interactive_keep_daemon_is_an_explicit_opt_out(self):
         for tool in ('gate', 'land'):

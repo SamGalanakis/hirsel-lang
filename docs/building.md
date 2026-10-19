@@ -667,7 +667,11 @@ ID such as `native:generated/success-0`), `all-tests`, and
 `gate-agree-selected-shard-<i>`); more than half the corpus runs the whole
 campaign.
 
-`--suggest` computes what the change can affect (`tools/buck2/impact.py`):
+`--suggest` computes what the change can affect (`tools/buck2/impact.py`)
+statically, from the changed paths, the root `BUCK` read without Buck2
+(`tools/buck2/graph.py` expands the `defs.bzl` macros into targets, inputs and
+dependencies) and the corpus import graphs: it starts no daemon and builds
+nothing, so it takes seconds. The floor's selection uses the same reading:
 
 - a crate's library source: every Buck2 test reading it, directly or through
   a dependency, and its row of `CRATE_CAMPAIGNS`. Front-end, validator and

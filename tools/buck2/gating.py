@@ -24,6 +24,7 @@ import tomllib
 
 import impact
 import event_logs
+import graph
 from sync import (AGREE_LIMIT, AGREE_SHARDS, AGREE_SLICE_PROGRAMS, CONFORMANCE_SHARDS, CONFORMANCE_SLICE_PROGRAMS,
                   SELECTED_SLICES)
 
@@ -703,13 +704,6 @@ def uquery(expression) -> list[str]:
     return result.stdout.split()
 
 
-def macro_targets(names) -> str:
-    """The targets each generated rule call declares: its name and the harness,
-    host and shard targets a hirsel_test adds."""
-    pattern = '|'.join(re.escape(name) for name in sorted(names))
-    return f'attrregexfilter(name, "^({pattern})(-harness|-host|-shard-[0-9]+)?$", root//:)'
-
-
 # What `tools/gate --tests` takes, beyond Buck2 test targets.
 SUGGESTED = 'suggested'
 ALL = 'all-tests'
@@ -723,13 +717,9 @@ EXAMPLES_INPUTS = ('crates/hirsel-cli/', 'crates/hirsel-driver/', 'examples/')
 WHOLE_CORPUS_SHARE = 0.5
 
 
-def crate_tests(crates) -> str:
-    """The query for every test target of these crates: unit, integration (all
-    shards), binary unit tests and doctests."""
-    names = '|'.join(re.escape(crate) for crate in sorted(crates))
-    return (f'(kind("_rust_test", attrregexfilter(name, "^({names})-(unittest|test-.+|bin-.+-unittest)$", root//:))'
-            f' + attrfilter(labels, doctest, attrregexfilter(name, "^({names})$", root//:)))'
-            ' - attrfilter(labels, gate, //...)')
+def labels(names) -> set[str]:
+    """Root target labels for graph names."""
+    return {f'root//:{name}' for name in names}
 
 
 def corpus_cases(prefix, root=ROOT) -> list[str]:
@@ -852,6 +842,7 @@ class Selection:
         self.root = root
         self.paths = changed_paths(base, root) if paths is None else paths
         buck_text = (root / 'BUCK').read_text()
+        self.graph = graph.Graph(buck_text, root)
         self.classified = impact.classify(self.paths, members(root), buck_text)
         if 'BUCK' in self.paths:
             old = subprocess.run(['git', 'show', f'{base}:BUCK'], cwd=root, capture_output=True, text=True).stdout
@@ -864,6 +855,11 @@ class Selection:
     @property
     def crates(self):
         return self.classified.crates
+
+    def owner_tests(self, paths) -> set[str]:
+        """The test targets that read these files themselves."""
+        files = owned_paths(paths, self.root)
+        return labels(name for name in self.graph.owners(files) if self.graph.targets[name].test)
 
     def ratchet(self) -> set[str]:
         if impact.PASSING not in self.paths:
@@ -880,14 +876,12 @@ class Selection:
         plan = Plan()
         c = self.classified
         if c.crates:
-            plan.tests |= set(uquery(crate_tests(c.crates)))
+            plan.tests |= labels(self.graph.crate_tests(c.crates))
             plan.reasons.append((', '.join(sorted(c.crates)), 'the crates whose source changed: all their tests'))
         tests = [p for p in c.owned if p.startswith('crates/') and p.split('/')[1] not in c.crates]
         if tests:
-            files = owned_paths(tests, self.root)
-            if files:
-                owners = ' + '.join(f'owner("{path}")' for path in files)
-                plan.tests |= set(uquery(f'kind("_rust_test", {owners}) - attrfilter(labels, gate, //...)'))
+            if owners := self.owner_tests(tests):
+                plan.tests |= owners
                 plan.reasons.append(('test code', 'the test targets of the changed test files'))
         cases = impact.changed_programs(self.paths, self.root, self.ratchet())
         if cases:
@@ -950,23 +944,19 @@ class Selection:
         c = self.classified
         root = self.root
         if c.everything:
-            plan.tests |= set(uquery(ALL_TESTS))
+            plan.tests |= labels(self.graph.all_tests())
             plan.campaigns |= set(impact.CAMPAIGNS)
             plan.reasons.append((f'{ALL} conformance agreement native-smoke',
                                  'a build-wide input, an unknown crate or the BUCK header changed'))
             return plan
-        scopes = []
+        scope = set()
         data = [p for p in c.owned if not p.startswith('crates/')]
         if c.owned:
-            files = owned_paths(c.owned, root)
-            if files:
-                scopes.append(' + '.join(f'owner("{path}")' for path in files))
+            scope |= self.graph.owners(owned_paths(c.owned, root))
         if isinstance(c.buck, set) and c.buck:
-            scopes.append(macro_targets(c.buck))
-        if scopes:
-            scope = f'rdeps(//..., {" + ".join(scopes)})'
-            plan.tests |= set(uquery(f'(kind("_rust_test", {scope}) + attrfilter(labels, doctest, {scope}))'
-                                     ' - attrfilter(labels, gate, //...)'))
+            scope |= self.graph.macro_targets(c.buck)
+        if scope:
+            plan.tests |= labels(self.graph.tests(self.graph.rdeps(scope)))
             plan.reasons.append(('<tests>', 'every Buck2 test reading a changed file, directly or through a dependency'))
         if c.crates:
             plan.campaigns |= c.campaigns
@@ -998,9 +988,8 @@ class Selection:
                                      f'{path} is data every case of the campaign can read'))
         if c.test_requests:
             # A reservation changes the run, not its harness or downstream users.
-            resized = uquery(f'kind("_rust_test", {macro_targets(c.test_requests)})'
-                             ' - attrfilter(labels, gate, //...)')
-            plan.tests |= set(resized)
+            plan.tests |= labels(name for name in self.graph.macro_targets(c.test_requests)
+                                 if self.graph.targets[name].test)
             for campaign, targets in CAMPAIGN_TARGETS.items():
                 if any(re.sub(r'-shard-\d+$', '', short(t)) in c.test_requests for t in targets):
                     plan.campaigns.add(campaign)
@@ -1022,7 +1011,7 @@ class Selection:
             if token == SUGGESTED:
                 plan.add(self.suggest())
             elif token == ALL:
-                plan.tests |= set(uquery(ALL_TESTS))
+                plan.tests |= labels(self.graph.all_tests())
                 plan.reasons.append((ALL, 'chosen'))
             elif token in WHOLE:
                 plan.campaigns.add(WHOLE[token])
@@ -1044,7 +1033,7 @@ class Selection:
                 plan.reasons.append((token, 'chosen'))
             else:
                 if names is None:
-                    names = {short(t) for t in uquery(ALL_TESTS)}
+                    names = self.graph.all_tests()
                 name = short(token.removeprefix('//:'))
                 shards = sorted(n for n in names if re.fullmatch(re.escape(name) + r'-shard-\d+', n))
                 if name not in names and not shards:
