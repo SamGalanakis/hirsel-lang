@@ -285,61 +285,61 @@ GATE_TESTS = [
       for index in range(1, CONFORMANCE_SHARDS + 1)),
     *(dict(name=f"gate-agree-shard-{index}", binary="//:hirsel-conformance-bin-agree",
            args=["--seed", "1", "--limit", str(AGREE_LIMIT), "--shard", f"{index}/{AGREE_SHARDS}"],
-           release=True, **GATE) for index in range(1, AGREE_SHARDS + 1)),
+           **GATE) for index in range(1, AGREE_SHARDS + 1)),
     *(dict(name=f"gate-conformance-selected-shard-{index}", binary="//:hirsel-conformance-bin-hirsel-conformance",
            args=["--check-format"], selected=["conformance_paths", "--path", index],
            measured_as="gate-conformance", **GATE)
       for index in range(1, SELECTED_SLICES + 1)),
     *(dict(name=f"gate-agree-selected-shard-{index}", binary="//:hirsel-conformance-bin-agree",
            args=["--seed", "1", "--limit", str(AGREE_LIMIT)], selected=["agree_paths", "--sample-path", index],
-           measured_as="gate-agree", release=True, **GATE)
+           measured_as="gate-agree", **GATE)
       for index in range(1, SELECTED_SLICES + 1)),
-    dict(name="gate-native-smoke", binary="//:hirsel-conformance-bin-native", args=["--smoke"], release=True,
+    dict(name="gate-native-smoke", binary="//:hirsel-conformance-bin-native", args=["--smoke"],
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     # Per-push matrix and parity share the changed-program filters from impact.py.
     dict(name="gate-native-changed", binary="//:hirsel-conformance-bin-native", args=["--smoke"],
-         release=True, runtime_archives=RUNTIME_ARCHIVES, changed_native=True, **GATE),
+         runtime_archives=RUNTIME_ARCHIVES, changed_native=True, **GATE),
     dict(name="gate-native-cranelift-changed", binary="//:hirsel-conformance-bin-native", args=["--cranelift"],
-         release=True, runtime_archives=RUNTIME_ARCHIVES, changed_native=True, **GATE),
+         runtime_archives=RUNTIME_ARCHIVES, changed_native=True, **GATE),
     # `tools/gate --full` (`-c hirsel.full=true` declares them). Native stages
     # carry their cross toolchain, qemu and Valgrind as pool action inputs.
     *(dict(name=f"gate-agree-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
-           args=["--shard", f"{index}/{AGREE_FULL_SHARDS}"], release=True, **GATE)
+           args=["--shard", f"{index}/{AGREE_FULL_SHARDS}"], **GATE)
       for index in range(1, AGREE_FULL_SHARDS + 1)),
     *(dict(name=f"gate-agree-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-agree",
            args=["--native", "full", "--shard", f"{index}/{AGREE_NATIVE_FULL_SHARDS}"],
-           release=True, runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)
+           runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)
       for index in range(1, AGREE_NATIVE_FULL_SHARDS + 1)),
     # Test-runner filters arrive after the build graph is fixed. Keep the whole
     # target free of the global cover; an unfiltered CLI run derives it itself.
-    dict(name="gate-native-full", full=True, binary="//:hirsel-conformance-bin-native", args=["--full"], release=True,
+    dict(name="gate-native-full", full=True, binary="//:hirsel-conformance-bin-native", args=["--full"],
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     *(dict(name=f"gate-native-full-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
-           args=["--full", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"], release=True,
+           args=["--full", "--shard", f"{index}/{NATIVE_FULL_SHARDS}"],
            runtime_archives=RUNTIME_ARCHIVES, native_selection="//:native-selection", **GATE)
       for index in range(1, NATIVE_FULL_SHARDS + 1)),
     *(dict(name=f"gate-native-history-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native-select",
-           args=["--replay-history", "--shard", f"{index}/{HISTORY_SHARDS}"], release=True,
+           args=["--replay-history", "--shard", f"{index}/{HISTORY_SHARDS}"],
            runtime_archives=RUNTIME_ARCHIVES, **GATE)
       for index in range(1, HISTORY_SHARDS + 1)),
     # The Cranelift parity gate: on demand (`-c hirsel.full=true`), with a lane's
     # `--test-arg=--filter --test-arg=<program>`; the shards together are the whole parity set.
     dict(name="gate-native-cranelift", full=True, binary="//:hirsel-conformance-bin-native", args=["--cranelift"],
-         release=True, runtime_archives=RUNTIME_ARCHIVES, **GATE),
+         runtime_archives=RUNTIME_ARCHIVES, **GATE),
     *(dict(name=f"gate-native-cranelift-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
-           args=["--cranelift", "--shard", f"{index}/{CRANELIFT_SHARDS}"], release=True,
+           args=["--cranelift", "--shard", f"{index}/{CRANELIFT_SHARDS}"],
            runtime_archives=RUNTIME_ARCHIVES, **GATE)
       for index in range(1, CRANELIFT_SHARDS + 1)),
     *(dict(name=f"gate-native-cranelift-aarch64-shard-{index}", full=True, binary="//:hirsel-conformance-bin-native",
-           args=["--cranelift", "--aarch64", "--shard", f"{index}/{CRANELIFT_SHARDS}"], release=True,
+           args=["--cranelift", "--aarch64", "--shard", f"{index}/{CRANELIFT_SHARDS}"],
            runtime_archives=RUNTIME_ARCHIVES, **GATE)
       for index in range(1, CRANELIFT_SHARDS + 1)),
-    dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"], release=True,
+    dict(name="gate-native-sanitize", full=True, binary="//:hirsel-conformance-bin-native", args=["--sanitize"],
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     dict(name="gate-conformance-hash-seed", full=True, binary="//:hirsel-conformance-bin-hirsel-conformance",
          args=["--hash-seed", "1"], **GATE),
     dict(name="gate-native-hash-sweep", full=True, binary="//:hirsel-conformance-bin-native", args=["--hash-sweep", "--hash-seed", "1"],
-         release=True, runtime_archives=RUNTIME_ARCHIVES, **GATE),
+         runtime_archives=RUNTIME_ARCHIVES, **GATE),
 ]
 
 INCLUDE = re.compile(r'\binclude(?:_str|_bytes)?!\(\s*"([^"]+)"\s*\)')
@@ -712,6 +712,10 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_native_selection", name="native-selection", collector="//:hirsel-conformance-bin-native-select", data=Raw(f"glob({starlark(CORPUS, 4)})")))
     for gate in GATE_TESTS:
         out.append("\n" + call("hirsel_command_test", **gate, precheck=PRECHECK, data=Raw(f"glob({starlark(CORPUS, 4)})")))
+    out.append("\n" + call("hirsel_test", name="hirsel-test-tool-profile", crate="test_tool_profile",
+                            crate_root="tools/tests/test_tool_profile.rs", srcs=["tools/tests/test_tool_profile.rs"],
+                            features=[], deps=[], manifest_dir=".", package_name="test-tool-profile",
+                            version="0.1.0", edition="2024"))
     out.append("\n" + call("hirsel_precheck", name="hirsel-std-precheck", hirsel="//:hirsel-cli-bin-hirsel",
                             manifest="stdlib/std@1/hirsel.json", srcs=Raw('glob(["stdlib/std@1/**"])'),
                             visibility=["PUBLIC"]))

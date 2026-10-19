@@ -277,7 +277,20 @@ them into a shared directory.
 - Profiles (`profile.bzl`): the default target platform `//tools/buck2:dev` is
   Cargo's dev profile (third-party crates at opt-level 1, and the members a
   root `[profile.dev.package.<name>] opt-level` names at that level);
-  `//tools/buck2:release` is `[profile.release]`.
+  `//tools/buck2:release` is `[profile.release]`;
+  `//tools/buck2:checked` is `[profile.checked]` (release with assertions and overflow checks).
+  Test harnesses and the executables they launch use `//tools/buck2:checked`,
+  an optimized profile with debug assertions and overflow checks enabled. This
+  includes `CARGO_BIN_EXE` subprocesses, conformance, agreement and native
+  compiler runners. Their runtime archives retain the production release
+  profile. Proc macros and build scripts retain their canonical dev profile.
+  The std precheck pins its exec dependency to this same checked configuration:
+  an ordinary `exec_dep` inherits the execution platform's configuration, which
+  has no Rust profile, and would fall back to dev even under a release caller.
+  Checked compiles use the dev compile requests and codegen policy, preserving
+  their memory headroom and parallelism while enabling O3.
+  Canonicalizing test harnesses on entry also keeps the workspace build and
+  tests from compiling the same harness under different reservations.
 
 ## Cost-balanced test shards
 

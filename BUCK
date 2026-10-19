@@ -3982,7 +3982,6 @@ hirsel_command_test(
         "--shard",
         "1/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4008,7 +4007,6 @@ hirsel_command_test(
         "--shard",
         "2/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4034,7 +4032,6 @@ hirsel_command_test(
         "--shard",
         "3/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4060,7 +4057,6 @@ hirsel_command_test(
         "--shard",
         "4/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4086,7 +4082,6 @@ hirsel_command_test(
         "--shard",
         "5/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4112,7 +4107,6 @@ hirsel_command_test(
         "--shard",
         "6/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4138,7 +4132,6 @@ hirsel_command_test(
         "--shard",
         "7/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4164,7 +4157,6 @@ hirsel_command_test(
         "--shard",
         "8/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4190,7 +4182,6 @@ hirsel_command_test(
         "--shard",
         "9/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4216,7 +4207,6 @@ hirsel_command_test(
         "--shard",
         "10/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4242,7 +4232,6 @@ hirsel_command_test(
         "--shard",
         "11/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4268,7 +4257,6 @@ hirsel_command_test(
         "--shard",
         "12/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4294,7 +4282,6 @@ hirsel_command_test(
         "--shard",
         "13/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4320,7 +4307,6 @@ hirsel_command_test(
         "--shard",
         "14/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4346,7 +4332,6 @@ hirsel_command_test(
         "--shard",
         "15/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4372,7 +4357,6 @@ hirsel_command_test(
         "--shard",
         "16/16",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4786,7 +4770,6 @@ hirsel_command_test(
         1,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4816,7 +4799,6 @@ hirsel_command_test(
         2,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4846,7 +4828,6 @@ hirsel_command_test(
         3,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4876,7 +4857,6 @@ hirsel_command_test(
         4,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4906,7 +4886,6 @@ hirsel_command_test(
         5,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4936,7 +4915,6 @@ hirsel_command_test(
         6,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4966,7 +4944,6 @@ hirsel_command_test(
         7,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -4996,7 +4973,6 @@ hirsel_command_test(
         8,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5026,7 +5002,6 @@ hirsel_command_test(
         9,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5056,7 +5031,6 @@ hirsel_command_test(
         10,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5086,7 +5060,6 @@ hirsel_command_test(
         11,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5116,7 +5089,6 @@ hirsel_command_test(
         12,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5146,7 +5118,6 @@ hirsel_command_test(
         13,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5176,7 +5147,6 @@ hirsel_command_test(
         14,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5206,7 +5176,6 @@ hirsel_command_test(
         15,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5236,7 +5205,6 @@ hirsel_command_test(
         16,
     ],
     measured_as = "gate-agree",
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5255,7 +5223,6 @@ hirsel_command_test(
     name = "gate-native-smoke",
     binary = "//:hirsel-conformance-bin-native",
     args = ["--smoke"],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -5275,7 +5242,6 @@ hirsel_command_test(
     name = "gate-native-changed",
     binary = "//:hirsel-conformance-bin-native",
     args = ["--smoke"],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     changed_native = True,
     cwd = "crates/hirsel-conformance",
@@ -5296,7 +5262,6 @@ hirsel_command_test(
     name = "gate-native-cranelift-changed",
     binary = "//:hirsel-conformance-bin-native",
     args = ["--cranelift"],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     changed_native = True,
     cwd = "crates/hirsel-conformance",
@@ -5321,7 +5286,6 @@ hirsel_command_test(
         "--shard",
         "1/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5344,7 +5308,6 @@ hirsel_command_test(
         "--shard",
         "2/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5367,7 +5330,6 @@ hirsel_command_test(
         "--shard",
         "3/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5390,7 +5352,6 @@ hirsel_command_test(
         "--shard",
         "4/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5413,7 +5374,6 @@ hirsel_command_test(
         "--shard",
         "5/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5436,7 +5396,6 @@ hirsel_command_test(
         "--shard",
         "6/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5459,7 +5418,6 @@ hirsel_command_test(
         "--shard",
         "7/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5482,7 +5440,6 @@ hirsel_command_test(
         "--shard",
         "8/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5505,7 +5462,6 @@ hirsel_command_test(
         "--shard",
         "9/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5528,7 +5484,6 @@ hirsel_command_test(
         "--shard",
         "10/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5551,7 +5506,6 @@ hirsel_command_test(
         "--shard",
         "11/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5574,7 +5528,6 @@ hirsel_command_test(
         "--shard",
         "12/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5597,7 +5550,6 @@ hirsel_command_test(
         "--shard",
         "13/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5620,7 +5572,6 @@ hirsel_command_test(
         "--shard",
         "14/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5643,7 +5594,6 @@ hirsel_command_test(
         "--shard",
         "15/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5666,7 +5616,6 @@ hirsel_command_test(
         "--shard",
         "16/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5689,7 +5638,6 @@ hirsel_command_test(
         "--shard",
         "17/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5712,7 +5660,6 @@ hirsel_command_test(
         "--shard",
         "18/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5735,7 +5682,6 @@ hirsel_command_test(
         "--shard",
         "19/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5758,7 +5704,6 @@ hirsel_command_test(
         "--shard",
         "20/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5781,7 +5726,6 @@ hirsel_command_test(
         "--shard",
         "21/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5804,7 +5748,6 @@ hirsel_command_test(
         "--shard",
         "22/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5827,7 +5770,6 @@ hirsel_command_test(
         "--shard",
         "23/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5850,7 +5792,6 @@ hirsel_command_test(
         "--shard",
         "24/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5873,7 +5814,6 @@ hirsel_command_test(
         "--shard",
         "25/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5896,7 +5836,6 @@ hirsel_command_test(
         "--shard",
         "26/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5919,7 +5858,6 @@ hirsel_command_test(
         "--shard",
         "27/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5942,7 +5880,6 @@ hirsel_command_test(
         "--shard",
         "28/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5965,7 +5902,6 @@ hirsel_command_test(
         "--shard",
         "29/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -5988,7 +5924,6 @@ hirsel_command_test(
         "--shard",
         "30/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6011,7 +5946,6 @@ hirsel_command_test(
         "--shard",
         "31/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6034,7 +5968,6 @@ hirsel_command_test(
         "--shard",
         "32/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6057,7 +5990,6 @@ hirsel_command_test(
         "--shard",
         "33/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6080,7 +6012,6 @@ hirsel_command_test(
         "--shard",
         "34/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6103,7 +6034,6 @@ hirsel_command_test(
         "--shard",
         "35/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6126,7 +6056,6 @@ hirsel_command_test(
         "--shard",
         "36/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6149,7 +6078,6 @@ hirsel_command_test(
         "--shard",
         "37/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6172,7 +6100,6 @@ hirsel_command_test(
         "--shard",
         "38/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6195,7 +6122,6 @@ hirsel_command_test(
         "--shard",
         "39/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6218,7 +6144,6 @@ hirsel_command_test(
         "--shard",
         "40/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6241,7 +6166,6 @@ hirsel_command_test(
         "--shard",
         "41/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6264,7 +6188,6 @@ hirsel_command_test(
         "--shard",
         "42/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6287,7 +6210,6 @@ hirsel_command_test(
         "--shard",
         "43/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6310,7 +6232,6 @@ hirsel_command_test(
         "--shard",
         "44/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6333,7 +6254,6 @@ hirsel_command_test(
         "--shard",
         "45/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6356,7 +6276,6 @@ hirsel_command_test(
         "--shard",
         "46/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6379,7 +6298,6 @@ hirsel_command_test(
         "--shard",
         "47/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6402,7 +6320,6 @@ hirsel_command_test(
         "--shard",
         "48/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6425,7 +6342,6 @@ hirsel_command_test(
         "--shard",
         "49/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6448,7 +6364,6 @@ hirsel_command_test(
         "--shard",
         "50/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6471,7 +6386,6 @@ hirsel_command_test(
         "--shard",
         "51/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6494,7 +6408,6 @@ hirsel_command_test(
         "--shard",
         "52/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6517,7 +6430,6 @@ hirsel_command_test(
         "--shard",
         "53/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6540,7 +6452,6 @@ hirsel_command_test(
         "--shard",
         "54/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6563,7 +6474,6 @@ hirsel_command_test(
         "--shard",
         "55/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6586,7 +6496,6 @@ hirsel_command_test(
         "--shard",
         "56/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6609,7 +6518,6 @@ hirsel_command_test(
         "--shard",
         "57/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6632,7 +6540,6 @@ hirsel_command_test(
         "--shard",
         "58/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6655,7 +6562,6 @@ hirsel_command_test(
         "--shard",
         "59/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6678,7 +6584,6 @@ hirsel_command_test(
         "--shard",
         "60/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6701,7 +6606,6 @@ hirsel_command_test(
         "--shard",
         "61/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6724,7 +6628,6 @@ hirsel_command_test(
         "--shard",
         "62/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6747,7 +6650,6 @@ hirsel_command_test(
         "--shard",
         "63/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6770,7 +6672,6 @@ hirsel_command_test(
         "--shard",
         "64/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6793,7 +6694,6 @@ hirsel_command_test(
         "--shard",
         "65/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6816,7 +6716,6 @@ hirsel_command_test(
         "--shard",
         "66/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6839,7 +6738,6 @@ hirsel_command_test(
         "--shard",
         "67/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6862,7 +6760,6 @@ hirsel_command_test(
         "--shard",
         "68/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6885,7 +6782,6 @@ hirsel_command_test(
         "--shard",
         "69/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6908,7 +6804,6 @@ hirsel_command_test(
         "--shard",
         "70/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6931,7 +6826,6 @@ hirsel_command_test(
         "--shard",
         "71/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6954,7 +6848,6 @@ hirsel_command_test(
         "--shard",
         "72/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -6977,7 +6870,6 @@ hirsel_command_test(
         "--shard",
         "73/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7000,7 +6892,6 @@ hirsel_command_test(
         "--shard",
         "74/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7023,7 +6914,6 @@ hirsel_command_test(
         "--shard",
         "75/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7046,7 +6936,6 @@ hirsel_command_test(
         "--shard",
         "76/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7069,7 +6958,6 @@ hirsel_command_test(
         "--shard",
         "77/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7092,7 +6980,6 @@ hirsel_command_test(
         "--shard",
         "78/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7115,7 +7002,6 @@ hirsel_command_test(
         "--shard",
         "79/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7138,7 +7024,6 @@ hirsel_command_test(
         "--shard",
         "80/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7161,7 +7046,6 @@ hirsel_command_test(
         "--shard",
         "81/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7184,7 +7068,6 @@ hirsel_command_test(
         "--shard",
         "82/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7207,7 +7090,6 @@ hirsel_command_test(
         "--shard",
         "83/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7230,7 +7112,6 @@ hirsel_command_test(
         "--shard",
         "84/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7253,7 +7134,6 @@ hirsel_command_test(
         "--shard",
         "85/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7276,7 +7156,6 @@ hirsel_command_test(
         "--shard",
         "86/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7299,7 +7178,6 @@ hirsel_command_test(
         "--shard",
         "87/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7322,7 +7200,6 @@ hirsel_command_test(
         "--shard",
         "88/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7345,7 +7222,6 @@ hirsel_command_test(
         "--shard",
         "89/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7368,7 +7244,6 @@ hirsel_command_test(
         "--shard",
         "90/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7391,7 +7266,6 @@ hirsel_command_test(
         "--shard",
         "91/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7414,7 +7288,6 @@ hirsel_command_test(
         "--shard",
         "92/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7437,7 +7310,6 @@ hirsel_command_test(
         "--shard",
         "93/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7460,7 +7332,6 @@ hirsel_command_test(
         "--shard",
         "94/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7483,7 +7354,6 @@ hirsel_command_test(
         "--shard",
         "95/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7506,7 +7376,6 @@ hirsel_command_test(
         "--shard",
         "96/96",
     ],
-    release = True,
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
     data = glob([
@@ -7531,7 +7400,6 @@ hirsel_command_test(
         "--shard",
         "1/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7558,7 +7426,6 @@ hirsel_command_test(
         "--shard",
         "2/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7585,7 +7452,6 @@ hirsel_command_test(
         "--shard",
         "3/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7612,7 +7478,6 @@ hirsel_command_test(
         "--shard",
         "4/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7639,7 +7504,6 @@ hirsel_command_test(
         "--shard",
         "5/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7666,7 +7530,6 @@ hirsel_command_test(
         "--shard",
         "6/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7693,7 +7556,6 @@ hirsel_command_test(
         "--shard",
         "7/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7720,7 +7582,6 @@ hirsel_command_test(
         "--shard",
         "8/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7747,7 +7608,6 @@ hirsel_command_test(
         "--shard",
         "9/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7774,7 +7634,6 @@ hirsel_command_test(
         "--shard",
         "10/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7801,7 +7660,6 @@ hirsel_command_test(
         "--shard",
         "11/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7828,7 +7686,6 @@ hirsel_command_test(
         "--shard",
         "12/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7855,7 +7712,6 @@ hirsel_command_test(
         "--shard",
         "13/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7882,7 +7738,6 @@ hirsel_command_test(
         "--shard",
         "14/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7909,7 +7764,6 @@ hirsel_command_test(
         "--shard",
         "15/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7936,7 +7790,6 @@ hirsel_command_test(
         "--shard",
         "16/16",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -7958,7 +7811,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-native",
     args = ["--full"],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -7983,7 +7835,6 @@ hirsel_command_test(
         "--shard",
         "1/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -8009,7 +7860,6 @@ hirsel_command_test(
         "--shard",
         "2/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -8035,7 +7885,6 @@ hirsel_command_test(
         "--shard",
         "3/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -8061,7 +7910,6 @@ hirsel_command_test(
         "--shard",
         "4/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -8087,7 +7935,6 @@ hirsel_command_test(
         "--shard",
         "5/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -8113,7 +7960,6 @@ hirsel_command_test(
         "--shard",
         "6/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -8139,7 +7985,6 @@ hirsel_command_test(
         "--shard",
         "7/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -8165,7 +8010,6 @@ hirsel_command_test(
         "--shard",
         "8/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     native_selection = "//:native-selection",
     cwd = "crates/hirsel-conformance",
@@ -8191,7 +8035,6 @@ hirsel_command_test(
         "--shard",
         "1/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8216,7 +8059,6 @@ hirsel_command_test(
         "--shard",
         "2/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8241,7 +8083,6 @@ hirsel_command_test(
         "--shard",
         "3/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8266,7 +8107,6 @@ hirsel_command_test(
         "--shard",
         "4/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8291,7 +8131,6 @@ hirsel_command_test(
         "--shard",
         "5/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8316,7 +8155,6 @@ hirsel_command_test(
         "--shard",
         "6/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8341,7 +8179,6 @@ hirsel_command_test(
         "--shard",
         "7/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8366,7 +8203,6 @@ hirsel_command_test(
         "--shard",
         "8/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8391,7 +8227,6 @@ hirsel_command_test(
         "--shard",
         "9/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8416,7 +8251,6 @@ hirsel_command_test(
         "--shard",
         "10/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8441,7 +8275,6 @@ hirsel_command_test(
         "--shard",
         "11/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8466,7 +8299,6 @@ hirsel_command_test(
         "--shard",
         "12/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8491,7 +8323,6 @@ hirsel_command_test(
         "--shard",
         "13/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8516,7 +8347,6 @@ hirsel_command_test(
         "--shard",
         "14/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8541,7 +8371,6 @@ hirsel_command_test(
         "--shard",
         "15/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8566,7 +8395,6 @@ hirsel_command_test(
         "--shard",
         "16/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8591,7 +8419,6 @@ hirsel_command_test(
         "--shard",
         "17/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8616,7 +8443,6 @@ hirsel_command_test(
         "--shard",
         "18/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8641,7 +8467,6 @@ hirsel_command_test(
         "--shard",
         "19/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8666,7 +8491,6 @@ hirsel_command_test(
         "--shard",
         "20/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8691,7 +8515,6 @@ hirsel_command_test(
         "--shard",
         "21/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8716,7 +8539,6 @@ hirsel_command_test(
         "--shard",
         "22/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8741,7 +8563,6 @@ hirsel_command_test(
         "--shard",
         "23/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8766,7 +8587,6 @@ hirsel_command_test(
         "--shard",
         "24/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8791,7 +8611,6 @@ hirsel_command_test(
         "--shard",
         "25/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8816,7 +8635,6 @@ hirsel_command_test(
         "--shard",
         "26/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8841,7 +8659,6 @@ hirsel_command_test(
         "--shard",
         "27/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8866,7 +8683,6 @@ hirsel_command_test(
         "--shard",
         "28/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8891,7 +8707,6 @@ hirsel_command_test(
         "--shard",
         "29/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8916,7 +8731,6 @@ hirsel_command_test(
         "--shard",
         "30/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8941,7 +8755,6 @@ hirsel_command_test(
         "--shard",
         "31/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8966,7 +8779,6 @@ hirsel_command_test(
         "--shard",
         "32/32",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -8987,7 +8799,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-native",
     args = ["--cranelift"],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9012,7 +8823,6 @@ hirsel_command_test(
         "--shard",
         "1/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9037,7 +8847,6 @@ hirsel_command_test(
         "--shard",
         "2/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9062,7 +8871,6 @@ hirsel_command_test(
         "--shard",
         "3/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9087,7 +8895,6 @@ hirsel_command_test(
         "--shard",
         "4/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9112,7 +8919,6 @@ hirsel_command_test(
         "--shard",
         "5/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9137,7 +8943,6 @@ hirsel_command_test(
         "--shard",
         "6/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9162,7 +8967,6 @@ hirsel_command_test(
         "--shard",
         "7/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9187,7 +8991,6 @@ hirsel_command_test(
         "--shard",
         "8/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9213,7 +9016,6 @@ hirsel_command_test(
         "--shard",
         "1/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9239,7 +9041,6 @@ hirsel_command_test(
         "--shard",
         "2/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9265,7 +9066,6 @@ hirsel_command_test(
         "--shard",
         "3/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9291,7 +9091,6 @@ hirsel_command_test(
         "--shard",
         "4/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9317,7 +9116,6 @@ hirsel_command_test(
         "--shard",
         "5/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9343,7 +9141,6 @@ hirsel_command_test(
         "--shard",
         "6/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9369,7 +9166,6 @@ hirsel_command_test(
         "--shard",
         "7/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9395,7 +9191,6 @@ hirsel_command_test(
         "--shard",
         "8/8",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9416,7 +9211,6 @@ hirsel_command_test(
     full = True,
     binary = "//:hirsel-conformance-bin-native",
     args = ["--sanitize"],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9463,7 +9257,6 @@ hirsel_command_test(
         "--hash-seed",
         "1",
     ],
-    release = True,
     runtime_archives = "//:hirsel-rt-archives",
     cwd = "crates/hirsel-conformance",
     precheck = "//:hirsel-std-precheck",
@@ -9477,6 +9270,19 @@ hirsel_command_test(
         "stdlib/**",
         "crates/hirsel-driver/tests/fixtures/text_opaque/**",
     ]),
+)
+
+hirsel_test(
+    name = "hirsel-test-tool-profile",
+    crate = "test_tool_profile",
+    crate_root = "tools/tests/test_tool_profile.rs",
+    srcs = ["tools/tests/test_tool_profile.rs"],
+    features = [],
+    deps = [],
+    manifest_dir = ".",
+    package_name = "test-tool-profile",
+    version = "0.1.0",
+    edition = "2024",
 )
 
 hirsel_precheck(

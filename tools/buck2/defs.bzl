@@ -213,6 +213,7 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
     _rust(
         native.rust_binary,
         name = harness,
+        incoming_transition = "root//tools/buck2:test_tool_transition",
         crate = crate,
         crate_root = crate_root,
         srcs = srcs,
@@ -326,11 +327,11 @@ _rust_test = rule(
     attrs = {
         "args": attrs.list(attrs.string(), default = []),
         "bin_exe_dir": attrs.string(default = ""),
-        "bin_exes": attrs.dict(attrs.string(), attrs.dep(), default = {}),
+        "bin_exes": attrs.dict(attrs.string(), attrs.transition_dep(cfg = "root//tools/buck2:test_tool_transition"), default = {}),
         "costs": attrs.option(attrs.source(), default = None),
         "cwd": attrs.string(),
         "data": attrs.list(attrs.source(), default = []),
-        "harness": attrs.dep(providers = [RunInfo]),
+        "harness": attrs.transition_dep(cfg = "root//tools/buck2:test_tool_transition", providers = [RunInfo]),
         "labels": attrs.list(attrs.string(), default = []),
         "llvm": attrs.dep(),
         "native_selection": attrs.option(attrs.dep(), default = None),
@@ -369,12 +370,12 @@ def selected_paths(key, index):
         return None
     return slices[index - 1].split("|")
 
-def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, precheck = None, release = False, full = False, native_selection = None, changed_native = False, selected = None, measured_as = None):
+def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, precheck = None, full = False, native_selection = None, changed_native = False, selected = None, measured_as = None):
     """A gate stage as a test: `binary args...` run from its package directory `cwd`.
 
     On the pool its result is cached by its inputs, so an unchanged corpus and
-    compiler pass without running. `release` builds the binary with Cargo's
-    release profile, as `cargo run --release` would. A `full` stage exists only
+    compiler pass without running. The binary uses the checked, optimized
+    checked profile. A `full` stage exists only
     in the full gate. Its pool request is the one measured for its stage,
     the name without `-shard-<i>` (TEST_REQUESTS in platforms.bzl).
     """
@@ -395,10 +396,6 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         if filters == [""]:
             filters = ["__no_changed_native_programs__"]
         args = args + [arg for path in filters for arg in ["--filter", path]]
-    if release:
-        configured = name + "-binary"
-        native.configured_alias(name = configured, actual = binary, platform = "root//tools/buck2:release")
-        binary = ":" + configured
     _rust_test(
         name = name,
         harness = binary,
@@ -468,7 +465,7 @@ def _precheck_impl(ctx):
 
 # `hirsel precheck <manifest>`: the package checked once, for every test and tool
 # run that selects it (docs/building.md, "The std precheck").
-hirsel_precheck = rule(
+_hirsel_precheck = rule(
     impl = _precheck_impl,
     attrs = {
         "hirsel": attrs.exec_dep(providers = [RunInfo]),
@@ -477,6 +474,14 @@ hirsel_precheck = rule(
         "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
     },
 )
+
+def hirsel_precheck(name, hirsel, **kwargs):
+    # exec_dep otherwise loses the caller's profile on the pool platform.
+    # Pin the executable to the same configuration as the test harnesses and
+    # CARGO_BIN_EXE tools, independent of the precheck action's reservation.
+    compiler = name + "-compiler"
+    native.configured_alias(name = compiler, actual = hirsel, platform = "root//tools/buck2:checked")
+    _hirsel_precheck(name = name, hirsel = ":" + compiler, **kwargs)
 
 def _toolchain_bundle_impl(ctx):
     # Copy the executable: a symlink would make current_exe resolve outside the

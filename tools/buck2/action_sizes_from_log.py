@@ -61,9 +61,10 @@ def events(path):
             metadata = details['metadata']
             wall = metadata['execution_time_us'] / 1e6
             seconds, nanos = metadata['start_time']
-            yield dict(target=label['name'], profile=('dev' if (':dev#' in owner['configuration']['full_name']
-                                                               or owner['configuration']['full_name'].startswith('hirsel-rust-host#'))
-                                                    else 'release'),
+            # Checked test tools use the dev compile requests and codegen policy.
+            configuration = owner['configuration']['full_name']
+            dev = any(p in configuration for p in (':dev#', ':checked#')) or configuration.startswith('hirsel-rust-host#')
+            yield dict(target=label['name'], profile='dev' if dev else 'release',
                        phase=action['name']['identifier'], wall=wall, end=seconds + nanos / 1e9 + wall,
                        cpu=int(props['cpu_count']), memory_kb=int(props['memory_kb']))
 

@@ -563,6 +563,32 @@ class ActionSizing(unittest.TestCase):
                            wall_ms='10000', cpu_usec='43000000', peak_bytes='900000000',
                            anon_peak_bytes='600000000', worker='fixture')
 
+    def test_optimized_test_tools_keep_the_dev_compile_budget(self):
+        from unittest.mock import patch
+        event = {'Event': {'data': {'SpanEnd': {'data': {'ActionExecution': {
+            'name': {'category': 'rustc', 'identifier': 'rlib [pic]'},
+            'failed': False,
+            'key': {'owner': {'TargetLabel': {
+                'label': {'package': 'root//', 'name': 'hirsel-check'},
+                'configuration': {'full_name': 'root//tools/buck2:checked#fixture'},
+            }}},
+            'commands': [{'details': {
+                'command_kind': {'command': {'RemoteCommand': {
+                    'cache_hit': False,
+                    'details': {'platform': {'properties': [
+                        {'name': 'cpu_count', 'value': '1'},
+                        {'name': 'memory_kb', 'value': '1048576'},
+                    ]}},
+                }}},
+                'metadata': {'execution_time_us': 10000000, 'start_time': [90, 0]},
+            }}],
+        }}}}}}
+        with patch.object(self.module.event_logs, 'lines', return_value=[json.dumps(event)]):
+            actions = list(self.module.events('fixture'))
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]['profile'], 'dev')
+        self.assertEqual(actions[0]['memory_kb'], 1048576)
+
     def test_unique_usage_sizes_cpu_and_memory_and_remembers_evidence(self):
         joined = self.module.join([self.action], {('worker', 'op'): self.record})
         row = self.module.sizes(joined)['profiles']['dev']['hirsel-check']

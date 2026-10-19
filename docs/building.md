@@ -328,7 +328,9 @@ precheck` refuses a package with any diagnostic. Diagnostics, semantic program
 revisions and replay identity are the same with and without a precheck. Buck2
 test targets that run std programs get `HIRSEL_PRECHECK` from
 `//:hirsel-std-precheck`, which rebuilds whenever std or the compiler changes;
-`HIRSEL_PACKAGE_CACHE=off` checks everything fresh.
+`HIRSEL_PACKAGE_CACHE=off` checks everything fresh. The precheck compiler and
+Buck2 test tools share the optimized `//tools/buck2:checked` profile, with
+debug assertions and integer overflow checks enabled.
 
 ## Layout
 

@@ -46,7 +46,7 @@ def hirsel_native_selection(name, collector, data):
         return
     # Gate-labelled targets are excluded from the ordinary workspace build.
     # Keep this build action available without enabling full test campaigns.
-    native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:release", labels = ["gate"])
+    native.configured_alias(name = name + "-collector", actual = collector, platform = "root//tools/buck2:checked", labels = ["gate"])
     _selection(name = name, collector = ":" + name + "-collector", data = data,
                exec_compatible_with = [budget_constraint(pool_budget_name(1, 1048576))],
                labels = ["gate"], visibility = ["PUBLIC"])

@@ -12,6 +12,29 @@ constraint_value(name = "profile_dev", constraint_setting = ":profile", visibili
 
 constraint_value(name = "profile_release", constraint_setting = ":profile", visibility = ["PUBLIC"])
 
+constraint_value(name = "profile_checked", constraint_setting = ":profile", visibility = ["PUBLIC"])
+
+# Compiler tools and harnesses share one optimized, checked configuration.
+platform(
+    name = "checked",
+    constraint_values = [
+        "prelude//os/constraints:linux",
+        "prelude//cpu/constraints:x86_64",
+        ":profile_checked",
+    ],
+    visibility = ["PUBLIC"],
+)
+
+host_transition(
+    name = "test_tool_transition",
+    configuration_name = "root//tools/buck2:checked",
+    budget = ":budget",
+    panic = ":panic",
+    profile = ":profile_checked",
+    cpu = "prelude//cpu/constraints:x86_64",
+    visibility = ["PUBLIC"],
+)
+
 # The default target platform: Cargo's dev profile.
 platform(
     name = "dev",
