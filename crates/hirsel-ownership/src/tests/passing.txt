@@ -135,7 +135,7 @@ MODE/MODE-1-arena-only-closure-call-taken-capture-ok.hir
 MODE/MODE-1-arena-only-moved-closure-result-ok.hir
 MODE/MODE-1-arena-only-unnamed-taken-copy-bad.hir
 MODE/MODE-1-borrow-capture-function-element-call-ok.hir
-MODE/MODE-1-borrow-source-annotation-bad.hir
+MODE/MODE-1-borrow-source-annotation-ok.hir
 MODE/MODE-1-borrowed-field-loop-result-source-bad.hir
 MODE/MODE-1-borrowed-field-loop-result-source-ok.hir
 MODE/MODE-1-borrowed-loop-result-source-bad.hir
@@ -227,7 +227,7 @@ MODE/MODE-1-local-function-bare-local-result-ok.hir
 MODE/MODE-1-local-result-copied-binding-bad.hir
 MODE/MODE-1-local-result-local-temporary-source-bad.hir
 MODE/MODE-1-local-result-local-temporary-source-ok.hir
-MODE/MODE-1-local-result-temporary-source-bad.hir
+MODE/MODE-1-local-result-temporary-source-arena-copy-ok.hir
 MODE/MODE-1-local-result-temporary-source-ok.hir
 MODE/MODE-1-local-taken-parameter-bad.hir
 MODE/MODE-1-local-taken-parameter-ok.hir
@@ -286,7 +286,7 @@ MODE/MODE-1-result-holder-field-copy-release-ok.hir
 MODE/MODE-1-result-holder-field-release-run.hir
 MODE/MODE-1-result-holder-field-reordered-release-ok.hir
 MODE/MODE-1-result-holder-loop-dead-inside-ok.hir
-MODE/MODE-1-result-holder-loop-live-inside-bad.hir
+MODE/MODE-1-result-holder-loop-live-inside-ok.hir
 MODE/MODE-1-result-holder-loop-live-inside-used-bad.hir
 MODE/MODE-1-result-holder-pending-argument-ok.hir
 MODE/MODE-1-result-holder-replacement-releases-loan-run.hir
@@ -347,6 +347,7 @@ MODE/MODE-1-unnamed-local-callee-temporary-bad.hir
 MODE/MODE-1-wave1-byte-share-bad.hir
 MODE/MODE-1-wave2-bytes-replace-accept.hir
 MODE/MODE-1-wave2-bytes-replace-reject.hir
+MODE/MODE-1-written-local-getter-bad.hir
 MODE/MODE-1-written-related-share-result-bad.hir
 MODE/MODE-1-written-related-share-result-ok.hir
 MODE/MODE-2-borrowed-element-view-run.hir
@@ -685,7 +686,6 @@ MODE/MODE-4-written-iter-parameter-ok.hir
 MODE/MODE-4-written-iterator-state-contract-ok.hir
 MODE/MODE-4-written-join-loss-ok.hir
 MODE/MODE-4-written-local-flat-bad.hir
-MODE/MODE-4-written-local-getter-bad.hir
 MODE/MODE-4-written-loop-loss-ok.hir
 MODE/MODE-4-written-mut-data-contract-ok.hir
 MODE/MODE-4-written-mut-failure-handback-ok.hir
@@ -810,7 +810,7 @@ OWN/OWN-3-later-argument-use-ok.hir
 OWN/OWN-3-later-argument-view-bad.hir
 OWN/OWN-3-later-argument-write-bad.hir
 OWN/OWN-3-map-borrow-sibling-field-ok.hir
-OWN/OWN-3-map-borrow-structural-mutation-bad.hir
+OWN/OWN-3-map-borrow-structural-mutation-ok.hir
 OWN/OWN-3-map-borrow-structural-mutation-used-bad.hir
 OWN/OWN-3-mut-alternatives-bad.hir
 OWN/OWN-3-mut-block-bad.hir

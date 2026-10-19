@@ -18,7 +18,7 @@ PROV/PROV-1-taken-argument-ends-brand-bad.hir # spec: #60
 PROV/PROV-1-taken-argument-ends-brand-ok.hir # spec: #60
 PROV/PROV-2-nested-brand-unbranded-parameter-bad.hir # spec: #60
 PROV/PROV-2-nested-brand-unbranded-parameter-ok.hir # spec: #60
-PROV/PROV-4-heap-unplaced-bad.hir # spec: #62
+PROV/PROV-4-heap-unplaced-global-ok.hir # spec: #62
 PROV/PROV-4-heap-unplaced-ok.hir # spec: #62
 PROV/PROV-4-placement-take-parameter-bad.hir # spec: #61
 PROV/PROV-4-placement-take-parameter-ok.hir # spec: #61

@@ -112,6 +112,7 @@ CONC/CONC-7-float-scalar.hir # dependency-owned H: LANG-2 line 5: literal needs 
 CONC/CONC-7-record-annotation-bad.hir # not done J: missing CONC-7 line 8
 CONC/CONC-7-record-payload-ok.hir # dependency-owned H: LANG-2 line 10: literal needs an expected type or numeric suffix
 CONC/CONC-7-sequence-payload-bad.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
+MODE/MODE-1-written-local-getter-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-counted-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-counted-list-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-error-mapper-occurrence-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
@@ -134,7 +135,6 @@ MODE/MODE-4-written-join-loss-bad.hir # dependency-owned I/P: operative rule is 
 MODE/MODE-4-written-later-argument-share-bad.hir # not done J: missing MODE-4 line 7
 MODE/MODE-4-written-local-flat-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-written-local-flat-borrow-bad.hir # not done J: missing MODE-4 line 14
-MODE/MODE-4-written-local-getter-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-written-loop-loss-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-written-mut-failure-handback-bad.hir # dependency-owned D/fixture M: LANG-4 line 4
 MODE/MODE-4-written-mut-failure-handback-ok.hir # dependency-owned D/fixture M: LANG-4 line 6

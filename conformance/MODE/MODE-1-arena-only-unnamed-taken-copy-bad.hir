@@ -2,7 +2,7 @@
 // expect: reject MODE-1 at line 11
 // A taken parameter's arena storage is not an arena-only argument. A result
 // holding a copy of it must name the parameter (ratified #43/#70/P2). The
-// named twin is MODE-1-local-result-temporary-source-bad, which is accepted.
+// named twin is MODE-1-local-result-temporary-source-arena-copy-ok.
 fn choose(a: Arena, x: Bytes in a, y: Bytes) -> Bytes in {a, x} {
   x
 }

@@ -474,7 +474,7 @@ const WITNESSED_SITES: [(&str, &str, &str); 5] = [
         "a scoped capability cannot enter an escaping capture",
     ),
     (
-        "MODE/MODE-4-written-local-getter-bad.hir",
+        "MODE/MODE-1-written-local-getter-bad.hir",
         "J",
         "an owned result retains a pre-existing local source bound",
     ),

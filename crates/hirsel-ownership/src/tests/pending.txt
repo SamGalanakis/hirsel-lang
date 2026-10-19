@@ -17,6 +17,8 @@ CLO/CLO-2-nested-uses-parameter-narrowed-bad.hir # outside ownership operative-r
 CLO/CLO-2-nested-uses-result-widened-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-nominal-argument-callable-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-seal-raw-authority-bad.hir # outside ownership operative-rule scope
+CLO/CLO-2-selected-callback-bad.hir # outside ownership operative-rule scope
+CLO/CLO-2-selected-callback-forward-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-std-option-and-then-run.hir # dependency-owned resolver: LANG-4 line 5
 CLO/CLO-2-std-option-filter-run.hir # dependency-owned resolver: LANG-4 line 10
 CLO/CLO-2-std-option-flatten-run.hir # dependency-owned resolver: LANG-4 line 8
@@ -42,8 +44,6 @@ CLO/CLO-4-annotated-tuple-callable-return-bad.hir # dependency-owned J: CLO-4 li
 CLO/CLO-4-capture-authority-declared-bad.hir # dependency-owned J: CLO-4 line 6
 CLO/CLO-4-contract6-held-selection-bad.hir # dependency-owned J: CLO-4 line 6
 CLO/CLO-4-generic-callable-uses-bad.hir # dependency-owned J: CLO-4 line 8
-CLO/CLO-4-selected-callback-bad.hir # outside ownership operative-rule scope
-CLO/CLO-4-selected-callback-forward-bad.hir # outside ownership operative-rule scope
 CLO/CLO-4-std-iter-fused-run.hir # dependency-owned resolver: LANG-4 line 25
 CLO/CLO-4-std-iter-run.hir # dependency-owned resolver: LANG-4 line 23
 DROP/DROP-1-user-drop-bad.hir # outside ownership operative-rule scope

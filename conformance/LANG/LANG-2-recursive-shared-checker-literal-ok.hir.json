@@ -10,7 +10,7 @@
   },
   "sources": [
     {
-      "path": "LANG-2-recursive-shared-checker-bad.hir",
+      "path": "LANG-2-recursive-shared-checker-literal-ok.hir",
       "module": []
     }
   ],
