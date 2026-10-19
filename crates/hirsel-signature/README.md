@@ -35,6 +35,17 @@ instead of mutating a stored type. The shared graph importer/substituter handles
 binder scopes; this module's wrapper records nominal dependencies and translates
 GraphError. Provider snapshots are Arc SignatureRef values.
 
+A recursive type group (type declarations naming each other through their bodies,
+such as `Tree = Leaf | Node(box Entry)` with `Entry { left: Tree, .. }`) is read from
+`SignatureProvider::recursive_group`: each member is normalized against the others'
+provisional signatures, never their published ones. A header (`GroupStage::Header`)
+needs no other declaration; a representation reads the others' headers; a published
+signature reads the others' representations. Members are then read as a declaration
+reads itself: no import, no dependency, empty declared bounds (proofs through them
+stay conservative, as for direct recursion), and one least fixed point of authority
+over the group. The published signature carries the group's key in
+`metadata.recursive_group` instead of the members' fingerprints.
+
 Normalization computes structural cleanup, including generic DependsOn conjunctions,
 nominal recursion and resource finalizer promises. Opaque and erased callable/Iter
 cleanup requires an exported proof; invocation noalloc does not imply cleanup

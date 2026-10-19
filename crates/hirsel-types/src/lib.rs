@@ -1084,11 +1084,38 @@ pub struct LookupOutput {
     pub manifest: ContentHash,
     pub result: Result<DefPath, QueryError>,
 }
+/// How much of a recursive type group's other members a normalization reads.
+/// A member's header (generics, visibility and attributes) needs no other
+/// declaration; its representation needs only the others' headers. A full
+/// signature reads the others' representations, so no member's signature
+/// waits on another's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GroupStage {
+    Header,
+    Representation,
+}
+/// A type declaration's recursive group: the other type declarations that its
+/// body reaches and that reach it back, each as a provisional signature at the
+/// requested stage, and the declaration's own group key. Empty outside a group.
+#[derive(Clone, Debug, Default)]
+pub struct RecursiveGroup {
+    pub key: Option<ContentHash>,
+    pub members: Vec<SignatureRef>,
+}
 /// Name lookup reads manifest identities, never another body's inferred facts (LANG-4/6).
 /// Failed lookups must record the manifest hash, so adding a name invalidates failures.
 pub trait SignatureProvider {
     fn signature(&mut self, definition: &DefPath) -> Result<SignatureRef, QueryError>;
     fn lookup(&mut self, context: &FileContext, path: &hirsel_syntax::Path) -> LookupOutput;
+    /// `definition`'s recursive type group, its other members at `stage`.
+    /// Providers without one (fixtures over a fixed registry) have none.
+    fn recursive_group(
+        &mut self,
+        _definition: &DefPath,
+        _stage: GroupStage,
+    ) -> Result<RecursiveGroup, QueryError> {
+        Ok(RecursiveGroup::default())
+    }
 }
 
 #[cfg(test)]

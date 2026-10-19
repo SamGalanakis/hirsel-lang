@@ -97,6 +97,7 @@ fn std_catalogue_signatures_match_the_complete_ordinary_source_contracts() {
                     resolution: &Resolution::default(),
                     metadata: &metadata,
                     declaration_sites: &metadata.declarations,
+                    stage: None,
                 },
                 &mut loaded.engine,
             )
@@ -217,6 +218,7 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
                 resolution: &Resolution::default(),
                 metadata: &metadata,
                 declaration_sites: &metadata.declarations,
+                stage: None,
             },
             &mut provider,
         )

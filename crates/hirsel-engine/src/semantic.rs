@@ -293,7 +293,7 @@ impl SignaturePhase for SignatureAdapter {
             .get(1)
             .or_else(|| candidates.first())
             .ok_or(QueryError::NotImplemented)?;
-        self.signature_with_candidates(file.clone(), *id, provider, Some(candidates))
+        self.signature_with_candidates(file.clone(), *id, provider, Some(candidates), None)
     }
     fn signature(
         &self,
@@ -301,7 +301,17 @@ impl SignaturePhase for SignatureAdapter {
         id: ItemId,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError> {
-        self.signature_with_candidates(file, id, provider, None)
+        self.signature_with_candidates(file, id, provider, None, None)
+    }
+    fn staged_signature(
+        &self,
+        candidates: &[(Arc<SyntaxFile>, ItemId)],
+        provider: &mut dyn SignatureProvider,
+        stage: hirsel_types::GroupStage,
+    ) -> Result<Signature, QueryError> {
+        let (file, id) = candidates.first().ok_or(QueryError::NotImplemented)?;
+        self.signature_with_candidates(file.clone(), *id, provider, Some(candidates), Some(stage))
+            .map(|output| output.value)
     }
 }
 impl SignatureAdapter {
@@ -311,6 +321,7 @@ impl SignatureAdapter {
         id: ItemId,
         provider: &mut dyn SignatureProvider,
         candidates: Option<&[(Arc<SyntaxFile>, ItemId)]>,
+        stage: Option<hirsel_types::GroupStage>,
     ) -> Result<QueryOutput<Signature>, QueryError> {
         let item = &file.tree.items[id.0 as usize];
         if let Some(owner) = hirsel_check_protocol::fact::fact_owner(&item.definition) {
@@ -371,13 +382,16 @@ impl SignatureAdapter {
                 return Err(QueryError::Operational(error.clone()));
             }
             let diagnostics = resolved.query.diagnostics.clone();
-            self.state.borrow_mut().signature_resolutions.insert(
-                item.definition.clone(),
-                ResolverSnapshot {
-                    file: file.clone(),
-                    output: resolved.query,
-                },
-            );
+            // A provisional signature publishes nothing for its declaration.
+            if stage.is_none() {
+                self.state.borrow_mut().signature_resolutions.insert(
+                    item.definition.clone(),
+                    ResolverSnapshot {
+                        file: file.clone(),
+                        output: resolved.query,
+                    },
+                );
+            }
             if crate::queries::has_errors(&diagnostics) {
                 return Err(QueryError::Diagnostics(diagnostics));
             }
@@ -390,9 +404,13 @@ impl SignatureAdapter {
                 resolution: &resolution,
                 metadata: &module.metadata,
                 declaration_sites: &declaration_sites,
+                stage,
             },
             provider,
         )?;
+        if stage.is_some() {
+            return Ok(output.public);
+        }
         if let Some(owner) = output.owner {
             self.state.borrow_mut().representations.insert(
                 item.definition.clone(),

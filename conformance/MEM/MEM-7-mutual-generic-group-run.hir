@@ -1,0 +1,24 @@
+// rule: MEM-7
+// expect: run
+// Generic declarations recursive through each other instantiate together.
+type Tree[K] = Leaf | Node(box Entry[K])
+
+type Entry[K] {
+  left: Tree[K],
+  key: K,
+  right: Tree[K],
+}
+
+fn count[K](t: Tree[K]) -> u64 {
+  match t {
+    Leaf() => 0,
+    Node(e) => count(e.left) + 1 + count(e.right),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let one: Tree[String] = Node(box Entry(left: Leaf(), key: "k", right: Leaf()))
+  let two: Tree[String] = Node(box Entry(left: one, key: "m", right: Leaf()))
+  test.check(t, count(two) == 2)
+  Ok(())
+}

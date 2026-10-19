@@ -1,0 +1,30 @@
+// rule: MEM-7
+// expect: run
+// A variant and a record recursive through each other need one box on the
+// cycle; each is normalized reading the other's representation.
+type Tree = Leaf | Node(box Entry)
+
+type Entry {
+  left: Tree,
+  key: u64,
+  right: Tree,
+}
+
+fn node(take left: Tree, key: u64, take right: Tree) -> Tree {
+  Node(box Entry(left: left, key: key, right: right))
+}
+
+fn sum(t: Tree) -> u64 {
+  match t {
+    Leaf() => 0,
+    Node(e) => sum(e.left) + e.key + sum(e.right),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let low = node(Leaf(), 1, Leaf())
+  let high = node(node(Leaf(), 8, Leaf()), 9, Leaf())
+  let tree = node(take low, 5, take high)
+  test.check(t, sum(tree) == 23)
+  Ok(())
+}

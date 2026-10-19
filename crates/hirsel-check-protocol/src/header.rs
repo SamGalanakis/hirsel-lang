@@ -14,6 +14,9 @@ pub struct Input<'a> {
     pub metadata: &'a Metadata,
     /// This owner's declaration sites in source order (or empty for AST fixtures).
     pub declaration_sites: &'a [DeclarationSite],
+    /// None for the published signature; a stage for a provisional one that
+    /// another member of a recursive type group reads.
+    pub stage: Option<hirsel_types::GroupStage>,
 }
 /// Private defining shape produced by the same pass as its public declaration.
 #[derive(Clone, Debug)]

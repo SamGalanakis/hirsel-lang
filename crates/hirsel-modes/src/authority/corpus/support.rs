@@ -429,6 +429,7 @@ pub(super) fn normalize_file(
                     resolution: &r,
                     metadata: &metadata,
                     declaration_sites: &metadata.declarations,
+                    stage: None,
                 },
                 registry,
             ) {

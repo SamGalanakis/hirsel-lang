@@ -91,6 +91,8 @@ fn normalize_inner(
         siblings: vec![],
         dependencies: BTreeMap::new(),
         snapshots: BTreeMap::new(),
+        group: BTreeMap::new(),
+        group_key: None,
         builtin_declarations: BTreeMap::new(),
         active: BTreeSet::new(),
         aliases: BTreeSet::new(),
@@ -302,9 +304,31 @@ fn normalize_inner(
                     "serializable requires transparent data without authority, brands or refinements; convert through a data DTO",
                 ));
             }
+            if input.stage == Some(GroupStage::Header) {
+                return Ok(provisional(&n, item, &attrs, *flavor, None));
+            }
+            let group = n.provider.recursive_group(
+                &item.definition,
+                if input.stage.is_some() {
+                    GroupStage::Header
+                } else {
+                    GroupStage::Representation
+                },
+            )?;
+            n.group_key = group.key;
+            for member in group.members {
+                n.snapshots
+                    .insert(member.definition.clone(), member.clone());
+                n.group.insert(member.definition.clone(), member);
+            }
+            n.load_group_nominals()?;
             let public_deps = n.dependencies.clone();
             let repr = n.type_body(body)?;
             n.own_representation = repr;
+            if input.stage == Some(GroupStage::Representation) {
+                return Ok(provisional(&n, item, &attrs, *flavor, repr));
+            }
+            n.settle_group_authority();
             let opaque = item.visibility == ast::Visibility::PublicOpaque;
             if opaque {
                 n.dependencies = public_deps.clone();
@@ -542,6 +566,7 @@ fn normalize_inner(
                     }
                 ),
             schema: vec![],
+            recursive_group: n.group_key,
             unsafe_ffi,
             wrapper: input
                 .metadata
@@ -596,6 +621,74 @@ enum Position {
     Result,
     Field,
 }
+/// A type declaration as another member of its recursive group reads it: its
+/// header, and at the representation stage its representation, with no
+/// derived facts. Its bounds are empty and its authority unknown until the
+/// reader settles them, so every proof through it stays conservative.
+fn provisional(
+    n: &Normalizer<'_, '_>,
+    item: &ast::Item,
+    attrs: &Attributes,
+    flavor: ast::TypeFlavor,
+    representation: Option<TypeId>,
+) -> NormalizedDeclaration {
+    let alias = item.visibility != ast::Visibility::PublicOpaque
+        && matches!(
+            item.kind,
+            ast::ItemKind::Type {
+                body: ast::TypeBody::Alias(_),
+                ..
+            }
+        );
+    NormalizedDeclaration {
+        public: QueryOutput {
+            value: Signature {
+                metadata: SignatureMetadata {
+                    visibility: item.visibility,
+                    alias,
+                    ..Default::default()
+                },
+                definition: item.definition.clone(),
+                types: if representation.is_some() {
+                    n.types.clone()
+                } else {
+                    TypeStore::default()
+                },
+                kind: SignatureKind::Type(TypeDefinition {
+                    loop_source: None,
+                    format: None,
+                    destructor_allocation: Allocation::MayAllocate,
+                    generics: n.generics.clone(),
+                    representation,
+                    bounds: vec![],
+                    authority: AuthoritySummary::Unknown,
+                    capability: attrs.capability,
+                    implementation_authority: None,
+                    serializable: attrs.serializable,
+                    layout: Layout {
+                        flat: flavor == ast::TypeFlavor::Flat,
+                        ..attrs.layout
+                    },
+                    distinct: flavor == ast::TypeFlavor::Distinct,
+                    resource: flavor == ast::TypeFlavor::Resource,
+                    drop: None,
+                    fact: None,
+                }),
+                fingerprint: ast::ContentHash::default(),
+            },
+            diagnostics: vec![],
+            dependencies: n
+                .dependencies
+                .iter()
+                .map(|(definition, fingerprint)| SignatureDependency {
+                    definition: definition.clone(),
+                    fingerprint: *fingerprint,
+                })
+                .collect(),
+        },
+        owner: None,
+    }
+}
 #[derive(Default)]
 struct Attributes {
     track_caller: bool,
@@ -619,6 +712,12 @@ struct Normalizer<'a, 'b> {
     siblings: Vec<String>,
     dependencies: BTreeMap<ast::DefPath, ast::ContentHash>,
     snapshots: BTreeMap<ast::DefPath, SignatureRef>,
+    /// The other members of this type's recursive group, as provisional
+    /// signatures (headers or representations). They are read in place of
+    /// their published signatures, which would wait on this one, and are not
+    /// dependencies: `group_key` covers them.
+    group: BTreeMap<ast::DefPath, SignatureRef>,
+    group_key: Option<ast::ContentHash>,
     builtin_declarations: BTreeMap<TypeId, SignatureRef>,
     active: BTreeSet<ast::TypeExprId>,
     aliases: BTreeSet<ast::DefPath>,
@@ -1331,6 +1430,9 @@ impl Normalizer<'_, '_> {
         Ok(())
     }
     fn snapshot(&mut self, d: &ast::DefPath) -> Result<SignatureRef, QueryError> {
+        if let Some(member) = self.group.get(d) {
+            return Ok(member.clone());
+        }
         if let Some(s) = self.snapshots.get(d) {
             self.dependencies.insert(d.clone(), s.fingerprint);
             return Ok(s.clone());
@@ -1565,7 +1667,9 @@ impl Normalizer<'_, '_> {
                             }) = s.as_deref()
                             {
                                 if let Some(repr) = def.representation {
-                                    if !args.is_empty() {
+                                    // A group member is read as this declaration
+                                    // reads itself: its fields are its own to check.
+                                    if !args.is_empty() && !self.group.contains_key(&d) {
                                         // Import normalizes actual declaration fields and records
                                         // their signature reads; proof policy lives in shared helpers.
                                         self.import(
@@ -2246,15 +2350,153 @@ impl Normalizer<'_, '_> {
         }
         self.authority_proof(root, &AuthoritySummary::Unknown)
     }
-    fn authority_proof(&self, root: TypeId, own: &AuthoritySummary) -> AuthoritySummary {
-        let item = &self.input.tree.items[self.input.item.0 as usize];
-        let roles = NominalRoles {
+    /// A recursive group's authority is one least fixed point over its
+    /// members' representations, as a lone recursive declaration's is over
+    /// its own (`type_authority`): every member starts inert and joins what
+    /// its fields reach, until no member's summary grows. The members then
+    /// carry their settled summaries, and this declaration's own fixed point
+    /// over them reaches the same joint solution.
+    fn settle_group_authority(&mut self) {
+        if self.group.is_empty() {
+            return;
+        }
+        let Some(own_root) = self.own_representation else {
+            return;
+        };
+        let roles = self.roles();
+        let mut own = AuthoritySummary::inert();
+        let mut summaries: BTreeMap<ast::DefPath, AuthoritySummary> = self
+            .group
+            .keys()
+            .map(|d| (d.clone(), AuthoritySummary::inert()))
+            .collect();
+        loop {
+            self.install_group_authority(&summaries);
+            let mut next: BTreeMap<_, _> = BTreeMap::new();
+            for (definition, member) in &self.group {
+                let SignatureKind::Type(declaration) = &member.kind else {
+                    continue;
+                };
+                let Some(root) = declaration.representation else {
+                    next.insert(definition.clone(), AuthoritySummary::Unknown);
+                    continue;
+                };
+                let generics = GenericDeclarations::signature(&declaration.generics);
+                let summary =
+                    structural_authority(&member.types, root, &roles, &generics, &mut |_, path| {
+                        Ok::<_, hirsel_types::QueryError>(match path {
+                            Some(path) if *path == self.own_definition() => {
+                                Some(self.own_authority_view(&own))
+                            }
+                            Some(path) => self.snapshots.get(path).cloned(),
+                            None => None,
+                        })
+                    })
+                    .unwrap();
+                next.insert(definition.clone(), summary);
+            }
+            let next_own = self.authority_proof(own_root, &own);
+            if next == summaries && next_own == own {
+                return;
+            }
+            summaries = next;
+            own = next_own;
+        }
+    }
+    /// Loads, and depends on, the declarations the group members'
+    /// representations name outside the group, which this declaration's
+    /// proofs read through them. One that cannot be read stays absent and
+    /// the proofs through it conservative.
+    fn load_group_nominals(&mut self) -> Result<(), QueryError> {
+        let own = self.own_definition();
+        let members: Vec<SignatureRef> = self.group.values().cloned().collect();
+        for member in members {
+            let SignatureKind::Type(declaration) = &member.kind else {
+                continue;
+            };
+            let mut pending: Vec<TypeId> = declaration.representation.into_iter().collect();
+            let mut seen = BTreeSet::new();
+            while let Some(id) = pending.pop() {
+                if !seen.insert(id) {
+                    continue;
+                }
+                let Some(row) = member.types.get(id) else {
+                    continue;
+                };
+                pending.extend(row.kind.value_parts());
+                if let TypeKind::Named { definition, .. } = &row.kind
+                    && *definition != own
+                    && !self.group.contains_key(definition)
+                {
+                    if let Err(e @ QueryError::Operational(_)) = self.snapshot(definition) {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Gives every group member its current authority summary.
+    fn install_group_authority(&mut self, summaries: &BTreeMap<ast::DefPath, AuthoritySummary>) {
+        for (definition, summary) in summaries {
+            let member = self.group.get_mut(definition).unwrap();
+            if let SignatureKind::Type(declaration) = &member.kind
+                && declaration.authority == *summary
+            {
+                continue;
+            }
+            let mut updated = (**member).clone();
+            if let SignatureKind::Type(declaration) = &mut updated.kind {
+                declaration.authority = summary.clone();
+            }
+            *member = std::sync::Arc::new(updated);
+            self.snapshots.insert(definition.clone(), member.clone());
+        }
+    }
+    fn roles(&self) -> NominalRoles {
+        NominalRoles {
             unsafe_capability: self.input.metadata.unsafe_capability.clone(),
             result_type: self.input.metadata.result_type.clone(),
             tasks_capability: self.input.metadata.tasks_capability.clone(),
             scope_capability: self.input.metadata.scope_capability.clone(),
             heap: self.input.metadata.heap.clone(),
-        };
+        }
+    }
+    fn own_definition(&self) -> ast::DefPath {
+        self.input.tree.items[self.input.item.0 as usize]
+            .definition
+            .clone()
+    }
+    /// This declaration as its recursive references read it while its own
+    /// authority summary is still a fixed-point estimate.
+    fn own_authority_view(&self, own: &AuthoritySummary) -> SignatureRef {
+        std::sync::Arc::new(Signature {
+            metadata: SignatureMetadata::default(),
+            definition: self.own_definition(),
+            types: TypeStore::default(),
+            kind: SignatureKind::Type(TypeDefinition {
+                loop_source: None,
+                format: None,
+                destructor_allocation: Allocation::MayAllocate,
+                generics: self.generics.clone(),
+                representation: None,
+                bounds: vec![],
+                authority: own.clone(),
+                capability: None,
+                implementation_authority: None,
+                serializable: false,
+                layout: Layout::default(),
+                distinct: false,
+                resource: false,
+                drop: None,
+                fact: None,
+            }),
+            fingerprint: Default::default(),
+        })
+    }
+    fn authority_proof(&self, root: TypeId, own: &AuthoritySummary) -> AuthoritySummary {
+        let item = &self.input.tree.items[self.input.item.0 as usize];
+        let roles = self.roles();
         structural_authority(
             &self.types,
             root,
@@ -2266,29 +2508,7 @@ impl Normalizer<'_, '_> {
                         if path == &item.definition
                             && matches!(item.kind, ast::ItemKind::Type { .. }) =>
                     {
-                        Some(std::sync::Arc::new(Signature {
-                            metadata: SignatureMetadata::default(),
-                            definition: path.clone(),
-                            types: TypeStore::default(),
-                            kind: SignatureKind::Type(TypeDefinition {
-                                loop_source: None,
-                                format: None,
-                                destructor_allocation: Allocation::MayAllocate,
-                                generics: self.generics.clone(),
-                                representation: None,
-                                bounds: vec![],
-                                authority: own.clone(),
-                                capability: None,
-                                implementation_authority: None,
-                                serializable: false,
-                                layout: Layout::default(),
-                                distinct: false,
-                                resource: false,
-                                drop: None,
-                                fact: None,
-                            }),
-                            fingerprint: Default::default(),
-                        }))
+                        Some(self.own_authority_view(own))
                     }
                     Some(path) => self.snapshots.get(path).cloned(),
                     None => self.builtin_declarations.get(&id).cloned(),

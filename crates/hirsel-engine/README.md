@@ -90,7 +90,7 @@ conservatively change it. Launch never reads checkout files to compute identity.
 `DefPath` display emits the versioned path bound by `ValidatedRun`.
 This identity is separate from `native::input_identity` and artifact provenance.
 
-Allowed dependencies: the shared data crates, check-protocol, run-config, validate, interp, resolve, parser, lexer and fmt, and hirsel-guard for the compiler thread's stack. Never signature, check, modes, lower, the native backends, the CLI or the conformance runner.
+Allowed dependencies: the shared data crates, check-protocol, run-config, validate, interp, resolve, parser, lexer, fmt and graph, and hirsel-guard for the compiler thread's stack. Never signature, check, modes, lower, the native backends, the CLI or the conformance runner.
 
 Invariants and boundary:
 
@@ -176,6 +176,14 @@ owner to both resolver snapshots. Sibling
 header reads go through SignatureProvider, avoiding stale same-file shortcuts.
 Duplicate items keep one DefPath plus addressable candidate ordinals; Metadata
 receives every declaration; Item supplies exact name-token spans for LANG-7 diagnostics.
+Recursive type groups (`queries/type_groups.rs`) come from the written type paths
+of a package's type declarations and manifest lookups, never from a signature, with
+Tarjan components and `hirsel_graph::scc_keys` over the members' paths and texts. A
+member's signature query normalizes the other members at the stage the normalizer
+asks for, through its own recorder (`SignaturePhase::staged_signature`, which
+publishes nothing), and records every member's text among its representation reads,
+so an edit to any member invalidates all of them. A failed probe of a member's
+published signature, which may be the one under construction, is not a read.
 The signature adapter preserves candidate source order when an edited declaration
 and a retained declaration come from snapshots with differently ordered FileIds.
 Explicit manifest exposures remain local build inputs; foreign metadata now uses

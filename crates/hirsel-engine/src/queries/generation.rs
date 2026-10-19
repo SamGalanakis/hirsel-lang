@@ -121,6 +121,7 @@ impl QueryEngine {
             representations: std::mem::take(&mut reads.representations),
             engine: self,
             reads: std::mem::take(&mut reads.reads),
+            groups: BTreeMap::new(),
         };
         let result = step(&mut recorder);
         reads.representations = recorder.representations;

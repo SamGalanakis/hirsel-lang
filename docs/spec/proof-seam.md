@@ -88,7 +88,9 @@ over every definition the definition's TIR names, itself included (callees, func
 references, constant reads, constructed and matched nominals, named types and capabilities
 in its type graph, origins, protocol association sources), sorted by `DefPath` and
 deduplicated. The export lists these references with their fingerprints. Signature
-fingerprints already include their own dependencies' fingerprints. By
+fingerprints already include their own dependencies' fingerprints; a member of a recursive
+type group (type declarations naming each other through their bodies) lists no other
+member and instead includes the group's key, which every member's text moves. By
 [LANG-6](language.md#lang-6-signatures) a callee body edit changes neither the caller's TIR
 nor any fingerprint the caller references, so it never changes a caller's checksum; a
 callee signature edit changes its fingerprint and therefore every checksum of every
@@ -101,7 +103,7 @@ Evidence is current for an obligation exactly when its recorded `(ObligationId, 
 equals the export's. The export header names the `TIR_VERSION`, compiler version, spec hash
 and interface version that produced it; a consumer that pins a checker also records them.
 
-## The export: `hirsel.tir.export.v4`
+## The export: `hirsel.tir.export.v5`
 
 ### PS-8: Encoding
 
@@ -130,7 +132,7 @@ iteration order, file id, type-id provenance, address or host path appears.
 
 ### PS-9: Contents
 
-- **Header:** the format `hirsel.tir.export.v4`, `TIR_VERSION`, compiler version, spec hash,
+- **Header:** the format `hirsel.tir.export.v5`, `TIR_VERSION`, compiler version, spec hash,
   interface version, and the launch entry with its semantic program revision when the
   program declares one.
 - **Definitions,** sorted by `DefPath`: path, location table, TIR, TIR digest, references

@@ -40,6 +40,7 @@ pub fn canonical_encoding(
         wrapper,
         roles,
         schema,
+        recursive_group,
     } = metadata;
     let NominalRoles {
         unsafe_capability,
@@ -148,6 +149,12 @@ pub fn canonical_encoding(
                 }
             }
         }
+    }
+    // Outside a recursive type group this preserves existing canonical
+    // vectors; a member's group key covers the members it does not list.
+    if let Some(group) = recursive_group {
+        e.tag("recursive-group-v1");
+        e.atom(&group.0);
     }
     match kind {
         SignatureKind::Function(f) => {

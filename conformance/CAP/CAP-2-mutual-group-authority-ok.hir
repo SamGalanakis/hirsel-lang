@@ -1,0 +1,16 @@
+// rule: CAP-2
+// expect: accept
+// Declarations recursive through each other hold no authority when no member
+// does: their summaries are one least fixed point.
+type Tree = Leaf | Node(box Entry)
+
+type Entry {
+  left: Tree,
+  key: u64,
+}
+
+fn need[T: inert](x: T) {}
+
+fn probe(x: Tree) {
+  need(x)
+}

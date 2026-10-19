@@ -1,0 +1,32 @@
+// rule: MEM-7
+// expect: run
+// A recursion through List needs no box, also across two declarations.
+type Value = Null | Number(i64) | Items(List[Member])
+
+type Member {
+  name: String,
+  value: Value,
+}
+
+fn total(v: Value) -> i64 {
+  match v {
+    Null() => 0,
+    Number(n) => n,
+    Items(members) => {
+      let mut sum = 0i64
+      for m in members {
+        sum = sum + total(m.value)
+      }
+      sum
+    },
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let inner: Value = Items([Member(name: "b", value: Number(2))])
+  let a = Member(name: "a", value: Number(1))
+  let c = Member(name: "c", value: inner)
+  let v: Value = Items([a, c])
+  test.check(t, total(v) == 3)
+  Ok(())
+}

@@ -677,15 +677,44 @@ snapshot_enum!(SchemaConstraint {
     PositiveSize(p),
     NoallocDrop(p)
 } in Cx);
-snapshot_struct!(SignatureMetadata {
-    track_caller,
-    visibility,
-    alias,
-    unsafe_ffi,
-    wrapper,
-    roles,
-    schema
-} in Cx);
+/// A recursive type group member's key follows the schema only when present,
+/// so every other signature, and every definition hash over one, encodes as
+/// before the field existed.
+impl Snapshot<Cx> for SignatureMetadata {
+    fn write(&self, w: &mut Writer<Cx>) {
+        w.open("SignatureMetadata");
+        self.track_caller.write(w);
+        self.visibility.write(w);
+        self.alias.write(w);
+        self.unsafe_ffi.write(w);
+        self.wrapper.write(w);
+        self.roles.write(w);
+        self.schema.write(w);
+        if let Some(group) = &self.recursive_group {
+            group.write(w);
+        }
+        w.close();
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        r.open("SignatureMetadata")?;
+        let value = SignatureMetadata {
+            track_caller: Snapshot::read(r)?,
+            visibility: Snapshot::read(r)?,
+            alias: Snapshot::read(r)?,
+            unsafe_ffi: Snapshot::read(r)?,
+            wrapper: Snapshot::read(r)?,
+            roles: Snapshot::read(r)?,
+            schema: Snapshot::read(r)?,
+            recursive_group: if r.at_close() {
+                None
+            } else {
+                Some(Snapshot::read(r)?)
+            },
+        };
+        r.close()?;
+        Ok(value)
+    }
+}
 erasing_struct!(Signature {
     metadata,
     definition,

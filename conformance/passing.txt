@@ -161,6 +161,8 @@ conformance/CAP/CAP-2-key-inert-bad.hir
 conformance/CAP/CAP-2-key-inert-ok.hir
 conformance/CAP/CAP-2-lexical-generic-inert-bad.hir
 conformance/CAP/CAP-2-lexical-generic-inert-ok.hir
+conformance/CAP/CAP-2-mutual-group-authority-bad.hir
+conformance/CAP/CAP-2-mutual-group-authority-ok.hir
 conformance/CAP/CAP-2-nested-generic-bound-bad.hir
 conformance/CAP/CAP-2-nested-generic-bound-ok.hir
 conformance/CAP/CAP-2-nested-generic-captured-wrapper-inert-bad.hir
@@ -2491,6 +2493,10 @@ conformance/MEM/MEM-7-inline-generic.hir
 conformance/MEM/MEM-7-inline-record.hir
 conformance/MEM/MEM-7-json-member-stringify-bad.hir
 conformance/MEM/MEM-7-json-member-stringify-run.hir
+conformance/MEM/MEM-7-mutual-box-group-run.hir
+conformance/MEM/MEM-7-mutual-generic-group-run.hir
+conformance/MEM/MEM-7-mutual-inline-group-bad.hir
+conformance/MEM/MEM-7-mutual-list-group-run.hir
 conformance/MEM/MEM-7-nested-option-field-bad.hir
 conformance/MEM/MEM-7-nested-option-field-run.hir
 conformance/MEM/MEM-7-packed.hir
@@ -5945,6 +5951,7 @@ conformance/SER/SER-2-duplicate-map-run.hir
 conformance/SER/SER-2-duplicate-set-run.hir
 conformance/SER/SER-2-flat-zero-stride-list-run.hir
 conformance/SER/SER-2-map-removed-equals-dense-run.hir
+conformance/SER/SER-2-mutual-group-run.hir
 conformance/SER/SER-2-noncanonical-bool-run.hir
 conformance/SER/SER-2-noncanonical-nan-run.hir
 conformance/SER/SER-2-overflow-length-run.hir

@@ -10,6 +10,7 @@ hirsel-guard = { path = "../hirsel-guard" }
 hirsel-check-protocol = { path = "../hirsel-check-protocol" }
 hirsel-run-config = { path = "../hirsel-run-config" }
 hirsel-diag = { path = "../hirsel-diag" }
+hirsel-graph = { path = "../hirsel-graph" }
 hirsel-span = { path = "../hirsel-span" }
 hirsel-intern = { path = "../hirsel-intern" }
 hirsel-syntax = { path = "../hirsel-syntax" }

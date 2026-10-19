@@ -1,0 +1,16 @@
+// rule: CAP-2
+// expect: reject CAP-2 at line 15
+// A capability held by one member of a recursive group is held by every
+// member that reaches it.
+type Tree = Leaf | Node(box Entry)
+
+type Entry {
+  left: Tree,
+  dir: Dir,
+}
+
+fn need[T: inert](x: T) {}
+
+fn probe(x: Tree) {
+  need(x)
+}

@@ -453,6 +453,11 @@ It requires explicit nominal opt-in, preserves transparent aliases, and opens on
 transparent data representations. Native layout, value ownership and schema
 eligibility are independent. Brands, authority, resources, opaque/refined types,
 callables and unsupported runtime constructors fail closed at every depth.
+`SignatureMetadata::recursive_group` is a recursive type group member's key; the
+encoding writes it as a framed extension only when present, so other signatures'
+encodings are unchanged. `SignatureProvider::recursive_group` supplies a group's
+other members at a `GroupStage`; providers without groups return none.
+
 `structural_serializable` is the boolean form. Source consumers use checked
 snapshots; V independently replays admission rather than trusting this descriptor.
 Serializable generic evidence implies Inert and supplies no crossing proof.

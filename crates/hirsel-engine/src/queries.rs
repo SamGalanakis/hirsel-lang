@@ -19,6 +19,7 @@ pub use precheck::Precheck;
 mod safety;
 pub use safety::{Escape, UnsafeReach};
 mod signature_input;
+mod type_groups;
 pub(crate) use dependencies::ExecutionReads;
 use hirsel_diag::Severity;
 use hirsel_intern::timings::{self, Count, Interval, Phase};
@@ -51,6 +52,16 @@ pub trait SignaturePhase {
         item: ItemId,
         provider: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<Signature>, QueryError>;
+    /// A recursive type group member's provisional signature at `stage`,
+    /// which another member reads; it publishes nothing.
+    fn staged_signature(
+        &self,
+        _items: &[(Arc<SyntaxFile>, ItemId)],
+        _provider: &mut dyn SignatureProvider,
+        _stage: hirsel_types::GroupStage,
+    ) -> Result<Signature, QueryError> {
+        Err(QueryError::NotImplemented)
+    }
 }
 
 /// Optional adapter slots support deliberately partial sessions in tooling tests.
@@ -490,6 +501,7 @@ impl QueryEngine {
             representations: BTreeMap::new(),
             engine: self,
             reads: DependencyReads::default(),
+            groups: BTreeMap::new(),
         };
         recorder.engine.signature_stack.push(definition.clone());
         let result = match adapter {
@@ -1015,6 +1027,7 @@ impl QueryEngine {
             representations: BTreeMap::new(),
             engine: self,
             reads: DependencyReads::default(),
+            groups: BTreeMap::new(),
         };
         let result = match adapter {
             Some(adapter) => adapter.resolve(snapshot.file.clone(), snapshot.item, &mut recorder),
@@ -1066,6 +1079,7 @@ impl QueryEngine {
                     .unwrap_or_default(),
                 engine: self,
                 reads,
+                groups: BTreeMap::new(),
             };
             let result = match adapter {
                 Some(adapter) => {
@@ -1136,6 +1150,7 @@ impl QueryEngine {
                 .unwrap_or_default(),
             engine: self,
             reads: initial,
+            groups: BTreeMap::new(),
         };
         let result = match adapter {
             Some(adapter) => adapter.check(
@@ -1662,6 +1677,8 @@ struct Recorder<'a> {
     representations: BTreeMap<DefPath, ContentHash>,
     engine: &'a mut QueryEngine,
     reads: DependencyReads,
+    /// Recursive type groups found so far, by member.
+    groups: BTreeMap<DefPath, Option<Rc<type_groups::TypeGroup>>>,
 }
 impl SignatureProvider for Recorder<'_> {
     fn signature(
@@ -1677,6 +1694,9 @@ impl SignatureProvider for Recorder<'_> {
                 definition: definition.clone(),
                 fingerprint: signature.fingerprint,
             }),
+            // A group member's published signature may be the one being
+            // built; the group key covers it (the resolver only probes it).
+            Err(_) if self.in_owner_group(definition) => {}
             Err(_) => {
                 self.reads.failed_signatures.push(definition.clone());
                 if definition != &self.owner
@@ -1728,6 +1748,13 @@ impl SignatureProvider for Recorder<'_> {
             self.reads.lookups.push((path, result.result.is_ok()));
         }
         result
+    }
+    fn recursive_group(
+        &mut self,
+        definition: &DefPath,
+        stage: hirsel_types::GroupStage,
+    ) -> Result<hirsel_types::RecursiveGroup, QueryError> {
+        self.group_at(definition, stage)
     }
 }
 fn lookup_path(context: &FileContext, path: &hirsel_syntax::Path) -> Option<DefPath> {

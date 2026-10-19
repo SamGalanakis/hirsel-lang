@@ -586,6 +586,7 @@ dependencies = [
  "hirsel-check-protocol",
  "hirsel-diag",
  "hirsel-fmt",
+ "hirsel-graph",
  "hirsel-guard",
  "hirsel-intern",
  "hirsel-interp",

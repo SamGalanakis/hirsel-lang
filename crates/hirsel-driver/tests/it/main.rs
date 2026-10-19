@@ -63,6 +63,7 @@ mod protocol_declarations;
 mod receiving;
 mod receiving_lifetimes;
 mod receiving_loans;
+mod recursive_groups;
 mod registry_sources;
 mod representation;
 mod run_isolation;

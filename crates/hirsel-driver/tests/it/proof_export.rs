@@ -89,7 +89,7 @@ fn a_contracted_program_round_trips_with_its_obligation_table() {
         let (text, export) = exported(ADD);
         assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
         assert!(export.skipped.is_empty(), "{:?}", export.skipped);
-        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v4\" 6"));
+        assert!(text.starts_with("(Export\n  (Header \"hirsel.tir.export.v5\" 6"));
         expect_file(
             include_str!("../fixtures/proof_seam/add.txt"),
             &(table(&export, "add") + &table(&export, "main")),
@@ -165,12 +165,12 @@ fn a_version_mismatch_is_refused_at_the_header() {
     with_compiler_stack(|| {
         let (text, _) = exported(ADD);
         let other = text.replacen(
-            "(Header \"hirsel.tir.export.v4\" 6",
-            "(Header \"hirsel.tir.export.v4\" 7",
+            "(Header \"hirsel.tir.export.v5\" 6",
+            "(Header \"hirsel.tir.export.v5\" 7",
             1,
         );
         assert_eq!(import(&other).unwrap_err().at, "header.tir_version");
-        let other = text.replacen("hirsel.tir.export.v4", "hirsel.tir.export.v0", 1);
+        let other = text.replacen("hirsel.tir.export.v5", "hirsel.tir.export.v0", 1);
         assert_eq!(import(&other).unwrap_err().at, "header.format");
         let engine = engine(ADD);
         let mut expected = engine.proof_environment();
@@ -624,4 +624,25 @@ fn a_sample_of_accepted_programs_round_trips() {
 #[ignore = "full gate"]
 fn full_gate_every_accepted_program_round_trips() {
     round_trip_all(|_| true);
+}
+
+#[test]
+fn a_recursive_type_group_round_trips_with_its_group_keys() {
+    with_compiler_stack(|| {
+        let source = "type Tree = Leaf | Node(box Entry)\n\
+                      type Entry { left: Tree, key: u64, right: Tree }\n\
+                      fn size(t: Tree) -> u64 {\n  match t {\n    Leaf() => 0u64,\n    \
+                      Node(e) => size(e.left) + 1u64 + size(e.right),\n  }\n}\n\
+                      pub fn main() -> Result[(), ()] {\n  let n = size(Leaf())\n  Ok(())\n}\n";
+        let (text, export) = exported(source);
+        assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
+        for name in ["Tree", "Entry"] {
+            let section = export
+                .signatures
+                .iter()
+                .find(|s| s.public.definition == named(name))
+                .unwrap_or_else(|| panic!("no signature for {name}"));
+            assert!(section.public.metadata.recursive_group.is_some(), "{name}");
+        }
+    });
 }

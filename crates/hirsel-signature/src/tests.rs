@@ -179,6 +179,7 @@ impl Fixture {
                 resolution: &self.resolution,
                 metadata: &self.metadata,
                 declaration_sites: &self.metadata.declarations,
+                stage: None,
             },
             &mut self.provider,
         )
@@ -1293,6 +1294,7 @@ fn ordinary_opaque_self_references_keep_the_exported_plain_cleanup_proof() {
             resolution: &f.resolution,
             metadata: &f.metadata,
             declaration_sites: &[],
+            stage: None,
         },
         &mut f.provider,
     )
@@ -1607,6 +1609,7 @@ impl Fixture {
             resolution: &self.resolution,
             metadata: &self.metadata,
             declaration_sites: &self.metadata.declarations,
+            stage: None,
         };
         let snapshots = self
             .provider
@@ -1628,6 +1631,8 @@ impl Fixture {
             siblings: vec![],
             dependencies: BTreeMap::new(),
             snapshots,
+            group: BTreeMap::new(),
+            group_key: None,
             builtin_declarations: BTreeMap::new(),
             active: BTreeSet::new(),
             aliases: BTreeSet::new(),

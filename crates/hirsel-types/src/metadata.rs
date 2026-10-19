@@ -52,6 +52,10 @@ pub struct SignatureMetadata {
     /// Intrinsic declaration constraints, supplied by the declaring registry.
     /// Ordinary declarations have no schema constraints.
     pub schema: Vec<SchemaConstraint>,
+    /// A member of a recursive type group (types naming each other through
+    /// their bodies): its `hirsel_graph::scc_keys` key over the members' text,
+    /// standing for the members it does not list as dependencies.
+    pub recursive_group: Option<ast::ContentHash>,
 }
 impl Default for SignatureMetadata {
     fn default() -> Self {
@@ -63,6 +67,7 @@ impl Default for SignatureMetadata {
             wrapper: None,
             roles: NominalRoles::default(),
             schema: vec![],
+            recursive_group: None,
         }
     }
 }
