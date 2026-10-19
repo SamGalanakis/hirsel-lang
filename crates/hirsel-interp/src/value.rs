@@ -155,6 +155,71 @@ impl PartialEq for ArenaStorage {
 }
 impl Eq for ArenaStorage {}
 
+/// The element storage of a List, Array, Map or Set block. A copy shares it and
+/// the first write through a holder detaches that holder's own copy (Arc
+/// make_mut), so snapshots, borrows and moves cost O(1) while every holder still
+/// observes value semantics. Sharing is the reference model's own cost model,
+/// never a semantic fact: no observation, equality or RC oracle reads it.
+#[derive(Clone, Default, Eq, PartialEq)]
+pub struct Block(std::sync::Arc<Vec<Option<Value>>>);
+impl Block {
+    /// The elements, copied only when another holder shares them.
+    pub fn into_vec(self) -> Vec<Option<Value>> {
+        std::sync::Arc::try_unwrap(self.0).unwrap_or_else(|shared| (*shared).clone())
+    }
+    /// The elements when this is their only holder; a shared block yields
+    /// nothing, since releasing this holder releases no element.
+    fn take_unique(&mut self) -> Option<Vec<Option<Value>>> {
+        std::sync::Arc::get_mut(&mut self.0).map(std::mem::take)
+    }
+}
+impl std::ops::Deref for Block {
+    type Target = Vec<Option<Value>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Block {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        if std::sync::Arc::get_mut(&mut self.0).is_none() {
+            hirsel_intern::work::count_by(
+                hirsel_intern::work::Counter::InterpCopiedValues,
+                self.0.len() as u64,
+            );
+        }
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+}
+impl From<Vec<Option<Value>>> for Block {
+    fn from(elements: Vec<Option<Value>>) -> Self {
+        Self(std::sync::Arc::new(elements))
+    }
+}
+impl FromIterator<Option<Value>> for Block {
+    fn from_iter<I: IntoIterator<Item = Option<Value>>>(elements: I) -> Self {
+        Self::from(elements.into_iter().collect::<Vec<_>>())
+    }
+}
+impl IntoIterator for Block {
+    type Item = Option<Value>;
+    type IntoIter = std::vec::IntoIter<Option<Value>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.into_vec().into_iter()
+    }
+}
+impl<'a> IntoIterator for &'a Block {
+    type Item = &'a Option<Value>;
+    type IntoIter = std::slice::Iter<'a, Option<Value>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+impl std::fmt::Debug for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum Value {
     FunctionReference(NamedFunction),
@@ -177,11 +242,11 @@ pub enum Value {
     /// a Map built in an arena, None elsewhere. Its element charge is one
     /// entry's.
     Map {
-        entries: Vec<Option<Value>>,
+        entries: Block,
         arena: Option<ArenaStorage>,
     },
     Set {
-        entries: Vec<Option<Value>>,
+        entries: Block,
         arena: Option<ArenaStorage>,
     },
     Tuple(Vec<Option<Value>>),
@@ -191,7 +256,7 @@ pub enum Value {
     },
     Sequence {
         kind: BuiltinType,
-        elements: Vec<Option<Value>>,
+        elements: Block,
         /// A List or Array block placed in an arena (MEM-6); None elsewhere.
         arena: Option<ArenaStorage>,
     },
@@ -241,19 +306,29 @@ impl Value {
             let _ = invoked.set(());
         }
     }
+    /// Writable fields. A shared block is detached first (copy on write).
     pub(crate) fn fields_mut(&mut self) -> Option<&mut Vec<Option<Value>>> {
         match self {
             Self::Map { entries: f, .. }
             | Self::Set { entries: f, .. }
-            | Self::Tuple(f)
+            | Self::Sequence { elements: f, .. } => Some(f),
+            Self::Tuple(f)
             | Self::Box(f)
             | Self::Record { fields: f, .. }
             | Self::Variant { fields: f, .. }
             | Self::Resource { fields: f, .. }
             | Self::ResourceVariant { fields: f, .. }
             | Self::Distinct { fields: f, .. }
-            | Self::Sequence { elements: f, .. }
             | Self::Closure { captures: f, .. } => Some(f),
+            _ => None,
+        }
+    }
+    /// The shared element storage of a List, Array, Map or Set.
+    fn block(&self) -> Option<&Block> {
+        match self {
+            Self::Map { entries: b, .. }
+            | Self::Set { entries: b, .. }
+            | Self::Sequence { elements: b, .. } => Some(b),
             _ => None,
         }
     }
@@ -265,28 +340,12 @@ impl Value {
             match value {
                 Value::F32(bits) if f32::from_bits(*bits).is_nan() => *bits = 0x7fc0_0000,
                 Value::F64(bits) if f64::from_bits(*bits).is_nan() => *bits = 0x7ff8_0000_0000_0000,
-                Value::Map {
-                    entries: fields, ..
-                }
-                | Value::Set {
-                    entries: fields, ..
-                }
-                | Value::Tuple(fields)
-                | Value::Variant { fields, .. }
-                | Value::Record { fields, .. }
-                | Value::Distinct { fields, .. }
-                | Value::Resource { fields, .. }
-                | Value::ResourceVariant { fields, .. }
-                | Value::Box(fields)
-                | Value::Sequence {
-                    elements: fields, ..
-                }
-                | Value::Closure {
-                    captures: fields, ..
-                } => {
+                value => {
+                    let Some(fields) = value.fields_mut() else {
+                        continue;
+                    };
                     pending.extend(fields.iter_mut().filter_map(Option::as_mut));
                 }
-                _ => {}
             }
         }
     }
@@ -384,11 +443,11 @@ impl Clone for Value {
                 },
                 Value::Shared(root) => Value::Shared(root.clone()),
                 Value::Map { entries, arena } => Value::Map {
-                    entries: vec![None; entries.len()],
+                    entries: entries.clone(),
                     arena: arena.clone(),
                 },
                 Value::Set { entries, arena } => Value::Set {
-                    entries: vec![None; entries.len()],
+                    entries: entries.clone(),
                     arena: arena.clone(),
                 },
                 Value::Tuple(f) => Value::Tuple(vec![None; f.len()]),
@@ -431,7 +490,7 @@ impl Clone for Value {
                     arena,
                 } => Value::Sequence {
                     kind: *kind,
-                    elements: vec![None; elements.len()],
+                    elements: elements.clone(),
                     arena: arena.clone(),
                 },
                 Value::Closure {
@@ -454,17 +513,24 @@ impl Clone for Value {
             }
         }
         let mut result = shallow(self);
+        let mut copied = 0;
         let mut work = vec![(self, &mut result)];
         while let Some((source, target)) = work.pop() {
+            // A block's copy shares its elements already.
+            if source.block().is_some() {
+                continue;
+            }
             if let (Some(src), Some(dst)) = (source.fields(), target.fields_mut()) {
                 for (src, dst) in src.iter().zip(dst.iter_mut()) {
                     if let Some(src) = src {
                         *dst = Some(shallow(src));
+                        copied += 1;
                         work.push((src, dst.as_mut().unwrap()));
                     }
                 }
             }
         }
+        hirsel_intern::work::count_by(hirsel_intern::work::Counter::InterpCopiedValues, copied);
         result
     }
 }
@@ -503,14 +569,14 @@ impl Value {
             } if invoked.get().is_some() => Some(&[]),
             Self::Map { entries: f, .. }
             | Self::Set { entries: f, .. }
-            | Self::Tuple(f)
+            | Self::Sequence { elements: f, .. } => Some(f),
+            Self::Tuple(f)
             | Self::Box(f)
             | Self::Record { fields: f, .. }
             | Self::Distinct { fields: f, .. }
             | Self::Resource { fields: f, .. }
             | Self::ResourceVariant { fields: f, .. }
             | Self::Variant { fields: f, .. }
-            | Self::Sequence { elements: f, .. }
             | Self::Closure { captures: f, .. } => Some(f),
             _ => None,
         }
@@ -520,9 +586,13 @@ impl Value {
     pub fn discard(self) {
         let mut work = vec![self];
         while let Some(mut value) = work.pop() {
-            if let Some(fields) = value.fields_mut() {
-                work.extend(fields.iter_mut().filter_map(Option::take));
-            }
+            let fields = match &mut value {
+                Value::Map { entries: b, .. }
+                | Value::Set { entries: b, .. }
+                | Value::Sequence { elements: b, .. } => b.take_unique(),
+                value => value.fields_mut().map(std::mem::take),
+            };
+            work.extend(fields.into_iter().flatten().flatten());
         }
     }
 }
@@ -568,21 +638,21 @@ impl Value {
     pub fn sequence(kind: BuiltinType, elements: Vec<Option<Value>>) -> Self {
         Self::Sequence {
             kind,
-            elements,
+            elements: elements.into(),
             arena: None,
         }
     }
     /// A Map outside any arena.
     pub fn map(entries: Vec<Option<Value>>) -> Self {
         Self::Map {
-            entries,
+            entries: entries.into(),
             arena: None,
         }
     }
     /// A Set outside any arena.
     pub fn set(entries: Vec<Option<Value>>) -> Self {
         Self::Set {
-            entries,
+            entries: entries.into(),
             arena: None,
         }
     }
@@ -593,7 +663,7 @@ impl Value {
             Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
                 arena.as_ref()
             }
-            Self::Record { definition, fields } if *definition == DefPath::core("SortedMap") => {
+            Self::Record { definition, fields } if definition.is_core("SortedMap") => {
                 fields.get(1)?.as_ref()?.arena_storage()
             }
             _ => None,
@@ -604,7 +674,7 @@ impl Value {
             Self::Sequence { arena, .. } | Self::Map { arena, .. } | Self::Set { arena, .. } => {
                 Some(arena)
             }
-            Self::Record { definition, fields } if *definition == DefPath::core("SortedMap") => {
+            Self::Record { definition, fields } if definition.is_core("SortedMap") => {
                 fields.get_mut(1)?.as_mut()?.arena_storage_mut()
             }
             _ => None,

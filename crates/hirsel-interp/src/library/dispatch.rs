@@ -132,7 +132,7 @@ impl Library {
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
         self.tasks.yield_now = true;
-        let a = call.arguments;
+        let a = &*call.arguments;
         if matches!(
             name,
             "file.read" | "file.seek" | "file.write" | "file.append"
@@ -579,7 +579,7 @@ impl Library {
         }))
     }
     fn file(&mut self, name: &str, call: &OperationCall<'_>) -> Result<Value, Error> {
-        let a = call.arguments;
+        let a = &*call.arguments;
         let (tree, root, dir) = self.simulation.directory(arg(a, 0)?)?;
         if !self.simulation.writable(dir)
             && matches!(
@@ -1453,7 +1453,7 @@ macro_rules! primary_operations {
             fn dispatch_primary(&mut $library, $call: OperationCall<'_>,
                 $context: &mut OperationContext<'_>, $name: &str)
                 -> Result<Option<OperationResult>, Error> {
-                let $args = $call.arguments;
+                let $args = &*$call.arguments;
                 let $value = match $name {
                     $( $( $path )|+ => $handler, )*
                     _ => return Ok(None),
@@ -1686,23 +1686,24 @@ primary_operations! { self, call, context, name, a, value;
             },
     Primitive: "list.len" | "array.len" => u64_value(collection::len(arg(a, 0)?)?),
     Primitive: "list.pop" | "list.remove" | "list.swap" | "list.reserve" => {
-        let mut list = arg(a, 0)?.clone();
-        let Value::Sequence { kind: BuiltinType::List, elements, .. } = &mut list else {
+        let (list, rest) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing builtin argument"))?;
+        let a = &*rest;
+        let Value::Sequence { kind: BuiltinType::List, elements, .. } = list else {
             return Err(invalid("list primitive requires List"));
         };
         let len = elements.len();
         let value = match name {
             "list.pop" => elements.pop().flatten().map_or_else(none, some),
             "list.remove" => {
-                let i = index(arg(a, 1)?)?;
+                let i = index(arg(a, 0)?)?;
                 if i >= len {
                     return Ok(Some(OperationResult::Failed(fail(&call, context, "MEM-14", "list index out of bounds"))));
                 }
                 elements.remove(i).ok_or_else(|| invalid("dead list element"))?
             }
             "list.swap" => {
-                let i = index(arg(a, 1)?)?;
-                let j = index(arg(a, 2)?)?;
+                let i = index(arg(a, 0)?)?;
+                let j = index(arg(a, 1)?)?;
                 if i >= len || j >= len {
                     return Ok(Some(OperationResult::Failed(fail(&call, context, "MEM-14", "list index out of bounds"))));
                 }
@@ -1711,10 +1712,10 @@ primary_operations! { self, call, context, name, a, value;
             }
             // Reference values have no observable capacity; do not allocate host
             // storage based on an unbounded language capacity request.
-            "list.reserve" => { index(arg(a, 1)?)?; Value::Unit }
+            "list.reserve" => { index(arg(a, 0)?)?; Value::Unit }
             _ => unreachable!(),
         };
-        return Ok(Some(OperationResult::Complete { value, arguments: vec![(0, list)], consumed: vec![], released: vec![] }));
+        value
     },
     Primitive: "failure.check" => {
         let Value::Variant { variant, fields } = arg(a, 1)? else { return Err(invalid("CheckRule variant")); };
@@ -1757,32 +1758,35 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "string.byte_offset" => u64_value(position(arg(a, 1)?, text(arg(a, 0)?)?)? as u64),
     Primitive: "path.text" => Value::String(path_text(arg(a, 0)?)?.to_owned()),
     Primitive: "list.push" => {
-                return Ok(Some(
-                    collection::push(arg(a, 0)?.clone(), arg(a, 1)?.clone())?
-                        .into_result(0, vec![1]),
-                ));
+                let item = take_arg(call.arguments, 1)?;
+                collection::push(arg_mut(call.arguments, 0)?, item)?;
+                return Ok(Some(OperationResult::returned(Value::Unit).transferring([1])));
             },
     Primitive: "map.len" | "set.len" => u64_value(collection::len(arg(a, 0)?)?),
     Primitive: "map.remove" => {
-        return Ok(Some(keyed(collection::map_remove(arg(a, 0)?.clone(), arg(a, 1)?), &call, context)?));
+        let (map, key) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing builtin argument"))?;
+        return Ok(Some(keyed(collection::map_remove(map, arg(key, 0)?), &call, context)?));
     },
     Primitive: "set.remove" => {
-        return Ok(Some(keyed(collection::set_remove(arg(a, 0)?.clone(), arg(a, 1)?), &call, context)?));
+        let (set, key) = call.arguments.split_first_mut().ok_or_else(|| invalid("missing builtin argument"))?;
+        return Ok(Some(keyed(collection::set_remove(set, arg(key, 0)?), &call, context)?));
     },
     Primitive: "map.empty" => collection::sequence(BuiltinType::Map, []),
     Primitive: "set.empty" => collection::sequence(BuiltinType::Set, []),
     Primitive: "map.insert" => {
+                let (key, item) = (take_arg(call.arguments, 1)?, take_arg(call.arguments, 2)?);
                 return Ok(Some(keyed(
-                    collection::insert(arg(a, 0)?.clone(), arg(a, 1)?.clone(), arg(a, 2)?.clone())
-                        .map(|m| m.into_result(0, vec![1, 2])),
+                    collection::insert(arg_mut(call.arguments, 0)?, key, item)
+                        .map(|displaced| displaced.into_result(vec![1, 2])),
                     &call,
                     context,
                 )?));
             },
     Primitive: "set.insert" => {
+                let item = take_arg(call.arguments, 1)?;
                 return Ok(Some(keyed(
-                    collection::set_insert(arg(a, 0)?.clone(), arg(a, 1)?.clone())
-                        .map(|m| m.into_result(0, vec![1])),
+                    collection::set_insert(arg_mut(call.arguments, 0)?, item)
+                        .map(|displaced| displaced.into_result(vec![1])),
                     &call,
                     context,
                 )?));
@@ -1886,6 +1890,15 @@ pub(super) fn parent(path: &str) -> &str {
 pub(super) fn arg(a: &[Value], i: usize) -> Result<&Value, Error> {
     a.get(i).ok_or_else(|| invalid("missing builtin argument"))
 }
+/// A `mut` argument, written in place.
+fn arg_mut(a: &mut [Value], i: usize) -> Result<&mut Value, Error> {
+    a.get_mut(i)
+        .ok_or_else(|| invalid("missing builtin argument"))
+}
+/// A taken argument the completion transfers.
+fn take_arg(a: &mut [Value], i: usize) -> Result<Value, Error> {
+    Ok(std::mem::replace(arg_mut(a, i)?, Value::Unit))
+}
 pub(super) fn text(v: &Value) -> Result<&str, Error> {
     if let Value::String(s) = v {
         Ok(s)
@@ -1922,7 +1935,7 @@ pub fn path(s: &str) -> Value {
 }
 pub(super) fn path_text(v: &Value) -> Result<&str, Error> {
     if let Value::Record { definition, fields } = v
-        && *definition == hirsel_syntax::DefPath::core("Path")
+        && definition.is_core("Path")
         && fields.len() == 1
     {
         text(fields[0].as_ref().ok_or_else(|| invalid("dead Path"))?)
@@ -1932,7 +1945,7 @@ pub(super) fn path_text(v: &Value) -> Result<&str, Error> {
 }
 fn position(v: &Value, s: &str) -> Result<usize, Error> {
     if let Value::Record { definition, fields } = v
-        && *definition == hirsel_syntax::DefPath::core("StrPos")
+        && definition.is_core("StrPos")
         && fields.len() == 2
         && fields[0].as_ref() == Some(&Value::String(s.into()))
     {
@@ -1951,7 +1964,7 @@ fn destination(call: &OperationCall<'_>) -> Result<Primitive, Error> {
         arguments,
     } = &t.kind
         && definition.0.name == "Option"
-        && *definition == hirsel_syntax::DefPath::core("Option")
+        && definition.is_core("Option")
     {
         if let GenericArgument::Type(id) = arguments[0] {
             t = call

@@ -53,7 +53,7 @@ impl Harness {
                     runtime: &Default::default(),
                     path: &path,
                     generics: &[],
-                    arguments: &args,
+                    arguments: &mut args.to_vec(),
                     result_type: result,
                     types: &self.types,
                     site: support::site(7),
@@ -224,15 +224,13 @@ fn ordered_collections_replace_without_reordering_and_copy_independence() {
     let empty = collection::sequence(BuiltinType::Map, []);
     let a = Value::String("a".into());
     let b = Value::String("b".into());
-    let m = updated(
-        collection::insert(
-            updated(collection::insert(empty.clone(), a.clone(), u64_value(1)).unwrap()),
-            b.clone(),
-            u64_value(2),
-        )
-        .unwrap(),
+    let m = inserted(
+        inserted(empty.clone(), a.clone(), u64_value(1)),
+        b.clone(),
+        u64_value(2),
     );
-    let changed = updated(collection::insert(m.clone(), a.clone(), u64_value(3)).unwrap());
+    // A copy shares its entries until the first write detaches the written holder.
+    let changed = inserted(m.clone(), a.clone(), u64_value(3));
     let entries = collection::elements(&changed, BuiltinType::Map).unwrap();
     assert_eq!(
         entries[0],
@@ -242,31 +240,18 @@ fn ordered_collections_replace_without_reordering_and_copy_independence() {
         collection::elements(&m, BuiltinType::Map).unwrap()[0],
         Value::Tuple(vec![Some(a.clone()), Some(u64_value(1))])
     );
-    let reversed = updated(
-        collection::insert(
-            updated(collection::insert(empty, b, u64_value(2)).unwrap()),
-            a,
-            u64_value(3),
-        )
-        .unwrap(),
-    );
+    let reversed = inserted(inserted(empty, b, u64_value(2)), a, u64_value(3));
     assert!(!collection::data_equal(&changed, &reversed));
-    let set = updated(
-        collection::set_insert(collection::sequence(BuiltinType::Set, []), u64_value(1)).unwrap(),
-    );
-    assert_eq!(
-        updated(collection::set_insert(set.clone(), u64_value(1)).unwrap()),
-        set
-    );
+    let mut set = collection::sequence(BuiltinType::Set, []);
+    released(collection::set_insert(&mut set, u64_value(1)).unwrap());
+    let mut again = set.clone();
+    released(collection::set_insert(&mut again, u64_value(1)).unwrap());
+    assert_eq!(again, set);
     assert!(!collection::data_equal(&f(f64::NAN), &f(f64::NAN)));
     assert!(collection::data_equal(&f(-0.0), &f(0.0)));
-    assert_eq!(
-        collection::len(&updated(
-            collection::push(collection::sequence(BuiltinType::List, []), u64_value(1)).unwrap()
-        ))
-        .unwrap(),
-        1
-    );
+    let mut list = collection::sequence(BuiltinType::List, []);
+    collection::push(&mut list, u64_value(1)).unwrap();
+    assert_eq!(collection::len(&list).unwrap(), 1);
 }
 fn unok(v: Value) -> Value {
     if let Value::Variant {
@@ -650,7 +635,7 @@ fn same_seed_configuration_events_replay_and_explicit_clock_env() {
             runtime: &Default::default(),
             path: &path,
             generics: &[],
-            arguments: &[io],
+            arguments: &mut [io],
             result_type: t,
             types: &h.types,
             site: Span::default(),
@@ -687,7 +672,7 @@ fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
                 runtime: &Default::default(),
                 path: &path,
                 generics: &[],
-                arguments: &[],
+                arguments: &mut [],
                 result_type: t,
                 types: &h.types,
                 site: Span::default()
@@ -704,7 +689,7 @@ fn m2_and_unknown_nominal_paths_have_distinct_unavailable_outcomes() {
                     runtime: &Default::default(),
                     path: &path,
                     generics: &[],
-                    arguments: &[],
+                    arguments: &mut [],
                     result_type: t,
                     types: &h.types,
                     site: Span::default()
@@ -738,7 +723,7 @@ fn replay_mismatch_cannot_publish_stdout_or_consume_fault_configuration() {
                 runtime: &Default::default(),
                 path: &path,
                 generics: &[],
-                arguments: &[io],
+                arguments: &mut [io],
                 result_type: ty,
                 types: &h.types,
                 site: Span::default()
@@ -851,7 +836,7 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
                     GenericArgument::Type(lane),
                     GenericArgument::Size(Size::Constant(3)),
                 ],
-                arguments: &args,
+                arguments: &mut args.to_vec(),
                 result_type: result,
                 types: &h.types,
                 site: support::site(7),
@@ -897,7 +882,7 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
                 runtime: &Default::default(),
                 path: &hirsel_syntax::DefPath::core("simd.splat"),
                 generics: &[GenericArgument::Size(Size::Constant(width))],
-                arguments: &args,
+                arguments: &mut args.to_vec(),
                 result_type: result,
                 types: &h.types,
                 site: support::site(7),
@@ -915,19 +900,14 @@ fn simd_scalar_schema_positive_width_and_checked_integer_lanes() {
     }
 }
 
-fn updated(mutation: collection::Mutation) -> Value {
-    let OperationResult::Complete {
-        mut arguments,
-        released,
-        ..
-    } = mutation.into_result(0, vec![])
-    else {
-        unreachable!()
-    };
-    for value in released {
+fn released(displaced: collection::Displaced) {
+    for value in displaced.0 {
         value.discard();
     }
-    arguments.pop().unwrap().1
+}
+fn inserted(mut map: Value, key: Value, item: Value) -> Value {
+    released(collection::insert(&mut map, key, item).unwrap());
+    map
 }
 
 #[test]
@@ -1277,7 +1257,7 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
                 runtime: &Default::default(),
                 path: &path,
                 generics: &[],
-                arguments: &[tasks, mutex, body],
+                arguments: &mut [tasks, mutex, body],
                 result_type,
                 types: &h.types,
                 site: support::site(7),
@@ -1375,7 +1355,7 @@ fn stdin_replay_rejects_oversized_chunks_and_invalid_errors_before_publication()
     let input = unok(recorded.value("io.stdin", vec![io]));
     let buffer = Value::Sequence {
         kind: BuiltinType::List,
-        elements: vec![Some(Value::Integer(n(Primitive::U8, 7)))],
+        elements: vec![Some(Value::Integer(n(Primitive::U8, 7)))].into(),
         arena: None,
     };
     recorded.value("stdin.read", vec![input, buffer.clone(), u64_value(2)]);

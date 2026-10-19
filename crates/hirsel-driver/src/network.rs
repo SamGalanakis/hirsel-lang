@@ -26,13 +26,11 @@ fn word(v: &Value) -> Result<u64, Error> {
     }
 }
 fn fields(v: &Value) -> Result<Vec<&Value>, Error> {
-    let f = match v {
-        Value::Record { fields, .. }
-        | Value::Variant { fields, .. }
-        | Value::Tuple(fields)
-        | Value::Sequence {
-            elements: fields, ..
-        } => fields,
+    let f: &[Option<Value>] = match v {
+        Value::Record { fields, .. } | Value::Variant { fields, .. } | Value::Tuple(fields) => {
+            fields
+        }
+        Value::Sequence { elements, .. } => elements,
         _ => return Err(invalid()),
     };
     f.iter().map(|v| v.as_ref().ok_or_else(invalid)).collect()
@@ -391,7 +389,7 @@ impl HostLibrary {
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
         use hirsel_rt::io::{ENV_HANDLE, IoError};
-        let a = call.arguments;
+        let a = &*call.arguments;
         if matches!(
             name,
             "io.stdin" | "io.stderr" | "io.stdout" | "io.random" | "io.tasks"
@@ -435,11 +433,11 @@ impl HostLibrary {
             _ => ENV_HANDLE,
         };
         if name == "env.narrow" {
-            let result = self.library.call(call, cx)?;
             let names = fields(&a[1])?
                 .into_iter()
                 .map(text)
                 .collect::<Result<_, _>>()?;
+            let result = self.library.call(call, cx)?;
             match (&result, self.host(R::EnvNarrow { env, names })?) {
                 (
                     Some(OperationResult::Complete {
@@ -465,11 +463,9 @@ impl HostLibrary {
             return Ok(result);
         }
         if name == "env.get" {
+            let name = text(&a[1])?;
             let result = self.library.call(call, cx)?;
-            let completion = self.host(R::EnvGet {
-                env,
-                name: text(&a[1])?,
-            })?;
+            let completion = self.host(R::EnvGet { env, name })?;
             let C::Env(value) = completion else {
                 return Err(invalid());
             };
@@ -2045,7 +2041,7 @@ mod tests {
                     runtime: &Default::default(),
                     path: &DefPath::core("test.dir"),
                     generics: &[],
-                    arguments: &[test, sequence(BuiltinType::List, [])],
+                    arguments: &mut [test, sequence(BuiltinType::List, [])],
                     result_type,
                     types: &types,
                     site: hirsel_span::Span::default(),

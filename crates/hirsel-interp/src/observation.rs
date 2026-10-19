@@ -226,8 +226,8 @@ impl ObservedValue {
                     nodes.push(O::NonComparableFunction);
                     continue;
                 }
-                Value::Map { entries: f, .. } => (A::Map, f),
-                Value::Set { entries: f, .. } => (A::Set, f),
+                Value::Map { entries: f, .. } => (A::Map, &**f),
+                Value::Set { entries: f, .. } => (A::Set, &**f),
                 Value::Tuple(f) => (A::Tuple, f),
                 Value::Box(f) => (A::Box, f),
                 Value::Record { definition, fields } => (A::Record(definition.clone()), fields),
@@ -242,7 +242,7 @@ impl ObservedValue {
                     ..
                 } => (A::ResourceVariant(definition.clone(), *variant), fields),
                 Value::Variant { variant, fields } => (A::Variant(*variant), fields),
-                Value::Sequence { kind, elements, .. } => (A::Sequence(*kind), elements),
+                Value::Sequence { kind, elements, .. } => (A::Sequence(*kind), &**elements),
             };
             let fields = fields
                 .iter()

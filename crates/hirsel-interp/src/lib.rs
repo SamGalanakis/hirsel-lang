@@ -333,7 +333,11 @@ pub struct OperationCall<'a> {
     pub runtime: &'a aggregate::RuntimeTypes,
     pub path: &'a DefPath,
     pub generics: &'a [GenericArgument],
-    pub arguments: &'a [Value],
+    /// Values in parameter order. An operation may write a `mut` argument in
+    /// place: the evaluator restores that argument to its caller's storage on
+    /// every exit, exactly as it publishes `Complete.arguments`. It writes no
+    /// other argument.
+    pub arguments: &'a mut [Value],
     pub result_type: TypeId,
     pub types: &'a TypeStore,
     pub site: Span,

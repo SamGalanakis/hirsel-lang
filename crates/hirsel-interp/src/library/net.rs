@@ -617,7 +617,7 @@ impl Simulation {
         cx: &mut OperationContext<'_>,
         cancellation: Option<u32>,
     ) -> Result<OperationResult, Error> {
-        let a = call.arguments;
+        let a = &*call.arguments;
         if name == "test.net" {
             self.id(arg(a, 0)?, "Test")?;
             let peers = collection::elements(arg(a, 1)?, BuiltinType::List)?
@@ -1763,7 +1763,7 @@ impl super::Library {
             &OperationCall {
                 runtime: &Default::default(),
                 path: &wait.path,
-                arguments: &wait.arguments,
+                arguments: &mut wait.arguments.clone(),
                 generics: &wait.generics,
                 types: &wait.types,
                 result_type: wait.result_type,

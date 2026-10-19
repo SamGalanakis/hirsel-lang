@@ -79,7 +79,7 @@ fn comparator(by: &Value) -> Result<Value, Error> {
     let Value::Record { definition, fields } = by else {
         return Err(invalid("expected Order dictionary"));
     };
-    if *definition != hirsel_syntax::DefPath::core("Order") || fields.len() != 1 {
+    if !definition.is_core("Order") || fields.len() != 1 {
         return Err(invalid("invalid Order dictionary"));
     }
     fields[0].clone().ok_or_else(|| invalid("dead comparator"))
@@ -118,8 +118,7 @@ impl Library {
     pub(super) fn next_iterator(&mut self, mut it: Value) -> Result<OperationResult, Error> {
         let mut maps = vec![];
         loop {
-            if matches!(&it, Value::Record { definition, .. } if *definition == hirsel_syntax::DefPath::core("IterMap"))
-            {
+            if matches!(&it, Value::Record { definition, .. } if definition.is_core("IterMap")) {
                 let mut fields = unpack(it, "IterMap")?;
                 maps.push(fields.pop().unwrap());
                 it = fields.pop().unwrap();
@@ -127,8 +126,7 @@ impl Library {
                 break;
             }
         }
-        if matches!(&it, Value::Record { definition, .. } if *definition == hirsel_syntax::DefPath::core("IterState"))
-        {
+        if matches!(&it, Value::Record { definition, .. } if definition.is_core("IterState")) {
             let mut fields = unpack(it, "IterState")?;
             let next = fields.pop().unwrap();
             let state = fields.pop().unwrap();
@@ -501,10 +499,7 @@ pub(super) fn sorted_len(args: &[Value]) -> Result<Value, Error> {
     let Value::Record { definition, fields } = map else {
         return Err(invalid("expected sorted map"));
     };
-    if *definition != hirsel_syntax::DefPath::core("SortedMap")
-        || fields.len() != 2
-        || fields[0].as_ref() != Some(by)
-    {
+    if !definition.is_core("SortedMap") || fields.len() != 2 || fields[0].as_ref() != Some(by) {
         return Err(invalid("sorted map comparator brand mismatch"));
     }
     let entries = fields[1]

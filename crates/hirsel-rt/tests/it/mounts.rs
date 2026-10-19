@@ -565,7 +565,7 @@ fn an_authorized_empty_virtual_mount_issues_a_directory_in_each_simulation() {
                 runtime: &Default::default(),
                 path: &hirsel_syntax::DefPath::core("io.dir"),
                 generics: &[],
-                arguments: &[io, path("work")],
+                arguments: &mut [io, path("work")],
                 result_type,
                 types: &types,
                 site: Span::default(),

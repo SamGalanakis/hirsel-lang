@@ -42,7 +42,7 @@ impl Harness {
                 OperationCall {
                     runtime: &Default::default(),
                     path: &hirsel_syntax::DefPath::core(name),
-                    arguments: args,
+                    arguments: &mut args.to_vec(),
                     generics: &[],
                     result_type,
                     types: &self.types,

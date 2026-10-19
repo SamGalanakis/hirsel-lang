@@ -110,7 +110,7 @@ fn decode(data: &Materialized, runtime: &aggregate::RuntimeTypes) -> Result<Valu
                     .get(node.ty)
                     .ok_or_else(|| invalid("materialized constructor type"))?;
                 values.push(aggregate::construct(
-                    constructor.clone(),
+                    constructor,
                     fields,
                     &row.kind,
                     runtime,

@@ -500,7 +500,7 @@ impl Simulation {
         cx: &mut OperationContext<'_>,
         canceled: Option<u32>,
     ) -> Result<OperationResult, Error> {
-        let a = call.arguments;
+        let a = &*call.arguments;
         let value = match name {
             "io.process" => {
                 self.id(arg(a, 0)?, "Io")?;
@@ -755,7 +755,7 @@ impl Simulation {
         cx: &mut OperationContext<'_>,
         canceled: Option<u32>,
     ) -> Result<OperationResult, Error> {
-        let a = call.arguments;
+        let a = &*call.arguments;
         let mut updates = vec![];
         let mut consumed = vec![];
         let mut input = encode_arguments(a);

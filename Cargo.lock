@@ -628,6 +628,7 @@ name = "hirsel-interp"
 version = "0.1.0"
 dependencies = [
  "hirsel-diag",
+ "hirsel-intern",
  "hirsel-kernels",
  "hirsel-run-config",
  "hirsel-span",

@@ -58,7 +58,7 @@ impl Library {
                 "entry must return core Result[(),E]".into(),
             ));
         };
-        if *definition != hirsel_syntax::DefPath::core("Result") || arguments.len() != 2 {
+        if !definition.is_core("Result") || arguments.len() != 2 {
             return Err(LaunchError::InvalidEntry(
                 "entry must return core Result[(),E]".into(),
             ));

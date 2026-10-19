@@ -26,7 +26,7 @@ impl Library {
     ) -> Result<OperationResult, Error> {
         self.simulation.id(arg(call.arguments, 0)?, "Tasks")?;
         self.tasks.yield_now = name != "mutex.with";
-        let a = call.arguments;
+        let a = &*call.arguments;
         let result = match name {
             "mutex.create" => {
                 self.synchronizers.next += 1;

@@ -29,7 +29,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<OperationResult, Error>
     if name == "slots.empty" {
         return Ok(OperationResult::returned(Value::Sequence {
             kind: BuiltinType::Slots,
-            elements: vec![],
+            elements: Default::default(),
             arena: None,
         }));
     }
@@ -120,7 +120,7 @@ mod tests {
     fn exhausted_generation_retires_the_vacancy() {
         let slots = Value::Sequence {
             kind: BuiltinType::Slots,
-            elements: vec![Some(tuple(u64_value(u64::MAX - 1), some(u64_value(7))))],
+            elements: vec![Some(tuple(u64_value(u64::MAX - 1), some(u64_value(7))))].into(),
             arena: None,
         };
         let stale = tuple(u64_value(0), u64_value(u64::MAX - 1));

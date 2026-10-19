@@ -269,7 +269,7 @@ impl QueryEngine {
                                 return Err(invalid("sequence element type is missing"));
                             };
                             let fields = vec![*element; elements.len()];
-                            (Constructor::Sequence, elements, fields.into())
+                            (Constructor::Sequence, elements.into_vec(), fields.into())
                         }
                         (
                             Value::Map { entries, .. },

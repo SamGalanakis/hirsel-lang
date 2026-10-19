@@ -21,7 +21,7 @@ pub(super) fn call(name: &str, call: &OperationCall<'_>) -> R<Value> {
     .map_err(Error::Query)?
     .ok_or_else(|| invalid("codec requires a checked concrete serializable schema"))?;
     let codec = Codec::new(&schema).map_err(|e| invalid(format!("codec schema: {e:?}")))?;
-    let [value] = call.arguments else {
+    let [value] = &*call.arguments else {
         return Err(invalid("codec arity"));
     };
     if name == "codec.encode" {
@@ -357,7 +357,7 @@ fn from_wire(
                     } => Value::set(fs),
                     SchemaNode::Builtin { kind, .. } => Value::Sequence {
                         kind: *kind,
-                        elements: fs,
+                        elements: fs.into(),
                         arena: None,
                     },
                     _ => return Err(invalid("codec finish schema")),
@@ -388,8 +388,8 @@ fn from_wire(
                                         .unwrap(),
                                 )
                             }
-                            ValueNode::F32(v) => Value::F32(*v),
-                            ValueNode::F64(v) => Value::F64(*v),
+                            ValueNode::F32(v) => crate::value::f32_value(f32::from_bits(*v)),
+                            ValueNode::F64(v) => crate::value::f64_value(f64::from_bits(*v)),
                             ValueNode::String(v) => Value::String(v.clone()),
                             ValueNode::Bytes(v) => Value::Bytes(v.clone()),
                             _ => return Err(invalid("codec scalar node")),

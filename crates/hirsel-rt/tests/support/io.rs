@@ -273,7 +273,7 @@ pub fn replay_interpreter_with_fixture(
                         handle("File", *file),
                         Value::Sequence {
                             kind: hirsel_types::BuiltinType::List,
-                            elements: vec![],
+                            elements: Default::default(),
                             arena: None,
                         },
                         reference::u64_value(*max),
@@ -561,7 +561,7 @@ pub fn replay_interpreter_with_fixture(
                         runtime: &Default::default(),
                         path: &path,
                         generics: &[],
-                        arguments: &args,
+                        arguments: &mut args.to_vec(),
                         result_type,
                         types: &types,
                         site: Span::default(),

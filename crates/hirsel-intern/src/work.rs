@@ -78,6 +78,9 @@ pub enum Counter {
     ModuleDeclarationRows,
     /// Row transfers while solving and replaying cleanup version inputs.
     RcCleanupVersionRows,
+    /// Value nodes the reference interpreter copies beneath a copied value, and
+    /// the elements of a shared block its first write detaches.
+    InterpCopiedValues,
     /// Cached dependency-node inspections.
     CacheValidationRows,
 }

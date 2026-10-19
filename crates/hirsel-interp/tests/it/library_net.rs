@@ -50,7 +50,7 @@ impl Harness {
                 OperationCall {
                     runtime: &Default::default(),
                     path: &hirsel_syntax::DefPath::core(name),
-                    arguments: &args,
+                    arguments: &mut args.to_vec(),
                     generics: &[],
                     types: &self.types,
                     result_type: ty,
@@ -491,7 +491,7 @@ fn replay_rejects_changed_written_bytes_and_rolls_back() {
             OperationCall {
                 runtime: &Default::default(),
                 path: &hirsel_syntax::DefPath::core(name),
-                arguments: args,
+                arguments: &mut args.to_vec(),
                 generics: &[],
                 types: &h.types,
                 result_type: ty,

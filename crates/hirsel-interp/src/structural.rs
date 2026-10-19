@@ -17,12 +17,12 @@ fn children(v: &Value) -> Option<&[Option<Value>]> {
     match v {
         Value::Map { entries: f, .. }
         | Value::Set { entries: f, .. }
-        | Value::Tuple(f)
+        | Value::Sequence { elements: f, .. } => Some(f),
+        Value::Tuple(f)
         | Value::Box(f)
         | Value::Record { fields: f, .. }
         | Value::Variant { fields: f, .. }
-        | Value::Distinct { fields: f, .. }
-        | Value::Sequence { elements: f, .. } => Some(f),
+        | Value::Distinct { fields: f, .. } => Some(f),
         _ => None,
     }
 }

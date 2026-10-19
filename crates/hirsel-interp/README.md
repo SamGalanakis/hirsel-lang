@@ -13,9 +13,11 @@ using no trace storage for pure computation. Outcomes, stdout, failure chains,
 step accounting and cleanup are identical in both modes. `SourceMap` must retain
 the TIR's immutable source snapshot: line numbers come from its spans, never
 guessed from offsets. Invalid/unavailable IR and provider errors return
-`ExecutionError`, retaining the original `Error` and stdout bytes. Inputs and
-operation results canonicalize float NaNs; equality of executions includes float
-bits and the selected trace. Semantic observations are identical across trace modes.
+`ExecutionError`, retaining the original `Error` and stdout bytes. Values are
+canonical by construction (SEM-2): entry inputs, TIR constants, scalar results and
+the library's float producers (`from_bits`, codec decoding) canonicalize NaNs, and
+nothing walks a value to re-canonicalize it; an `Operations` implementation returns
+canonical floats. Equality of executions includes float bits and the selected trace. Semantic observations are identical across trace modes.
 
 `exit_report` formats the typed payload of a returned Error using a worklist. The scheduler consumes the returned entry Result after its entry hook publishes the report; the observation retains only a tooling snapshot of the value. The formatter performs no Io; `ObservedExecution.exit_report` carries the host text beside the semantic observation, and the driver decides when to write it.
 
@@ -148,11 +150,20 @@ structural map equality is order-sensitive, set equality and hashing ignore orde
 Opaque `Handle { kind, id }` is for capability/runtime identity, never host addresses.
 The registry chooses tags and deterministic IDs; no behavior is inferred from tags.
 
-Semantic copying uses an iterative tree copy. This reference model preserves value
-semantics independently of RC implementation costs: the native RC pass, holder
-counts, COW allocation audits and reuse are separate oracles. Mut arguments transfer
-into frame slots and write back on success or failure, without rollback. Library
-`Complete.arguments` updates are validated before publication. Projection and whole-value
+Semantic copying uses an iterative tree copy that stops at blocks: the elements of a
+List, Array, Inline, Simd, Map or Set (`value::Block`) are shared by every copy and
+detached by a holder's first write (copy on write), so moving, borrowing and copying
+a block costs O(1). Sharing is this model's cost, never a semantic fact: the native
+RC pass, holder counts, COW allocation audits and reuse are separate oracles, and
+checked execution's witnesses ignore it. Reads of an operand (copy, borrow) resolve
+its place without writing, so they never detach. `work::Counter::InterpCopiedValues`
+counts the nodes copied beneath a copied value and the elements a detach copies; the
+driver's scaling probe bounds it. A run asks its `TirProvider` for each definition
+once, and for each own-bodied CT-5 declaration once; a failed lookup is asked again.
+Mut arguments transfer into frame slots and write
+back on success or failure, without rollback. An operation may write its `mut`
+arguments in place through `OperationCall.arguments`; library `Complete.arguments`
+updates are validated before publication. Projection and whole-value
 writes still require explicit replacement drops. Loan validity, copying bounds,
 unique access and source pattern legality belong to checked lowering/validation.
 The evaluator also rejects explicit copies of resource-containing or once values.
@@ -393,8 +404,8 @@ a failing release prevents the success continuation and joins the failure chain.
 Semantic effects export source/role anchors for resource construction, finalizer
 entry, forget, handle drop and capability consumption. Simulation replay acceptance
 precedes publication; transient body and cleanup indices stay in the debug trace.
-Collection mutations carry their updated owner and displaced values together in
-`collection::Mutation`; publishing consumes it into Complete. Equal-key Map
+Collection mutations write their `mut` owner in place; `collection::Displaced`
+carries the values they displaced into Complete.released. Equal-key Map
 replacement retains its old key and insertion position; duplicate Set insertion
 returns its unused input for ordinary release. Consumed file handles explicitly
 transfer out of evaluator cleanup even when their operation returns an error Result.

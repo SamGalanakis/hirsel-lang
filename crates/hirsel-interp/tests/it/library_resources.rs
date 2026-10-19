@@ -168,7 +168,7 @@ fn mapper_cases(materialized: bool) {
                     OperationCall {
                         runtime: &Default::default(),
                         path: &hirsel_syntax::DefPath::core("iter.from"),
-                        arguments: &[u64_value(0), closure("next")],
+                        arguments: &mut [u64_value(0), closure("next")],
                         generics: &[],
                         result_type: dummy,
                         types: &types,
@@ -195,7 +195,7 @@ fn mapper_cases(materialized: bool) {
                 OperationCall {
                     runtime: &Default::default(),
                     path: &hirsel_syntax::DefPath::core("iter.map"),
-                    arguments: &[it, closure("mapper")],
+                    arguments: &mut [it, closure("mapper")],
                     generics: &[],
                     result_type: dummy,
                     types: &types,

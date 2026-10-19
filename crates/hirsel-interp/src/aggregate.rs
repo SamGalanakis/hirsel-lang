@@ -35,7 +35,7 @@ impl RuntimeTypes {
     }
 }
 pub(crate) fn construct(
-    constructor: Constructor,
+    constructor: &Constructor,
     values: Vec<Option<Value>>,
     kind: &TypeKind,
     types: &RuntimeTypes,
@@ -48,44 +48,44 @@ pub(crate) fn construct(
             definition,
             variant,
         } => {
-            if matches!(kind, TypeKind::Named { .. }) && types.get(&definition).is_none() {
+            if matches!(kind, TypeKind::Named { .. }) && types.get(definition).is_none() {
                 return Err(Error::Unavailable(
                     "nominal runtime metadata required".into(),
                 ));
             }
-            if types.get(&definition).is_some_and(|n| n.resource) {
+            if types.get(definition).is_some_and(|n| n.resource) {
                 Value::ResourceVariant {
                     sizes,
-                    definition,
-                    variant,
+                    definition: definition.clone(),
+                    variant: *variant,
                     fields: values,
                 }
             } else {
                 Value::Variant {
-                    variant,
+                    variant: *variant,
                     fields: values,
                 }
             }
         }
         Constructor::Record(definition) => {
-            if let Some(n) = types.get(&definition) {
+            if let Some(n) = types.get(definition) {
                 if n.fields != values.len() {
                     return Err(invalid("nominal constructor arity"));
                 }
                 if n.resource {
                     Value::Resource {
                         sizes,
-                        definition,
+                        definition: definition.clone(),
                         fields: values,
                     }
                 } else if n.distinct {
                     Value::Distinct {
-                        definition,
+                        definition: definition.clone(),
                         fields: values,
                     }
                 } else {
                     Value::Record {
-                        definition,
+                        definition: definition.clone(),
                         fields: values,
                     }
                 }
@@ -96,7 +96,7 @@ pub(crate) fn construct(
                     ));
                 }
                 Value::Record {
-                    definition,
+                    definition: definition.clone(),
                     fields: values,
                 }
             }
@@ -113,7 +113,7 @@ pub(crate) fn construct(
             }
             Value::Sequence {
                 kind: *kind,
-                elements: values,
+                elements: values.into(),
                 arena: None,
             }
         }
@@ -137,7 +137,7 @@ pub(crate) fn construct(
                     values.into_iter().next().unwrap(),
                     Some(Value::Sequence {
                         kind: BuiltinType::Array,
-                        elements: vec![],
+                        elements: Default::default(),
                         arena: None,
                     }),
                 ],
@@ -217,12 +217,12 @@ mod tests {
             ])),
         ];
         assert_eq!(
-            construct(Constructor::Map, entries.clone(), &map, &runtime, vec![]).unwrap(),
+            construct(&Constructor::Map, entries.clone(), &map, &runtime, vec![]).unwrap(),
             Value::map(entries)
         );
         assert!(
             construct(
-                Constructor::Map,
+                &Constructor::Map,
                 vec![Some(Value::Tuple(vec![Some(Value::Bool(true)), None]))],
                 &map,
                 &runtime,
@@ -236,11 +236,11 @@ mod tests {
         };
         let elements = vec![Some(Value::Bool(true)), Some(Value::Bool(false))];
         assert_eq!(
-            construct(Constructor::Set, elements.clone(), &set, &runtime, vec![]).unwrap(),
+            construct(&Constructor::Set, elements.clone(), &set, &runtime, vec![]).unwrap(),
             Value::set(elements)
         );
-        assert!(construct(Constructor::Set, vec![None], &set, &runtime, vec![]).is_err());
-        assert!(construct(Constructor::Map, vec![], &set, &runtime, vec![]).is_err());
-        assert!(construct(Constructor::Set, vec![], &map, &runtime, vec![]).is_err());
+        assert!(construct(&Constructor::Set, vec![None], &set, &runtime, vec![]).is_err());
+        assert!(construct(&Constructor::Map, vec![], &set, &runtime, vec![]).is_err());
+        assert!(construct(&Constructor::Set, vec![], &map, &runtime, vec![]).is_err());
     }
 }

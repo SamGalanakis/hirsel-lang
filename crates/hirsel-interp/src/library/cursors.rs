@@ -57,7 +57,7 @@ pub(super) fn call(name: &str, args: &[Value]) -> Result<Option<OperationResult>
                         matches!(v, Value::Char(_))
                     }
                     "ScalarPositions" => {
-                        matches!(v,Value::Record {definition,..} if *definition==hirsel_syntax::DefPath::core("StrPos"))
+                        matches!(v,Value::Record {definition,..} if definition.is_core("StrPos"))
                     }
                     _ => true,
                 };
@@ -263,9 +263,7 @@ fn source_elements(source: &Value, kind: BuiltinType) -> Result<&[Option<Value>]
     match (kind, source) {
         (BuiltinType::Map, Value::Map { entries, .. }) => Ok(entries),
         (BuiltinType::SortedMap, Value::Record { definition, fields })
-            if *definition == hirsel_syntax::DefPath::core("SortedMap")
-                && fields.len() == 2
-                && fields[0].is_some() =>
+            if definition.is_core("SortedMap") && fields.len() == 2 && fields[0].is_some() =>
         {
             match &fields[1] {
                 Some(Value::Sequence {
@@ -285,10 +283,7 @@ fn owned_elements(source: &mut Value, kind: BuiltinType) -> Result<&mut Vec<Opti
         let Value::Record { definition, fields } = source else {
             return Err(invalid("SortedMap entry storage"));
         };
-        if *definition != hirsel_syntax::DefPath::core("SortedMap")
-            || fields.len() != 2
-            || fields[0].is_none()
-        {
+        if !definition.is_core("SortedMap") || fields.len() != 2 || fields[0].is_none() {
             return Err(invalid("SortedMap entry storage"));
         }
         return match &mut fields[1] {

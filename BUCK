@@ -2055,6 +2055,7 @@ hirsel_library(
     name = "hirsel-interp",
     deps = [
         "//:hirsel-diag",
+        "//:hirsel-intern",
         "//:hirsel-kernels",
         "//:hirsel-run-config",
         "//:hirsel-span",
@@ -2077,6 +2078,7 @@ hirsel_test(
     name = "hirsel-interp-unittest",
     deps = [
         "//:hirsel-diag",
+        "//:hirsel-intern",
         "//:hirsel-kernels",
         "//:hirsel-run-config",
         "//:hirsel-span",
@@ -2108,6 +2110,7 @@ hirsel_test(
     deps = [
         "//:hirsel-interp",
         "//:hirsel-diag",
+        "//:hirsel-intern",
         "//:hirsel-kernels",
         "//:hirsel-run-config",
         "//:hirsel-span",

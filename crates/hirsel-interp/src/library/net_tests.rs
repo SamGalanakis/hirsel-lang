@@ -120,7 +120,7 @@ fn udp_semantic_replay_checks_payload_as_well_as_count_peer_and_truncation() {
                     runtime: &Default::default(),
                     path: &hirsel_syntax::DefPath::core(name),
                     generics: &[],
-                    arguments: args,
+                    arguments: &mut args.to_vec(),
                     result_type,
                     types: &types,
                     site: Default::default(),

@@ -52,7 +52,7 @@ impl Library {
         call: &OperationCall<'_>,
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        let a = call.arguments;
+        let a = &*call.arguments;
         self.simulation.id(arg(a, 0)?, "MonotonicClock")?;
         let deadline = instant(arg(a, 1)?)?;
         self.tasks.yield_now = true;

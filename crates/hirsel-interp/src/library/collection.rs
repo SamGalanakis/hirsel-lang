@@ -1,4 +1,4 @@
-//! Ordered value containers. Mutations publish a new value through Operations.
+//! Ordered value containers. Mutations write their `mut` owner in place.
 use crate::{Error, Integer, OperationResult, Value, invalid};
 use hirsel_types::BuiltinType;
 pub fn sequence(kind: BuiltinType, values: impl IntoIterator<Item = Value>) -> Value {
@@ -6,11 +6,7 @@ pub fn sequence(kind: BuiltinType, values: impl IntoIterator<Item = Value>) -> V
     match kind {
         BuiltinType::Map => Value::map(elements),
         BuiltinType::Set => Value::set(elements),
-        _ => Value::Sequence {
-            kind,
-            elements,
-            arena: None,
-        },
+        _ => Value::sequence(kind, elements),
     }
 }
 pub fn elements(value: &Value, kind: BuiltinType) -> Result<Vec<Value>, Error> {
@@ -53,20 +49,17 @@ pub fn len(value: &Value) -> Result<u64, Error> {
         _ => Err(invalid("expected collection")),
     }
 }
-/// A collection update and every owned value it displaced travel together.
-/// Callers can only publish through the operation completion ownership boundary.
+/// A collection updates its `mut` owner in place; every owned value the update
+/// displaced travels to the operation completion, which releases it.
 #[must_use]
-pub struct Mutation {
-    value: Value,
-    released: Vec<Value>,
-}
-impl Mutation {
-    pub fn into_result(self, parameter: usize, consumed: Vec<usize>) -> OperationResult {
+pub struct Displaced(pub Vec<Value>);
+impl Displaced {
+    pub fn into_result(self, consumed: Vec<usize>) -> OperationResult {
         OperationResult::Complete {
             value: Value::Unit,
-            arguments: vec![(parameter, self.value)],
+            arguments: vec![],
             consumed,
-            released: self.released,
+            released: self.0,
         }
     }
 }
@@ -81,21 +74,17 @@ pub(super) fn replace_entry_value(entry: &mut Value, value: Value) -> Result<Val
         .replace(value)
         .ok_or_else(|| invalid("dead map value"))
 }
-pub fn push(mut value: Value, item: Value) -> Result<Mutation, Error> {
-    if let Value::Sequence {
+pub fn push(list: &mut Value, item: Value) -> Result<(), Error> {
+    let Value::Sequence {
         kind: BuiltinType::List,
         elements,
         ..
-    } = &mut value
-    {
-        elements.push(Some(item));
-        Ok(Mutation {
-            value,
-            released: vec![],
-        })
-    } else {
-        Err(invalid("list.push requires List"))
-    }
+    } = list
+    else {
+        return Err(invalid("list.push requires List"));
+    };
+    elements.push(Some(item));
+    Ok(())
 }
 /// Every keyed operation reads its key as a hashing engine would, so a key past
 /// the structural depth limit is MEM-3 Depth whatever the container holds.
@@ -142,43 +131,38 @@ fn find(
     }
     Ok(None)
 }
-pub fn insert(mut value: Value, key: Value, item: Value) -> Result<Mutation, KeyedError> {
+pub fn insert(map: &mut Value, key: Value, item: Value) -> Result<Displaced, KeyedError> {
     let Value::Map {
         entries: elements, ..
-    } = &mut value
+    } = map
     else {
         return Err(invalid("map.insert requires Map").into());
     };
     if let Some(index) = find(elements, &key, entry_key)? {
         // The taken key drops after the displaced value, as natively.
         let old = replace_entry_value(elements[index].as_mut().unwrap(), item)?;
-        return Ok(Mutation {
-            value,
-            released: vec![old, key],
-        });
+        return Ok(Displaced(vec![old, key]));
     }
     // The borrowed key is copied into the map: a share of its arena Lists (MEM-6).
     key.share_arena_storage();
     elements.push(Some(Value::Tuple(vec![Some(key), Some(item)])));
-    Ok(Mutation {
-        value,
-        released: vec![],
-    })
+    Ok(Displaced(vec![]))
 }
-pub fn set_insert(mut value: Value, item: Value) -> Result<Mutation, KeyedError> {
+pub fn set_insert(set: &mut Value, item: Value) -> Result<Displaced, KeyedError> {
     let Value::Set {
         entries: elements, ..
-    } = &mut value
+    } = set
     else {
         return Err(invalid("set.insert requires Set").into());
     };
-    let released = if find(elements, &item, |member| Ok(member))?.is_some() {
-        vec![item]
-    } else {
-        elements.push(Some(item));
-        vec![]
-    };
-    Ok(Mutation { value, released })
+    Ok(Displaced(
+        if find(elements, &item, |member| Ok(member))?.is_some() {
+            vec![item]
+        } else {
+            elements.push(Some(item));
+            vec![]
+        },
+    ))
 }
 /// The value stored under an equal key, as a semantic copy.
 pub fn get(map: &Value, key: &Value) -> Result<Option<Value>, KeyedError> {
@@ -309,10 +293,10 @@ pub fn order(a: Integer, b: Integer) -> Option<i32> {
 }
 
 /// Ordered eviction transfers V and separately releases the stored key.
-pub fn map_remove(mut value: Value, key: &Value) -> Result<OperationResult, KeyedError> {
+pub fn map_remove(map: &mut Value, key: &Value) -> Result<OperationResult, KeyedError> {
     let Value::Map {
         entries: elements, ..
-    } = &mut value
+    } = map
     else {
         return Err(invalid("map.remove requires Map").into());
     };
@@ -328,15 +312,15 @@ pub fn map_remove(mut value: Value, key: &Value) -> Result<OperationResult, Keye
     };
     Ok(OperationResult::Complete {
         value: result,
-        arguments: vec![(0, value)],
+        arguments: vec![],
         consumed: vec![],
         released,
     })
 }
-pub fn set_remove(mut value: Value, key: &Value) -> Result<OperationResult, KeyedError> {
+pub fn set_remove(set: &mut Value, key: &Value) -> Result<OperationResult, KeyedError> {
     let Value::Set {
         entries: elements, ..
-    } = &mut value
+    } = set
     else {
         return Err(invalid("set.remove requires Set").into());
     };
@@ -352,7 +336,7 @@ pub fn set_remove(mut value: Value, key: &Value) -> Result<OperationResult, Keye
     };
     Ok(OperationResult::Complete {
         value: Value::Bool(index.is_some()),
-        arguments: vec![(0, value)],
+        arguments: vec![],
         consumed: vec![],
         released,
     })

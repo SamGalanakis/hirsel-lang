@@ -295,7 +295,7 @@ impl Library {
         call: &OperationCall<'_>,
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        let a = call.arguments;
+        let a = &*call.arguments;
         self.tasks.yield_now = true;
         self.simulation.record(
             "Tasks",
@@ -386,7 +386,7 @@ impl Library {
                         {
                             hirsel_types::TypeKind::Parameter(_) => None,
                             hirsel_types::TypeKind::Named { definition, .. } => {
-                                Some(*definition == hirsel_syntax::DefPath::core("Result"))
+                                Some(definition.is_core("Result"))
                             }
                             _ => Some(false),
                         },
@@ -1073,7 +1073,7 @@ mod tests {
                 &OperationCall {
                     runtime: &Default::default(),
                     path: &DefPath::core(name),
-                    arguments,
+                    arguments: &mut arguments.to_vec(),
                     generics: &[],
                     types: &types,
                     result_type: unit,

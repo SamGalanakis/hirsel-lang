@@ -87,7 +87,7 @@ fn two_reads_share_one_pre_entry_materialization_for_every_data_kind() {
                 },
                 Value::Sequence {
                     kind: BuiltinType::List,
-                    elements: vec![Some(Value::String("saved".into()))],
+                    elements: vec![Some(Value::String("saved".into()))].into(),
                     arena: None,
                 },
             ),

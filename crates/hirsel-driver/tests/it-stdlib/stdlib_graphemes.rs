@@ -158,7 +158,7 @@ fn full_gate_every_unicode16_grapheme_break_case_over_full_and_nonzero_origin_sl
                         panic!("{name} line {line}: {actual:?}");
                     };
                     assert_eq!(
-                        elements,
+                        elements.to_vec(),
                         expected.iter().cloned().map(Some).collect::<Vec<_>>(),
                         "GraphemeBreakTest line {line}, {name}"
                     );

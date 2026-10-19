@@ -161,6 +161,70 @@ fn audit_resources(
     Some(trap)
 }
 
+/// One run's view of its provider: a program's definitions are immutable for the
+/// run, so each is looked up once rather than at every call. An error is never
+/// retained; it is asked again.
+struct Resolved<'p, P: ?Sized> {
+    provider: &'p mut P,
+    definitions: std::collections::BTreeMap<hirsel_syntax::DefPath, DefinitionRef>,
+    /// Declarations with their own body: CT-5 instances never replace them.
+    own_bodies: std::collections::BTreeSet<hirsel_syntax::DefPath>,
+}
+impl<'p, P: TirProvider + ?Sized> Resolved<'p, P> {
+    fn new(provider: &'p mut P) -> Self {
+        Self {
+            provider,
+            definitions: Default::default(),
+            own_bodies: Default::default(),
+        }
+    }
+}
+impl<P: TirProvider + ?Sized> TirProvider for Resolved<'_, P> {
+    fn definition(
+        &mut self,
+        path: &hirsel_syntax::DefPath,
+    ) -> Result<DefinitionRef, hirsel_types::QueryError> {
+        if let Some(definition) = self.definitions.get(path) {
+            return Ok(definition.clone());
+        }
+        let definition = self.provider.definition(path)?;
+        self.definitions.insert(path.clone(), definition.clone());
+        Ok(definition)
+    }
+    fn constant(
+        &mut self,
+        path: &hirsel_syntax::DefPath,
+    ) -> Result<MaterializedRef, hirsel_types::QueryError> {
+        self.provider.constant(path)
+    }
+    fn constant_instance(
+        &mut self,
+        path: &hirsel_syntax::DefPath,
+        arguments: &[u64],
+    ) -> Result<MaterializedRef, hirsel_types::QueryError> {
+        self.provider.constant_instance(path, arguments)
+    }
+    fn constant_definitions(
+        &mut self,
+    ) -> Result<Vec<hirsel_syntax::DefPath>, hirsel_types::QueryError> {
+        self.provider.constant_definitions()
+    }
+    fn instance_body(
+        &mut self,
+        path: &hirsel_syntax::DefPath,
+        types: &hirsel_types::TypeStore,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Option<hirsel_syntax::DefPath>, hirsel_types::QueryError> {
+        if self.own_bodies.contains(path) {
+            return Ok(None);
+        }
+        let instance = self.provider.instance_body(path, types, arguments)?;
+        if instance.is_none() {
+            self.own_bodies.insert(path.clone());
+        }
+        Ok(instance)
+    }
+}
 fn execute_frames(
     provider: &mut (impl TirProvider + ?Sized),
     sources: &SourceMap,
@@ -173,6 +237,7 @@ fn execute_frames(
     execution: &mut Execution,
     entry_consumed: &mut bool,
 ) -> Result<(), Error> {
+    let provider = &mut Resolved::new(provider);
     let mut returned_snapshot = None;
     let mut tooling = None;
     let mut budgets = crate::bounded::Budgets::new(runtime.budgets);
@@ -385,13 +450,11 @@ fn execute_frames(
         }
 
         let depth = frames.len();
-        if let Some((result, mut state)) = frames
-            .last_mut()
-            .unwrap()
-            .work
-            .is_empty()
-            .then(|| frames.last_mut().unwrap().operation.take())
-            .flatten()
+        // Test before taking: moving the large empty slot on every step costs.
+        let top = frames.last_mut().unwrap();
+        if top.work.is_empty()
+            && top.operation.is_some()
+            && let Some((result, mut state)) = top.operation.take()
         {
             let frame = frames.last_mut().unwrap();
             match result {
@@ -439,7 +502,7 @@ fn execute_frames(
                 }
                 OperationResult::Call {
                     callee,
-                    arguments,
+                    mut arguments,
                     mut_arguments,
                     writebacks,
                     updates,
@@ -583,7 +646,7 @@ fn execute_frames(
                                     runtime,
                                     path: &reference.definition,
                                     generics: &reference.arguments,
-                                    arguments: &arguments,
+                                    arguments: &mut arguments,
                                     result_type: function.result,
                                     types: &reference.types,
                                     site: state.anchor.site,
@@ -1209,7 +1272,9 @@ fn execute_frames(
                 }
             }
         }
-        if let Some(ending) = frames.last_mut().unwrap().ending.take() {
+        if frames.last().unwrap().ending.is_some()
+            && let Some(ending) = frames.last_mut().unwrap().ending.take()
+        {
             let mut finished = frames.pop().unwrap();
             // Map the result and mut write-backs into the caller's lifetimes, then
             // end every instance the frame owns (MODE-1, MEM-10, MEM-4).
@@ -1474,17 +1539,19 @@ fn execute_frames(
             }
         }
         let frame = frames.last_mut().unwrap();
-        let block = frame
-            .body()
-            .blocks
-            .get(frame.block.0 as usize)
+        // The step reads its code through its own handle on the immutable
+        // definition, so the frame stays free for mutation without a copy.
+        let definition = frame.definition.clone();
+        let block = definition
+            .bodies
+            .get(frame.body_id.0 as usize)
+            .and_then(|body| body.blocks.get(frame.block.0 as usize))
             .ok_or_else(|| invalid("block out of range"))?;
-        let instruction = block.instructions.get(frame.instruction).cloned();
-        let terminator = block.terminator.clone();
-        let site = instruction.as_ref().map_or(block.span, |i| i.span);
-        let cleanup = instruction
-            .as_ref()
-            .map_or_else(|| terminator_cleanup(&terminator), |i| Some(i.on_failure));
+        let instruction = block.instructions.get(frame.instruction);
+        let terminator = &block.terminator;
+        let site = instruction.map_or(block.span, |i| i.span);
+        let cleanup =
+            instruction.map_or_else(|| terminator_cleanup(terminator), |i| Some(i.on_failure));
         // Issue #34: failure occurs at the next scheduled site after entry.
         // Control-only edges have no current-frame failure list in frozen TIR.
         if frame.depth_failure || limits.steps == Some(execution.steps) {
@@ -1531,14 +1598,14 @@ fn execute_frames(
                 });
             }
             frame.instruction += 1;
-            match instruction.kind {
-                InstructionKind::Check { condition, rule } => match frame.operand(&condition) {
+            match &instruction.kind {
+                InstructionKind::Check { condition, rule } => match frame.operand(condition) {
                     Ok(Value::Bool(true)) => Ok(Action::Continue),
-                    Ok(Value::Bool(false)) => Ok(Action::Fail(rule)),
+                    Ok(Value::Bool(false)) => Ok(Action::Fail(rule.clone())),
                     Ok(_) => Err(invalid("check needs bool").into()),
                     Err(e) => Err(e.into()),
                 },
-                InstructionKind::Drop { place, if_live } => {
+                &InstructionKind::Drop { place, if_live } => {
                     arena_write(frame, place, false, &mut budgets).and_then(|()| {
                         frame
                             .access(place, "drop")
@@ -1550,7 +1617,7 @@ fn execute_frames(
                             .map_err(EvalError::from)
                     })
                 }
-                InstructionKind::RunCleanup(id) => Ok(Action::Cleanup(id)),
+                &InstructionKind::RunCleanup(id) => Ok(Action::Cleanup(id)),
                 kind => execute_instruction(
                     frame,
                     kind,
@@ -1872,7 +1939,7 @@ fn execute_frames(
                         }
                         // MEM-6: a copy into a bounded arena charges its whole tree first,
                         // and builds every List and Array of it unshared there.
-                        let exhausted = if path == hirsel_syntax::DefPath::core("copy_to") {
+                        let exhausted = if path.is_core("copy_to") {
                             copy_to_arena(
                                 runtime,
                                 types,
@@ -1899,7 +1966,7 @@ fn execute_frames(
                                     runtime,
                                     path: &path,
                                     generics: &generics,
-                                    arguments: &arguments,
+                                    arguments: &mut arguments,
                                     result_type,
                                     types,
                                     site,
@@ -2233,15 +2300,14 @@ fn rvalue(
     constants: &mut crate::constants::Constants,
     budgets: &mut crate::bounded::Budgets,
 ) -> Result<(Value, Shadow), EvalError> {
-    let value = frame
-        .body()
+    let code = frame.definition.clone();
+    let value = code.bodies[frame.body_id.0 as usize]
         .rvalues
         .get(id.0 as usize)
-        .ok_or_else(|| invalid("rvalue out of range"))?
-        .clone();
+        .ok_or_else(|| invalid("rvalue out of range"))?;
     let mut shadow = Shadow::default();
-    let value = match value {
-        Rvalue::Constant(c) => {
+    let value = match *value {
+        Rvalue::Constant(ref c) => {
             let ty = frame.place(destination)?.ty;
             let ty = &frame
                 .definition
@@ -2249,7 +2315,7 @@ fn rvalue(
                 .get(ty)
                 .ok_or_else(|| invalid("type out of range"))?
                 .kind;
-            let value = scalar::constant(&c, ty)?;
+            let value = scalar::constant(c, ty)?;
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, true);
             }
@@ -2273,18 +2339,18 @@ fn rvalue(
             )
         }
         Rvalue::FunctionReference {
-            definition,
-            arguments,
+            ref definition,
+            ref arguments,
         } => {
             let arguments = arguments
-                .into_iter()
-                .map(|argument| match argument {
+                .iter()
+                .map(|argument| match *argument {
                     hirsel_types::GenericArgument::Size(hirsel_types::Size::Parameter(p)) => {
                         frame.size(p).map(|n| {
                             hirsel_types::GenericArgument::Size(hirsel_types::Size::Constant(n))
                         })
                     }
-                    other => Ok(other),
+                    ref other => Ok(other.clone()),
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
             let concrete = crate::type_arguments::concrete(
@@ -2293,15 +2359,15 @@ fn rvalue(
                 &frame.type_arguments,
             )?;
             Value::FunctionReference(crate::value::NamedFunction {
-                definition,
+                definition: definition.clone(),
                 arguments: concrete.arguments,
                 types: concrete.types,
                 ty: frame.place(destination)?.ty,
             })
         }
         Rvalue::ReadConstant {
-            definition,
-            arguments,
+            ref definition,
+            ref arguments,
         } => {
             let arguments = arguments
                 .iter()
@@ -2310,20 +2376,20 @@ fn rvalue(
                     hirsel_types::Size::Parameter(parameter) => frame.size(*parameter),
                 })
                 .collect::<Result<Vec<_>, Error>>()?;
-            let value = constants.read_instance(provider, &definition, &arguments, runtime)?;
+            let value = constants.read_instance(provider, definition, &arguments, runtime)?;
             if frame.check.is_some() {
                 shadow = shadow.ownership(&value, false);
             }
             value
         }
-        Rvalue::Use(operand) => {
-            let (value, bound) = frame.operand_shadow(&operand)?;
+        Rvalue::Use(ref operand) => {
+            let (value, bound) = frame.operand_shadow(operand)?;
             shadow = bound;
             value
         }
         Rvalue::Unary {
             op: hirsel_syntax::UnaryOp::Unique,
-            value,
+            ref value,
         } => {
             if value.usage != hirsel_types::UseKind::Copy {
                 return Err(invalid("deep unique requires copy extraction").into());
@@ -2348,17 +2414,21 @@ fn rvalue(
             }
             // Value copies traverse owned fields; Shared roots clone their
             // handle identity and retain their existing contents as a boundary.
-            let (mut value, bound) = frame.operand_shadow(&value)?;
+            let (mut value, bound) = frame.operand_shadow(value)?;
             if let Some(check) = &frame.check {
                 shadow = bound.fresh_copy(&check.state.borrow());
             }
             value.fresh_arena_storage();
             value
         }
-        Rvalue::Unary { op, value } => scalar::unary(op, frame.operand(&value)?)?,
-        Rvalue::Binary { op, left, right } => {
-            let left = frame.operand(&left)?;
-            let right = frame.operand(&right)?;
+        Rvalue::Unary { op, ref value } => scalar::unary(op, frame.operand(value)?)?,
+        Rvalue::Binary {
+            op,
+            ref left,
+            ref right,
+        } => {
+            let left = frame.operand(left)?;
+            let right = frame.operand(right)?;
             if matches!(
                 op,
                 hirsel_syntax::BinaryOp::Eq
@@ -2380,25 +2450,25 @@ fn rvalue(
             }
         }
         Rvalue::Construct {
-            constructor,
-            fields,
-            destination: placement,
+            ref constructor,
+            ref fields,
+            destination: ref placement,
         } => {
             // MEM-6: charge a bounded arena before any operand is consumed.
-            if let Some(arena) = bounded_destination(frame, &placement, budgets) {
+            if let Some(arena) = bounded_destination(frame, placement, budgets) {
                 let ty = frame.place(destination)?.ty;
                 let bytes = crate::bounded::construction(
                     runtime,
                     &frame.definition.types,
                     ty,
-                    &constructor,
+                    constructor,
                     fields.len(),
                 )?;
                 budgets
                     .charge(arena, bytes)
                     .map_err(EvalError::OutOfSpace)?;
             }
-            let (mut values, mut parts) = if let Constructor::SortedMap { by } = &constructor {
+            let (mut values, mut parts) = if let Constructor::SortedMap { by } = constructor {
                 let (value, shadow) = frame.operand_shadow(by)?;
                 (vec![Some(value)], vec![shadow])
             } else {
@@ -2439,12 +2509,12 @@ fn rvalue(
                     _ => false,
                 };
                 let region = if block {
-                    checked_allocation(frame, &placement)?
+                    checked_allocation(frame, placement)?
                 } else {
                     None
                 };
                 shadow = Shadow::Parts(parts);
-                if let Destination::Arena(origin) = &placement {
+                if let Destination::Arena(origin) = placement {
                     if let Some(arena) = frame.arena_of(origin) {
                         shadow.add_all(arena);
                     }
@@ -2478,16 +2548,14 @@ fn rvalue(
             let mut value = crate::aggregate::construct(constructor, values, kind, runtime, sizes)?;
             // MEM-6: a List, Array, Map or Set built in an arena is unshared
             // storage there.
-            if let Destination::Arena(origin) = &placement
+            if let Destination::Arena(origin) = placement
                 && let Some(arena) = frame.arena_of(origin)
             {
                 let kind = match &value {
                     Value::Sequence { kind, .. } => Some(*kind),
                     Value::Map { .. } => Some(hirsel_types::BuiltinType::Map),
                     Value::Set { .. } => Some(hirsel_types::BuiltinType::Set),
-                    Value::Record { definition, .. }
-                        if *definition == hirsel_syntax::DefPath::core("SortedMap") =>
-                    {
+                    Value::Record { definition, .. } if definition.is_core("SortedMap") => {
                         Some(hirsel_types::BuiltinType::SortedMap)
                     }
                     _ => None,
@@ -2517,11 +2585,11 @@ fn rvalue(
         }
         Rvalue::Closure {
             body,
-            captures,
-            destination: placement,
+            ref captures,
+            destination: ref placement,
         } => {
             if !captures.is_empty()
-                && let Some(arena) = bounded_destination(frame, &placement, budgets)
+                && let Some(arena) = bounded_destination(frame, placement, budgets)
             {
                 let types = captures
                     .iter()
@@ -2542,13 +2610,13 @@ fn rvalue(
                 })
                 .collect();
             let region = if frame.check.is_some() && !captures.is_empty() {
-                checked_allocation(frame, &placement)?
+                checked_allocation(frame, placement)?
             } else {
                 None
             };
             let mut parts = vec![];
             let mut values = vec![];
-            for operand in &captures {
+            for operand in captures {
                 let (value, mut bound) = frame.operand_shadow(operand)?;
                 if matches!(
                     operand.usage,
@@ -2591,16 +2659,12 @@ fn rvalue(
                 type_arguments: frame.type_arguments.clone(),
             }
         }
-        _ => {
-            return Err(
-                Error::Unavailable("rvalue requires aggregate/shape extension".into()).into(),
-            );
-        }
     };
+    // Bounds exist only under checked execution.
     let shadow = if frame.check.is_some() {
         shadow.ownership(&value, true).for_value(&value)
     } else {
-        shadow.for_value(&value)
+        Shadow::default()
     };
     Ok((value, shadow))
 }
@@ -2644,7 +2708,7 @@ fn list_write(
 ) -> Option<u64> {
     let name = ["list.push", "list.pop", "list.remove", "list.swap"]
         .into_iter()
-        .find(|name| *path == hirsel_syntax::DefPath::core(name))?;
+        .find(|name| path.is_core(name))?;
     let index = |at: usize| match arguments.get(at) {
         Some(Value::Integer(i)) => Some(i.bits()),
         _ => None,
@@ -2698,11 +2762,9 @@ fn read_write(
     arguments: &mut [Value],
     budgets: &mut crate::bounded::Budgets,
 ) -> Option<u64> {
-    let (buffer, max) = if *path == hirsel_syntax::DefPath::core("stdin.read") {
+    let (buffer, max) = if path.is_core("stdin.read") {
         (1, 2)
-    } else if *path == hirsel_syntax::DefPath::core("file.read")
-        || *path == hirsel_syntax::DefPath::core("net.read")
-        || *path == hirsel_syntax::DefPath::core("udp.recv_from")
+    } else if path.is_core("file.read") || path.is_core("net.read") || path.is_core("udp.recv_from")
     {
         (2, 3)
     } else {
@@ -2753,8 +2815,11 @@ fn keyed_write(
 ) -> Option<u64> {
     let name = ["map.insert", "set.insert", "map.remove", "set.remove"]
         .into_iter()
-        .find(|name| *path == hirsel_syntax::DefPath::core(name))?;
+        .find(|name| path.is_core(name))?;
     let (container, rest) = arguments.split_first_mut()?;
+    if container.arena_storage().is_none() {
+        return None;
+    }
     let hit = crate::library::collection::contains(container, rest.first()?).ok()?;
     // Whether the operation writes, and whether it adds an entry.
     let (writes, adds) = match name {
@@ -2923,7 +2988,7 @@ fn checked_allocation(frame: &Frame, placement: &Destination) -> Result<Option<u
 }
 fn execute_instruction(
     frame: &mut Frame,
-    kind: InstructionKind,
+    kind: &InstructionKind,
     runtime: &crate::aggregate::RuntimeTypes,
     site: Span,
     trace: &mut Vec<TraceEvent>,
@@ -2931,7 +2996,7 @@ fn execute_instruction(
     constants: &mut crate::constants::Constants,
     budgets: &mut crate::bounded::Budgets,
 ) -> Result<(), EvalError> {
-    match kind {
+    match *kind {
         InstructionKind::Defuse { place } => {
             let slot = frame.slot(place)?;
             let value = slot
@@ -2965,7 +3030,8 @@ fn execute_instruction(
                 let mut current = Some(local.scope);
                 while let Some(id) = current {
                     if id == scope {
-                        frame.slots[index].take();
+                        // Drop in place: moving the dead slot out copies it.
+                        frame.slots[index] = None;
                         if let Some(check) = &mut frame.check {
                             check.shadows[index] = Shadow::default();
                         }
@@ -2992,7 +3058,7 @@ fn execute_instruction(
         }
         InstructionKind::Replace {
             destination,
-            value,
+            ref value,
             displaced,
             if_live,
         } => {
@@ -3003,7 +3069,7 @@ fn execute_instruction(
                 )
                 .into());
             }
-            let (value, shadow) = frame.operand_shadow(&value)?;
+            let (value, shadow) = frame.operand_shadow(value)?;
             arena_write(frame, destination, false, budgets)?;
             frame.write_access(destination)?;
             let old_shadow = frame.displaced_shadow(destination)?;
@@ -3047,8 +3113,11 @@ fn execute_instruction(
             frame.write_access(destination)?;
             frame.assign_shadow(destination, value, shadow)?;
         }
-        InstructionKind::Snapshot { destination, value } => {
-            let (value, shadow) = frame.operand_shadow(&value)?;
+        InstructionKind::Snapshot {
+            destination,
+            ref value,
+        } => {
+            let (value, shadow) = frame.operand_shadow(value)?;
             frame.assign_shadow(destination, value, shadow)?;
         }
         InstructionKind::Drop { .. } | InstructionKind::RunCleanup(_) => unreachable!(),
@@ -3081,11 +3150,11 @@ fn execute_instruction(
 }
 fn execute_terminator(
     frame: &mut Frame,
-    terminator: Terminator,
+    terminator: &Terminator,
     runtime: &crate::aggregate::RuntimeTypes,
     budgets: &mut crate::bounded::Budgets,
 ) -> Result<Action, EvalError> {
-    Ok(match terminator {
+    Ok(match *terminator {
         Terminator::Match { table, from } => {
             let table = &frame.body().matches[table.0 as usize];
             let mut selected = None;
@@ -3102,19 +3171,23 @@ fn execute_terminator(
             frame.goto(block);
             Action::Continue
         }
-        Terminator::Branch { condition, yes, no } => {
-            let Value::Bool(condition) = frame.operand(&condition)? else {
+        Terminator::Branch {
+            ref condition,
+            yes,
+            no,
+        } => {
+            let Value::Bool(condition) = frame.operand(condition)? else {
                 return Err(invalid("branch needs bool").into());
             };
             frame.goto(if condition { yes } else { no });
             Action::Continue
         }
         Terminator::Switch {
-            value,
-            arms,
+            ref value,
+            ref arms,
             otherwise,
         } => {
-            let value = frame.operand(&value)?;
+            let value = frame.operand(value)?;
             let tag = match &value {
                 Value::Variant { variant, .. } | Value::ResourceVariant { variant, .. } => {
                     Some(*variant)
@@ -3137,21 +3210,21 @@ fn execute_terminator(
             frame.goto(next);
             Action::Continue
         }
-        Terminator::Return { value, .. } => {
-            let (value, shadow) = frame.operand_shadow(&value)?;
+        Terminator::Return { ref value, .. } => {
+            let (value, shadow) = frame.operand_shadow(value)?;
             if let Some(check) = &mut frame.check {
                 check.returned = Some(shadow);
             }
             Action::Return(value)
         }
-        Terminator::Fail { rule, .. } => Action::Fail(rule),
+        Terminator::Fail { ref rule, .. } => Action::Fail(rule.clone()),
         Terminator::Call {
-            callee,
-            arguments,
+            ref callee,
+            ref arguments,
             returns,
             on_failure,
         } => {
-            if let Callee::Definition { path, .. } = &callee {
+            if let Callee::Definition { path, .. } = callee {
                 if runtime.forget.as_ref() == Some(path)
                     && (arguments.len() != 1
                         || arguments[0].value.usage != hirsel_types::UseKind::Take)
@@ -3159,25 +3232,25 @@ fn execute_terminator(
                     return Err(invalid("forget requires one take argument").into());
                 }
             }
-            let forward_caller = match &callee {
+            let forward_caller = match callee {
                 Callee::Definition { .. } => true,
                 Callee::Indirect { forward_caller, .. } => *forward_caller,
             };
             let callee = match callee {
                 Callee::Definition { path, arguments } => {
                     let generics = arguments
-                        .into_iter()
-                        .map(|argument| match argument {
+                        .iter()
+                        .map(|argument| match *argument {
                             hirsel_types::GenericArgument::Size(hirsel_types::Size::Parameter(
                                 p,
                             )) => frame.size(p).map(|n| {
                                 hirsel_types::GenericArgument::Size(hirsel_types::Size::Constant(n))
                             }),
-                            argument => Ok(argument),
+                            ref argument => Ok(argument.clone()),
                         })
                         .collect::<Result<Vec<_>, Error>>()?;
                     RuntimeCallee::Definition {
-                        path,
+                        path: path.clone(),
                         generics,
                         types: None,
                     }
@@ -3187,7 +3260,7 @@ fn execute_terminator(
                     value: operand,
                     arguments,
                 } => {
-                    let (value, shadow) = frame.operand_shadow(&operand)?;
+                    let (value, shadow) = frame.operand_shadow(operand)?;
                     let check = callee_lifetime(frame, operand.place, &value, shadow)?;
                     value.begin_call();
                     match value {
@@ -3349,9 +3422,9 @@ fn checked_callee(
     let RuntimeCallee::Definition { path, .. } = &callee else {
         return Ok((callee, None, None));
     };
-    let bounded = *path == hirsel_syntax::DefPath::core(crate::library::ARENA_BOUNDED_OPERATION);
+    let bounded = path.is_core(crate::library::ARENA_BOUNDED_OPERATION);
     let Some(check) = &frame.check else {
-        if !bounded && *path != hirsel_syntax::DefPath::core(crate::library::ARENA_WITH_OPERATION) {
+        if !bounded && !path.is_core(crate::library::ARENA_WITH_OPERATION) {
             return Ok((callee, None, None));
         }
         let cap = bounded.then(|| bounded_capacity(arguments)).transpose()?;
@@ -3775,8 +3848,7 @@ fn update_operation(
             return Err(invalid("operation updated a non-mut argument"));
         }
     }
-    for (index, mut value) in updates {
-        value.canonicalize();
+    for (index, value) in updates {
         std::mem::replace(&mut state.arguments[index], value).discard();
     }
     Ok(())

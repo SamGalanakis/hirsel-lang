@@ -84,7 +84,7 @@ impl Library {
         call: &OperationCall<'_>,
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
-        let a = call.arguments;
+        let a = &*call.arguments;
         self.simulation.id(arg(a, 0)?, "Tasks")?;
         self.tasks.yield_now = true;
         let input = request(self.tasks.current, a);

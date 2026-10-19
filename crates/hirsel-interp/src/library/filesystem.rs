@@ -265,7 +265,7 @@ impl Library {
                 "file.read_dir" => {
                     return Ok(ok(Value::Sequence {
                         kind: BuiltinType::List,
-                        elements: vec![],
+                        elements: Default::default(),
                         arena: None,
                     }));
                 }

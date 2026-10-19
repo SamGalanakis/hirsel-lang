@@ -566,7 +566,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
                     0,
                     Value::Sequence {
                         kind: *kind,
-                        elements: vec![None],
+                        elements: vec![None].into(),
                         arena: None,
                     },
                 )],
@@ -736,7 +736,8 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
                     sizes: Default::default(),
                     definition: path("Item"),
                     fields: vec![],
-                })],
+                })]
+                .into(),
                 arena: None,
             }],
             Limits {

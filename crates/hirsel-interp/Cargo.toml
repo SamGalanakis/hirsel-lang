@@ -14,6 +14,7 @@ hirsel-syntax = { path = "../hirsel-syntax" }
 hirsel-types = { path = "../hirsel-types" }
 hirsel-tir = { path = "../hirsel-tir" }
 hirsel-diag = { path = "../hirsel-diag" }
+hirsel-intern = { path = "../hirsel-intern" }
 
 
 [dev-dependencies]

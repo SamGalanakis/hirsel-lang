@@ -35,6 +35,23 @@ enum AccessStep {
     VariantField { variant: u32, field: usize },
     Index(usize),
 }
+impl AccessStep {
+    /// The field ordinal, the variant it requires and whether it is an index.
+    fn parts(self) -> (usize, Option<u32>, bool) {
+        match self {
+            Self::Field(index) => (index, None, false),
+            Self::VariantField { variant, field } => (field, Some(variant), false),
+            Self::Index(index) => (index, None, true),
+        }
+    }
+    fn missing(indexed: bool) -> AccessError {
+        if indexed {
+            AccessError::OutOfBounds
+        } else {
+            invalid("field out of range").into()
+        }
+    }
+}
 
 pub(crate) struct Continuation {
     /// None for a diverging call, whose callee never returns normally.
@@ -116,8 +133,7 @@ impl Frame {
         let parameters = body.parameters.clone();
         let entry = body.entry;
         let mut slots = vec![None; body.locals.len()];
-        for (local, mut value) in parameters.into_iter().zip(arguments) {
-            value.canonicalize();
+        for (local, value) in parameters.into_iter().zip(arguments) {
             let slot = slots
                 .get_mut(local.0 as usize)
                 .ok_or_else(|| invalid("tail parameter index"))?;
@@ -154,7 +170,10 @@ impl Frame {
             }
         }
     }
-    pub fn new(definition: DefinitionRef, arguments: Vec<Value>) -> Result<Self, Error> {
+    /// The entry frame. External inputs are canonicalized here (SEM-2); every
+    /// value the evaluator builds afterwards is canonical by construction.
+    pub fn new(definition: DefinitionRef, mut arguments: Vec<Value>) -> Result<Self, Error> {
+        arguments.iter_mut().for_each(Value::canonicalize);
         let entry = definition.entry;
         Self::new_body(definition, entry, arguments, vec![], Default::default())
     }
@@ -173,8 +192,7 @@ impl Frame {
             return Err(invalid("parameter count mismatch"));
         }
         let mut slots = vec![None; body.locals.len()];
-        for (local, mut value) in body.parameters.iter().zip(arguments) {
-            value.canonicalize();
+        for (local, value) in body.parameters.iter().zip(arguments) {
             let slot = slots
                 .get_mut(local.0 as usize)
                 .ok_or_else(|| invalid("parameter slot out of range"))?;
@@ -253,7 +271,7 @@ impl Frame {
                     // SortedMap's logical indexed payload is its physical map
                     // field. Value access and shadow access use the same path.
                     if matches!(value, Some(Value::Record { definition, .. })
-                        if *definition == hirsel_syntax::DefPath::core("SortedMap"))
+                        if definition.is_core("SortedMap"))
                     {
                         steps.push(AccessStep::Field(1));
                         value = value
@@ -278,18 +296,19 @@ impl Frame {
         Ok(steps)
     }
     pub fn slot(&mut self, id: PlaceId) -> Result<&mut Option<Value>, AccessError> {
-        let place = self.place(id)?.clone();
-        let indices = self.indices(&place)?;
+        let place = self.place(id)?;
+        let root = place.root.0 as usize;
+        let indices = if place.projection.is_empty() {
+            vec![]
+        } else {
+            self.indices(place)?
+        };
         let mut slot = self
             .slots
-            .get_mut(place.root.0 as usize)
+            .get_mut(root)
             .ok_or_else(|| invalid("local out of range"))?;
         for step in indices {
-            let (index, variant, indexed) = match step {
-                AccessStep::Field(index) => (index, None, false),
-                AccessStep::VariantField { variant, field } => (field, Some(variant), false),
-                AccessStep::Index(index) => (index, None, true),
-            };
+            let (index, variant, indexed) = step.parts();
             let fields = match slot.as_mut() {
                 Some(v)
                     if variant.is_none()
@@ -317,13 +336,54 @@ impl Frame {
                 }
                 _ => return Err(invalid("projection on dead or incompatible storage").into()),
             };
-            slot = fields.get_mut(index).ok_or_else(|| {
-                if indexed {
-                    AccessError::OutOfBounds
-                } else {
-                    invalid("field out of range").into()
+            slot = fields
+                .get_mut(index)
+                .ok_or_else(|| AccessStep::missing(indexed))?;
+        }
+        Ok(slot)
+    }
+    /// The storage at a place, read without writing: unlike `slot`, it never
+    /// detaches a shared block on the path. Errors are `slot`'s.
+    pub fn slot_ref(&self, id: PlaceId) -> Result<&Option<Value>, AccessError> {
+        let place = self.place(id)?;
+        let mut slot = self
+            .slots
+            .get(place.root.0 as usize)
+            .ok_or_else(|| invalid("local out of range"))?;
+        if place.projection.is_empty() {
+            return Ok(slot);
+        }
+        for step in self.indices(place)? {
+            let (index, variant, indexed) = step.parts();
+            let fields = match slot.as_ref() {
+                Some(v)
+                    if variant.is_none()
+                        && !matches!(v, Value::Variant { .. } | Value::ResourceVariant { .. }) =>
+                {
+                    v.fields().ok_or_else(|| invalid("projection on scalar"))?
                 }
-            })?;
+                Some(
+                    Value::Variant {
+                        variant: tag,
+                        fields,
+                    }
+                    | Value::ResourceVariant {
+                        variant: tag,
+                        fields,
+                        ..
+                    },
+                ) if variant == Some(*tag) => fields,
+                Some(
+                    Value::Variant { variant: tag, .. }
+                    | Value::ResourceVariant { variant: tag, .. },
+                ) if variant.is_some() && variant != Some(*tag) => {
+                    return Err(AccessError::InactiveVariant);
+                }
+                _ => return Err(invalid("projection on dead or incompatible storage").into()),
+            };
+            slot = fields
+                .get(index)
+                .ok_or_else(|| AccessStep::missing(indexed))?;
         }
         Ok(slot)
     }
@@ -341,15 +401,16 @@ impl Frame {
         lend: bool,
         mut charge: impl FnMut(u64, u64) -> Result<(), u64>,
     ) -> Result<Option<u64>, AccessError> {
-        let place = self.place(id)?.clone();
-        let Ok(steps) = self.indices(&place) else {
+        let place = self.place(id)?;
+        // A whole local crosses no block, so nothing on its path is shared.
+        if place.projection.is_empty() {
+            return Ok(None);
+        }
+        let root = place.root.0 as usize;
+        let Ok(steps) = self.indices(place) else {
             return Ok(None);
         };
-        let Some(mut value) = self
-            .slots
-            .get_mut(place.root.0 as usize)
-            .and_then(Option::as_mut)
-        else {
+        let Some(mut value) = self.slots.get_mut(root).and_then(Option::as_mut) else {
             return Ok(None);
         };
         let mut crossed = false;
@@ -505,6 +566,13 @@ impl Frame {
         &mut self,
         operand: &Operand,
     ) -> Result<(Value, crate::checked::Shadow), AccessError> {
+        if self.check.is_none() {
+            let value = self.extract(operand)?;
+            if operand.usage == UseKind::Copy {
+                value.share_arena_storage();
+            }
+            return Ok((value, Default::default()));
+        }
         let mut shadow = self.access(operand.place, "operand")?;
         let value = self.extract(operand)?;
         if operand.usage == UseKind::Copy {
@@ -551,7 +619,7 @@ impl Frame {
                 return Err(invalid("copy of once value").into());
             }
             let value = self
-                .slot(operand.place)?
+                .slot_ref(operand.place)?
                 .as_ref()
                 .ok_or_else(|| invalid("dead storage"))?;
             let mut work = vec![value];
@@ -582,13 +650,13 @@ impl Frame {
         }
         let root = self.place(operand.place)?.root;
         let preserve = self.mut_parameters.contains(&root);
-        let slot = self.slot(operand.place)?;
+        // Only a move writes its source; every other use reads it, sharing blocks.
+        let slot = self.slot_ref(operand.place)?;
         match operand.usage {
-            UseKind::Take if preserve && slot.as_ref().is_some_and(Value::inline_bits) => {
-                slot.clone()
+            UseKind::Take if !(preserve && slot.as_ref().is_some_and(Value::inline_bits)) => {
+                self.slot(operand.place)?.take()
             }
-            UseKind::Take => slot.take(),
-            UseKind::Copy | UseKind::Borrow | UseKind::Mut => slot.clone(),
+            _ => slot.clone(),
         }
         .ok_or_else(|| invalid("use of dead storage").into())
     }
@@ -598,14 +666,13 @@ impl Frame {
     pub fn assign_shadow(
         &mut self,
         destination: PlaceId,
-        mut value: Value,
+        value: Value,
         shadow: crate::checked::Shadow,
     ) -> Result<(), AccessError> {
         let slot = self.slot(destination)?;
         if slot.is_some() {
             return Err(invalid("assignment to live storage requires an explicit drop").into());
         }
-        value.canonicalize();
         *slot = Some(value);
         self.set_shadow(destination, shadow)?;
         Ok(())
