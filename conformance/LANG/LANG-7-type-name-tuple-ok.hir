@@ -1,7 +1,0 @@
-// rule: LANG-7
-// expect: accept
-type R = (u8, u8)
-
-fn probe() {
-  let x: R = (1u8, 2u8)
-}

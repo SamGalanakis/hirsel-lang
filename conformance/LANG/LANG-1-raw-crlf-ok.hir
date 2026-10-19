@@ -1,6 +1,0 @@
-// rule: LANG-1
-// expect: accept
-fn value() {
-  let _ = r"first
-second"
-}

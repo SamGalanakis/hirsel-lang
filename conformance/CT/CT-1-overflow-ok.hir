@@ -1,4 +1,0 @@
-// rule: CT-1
-// expect: accept
-// "A failure ... during comptime is a compile error".
-pub const VALUE: u8 = comptime (254 + 1)

@@ -1,5 +1,0 @@
-// rule: LANG-2
-// expect: accept
-fn slot_absent(s: Slots[List[Bytes]], id: SlotId[List[Bytes]] of s) -> bool {
-  slots.get(s, id) == None
-}

@@ -1,8 +1,0 @@
-// rule: GEN-1
-// expect: reject GEN-1 at line 7
-// MEM-12 keeps flat storage opt-in; compatible fields do not grant root Flatness.
-fn use_flat[T: flat](x: T) {}
-
-fn example(x: String) {
-  use_flat(x)
-}

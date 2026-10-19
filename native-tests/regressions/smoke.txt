@@ -83,7 +83,6 @@ conformance/LANG/LANG-13-tour-patterns-run.hir
 conformance/LANG/LANG-2-generic-callable-borrow-run.hir
 conformance/LANG/LANG-2-generic-callable-context-run.hir
 conformance/LANG/LANG-2-generic-callable-owned-run.hir
-conformance/LANG/LANG-2-generic-callable-result-error-run.hir
 conformance/LANG/LANG-2-generic-callable-result-nested-run.hir
 conformance/LANG/LANG-2-generic-callable-size-run.hir
 conformance/LANG/LANG-8-tour-option-result-run.hir

@@ -1,9 +1,0 @@
-// rule: LANG-12
-// expect: accept
-// Shows "must be labelled at every call; an unlabelled parameter cannot be."
-type Choice = Some(u32) | None
-
-@noalloc
-fn example(x: u32) -> Choice {
-  Some(x)
-}

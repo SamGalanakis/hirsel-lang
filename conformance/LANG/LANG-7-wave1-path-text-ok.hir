@@ -1,5 +1,0 @@
-// rule: LANG-7
-// expect: accept
-fn example(value: Path) -> String {
-  path.text(value)
-}

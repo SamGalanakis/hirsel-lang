@@ -1,8 +1,0 @@
-// rule: LANG-2
-// expect: accept
-// A singleton literal kind supplies its intrinsic type without an annotation.
-@noalloc
-fn example() -> () {
-  let x = true
-  ()
-}

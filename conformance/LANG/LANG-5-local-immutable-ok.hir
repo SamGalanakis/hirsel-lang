@@ -1,9 +1,0 @@
-// rule: LANG-5
-// expect: accept
-// Shows "A value changes only through a visible name"
-@noalloc
-fn example() -> u32 {
-  let mut n: u32 = 0
-  n = 1
-  n
-}

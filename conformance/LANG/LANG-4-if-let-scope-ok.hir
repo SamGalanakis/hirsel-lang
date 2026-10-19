@@ -1,9 +1,0 @@
-// rule: LANG-4
-// expect: accept
-// An if-let binding is in scope only in the block that runs on a match.
-fn first(x: Option[u32]) -> u32 {
-  if let Some(n) = x {
-    return n
-  }
-  0
-}

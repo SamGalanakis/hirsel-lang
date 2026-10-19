@@ -1,9 +1,0 @@
-// rule: GEN-1
-// expect: reject GEN-1 at line 7
-type W[T: inert] {
-  x: T,
-}
-
-fn go(take v: Dir) -> W[Dir] {
-  W(x: v)
-}

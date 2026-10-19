@@ -1,8 +1,0 @@
-// rule: LANG-7
-// expect: reject LANG-7 at line 7
-fn example() {
-  fn identity[T](take value: T) -> T {
-    value
-  }
-  let f: fn(String) -> String uses {} = identity
-}

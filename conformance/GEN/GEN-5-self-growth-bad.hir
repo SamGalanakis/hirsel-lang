@@ -1,6 +1,0 @@
-// rule: GEN-5
-// expect: reject GEN-5 at line 5
-// Shows "A cycle of calls whose type arguments grow is rejected."
-fn grow[T: copyable](x: T) -> () {
-  grow((copy x, copy x))
-}

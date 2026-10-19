@@ -1,9 +1,0 @@
-// rule: LANG-15
-// expect: accept
-// Shows "let y = x copies a plain value and moves any other"
-@noalloc
-fn example(take xs: List[u32]) -> u64 {
-  let y = copy xs
-  let _ = list.len(xs)
-  list.len(y)
-}

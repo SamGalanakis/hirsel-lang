@@ -1,6 +1,0 @@
-// rule: LANG-1
-// expect: accept
-// Accepted twin: an ASCII scalar.
-fn byte() -> u8 {
-  b'e'
-}

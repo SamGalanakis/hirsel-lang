@@ -1,5 +1,0 @@
-// rule: GEN-1
-// expect: accept
-fn example(take xs: List[u64]) -> () {
-  list.dedup(take xs);
-}

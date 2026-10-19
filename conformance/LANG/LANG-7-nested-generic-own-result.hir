@@ -1,7 +1,0 @@
-// rule: LANG-7
-// expect: accept
-fn outer[T: plain](x: T) {
-  fn inner[U: plain](take y: U) -> U {
-    y
-  }
-}

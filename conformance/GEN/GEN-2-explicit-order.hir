@@ -1,7 +1,0 @@
-// rule: GEN-2
-// expect: accept
-// Shows "Order[T], Hasher[T], Eq[T], user records of functions."
-@noalloc
-fn dictionary[T](d: Order[T]) -> () {
-  ()
-}

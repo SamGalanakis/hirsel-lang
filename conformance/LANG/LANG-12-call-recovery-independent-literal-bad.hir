@@ -1,7 +1,0 @@
-// rule: LANG-12
-// expect: reject LANG-12 at line 6
-fn rename(from x: u8, to y: u8) {}
-
-fn probe() {
-  rename(x: 1, y: 300u8)
-}

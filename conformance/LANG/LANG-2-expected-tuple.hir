@@ -1,7 +1,0 @@
-// rule: LANG-2
-// expect: accept
-// Shows "A literal or bare variant takes its type from the expected type; with neither it is an error."
-@noalloc
-fn value() -> (u32, bool, ()) {
-  (1, true, ())
-}

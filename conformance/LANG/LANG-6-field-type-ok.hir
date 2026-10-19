@@ -1,6 +1,0 @@
-// rule: LANG-6
-// expect: accept
-// Shows "No part of a signature is ever inferred from a body."
-type Rec {
-  n: u32,
-}

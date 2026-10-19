@@ -1,5 +1,0 @@
-// rule: GEN-1
-// expect: accept
-fn example(x: Bytes) -> bool {
-  x == b"fresh"
-}

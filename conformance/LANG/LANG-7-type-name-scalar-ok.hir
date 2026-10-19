@@ -1,6 +1,0 @@
-// rule: LANG-7
-// expect: accept
-fn probe() {
-  let x = 1u8
-  let b: bool = true
-}

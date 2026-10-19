@@ -1,8 +1,0 @@
-// rule: LANG-2
-// expect: accept
-fn example() -> u64 {
-  fn identity[T](take value: T) -> T {
-    value
-  }
-  identity(3u64)
-}

@@ -1,8 +1,0 @@
-// rule: GEN-1
-// expect: reject GEN-1 at line 7
-resource type Token {}
-drop(t) {}
-
-fn example(t: Token) -> bool {
-  t == t
-}

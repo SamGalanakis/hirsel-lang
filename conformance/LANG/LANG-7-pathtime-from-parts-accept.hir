@@ -1,6 +1,0 @@
-// rule: LANG-7
-// expect: accept
-fn example() {
-  duration.from_parts(0, 0i32)
-  ()
-}

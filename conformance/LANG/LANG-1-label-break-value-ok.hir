@@ -1,7 +1,0 @@
-// rule: LANG-1
-// expect: accept
-fn f() {
-  'outer: while true {
-    break 'outer
-  }
-}

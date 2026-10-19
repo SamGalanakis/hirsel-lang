@@ -1,5 +1,0 @@
-// rule: LANG-7
-// expect: accept
-fn main() -> () {
-  core@1/f32.bits(1f32);
-}

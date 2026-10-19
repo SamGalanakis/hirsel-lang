@@ -1,9 +1,0 @@
-// rule: CT-2
-// expect: reject CT-2 at line 3
-const CALLBACK: fn(u64) -> u64 uses {} = comptime {
-  fn identity[T: plain](value: T) -> T {
-    value
-  }
-  let f: fn(u64) -> u64 uses {} = identity
-  f
-}

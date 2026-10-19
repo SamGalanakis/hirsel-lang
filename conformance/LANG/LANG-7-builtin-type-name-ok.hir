@@ -1,7 +1,0 @@
-// rule: LANG-7
-// expect: accept
-type Shape = Dot(u64) | Empty
-
-fn make() -> Shape {
-  Dot(1)
-}

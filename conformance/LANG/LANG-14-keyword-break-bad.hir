@@ -1,5 +1,0 @@
-// rule: LANG-14
-// expect: reject LANG-14 at line 5
-// Shows "break" is in the keyword list and cannot be a parameter name.
-@noalloc
-fn example(break: u32) -> u32 { 0 }

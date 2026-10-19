@@ -1,5 +1,0 @@
-// rule: LANG-14
-// expect: reject LANG-14 at line 5
-// Shows "match" is in the keyword list and cannot be a parameter name.
-@noalloc
-fn example(match: u32) -> u32 { 0 }

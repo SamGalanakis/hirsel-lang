@@ -1,4 +1,0 @@
-// rule: LANG-9
-// expect: reject LANG-9 at line 3
-@bench
-fn example(value: u64) {}

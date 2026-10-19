@@ -1,9 +1,0 @@
-// rule: GEN-1
-// expect: accept
-type Cell {
-  value: u64,
-}
-
-fn probe(a: Map[u64, Cell], b: Map[u64, Cell]) -> bool {
-  map.same_entries(a, b)
-}

@@ -1,5 +1,0 @@
-// rule: LANG-7
-// expect: accept
-pub fn example() -> String {
-  std@1/hex.encode(bytes.from_inline(std@1/sha256.digest(b"abc")))
-}

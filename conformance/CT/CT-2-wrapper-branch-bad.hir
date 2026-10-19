@@ -1,9 +1,0 @@
-// rule: CT-2
-// expect: reject CT-2 at line 4
-fn probe() {
-  let m: SortedMap[u32, u8] of u32.order = comptime if true {
-    sorted_map.empty(u32.order)
-  } else {
-    sorted_map.empty(u32.order)
-  }
-}

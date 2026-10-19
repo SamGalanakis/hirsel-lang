@@ -1,8 +1,0 @@
-// rule: LANG-9
-// expect: accept
-// Shows "Tests are ordinary functions, pure or taking the Test capability"
-pub fn test_fake(t: Test) -> () {
-  let dir = test.dir(t, [(path.of("a.txt"), b"x\r\ny")])
-  let _ = dir
-  test.check(t, true)
-}

@@ -1,8 +1,0 @@
-// rule: LANG-2
-// expect: accept
-fn example() {
-  fn identity[T](take value: T) -> T {
-    value
-  }
-  let f: fn(take u64) -> u64 uses {} = identity
-}

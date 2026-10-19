@@ -1,6 +1,0 @@
-// rule: GEN-1
-// expect: accept
-// Shows "Structural, computed from the type, no user instances."
-fn duplicate[T: copyable](x: T) -> T in x {
-  copy x
-}

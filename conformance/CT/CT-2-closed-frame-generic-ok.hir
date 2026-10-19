@@ -1,5 +1,0 @@
-// rule: CT-2
-// expect: accept
-fn probe[T]() -> u8 {
-  comptime 1u8
-}

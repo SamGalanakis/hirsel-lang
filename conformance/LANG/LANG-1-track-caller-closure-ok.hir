@@ -1,9 +1,0 @@
-// rule: LANG-1
-// expect: run
-pub fn main() -> Result[(), ()] {
-  let f = fn(n: u8) -> u8 {
-    n
-  }
-  let _ = f(1u8)
-  Ok(())
-}

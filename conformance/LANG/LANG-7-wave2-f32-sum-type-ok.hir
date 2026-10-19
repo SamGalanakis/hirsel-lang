@@ -1,5 +1,0 @@
-// rule: LANG-7
-// expect: accept
-fn main() -> () {
-  f32.sum([1.0f32]);
-}

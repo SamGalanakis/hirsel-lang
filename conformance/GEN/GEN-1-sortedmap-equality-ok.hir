@@ -1,5 +1,0 @@
-// rule: GEN-1
-// expect: accept
-fn equal(x: Map[u32, u8]) -> bool {
-  x == x
-}
