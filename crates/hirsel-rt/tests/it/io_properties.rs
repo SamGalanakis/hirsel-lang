@@ -1045,6 +1045,7 @@ fn command_value(command: &hirsel_run_config::Command) -> Value {
                         .collect(),
                 ))
             }),
+            Value::Bool(command.own_group),
         ],
     )
 }
