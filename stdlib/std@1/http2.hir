@@ -52,7 +52,8 @@ pub opaque type Session: copyable + inert + noalloc_drop uses {} {
   continuation: u32,
   header_end: bool,
   header_block: List[u8],
-  outgoing: List[u8],
+  outgoing: List[http2_wire.Frame],
+  preface_pending: bool,
   first: bool,
   settings_pending: bool,
   draining: bool,
@@ -82,14 +83,12 @@ pub fn session(role: Role, header_limit: u64) -> Session uses {} {
     header_end: false,
     header_block: [],
     outgoing: [],
+    preface_pending: role == Client(),
     first: true,
     settings_pending: true,
     draining: false,
     failed: false
   )
-  if role == Client() {
-    append(mut s.outgoing, http2_wire.preface())
-  }
   emit(
     mut s,
     http2_wire.Frame(
@@ -115,17 +114,41 @@ fn append(mut out: List[u8], data: Bytes) uses {} {
   }
 }
 
-fn emit(mut s: Session, frame: http2_wire.Frame) uses {} {
-  let Ok(data) = http2_wire.encode(frame, s.peer_frame_size) else {
-    core@1/failure.check(false, TextInvariant())
-    return
-  }
-  append(mut s.outgoing, data)
+fn emit(mut s: Session, take frame: http2_wire.Frame) uses {} {
+  core@1/failure.check(
+    http2_wire.validate(frame) == Ok(()) && core@1/bytes.len(frame.payload) <= core@1/int.widen(
+      s.peer_frame_size
+    ),
+    TextInvariant()
+  )
+  core@1/list.push(mut s.outgoing, take frame)
 }
 
-/// Move all pending writes out of the endpoint, in wire order.
+/// Drain the pending preface and frames in wire order without coalescing them.
+/// Write the returned preface first, followed by each encoded frame.
+pub fn drain_frames(mut s: Session) -> (Bytes, List[http2_wire.Frame]) uses {} {
+  let prefix = if replace(mut s.preface_pending, false) {
+    http2_wire.preface()
+  } else {
+    b""
+  }
+  (prefix, unique replace(mut s.outgoing, []))
+}
+
+/// Coalesce all pending writes into one wire buffer. For streaming writes,
+/// drain_frames avoids copying all queued payloads into a combined buffer.
 pub fn output(mut s: Session) -> unique Bytes uses {} {
-  unique core@1/bytes.from_list(replace(mut s.outgoing, []))
+  let (prefix, frames) = drain_frames(mut s)
+  let mut out: List[u8] = []
+  append(mut out, prefix)
+  for frame in frames {
+    let Ok(data) = http2_wire.encode(frame, 16777215) else {
+      core@1/failure.check(false, TextInvariant())
+      return b""
+    }
+    append(mut out, data)
+  }
+  unique core@1/bytes.from_list(take out)
 }
 
 @noalloc
@@ -897,13 +920,16 @@ pub fn flush(mut c: Connection) -> Result[(), Error] {
   if c.closed {
     return Error(Closed())
   }
-  let data = output(mut c.endpoint)
-  if core@1/bytes.len(data) == 0 {
-    return Ok(())
-  }
+  let (prefix, frames) = drain_frames(mut c.endpoint)
   c.closed = true
   let n = c.net
-  core@1/net.write_all(n, mut c.stream, data) ? net_error
+  if core@1/bytes.len(prefix) != 0 {
+    core@1/net.write_all(n, mut c.stream, prefix) ? net_error
+  }
+  for frame in frames {
+    let data = http2_wire.encode(frame, 16777215) ? Wire
+    core@1/net.write_all(n, mut c.stream, data) ? net_error
+  }
   c.closed = false
   Ok(())
 }

@@ -1494,8 +1494,10 @@ header_limit)` owns compression state, multiplexed stream state and separate
 connection/stream flow-control windows. Its client output begins with the
 prior-knowledge preface and SETTINGS disabling push. The server expects its
 caller to verify that preface before passing frames. Both require the peer's
-first frame to be non-ACK SETTINGS. `output(mut session)` drains pending wire
-bytes. `receive(mut session, frame)` produces `Headers`, `Data`, `Reset`,
+first frame to be non-ACK SETTINGS. `drain_frames(mut session)` returns the
+pending preface and frames in wire order without coalescing payloads. Write the
+preface before the encoded frames. `output(mut session)` instead coalesces
+pending wire bytes into one buffer. `receive(mut session, frame)` produces `Headers`, `Data`, `Reset`,
 `Goaway`, `PingAck`, `Settings` or `Idle` events, queuing protocol acknowledgements
 and errors. A connection error queues GOAWAY and permanently fails the endpoint;
 a stream error queues RST_STREAM. Push promises are connection errors. Header

@@ -330,8 +330,12 @@ pub fn decode(mut d: Decoder, data: Bytes, limit: u64) -> Result[List[Field], Er
 
 @preserves_unique(out)
 fn append_string(mut out: List[u8], value: Bytes) uses {} {
-  let compressed = huffman_encode(value)
-  if core@1/bytes.len(compressed) < core@1/bytes.len(value) {
+  let mut bits: u64 = 0
+  for i in 0u64..core@1/bytes.len(value) {
+    bits += core@1/int.widen(LENGTHS[core@1/int.widen(value[i])])
+  }
+  if (bits + 7) / 8 < core@1/bytes.len(value) {
+    let compressed = huffman_encode(value)
     append_integer(mut out, core@1/bytes.len(compressed), 127, 128)
     append_bytes(mut out, compressed)
   } else {
