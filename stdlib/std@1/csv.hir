@@ -9,6 +9,7 @@ pub type Config {
 @serializable
 pub type CsvError = Syntax(u64) | UnequalFields(u64) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter
 
+@serializable
 pub type ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead
 
 pub opaque type Reader: copyable + inert + noalloc_drop uses {} {

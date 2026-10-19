@@ -16,31 +16,39 @@ pub(super) fn declaration(
     if s.definition.is_core("Path") {
         return Ok(text_path(d, &[]));
     }
-    let conditional = d.serializable
-        && s.definition.package_is("core", "1")
-        && s.definition.0.modules.is_empty()
-        && matches!(&d.authority, AuthoritySummary::Known(terms)
-            if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
+    let parametric = matches!(&d.authority, AuthoritySummary::Known(terms)
+        if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
     if !d.serializable && !s.metadata.alias
         || d.capability.is_some()
         || d.resource
         || d.drop.is_some()
         || d.fact.is_some()
         || s.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
-        || d.authority != AuthoritySummary::inert() && !conditional
+        || d.authority != AuthoritySummary::inert() && !(d.serializable && parametric)
     {
         return Ok(false);
     }
     let Some(root) = d.representation else {
         return Ok(false);
     };
-    // A conditional core type's representation is proved with every type parameter
-    // admitted; each use proves its own arguments after substitution.
+    // A published Serializable bound holds at every instantiation: it is proved with
+    // only the declared parameter bounds.
+    if d.bounds.contains(&Bound::Serializable) {
+        return Ok(d.authority == AuthoritySummary::inert()
+            && eligible(
+                &s.types,
+                root,
+                &GenericDeclarations::signature(&d.generics),
+                signatures,
+            )?);
+    }
+    // An opt-in without that bound is conditional: its representation is proved with
+    // every type parameter admitted, and each use proves its arguments after substitution.
     let generics: Vec<_> = d
         .generics
         .iter()
         .map(|g| match g {
-            GenericParameter::Type { name, bounds } if conditional => GenericParameter::Type {
+            GenericParameter::Type { name, bounds } => GenericParameter::Type {
                 name: name.clone(),
                 bounds: bounds
                     .iter()
@@ -123,12 +131,10 @@ pub(super) fn eligible(
                     }
                     continue;
                 }
-                // A generic core type declared serializable (Option, Result, ...) bounds
-                // none of its parameters, so its ordinary declaration still accepts File,
-                // resources, etc. Eligibility is proved after substitution.
+                // A generic type declared serializable need not bound its parameters, so
+                // its ordinary declaration still accepts File, resources, etc. Eligibility
+                // is proved after substitution.
                 let conditional = d.serializable
-                    && definition.package_is("core", "1")
-                    && definition.0.modules.is_empty()
                     && matches!(&d.authority, AuthoritySummary::Known(terms)
                         if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
                 let data_authority = d.authority == AuthoritySummary::inert() || conditional;

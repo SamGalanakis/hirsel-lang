@@ -36,6 +36,7 @@ pub type TarError = Header(u64) | Encoding(u64) | Unsupported(u64) | Truncated
 
 /// A read from the buffered source failed, a compressed archive does not
 /// decode, or the archive is malformed.
+@serializable
 pub type ReadError[E] = Input(bufio.ReadError[E]) | Data(flate.FlateError) | Archive(
   TarError
 )
@@ -47,6 +48,7 @@ pub type WriteError = Field | TooLong | Short | Closed
 
 /// Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),
 /// would exceed its byte limit, or a file operation failed.
+@serializable
 pub type ExtractError[E] = Read(ReadError[E]) | Insecure(String) | Unsupported(String) | TooLarge | File(
   FileError
 )

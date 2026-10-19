@@ -26,6 +26,7 @@ pub type Header {
   value: String,
 }
 
+@serializable
 pub type Config {
   max_redirects: u32,
   max_idle_connections: u64,

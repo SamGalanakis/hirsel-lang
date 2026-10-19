@@ -457,9 +457,9 @@ callables and unsupported runtime constructors fail closed at every depth.
 snapshots; V independently replays admission rather than trusting this descriptor.
 Serializable generic evidence implies Inert and supplies no crossing proof.
 A nominal instantiation reached again, by recursion or along another path,
-references its first node. A core declaration marked serializable whose authority
-is only its type parameters (`Option`, `Result`, `TxFailure`, `Bounded`) is
-admitted with unbounded parameters; each use proves its arguments. A core `Path` is a
+references its first node. A declaration marked serializable whose authority is
+only its type parameters (core `Option`, `Result`, `TxFailure`, `Bounded`; std
+`ReadError[E]`) is admitted with unbounded parameters; each use proves its arguments. A core `Path` is a
 nominal node over `String`, its text; it has no representation of its own.
 
 `wire` implements SER-2 version 1 over concrete `serialization` schema graphs.

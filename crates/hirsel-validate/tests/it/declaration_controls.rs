@@ -873,13 +873,14 @@ fn serializable_ir_templates_need_their_own_generic_schema_bound() {
 }
 
 #[test]
-fn only_core_ir_is_serializable_over_unbounded_parameters() {
-    // A core declaration marked serializable bounds none of its parameters (Option,
-    // TxFailure); its uses prove the arguments. Without the core-identity check in
-    // serialization::declaration the user twin is accepted.
+fn unbounded_ir_parameters_are_conditional_never_a_published_bound() {
+    // A declaration marked serializable may leave its parameters unbounded (core Option,
+    // std ReadError[E]); its uses prove the arguments. A published Serializable bound
+    // holds at every instantiation, so it needs the declared bounds alone: without that
+    // check in serialization::declaration the bounded twins are accepted.
     let parameter = TypeParameterRef::bound(TypeParamId(0));
-    let mut user = serializable_declaration(TypeKind::Parameter(parameter));
-    let SignatureKind::Type(d) = &mut user.kind else {
+    let mut conditional = serializable_declaration(TypeKind::Parameter(parameter));
+    let SignatureKind::Type(d) = &mut conditional.kind else {
         unreachable!()
     };
     d.bounds.clear();
@@ -888,10 +889,18 @@ fn only_core_ir_is_serializable_over_unbounded_parameters() {
         bounds: vec![].into(),
     }];
     d.authority = AuthoritySummary::Known(vec![AuthorityTerm::TypeParameter(parameter)].into());
-    let mut core = user.clone();
-    core.definition = hirsel_syntax::DefPath::core("Data");
-    verdict(core, true);
-    verdict(user, false);
+    for core in [false, true] {
+        let mut s = conditional.clone();
+        if core {
+            s.definition = hirsel_syntax::DefPath::core("Data");
+        }
+        verdict(s.clone(), true);
+        let SignatureKind::Type(d) = &mut s.kind else {
+            unreachable!()
+        };
+        d.bounds = vec![Bound::Serializable];
+        verdict(s, false);
+    }
 }
 
 #[test]

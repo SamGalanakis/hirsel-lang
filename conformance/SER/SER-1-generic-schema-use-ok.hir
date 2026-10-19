@@ -1,0 +1,10 @@
+// rule: SER-1
+// expect: accept
+@serializable
+type Row[T: inert] {
+  value: T,
+}
+
+fn store[T: serializable](x: Row[T]) -> Bytes {
+  codec.encode(x)
+}

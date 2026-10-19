@@ -1,5 +1,6 @@
 // Rust alloc/src/io/buffered/bufreader.rs fill_buf/consume and
 // alloctests/tests/io/buffered.rs delimiter/line vectors, f6c1107f.
+@serializable
 pub type ReadError[E] = Source(E) | Limit | UnexpectedEof | InvalidUtf8 | InvalidRead
 
 pub opaque type Reader: copyable + inert + noalloc_drop uses {} {

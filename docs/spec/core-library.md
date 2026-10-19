@@ -395,6 +395,9 @@ issued Dir and File handles retain their pinned identities across removal.
 type Durability = Durable() | Volatile()
 ```
 
+`Durability` is plain data and `serializable`
+([SER-1](serialization.md#ser-1-serializable-schemas)).
+
 Other file operations promise nothing across a crash; these two do. `file.sync(d, f)` returns
 once `f`'s bytes, and the listing of every directory from the parent of the path `f` was
 opened or created at up to its mount's root, are durable: a crash keeps them. A rename is
@@ -453,7 +456,8 @@ NetError     = NotGranted() | Canceled(CancelCause) | InvalidInput() | UnknownHo
              | TimedOut() | Tls(TlsFailure) | Fault(u32)
 ```
 
-`IpAddr`, `SocketAddr`, `UdpReceived`, `TlsFailure` and `NetError` are `serializable`;
+`IpAddr`, `SocketAddr`, `UdpReceived`, `TlsRoots`, `TlsFailure` and `NetError` are
+`serializable`;
 the rule and scripted-peer types are not. `Fault` codes, like `FileFault` codes, are capability inputs, not OS error numbers. One error
 type serves the whole network stack, so `connect`, `tls.connect`, `tls.accept`, `read` and `write` compose
 with plain `?`. Interrupted and would-block conditions never surface: the provider retries

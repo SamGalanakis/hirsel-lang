@@ -1,0 +1,8 @@
+// rule: SER-1
+// expect: reject SER-1 at line 7
+// A std generic error is serializable exactly when the type argument its fields use is.
+fn encode[T: serializable](x: T) {}
+
+fn f(e: bufio.ReadError[Instant]) {
+  encode(e)
+}

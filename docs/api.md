@@ -304,7 +304,7 @@ Variant of DecodeError.
 
 <a id="def-core_401_2fDurability"></a>
 
-- `type Durability: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Durable() | Volatile()`
+- `type Durability: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Durable() | Volatile()`
 
 <a id="def-core_401_2fDurability_23Durable"></a>
 
@@ -1354,7 +1354,7 @@ Variant of TlsFailure.
 
 <a id="def-core_401_2fTlsRoots"></a>
 
-- `type TlsRoots uses {} = WebPki() | Pem(Bytes)`
+- `type TlsRoots: serializable uses {} = WebPki() | Pem(Bytes)`
 
 <a id="def-core_401_2fTlsRoots_23Pem"></a>
 
@@ -2291,7 +2291,7 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core
 
 <a id="def-std_401_2fbufio_2fReadError"></a>
 
-- `pub type bufio.ReadError[E] = Source(E) | Limit | UnexpectedEof | InvalidUtf8 | InvalidRead`
+- `@serializable pub type bufio.ReadError[E] = Source(E) | Limit | UnexpectedEof | InvalidUtf8 | InvalidRead`
 
 <a id="def-std_401_2fbufio_2fReadError_23InvalidRead"></a>
 
@@ -2970,7 +2970,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fcsv_2fReadError"></a>
 
-- `pub type csv.ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead`
+- `@serializable pub type csv.ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead`
 
 References: [`std@1/csv/CsvError`](#def-std_401_2fcsv_2fCsvError)
 
@@ -4287,7 +4287,7 @@ Variant of flate.Format.
 
 <a id="def-std_401_2fflate_2fReadError"></a>
 
-- `pub type flate.ReadError[E] = Input(bufio.ReadError[E]) | Data(FlateError)`
+- `@serializable pub type flate.ReadError[E] = Input(bufio.ReadError[E]) | Data(FlateError)`
 
 A read from a buffered source failed, or its bytes do not decode.
 
@@ -4810,7 +4810,7 @@ References: [`core@1/MonotonicClock`](#def-core_401_2fMonotonicClock), [`core@1/
 
 <a id="def-std_401_2fhttp_2fConfig"></a>
 
-- `pub type http.Config { max_redirects: u32, max_idle_connections: u64, max_idle_connections_per_host: u64, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, decompress: bool, unix_socket: Option[Path], }`
+- `@serializable pub type http.Config { max_redirects: u32, max_idle_connections: u64, max_idle_connections_per_host: u64, connect_timeout: Option[time.Duration], read_timeout: Option[time.Duration], write_timeout: Option[time.Duration], max_head_bytes: u64, max_body_bytes: u64, idle_timeout: Option[time.Duration], max_headers: u64, user_agent: String, roots: TlsRoots, status_as_error: bool, decompress: bool, unix_socket: Option[Path], }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Path`](#def-core_401_2fPath), [`core@1/String`](#def-core_401_2fString), [`core@1/TlsRoots`](#def-core_401_2fTlsRoots), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/time/Duration`](#def-std_401_2ftime_2fDuration)
 
@@ -8399,7 +8399,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2ftar_2fExtractError"></a>
 
-- `pub type tar.ExtractError[E] = Read(ReadError[E]) | Insecure(String) | Unsupported(String) | TooLarge | File( FileError )`
+- `@serializable pub type tar.ExtractError[E] = Read(ReadError[E]) | Insecure(String) | Unsupported(String) | TooLarge | File( FileError )`
 
 Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),
 would exceed its byte limit, or a file operation failed.
@@ -8519,7 +8519,7 @@ Variant of tar.Kind.
 
 <a id="def-std_401_2ftar_2fReadError"></a>
 
-- `pub type tar.ReadError[E] = Input(bufio.ReadError[E]) | Data(flate.FlateError) | Archive( TarError )`
+- `@serializable pub type tar.ReadError[E] = Input(bufio.ReadError[E]) | Data(flate.FlateError) | Archive( TarError )`
 
 A read from the buffered source failed, a compressed archive does not
 decode, or the archive is malformed.

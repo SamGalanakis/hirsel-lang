@@ -72,8 +72,11 @@ and to representations consulted for structural properties.
 
 SER-1 normalizes zero-argument `@serializable` on transparent data declarations,
 checks the complete schema, and retains the written public opt-in independently
-of Flat and Sendable. Generic declarations and uses require exact lexical
-Serializable evidence. Transparent aliases preserve their target's decision;
+of Flat and Sendable. A generic declaration whose fields need more than its
+parameters' bounds, and whose authority is only those parameters, is conditionally
+serializable: its representation is proved with every type parameter admitted, it
+publishes no Serializable bound, and each use proves its arguments after
+substitution. Uses at a parameter require exact lexical Serializable evidence. Transparent aliases preserve their target's decision;
 opaque/refined domain types use ordinary DTO conversion and validating factories.
 Ineligible declarations and generic schema uses report SER-1 before dependent uses.
 Before a SER-1 proof the normalizer loads, and depends on, every declaration whose

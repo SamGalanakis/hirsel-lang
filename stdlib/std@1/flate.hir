@@ -828,6 +828,7 @@ pub opaque type Decoder: copyable + inert + noalloc_drop uses {} {
 }
 
 /// A read from a buffered source failed, or its bytes do not decode.
+@serializable
 pub type ReadError[E] = Input(bufio.ReadError[E]) | Data(FlateError)
 
 pub fn decoder(format: Format) -> unique Decoder uses {} {

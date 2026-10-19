@@ -437,7 +437,16 @@ fn normalize_inner(
             let serializable = (attrs.serializable || alias)
                 && authority == AuthoritySummary::inert()
                 && repr.is_some_and(|root| n.satisfies(root, Bound::Serializable));
-            if attrs.serializable && !serializable {
+            // A generic opt-in whose fields need more than its parameters' bounds is
+            // conditionally serializable: proved here with every type parameter admitted,
+            // and at each use after substitution. It publishes no serializable bound.
+            let conditional = !serializable
+                && attrs.serializable
+                && !n.generics.is_empty()
+                && matches!(&authority, AuthoritySummary::Known(terms)
+                    if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))))
+                && repr.is_some_and(|root| n.conditionally_serializable(root));
+            if attrs.serializable && !serializable && !conditional {
                 return Err(diagnostic(
                     const { RuleId::of("SER-1") },
                     item.origin.span,
@@ -2442,9 +2451,42 @@ impl Normalizer<'_, '_> {
         )
         .unwrap_or_else(|error| self.proof_failure(error, false))
     }
+    /// SER-1 for a generic opt-in's representation, every own type parameter admitted.
+    fn conditionally_serializable(&self, root: TypeId) -> bool {
+        let generics: Vec<_> = self
+            .generics
+            .iter()
+            .map(|g| match g {
+                GenericParameter::Type { name, bounds } => GenericParameter::Type {
+                    name: name.clone(),
+                    bounds: bounds
+                        .iter()
+                        .copied()
+                        .chain([Bound::Serializable])
+                        .collect(),
+                },
+                g => g.clone(),
+            })
+            .collect();
+        let declarations = GenericDeclarations::from_binders(
+            std::iter::once(&generics)
+                .chain(self.outer_generics.iter().rev())
+                .enumerate()
+                .map(|(d, ps)| (GenericBinder::Bound(d as u32), ps.clone())),
+        );
+        self.serializable_in(root, &declarations)
+            .unwrap_or_else(|error| self.proof_failure(error, false))
+    }
     fn serializable(&self, root: TypeId) -> Result<bool, QueryError> {
+        self.serializable_in(root, &self.declarations())
+    }
+    fn serializable_in(
+        &self,
+        root: TypeId,
+        declarations: &GenericDeclarations,
+    ) -> Result<bool, QueryError> {
         let item = &self.input.tree.items[self.input.item.0 as usize];
-        structural_serializable(&self.types, root, &self.declarations(), &mut |path| {
+        structural_serializable(&self.types, root, declarations, &mut |path| {
             if path != &item.definition {
                 return Ok(self.snapshots.get(path).cloned());
             }

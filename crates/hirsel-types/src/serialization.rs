@@ -194,12 +194,11 @@ fn schema_inner(
                     };
                     continue;
                 }
-                // A generic core type declared serializable (Option, Result, ...) bounds
-                // none of its parameters, so its ordinary declaration still accepts File,
-                // resources, etc. Eligibility is proved after substitution.
+                // A generic type declared serializable (core Option and Result, std
+                // ReadError[E], ...) need not bound its parameters, so its ordinary
+                // declaration still accepts File, resources, etc. Eligibility is proved
+                // after substitution.
                 let conditional = d.serializable
-                    && definition.package_is("core", "1")
-                    && definition.0.modules.is_empty()
                     && matches!(&d.authority, AuthoritySummary::Known(terms)
                         if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
                 let data_authority = d.authority == AuthoritySummary::inert() || conditional;

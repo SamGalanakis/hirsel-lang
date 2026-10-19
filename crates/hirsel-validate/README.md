@@ -809,8 +809,9 @@ signature (including unused declarations) and generic use. It opens transparent
 representations and checks brands, authority, opacity, refinements, resources and
 the admitted constructor list without consuming Source schema descriptors.
 Regular recursion uses declaration applications; nonregular expansion exhaustion
-remains operational. Only a root core declaration marked serializable may leave its
-parameters unbounded; its representation is proved with them admitted. The root core
+remains operational. A declaration marked serializable whose authority is only its
+type parameters may leave them unbounded; its representation is proved with them
+admitted. A published Serializable bound is proved with only the declared bounds. The root core
 `Path`, nongeneric, inert and without a representation, is admitted as its text. Hand-built unused signature and generic controls accompany
 Source accept/reject twins.
 

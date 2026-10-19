@@ -1,0 +1,8 @@
+// rule: SER-1
+// expect: accept
+@serializable
+type Tree[T: inert] = Leaf(T) | Node(List[Tree[T]])
+
+fn store[T: serializable](x: Tree[T]) -> Bytes {
+  codec.encode(x)
+}

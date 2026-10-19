@@ -16,9 +16,15 @@ core types below. Every owned payload qualifies independently; no unsupported co
 inherits a codec.
 
 User records, variants, unconstrained distinct types and flat types may opt in with
-`@serializable` when every part of their schema qualifies. Generic schemas require
-`serializable` bounds on their serialized parameters. A symbolic schema describes a
-generic template and is concretely specialized before encoding or decoding. Encoding
+`@serializable` when every part of their schema qualifies. A generic declaration that
+opts in needs no new bound: it is serializable exactly when every type argument its
+fields use is serializable, as Rust's derive bounds make it. Its declaration is proved
+with each type parameter admitted, so its fields hold no authority beyond its
+parameters, and each use proves its actual arguments after substitution; a use at a
+type parameter needs that parameter's `serializable` bound. A declaration whose
+parameters' bounds already prove its schema is serializable at every instantiation. A
+symbolic schema describes a generic template and is concretely specialized before
+encoding or decoding. Encoding
 borrows valid data; decoding produces fresh owned data and reconstructs no loans, owner
 identities, capability authority or allocation sharing. An opaque or validated domain type
 converts explicitly to a serializable data type and validates again on reconstruction.
@@ -35,10 +41,10 @@ type Point { x: i32, y: i32 }
 ```
 
 The serializable core types are the errors and outcomes that can cross a call or be
-stored, and the data they carry. `Option`, `Result`, `TxFailure` and `Bounded` bound none
-of their parameters, so each is serializable exactly when its arguments are, proved after
-substitution. `DecodeError`, `CancelCause`, `CancelError`, `ChannelError`, `FileError`,
-`FileKind`, `Path`, `DirEntry`, `Metadata`, `IpAddr`, `SocketAddr`, `UdpReceived`, `TlsFailure`, `NetError`,
+stored, and the data they carry. `Option`, `Result`, `TxFailure` and `Bounded` are
+generic opt-ins like any other, so each is serializable exactly when its arguments are. `DecodeError`, `CancelCause`, `CancelError`, `ChannelError`, `FileError`,
+`FileKind`, `Durability`, `Path`, `DirEntry`, `Metadata`, `IpAddr`, `SocketAddr`,
+`UdpReceived`, `TlsRoots`, `TlsFailure`, `NetError`,
 `GrantError`, `ExitStatus`, `ProcessOutput`, `PipelineOutput`, `ProcessError`,
 `InputError`, `EnvError`, `OutputError`, `ClockError`, `RandomError`, `WaitError`,
 `ArgError`, `FloatIntError`, `OutOfSpace`, `CliError`, `FailureKind`, `SourceSite` and
