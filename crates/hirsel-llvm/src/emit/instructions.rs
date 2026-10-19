@@ -1376,6 +1376,35 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         .call(bytes, &[seed, at.ptr, self.const_u64(size)]);
                     return self.define(result, hash);
                 }
+                // A short byte slice's complete framing fits in two words.
+                // Feed exactly length || bytes through the one-shot leaf; longer
+                // slices retain the streaming path without a proportional buffer.
+                let short = if matches!(self.layout(layout)?.kind, LayoutKind::Slice { element } if self.fixed_size(element)? == 1)
+                {
+                    let (data, length) = self.slice_bytes(value)?;
+                    let fast = self.module.append_block(self.function);
+                    let long = self.module.append_block(self.function);
+                    let done = self.module.append_block(self.function);
+                    let fits = self
+                        .builder
+                        .icmp(IntPredicate::Ule, length, self.const_u64(8));
+                    self.builder.cond_br(fits, fast, long);
+                    self.builder.position(fast);
+                    let ty = self.module.array_type(self.module.int_type(8), 16);
+                    let buffer = self.prologue.alloca(ty, 8);
+                    self.builder.store(length, buffer, 8);
+                    let tail = self.builder.offset(buffer, self.const_u64(8));
+                    self.builder.memcpy(tail, 1, data, 1, length);
+                    let framed = self.builder.binary(BinOp::Add, length, self.const_u64(8));
+                    let bytes = self.runtime(RuntimeEntry::HashBytes)?;
+                    let hash = self.builder.call(bytes, &[seed, buffer, framed]);
+                    let from = self.builder.current();
+                    self.builder.br(done);
+                    self.builder.position(long);
+                    Some((done, from, hash))
+                } else {
+                    None
+                };
                 let update = self.runtime(RuntimeEntry::HashUpdate)?;
                 let hasher = match compare::hasher(self.module, self.inputs.layouts, layout, update)
                 {
@@ -1409,6 +1438,17 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.guard(too_deep, failure)?;
                 let finish = self.runtime(RuntimeEntry::HashFinish)?;
                 let hash = self.builder.call(finish, &[hash]);
+                let hash = if let Some((done, fast, short)) = short {
+                    let long = self.builder.current();
+                    self.builder.br(done);
+                    self.builder.position(done);
+                    let joined = self.builder.phi(self.module.int_type(64));
+                    self.builder.add_incoming(joined, short, fast);
+                    self.builder.add_incoming(joined, hash, long);
+                    joined
+                } else {
+                    hash
+                };
                 self.define(result, hash)
             }
             // MEM-11: a fresh root block holding the value, whose blocks the runtime freezes.

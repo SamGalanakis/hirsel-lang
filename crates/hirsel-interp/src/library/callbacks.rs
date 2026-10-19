@@ -32,8 +32,8 @@ pub(super) enum Pending {
         inserted: bool,
     },
     MapInitialized {
-        map: Value,
         key: Value,
+        hash: u64,
     },
     /// `shared.with`: the body's result is the operation's.
     Read,
@@ -227,7 +227,7 @@ impl Library {
             .first()
             .ok_or_else(|| invalid("map update arguments"))?;
         let key = args.get(1).ok_or_else(|| invalid("map update key"))?;
-        let found = collection::map_index(map, key)?;
+        let (found, hash) = collection::map_index(map, key)?;
         if !insert && found.is_none() {
             return Ok(OperationResult::returned(Value::Bool(false)));
         }
@@ -296,10 +296,7 @@ impl Library {
                 }
             }
             self.schedule(
-                Pending::MapInitialized {
-                    map: prepared.clone(),
-                    key,
-                },
+                Pending::MapInitialized { key, hash },
                 args.get(2)
                     .ok_or_else(|| invalid("map initializer"))?
                     .clone(),
@@ -417,6 +414,7 @@ impl Library {
         &mut self,
         token: u64,
         result: OperationResult,
+        arguments: &mut [Value],
         _context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         let pending = self
@@ -463,20 +461,19 @@ impl Library {
             } else {
                 Value::Bool(true)
             })),
-            Pending::MapInitialized { mut map, key } => {
+            Pending::MapInitialized { key, hash } => {
                 let OperationResult::Complete { value, .. } = result else {
                     return Err(invalid("map initializer result"));
                 };
-                let Value::Map { entries, .. } = &mut map else {
-                    unreachable!()
+                let Some(Value::Map { entries, .. }) = arguments.first_mut() else {
+                    return Err(invalid("map initializer lost its mut argument"));
                 };
-                entries.push(Some(Value::Tuple(vec![Some(key), Some(value)])));
-                Ok(OperationResult::Complete {
-                    value: Value::Unit,
-                    arguments: vec![(0, map)],
-                    consumed: vec![],
-                    released: vec![],
-                })
+                entries.push_keyed(
+                    Value::Tuple(vec![Some(key), Some(value)]),
+                    hash,
+                    crate::value::KeyKind::Map,
+                );
+                Ok(OperationResult::returned(Value::Unit))
             }
             Pending::Read => match result {
                 OperationResult::Complete {

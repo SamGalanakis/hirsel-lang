@@ -1322,6 +1322,7 @@ impl Operations for Library {
         &mut self,
         token: u64,
         result: OperationResult,
+        arguments: &mut [Value],
         context: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         if self.synchronizers.pending.contains_key(&token) {
@@ -1330,7 +1331,7 @@ impl Operations for Library {
         if let Some(pending) = self.tasks.pending.remove(&token) {
             self.resume_task(pending, result, context)
         } else {
-            self.resume_callback(token, result, context)
+            self.resume_callback(token, result, arguments, context)
         }
     }
     fn drop_handle(

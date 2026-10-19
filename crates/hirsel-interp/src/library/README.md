@@ -55,12 +55,12 @@ nothing. A host adapter supplies its own provider's draw through `supply_random`
 Collections retain insertion/replacement order, semantic copies and IEEE data
 equality. Updates use OperationResult::Complete, so the scheduler publishes only to
 explicit Mut operand places. Hash-table traversal never determines iteration. Scalar conversion, SipHash-1-3 and pinned Unicode algorithms live in hirsel-kernels; runtime and interpreter retain independent value/collection/Io semantics.
-The linear map representation is the reference oracle; keyed SipHash placement
-is backend-owned and cannot affect results.
-`map.insert`, `set.insert`, `map.get` and `set.contains` select their entry
-through one lookup (`collection::find`), which first walks the key through the
-structural depth limit as a hash would: a key past it is MEM-3 Depth whatever
-the container holds. `map.get` returns a semantic copy of the stored value.
+Map and Set retain an insertion-ordered entry block and a private lazy hash
+index beside it. Index traversal never determines iteration. Insertion extends
+the index, value-only Map callbacks preserve it, and other writes invalidate it;
+a detached copy rebuilds its own index on demand. `map.insert`, `set.insert`,
+`map.get` and `set.contains` use the same hashed lookup and equality candidates.
+A key past the structural depth limit is MEM-3 Depth whatever the container holds. `map.get` returns a semantic copy of the stored value.
 
 Slots use generation-checked entries. Removal increments the generation; wrapping
 into reserved zero retires the vacancy. Insertion reuses an earlier vacancy before
@@ -191,7 +191,7 @@ runtime's test trees): writes note the last write, `file.sync` and `file.put_new
 record the file's bytes and its directory chain, and `test.crash` rebuilds the tree from it
 and marks the tree's open File and AtomicFile handles stale.
 
-`map.upsert_with` and `map.update_with` select once through `collection::find`.
+`map.upsert_with` and `map.update_with` select once through `collection::map_index`.
 A hit schedules a mutable value callback with an explicit field writeback,
 which preserves its mutations on success, failure and abandonment. A missing
 upsert initializes and appends a copied key; a missing update returns false.

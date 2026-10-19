@@ -970,6 +970,7 @@ fn execute_frames(
                     let resumed = operations.resume(
                         callback.token,
                         result,
+                        &mut callback.state.arguments,
                         &mut OperationContext {
                             configuration,
                             sources,
@@ -3813,14 +3814,7 @@ fn writeback_callback(
             .ok_or_else(|| invalid("missing callback mut writeback"))?
             .1
             .clone();
-        let mut saved = &mut callback.state.arguments[target.argument];
-        for &field in &target.fields {
-            saved = saved
-                .fields_mut()
-                .and_then(|fields| fields.get_mut(field))
-                .and_then(Option::as_mut)
-                .ok_or_else(|| invalid("callback writeback field"))?;
-        }
+        let saved = callback.state.arguments[target.argument].project_mut(&target.fields)?;
         std::mem::replace(saved, value).discard();
     }
     Ok(())

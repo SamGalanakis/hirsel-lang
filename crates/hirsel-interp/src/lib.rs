@@ -321,9 +321,11 @@ operation_boundary! {
         _context: &mut OperationContext<'_>) -> Result<(), Error> {
         Ok(())
     }
+    /// Resume with retained operation arguments; mutable owners can change in place.
     fn resume(&mut self,
         _continuation: u64,
         _result: OperationResult,
+        _arguments: &mut [Value],
         _context: &mut OperationContext<'_>) -> Result<OperationResult, Error> {
         Err(invalid("operation continuation is not implemented"))
     }

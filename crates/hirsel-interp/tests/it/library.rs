@@ -1239,6 +1239,7 @@ fn dead_mutex_releases_updated_payload_and_preserves_original_failure() {
                 failures: vec![original.clone()],
                 released: vec![],
             },
+            &mut [],
             &mut context,
         )
         .unwrap()

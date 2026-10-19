@@ -81,6 +81,8 @@ pub enum Counter {
     /// Value nodes the reference interpreter copies beneath a copied value, and
     /// the elements of a shared block its first write detaches.
     InterpCopiedValues,
+    /// Ordered collection entries indexed, compared or appended by the interpreter.
+    InterpKeyedRows,
     /// Cached dependency-node inspections.
     CacheValidationRows,
 }

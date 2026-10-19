@@ -10,8 +10,9 @@
 //! `COMPARE_MAX_DEPTH` is the MEM-3 Depth failure.
 //!
 //! A hash function `hirsel.hash.<layout>(at, state, depth, deep) -> i64` feeds the scalar
-//! leaves of its value to `hirsel_rt_v2_hash_bytes` in layout order and returns the new
-//! state; floats feed `-0.0` as `+0.0`, a variant its ordinal, a sequence its count first.
+//! leaves of its value to `hirsel_rt_v2_hash_update` in layout order and returns the
+//! caller-owned stream. Only the root finalizes it. Floats feed `-0.0` as `+0.0`,
+//! a variant its ordinal, a sequence its count first.
 
 use cranelift_codegen::Context;
 use cranelift_codegen::ir::{
@@ -1351,6 +1352,34 @@ impl FnEmitter<'_, '_, '_> {
             let hash = self.rt1(RuntimeEntry::HashBytes, &[seed, at.ptr, length])?;
             return self.define(result, V::One(hash));
         }
+        // The complete framing of a short byte slice fits in two words.
+        let short = if matches!(self.layout(layout)?.kind, LayoutKind::Slice { element } if self.fixed_size(element)? == 1)
+        {
+            let (data, length) = self.slice_bytes(value)?;
+            let fast = self.b.create_block();
+            let long = self.b.create_block();
+            let done = self.b.create_block();
+            self.b.append_block_param(done, types::I64);
+            let fits = self
+                .b
+                .ins()
+                .icmp_imm(IntCC::UnsignedLessThanOrEqual, length, 8);
+            self.b.ins().brif(fits, fast, &[], long, &[]);
+            self.b.switch_to_block(fast);
+            self.b.seal_block(fast);
+            let (buffer, _) = self.stack_bytes(16, 8);
+            self.store_at(length, buffer, 0);
+            let tail = self.offset(buffer, 8);
+            self.copy_dynamic(tail, data, length);
+            let framed = self.b.ins().iadd_imm(length, 8);
+            let hash = self.rt1(RuntimeEntry::HashBytes, &[seed, buffer, framed])?;
+            self.b.ins().jump(done, &[hash.into()]);
+            self.b.switch_to_block(long);
+            self.b.seal_block(long);
+            Some(done)
+        } else {
+            None
+        };
         let definition = self.definition();
         let hasher = self.em.hasher(layout, definition)?;
         let (state, _) = self.stack_bytes(
@@ -1366,6 +1395,14 @@ impl FnEmitter<'_, '_, '_> {
         let flag = self.load_ty(types::I8, deep, 0);
         self.guard(flag, failure)?;
         let hash = self.rt1(RuntimeEntry::HashFinish, &[hash])?;
+        let hash = if let Some(done) = short {
+            self.b.ins().jump(done, &[hash.into()]);
+            self.b.switch_to_block(done);
+            self.b.seal_block(done);
+            self.b.block_params(done)[0]
+        } else {
+            hash
+        };
         self.define(result, V::One(hash))
     }
 }

@@ -37,10 +37,20 @@ int main(void) {
       uint64_t key, value;
       memcpy(&key, es + @START@ + i * @STRIDE@ + @KEY@, 8);
       memcpy(&value, es + @START@ + i * @STRIDE@ + @VALUE@, 8);
-      assert(key == i && value == i + 100);
+      assert((@SLICE@ || key == i) && value == i + 100);
       uint64_t hash;
       memcpy(&hash, hs + @HASHSTART@ + i * 8, 8);
-      if (@COMPOSITE@) {
+      if (@SLICE@) {
+        // Independently frame byte lengths 0..31 across the two-word fast path.
+        uint64_t state[6], length = i;
+        uint8_t text[32];
+        memset(text, 'x', sizeof text);
+        hirsel_rt_v2_hash_init(state, seeds[run]);
+        uint64_t stream = (uint64_t)(uintptr_t)state;
+        hirsel_rt_v2_hash_update(stream, &length, 8);
+        hirsel_rt_v2_hash_update(stream, text, length);
+        assert(hash == hirsel_rt_v2_hash_finish(stream));
+      } else if (@COMPOSITE@) {
         // Independent framing: tuple(u64, String, Set[u64]), with canonical
         // set order 1,256 despite construction order 256,1. One finalization.
         uint64_t state[6], length = 4, members = 2, one = 1, big = 256;

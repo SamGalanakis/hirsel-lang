@@ -1,4 +1,5 @@
 //! SipHash-1-3 over bytes with explicitly supplied keys.
+#[inline(always)]
 fn round(v: &mut [u64; 4]) {
     v[0] = v[0].wrapping_add(v[1]);
     v[1] = v[1].rotate_left(13);
@@ -37,11 +38,14 @@ impl SipHasher13 {
             length: 0,
         }
     }
+    #[inline(always)]
     fn compress(&mut self, word: u64) {
         self.state[3] ^= word;
         round(&mut self.state);
         self.state[0] ^= word;
     }
+    // One-shot callers know the initial tail is empty; keep their state in registers.
+    #[inline(always)]
     pub fn write(&mut self, mut bytes: &[u8]) {
         let used = (self.length & 7) as usize;
         self.length = self.length.wrapping_add(bytes.len() as u64);
@@ -65,6 +69,7 @@ impl SipHasher13 {
             self.tail |= u64::from(byte) << (i * 8);
         }
     }
+    #[inline(always)]
     pub fn finish(&self) -> u64 {
         let mut final_state = self.clone();
         final_state.compress(self.tail | (self.length << 56));

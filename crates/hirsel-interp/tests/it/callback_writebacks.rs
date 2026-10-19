@@ -71,6 +71,7 @@ impl Operations for Writeback {
         &mut self,
         token: u64,
         result: OperationResult,
+        _arguments: &mut [Value],
         _: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         if token == 1 {

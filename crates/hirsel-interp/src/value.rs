@@ -160,39 +160,106 @@ impl Eq for ArenaStorage {}
 /// make_mut), so snapshots, borrows and moves cost O(1) while every holder still
 /// observes value semantics. Sharing is the reference model's own cost model,
 /// never a semantic fact: no observation, equality or RC oracle reads it.
-#[derive(Clone, Default, Eq, PartialEq)]
-pub struct Block(std::sync::Arc<Vec<Option<Value>>>);
+mod keyed;
+pub(crate) use keyed::KeyKind;
+
+#[derive(Clone, Default)]
+pub struct Block(std::sync::Arc<BlockData>);
+#[derive(Default)]
+struct BlockData {
+    elements: Vec<Option<Value>>,
+    index: std::sync::OnceLock<Option<Box<keyed::KeyIndex>>>,
+}
+impl Clone for BlockData {
+    fn clone(&self) -> Self {
+        Self {
+            elements: self.elements.clone(),
+            index: Default::default(),
+        }
+    }
+}
+impl PartialEq for Block {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.elements == other.0.elements
+    }
+}
+impl Eq for Block {}
+impl Value {
+    /// Project a callback's mutable payload without invalidating unchanged Map keys.
+    pub(crate) fn project_mut(&mut self, mut path: &[usize]) -> Result<&mut Value, crate::Error> {
+        let mut value = self;
+        while let Some((&field, rest)) = path.split_first() {
+            match value {
+                Value::Map { entries, .. } => {
+                    if rest.first() == Some(&1) {
+                        value = entries
+                            .map_value_mut(field)?
+                            .as_mut()
+                            .ok_or_else(|| crate::invalid("dead map value"))?;
+                        path = &rest[1..];
+                    } else {
+                        value = entries
+                            .get_mut(field)
+                            .and_then(Option::as_mut)
+                            .ok_or_else(|| crate::invalid("callback writeback field"))?;
+                        path = rest;
+                    }
+                }
+                _ => {
+                    value = value
+                        .fields_mut()
+                        .and_then(|fields| fields.get_mut(field))
+                        .and_then(Option::as_mut)
+                        .ok_or_else(|| crate::invalid("callback writeback field"))?;
+                    path = rest;
+                }
+            }
+        }
+        Ok(value)
+    }
+}
 impl Block {
     /// The elements, copied only when another holder shares them.
     pub fn into_vec(self) -> Vec<Option<Value>> {
-        std::sync::Arc::try_unwrap(self.0).unwrap_or_else(|shared| (*shared).clone())
+        std::sync::Arc::try_unwrap(self.0)
+            .map(|data| data.elements)
+            .unwrap_or_else(|shared| shared.elements.clone())
     }
-    /// The elements when this is their only holder; a shared block yields
-    /// nothing, since releasing this holder releases no element.
+    /// The elements when this is their only holder.
     fn take_unique(&mut self) -> Option<Vec<Option<Value>>> {
-        std::sync::Arc::get_mut(&mut self.0).map(std::mem::take)
+        let data = std::sync::Arc::get_mut(&mut self.0)?;
+        data.index.take();
+        Some(std::mem::take(&mut data.elements))
     }
-}
-impl std::ops::Deref for Block {
-    type Target = Vec<Option<Value>>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl std::ops::DerefMut for Block {
-    fn deref_mut(&mut self) -> &mut Self::Target {
+    fn make_mut(&mut self) -> &mut BlockData {
         if std::sync::Arc::get_mut(&mut self.0).is_none() {
             hirsel_intern::work::count_by(
                 hirsel_intern::work::Counter::InterpCopiedValues,
-                self.0.len() as u64,
+                self.0.elements.len() as u64,
             );
         }
         std::sync::Arc::make_mut(&mut self.0)
     }
 }
+impl std::ops::Deref for Block {
+    type Target = Vec<Option<Value>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0.elements
+    }
+}
+impl std::ops::DerefMut for Block {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let data = self.make_mut();
+        data.index.take();
+        &mut data.elements
+    }
+}
 impl From<Vec<Option<Value>>> for Block {
     fn from(elements: Vec<Option<Value>>) -> Self {
-        Self(std::sync::Arc::new(elements))
+        Self(std::sync::Arc::new(BlockData {
+            elements,
+            index: Default::default(),
+        }))
     }
 }
 impl FromIterator<Option<Value>> for Block {
@@ -211,12 +278,12 @@ impl<'a> IntoIterator for &'a Block {
     type Item = &'a Option<Value>;
     type IntoIter = std::slice::Iter<'a, Option<Value>>;
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.0.elements.iter()
     }
 }
 impl std::fmt::Debug for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        self.0.elements.fmt(f)
     }
 }
 

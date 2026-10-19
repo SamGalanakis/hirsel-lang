@@ -1,4 +1,5 @@
 //! Ordered value containers. Mutations write their `mut` owner in place.
+use crate::value::KeyKind;
 use crate::{Error, Integer, OperationResult, Value, invalid};
 use hirsel_types::BuiltinType;
 pub fn sequence(kind: BuiltinType, values: impl IntoIterator<Item = Value>) -> Value {
@@ -98,44 +99,11 @@ impl From<Error> for KeyedError {
         Self::Invalid(error)
     }
 }
-fn entry_key(entry: &Value) -> Result<&Value, Error> {
-    let Value::Tuple(pair) = entry else {
-        return Err(invalid("invalid map entry"));
-    };
-    if pair.len() != 2 {
-        return Err(invalid("invalid map pair"));
-    }
-    pair[0].as_ref().ok_or_else(|| invalid("dead map key"))
-}
-/// The one keyed lookup: insertion and keyed reads cannot disagree on which
-/// element a key selects. `key_of` projects an element's key.
-fn find(
-    elements: &[Option<Value>],
-    key: &Value,
-    key_of: fn(&Value) -> Result<&Value, Error>,
-) -> Result<Option<usize>, KeyedError> {
-    match crate::structural::hash(key, 0) {
-        Ok(_) => (),
-        Err(crate::structural::StructuralError::Depth) => return Err(KeyedError::Depth),
-        Err(crate::structural::StructuralError::InvalidValue) => {
-            return Err(invalid("key is not key data").into());
-        }
-    }
-    for (index, element) in elements.iter().enumerate() {
-        let element = element
-            .as_ref()
-            .ok_or_else(|| invalid("dead collection element"))?;
-        if data_equal(key_of(element)?, key) {
-            return Ok(Some(index));
-        }
-    }
-    Ok(None)
-}
-pub(super) fn map_index(map: &Value, key: &Value) -> Result<Option<usize>, KeyedError> {
+pub(super) fn map_index(map: &Value, key: &Value) -> Result<(Option<usize>, u64), KeyedError> {
     let Value::Map { entries, .. } = map else {
         return Err(invalid("map update requires Map").into());
     };
-    find(entries, key, entry_key)
+    entries.find_key(key, KeyKind::Map)
 }
 pub fn insert(map: &mut Value, key: Value, item: Value) -> Result<Displaced, KeyedError> {
     let Value::Map {
@@ -144,14 +112,22 @@ pub fn insert(map: &mut Value, key: Value, item: Value) -> Result<Displaced, Key
     else {
         return Err(invalid("map.insert requires Map").into());
     };
-    if let Some(index) = find(elements, &key, entry_key)? {
+    let (index, hash) = elements.find_key(&key, KeyKind::Map)?;
+    if let Some(index) = index {
         // The taken key drops after the displaced value, as natively.
-        let old = replace_entry_value(elements[index].as_mut().unwrap(), item)?;
+        let old = elements
+            .map_value_mut(index)?
+            .replace(item)
+            .ok_or_else(|| invalid("dead map value"))?;
         return Ok(Displaced(vec![old, key]));
     }
     // The borrowed key is copied into the map: a share of its arena Lists (MEM-6).
     key.share_arena_storage();
-    elements.push(Some(Value::Tuple(vec![Some(key), Some(item)])));
+    elements.push_keyed(
+        Value::Tuple(vec![Some(key), Some(item)]),
+        hash,
+        KeyKind::Map,
+    );
     Ok(Displaced(vec![]))
 }
 pub fn set_insert(set: &mut Value, item: Value) -> Result<Displaced, KeyedError> {
@@ -161,14 +137,13 @@ pub fn set_insert(set: &mut Value, item: Value) -> Result<Displaced, KeyedError>
     else {
         return Err(invalid("set.insert requires Set").into());
     };
-    Ok(Displaced(
-        if find(elements, &item, |member| Ok(member))?.is_some() {
-            vec![item]
-        } else {
-            elements.push(Some(item));
-            vec![]
-        },
-    ))
+    let (index, hash) = elements.find_key(&item, KeyKind::Set)?;
+    Ok(Displaced(if index.is_some() {
+        vec![item]
+    } else {
+        elements.push_keyed(item, hash, KeyKind::Set);
+        vec![]
+    }))
 }
 /// The value stored under an equal key, as a semantic copy.
 pub fn get(map: &Value, key: &Value) -> Result<Option<Value>, KeyedError> {
@@ -178,7 +153,7 @@ pub fn get(map: &Value, key: &Value) -> Result<Option<Value>, KeyedError> {
     else {
         return Err(invalid("map.get requires Map").into());
     };
-    let Some(index) = find(elements, key, entry_key)? else {
+    let Some(index) = elements.find_key(key, KeyKind::Map)?.0 else {
         return Ok(None);
     };
     let Some(Value::Tuple(pair)) = &elements[index] else {
@@ -193,10 +168,10 @@ pub fn contains(collection: &Value, key: &Value) -> Result<bool, KeyedError> {
     let found = match collection {
         Value::Map {
             entries: elements, ..
-        } => find(elements, key, entry_key)?,
+        } => elements.find_key(key, KeyKind::Map)?.0,
         Value::Set {
             entries: elements, ..
-        } => find(elements, key, |member| Ok(member))?,
+        } => elements.find_key(key, KeyKind::Set)?.0,
         _ => return Err(invalid("contains requires Map or Set").into()),
     };
     Ok(found.is_some())
@@ -306,7 +281,7 @@ pub fn map_remove(map: &mut Value, key: &Value) -> Result<OperationResult, Keyed
     else {
         return Err(invalid("map.remove requires Map").into());
     };
-    let (result, released) = if let Some(index) = find(elements, key, entry_key)? {
+    let (result, released) = if let Some(index) = elements.find_key(key, KeyKind::Map)?.0 {
         let Some(Value::Tuple(mut pair)) = elements.remove(index) else {
             return Err(invalid("invalid map entry").into());
         };
@@ -330,7 +305,7 @@ pub fn set_remove(set: &mut Value, key: &Value) -> Result<OperationResult, Keyed
     else {
         return Err(invalid("set.remove requires Set").into());
     };
-    let index = find(elements, key, |member| Ok(member))?;
+    let index = elements.find_key(key, KeyKind::Set)?.0;
     let released = if let Some(index) = index {
         vec![
             elements

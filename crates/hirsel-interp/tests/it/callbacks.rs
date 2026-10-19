@@ -29,6 +29,7 @@ impl Operations for Repeat {
         &mut self,
         token: u64,
         result: OperationResult,
+        _arguments: &mut [Value],
         ctx: &mut OperationContext<'_>,
     ) -> Result<OperationResult, Error> {
         assert_eq!(ctx.anchor().unwrap().definition, path("main"));
@@ -327,6 +328,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
             &mut self,
             token: u64,
             result: OperationResult,
+            _arguments: &mut [Value],
             ctx: &mut OperationContext<'_>,
         ) -> Result<OperationResult, Error> {
             assert_eq!(token, 7);
@@ -579,6 +581,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
             &mut self,
             token: u64,
             _: OperationResult,
+            _arguments: &mut [Value],
             ctx: &mut OperationContext<'_>,
         ) -> Result<OperationResult, Error> {
             assert_eq!(token, 11);
@@ -826,6 +829,7 @@ fn nested_native_named_callbacks_resume_mut_updates_and_preserve_failure_and_dep
             &mut self,
             token: u64,
             result: OperationResult,
+            _arguments: &mut [Value],
             _: &mut OperationContext<'_>,
         ) -> Result<OperationResult, Error> {
             self.resumed.push(token);

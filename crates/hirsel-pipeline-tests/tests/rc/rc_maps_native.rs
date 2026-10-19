@@ -34,18 +34,26 @@ fn sequence(table: &LayoutTable, field: &FieldLayout) -> (u64, u64, u64, LayoutI
 #[test]
 #[ignore = "native: run by tools/check-native.sh"]
 fn compiled_hash_seed_changes_buckets_and_preserves_insertion_order() {
-    compiled_seed_law(false);
+    compiled_seed_law(false, false);
 }
 
 #[test]
 #[ignore = "native: run by tools/check-native.sh"]
 fn compiled_composite_hash_is_one_canonical_stream_on_both_backends() {
-    compiled_seed_law(true);
+    compiled_seed_law(true, false);
 }
 
-fn compiled_seed_law(composite: bool) {
+#[test]
+#[ignore = "native: run by tools/check-native.sh"]
+fn compiled_short_and_long_slice_hashes_have_identical_framing_on_both_backends() {
+    compiled_seed_law(false, true);
+}
+
+fn compiled_seed_law(composite: bool, slice: bool) {
     let key_type = if composite {
         "(u64, String, Set[u64])"
+    } else if slice {
+        "String"
     } else {
         "u64"
     };
@@ -58,6 +66,8 @@ fn compiled_seed_law(composite: bool) {
         .map(|i| {
             let key = if composite {
                 format!("key({i})")
+            } else if slice {
+                format!("\"{}\"", "x".repeat(i))
             } else {
                 i.to_string()
             };
@@ -70,6 +80,8 @@ fn compiled_seed_law(composite: bool) {
     let targets = TargetSpec::executed();
     let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(if composite {
         "map-composite-seed"
+    } else if slice {
+        "map-slice-seed"
     } else {
         "map-seed"
     });
@@ -180,6 +192,7 @@ fn compiled_seed_law(composite: bool) {
                         let c = include_str!("../rc/maps/seed.c")
                             .replace("@CALLS@", &calls)
                             .replace("@COMPOSITE@", if composite { "1" } else { "0" })
+                            .replace("@SLICE@", if slice { "1" } else { "0" })
                             .replace("@BUILD@", &symbol)
                             .replace("@FIRST@", &first)
                             .replace(
