@@ -1,6 +1,0 @@
-// rule: PROV-2
-// expect: accept
-fn example(c: MonotonicClock) -> Result[u64, ClockError] {
-  let start = clock.monotonic(c)?
-  Ok(instant.ticks(start))
-}

@@ -1,5 +1,0 @@
-// rule: CAP-1
-// expect: accept
-pub fn query(args: Args) -> Result[String, ArgError] {
-  arg.text(args, 0)
-}

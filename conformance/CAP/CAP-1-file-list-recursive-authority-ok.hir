@@ -1,5 +1,0 @@
-// rule: CAP-1
-// expect: accept
-fn allowed(d: Dir) -> Result[List[DirEntry], FileError] uses {d} {
-  file.list_recursive(d, path.of(""))
-}

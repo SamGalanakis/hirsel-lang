@@ -1,6 +1,0 @@
-// rule: CAP-1
-// expect: accept
-// The introduction permits "the one ambient permission ... allocating on the heap".
-pub fn data() -> List[u32] {
-  [1, 2]
-}

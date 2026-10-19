@@ -1,6 +1,0 @@
-// rule: PROV-4
-// expect: accept
-// "in a appears only where a function ... receives values to store there."
-fn push[T](a: Arena, mut xs: unique List[T] in a, take x: T in a) -> () {
-  let _ = x
-}

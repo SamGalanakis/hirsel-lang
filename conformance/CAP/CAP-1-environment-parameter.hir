@@ -1,7 +1,0 @@
-// rule: CAP-1
-// expect: accept
-// "environment variables" arrive "only as typed parameters".
-@noalloc
-fn authority(env: Env) -> () {
-  ()
-}

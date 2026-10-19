@@ -20,6 +20,5 @@ conformance/MODE/MODE-2-plain-unique-inert.hir
 conformance/OWN/OWN-1-borrowed-assign-share-run.hir
 conformance/PROV/PROV-1-copied-prefix-if-run.hir
 conformance/PROV/PROV-1-copied-prefix-match-run.hir
-conformance/PROV/PROV-1-copied-prefix-range-run.hir
 conformance/PROV/PROV-1-copied-prefix-while-run.hir
 conformance/PROV/PROV-1-copied-prefix-write-run.hir

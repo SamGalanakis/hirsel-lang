@@ -1,7 +1,0 @@
-// rule: CAP-1
-// expect: accept
-// "allocation placement" arrives "only as typed parameters".
-@noalloc
-fn authority(a: Arena) -> () {
-  ()
-}

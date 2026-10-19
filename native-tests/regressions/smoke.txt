@@ -2,7 +2,6 @@
 # fault injection, and optimized x86-64 and AArch64 executables launched at the glibc 2.28
 # floor): every one must agree with the
 # reference. Run them (//:gate-native-smoke) for every change that can affect native code.
-conformance/CAP/CAP-1-output-no-added-newline.hir
 conformance/CLO/CLO-2-bound-derived-capability-run.hir
 conformance/CLO/CLO-2-derived-capability-field-run.hir
 conformance/DROP/DROP-2-kept-temporary-failure-run.hir

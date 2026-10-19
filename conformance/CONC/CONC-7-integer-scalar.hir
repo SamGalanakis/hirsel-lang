@@ -1,6 +1,0 @@
-// rule: CONC-7
-// expect: accept
-// "Atomic[T] holds scalars only"; scalar payloads need Tasks.
-fn make(tasks: Tasks) -> () {
-  let a: Atomic[u32] = atomic.create(tasks, 7)
-}

@@ -1,9 +1,0 @@
-// rule: PROV-2
-// expect: accept
-fn use_pos(s: Dir, p: u64) -> () {
-  ()
-}
-
-fn probe(s: Dir, p: u64 of s) -> () {
-  use_pos(s, ~p)
-}

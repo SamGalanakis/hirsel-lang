@@ -14,8 +14,6 @@ CAP/CAP-1-net-tls-name-mismatch-run.hir # dependency-owned E/v20 follow-up: NotI
 CAP/CAP-1-net-tls-peer-fails-run.hir # dependency-owned E/v20 follow-up: NotImplemented
 CAP/CAP-1-net-tls-truncate-run.hir # dependency-owned E/v20 follow-up: NotImplemented
 CAP/CAP-1-net-ungranted-host-run.hir # dependency-owned E/v20 follow-up: NotImplemented
-CAP/CAP-2-net-stream-operation-authority-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
-CAP/CAP-2-net-stream-operation-authority-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 CAP/CAP-2-opaque-conservative-ok.hir # dependency-owned H: LANG-7 line 8: opaque type cannot be constructed here
 CAP/CAP-2-opaque-dir-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("CAP-2"), severity: Error, message: "opaque authority summary omits representation authority", primary: Span { file: FileId(0), start: 49, end: 116 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
 CAP/CAP-2-opaque-dir-ok.hir # dependency-owned H: LANG-7 line 14: opaque type cannot be constructed here
@@ -24,12 +22,9 @@ CAP/CAP-2-opaque-lock-ok.hir # dependency-owned H: LANG-7 line 12: field is unav
 CAP/CAP-2-opaque-package-bad.hir # dependency-owned D/fixture M: LANG-4 line 8
 CAP/CAP-2-opaque-package-effect-ok.hir # dependency-owned D/fixture M: LANG-4 line 8
 CAP/CAP-2-opaque-package-pure-ok.hir # dependency-owned D/fixture M: LANG-4 line 8
-CAP/CAP-2-opaque-stdout-bad.hir # dependency-owned E/v20 follow-up: Diagnostics([Diagnostic { rule: RuleId("CAP-2"), severity: Error, message: "opaque authority summary omits representation authority", primary: Span { file: FileId(0), start: 49, end: 119 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
-CAP/CAP-2-opaque-stdout-ok.hir # dependency-owned H: LANG-7 line 14: opaque type cannot be constructed here
 CAP/CAP-2-testhelpers-property-accept.hir # dependency-owned D/fixture M: LANG-4 line 11
 CAP/CAP-3-directory-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 CAP/CAP-3-directory-capture-ok.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
-CAP/CAP-3-net-restricted-body-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
 CAP/CAP-3-stdout-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 CAP/CAP-3-stdout-capture-ok.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 CAP/CAP-3-tasks-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
@@ -125,11 +120,9 @@ CONC/CONC-6-receiver-copy-bad.hir # dependency-owned I/P: operative rule is owne
 CONC/CONC-6-sender-duplicate-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 CONC/CONC-7-boolean-scalar.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 CONC/CONC-7-float-scalar.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
-CONC/CONC-7-integer-scalar.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 CONC/CONC-7-record-annotation-bad.hir # not done J: missing CONC-7 line 8
 CONC/CONC-7-record-payload-ok.hir # dependency-owned H: LANG-2 line 10: literal needs an expected type or numeric suffix
 CONC/CONC-7-sequence-payload-bad.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
-CONC/CONC-7-sequence-payload-ok.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 MODE/MODE-4-counted-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-counted-list-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-error-mapper-occurrence-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
@@ -174,10 +167,7 @@ MODE/MODE-5-local-capture-bad.hir # not done J: missing CLO-4 line 5
 MODE/MODE-6-net-global-capture-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 MODE/MODE-6-net-test-capture-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
 MODE/MODE-6-tx-return-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
-PROV/PROV-1-borrowed-directory-narrow-run.hir # dependency-owned D/fixture M: PROG-2 line 8
 PROV/PROV-1-mut-parameter-field-replace-run.hir # dependency-owned D/fixture M: LANG-4 line 17
-PROV/PROV-1-mut-parameter-net-field-replace-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
-PROV/PROV-1-mut-parameter-net-field-replace-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-1-net-stream-other-net-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-1-net-stream-other-net-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-1-owned-replacement-other-bad.hir # dependency-owned H: LANG-2 line 4: generic call arguments cannot be inferred from its prefix and expected type
@@ -195,16 +185,11 @@ PROV/PROV-1-wave2-find-accept.hir # dependency-owned D/fixture M: LANG-4 line 4
 PROV/PROV-1-wave2-find-reject.hir # dependency-owned D/fixture M: LANG-4 line 4
 PROV/PROV-1-wave2-find-take-accept.hir # dependency-owned D/fixture M: LANG-4 line 4
 PROV/PROV-1-wave2-find-take-reject.hir # dependency-owned D/fixture M: LANG-4 line 4
-PROV/PROV-2-instant-compare-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-2-instant-constructor-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
-PROV/PROV-2-instant-copy-clock-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-2-instant-equality-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
-PROV/PROV-2-instant-replace-clock-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-2-instant-same-clock-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
-PROV/PROV-2-instant-sample-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-2-instant-wrong-clock-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
 PROV/PROV-2-narrow-current-test-run.hir # dependency-owned D/fixture M: PROG-2 line 54
-PROV/PROV-2-wave1-empty-position-ok.hir # dependency-owned D/fixture M: LANG-4 line 7
 PROV/PROV-2-wave1-position-join-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
 PROV/PROV-2-wave1-position-join-ok.hir # dependency-owned D/fixture M: LANG-4 line 5
 PROV/PROV-2-wave1-user-variant-bad.hir # dependency-owned D/fixture M: LANG-4 line 15
@@ -212,5 +197,3 @@ PROV/PROV-2-wave1-user-variant-ok.hir # dependency-owned D/fixture M: LANG-4 lin
 PROV/PROV-4-mixed-source-take-second-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 PROV/PROV-5-field-read-record-take-bad.hir # dependency-owned D/fixture M: LANG-4 line 12
 PROV/PROV-5-field-read-record-take-run.hir # dependency-owned D/fixture M: LANG-4 line 15
-PROV/PROV-5-net-conn-sibling-brand-bad.hir # dependency-owned E/v20 follow-up: NotImplemented
-PROV/PROV-5-net-conn-sibling-brand-ok.hir # dependency-owned E/v20 follow-up: NotImplemented

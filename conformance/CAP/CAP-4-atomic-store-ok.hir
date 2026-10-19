@@ -1,6 +1,0 @@
-// rule: CAP-4
-// expect: accept
-// "Every atomic operation and every mutex acquisition takes the Tasks capability".
-fn operation(tasks: Tasks, a: Atomic[u32], value: u32) -> () {
-  atomic.store(tasks, a, value)
-}

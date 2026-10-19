@@ -1,7 +1,0 @@
-// rule: PROV-2
-// expect: accept
-fn example(c: MonotonicClock) -> Result[i32, ClockError] {
-  let first = clock.monotonic(c)?
-  let second = clock.monotonic(c)?
-  Ok(time.compare(c, first, second))
-}

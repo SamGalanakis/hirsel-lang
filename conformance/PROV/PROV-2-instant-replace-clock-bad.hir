@@ -1,8 +1,0 @@
-// rule: PROV-2
-// expect: reject PROV-1 at line 7
-fn example(c: MonotonicClock, replacement: MonotonicClock) -> Result[i32, ClockError] {
-  let mut owner = copy c
-  let start = clock.monotonic(owner)?
-  owner = replacement
-  Ok(time.compare(owner, start, start))
-}

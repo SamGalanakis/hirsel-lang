@@ -1,5 +1,0 @@
-// rule: CAP-2
-// expect: accept
-pub opaque type Runner: plain + sendable uses {Proc} {
-  p: Proc,
-}

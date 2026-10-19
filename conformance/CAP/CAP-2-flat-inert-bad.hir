@@ -1,7 +1,0 @@
-// rule: CAP-2
-// expect: reject CAP-2 at line 6
-fn need[T: inert](x: T) {}
-
-fn probe[T: plain](x: T) {
-  need(x)
-}

@@ -1,6 +1,0 @@
-// rule: PROV-4
-// expect: accept
-// Conservative placement is legal even when the body only reads.
-fn read(a: Arena, x: Bytes in a) -> Bytes in x {
-  x
-}

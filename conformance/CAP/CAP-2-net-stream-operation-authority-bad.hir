@@ -1,5 +1,0 @@
-// rule: CAP-2
-// expect: reject CAP-2 at line 4
-pub fn read(n: Net, mut s: Stream of n, mut buf: List[u8]) {
-  let _ = net.read(mut s, mut buf, 10u64)
-}

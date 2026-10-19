@@ -34,7 +34,7 @@ conformance/SEM/SEM-4-set-cursor-last-use-run.hir
 conformance/SEM/SEM-4-wave1-collections-run.hir
 conformance/SEM/SEM-4-wave1-counted-run.hir
 conformance/CONC/CONC-2-await.hir
-conformance/CONC/CONC-2-detach.hir
+conformance/CONC/CONC-2-detach-joins-before-exit.hir
 conformance/FAIL/FAIL-2-child-propagates.hir
 conformance/CONC/CONC-3-task-capture-after-sleep-run.hir
 conformance/SER/SER-2-duplicate-map-run.hir

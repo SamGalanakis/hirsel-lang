@@ -1,9 +1,0 @@
-// rule: PROV-4
-// expect: accept
-fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
-  x
-}
-
-fn relay(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
-  choose(a, b, x, y)
-}

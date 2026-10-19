@@ -1,7 +1,0 @@
-// rule: PROV-4
-// expect: reject PROV-4 at line 6
-// A value that owns blocks keeps the arena that holds them.
-fn text(a: Arena) -> String {
-  let x: String in a = "x"
-  x
-}

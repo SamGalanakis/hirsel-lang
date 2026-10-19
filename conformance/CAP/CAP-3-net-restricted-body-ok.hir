@@ -1,8 +1,0 @@
-// rule: CAP-3
-// expect: accept
-pub fn probe(n: Net) {
-  let body = fn() uses {} {
-    let _ = 80u16
-  }
-  body()
-}

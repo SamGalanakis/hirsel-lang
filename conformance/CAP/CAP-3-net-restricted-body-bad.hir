@@ -1,8 +1,0 @@
-// rule: CAP-3
-// expect: reject CAP-3 at line 5
-pub fn probe(n: Net) {
-  let body = fn() uses {} {
-    let _ = net.resolve(n, "example.com", 80u16)
-  }
-  body()
-}

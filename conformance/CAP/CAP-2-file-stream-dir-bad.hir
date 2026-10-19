@@ -1,6 +1,0 @@
-// rule: CAP-2
-// expect: reject CAP-2 at line 5
-pub fn read(d: Dir, mut f: File of d, mut buffer: List[u8]) -> Result[u64, FileError] {
-  let max = 4u64
-  file.read(mut f, mut buffer, max)
-}

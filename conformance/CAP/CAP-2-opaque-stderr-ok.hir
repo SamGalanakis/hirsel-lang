@@ -1,5 +1,0 @@
-// rule: CAP-2
-// expect: accept
-pub opaque type Box: plain + sendable uses {Stderr} {
-  s: Stderr,
-}

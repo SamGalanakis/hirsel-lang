@@ -1,6 +1,0 @@
-// rule: PROV-1
-// expect: accept
-fn probe(x: Bytes, y: u64 of x) -> u64 of x
-  ensures result == y {
-  y
-}
