@@ -1433,6 +1433,32 @@ class Scripts(unittest.TestCase):
         logged = self.commands.read_text().splitlines() if self.commands.exists() else []
         return result, logged
 
+    def test_buck_backed_sync_starts_after_preparation_and_the_prequeue_daemon_stop(self):
+        path = self.root / 'tools/buck2/gating.py'
+        tracing = '''
+_start_local_check = Local.start
+def traced_local_check(self, name, command):
+    if any(str(arg).endswith('sync.py') for arg in command):
+        with open(os.environ['DAEMON_TRACE'], 'a') as trace:
+            trace.write('sync-start\\n')
+    return _start_local_check(self, name, command)
+Local.start = traced_local_check
+'''
+        commit(self.root, {'tools/buck2/gating.py': path.read_text() + tracing,
+                           'bench/native/tests/test_fixture.py':
+                               'import unittest\nclass Fixture(unittest.TestCase):\n    def test_available(self): pass\n'},
+               'Trace sync lifecycle')
+        trace = self.root.parent / 'daemon-trace'
+        result, _ = self.run_tool('gate', '--tests', 'suggested', '--why', 'Buck-backed inventory',
+                                  env={'DAEMON_TRACE': str(trace)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = trace.read_text().splitlines()
+        sync = rows.index('sync-start')
+        build = next(i for i, row in enumerate(rows) if row.startswith('build '))
+        stop = next(i for i, row in enumerate(rows) if row.startswith('kill v2 '))
+        self.assertGreater(sync, build, 'inventory started before the prepared workspace build')
+        self.assertGreater(sync, stop, 'inventory was live when the gate stopped its daemon')
+
     def sibling_pushes(self, files):
         commit(self.sibling, files, 'Sibling change')
         git(self.sibling, 'push', '-q', 'origin', 'HEAD:main')

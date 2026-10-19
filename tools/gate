@@ -299,8 +299,6 @@ def local_checks(report, local, base, selection):
         local.start('tools/tests/ignored_tests.py', [PY, str(ROOT / 'tools/tests/ignored_tests.py')])
     for name, command in impact.proof_checks(selection.paths):
         local.start(name, command)
-    if c.tools or c.needs_buck2:
-        local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
 
 
 def build_first(report, log):
@@ -443,7 +441,7 @@ def push_gate(base_ref, tokens, why, extend):
     say(f'gate: why: {why}')
     local = gating.Local()
     local_checks(report, local, base, scope)
-    needs_buck2 = c.needs_buck2 or bool(tokens) or c.everything
+    needs_buck2 = c.needs_buck2 or bool(c.tools) or bool(tokens) or c.everything
     plan = floor = None
     pool = 'none'
     target_results = {}
@@ -479,6 +477,10 @@ def push_gate(base_ref, tokens, why, extend):
             if resumed is not None and resumed.get('config', []) == plan.config():
                 target_results = resumed.get('target_results', {})
             if build_first(report, log):
+                # --check lists compiled cases on the pool. Preparation and
+                # the prequeue daemon stop must finish before it starts.
+                if c.tools or c.needs_buck2:
+                    local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
                 target_results = run_plan(report, plan, log, target_results)
             else:
                 say('gate: formatting, Clippy or the workspace build failed; no test ran')
