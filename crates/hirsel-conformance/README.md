@@ -143,14 +143,22 @@ and agree, including checked execution, exact-program replay and reductions.
 Native artifact names retain nonzero launch inputs as canonical suffixes; every
 existing seed-zero matrix name is unchanged.
 Variants of programs the compiler does not accept today are skipped. Each
-remaining variant goes through the driver in a fresh engine; variants of `run`
-tests are also interpreted under a step budget, once normally and once under
-checked execution. A checked run that traps is
+remaining variant goes through the driver in a fresh engine; variants of `run`,
+`fail` and `blocked` programs also run their entry, and variants of `test`
+programs each `@test` function as `hirsel test` launches it (a fresh Test root
+with the test's own seed), under a step budget, once normally and once under
+checked execution. A failure path is compared like any other run: outcome
+(failure rule and site included) and output. A variant's own outcome is never
+judged against its program's header. A checked run that traps is
 flagged as `checked/<rule>`, one that observes anything else differently as
-`checked/divergence`.
+`checked/divergence`. `--native` compares the same executions, tests included
+(the launch carries the test's seed), on the heap executor and as native code.
+`--program` replays a reproducer's tests when it declares a `@test` function,
+and its entry otherwise.
 
 The JSON report counts variants that were rejected with a language diagnostic,
-accepted and valid (with how many of those ran in both execution modes), or
+accepted and valid (with how many of those ran in both execution modes,
+`executed`, and that count by the edited program's expectation, `executions`), or
 unavailable (a phase reported not implemented), and
 lists the flagged ones clustered by first violation kind and edit kind. Each
 cluster carries its count and one representative, reduced by deleting
@@ -227,7 +235,7 @@ The migration never updates `passing.txt` or excludes a semantic difference.
 checking or executing mutations. It lists every program's mutation count,
 the baseline and generated program counts, and the exhaustive configurations.
 The baseline contains passing `run` and `fail` cases; `accept` cases are never
-executed by this campaign. Agreement executes only `run` mutations that remain
+executed by this campaign. Agreement executes only `run`, `fail`, `blocked` and `test` mutations that remain
 valid and within the interpreter budget. Its reported native count is therefore
 an upper bound; an exact launch count requires running the campaign.
 

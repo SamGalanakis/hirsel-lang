@@ -51,7 +51,7 @@ def summarize(outputs, shards=AGREE_SHARDS, limit=AGREE_LIMIT):
     if (limit != UNLIMITED and total['seed'] != 1) or total['limit'] != limit or total['hash_seed'] != 0:
         raise ValueError('agreement sample parameters differ from the gate')
     total.update({key: 0 for key in COUNTS})
-    total.update(edits={}, clusters=[])
+    total.update(edits={}, executions={}, clusters=[])
     seen = set()
     for report in reports:
         shard = report.get('shard', {})
@@ -68,6 +68,8 @@ def summarize(outputs, shards=AGREE_SHARDS, limit=AGREE_LIMIT):
             total[key] += value
         for edit, count in report['edits'].items():
             total['edits'][edit] = total['edits'].get(edit, 0) + count
+        for expectation, count in report['executions'].items():
+            total['executions'][expectation] = total['executions'].get(expectation, 0) + count
         total['clusters'].extend(report['clusters'])
     if total['checked'] + total['skipped'] != min(limit, total['eligible']):
         raise ValueError('agreement shards did not cover the global sample')
@@ -77,6 +79,8 @@ def summarize(outputs, shards=AGREE_SHARDS, limit=AGREE_LIMIT):
         raise ValueError('agreement classifications do not sum to checked')
     if sum(total['edits'].values()) != total['checked']:
         raise ValueError('agreement edit counts do not sum to checked')
+    if sum(total['executions'].values()) != total['executed']:
+        raise ValueError('agreement execution counts do not sum to executed')
     return total
 
 

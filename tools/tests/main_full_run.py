@@ -418,7 +418,8 @@ class AgreementShards(unittest.TestCase):
         self.agree = agree
         self.report = dict(seed=1, limit=4, hash_seed=0, programs=3, generated=9, eligible=9, variants_per_program=96,
                            checked=2, skipped=0, rejected=1, valid=1, unavailable=0,
-                           runtime_limits=0, executed=1, edits={'mode': 2}, clusters=[])
+                           runtime_limits=0, executed=1, edits={'mode': 2}, executions={'fail': 1},
+                           clusters=[])
 
     def outputs(self):
         return {f'shard-{i}': '---- STDOUT ----\n' + json.dumps(
@@ -427,13 +428,15 @@ class AgreementShards(unittest.TestCase):
     def test_sums_classifications_and_edits_but_keeps_global_catalogue_counts(self):
         result = self.agree.summarize(self.outputs(), 2, 4)
         self.assertEqual(result, self.report | dict(checked=4, rejected=2, valid=2,
-                                                   executed=2, edits={'mode': 4}))
+                                                   executed=2, edits={'mode': 4},
+                                                   executions={'fail': 2}))
 
     def test_refuses_missing_duplicate_mismatched_and_flagged_shards(self):
         for changed in [
                 {'shard': dict(index=1, count=2)},
                 {'shard': dict(index=2, count=3)},
                 {'generated': 10}, {'eligible': 10}, {'variants_per_program': 64}, {'checked': 1}, {'edits': {}},
+                {'executions': {'run': 1, 'fail': 1}},
                 {'clusters': [dict(kind='bug', path='reproducer.hir')]}]:
             with self.subTest(changed=changed):
                 outputs = self.outputs()

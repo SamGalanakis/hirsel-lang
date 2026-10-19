@@ -140,6 +140,17 @@ pub enum End {
 }
 
 impl Expect {
+    /// The header's `expect:` word.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Expect::Accept => "accept",
+            Expect::Test => "test",
+            Expect::Blocked { .. } => "blocked",
+            Expect::Reject { .. } => "reject",
+            Expect::Run { .. } => "run",
+            Expect::Fail { .. } => "fail",
+        }
+    }
     /// The corpus verdict: whether `actual` is exactly what this header expects.
     /// `Test` cases are judged by their `@test` functions instead.
     pub fn matches(&self, actual: &Actual) -> bool {

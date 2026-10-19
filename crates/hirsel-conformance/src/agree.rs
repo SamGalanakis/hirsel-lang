@@ -29,12 +29,13 @@ impl Classification {
         }
     }
 }
+/// Variants can introduce infinite loops. A deterministic instruction budget
+/// bounds execution without confusing ordinary limits with interpreter bugs.
+const STEPS: u64 = 10_000;
 fn engine() -> QueryEngine {
     let mut adapters = hirsel_driver::compiler_adapters();
     let mut interpreter = hirsel_engine::InterpreterAdapter::default();
-    // Variants can introduce infinite loops. A deterministic instruction budget
-    // bounds execution without confusing ordinary limits with interpreter bugs.
-    interpreter.limits.steps = Some(10_000);
+    interpreter.limits.steps = Some(STEPS);
     adapters.interpreter = Some(Box::new(interpreter));
     // The environment hashes the spec; every variant shares one.
     static ENVIRONMENT: OnceLock<hirsel_engine::QueryEnvironment> = OnceLock::new();
@@ -76,12 +77,45 @@ fn query_error(error: QueryError) -> Classification {
         QueryError::Operational(e) => violation(&e.operation, &e.message),
     }
 }
+/// What a variant's run executes. A failure path is a run like any other, so
+/// `fail` and `blocked` programs run their entry as `run` programs do.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Execution {
+    /// Checking only: an `accept` program.
+    None,
+    /// The entry: a `run`, `fail` or `blocked` program.
+    Entry,
+    /// Each `@test` function, as `hirsel test` launches it: a `test` program.
+    Tests,
+}
+impl Execution {
+    pub fn of(expect: &crate::Expect) -> Self {
+        match expect {
+            crate::Expect::Run { .. }
+            | crate::Expect::Fail { .. }
+            | crate::Expect::Blocked { .. } => Self::Entry,
+            crate::Expect::Test => Self::Tests,
+            crate::Expect::Accept | crate::Expect::Reject { .. } => Self::None,
+        }
+    }
+    /// A reproducer carries no header: one that declares a `@test` function
+    /// runs its tests, any other its entry.
+    pub fn of_source(source: &str) -> Self {
+        if source.lines().any(|line| line.trim() == "@test") {
+            Self::Tests
+        } else {
+            Self::Entry
+        }
+    }
+}
+
 /// Runtime language failures and artificial execution limits are ordinary variant
 /// outcomes. Only interpreter/tool errors are bugs; changed stdout is expected.
 /// A variant that runs is run again under checked execution, which must observe
-/// the same or trap; either difference is a bug.
-pub fn classify(source: &str, run: bool) -> Classification {
-    classify_native(source, run, None)
+/// the same outcome (failure rule and site included) and output, or trap; either
+/// difference is a bug.
+pub fn classify(source: &str, execution: Execution) -> Classification {
+    classify_native(source, execution, None)
 }
 
 /// The runtime extension: the configurations a
@@ -251,10 +285,10 @@ impl Native {
 /// configurations.
 pub fn classify_native(
     source: &str,
-    run: bool,
+    execution: Execution,
     native: Option<(&Native, &[hirsel_driver::native::Configuration])>,
 ) -> Classification {
-    classify_package_native(source, run, native, None, 0)
+    classify_package_native(source, execution, native, None, 0)
 }
 
 /// Replay one exact program, including its package sidecar, through agreement.
@@ -267,31 +301,37 @@ pub fn replay_program_with_hash_seed(
     let source = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(classify_package_native(
         &source,
-        true,
+        Execution::of_source(&source),
         native.map(|n| (n, n.matrix.as_slice())),
         Some(path),
         hash_seed,
     ))
 }
 
+/// `source` replaces the primary source of `path`'s program when there is a
+/// path (a package sidecar's program, or a test program: discovery needs a
+/// loaded program); otherwise it is checked alone.
 fn classify_package_native(
     source: &str,
-    run: bool,
+    execution: Execution,
     native: Option<(&Native, &[hirsel_driver::native::Configuration])>,
     path: Option<&Path>,
     hash_seed: u64,
 ) -> Classification {
     match catch_unwind(AssertUnwindSafe(|| {
-        let (mut engine, checked, entry) = if let Some(path) = path {
-            let mut program = match hirsel_driver::load_program_source(path, Some(source)) {
+        let (mut program, mut bare) = (None, None);
+        let (checked, entry) = if let Some(path) = path {
+            let mut loaded = match hirsel_driver::load_program_source(path, Some(source)) {
                 Ok(p) => p,
                 Err(e) => return tool_error(e),
             };
             let mut interpreter = hirsel_engine::InterpreterAdapter::default();
-            interpreter.limits.steps = Some(10_000);
-            program.engine.adapters.interpreter = Some(Box::new(interpreter));
-            let checked = program.check();
-            (program.engine, checked, program.entry)
+            interpreter.limits.steps = Some(STEPS);
+            loaded.engine.adapters.interpreter = Some(Box::new(interpreter));
+            let checked = loaded.check();
+            let entry = loaded.entry.clone();
+            program = Some(loaded);
+            (checked, entry)
         } else {
             let mut engine = engine();
             let context = hirsel_engine::default_context();
@@ -300,7 +340,8 @@ fn classify_package_native(
                 .add("agree.hir", source.into())
                 .expect("corpus-sized source");
             let checked = hirsel_engine::check_progress(&mut engine, file, &context);
-            (engine, checked, crate::selected_entry(source, &context))
+            bare = Some(engine);
+            (checked, crate::selected_entry(source, &context))
         };
         match checked {
             Err(e) => return query_error(e),
@@ -317,59 +358,73 @@ fn classify_package_native(
                 }
             }
         }
-        if run {
-            let simulation = match crate::simulation(source) {
-                Ok(simulation) => simulation,
-                Err(error) => return violation("fixture", &error),
-            };
-            let config = hirsel_engine::RunConfiguration {
-                entry,
-                hash_seed,
-                inputs: vec![],
-            };
-            let normal = match hirsel_engine::run_observed_snapshot(
-                &mut engine,
-                &config,
-                simulation.clone(),
-            ) {
-                Ok(observed) => observed,
-                Err(e) => return tool_error(e),
-            };
-            match &normal.outcome {
-                Ok(hirsel_engine::RunOutcome::ToolingLimit(_)) => {
-                    return Classification::RuntimeLimit;
-                }
-                Ok(_) => {}
-                Err(hirsel_engine::RuntimeError::Query(error)) => {
-                    return query_error(error.clone());
-                }
-                Err(e) => return violation("interpretation", &format!("{e:?}")),
-            }
-            let checked =
-                match hirsel_engine::run_observed_checked(&mut engine, &config, simulation.clone())
+        match execution {
+            Execution::None => {}
+            Execution::Entry => {
+                let engine = match (&mut program, &mut bare) {
+                    (Some(program), _) => &mut program.engine,
+                    (None, Some(engine)) => engine,
+                    (None, None) => unreachable!("one engine checked the source"),
+                };
+                let (simulation, fixture) =
+                    match (crate::simulation(source), crate::fixture(source)) {
+                        (Ok(simulation), Ok(fixture)) => (simulation, fixture),
+                        (Err(error), _) | (_, Err(error)) => return violation("fixture", &error),
+                    };
+                let config = hirsel_engine::RunConfiguration {
+                    entry,
+                    hash_seed,
+                    inputs: vec![],
+                };
+                if let Some(outcome) =
+                    compare_engines(engine, &config, simulation, native, &fixture)
                 {
-                    Ok(observed) => observed,
+                    return outcome;
+                }
+            }
+            Execution::Tests => {
+                let Some(program) = &mut program else {
+                    return violation("fixture", "a test program is loaded through its file");
+                };
+                let tests = match hirsel_driver::testing::discover(
+                    program,
+                    &[],
+                    None,
+                    hirsel_driver::testing::Selection::Tests,
+                ) {
+                    Ok(tests) => tests,
                     Err(e) => return tool_error(e),
                 };
-            if let Some(detail) = crate::compiler::checked_divergence(&normal, &checked) {
-                let kind = match &checked.outcome {
-                    Ok(hirsel_engine::RunOutcome::Trapped(trap)) => {
-                        format!("checked/{}", trap.rule)
+                // `hirsel test`'s launch: a fresh Test root with the test's
+                // own seed and no other grant (testing::execute).
+                for test in &tests {
+                    let config = hirsel_engine::RunConfiguration {
+                        entry: test.entry.clone(),
+                        hash_seed,
+                        inputs: vec![],
+                    };
+                    let simulation = hirsel_engine::SimulationConfig {
+                        test_seed: test.seed,
+                        ..Default::default()
+                    };
+                    let matrix = native.map(|(native, matrix)| {
+                        let mut matrix = matrix.to_vec();
+                        for configuration in &mut matrix {
+                            configuration.options.launch.test_seed = test.seed;
+                        }
+                        (native, matrix)
+                    });
+                    if let Some(outcome) = compare_engines(
+                        &mut program.engine,
+                        &config,
+                        simulation,
+                        matrix
+                            .as_ref()
+                            .map(|(native, matrix)| (*native, matrix.as_slice())),
+                        &Default::default(),
+                    ) {
+                        return outcome;
                     }
-                    _ => "checked/divergence".into(),
-                };
-                return Classification::Bug { kind, detail };
-            }
-            if let (Some((native, matrix)), Some(observation)) = (native, &normal.observation) {
-                let reference = hirsel_driver::native::Observation::of_reference(observation);
-                if let Some(bug) = native.compare(
-                    &mut engine,
-                    matrix,
-                    &reference,
-                    &config.entry,
-                    &crate::fixture(source).unwrap(),
-                ) {
-                    return bug;
                 }
             }
         }
@@ -388,6 +443,50 @@ fn classify_package_native(
             }
         }
     }
+}
+
+/// Run `config` normally, then under checked execution, then under `native`'s
+/// matrix. None when every engine observed the same; otherwise the variant's
+/// classification (a step limit or an unavailable phase ends it as well).
+fn compare_engines(
+    engine: &mut QueryEngine,
+    config: &hirsel_engine::RunConfiguration,
+    simulation: hirsel_engine::SimulationConfig,
+    native: Option<(&Native, &[hirsel_driver::native::Configuration])>,
+    fixture: &hirsel_driver::native::Fixture,
+) -> Option<Classification> {
+    let normal = match hirsel_engine::run_observed_snapshot(engine, config, simulation.clone()) {
+        Ok(observed) => observed,
+        Err(e) => return Some(tool_error(e)),
+    };
+    match &normal.outcome {
+        Ok(hirsel_engine::RunOutcome::ToolingLimit(_)) => {
+            return Some(Classification::RuntimeLimit);
+        }
+        Ok(_) => {}
+        Err(hirsel_engine::RuntimeError::Query(error)) => {
+            return Some(query_error(error.clone()));
+        }
+        Err(e) => return Some(violation("interpretation", &format!("{e:?}"))),
+    }
+    let checked = match hirsel_engine::run_observed_checked(engine, config, simulation) {
+        Ok(observed) => observed,
+        Err(e) => return Some(tool_error(e)),
+    };
+    if let Some(detail) = crate::compiler::checked_divergence(&normal, &checked) {
+        let kind = match &checked.outcome {
+            Ok(hirsel_engine::RunOutcome::Trapped(trap)) => {
+                format!("checked/{}", trap.rule)
+            }
+            _ => "checked/divergence".into(),
+        };
+        return Some(Classification::Bug { kind, detail });
+    }
+    if let (Some((native, matrix)), Some(observation)) = (native, &normal.observation) {
+        let reference = hirsel_driver::native::Observation::of_reference(observation);
+        return native.compare(engine, matrix, &reference, &config.entry, fixture);
+    }
+    None
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -1451,29 +1550,30 @@ pub fn catalogue_counts(source: &str) -> Result<BTreeMap<&'static str, usize>, S
 }
 /// Greedy syntax reduction reaches a deletion fixed point for definitions and
 /// statements. Preserve the same first bug kind, not just any failing outcome.
-pub fn shrink(source: &str, run: bool, kind: &str) -> String {
-    shrink_native(source, run, kind, None)
+pub fn shrink(source: &str, execution: Execution, kind: &str) -> String {
+    shrink_native(source, execution, kind, None)
 }
 
 /// `shrink` for a discrepancy found under `native`'s configurations.
 pub fn shrink_native(
     source: &str,
-    run: bool,
+    execution: Execution,
     kind: &str,
     native: Option<(&Native, &[hirsel_driver::native::Configuration])>,
 ) -> String {
-    shrink_package_native(source, run, kind, native, None, 0)
+    shrink_package_native(source, execution, kind, native, None, 0)
 }
 fn shrink_package_native(
     source: &str,
-    run: bool,
+    execution: Execution,
     kind: &str,
     native: Option<(&Native, &[hirsel_driver::native::Configuration])>,
     path: Option<&Path>,
     hash_seed: u64,
 ) -> String {
-    let classify =
-        |source: &str, run: bool| classify_package_native(source, run, native, path, hash_seed);
+    let classify = |source: &str, execution: Execution| {
+        classify_package_native(source, execution, native, path, hash_seed)
+    };
     let mut current = source.to_owned();
     loop {
         let Ok(file) = parse(&current) else { break };
@@ -1489,7 +1589,7 @@ fn shrink_package_native(
         for span in ranges {
             let mut candidate = current.clone();
             candidate.replace_range(span.start as usize..span.end as usize, "");
-            if classify(&candidate, run).key() == Some(kind) {
+            if classify(&candidate, execution).key() == Some(kind) {
                 current = candidate;
                 changed = true;
                 break;
@@ -1504,7 +1604,7 @@ fn shrink_package_native(
         .filter(|line| !line.trim_start().starts_with("//") && !line.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-    if classify(&cleaned, run).key() == Some(kind) {
+    if classify(&cleaned, execution).key() == Some(kind) {
         cleaned
     } else {
         current
@@ -1530,6 +1630,8 @@ pub struct Report {
     pub runtime_limits: usize,
     /// Valid variants executed both normally and under checked execution.
     pub executed: usize,
+    /// `executed` by the expectation of the program each variant edits.
+    pub executions: BTreeMap<&'static str, usize>,
     pub clusters: BTreeMap<(String, &'static str), Cluster>,
     pub edits: BTreeMap<&'static str, usize>,
 }
@@ -1539,8 +1641,8 @@ pub struct Cluster {
     pub path: String,
     pub source: String,
     pub detail: String,
-    run: bool,
-    package_path: Option<std::path::PathBuf>,
+    execution: Execution,
+    file: Option<std::path::PathBuf>,
 }
 impl Report {
     /// Reduce every cluster's first variant to a minimal representative.
@@ -1552,10 +1654,10 @@ impl Report {
             let matrix = native.map(|n| n.for_program(&cluster.path));
             cluster.source = shrink_package_native(
                 &cluster.source,
-                cluster.run,
+                cluster.execution,
                 kind,
                 native.zip(matrix.as_deref()),
-                cluster.package_path.as_deref(),
+                cluster.file.as_deref(),
                 self.hash_seed,
             );
         }
@@ -1566,6 +1668,7 @@ impl Report {
             "skipped": self.skipped, "checked": self.checked, "rejected": self.rejected,
             "valid": self.valid, "unavailable": self.unavailable,
             "runtime_limits": self.runtime_limits, "executed": self.executed,
+            "executions": self.executions,
             "edits": self.edits,
             "clusters": self.clusters.iter().map(|((kind, edit), c)| serde_json::json!({
                 "kind": kind, "edit": edit, "count": c.count, "path": c.path,
@@ -1719,8 +1822,12 @@ fn in_sample_shard(rank: u64, shard: Option<crate::Shard>) -> bool {
 struct Program {
     path: String,
     source: String,
-    run: bool,
-    package_path: Option<std::path::PathBuf>,
+    execution: Execution,
+    /// The expectation it was written under, for the execution counts.
+    expectation: &'static str,
+    /// The file a variant replaces the primary source of: a package sidecar's
+    /// program, or a test program (`classify_package_native`).
+    file: Option<std::path::PathBuf>,
 }
 
 /// Independent bounds: a per-program rotating window, then a global rank limit.
@@ -1904,10 +2011,9 @@ pub fn run_native_with_hash_seed(
             continue;
         }
         let Ok(parsed) = parse(&source) else { continue };
-        let package_path = path
-            .with_extension("hir.json")
-            .exists()
-            .then_some(path.clone());
+        let execution = Execution::of(&header.expect);
+        let file = (execution == Execution::Tests || path.with_extension("hir.json").exists())
+            .then(|| path.clone());
         let path = relative.display().to_string();
         let (generated, edits) = if sample.per_program.is_none() && sample.limit != usize::MAX {
             ranked_catalogue(&parsed, &source, &path, seed, sample.limit)
@@ -1922,8 +2028,9 @@ pub fn run_native_with_hash_seed(
         programs.push(Program {
             path,
             source,
-            package_path,
-            run: matches!(header.expect, crate::Expect::Run { .. }),
+            execution,
+            expectation: header.expect.kind(),
+            file,
         });
     }
     if native.is_some() {
@@ -1956,8 +2063,9 @@ pub fn run_native_with_hash_seed(
             programs.push(Program {
                 path,
                 source,
-                run: true,
-                package_path: fixture
+                execution: Execution::Entry,
+                expectation: "historical",
+                file: fixture
                     .with_extension("hir.json")
                     .exists()
                     .then_some(fixture),
@@ -1992,9 +2100,9 @@ pub fn run_native_with_hash_seed(
             |p| {
                 classify_package_native(
                     &programs[*p].source,
-                    false,
+                    Execution::None,
                     None,
-                    programs[*p].package_path.as_deref(),
+                    programs[*p].file.as_deref(),
                     hash_seed,
                 )
             },
@@ -2022,9 +2130,9 @@ pub fn run_native_with_hash_seed(
             let source = edit.apply(&program.source);
             let outcome = classify_package_native(
                 &source,
-                program.run,
+                program.execution,
                 native.zip(matrix.as_deref()),
-                program.package_path.as_deref(),
+                program.file.as_deref(),
                 hash_seed,
             );
             if let Classification::Bug { kind, detail } = &outcome
@@ -2046,7 +2154,10 @@ pub fn run_native_with_hash_seed(
             Classification::Rejected => report.rejected += 1,
             Classification::Valid => {
                 report.valid += 1;
-                report.executed += usize::from(program.run);
+                if program.execution != Execution::None {
+                    report.executed += 1;
+                    *report.executions.entry(program.expectation).or_default() += 1;
+                }
             }
             Classification::Unavailable => report.unavailable += 1,
             Classification::RuntimeLimit => {
@@ -2062,8 +2173,8 @@ pub fn run_native_with_hash_seed(
                         path: program.path.clone(),
                         source: edit.apply(&program.source),
                         detail,
-                        run: program.run,
-                        package_path: program.package_path.clone(),
+                        execution: program.execution,
+                        file: program.file.clone(),
                     });
                 cluster.count += 1;
             }
@@ -2249,6 +2360,48 @@ mod tests {
         assert_eq!(summed, whole);
     }
     #[test]
+    fn fail_and_test_variants_execute_on_every_engine() {
+        let root = std::env::temp_dir().join(format!(
+            "hirsel-agree-executions-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        for area in ["SEM", "LANG"] {
+            std::fs::create_dir_all(root.join("conformance").join(area)).unwrap();
+        }
+        std::fs::create_dir_all(root.join(crate::SPEC_DIR)).unwrap();
+        std::fs::write(
+            root.join(crate::SPEC_DIR).join("language.md"),
+            "### SEM-1: Integers\n### LANG-9: Tests\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("conformance/SEM/SEM-1-fixture-fail.hir"),
+            "// rule: SEM-1\n// expect: fail SEM-1 at line 5\npub fn main(rt: Io, args: Args) -> Result[(), CliError] {\n  let mut k: u8 = 8u8\n  let n = 1u8 << k\n  Ok(())\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("conformance/LANG/LANG-9-fixture.hir"),
+            "// rule: LANG-9\n// expect: test\n@test\nfn example(t: Test) {\n  let mut ok: bool = true\n  test.check(t, ok)\n}\n",
+        )
+        .unwrap();
+        let report = run(&root, 1, usize::MAX).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(report.clusters.is_empty(), "{:?}", report.clusters);
+        assert!(
+            report.executions.get("fail").is_some_and(|&n| n > 0),
+            "{report:?}"
+        );
+        assert!(
+            report.executions.get("test").is_some_and(|&n| n > 0),
+            "{report:?}"
+        );
+        assert_eq!(report.executed, report.executions.values().sum::<usize>());
+    }
+    #[test]
     fn a_sample_within_files_partitions_the_whole_corpus_sample() {
         let root = std::env::temp_dir().join(format!(
             "hirsel-agree-within-{}-{}",
@@ -2372,7 +2525,11 @@ mod tests {
         );
         // The record keeps the view of `s` through the element until `r.name`
         // is read, on both checkers.
-        assert_eq!(classify(&held, false), Classification::Valid, "{held}");
+        assert_eq!(
+            classify(&held, Execution::None),
+            Classification::Valid,
+            "{held}"
+        );
     }
     #[test]
     fn catalogue_holds_literals_related_bindings_and_block_tails() {
@@ -2390,7 +2547,7 @@ mod tests {
             "{related}"
         );
         assert_eq!(
-            classify(&related, false),
+            classify(&related, Execution::None),
             Classification::Valid,
             "{related}"
         );
@@ -2400,7 +2557,11 @@ mod tests {
             tail.contains("let agree_tail: List[List[List[u64]]] = [v]\nagree_tail[0]"),
             "{tail}"
         );
-        assert_eq!(classify(&tail, false), Classification::Rejected, "{tail}");
+        assert_eq!(
+            classify(&tail, Execution::None),
+            Classification::Rejected,
+            "{tail}"
+        );
         // A closure that captures the block's Global list returns a share of
         // it, which leaves the block. A closure's result over a borrowed
         // parameter stays local to that argument (CLO-1), here to `v`.
@@ -2418,7 +2579,7 @@ mod tests {
         ] {
             let tail = edit(kind);
             assert!(tail.contains(text), "{tail}");
-            assert_eq!(classify(&tail, false), expected, "{tail}");
+            assert_eq!(classify(&tail, Execution::None), expected, "{tail}");
         }
     }
     #[test]
@@ -2436,7 +2597,11 @@ mod tests {
             made.contains("= [(fn() { ((fn(k: u64) { k }, 1u64), 0u64) })()]\nlet (pair, _)"),
             "{made}"
         );
-        assert_eq!(classify(&made, false), Classification::Valid, "{made}");
+        assert_eq!(
+            classify(&made, Execution::None),
+            Classification::Valid,
+            "{made}"
+        );
     }
     #[test]
     fn catalogue_makes_a_typed_initializer_the_result_of_a_called_closure() {
@@ -2457,11 +2622,15 @@ mod tests {
         ] {
             let made = edits.iter().find(|e| e.kind == kind).unwrap().apply(source);
             assert!(made.contains(text), "{made}");
-            assert_eq!(classify(&made, false), Classification::Valid, "{made}");
+            assert_eq!(
+                classify(&made, Execution::None),
+                Classification::Valid,
+                "{made}"
+            );
             // The twin whose literal may allocate has no evidence.
             let allocating = made.replacen("@noalloc fn seven", "fn seven", 1);
             assert_eq!(
-                classify(&allocating, false),
+                classify(&allocating, Execution::None),
                 Classification::Rejected,
                 "{allocating}"
             );
@@ -2473,7 +2642,7 @@ mod tests {
         // checkers. The corpus pins the list form and the rejected tuple twin
         // (CLO-2-nested-uses-annotation-*).
         let source = "@noalloc fn through(g: @noalloc fn() -> () uses {}) -> () { () }\nfn probe() -> () { let held: (fn(g: @noalloc fn() -> () uses {}) -> (), u64) = (fn(g: @noalloc fn() -> () uses {}) { through(g) }, 0u64); () }";
-        assert_eq!(classify(source, false), Classification::Valid);
+        assert_eq!(classify(source, Execution::None), Classification::Valid);
     }
     #[test]
     fn nested_callables_are_received_by_position_on_both_checkers() {
@@ -2486,14 +2655,18 @@ mod tests {
             "fn probe() -> () { let held: (fn() -> (fn() -> () uses {}), u64) = (fn() { fn() { () } }, 0u64); () }",
             "fn probe() -> () { let h: (fn(g: fn() -> () uses {}) -> (), u64) = (fn(g: fn() -> ()) { g() }, 0u64); () }",
         ] {
-            assert_eq!(classify(source, false), Classification::Valid, "{source}");
+            assert_eq!(
+                classify(source, Execution::None),
+                Classification::Valid,
+                "{source}"
+            );
         }
         for source in [
             "fn probe() -> () { let h: (fn(g: fn() -> ()) -> (), u64) = (fn(g: fn() -> () uses {}) { g() }, 0u64); () }",
             "fn probe(rt: Stdout) -> () { let h: (fn() -> (fn() -> () uses {}), u64) = (fn() { fn() { let _ = out.print(rt, \"x\") } }, 0u64); () }",
         ] {
             assert_eq!(
-                classify(source, false),
+                classify(source, Execution::None),
                 Classification::Rejected,
                 "{source}"
             );
@@ -2509,7 +2682,7 @@ mod tests {
             .unwrap()
             .apply(source);
         assert!(
-            matches!(classify(&compared, false), Classification::Valid),
+            matches!(classify(&compared, Execution::None), Classification::Valid),
             "{compared}"
         );
     }
@@ -2571,7 +2744,11 @@ mod tests {
                     .replace("return piece", "return copy piece")
                     .replace("=> piece,", "=> copy piece,"),
             ] {
-                assert_eq!(classify(&source, false), Classification::Valid, "{source}");
+                assert_eq!(
+                    classify(&source, Execution::None),
+                    Classification::Valid,
+                    "{source}"
+                );
             }
         }
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2590,7 +2767,7 @@ mod tests {
             // The full grapheme program exceeds the campaign's instruction
             // budget; corpus/native execution covers both return forms.
             assert_eq!(
-                classify_package_native(&source, false, None, Some(&path), 0),
+                classify_package_native(&source, Execution::None, None, Some(&path), 0),
                 expected,
                 "{}",
                 path.display()

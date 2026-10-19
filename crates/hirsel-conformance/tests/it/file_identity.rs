@@ -25,7 +25,8 @@ fn opened_file_identity_agrees_natively_and_replays_real_io_for_every_control() 
             let source =
                 std::fs::read_to_string(root.join("conformance/PROV").join(format!("{id}.hir")))
                     .unwrap();
-            let classification = agree::classify_native(&source, true, Some((&native, &matrix)));
+            let classification =
+                agree::classify_native(&source, agree::Execution::Entry, Some((&native, &matrix)));
             assert_eq!(classification, agree::Classification::Valid, "{id}");
             std::fs::create_dir_all(dir.join(&id)).unwrap();
             let replay = native::replay_source(&id, &source, &native.toolchain, &dir.join(&id));
