@@ -176,6 +176,43 @@ fn prechecked_std_products_equal_fresh_ones() {
     });
 }
 
+/// LANG-6: a definition hash is the same whether std is adopted from its precheck
+/// or checked from source, for every std definition and the program's closure.
+#[test]
+fn definition_hashes_are_the_same_with_and_without_the_std_precheck() {
+    with_compiler_stack(|| {
+        let f = Fixture::new();
+        let path = std::env::var_os("HIRSEL_PRECHECK")
+            .expect("set HIRSEL_PRECHECK to the toolchain's std precheck");
+        let precheck = Arc::new(Precheck::read(Path::new(&path)).unwrap());
+        let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
+        let mut prechecked = load(&client, &PackageCache::prechecked(vec![precheck]));
+        assert!(
+            prechecked.engine.prechecked(&package("std")),
+            "{:?}",
+            prechecked.precheck_notes
+        );
+        let mut reference = load(&client, &PackageCache::disabled());
+        assert!(!reference.engine.prechecked(&package("std")));
+        let mut hashes = |p: &mut LoadedProgram| {
+            let entry = p.entry.clone();
+            let mut all = p.engine.package_definition_hashes(&package("std")).unwrap();
+            all.hashes
+                .extend(p.engine.definition_hashes([entry]).unwrap().hashes);
+            all.hashes
+        };
+        let (actual, expected) = (hashes(&mut prechecked), hashes(&mut reference));
+        assert!(expected.len() > 1000, "{}", expected.len());
+        let differing: Vec<_> = expected
+            .iter()
+            .filter(|(path, hash)| actual.get(*path) != Some(*hash))
+            .map(|(path, _)| path.to_string())
+            .collect();
+        assert!(differing.is_empty(), "{differing:?}");
+        assert_eq!(actual.len(), expected.len());
+    });
+}
+
 const LIBRARY: &str = "pub fn value(x: u64) -> u64 {
   x + 1
 }

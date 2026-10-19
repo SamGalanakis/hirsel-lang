@@ -192,7 +192,11 @@ the definition or anything it uses is called:
 
 - A definition with a body hashes its signature and its TIR; a type hashes its owner view,
   with its finalizer's TIR when it has one. Every other definition the encoding names is
-  written as that definition's hash. Source positions, the names of locals, parameters and
+  written as that definition's hash, except the nominal roles every signature carries
+  (the core definitions that are the `Result`, `Unsafe`, `Tasks`, `Scope` and heap
+  `Arena` roles), which are written by role name: a definition that uses a role type names
+  it in its signature or TIR, so an edit to a core role type moves only the definitions
+  that use it. Source positions, the names of locals, parameters and
   generic parameters, and the definition's own name are erased. Labels and field and
   variant names belong to the signature and remain.
 - A definition whose meaning is attached to its name hashes its full versioned path and its
@@ -212,8 +216,9 @@ a type identity for checking or serialization: nominal identity stays with paths
 signature fingerprints, which a caller checks alongside it. The encoding is the
 [PS-8](proof-seam.md#ps-8-encoding) wire text with these substitutions, hashed with the
 length-framed SHA-256 of [PS-5](proof-seam.md#ps-5-tir-digest) under the domain
-`hirsel.definition.hash.v1` with `TIR_VERSION`. It is the same on every machine and build
-and changes only with `TIR_VERSION` or the encoding. `hirsel hash` prints the hashes of a
+`hirsel.definition.hash.v1` with `TIR_VERSION`. For the same definitions it is the same
+on every machine and build, whether a package was checked from source or adopted from its
+precheck, and changes only with `TIR_VERSION` or the encoding. `hirsel hash` prints the hashes of a
 program's definitions, and the definition-hash query lists each call site with its
 callee's hash.
 

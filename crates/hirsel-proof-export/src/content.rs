@@ -1,8 +1,9 @@
 //! Definition content hashes (LANG-6): a name-independent code identity per
 //! definition. The encoding is the PS-8 wire text under [`Cx`] in content
 //! mode: every definition path is written as its hash, a reference into the
-//! definition's own recursive group as a group marker, and spans, local and
-//! parameter names and name-derived fingerprints are erased.
+//! definition's own recursive group as a group marker, a signature's nominal
+//! roles by role name, and spans, local and parameter names and name-derived
+//! fingerprints are erased.
 use crate::wire::Cx;
 use crate::{Location, collect};
 use hirsel_codec::{Snapshot, Writer};

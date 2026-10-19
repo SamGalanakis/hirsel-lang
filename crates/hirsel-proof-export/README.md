@@ -17,7 +17,9 @@ The prover-neutral proof seam (rules PS-1..PS-16):
 mode (`Cx::content`), where every definition path is written as its hash
 (through the codec's `Observe::reference`), a reference into the recursive
 group being hashed as a group marker, and spans, local, parameter and
-generic-parameter names and name-derived fingerprints are erased.
+generic-parameter names and name-derived fingerprints are erased. A
+signature's nominal roles are written by role name, so an edit to a core role
+type moves only the definitions whose TIR or types name it.
 `definition_hashes` hashes Tarjan components dependencies first and refines
 each group's members until their partition is stable; `call_sites` lists a
 TIR's calls and function references with each callee's hash. The driver-layer

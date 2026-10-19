@@ -630,13 +630,44 @@ snapshot_enum!(SignatureKind {
     Const { ty, generics }
 } in Cx);
 snapshot_struct!(HeapRole { arena, operation } in Cx);
-snapshot_struct!(NominalRoles {
-    unsafe_capability,
-    result_type,
-    tasks_capability,
-    scope_capability,
-    heap
-} in Cx);
+/// Under a content hash encoding each role is written as its role name, not its
+/// definition: the roles are one environment binding every signature carries,
+/// and a body's real use of a role type is a hashed reference in its TIR.
+impl Snapshot<Cx> for NominalRoles {
+    fn write(&self, w: &mut Writer<Cx>) {
+        w.open("NominalRoles");
+        if w.context.content.is_some() {
+            for (role, present) in [
+                ("unsafe_capability", self.unsafe_capability.is_some()),
+                ("result_type", self.result_type.is_some()),
+                ("tasks_capability", self.tasks_capability.is_some()),
+                ("scope_capability", self.scope_capability.is_some()),
+                ("heap", self.heap.is_some()),
+            ] {
+                present.then(|| role.to_string()).write(w);
+            }
+        } else {
+            self.unsafe_capability.write(w);
+            self.result_type.write(w);
+            self.tasks_capability.write(w);
+            self.scope_capability.write(w);
+            self.heap.write(w);
+        }
+        w.close();
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        r.open("NominalRoles")?;
+        let value = NominalRoles {
+            unsafe_capability: Snapshot::<Cx>::read(r)?,
+            result_type: Snapshot::<Cx>::read(r)?,
+            tasks_capability: Snapshot::<Cx>::read(r)?,
+            scope_capability: Snapshot::<Cx>::read(r)?,
+            heap: Snapshot::<Cx>::read(r)?,
+        };
+        r.close()?;
+        Ok(value)
+    }
+}
 snapshot_enum!(ScalarDomain { Integer, Float, Scalar } in Cx);
 snapshot_enum!(SchemaConstraint {
     Bound { parameter, bound, rule },
