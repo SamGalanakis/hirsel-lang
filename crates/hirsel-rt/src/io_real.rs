@@ -315,7 +315,8 @@ impl RealIo {
                         tree.directories.insert(path.clone());
                         work.push((pin, path, ancestry));
                     } else if meta.is_file() {
-                        let logical = relative(&selector, &path).expect("snapshot entry");
+                        let logical = hirsel_run_config::confined_relative(&selector, &path)
+                            .expect("snapshot entry");
                         // Invalid entries remain operation faults, rather than admission errors.
                         file_identities.insert(logical.clone(), (meta.dev(), meta.ino()));
                         if let Ok(bytes) = self.disk.read(&logical) {
@@ -360,27 +361,25 @@ impl RealIo {
         let mut tree = Tree::new(BTreeMap::new())?;
         for selector in &widest {
             let (_, _, snapshot) = &snapshots[selector];
-            tree.directories.extend(
-                snapshot
-                    .directories
-                    .iter()
-                    .map(|p| relative(selector, p).expect("snapshot directory")),
-            );
-            tree.files.extend(
-                snapshot
-                    .files
-                    .iter()
-                    .map(|(p, b)| (relative(selector, p).expect("snapshot file"), b.clone())),
-            );
-            tree.metadata.extend(
-                snapshot
-                    .metadata
-                    .iter()
-                    .map(|(p, m)| (relative(selector, p).expect("snapshot metadata"), m.clone())),
-            );
+            tree.directories
+                .extend(snapshot.directories.iter().map(|p| {
+                    hirsel_run_config::confined_relative(selector, p).expect("snapshot directory")
+                }));
+            tree.files.extend(snapshot.files.iter().map(|(p, b)| {
+                (
+                    hirsel_run_config::confined_relative(selector, p).expect("snapshot file"),
+                    b.clone(),
+                )
+            }));
+            tree.metadata.extend(snapshot.metadata.iter().map(|(p, m)| {
+                (
+                    hirsel_run_config::confined_relative(selector, p).expect("snapshot metadata"),
+                    m.clone(),
+                )
+            }));
             tree.links.extend(snapshot.links.iter().map(|(p, target)| {
                 (
-                    relative(selector, p).expect("snapshot link"),
+                    hirsel_run_config::confined_relative(selector, p).expect("snapshot link"),
                     target.clone(),
                 )
             }));
@@ -398,7 +397,8 @@ impl RealIo {
                 .iter()
                 .find_map(|top| snapshots[top].1.get(identity).map(|suffix| (top, suffix)))
                 .ok_or(IoError::Fault(1))?;
-            let target = relative(canonical, suffix).expect("snapshot mount alias");
+            let target = hirsel_run_config::confined_relative(canonical, suffix)
+                .expect("snapshot mount alias");
             let parent = selector.rsplit_once('/').map_or("", |(p, _)| p);
             let prefix = "../".repeat(parent.split('/').filter(|p| !p.is_empty()).count());
             tree.links

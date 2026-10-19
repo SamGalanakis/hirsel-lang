@@ -1,0 +1,11 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+// Normalize the caller's path before checking physical components, even when
+// the component removed by .. is a file or does not exist.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("f"), b"A")])
+  test.check(t, file.read_bytes(d, path.of("f/../f"))? == b"A")
+  test.check(t, file.read_bytes(d, path.of("missing/../f"))? == b"A")
+  Ok(())
+}

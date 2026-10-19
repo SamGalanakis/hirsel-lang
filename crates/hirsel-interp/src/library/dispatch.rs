@@ -278,7 +278,9 @@ impl Library {
                                         || (name == "io.dir"
                                             && self.simulation.detached_mounts.contains(&root)) =>
                                 {
-                                    let logical = simulation::relative(&root, &local).unwrap();
+                                    let logical =
+                                        hirsel_run_config::confined_relative(&root, &local)
+                                            .unwrap();
                                     let handle = self.simulation.handle(
                                         "Dir",
                                         Grant::Dir {
@@ -501,7 +503,7 @@ impl Library {
                         return Err(invalid("invalid test.dir pair"));
                     }
                     let p = path_text(pair[0].as_ref().ok_or_else(|| invalid("dead path"))?)?;
-                    let p = simulation::relative("", p)
+                    let p = hirsel_run_config::confined_relative("", p)
                         .ok_or_else(|| invalid("test.dir entry escapes root"))?;
                     let data =
                         bytes(pair[1].as_ref().ok_or_else(|| invalid("dead bytes"))?)?.to_vec();
@@ -604,12 +606,15 @@ impl Library {
             name,
             "file.narrow" | "file.walk" | "file.write_all" | "file.commit" | "file.sync"
         ) {
-            let invalid_path = simulation::relative(&root, path_text(arg(a, 1)?)?).is_none()
+            let invalid_path = hirsel_run_config::confined_relative(&root, path_text(arg(a, 1)?)?)
+                .is_none()
                 || (name == "file.rename"
-                    && simulation::relative(&root, path_text(arg(a, 2)?)?).is_none());
+                    && hirsel_run_config::confined_relative(&root, path_text(arg(a, 2)?)?)
+                        .is_none());
             let invalid_path = invalid_path
                 || (name == "dir.remove_all"
-                    && simulation::relative(&root, path_text(arg(a, 1)?)?).as_deref()
+                    && hirsel_run_config::confined_relative(&root, path_text(arg(a, 1)?)?)
+                        .as_deref()
                         == Some(&root))
                 || (name == "file.set_permissions" && int(arg(a, 2)?)?.bits() > 0o777);
             if invalid_path {
@@ -635,7 +640,8 @@ impl Library {
                             &root,
                             path_text(arg(a, 1)?)?,
                             false,
-                        ) && simulation::relative(&root, path_text(arg(a, 1)?)?).as_deref()
+                        ) && hirsel_run_config::confined_relative(&root, path_text(arg(a, 1)?)?)
+                            .as_deref()
                             != Some(&root)
                         {
                             let _ = self.simulation.remove_tree(tree, &p, Some(*partial));
@@ -883,7 +889,7 @@ impl Library {
             return Ok(ok(Value::Unit));
         }
         let p = path_text(arg(a, 1)?)?;
-        let Some(logical) = simulation::relative(&root, p) else {
+        let Some(logical) = hirsel_run_config::confined_relative(&root, p) else {
             return Ok(file_fault(self.simulation.config.invalid_path_code));
         };
         let follow = !matches!(

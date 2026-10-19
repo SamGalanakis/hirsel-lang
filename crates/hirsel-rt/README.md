@@ -1103,3 +1103,9 @@ B15 (`tests/it/tape_property.rs`) round-trips generated fields across every
 request and completion variant, including populated network and process scripts.
 Exhaustive matches require a specimen for new variants. It catches omitted,
 misframed and lossy fields; its ignored `full_gate_` version expands the draws.
+
+B12 (`tests/it/io_properties.rs`) compares real fd confinement, replay,
+interpreter and an independent recursive reference on generated trees with
+parent components, dangling links and cycles. Neither simulated oracle consumes
+host faults. It catches disagreement between lexical normalization and physical
+link traversal; its ignored `full_gate_` version expands trees and paths.

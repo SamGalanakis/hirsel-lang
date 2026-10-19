@@ -918,7 +918,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             ["argument", value] => arguments.push(string(value)?),
             ["directory", value] => {
                 let path = string(value)?;
-                if crate::io::relative("", &path).as_ref() != Some(&path)
+                if hirsel_run_config::confined_relative("", &path).as_ref() != Some(&path)
                     || !directories.insert(path)
                 {
                     return Err("bad recorded directory".into());
@@ -934,7 +934,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             ["link", path, target] => {
                 let path = string(path)?;
                 if path.is_empty()
-                    || crate::io::relative("", &path).as_ref() != Some(&path)
+                    || hirsel_run_config::confined_relative("", &path).as_ref() != Some(&path)
                     || links.insert(path, string(target)?).is_some()
                 {
                     return Err("bad recorded link".into());
@@ -942,7 +942,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
             }
             ["metadata", path, meta] => {
                 let path = string(path)?;
-                if crate::io::relative("", &path).as_ref() != Some(&path)
+                if hirsel_run_config::confined_relative("", &path).as_ref() != Some(&path)
                     || entry_metadata.insert(path, parse_metadata(meta)?).is_some()
                 {
                     return Err("bad recorded metadata".into());

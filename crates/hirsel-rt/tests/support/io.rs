@@ -714,7 +714,7 @@ pub fn replay_interpreter_with_fixture(
         }
     }
 }
-fn decode(schema: &Completion, value: hirsel_interp::Value) -> Completion {
+pub(crate) fn decode(schema: &Completion, value: hirsel_interp::Value) -> Completion {
     use hirsel_interp::Value;
     fn fields(value: Value) -> (u32, Vec<Value>) {
         if let Value::Variant { variant, fields } = value {

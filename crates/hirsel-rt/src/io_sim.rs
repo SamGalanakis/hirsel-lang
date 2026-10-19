@@ -944,7 +944,7 @@ impl<'a> LinkedTree<'a> {
                 .ok_or(IoError::Fault(1))?
         };
         if self.detached() {
-            return if relative("", local).as_deref() == Some("") {
+            return if hirsel_run_config::confined_relative("", local).as_deref() == Some("") {
                 Ok(self.active.1.clone())
             } else {
                 Err(IoError::NotFound)

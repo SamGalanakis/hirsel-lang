@@ -1,6 +1,7 @@
 //! Explicit deterministic capability implementations; no host I/O or entropy.
 use crate::{Error, OperationContext, TraceEvent, Value, invalid};
 use hirsel_run_config::Access;
+use hirsel_run_config::confined_relative;
 use hirsel_syntax::DefPath;
 use hirsel_tir::{CapabilityEvent, RunConfiguration};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -322,8 +323,8 @@ impl Simulation {
         // remain data and are checked at the confined operation boundary.
         let mut files = BTreeMap::new();
         for (path, data) in std::mem::take(&mut config.files) {
-            let path =
-                relative("", &path).ok_or_else(|| invalid("simulation file escapes root"))?;
+            let path = confined_relative("", &path)
+                .ok_or_else(|| invalid("simulation file escapes root"))?;
             if path.is_empty() {
                 return Err(invalid("file at directory root"));
             }
@@ -332,7 +333,8 @@ impl Simulation {
         let mut dirs = BTreeSet::from([String::new()]);
         for d in &config.directories {
             dirs.insert(
-                relative("", d).ok_or_else(|| invalid("simulation directory escapes root"))?,
+                confined_relative("", d)
+                    .ok_or_else(|| invalid("simulation directory escapes root"))?,
             );
         }
         // Acquiring a mount establishes its root even when it has no entries.
@@ -344,7 +346,7 @@ impl Simulation {
             parents(selector, &mut dirs);
         }
         for path in config.links.keys() {
-            if path.is_empty() || relative("", path).as_ref() != Some(path) {
+            if path.is_empty() || confined_relative("", path).as_ref() != Some(path) {
                 return Err(invalid("invalid simulation link name"));
             }
             parents(path, &mut dirs);
@@ -623,7 +625,7 @@ impl Simulation {
             .cloned()
             .map_or_else(|| self.resolve_path(0, "", selector, true), Ok)?;
         if self.detached_mounts.contains(selector) {
-            return if relative("", path).as_deref() == Some("") {
+            return if confined_relative("", path).as_deref() == Some("") {
                 Ok(physical)
             } else {
                 Err(FileError::NotFound)
@@ -647,13 +649,15 @@ impl Simulation {
             .map(String::as_str)
             .unwrap_or(logical_root);
         if self.detached_directories.contains(&directory) {
-            return if relative("", path).as_deref() == Some("") {
+            return if confined_relative("", path).as_deref() == Some("") {
                 Ok(root.into())
             } else {
                 Err(FileError::NotFound)
             };
         }
-        self.resolve_path(tree, root, path, follow_leaf)
+        let normalized =
+            confined_relative("", path).ok_or(FileError::Fault(self.config.invalid_path_code))?;
+        self.resolve_path(tree, root, &normalized, follow_leaf)
     }
     fn resolve_path(
         &self,
@@ -961,26 +965,6 @@ pub(crate) fn parents(path: &str, dirs: &mut BTreeSet<String>) {
         dirs.insert(parent.into());
         p = parent;
     }
-}
-pub(crate) fn relative(root: &str, path: &str) -> Option<String> {
-    if path.starts_with('/') || path.contains('\0') || path.contains('\\') {
-        return None;
-    }
-    let mut parts: Vec<_> = root.split('/').filter(|s| !s.is_empty()).collect();
-    let base = parts.len();
-    for p in path.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                if parts.len() == base {
-                    return None;
-                }
-                parts.pop();
-            }
-            _ => parts.push(p),
-        }
-    }
-    Some(parts.join("/"))
 }
 
 #[cfg(test)]

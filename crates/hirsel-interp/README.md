@@ -644,3 +644,8 @@ destination arena.
 
 Blocking Io calls apply CONC-3 program validity and authority checks before cancellation;
 scripted peer transitions, faults and deadline observations follow cancellation.
+
+Directory operations normalize the caller's portable path lexically through
+`hirsel_run_config::confined_relative` before resolving snapshot symlinks.
+Physical link targets are still traversed component by component beneath the
+pinned directory.

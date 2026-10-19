@@ -5,6 +5,7 @@ pub use crate::net::{
     NetError, NetOperation, NetProvider, NetRule, NetTimeout, NetWorld, RootsDigest, ShutdownHow,
     SocketAddr, TimeoutKind, TlsFailure,
 };
+use hirsel_run_config::confined_relative;
 use hirsel_run_config::{Access, RunRefusal};
 use std::collections::{BTreeMap, BTreeSet};
 pub(crate) fn mount_access(
@@ -674,7 +675,7 @@ impl Tree {
             metadata: BTreeMap::new(),
         };
         for (path, bytes) in files {
-            let path = relative("", &path)
+            let path = confined_relative("", &path)
                 .filter(|p| !p.is_empty())
                 .ok_or(IoError::Fault(1))?;
             let mut p = path.as_str();
@@ -786,26 +787,7 @@ pub(crate) trait Storage {
     fn read_dir(&mut self, path: &str) -> Result<Vec<DirEntry>, IoError>;
     fn walk(&mut self, root: &str) -> Result<Vec<String>, IoError>;
 }
-pub(crate) fn relative(root: &str, path: &str) -> Option<String> {
-    if path.starts_with('/') || path.contains('\0') || path.contains('\\') {
-        return None;
-    }
-    let mut parts: Vec<_> = root.split('/').filter(|p| !p.is_empty()).collect();
-    let base = parts.len();
-    for p in path.split('/') {
-        match p {
-            "" | "." => {}
-            ".." => {
-                if parts.len() == base {
-                    return None;
-                }
-                parts.pop();
-            }
-            _ => parts.push(p),
-        }
-    }
-    Some(parts.join("/"))
-}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct State {
     pub handles: Handles,
@@ -1309,7 +1291,8 @@ impl State {
                 }
                 let mut files = BTreeMap::new();
                 for (path, bytes) in entries {
-                    let path = relative("", path).ok_or(AdapterError::InvalidCompletion)?;
+                    let path =
+                        confined_relative("", path).ok_or(AdapterError::InvalidCompletion)?;
                     files.insert(path, bytes.clone());
                 }
                 let tree = Tree::new(files).map_err(|_| AdapterError::InvalidCompletion)?;
@@ -1388,7 +1371,7 @@ impl State {
                 let result = if let Some(e) = error {
                     Err(e)
                 } else {
-                    relative(&root, path)
+                    confined_relative(&root, path)
                         .ok_or(IoError::Fault(1))
                         .and_then(|root| {
                             storage.directory(&root, self.handles.next())?;
@@ -1657,8 +1640,8 @@ impl State {
                 let result = if let Some(e) = error {
                     Err(e)
                 } else {
-                    relative(&root, from)
-                        .zip(relative(&root, to))
+                    confined_relative(&root, from)
+                        .zip(confined_relative(&root, to))
                         .ok_or(IoError::Fault(1))
                         .and_then(|(from, to)| {
                             if from == root || to == root {
@@ -1701,7 +1684,7 @@ impl State {
                 };
                 let root = self.directory(directory)?;
                 storage.activate(directory, &root);
-                let path = relative(&root, path).ok_or(IoError::Fault(1));
+                let path = confined_relative(&root, path).ok_or(IoError::Fault(1));
                 match request {
                     R::Open { .. } | R::Create { .. } => Ok(C::Handle(if let Some(e) = error {
                         Err(e)

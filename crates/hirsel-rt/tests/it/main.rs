@@ -8,6 +8,7 @@ mod count;
 mod finalizers;
 mod handles;
 mod io;
+mod io_properties;
 mod measurement;
 mod model;
 mod mounts;

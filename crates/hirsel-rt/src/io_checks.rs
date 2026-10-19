@@ -135,8 +135,12 @@ impl State {
             }
             R::SetPermissions {
                 path, permissions, ..
-            } => *permissions > 0o777 || crate::io::relative(&root, path).is_none(),
-            R::RemoveAll { path, .. } => crate::io::relative(&root, path).is_none_or(|p| p == root),
+            } => {
+                *permissions > 0o777 || hirsel_run_config::confined_relative(&root, path).is_none()
+            }
+            R::RemoveAll { path, .. } => {
+                hirsel_run_config::confined_relative(&root, path).is_none_or(|p| p == root)
+            }
             R::Open { path, .. }
             | R::Create { path, .. }
             | R::Read { path, .. }
@@ -148,10 +152,12 @@ impl State {
             | R::Mkdir { path, .. }
             | R::RemoveDir { path, .. }
             | R::CreateAtomic { path, .. }
-            | R::PutNew { path, .. } => crate::io::relative(&root, path).is_none(),
+            | R::PutNew { path, .. } => {
+                hirsel_run_config::confined_relative(&root, path).is_none()
+            }
             R::Rename { from, to, .. } => {
-                crate::io::relative(&root, from).is_none()
-                    || crate::io::relative(&root, to).is_none()
+                hirsel_run_config::confined_relative(&root, from).is_none()
+                    || hirsel_run_config::confined_relative(&root, to).is_none()
             }
             _ => false,
         };
