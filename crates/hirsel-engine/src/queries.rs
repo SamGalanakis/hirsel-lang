@@ -1,5 +1,7 @@
 use crate::layered::Layered;
 use crate::*;
+mod definition_hash;
+pub use definition_hash::DefinitionHashes;
 mod dependencies;
 pub(crate) mod generation;
 pub use generation::GeneratedSource;

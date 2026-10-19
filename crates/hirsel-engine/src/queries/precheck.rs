@@ -394,6 +394,10 @@ impl QueryEngine {
 /// A prechecked definition's revision node.
 pub(crate) struct PrecheckedNodeRef(Arc<PrecheckedDefinition>);
 impl PrecheckedNodeRef {
+    /// Whether the precheck holds the definition's TIR.
+    pub(super) fn has_lowering(&self) -> bool {
+        self.0.lowering.is_some()
+    }
     pub(super) fn has_staged_reads(&self) -> bool {
         self.0
             .lowering

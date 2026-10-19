@@ -8,8 +8,8 @@ use hirsel_codec::{DecodeError, Reader, Snapshot, Writer, snapshot_enum, snapsho
 use hirsel_diag::RuleId;
 use hirsel_span::{FileId, Span};
 use hirsel_syntax::{
-    BinaryOp, Bound, ContractKind, ExprId, ItemId, PassingMode, PatternId, StmtId, TypeExprId,
-    UnaryOp, Visibility,
+    BinaryOp, Bound, ContentHash, ContractKind, ExprId, ItemId, PassingMode, PatternId, StmtId,
+    TypeExprId, UnaryOp, Visibility,
 };
 use hirsel_tir::{
     Block, BlockId, Body, BodyId, CallArgument, CallReturn, Callee, Cleanup, CleanupAction,
@@ -53,6 +53,9 @@ pub struct Cx {
     pub(crate) section: u32,
     /// Collect: every definition path the section names (PS-6 references).
     pub(crate) references: BTreeSet<hirsel_syntax::DefPath>,
+    /// A definition content hash encoding (LANG-6): references are written
+    /// by hash, and spans and local names are erased.
+    pub(crate) content: Option<crate::content::Naming>,
 }
 
 const SYNTAX_KINDS: usize = 5;
@@ -74,6 +77,7 @@ impl Cx {
             type_ids: vec![],
             section: 0,
             references: BTreeSet::new(),
+            content: None,
         }
     }
     /// Start a definition section: empty tables, collect pass.
@@ -126,6 +130,38 @@ impl Cx {
     }
 }
 
+/// `snapshot_struct!` under [`Cx`], except that each `field => value` writes
+/// `value` instead under a content hash encoding: the field is a name or a
+/// name-derived fingerprint, never meaning.
+macro_rules! erasing_struct {
+    ($ty:ident { $($field:ident $(=> $erased:expr)?),* $(,)? }) => {
+        impl Snapshot<Cx> for $ty {
+            fn write(&self, w: &mut Writer<Cx>) {
+                w.open(stringify!($ty));
+                let erase = w.context.content.is_some();
+                $(erasing_struct!(@field self, w, erase, $field $(, $erased)?);)*
+                w.close();
+            }
+            fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+                r.open(stringify!($ty))?;
+                let value = $ty { $($field: Snapshot::<Cx>::read(r)?,)* };
+                r.close()?;
+                Ok(value)
+            }
+        }
+    };
+    (@field $self:ident, $w:ident, $erase:ident, $field:ident) => {
+        Snapshot::<Cx>::write(&$self.$field, $w);
+    };
+    (@field $self:ident, $w:ident, $erase:ident, $field:ident, $erased:expr) => {
+        if $erase {
+            Snapshot::<Cx>::write(&$erased, $w);
+        } else {
+            Snapshot::<Cx>::write(&$self.$field, $w);
+        }
+    };
+}
+
 snapshot_struct!(Location {
     module,
     line,
@@ -136,6 +172,10 @@ snapshot_struct!(Location {
 
 impl Snapshot<Cx> for Span {
     fn write(&self, w: &mut Writer<Cx>) {
+        if w.context.content.is_some() {
+            w.uint(0);
+            return;
+        }
         let id = w.context.location(*self);
         w.uint(id.into());
     }
@@ -473,26 +513,58 @@ snapshot_struct!(Type {
 } in Cx);
 snapshot_struct!(Field { growable, name, ty } in Cx);
 snapshot_struct!(Variant { name, fields } in Cx);
-snapshot_enum!(GenericParameter {
-    Type { name, bounds },
-    Size { name }
-} in Cx);
-snapshot_struct!(Parameter {
-    name,
+impl Snapshot<Cx> for GenericParameter {
+    fn write(&self, w: &mut Writer<Cx>) {
+        // Generic parameters are referenced by position; their names are local.
+        let erase = w.context.content.is_some();
+        let name = |name: &String| if erase { String::new() } else { name.clone() };
+        match self {
+            Self::Type { name: n, bounds } => {
+                w.open("Type");
+                name(n).write(w);
+                bounds.write(w);
+            }
+            Self::Size { name: n } => {
+                w.open("Size");
+                name(n).write(w);
+            }
+        }
+        w.close();
+    }
+    fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
+        let value = match r.open_any()? {
+            "Type" => Self::Type {
+                name: String::read(r)?,
+                bounds: SharedSlice::read(r)?,
+            },
+            "Size" => Self::Size {
+                name: String::read(r)?,
+            },
+            other => return Err(r.error(format!("unknown GenericParameter variant {other}"))),
+        };
+        r.close()?;
+        Ok(value)
+    }
+}
+erasing_struct!(Parameter {
+    // A parameter's name is local to its body; its label is its call interface.
+    name => None::<String>,
     label,
     passing,
     ty
-} in Cx);
-snapshot_struct!(Contract {
+});
+erasing_struct!(Contract {
     kind,
     ordinal,
-    code_hash
-} in Cx);
-snapshot_struct!(ForeignContract {
+    // Derived from resolved names; the contract code is in its owner's TIR.
+    code_hash => ContentHash::default()
+});
+erasing_struct!(ForeignContract {
     abi,
     blocking,
-    aliasing_contract
-} in Cx);
+    // The extern's doc comment.
+    aliasing_contract => String::new()
+});
 snapshot_enum!(WrapperKind { Pure, Handle, Effect } in Cx);
 snapshot_struct!(ForeignWrapper { kind, deterministic } in Cx);
 snapshot_struct!(StatePromise {
@@ -583,13 +655,14 @@ snapshot_struct!(SignatureMetadata {
     roles,
     schema
 } in Cx);
-snapshot_struct!(Signature {
+erasing_struct!(Signature {
     metadata,
     definition,
     types,
     kind,
-    fingerprint
-} in Cx);
+    // Name-sensitive; the content hash covers the signature itself.
+    fingerprint => ContentHash::default()
+});
 snapshot_struct!(SignatureDependency { definition, fingerprint } in Cx);
 snapshot_enum!(UseKind { Borrow, Take, Copy, Mut } in Cx);
 snapshot_enum!(Destination {
@@ -599,7 +672,10 @@ snapshot_enum!(Destination {
     Region(region),
     Inferred
 } in Cx);
-snapshot_struct!(ProtocolAssociation { source, fingerprint } in Cx);
+erasing_struct!(ProtocolAssociation {
+    source,
+    fingerprint => ContentHash::default()
+});
 
 // --- TIR -------------------------------------------------------------------
 snapshot_enum!(Storage {
@@ -765,16 +841,16 @@ snapshot_struct!(ProtocolAssociationReceipt {
     open,
     next
 } in Cx);
-snapshot_struct!(Definition {
+erasing_struct!(Definition {
     caller_bodies,
     protocol_associations,
     types,
     path,
-    signature_hash,
+    signature_hash => ContentHash::default(),
     bodies,
     entry,
     contracts
-} in Cx);
+});
 snapshot_struct!(Materialized { types, root } in Cx);
 snapshot_struct!(ValueNode { ty, kind } in Cx);
 snapshot_enum!(ValueKind {

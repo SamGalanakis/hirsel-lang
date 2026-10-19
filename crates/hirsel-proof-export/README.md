@@ -13,6 +13,16 @@ The prover-neutral proof seam (rules PS-1..PS-16):
   digest, table and checksum, requires canonical form, and re-validates each
   definition with V.
 
+`content.rs` computes LANG-6 definition hashes: the same wire text in content
+mode (`Cx::content`), where every definition path is written as its hash
+(through the codec's `Observe::reference`), a reference into the recursive
+group being hashed as a group marker, and spans, local, parameter and
+generic-parameter names and name-derived fingerprints are erased.
+`definition_hashes` hashes Tarjan components dependencies first and refines
+each group's members until their partition is stable; `call_sites` lists a
+TIR's calls and function references with each callee's hash. The driver-layer
+engine chooses each definition's `DefinitionContent`.
+
 `sidecar.rs` is the PS-12 evidence consumer: the
 `hirsel.proof.sidecar.v1` record shape and `assess`, which decides for every
 obligation of an export whether its record is current (revision and checksum),

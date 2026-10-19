@@ -186,6 +186,37 @@ Materializing compile-time values depends on the executed implementations and co
 so a same-signature body edit invalidates evaluated dependents, while static checking
 still reads only signatures.
 
+**Definition hashes.** Every definition has a definition hash, the code identity that
+runners, the code store and upgrades use. It covers what the definition means, never what
+the definition or anything it uses is called:
+
+- A definition with a body hashes its signature and its TIR; a type hashes its owner view,
+  with its finalizer's TIR when it has one. Every other definition the encoding names is
+  written as that definition's hash. Source positions, the names of locals, parameters and
+  generic parameters, and the definition's own name are erased. Labels and field and
+  variant names belong to the signature and remain.
+- A definition whose meaning is attached to its name hashes its full versioned path and its
+  signature: a registry operation, an extern or a signature fragment. A generic generated
+  declaration ([CT-5](compile-time.md#ct-5-generation)) also hashes its path, its
+  signature, its declaration's tokens and the hashes of what its generator reads, so its
+  hash changes when it is renamed.
+- A recursive group (a strongly connected component of the reference graph) is hashed
+  together. A reference into the group is written as a group marker. Each member is then
+  refined by the hashes of the members it references, in encoding order, until no member
+  splits from another, and its hash binds the group's sorted member hashes and its own.
+
+Renaming a definition, a local or a module therefore keeps every hash. A body or signature
+edit changes the edited definition's hash and the hash of every definition that reaches it,
+and two identical definitions in different modules share a hash. A definition hash is not
+a type identity for checking or serialization: nominal identity stays with paths and
+signature fingerprints, which a caller checks alongside it. The encoding is the
+[PS-8](proof-seam.md#ps-8-encoding) wire text with these substitutions, hashed with the
+length-framed SHA-256 of [PS-5](proof-seam.md#ps-5-tir-digest) under the domain
+`hirsel.definition.hash.v1` with `TIR_VERSION`. It is the same on every machine and build
+and changes only with `TIR_VERSION` or the encoding. `hirsel hash` prints the hashes of a
+program's definitions, and the definition-hash query lists each call site with its
+callee's hash.
+
 Whether a generic parameter can transport an implicit sendability refinement follows
 from its declared copying permissions, never from its implementation. Neither a body that
 happens not to copy nor a library operation's name strengthens that contract. Core

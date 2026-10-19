@@ -4,10 +4,15 @@
 //! decodes, re-derives every signature fingerprint, recomputes every digest
 //! and table, and re-validates each definition with V; any difference is a
 //! located refusal.
+mod content;
 mod obligations;
 pub mod sidecar;
 pub mod wire;
 
+pub use content::{
+    CallSite, CallSiteKind, DEFINITION_HASH_DOMAIN, DefinitionContent, call_sites,
+    definition_hashes, references,
+};
 pub use obligations::{
     Detail, Obligation, ObligationId, ObligationKind, Site, SitePosition, projected_places,
 };
@@ -172,11 +177,17 @@ impl Observe for Cx {
             self.references.insert(path.clone());
         }
     }
+    fn reference(&mut self, path: &DefPath) -> Option<String> {
+        let collecting = self.collecting;
+        self.content
+            .as_mut()
+            .map(|naming| naming.reference(path, collecting))
+    }
 }
 
 /// Run the collect pass of `write` on a scratch writer, then leave `w` ready
 /// to emit with the finished section tables.
-fn collect(w: &mut Writer<Cx>, write: impl Fn(&mut Writer<Cx>)) {
+pub(crate) fn collect(w: &mut Writer<Cx>, write: impl Fn(&mut Writer<Cx>)) {
     let locator = w.context.locator.clone();
     let mut cx = std::mem::replace(&mut w.context, Cx::new(locator));
     cx.begin_collect();

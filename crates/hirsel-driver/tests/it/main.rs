@@ -19,6 +19,7 @@ mod codec;
 mod comptime;
 mod contract_diagnostics;
 mod contracts;
+mod definition_hash;
 mod depth;
 mod dictionaries;
 mod erased_release_ir;

@@ -33,7 +33,7 @@ fn help_spellings_print_usage_to_stdout_and_exit_zero() {
         assert_eq!(output.status.code(), Some(0), "{command}");
         assert_eq!(
             output.stdout,
-            b"usage: hirsel [--verbose] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
+            b"usage: hirsel [--verbose] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>\n",
             "{command}"
         );
         assert!(output.stderr.is_empty(), "{command}");
@@ -124,6 +124,42 @@ fn expand_prints_generated_bodies_in_source_order_and_rejected_source_exits_one(
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("error[LANG-7]"));
+}
+#[test]
+fn hash_prints_definition_hashes_that_renames_keep_and_rejected_source_exits_one() {
+    let hash = |source: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("hash")
+            .arg(file(source))
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let source = "fn add(x: u64) -> u64 { let y = x + 1u64; y }\npub fn main() -> Result[(), ()] { let n = add(1u64); Ok(()) }\n";
+    let text = hash(source);
+    let lines: Vec<_> = text.lines().map(|l| l.split_once(' ').unwrap()).collect();
+    assert_eq!(
+        lines.iter().map(|(_, path)| *path).collect::<Vec<_>>(),
+        ["standalone@0/add", "standalone@0/main"]
+    );
+    assert!(lines.iter().all(|(hash, _)| hash.len() == 64));
+    let renamed = hash(&source.replace("add", "plus").replace('y', "z"));
+    assert_eq!(
+        renamed,
+        text.replace("standalone@0/add", "standalone@0/plus")
+            .lines()
+            .rev()
+            .map(|l| format!("{l}\n"))
+            .collect::<String>()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("hash")
+        .arg(file("fn bad() -> u64 { true }\n"))
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
 }
 #[test]
 fn export_tir_writes_the_proof_seam_export_and_rejected_source_exits_one() {

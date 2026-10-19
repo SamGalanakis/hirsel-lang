@@ -173,6 +173,39 @@ pub fn export_tir_path(path: &Path) -> Result<String, ToolError> {
             .map_err(|error| program.error(error))
     })
 }
+/// `hirsel hash <source|manifest.json>`: one `<hash> <definition path>` line
+/// per source definition of the checked program's package, sorted by path
+/// (LANG-6 definition hashes).
+pub fn hash_path(path: &Path) -> Result<String, ToolError> {
+    hirsel_engine::with_compiler_stack(|| {
+        let mut program = load_program(path)?;
+        let output = program.check().map_err(|error| program.error(error))?;
+        if output
+            .diagnostics
+            .iter()
+            .any(|d| d.severity.as_str() == "error")
+        {
+            return Err(program.error(hirsel_engine::QueryError::Diagnostics(output.diagnostics)));
+        }
+        let package = program.entry.0.package.clone();
+        let hashes = program
+            .engine
+            .package_definition_hashes(&package)
+            .map_err(|error| program.error(error))?;
+        let mut out = String::new();
+        for (definition, hash) in hashes
+            .hashes
+            .iter()
+            .filter(|(definition, _)| definition.0.package == package)
+        {
+            for byte in hash.0 {
+                out.push_str(&format!("{byte:02x}"));
+            }
+            out.push_str(&format!(" {definition}\n"));
+        }
+        Ok(out)
+    })
+}
 /// `hirsel expand <file>`: each generated body (CT-5) of the file's declarations, in
 /// source order, exactly as its generator wrote it, so diagnostic lines match.
 pub fn expand_path(path: &Path) -> Result<String, ToolError> {

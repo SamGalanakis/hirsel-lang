@@ -41,6 +41,15 @@ Comments/spaces, source positions, file order, compiler provenance and native
 instances/options are excluded. Newline boundaries remain because LANG-1 uses
 them. Unrelated source definitions do not participate.
 
+`QueryEngine::definition_hashes(roots)` gives every definition the roots reach
+its LANG-6 definition hash, and each definition with TIR its call sites with
+their callees' hashes (`definition_hash`, `package_definition_hashes` and
+`hirsel hash` read it). A definition with TIR hashes its signature and TIR, a
+source or prechecked type its owner view, and a registry operation, extern,
+signature fragment or generic generated declaration its path, signature,
+semantic tokens and reads. It is a query over existing TIR; nothing is cached
+across calls.
+
 `QueryEngine::unsafe_reach(root)` walks that same closure breadth-first from any
 root definition and returns the shortest path to the first extern or
 `UnsafeOperation`-role core operation it reaches (CAP-6), or none. It is the

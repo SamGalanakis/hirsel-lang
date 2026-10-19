@@ -35,6 +35,10 @@ Commands (arguments use the shared lexopt parser):
   generated function body (`= comptime`, CT-5) of the file's declarations in
   source order, exactly as its generator wrote it, so diagnostic lines in
   generated text match. A rejected program prints its diagnostics and exits 1.
+- `hirsel hash <source|manifest.json>` checks the program and prints one
+  `<hash> <definition path>` line per source definition of its package, sorted by
+  path: the LANG-6 definition hash, which renames keep and body edits move. A
+  rejected program prints its diagnostics and exits 1.
 - `hirsel doc <manifest.json> [-o out.md] [--json]` documents that package's
   public declarations without checking bodies. It retains full doc comments and
   signature contracts, stable definition-path anchors, and dependency links.
