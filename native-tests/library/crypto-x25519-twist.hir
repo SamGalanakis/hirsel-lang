@@ -1,0 +1,33 @@
+// steps: 6000000
+// One X25519 ladder keeps bounded interpretation and smoke under the action limit.
+// Wycheproof x25519_test.json (Apache-2.0); full518-case set in crypto-x25519-wycheproof.hir.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+fn shared(secret_hex: String, public_hex: String, expected: String) -> () {
+  match std@1/x25519.shared_secret(decode(secret_hex), decode(public_hex)) {
+    Ok(secret) => failure.check(std@1/hex.encode(secret) == expected, TextInvariant()),
+    Error(LowOrderPoint()) => failure.check(
+      expected == "0000000000000000000000000000000000000000000000000000000000000000",
+      TextInvariant()
+    ),
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), LaunchError] {
+  // tcId 7: Twist, SpecialPublicKey
+  shared(
+    "d03edde9f3e7b799045f9ac3793d4a9277dadeadc41bec0290f81f744f73775f",
+    "0200000000000000000000000000000000000000000000000000000000000000",
+    "b87a1722cc6c1e2feecb54e97abd5a22acc27616f78f6e315fd2b73d9f221e57"
+  )
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

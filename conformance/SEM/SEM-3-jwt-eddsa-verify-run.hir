@@ -1,0 +1,34 @@
+// rule: SEM-3
+// expect: run
+// steps: 6000000
+// golang-jwt Ed25519 fixture, with RFC 8037 alg EdDSA; public test key only.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main() -> Result[(), ()] {
+  let verified = jwt.verify_at(
+    "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJmb28iOiJiYXIifQ.rCiLylq-3K-9Y-cvlzvVtkeXhEUOqVYRRH8-7xvAgDRJGLO5WvvlNM2_SdD5AyaNPQCPevoMI_dSLiujr2oJDQ",
+    EdDSA(
+      ed25519.PublicKey(
+        bytes: decode(
+          "587ef3ea1a58aaf3e7b368b89fdcb29b0bc1dc03e18b82f243b887393e9caed1"
+        )
+      )
+    ),
+    jwt.default_validation(),
+    0
+  )
+  failure.check(
+    match verified {
+      Ok(Object(fields)) => map.get(fields, "foo") == Some(Text("bar")),
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

@@ -1,0 +1,24 @@
+// steps: 6000000
+// One expensive curve operation per program keeps the smoke matrix bounded.
+// RFC 8032 section 7.1 TEST3 deterministic signing.
+// Full151-case set: crypto-ed25519-wycheproof.hir (Apache-2.0).
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main(rt: Io) -> Result[(), LaunchError] {
+  let seed = decode("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7")
+  let signature = std@1/ed25519.sign(seed, decode("af82"))
+  failure.check(
+    std@1/hex.encode(signature) == "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+    TextInvariant()
+  )
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

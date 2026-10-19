@@ -1,0 +1,22 @@
+// rule: SEM-3
+// expect: fail SEM-3 at line 15
+// A 31-byte Ed25519 seed is refused before hashing.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(
+    std@1/hex.encode(
+      std@1/ed25519.public_key(
+        decode("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f")
+      )
+    ) == "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    TextInvariant()
+  )
+  Ok(())
+}

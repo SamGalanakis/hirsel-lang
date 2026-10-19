@@ -1,0 +1,29 @@
+// steps: 6000000
+// One expensive curve operation per program keeps the smoke matrix bounded.
+// Wycheproof tcId1 valid signature.
+// Full151-case set: crypto-ed25519-wycheproof.hir (Apache-2.0).
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main(rt: Io) -> Result[(), LaunchError] {
+  // tcId 1: Valid
+  failure.check(
+    std@1/ed25519.verify(
+      decode("7d4d0e7f6153a69b6242b522abbee685fda4420f8834b108c3bdae369ef549fa"),
+      decode(""),
+      decode(
+        "d4fbdb52bfa726b44d1786a8c0d171c3e62ca83c9e5bbe63de0bb2483f8fd6cc1429ab72cafc41ab56af02ff8fcc43b99bfe4c7ae940f60f38ebaa9d311c4007"
+      )
+    ) == true,
+    TextInvariant()
+  )
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

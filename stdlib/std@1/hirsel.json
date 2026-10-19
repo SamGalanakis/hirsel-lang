@@ -1149,6 +1149,32 @@
       "module": [
         "schema_evolution"
       ]
+    },
+    {
+      "path": "internal/curve25519.hir",
+      "module": [
+        "internal",
+        "curve25519"
+      ]
+    },
+    {
+      "path": "internal/curve25519_table.hir",
+      "module": [
+        "internal",
+        "curve25519_table"
+      ]
+    },
+    {
+      "path": "x25519.hir",
+      "module": [
+        "x25519"
+      ]
+    },
+    {
+      "path": "ed25519.hir",
+      "module": [
+        "ed25519"
+      ]
     }
   ],
   "dependencies": []

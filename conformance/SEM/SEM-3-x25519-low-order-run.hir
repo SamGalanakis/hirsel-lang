@@ -1,0 +1,59 @@
+// rule: SEM-3
+// expect: run
+// steps: 6000000
+// one X25519 is a 255-step Montgomery ladder and an inversion, about 2.8M steps
+// The peer u = 0 is a point of small order: the RFC 7748 section 6.1 all-zero result is
+// LowOrderPoint(), not a shared secret.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main() -> Result[(), ()] {
+  let Error(LowOrderPoint()) = std@1/x25519.shared_secret(
+    decode("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"),
+    bytes.from_list(
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    )
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  Ok(())
+}

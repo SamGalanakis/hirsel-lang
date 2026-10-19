@@ -1,0 +1,1287 @@
+// Arithmetic for X25519 (RFC 7748) and Ed25519 (RFC 8032): the field modulo
+// 2^255 - 19 in five 51-bit limbs and the edwards25519 group, from Zig
+// std/crypto/25519/field.zig, edwards25519.zig and curve25519.zig (MIT), and
+// scalars modulo the group order L from TweetNaCl's modL (public domain).
+// Operations on secrets (fe_*, the ladder, base_mul and the scalar functions)
+// select with masks and never branch or index on a secret; those named
+// *_public run in time that depends on their public inputs.
+pub type Fe {
+  l0: u64,
+  l1: u64,
+  l2: u64,
+  l3: u64,
+  l4: u64,
+}
+
+const MASK51: u64 = 0x7ffffffffffff
+
+const ZERO: Fe = Fe(l0: 0, l1: 0, l2: 0, l3: 0, l4: 0)
+
+const ONE: Fe = Fe(l0: 1, l1: 0, l2: 0, l3: 0, l4: 0)
+
+// sqrt(-1), the curve constant d and 2d.
+const SQRTM1: Fe = Fe(
+  l0: 1718705420411056,
+  l1: 234908883556509,
+  l2: 2233514472574048,
+  l3: 2117202627021982,
+  l4: 765476049583133
+)
+
+const D: Fe = Fe(
+  l0: 929955233495203,
+  l1: 466365720129213,
+  l2: 1662059464998953,
+  l3: 2033849074728123,
+  l4: 1442794654840575
+)
+
+const D2: Fe = Fe(
+  l0: 1859910466990425,
+  l1: 932731440258426,
+  l2: 1072319116312658,
+  l3: 1815898335770999,
+  l4: 633789495995903
+)
+
+@noalloc
+fn load64(data: Bytes, at: u64) -> u64 uses {} {
+  let mut value: u64 = 0
+  let mut i: u64 = 8
+  while i > 0 {
+    i -= 1
+    let byte: u64 = core@1/int.widen(data[at + i])
+    value = value << 8 | byte
+  }
+  value
+}
+
+// The 32 little-endian bytes at `at`, ignoring the top bit.
+@noalloc
+pub fn fe_from_bytes(data: Bytes, at: u64) -> Fe uses {} {
+  Fe(
+    l0: load64(data, at) & MASK51,
+    l1: load64(data, at + 6) >> 3 & MASK51,
+    l2: load64(data, at + 12) >> 6 & MASK51,
+    l3: load64(data, at + 19) >> 1 & MASK51,
+    l4: load64(data, at + 24) >> 12 & MASK51
+  )
+}
+
+// The canonical representative, each limb below 2^51.
+@noalloc
+fn fe_reduce(a: Fe) -> Fe uses {} {
+  let mut l0 = a.l0
+  let mut l1 = a.l1
+  let mut l2 = a.l2
+  let mut l3 = a.l3
+  let mut l4 = a.l4
+  let mut pass: u64 = 0
+  while pass < 2 {
+    l1 += l0 >> 51
+    l0 = l0 & MASK51
+    l2 += l1 >> 51
+    l1 = l1 & MASK51
+    l3 += l2 >> 51
+    l2 = l2 & MASK51
+    l4 += l3 >> 51
+    l3 = l3 & MASK51
+    l0 += 19 * (l4 >> 51)
+    l4 = l4 & MASK51
+    pass += 1
+  }
+  // Add 19 to learn whether the value reaches p, then subtract it back with 2^255.
+  l0 += 19
+  l1 += l0 >> 51
+  l0 = l0 & MASK51
+  l2 += l1 >> 51
+  l1 = l1 & MASK51
+  l3 += l2 >> 51
+  l2 = l2 & MASK51
+  l4 += l3 >> 51
+  l3 = l3 & MASK51
+  l0 += 19 * (l4 >> 51)
+  l4 = l4 & MASK51
+  l0 += 0x8000000000000 - 19
+  l1 += 0x8000000000000 - 1
+  l2 += 0x8000000000000 - 1
+  l3 += 0x8000000000000 - 1
+  l4 += 0x8000000000000 - 1
+  l1 += l0 >> 51
+  l0 = l0 & MASK51
+  l2 += l1 >> 51
+  l1 = l1 & MASK51
+  l3 += l2 >> 51
+  l2 = l2 & MASK51
+  l4 += l3 >> 51
+  l3 = l3 & MASK51
+  Fe(l0: l0, l1: l1, l2: l2, l3: l3, l4: l4 & MASK51)
+}
+
+@noalloc
+pub fn fe_to_bytes(a: Fe) -> Inline[u8, 32] uses {} {
+  let r = fe_reduce(a)
+  let words: Inline[u64, 4] = [
+    r.l0 | r.l1 << 51,
+    r.l1 >> 13 | r.l2 << 38,
+    r.l2 >> 26 | r.l3 << 25,
+    r.l3 >> 39 | r.l4 << 12
+  ]
+  let mut out: Inline[u8, 32] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let mut i: u64 = 0
+  while i < 32 {
+    out[i] = core@1/int.truncate(words[i >> 3] >> (i & 7) * 8)
+    i += 1
+  }
+  take out
+}
+
+@noalloc
+pub fn fe_add(a: Fe, b: Fe) -> Fe uses {} {
+  Fe(
+    l0: a.l0 + b.l0,
+    l1: a.l1 + b.l1,
+    l2: a.l2 + b.l2,
+    l3: a.l3 + b.l3,
+    l4: a.l4 + b.l4
+  )
+}
+
+// a - b as a + 2p - b, after carrying b below 2^52.
+@noalloc
+pub fn fe_sub(a: Fe, b: Fe) -> Fe uses {} {
+  let mut b1 = b.l1 + (b.l0 >> 51)
+  let mut b2 = b.l2 + (b1 >> 51)
+  let mut b3 = b.l3 + (b2 >> 51)
+  let mut b4 = b.l4 + (b3 >> 51)
+  let b0 = (b.l0 & MASK51) + 19 * (b4 >> 51)
+  b1 = b1 & MASK51
+  b2 = b2 & MASK51
+  b3 = b3 & MASK51
+  b4 = b4 & MASK51
+  Fe(
+    l0: a.l0 + 0xfffffffffffda - b0,
+    l1: a.l1 + 0xffffffffffffe - b1,
+    l2: a.l2 + 0xffffffffffffe - b2,
+    l3: a.l3 + 0xffffffffffffe - b3,
+    l4: a.l4 + 0xffffffffffffe - b4
+  )
+}
+
+@noalloc
+pub fn fe_neg(a: Fe) -> Fe uses {} {
+  fe_sub(ZERO, a)
+}
+
+// Carries five 128-bit column sums into limbs below 2^52.
+@noalloc
+fn carry_columns(r0: u128, r1: u128, r2: u128, r3: u128, r4: u128) -> Fe uses {} {
+  let c1 = r1 + (r0 >> 51)
+  let c2 = r2 + (c1 >> 51)
+  let c3 = r3 + (c2 >> 51)
+  let c4 = r4 + (c3 >> 51)
+  let top: u64 = core@1/int.narrow(c4 >> 51)
+  let low0: u64 = core@1/int.truncate(r0)
+  let low1: u64 = core@1/int.truncate(c1)
+  let low2: u64 = core@1/int.truncate(c2)
+  let low3: u64 = core@1/int.truncate(c3)
+  let low4: u64 = core@1/int.truncate(c4)
+  let l0 = (low0 & MASK51) + 19 * top
+  let l1 = (low1 & MASK51) + (l0 >> 51)
+  Fe(
+    l0: l0 & MASK51,
+    l1: l1 & MASK51,
+    l2: (low2 & MASK51) + (l1 >> 51),
+    l3: low3 & MASK51,
+    l4: low4 & MASK51
+  )
+}
+
+@noalloc
+pub fn fe_mul(a: Fe, b: Fe) -> Fe uses {} {
+  let a0: u128 = core@1/int.widen(a.l0)
+  let a1: u128 = core@1/int.widen(a.l1)
+  let a2: u128 = core@1/int.widen(a.l2)
+  let a3: u128 = core@1/int.widen(a.l3)
+  let a4: u128 = core@1/int.widen(a.l4)
+  let b0: u128 = core@1/int.widen(b.l0)
+  let b1: u128 = core@1/int.widen(b.l1)
+  let b2: u128 = core@1/int.widen(b.l2)
+  let b3: u128 = core@1/int.widen(b.l3)
+  let b4: u128 = core@1/int.widen(b.l4)
+  let a1_19 = 19 * a1
+  let a2_19 = 19 * a2
+  let a3_19 = 19 * a3
+  let a4_19 = 19 * a4
+  carry_columns(
+    a0 * b0 + a1_19 * b4 + a2_19 * b3 + a3_19 * b2 + a4_19 * b1,
+    a0 * b1 + a1 * b0 + a2_19 * b4 + a3_19 * b3 + a4_19 * b2,
+    a0 * b2 + a1 * b1 + a2 * b0 + a3_19 * b4 + a4_19 * b3,
+    a0 * b3 + a1 * b2 + a2 * b1 + a3 * b0 + a4_19 * b4,
+    a0 * b4 + a1 * b3 + a2 * b2 + a3 * b1 + a4 * b0
+  )
+}
+
+@noalloc
+pub fn fe_sq(a: Fe) -> Fe uses {} {
+  let a0: u128 = core@1/int.widen(a.l0)
+  let a1: u128 = core@1/int.widen(a.l1)
+  let a2: u128 = core@1/int.widen(a.l2)
+  let a3: u128 = core@1/int.widen(a.l3)
+  let a4: u128 = core@1/int.widen(a.l4)
+  let a0_2 = 2 * a0
+  let a1_2 = 2 * a1
+  let a1_38 = 38 * a1
+  let a2_38 = 38 * a2
+  let a3_38 = 38 * a3
+  let a3_19 = 19 * a3
+  let a4_19 = 19 * a4
+  carry_columns(
+    a0 * a0 + a1_38 * a4 + a2_38 * a3,
+    a0_2 * a1 + a2_38 * a4 + a3_19 * a3,
+    a0_2 * a2 + a1 * a1 + a3_38 * a4,
+    a0_2 * a3 + a1_2 * a2 + a4_19 * a4,
+    a0_2 * a4 + a1_2 * a3 + a2 * a2
+  )
+}
+
+// a times a small constant.
+@noalloc
+pub fn fe_mul_small(a: Fe, n: u64) -> Fe uses {} {
+  let factor: u128 = core@1/int.widen(n)
+  let a0: u128 = core@1/int.widen(a.l0)
+  let a1: u128 = core@1/int.widen(a.l1)
+  let a2: u128 = core@1/int.widen(a.l2)
+  let a3: u128 = core@1/int.widen(a.l3)
+  let a4: u128 = core@1/int.widen(a.l4)
+  let x0 = a0 * factor
+  let x1 = a1 * factor + (x0 >> 51)
+  let x2 = a2 * factor + (x1 >> 51)
+  let x3 = a3 * factor + (x2 >> 51)
+  let x4 = a4 * factor + (x3 >> 51)
+  let top: u64 = core@1/int.narrow(x4 >> 51)
+  let low0: u64 = core@1/int.truncate(x0)
+  let low1: u64 = core@1/int.truncate(x1)
+  let low2: u64 = core@1/int.truncate(x2)
+  let low3: u64 = core@1/int.truncate(x3)
+  let low4: u64 = core@1/int.truncate(x4)
+  Fe(
+    l0: (low0 & MASK51) + 19 * top,
+    l1: low1 & MASK51,
+    l2: low2 & MASK51,
+    l3: low3 & MASK51,
+    l4: low4 & MASK51
+  )
+}
+
+@noalloc
+fn fe_sqn(a: Fe, n: u64) -> Fe uses {} {
+  let mut x = a
+  let mut i: u64 = 0
+  while i < n {
+    x = fe_sq(x)
+    i += 1
+  }
+  x
+}
+
+// a^(p-2), the inverse of a nonzero a, and zero for zero.
+@noalloc
+pub fn fe_invert(a: Fe) -> Fe uses {} {
+  let mut t0 = fe_sq(a)
+  let mut t1 = fe_mul(fe_sqn(t0, 2), a)
+  t0 = fe_mul(t0, t1)
+  t1 = fe_mul(t1, fe_sq(t0))
+  t1 = fe_mul(t1, fe_sqn(t1, 5))
+  let mut t2 = fe_mul(fe_sqn(t1, 10), t1)
+  t2 = fe_sqn(fe_mul(t2, fe_sqn(t2, 20)), 10)
+  t1 = fe_mul(t1, t2)
+  t2 = fe_mul(fe_sqn(t1, 50), t1)
+  fe_mul(fe_sqn(fe_mul(t1, fe_sqn(fe_mul(t2, fe_sqn(t2, 100)), 50)), 5), t0)
+}
+
+// a^((p-5)/8), for square roots since p = 5 (mod 8).
+@noalloc
+fn fe_pow2523(a: Fe) -> Fe uses {} {
+  let mut t0 = fe_mul(a, fe_sq(a))
+  let mut t1 = fe_mul(fe_sq(fe_mul(t0, fe_sqn(t0, 2))), a)
+  t0 = fe_mul(fe_sqn(t1, 5), t1)
+  let mut t2 = fe_mul(fe_sqn(t0, 5), t1)
+  t1 = fe_mul(fe_sqn(t2, 15), t2)
+  t2 = fe_mul(fe_sqn(t1, 30), t1)
+  t1 = fe_mul(fe_sqn(t2, 60), t2)
+  fe_mul(fe_sqn(fe_mul(fe_sqn(fe_mul(fe_sqn(t1, 120), t1), 10), t0), 2), a)
+}
+
+@noalloc
+pub fn fe_is_zero(a: Fe) -> bool uses {} {
+  let r = fe_reduce(a)
+  r.l0 | r.l1 | r.l2 | r.l3 | r.l4 == 0
+}
+
+@noalloc
+fn fe_is_negative(a: Fe) -> u64 uses {} {
+  fe_reduce(a).l0 & 1
+}
+
+// All ones when `bit` is 1, zero when it is 0.
+@noalloc
+fn mask(bit: u64) -> u64 uses {} {
+  core@1/int.wrapping_add(~bit, 1)
+}
+
+// b when `bit` is 1, otherwise a.
+@noalloc
+pub fn fe_select(a: Fe, b: Fe, bit: u64) -> Fe uses {} {
+  let m = mask(bit)
+  Fe(
+    l0: a.l0 ^ (a.l0 ^ b.l0) & m,
+    l1: a.l1 ^ (a.l1 ^ b.l1) & m,
+    l2: a.l2 ^ (a.l2 ^ b.l2) & m,
+    l3: a.l3 ^ (a.l3 ^ b.l3) & m,
+    l4: a.l4 ^ (a.l4 ^ b.l4) & m
+  )
+}
+
+// The RFC 7748 X25519 function: the u-coordinate of `scalar`, clamped, times the point at u.
+pub fn x25519(scalar: Bytes, u: Bytes) -> Inline[u8, 32] uses {} {
+  let mut k: Inline[u8, 32] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let mut i: u64 = 0
+  while i < 32 {
+    k[i] = scalar[i]
+    i += 1
+  }
+  k[0] = k[0] & 248
+  k[31] = k[31] & 127 | 64
+  let x1 = fe_from_bytes(u, 0)
+  let mut x2 = ONE
+  let mut z2 = ZERO
+  let mut x3 = x1
+  let mut z3 = ONE
+  let mut swap: u64 = 0
+  let mut position: u64 = 255
+  while position > 0 {
+    position -= 1
+    let byte: u64 = core@1/int.widen(k[position >> 3])
+    let bit = byte >> (position & 7) & 1
+    swap = swap ^ bit
+    let sx2 = fe_select(x2, x3, swap)
+    let sx3 = fe_select(x3, x2, swap)
+    let sz2 = fe_select(z2, z3, swap)
+    let sz3 = fe_select(z3, z2, swap)
+    swap = bit
+    let a = fe_add(sx2, sz2)
+    let b = fe_sub(sx2, sz2)
+    let aa = fe_sq(a)
+    let bb = fe_sq(b)
+    x2 = fe_mul(aa, bb)
+    let e = fe_sub(aa, bb)
+    let da = fe_mul(fe_sub(sx3, sz3), a)
+    let cb = fe_mul(fe_add(sx3, sz3), b)
+    x3 = fe_sq(fe_add(da, cb))
+    z3 = fe_mul(x1, fe_sq(fe_sub(da, cb)))
+    z2 = fe_mul(e, fe_add(bb, fe_mul_small(e, 121666)))
+  }
+  let fx2 = fe_select(x2, x3, swap)
+  let fz2 = fe_select(z2, z3, swap)
+  fe_to_bytes(fe_mul(fx2, fe_invert(fz2)))
+}
+
+// An edwards25519 point in extended coordinates: x = X/Z, y = Y/Z, xy = T/Z.
+pub type Point {
+  x: Fe,
+  y: Fe,
+  z: Fe,
+  t: Fe,
+}
+
+const IDENTITY: Point = Point(x: ZERO, y: ONE, z: ONE, t: ZERO)
+
+const BASE: Point = Point(
+  x: Fe(
+    l0: 1738742601995546,
+    l1: 1146398526822698,
+    l2: 2070867633025821,
+    l3: 562264141797630,
+    l4: 587772402128613
+  ),
+  y: Fe(
+    l0: 1801439850948184,
+    l1: 1351079888211148,
+    l2: 450359962737049,
+    l3: 900719925474099,
+    l4: 1801439850948198
+  ),
+  z: ONE,
+  t: Fe(
+    l0: 1841354044333475,
+    l1: 16398895984059,
+    l2: 755974180946558,
+    l3: 900171276175154,
+    l4: 1821297809914039
+  )
+)
+
+@noalloc
+fn point_dbl(p: Point) -> Point uses {} {
+  let t0 = fe_sq(fe_add(p.x, p.y))
+  let xx = fe_sq(p.x)
+  let yy = fe_sq(p.y)
+  let y = fe_add(yy, xx)
+  let z = fe_sub(yy, xx)
+  let x = fe_sub(t0, y)
+  let zz = fe_sq(p.z)
+  let t = fe_sub(fe_add(zz, zz), z)
+  Point(x: fe_mul(x, t), y: fe_mul(y, z), z: fe_mul(z, t), t: fe_mul(x, y))
+}
+
+@noalloc
+fn point_add(p: Point, q: Point) -> Point uses {} {
+  let a = fe_mul(fe_sub(p.y, p.x), fe_sub(q.y, q.x))
+  let b = fe_mul(fe_add(p.x, p.y), fe_add(q.x, q.y))
+  let c = fe_mul(fe_mul(p.t, q.t), D2)
+  let zz = fe_mul(p.z, q.z)
+  let d = fe_add(zz, zz)
+  let x = fe_sub(b, a)
+  let y = fe_add(b, a)
+  let z = fe_add(d, c)
+  let t = fe_sub(d, c)
+  Point(x: fe_mul(x, t), y: fe_mul(y, z), z: fe_mul(z, t), t: fe_mul(x, y))
+}
+
+@noalloc
+pub fn point_neg(p: Point) -> Point uses {} {
+  Point(x: fe_neg(p.x), y: p.y, z: p.z, t: fe_neg(p.t))
+}
+
+@noalloc
+fn point_select(a: Point, b: Point, bit: u64) -> Point uses {} {
+  Point(
+    x: fe_select(a.x, b.x, bit),
+    y: fe_select(a.y, b.y, bit),
+    z: fe_select(a.z, b.z, bit),
+    t: fe_select(a.t, b.t, bit)
+  )
+}
+
+pub fn point_encode(p: Point) -> Inline[u8, 32] uses {} {
+  let zi = fe_invert(p.z)
+  let mut out = fe_to_bytes(fe_mul(p.y, zi))
+  let sign: u8 = core@1/int.truncate(fe_is_negative(fe_mul(p.x, zi)) << 7)
+  out[31] = out[31] ^ sign
+  take out
+}
+
+// Whether the 32 bytes at `at` encode a coordinate below p, ignoring the top bit.
+fn canonical_public(data: Bytes, at: u64) -> bool uses {} {
+  if data[at + 31] & 0x7f != 0x7f || data[at] < 0xed {
+    return true
+  }
+  let mut i: u64 = 1
+  while i < 31 {
+    if data[at + i] != 0xff {
+      return true
+    }
+    i += 1
+  }
+  false
+}
+
+// The point a canonical 32-byte encoding at `at` names, if any.
+pub fn point_decode_public(data: Bytes, at: u64) -> Option[Point] uses {} {
+  if !canonical_public(data, at) {
+    return None
+  }
+  let y = fe_from_bytes(data, at)
+  let yy = fe_sq(y)
+  let u = fe_sub(yy, ONE)
+  let v = fe_add(fe_mul(yy, D), ONE)
+  let mut x = fe_mul(fe_pow2523(fe_mul(u, v)), u)
+  let vxx = fe_mul(fe_sq(x), v)
+  let minus_root = fe_is_zero(fe_sub(vxx, u))
+  if !minus_root && !fe_is_zero(fe_add(vxx, u)) {
+    return None
+  }
+  if !minus_root {
+    x = fe_mul(x, SQRTM1)
+  }
+  let sign: u64 = core@1/int.widen(data[at + 31] >> 7)
+  if fe_is_zero(x) && sign == 1 {
+    return None
+  }
+  if fe_is_negative(x) != sign {
+    x = fe_neg(x)
+  }
+  Some(Point(x: x, y: y, z: ONE, t: fe_mul(x, y)))
+}
+
+// Whether 8p is the identity, so p lies in the small subgroup of order dividing 8.
+pub fn point_small_order_public(p: Point) -> bool uses {} {
+  fe_is_zero(point_dbl(point_dbl(point_dbl(p))).x)
+}
+
+// Whether 8p is the identity: X = 0 and Y = Z.
+pub fn point_cofactor_identity_public(p: Point) -> bool uses {} {
+  let q = point_dbl(point_dbl(point_dbl(p)))
+  fe_is_zero(q.x) && fe_is_zero(fe_sub(q.y, q.z))
+}
+
+// A precomputed affine multiple of B: (y + x, y - x, 2dxy).
+type Niels {
+  plus: Fe,
+  minus: Fe,
+  xy2d: Fe,
+}
+
+// p + q for a precomputed q: ref10's ge_madd, then back to extended coordinates.
+@noalloc
+fn point_madd(p: Point, q: Niels) -> Point uses {} {
+  let a = fe_mul(fe_add(p.y, p.x), q.plus)
+  let b = fe_mul(fe_sub(p.y, p.x), q.minus)
+  let c = fe_mul(q.xy2d, p.t)
+  let d = fe_add(p.z, p.z)
+  let x = fe_sub(a, b)
+  let y = fe_add(a, b)
+  let z = fe_add(d, c)
+  let t = fe_sub(d, c)
+  Point(x: fe_mul(x, t), y: fe_mul(y, z), z: fe_mul(z, t), t: fe_mul(x, y))
+}
+
+// The secret scalar's 64 signed 4-bit digits, each in [-8, 8], plus 8.
+@noalloc
+fn radix16(scalar: Inline[u8, 32]) -> Inline[u64, 64] uses {} {
+  let mut e: Inline[i64, 64] = [
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64
+  ]
+  let mut i: u64 = 0
+  while i < 32 {
+    let byte: i64 = core@1/int.widen(scalar[i])
+    e[2 * i] = byte & 15
+    e[2 * i + 1] = byte >> 4
+    i += 1
+  }
+  let mut carry: i64 = 0
+  i = 0
+  while i < 63 {
+    e[i] += carry
+    carry = e[i] + 8 >> 4
+    e[i] -= carry * 16
+    i += 1
+  }
+  e[63] += carry
+  let mut out: Inline[u64, 64] = [
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64,
+    0u64
+  ]
+  i = 0
+  while i < 64 {
+    out[i] = core@1/int.narrow(e[i] + 8)
+    i += 1
+  }
+  take out
+}
+
+// digit * 256^i * B from position i's table, for `offset` = digit + 8 with a
+// secret digit in [-8, 8]: every entry is read and the negation is a mask.
+@noalloc
+fn base_select(table: Inline[u64, 120], offset: u64) -> Niels uses {} {
+  let shifted = core@1/int.wrapping_add(offset, 0xfffffffffffffff8)
+  let negative = shifted >> 63
+  let size = core@1/int.wrapping_add(shifted ^ mask(negative), negative)
+  let mut p0: u64 = 1
+  let mut p1: u64 = 0
+  let mut p2: u64 = 0
+  let mut p3: u64 = 0
+  let mut p4: u64 = 0
+  let mut m0: u64 = 1
+  let mut m1: u64 = 0
+  let mut m2: u64 = 0
+  let mut m3: u64 = 0
+  let mut m4: u64 = 0
+  let mut x0: u64 = 0
+  let mut x1: u64 = 0
+  let mut x2: u64 = 0
+  let mut x3: u64 = 0
+  let mut x4: u64 = 0
+  let mut j: u64 = 0
+  while j < 8 {
+    let hit = mask(core@1/int.wrapping_add(size ^ j + 1, 0xffffffffffffffff) >> 63)
+    let at = 15 * j
+    p0 = p0 ^ hit & (p0 ^ table[at + 0])
+    p1 = p1 ^ hit & (p1 ^ table[at + 1])
+    p2 = p2 ^ hit & (p2 ^ table[at + 2])
+    p3 = p3 ^ hit & (p3 ^ table[at + 3])
+    p4 = p4 ^ hit & (p4 ^ table[at + 4])
+    m0 = m0 ^ hit & (m0 ^ table[at + 5])
+    m1 = m1 ^ hit & (m1 ^ table[at + 6])
+    m2 = m2 ^ hit & (m2 ^ table[at + 7])
+    m3 = m3 ^ hit & (m3 ^ table[at + 8])
+    m4 = m4 ^ hit & (m4 ^ table[at + 9])
+    x0 = x0 ^ hit & (x0 ^ table[at + 10])
+    x1 = x1 ^ hit & (x1 ^ table[at + 11])
+    x2 = x2 ^ hit & (x2 ^ table[at + 12])
+    x3 = x3 ^ hit & (x3 ^ table[at + 13])
+    x4 = x4 ^ hit & (x4 ^ table[at + 14])
+    j += 1
+  }
+  // -q swaps y + x with y - x and negates 2dxy.
+  let plus = Fe(l0: p0, l1: p1, l2: p2, l3: p3, l4: p4)
+  let minus = Fe(l0: m0, l1: m1, l2: m2, l3: m3, l4: m4)
+  let xy2d = Fe(l0: x0, l1: x1, l2: x2, l3: x3, l4: x4)
+  Niels(
+    plus: fe_select(plus, minus, negative),
+    minus: fe_select(minus, plus, negative),
+    xy2d: fe_select(xy2d, fe_neg(xy2d), negative)
+  )
+}
+
+// scalar * B for a secret 32-byte little-endian scalar below 2^255, as ref10's
+// ge_scalarmult_base: the odd digits through the precomputed table, times 16,
+// then the even digits.
+@noalloc
+pub fn base_mul(scalar: Inline[u8, 32]) -> Point uses {} {
+  let digits = radix16(scalar)
+  let mut q = IDENTITY
+  let mut i: u64 = 1
+  while i < 64 {
+    q = point_madd(
+      q,
+      base_select(internal.curve25519_table.position(i >> 1), digits[i])
+    )
+    i += 2
+  }
+  q = point_dbl(point_dbl(point_dbl(point_dbl(q))))
+  i = 0
+  while i < 64 {
+    q = point_madd(
+      q,
+      base_select(internal.curve25519_table.position(i >> 1), digits[i])
+    )
+    i += 2
+  }
+  q
+}
+
+// The signed 4-bit digits of a public scalar below 2^255, each in [-8, 8].
+fn slide(scalar: Bytes) -> Inline[i64, 64] uses {} {
+  let mut e: Inline[i64, 64] = [
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64
+  ]
+  let mut i: u64 = 0
+  while i < 32 {
+    let byte: i64 = core@1/int.widen(scalar[i])
+    e[2 * i] = byte & 15
+    e[2 * i + 1] = byte >> 4
+    i += 1
+  }
+  let mut carry: i64 = 0
+  i = 0
+  while i < 63 {
+    e[i] += carry
+    carry = e[i] + 8 >> 4
+    e[i] -= carry * 16
+    i += 1
+  }
+  e[63] += carry
+  take e
+}
+
+// The multiples 0 to 8 of p.
+fn multiples(p: Point) -> Inline[Point, 9] uses {} {
+  let mut table: Inline[Point, 9] = [
+    IDENTITY,
+    p,
+    IDENTITY,
+    IDENTITY,
+    IDENTITY,
+    IDENTITY,
+    IDENTITY,
+    IDENTITY,
+    IDENTITY
+  ]
+  let mut i: u64 = 2
+  while i < 9 {
+    table[i] = point_add(table[i - 1], p)
+    i += 1
+  }
+  take table
+}
+
+fn add_digit(q: Point, table: Inline[Point, 9], digit: i64) -> Point uses {} {
+  if digit > 0 {
+    let index: u64 = core@1/int.narrow(digit)
+    point_add(q, table[index])
+  } else if digit < 0 {
+    let index: u64 = core@1/int.narrow(-digit)
+    point_add(q, point_neg(table[index]))
+  } else {
+    q
+  }
+}
+
+// a * B + b * p for public scalars below 2^255, in variable time.
+pub fn double_mul_public(a: Bytes, b: Bytes, p: Point) -> Point uses {} {
+  let base = multiples(BASE)
+  let other = multiples(p)
+  let ea = slide(a)
+  let eb = slide(b)
+  let mut q = IDENTITY
+  let mut position: u64 = 64
+  while position > 0 {
+    position -= 1
+    q = add_digit(q, base, ea[position])
+    q = add_digit(q, other, eb[position])
+    if position > 0 {
+      q = point_dbl(point_dbl(point_dbl(point_dbl(q))))
+    }
+  }
+  q
+}
+
+pub fn point_sub(p: Point, q: Point) -> Point uses {} {
+  point_add(p, point_neg(q))
+}
+
+// The group order L in little-endian bytes.
+const L: Inline[i64, 32] = [
+  0xed,
+  0xd3,
+  0xf5,
+  0x5c,
+  0x1a,
+  0x63,
+  0x12,
+  0x58,
+  0xd6,
+  0x9c,
+  0xf7,
+  0xa2,
+  0xde,
+  0xf9,
+  0xde,
+  0x14,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0x10
+]
+
+// x modulo L for 64 signed byte-weight digits, as 32 little-endian bytes (TweetNaCl modL).
+@noalloc
+fn mod_l(mut x: Inline[i64, 64]) -> Inline[u8, 32] uses {} {
+  let mut i: u64 = 63
+  while i >= 32 {
+    let mut carry: i64 = 0
+    let mut j = i - 32
+    while j < i - 12 {
+      x[j] += carry - 16 * x[i] * L[j - (i - 32)]
+      carry = x[j] + 128 >> 8
+      x[j] -= carry * 256
+      j += 1
+    }
+    x[j] += carry
+    x[i] = 0
+    i -= 1
+  }
+  let mut carry: i64 = 0
+  let mut j: u64 = 0
+  while j < 32 {
+    x[j] += carry - (x[31] >> 4) * L[j]
+    carry = x[j] >> 8
+    x[j] = x[j] & 255
+    j += 1
+  }
+  j = 0
+  while j < 32 {
+    x[j] -= carry * L[j]
+    j += 1
+  }
+  let mut out: Inline[u8, 32] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  i = 0
+  while i < 32 {
+    x[i + 1] += x[i] >> 8
+    out[i] = core@1/int.truncate(x[i] & 255)
+    i += 1
+  }
+  take out
+}
+
+// The 64 little-endian bytes of `wide` modulo L.
+@noalloc
+pub fn scalar_reduce(wide: Inline[u8, 64]) -> Inline[u8, 32] uses {} {
+  let mut x: Inline[i64, 64] = [
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64
+  ]
+  let mut i: u64 = 0
+  while i < 64 {
+    x[i] = core@1/int.widen(wide[i])
+    i += 1
+  }
+  mod_l(mut x)
+}
+
+// a * b + c modulo L for 32-byte little-endian a, b and c.
+@noalloc
+pub fn scalar_mul_add(a: Inline[u8, 32], b: Inline[u8, 32], c: Inline[u8, 32]) -> Inline[
+  u8,
+  32
+] uses {} {
+  let mut x: Inline[i64, 64] = [
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64,
+    0i64
+  ]
+  let mut i: u64 = 0
+  while i < 32 {
+    x[i] = core@1/int.widen(c[i])
+    i += 1
+  }
+  i = 0
+  while i < 32 {
+    let ai: i64 = core@1/int.widen(a[i])
+    let mut j: u64 = 0
+    while j < 32 {
+      let bj: i64 = core@1/int.widen(b[j])
+      x[i + j] += ai * bj
+      j += 1
+    }
+    i += 1
+  }
+  mod_l(mut x)
+}
+
+// Whether the 32 bytes at `at` are a little-endian scalar below L.
+pub fn scalar_canonical_public(data: Bytes, at: u64) -> bool uses {} {
+  let mut i: u64 = 32
+  while i > 0 {
+    i -= 1
+    let byte: i64 = core@1/int.widen(data[at + i])
+    if byte != L[i] {
+      return byte < L[i]
+    }
+  }
+  false
+}

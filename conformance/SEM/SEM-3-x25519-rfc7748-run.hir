@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// steps: 6000000
+// one X25519 is a 255-step Montgomery ladder and an inversion, about 2.8M steps
+// RFC 7748 section 5.2 test vector 1 (Zig std/crypto/25519/x25519.zig "rfc7748 vector1"):
+// the shared secret of the scalar and the u-coordinate, whose top bit the function ignores.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main() -> Result[(), ()] {
+  let Ok(shared) = std@1/x25519.shared_secret(
+    decode("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"),
+    decode("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c")
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    std@1/hex.encode(shared) == "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+    TextInvariant()
+  )
+  Ok(())
+}

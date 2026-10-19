@@ -6582,3 +6582,15 @@ conformance/SEM/SEM-3-format-utf8-invariant-fail.hir
 conformance/SEM/SEM-1-http-server-tls-alpn-run.hir
 conformance/SEM/SEM-1-http2-indexed-retirement-run.hir
 conformance/LANG/LANG-13-joined-view-consumers-run.hir
+conformance/SEM/SEM-3-ed25519-rfc8032-sign-run.hir
+conformance/SEM/SEM-3-ed25519-rfc8032-verify-run.hir
+conformance/SEM/SEM-3-ed25519-seed-size-fail.hir
+conformance/SEM/SEM-3-ed25519-seed-size-run.hir
+conformance/SEM/SEM-3-ed25519-verify-reject-run.hir
+conformance/SEM/SEM-3-jwt-eddsa-reject-run.hir
+conformance/SEM/SEM-3-jwt-eddsa-sign-run.hir
+conformance/SEM/SEM-3-jwt-eddsa-verify-run.hir
+conformance/SEM/SEM-3-x25519-low-order-run.hir
+conformance/SEM/SEM-3-x25519-rfc7748-run.hir
+conformance/SEM/SEM-3-x25519-secret-size-fail.hir
+conformance/SEM/SEM-3-x25519-secret-size-run.hir

@@ -1,0 +1,138 @@
+// RFC 8032 Ed25519 signatures over SHA-512, from Zig std/crypto/25519/ed25519.zig
+// (MIT): deterministic signing from a 32-byte seed and cofactored verification.
+/// An encoded 32-byte Ed25519 public key. Verification rejects malformed bytes.
+pub type PublicKey {
+  bytes: Bytes,
+}
+
+/// A 32-byte Ed25519 seed; the public key is recomputed when signing.
+pub type PrivateKey {
+  seed: Bytes,
+}
+
+// The clamped secret scalar and the nonce prefix of a 32-byte seed.
+fn expand(seed: Bytes) -> (Inline[u8, 32], unique Bytes) uses {} {
+  core@1/failure.check(core@1/bytes.len(seed) == 32, TextInvariant())
+  let h = std@1/sha512.digest(seed)
+  let mut scalar: Inline[u8, 32] = [
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8,
+    0u8
+  ]
+  let mut prefix: List[u8] = []
+  let mut i: u64 = 0
+  while i < 32 {
+    scalar[i] = h[i]
+    core@1/list.push(mut prefix, h[i + 32])
+    i += 1
+  }
+  scalar[0] = scalar[0] & 248
+  scalar[31] = scalar[31] & 127 | 64
+  (scalar, core@1/bytes.from_list(take prefix))
+}
+
+// SHA-512 of the parts in order, modulo the group order.
+fn challenge(first: Bytes, second: Bytes, message: Bytes) -> Inline[u8, 32] uses {} {
+  let mut state = std@1/sha512.new()
+  std@1/sha512.update(mut state, first)
+  std@1/sha512.update(mut state, second)
+  std@1/sha512.update(mut state, message)
+  internal.curve25519.scalar_reduce(std@1/sha512.finish(take state))
+}
+
+// The 32-byte public key of a 32-byte seed.
+pub fn public_key(seed: Bytes) -> unique Bytes uses {} {
+  let (scalar, _) = expand(seed)
+  std@1/bytes.from_inline(
+    internal.curve25519.point_encode(internal.curve25519.base_mul(scalar))
+  )
+}
+
+// The 64-byte signature R || S of `message` under the key pair of `seed`. The
+// public key is recomputed from the seed, so a signature can never be made
+// under a mismatched public key.
+pub fn sign(seed: Bytes, message: Bytes) -> unique Bytes uses {} {
+  let (scalar, prefix) = expand(seed)
+  let public = std@1/bytes.from_inline(
+    internal.curve25519.point_encode(internal.curve25519.base_mul(scalar))
+  )
+  let nonce = challenge(prefix, b"", message)
+  let r = std@1/bytes.from_inline(
+    internal.curve25519.point_encode(internal.curve25519.base_mul(nonce))
+  )
+  let k = challenge(r, public, message)
+  let s = internal.curve25519.scalar_mul_add(k, scalar, nonce)
+  let mut out: List[u8] = []
+  core@1/list.reserve(mut out, 64)
+  for byte in r {
+    core@1/list.push(mut out, byte)
+  }
+  for byte in s {
+    core@1/list.push(mut out, byte)
+  }
+  core@1/bytes.from_list(take out)
+}
+
+// Whether `signature` is a valid signature of `message` under the key `public`. It
+// requires a 32-byte canonical public key outside the small subgroup, a 64-byte
+// signature whose R is a canonical point other than the identity or (0, -1) and
+// whose S is below the group order, and [8][S]B = [8]R + [8][k]A. Malformed input
+// of any length is false.
+pub fn verify(public: Bytes, message: Bytes, signature: Bytes) -> bool uses {} {
+  if core@1/bytes.len(public) != 32 || core@1/bytes.len(signature) != 64 {
+    return false
+  }
+  if !internal.curve25519.scalar_canonical_public(signature, 32) {
+    return false
+  }
+  let Some(a) = internal.curve25519.point_decode_public(public, 0) else {
+    return false
+  }
+  if internal.curve25519.point_small_order_public(a) {
+    return false
+  }
+  let Some(r) = internal.curve25519.point_decode_public(signature, 0) else {
+    return false
+  }
+  if internal.curve25519.fe_is_zero(r.x) {
+    return false
+  }
+  let k = challenge(core@1/bytes.slice(signature, 0, 32), public, message)
+  let sb_minus_ka = internal.curve25519.double_mul_public(
+    core@1/bytes.slice(signature, 32, 64),
+    std@1/bytes.from_inline(k),
+    internal.curve25519.point_neg(a)
+  )
+  internal.curve25519.point_cofactor_identity_public(
+    internal.curve25519.point_sub(sb_minus_ka, r)
+  )
+}

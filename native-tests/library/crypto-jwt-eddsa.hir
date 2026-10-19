@@ -1,0 +1,152 @@
+// oracle: expected-stdout
+// oracle-reason: Signing and verifying the golang-jwt vectors exceed bounded interpretation; signatures are independently pinned.
+// golang-jwt/jwt d2cffb184933cab5b685db7e9eea56326f0acc0d ed25519_test.go:18-113
+// test/ed25519-{private,public}.pem (MIT; public test keys only).
+// Upstream method tests sign an ED25519 header directly; jwt.verify_at correctly
+// rejects that header because the registered JOSE algorithm is EdDSA.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+fn seed() -> unique Bytes {
+  decode("414c119ae6958c5ccd7285c4894dbcd191e4942f0e14e42e8bc9631c10777b9a")
+}
+
+fn public() -> ed25519.PublicKey {
+  ed25519.PublicKey(
+    bytes: decode("587ef3ea1a58aaf3e7b368b89fdcb29b0bc1dc03e18b82f243b887393e9caed1")
+  )
+}
+
+fn test_claims() -> json.Value {
+  let mut fields: Map[String, json.Value] = map.empty()
+  map.insert(mut fields, "foo", Text("bar"))
+  Object(take fields)
+}
+
+fn test_token() -> String {
+  "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJmb28iOiJiYXIifQ.rCiLylq-3K-9Y-cvlzvVtkeXhEUOqVYRRH8-7xvAgDRJGLO5WvvlNM2_SdD5AyaNPQCPevoMI_dSLiujr2oJDQ"
+}
+
+pub fn main(rt: Io) -> Result[(), LaunchError] {
+  // Upstream ed25519TestData[0]: method-level sign and verify.
+  failure.check(
+    ed25519.verify(
+      public().bytes,
+      string.as_bytes("eyJhbGciOiJFRDI1NTE5IiwidHlwIjoiSldUIn0.eyJmb28iOiJiYXIifQ"),
+      decode(
+        "112b95cd9ab57040abb7d39dfe02cf546fbfeae44fffc36af9a8f1e82b66943a91259a9d7a3ae8da2964a9a42048bfac884ff724c4d45bb530028acb693c850b"
+      )
+    ) == true,
+    TextInvariant()
+  )
+  failure.check(
+    (ed25519.sign(
+      seed(),
+      string.as_bytes("eyJhbGciOiJFRDI1NTE5IiwidHlwIjoiSldUIn0.eyJmb28iOiJiYXIifQ")
+    ) == decode(
+      "112b95cd9ab57040abb7d39dfe02cf546fbfeae44fffc36af9a8f1e82b66943a91259a9d7a3ae8da2964a9a42048bfac884ff724c4d45bb530028acb693c850b"
+    )) == true,
+    TextInvariant()
+  )
+  failure.check(
+    jwt.verify_at(
+      "eyJhbGciOiJFRDI1NTE5IiwidHlwIjoiSldUIn0.eyJmb28iOiJiYXIifQ.ESuVzZq1cECrt9Od_gLPVG-_6uRP_8Nq-ajx6CtmlDqRJZqdejro2ilkqaQgSL-siE_3JMTUW7UwAorLaTyFCw",
+      EdDSA(public()),
+      jwt.default_validation(),
+      0
+    ) == Error(UnsupportedAlgorithm("ED25519")),
+    TextInvariant()
+  )
+  // Upstream ed25519TestData[1]: method-level sign and verify.
+  failure.check(
+    ed25519.verify(
+      public().bytes,
+      string.as_bytes("eyJhbGciOiJFRDI1NTE5IiwidHlwIjoiSldUIn0.eyJmb28iOiJiYXoifQ"),
+      decode(
+        "112b95cd9ab57040abb7d39dfe02cf546fbfeae44fffc36af9a8f1e82b66943a91259a9d7a3ae8da2964a9a42048bfac884ff724c4d45bb530028acb693c850b"
+      )
+    ) == false,
+    TextInvariant()
+  )
+  failure.check(
+    (ed25519.sign(
+      seed(),
+      string.as_bytes("eyJhbGciOiJFRDI1NTE5IiwidHlwIjoiSldUIn0.eyJmb28iOiJiYXoifQ")
+    ) == decode(
+      "112b95cd9ab57040abb7d39dfe02cf546fbfeae44fffc36af9a8f1e82b66943a91259a9d7a3ae8da2964a9a42048bfac884ff724c4d45bb530028acb693c850b"
+    )) == false,
+    TextInvariant()
+  )
+  failure.check(
+    jwt.verify_at(
+      "eyJhbGciOiJFRDI1NTE5IiwidHlwIjoiSldUIn0.eyJmb28iOiJiYXoifQ.ESuVzZq1cECrt9Od_gLPVG-_6uRP_8Nq-ajx6CtmlDqRJZqdejro2ilkqaQgSL-siE_3JMTUW7UwAorLaTyFCw",
+      EdDSA(public()),
+      jwt.default_validation(),
+      0
+    ) == Error(UnsupportedAlgorithm("ED25519")),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.sign(EdDSAPrivate(ed25519.PrivateKey(seed: seed())), test_claims()) == Ok(
+      test_token()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.verify_at(test_token(), EdDSA(public()), jwt.default_validation(), 0) == Ok(
+      test_claims()
+    ),
+    TextInvariant()
+  )
+  let parts = string.split(test_token(), ".")
+  let tampered = f"{parts[0]}.eyJmb28iOiJiYXoifQ.{parts[2]}"
+  failure.check(
+    jwt.verify_at(tampered, EdDSA(public()), jwt.default_validation(), 0) == Error(
+      Signature()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.verify_at(test_token(), HS256(public().bytes), jwt.default_validation(), 0) == Error(
+      UnsupportedAlgorithm("EdDSA")
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.verify_at(
+      test_token(),
+      EdDSAPrivate(ed25519.PrivateKey(seed: seed())),
+      jwt.default_validation(),
+      0
+    ) == Error(InvalidKey()),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.verify_at(
+      test_token(),
+      EdDSA(ed25519.PublicKey(bytes: b"short")),
+      jwt.default_validation(),
+      0
+    ) == Error(InvalidKey()),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.sign(EdDSA(public()), test_claims()) == Error(InvalidKey()),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.sign(EdDSAPrivate(ed25519.PrivateKey(seed: b"short")), test_claims()) == Error(
+      InvalidKey()
+    ),
+    TextInvariant()
+  )
+  out.print(io.stdout(rt) ? Grant, "jwt EdDSA: passed\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

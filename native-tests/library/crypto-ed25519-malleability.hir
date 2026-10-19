@@ -1,0 +1,29 @@
+// steps: 6000000
+// One expensive curve operation per program keeps the smoke matrix bounded.
+// A single Wycheproof rejection vector; the complete suite is tested separately.
+// Full151-case set: crypto-ed25519-wycheproof.hir (Apache-2.0).
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main(rt: Io) -> Result[(), LaunchError] {
+  // tcId 63: SignatureMalleability
+  failure.check(
+    std@1/ed25519.verify(
+      decode("7d4d0e7f6153a69b6242b522abbee685fda4420f8834b108c3bdae369ef549fa"),
+      decode("54657374"),
+      decode(
+        "7c38e026f29e14aabd059a0f2db8b0cd783040609a8be684db12f82a27774ab067654bce3832c2d76f8f6f5dafc08d9339d4eef676573336a5c51eb6f946b31d"
+      )
+    ) == false,
+    TextInvariant()
+  )
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)

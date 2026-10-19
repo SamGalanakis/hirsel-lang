@@ -1,0 +1,29 @@
+// RFC 7748 X25519 Diffie-Hellman over Curve25519, through the constant-time
+// Montgomery ladder of Zig std/crypto/25519/x25519.zig (MIT).
+pub type SharedError = LowOrderPoint()
+
+const BASE_U: Bytes = b"\x09\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+
+// The 32-byte public key of a 32-byte secret: the secret, clamped, times the base point u = 9.
+pub fn public_key(secret: Bytes) -> unique Bytes uses {} {
+  core@1/failure.check(core@1/bytes.len(secret) == 32, TextInvariant())
+  std@1/bytes.from_inline(internal.curve25519.x25519(secret, BASE_U))
+}
+
+// The 32-byte shared secret of a secret and a peer's public key, or LowOrderPoint()
+// when the peer's point has small order and the result would be all zeros. Any
+// 32-byte public key is accepted, its top bit ignored and a u at or above p reduced,
+// as RFC 7748 section 5 requires. Hash the result before using it as a key.
+pub fn shared_secret(secret: Bytes, peer: Bytes) -> Result[unique Bytes, SharedError] uses {} {
+  core@1/failure.check(core@1/bytes.len(secret) == 32, TextInvariant())
+  core@1/failure.check(core@1/bytes.len(peer) == 32, TextInvariant())
+  let out = internal.curve25519.x25519(secret, peer)
+  let mut any: u8 = 0
+  for byte in out {
+    any = any | byte
+  }
+  if any == 0 {
+    return Error(LowOrderPoint())
+  }
+  Ok(std@1/bytes.from_inline(out))
+}

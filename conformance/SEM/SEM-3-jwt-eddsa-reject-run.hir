@@ -1,0 +1,50 @@
+// rule: SEM-3
+// expect: run
+// golang-jwt Ed25519 fixture, with RFC 8037 alg EdDSA; public test key only.
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut fields: Map[String, json.Value] = map.empty()
+  let claims: json.Value = Object(take fields)
+  failure.check(
+    jwt.sign(EdDSA(ed25519.PublicKey(bytes: b"")), claims) == Error(InvalidKey()),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.sign(EdDSAPrivate(ed25519.PrivateKey(seed: b"short")), claims) == Error(
+      InvalidKey()
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.verify_at(
+      "eyJhbGciOiJFRDI1NTE5IiwidHlwIjoiSldUIn0.eyJmb28iOiJiYXIifQ.ESuVzZq1cECrt9Od_gLPVG-_6uRP_8Nq-ajx6CtmlDqRJZqdejro2ilkqaQgSL-siE_3JMTUW7UwAorLaTyFCw",
+      EdDSA(
+        ed25519.PublicKey(
+          bytes: decode(
+            "587ef3ea1a58aaf3e7b368b89fdcb29b0bc1dc03e18b82f243b887393e9caed1"
+          )
+        )
+      ),
+      jwt.default_validation(),
+      0
+    ) == Error(UnsupportedAlgorithm("ED25519")),
+    TextInvariant()
+  )
+  failure.check(
+    jwt.verify_at(
+      "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJmb28iOiJiYXIifQ.rCiLylq-3K-9Y-cvlzvVtkeXhEUOqVYRRH8-7xvAgDRJGLO5WvvlNM2_SdD5AyaNPQCPevoMI_dSLiujr2oJDQ",
+      HS256(b"secret"),
+      jwt.default_validation(),
+      0
+    ) == Error(UnsupportedAlgorithm("EdDSA")),
+    TextInvariant()
+  )
+  Ok(())
+}

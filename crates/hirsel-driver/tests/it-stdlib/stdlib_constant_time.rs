@@ -1,7 +1,7 @@
 //! Constant-time equality is a property of the operation sequence, which no corpus
 //! program can observe: the interpreter's full trace of `std@1/constant_time.equal`
 //! must be the same whether, and wherever, equal-length inputs differ, and the
-//! ciphers' traces must not depend on their keys or messages.
+//! ciphers' and curves' traces must not depend on their keys, seeds or messages.
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_interp::{Limits, Outcome, TraceEvent, TraceMode, Value, library::Library};
@@ -40,6 +40,7 @@ fn trace(
         &sources,
         &configuration,
         args.iter().map(|a| Value::Bytes(a.to_vec())).collect(),
+        // An X25519 or an Ed25519 signature takes about three million steps.
         Limits {
             steps: Some(20_000_000),
             ..Default::default()
@@ -152,6 +153,30 @@ fn aead_secrets_run_one_operation_sequence_per_length() {
             "seal",
             &[&[0x11; 32], &nonce, &zeros, &data],
             &[&[0xee; 32], &nonce, &ones, &data],
+        );
+    });
+}
+
+/// Two secrets or seeds, with messages of one length, take the same trace through
+/// X25519 and Ed25519 signing. About three million steps each, traced twice.
+#[test]
+#[ignore = "full gate"]
+fn full_gate_curve_secrets_run_one_operation_sequence() {
+    with_compiler_stack(|| {
+        let mut loaded = fixture();
+        same_trace(
+            &mut loaded,
+            "x25519",
+            "public_key",
+            &[&[0x11; 32]],
+            &[&[0xee; 32]],
+        );
+        same_trace(
+            &mut loaded,
+            "ed25519",
+            "sign",
+            &[&[0x11; 32], b"message"],
+            &[&[0xee; 32], b"MESSAGE"],
         );
     });
 }

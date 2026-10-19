@@ -1,5 +1,5 @@
 // JSON Web Tokens (RFC 7519) in JWS compact serialization (RFC 7515) with the
-// HS256, HS384 and HS512 MACs of RFC 7518, adapted from golang-jwt/jwt v5
+// HS256, HS384 and HS512 MACs and EdDSA signatures of RFC 7518, adapted from golang-jwt/jwt v5
 // parser.go (ParseUnverified, segment decoding), hmac.go (SigningMethodHMAC
 // Sign and Verify) and validator.go (verifyExpiresAt, verifyNotBefore,
 // verifyAudience, verifyIssuer), golang-jwt/jwt
@@ -7,7 +7,9 @@
 // key fixes the algorithm: a token naming any other `alg`, `none` included, is
 // refused before its signature is checked.
 /// A verification or signing key and the algorithm it is for.
-pub type Key = HS256(Bytes) | HS384(Bytes) | HS512(Bytes)
+pub type Key = HS256(Bytes) | HS384(Bytes) | HS512(Bytes) | EdDSA(ed25519.PublicKey) | EdDSAPrivate(
+  ed25519.PrivateKey
+)
 
 /// Claim checks beyond the signature. `audience` must appear in the `aud` claim (a
 /// string or an array of strings) and `issuer` equal `iss`; `leeway` seconds widen
@@ -19,7 +21,9 @@ pub type Validation {
   require_expiration: bool,
 }
 
-pub type JwtError = Malformed | Json(json.JsonError) | UnsupportedAlgorithm(String) | Critical | Signature | Expired | NotYetValid | Audience | Issuer | MissingExpiration | InvalidClaim(
+pub type JwtError = InvalidKey | Malformed | Json(json.JsonError) | UnsupportedAlgorithm(
+  String
+) | Critical | Signature | Expired | NotYetValid | Audience | Issuer | MissingExpiration | InvalidClaim(
   String
 ) | Clock(ClockError)
 
@@ -33,14 +37,37 @@ fn algorithm(key: Key) -> unique String uses {} {
     HS256(_) => "HS256",
     HS384(_) => "HS384",
     HS512(_) => "HS512",
+    EdDSA(_) => "EdDSA",
+    EdDSAPrivate(_) => "EdDSA",
   }
 }
 
-fn mac(key: Key, data: Bytes) -> unique Bytes uses {} {
+// golang-jwt ed25519.go:34-78: public keys verify, private keys sign.
+fn make_signature(key: Key, data: Bytes) -> Result[unique Bytes, JwtError] uses {} {
   match key {
-    HS256(secret) => bytes.from_inline(hmac.mac(sha256.hash(), secret, data)),
-    HS384(secret) => bytes.from_inline(hmac.mac(sha384.hash(), secret, data)),
-    HS512(secret) => bytes.from_inline(hmac.mac(sha512.hash(), secret, data)),
+    HS256(secret) => Ok(bytes.from_inline(hmac.mac(sha256.hash(), secret, data))),
+    HS384(secret) => Ok(bytes.from_inline(hmac.mac(sha384.hash(), secret, data))),
+    HS512(secret) => Ok(bytes.from_inline(hmac.mac(sha512.hash(), secret, data))),
+    EdDSA(_) => Error(InvalidKey()),
+    EdDSAPrivate(private) => {
+      if bytes.len(private.seed) != 32 {
+        return Error(InvalidKey())
+      }
+      Ok(ed25519.sign(private.seed, data))
+    },
+  }
+}
+
+fn verify_signature(key: Key, data: Bytes, signed: Bytes) -> Result[bool, JwtError] uses {} {
+  match key {
+    EdDSA(public) => {
+      if bytes.len(public.bytes) != 32 {
+        return Error(InvalidKey())
+      }
+      Ok(ed25519.verify(public.bytes, data, signed))
+    },
+    EdDSAPrivate(_) => Error(InvalidKey()),
+    _ => Ok(constant_time.equal(make_signature(key, data)?, signed)),
   }
 }
 
@@ -54,7 +81,8 @@ fn json_error(error: json.JsonError) -> JwtError uses {} {
 
 /// Signs `claims`, a JSON object, under the header `{"alg":...,"typ":"JWT"}`:
 /// `header.claims.signature`, each segment unpadded base64url. A claims value that is
-/// not an object is `InvalidClaim("claims")`.
+/// not an object is `InvalidClaim("claims")`. EdDSA needs `EdDSAPrivate` with a
+/// 32-byte seed; a public key or malformed seed is `InvalidKey()`.
 pub fn sign(key: Key, claims: json.Value) -> Result[unique String, JwtError] uses {} {
   let Object(_) = claims else {
     return Error(InvalidClaim("claims"))
@@ -67,7 +95,7 @@ pub fn sign(key: Key, claims: json.Value) -> Result[unique String, JwtError] use
   let signing_input = f"{segment(string.as_bytes(header_text))}.{segment(
     string.as_bytes(claims_text)
   )}"
-  let signature = segment(mac(key, string.as_bytes(signing_input)))
+  let signature = segment(make_signature(key, string.as_bytes(signing_input))?)
   Ok(f"{signing_input}.{signature}")
 }
 
@@ -196,8 +224,9 @@ pub fn validate(claims: json.Value, validation: Validation, now: i64) -> Result[
 
 /// Verifies `token` with `key` at `now` (Unix seconds) and returns its claims: the
 /// header's `alg` must be the key's (`UnsupportedAlgorithm(alg)` otherwise), a `crit`
-/// header is `Critical()`, the MAC must match in constant time (`Signature()`), and
-/// then the claims must pass `validate`.
+/// header is `Critical()`, the MAC or Ed25519 signature must match (`Signature()`), and
+/// then the claims must pass `validate`. EdDSA uses the public key; a private key
+/// or malformed key is `InvalidKey()`.
 pub fn verify_at(token: String, key: Key, validation: Validation, now: i64) -> Result[
   json.Value,
   JwtError
@@ -222,8 +251,7 @@ pub fn verify_at(token: String, key: Key, validation: Validation, now: i64) -> R
   text.append(mut signing_input, parts[0])
   list.push(mut signing_input, b'.')
   text.append(mut signing_input, parts[1])
-  let expected = mac(key, bytes.from_list(take signing_input))
-  if !constant_time.equal(expected, signature) {
+  if !verify_signature(key, bytes.from_list(take signing_input), signature)? {
     return Error(Signature())
   }
   let claims = object(parts[1])?

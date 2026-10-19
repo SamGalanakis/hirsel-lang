@@ -1,0 +1,28 @@
+// steps: 6000000
+// One expensive curve operation per program keeps the smoke matrix bounded.
+// RFC 8032 section 7.1 TEST3 verification.
+// Full151-case set: crypto-ed25519-wycheproof.hir (Apache-2.0).
+fn decode(text: String) -> unique Bytes {
+  let Ok(data) = std@1/hex.decode(text) else {
+    failure.check(false, TextInvariant())
+    return bytes.from_list([])
+  }
+  data
+}
+
+pub fn main(rt: Io) -> Result[(), LaunchError] {
+  failure.check(
+    std@1/ed25519.verify(
+      decode("fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"),
+      decode("af82"),
+      decode(
+        "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a"
+      )
+    ),
+    TextInvariant()
+  )
+  out.print(io.stdout(rt) ? Grant, "ok\n") ? Output
+  Ok(())
+}
+
+pub type LaunchError = Grant(GrantError) | Output(OutputError)
