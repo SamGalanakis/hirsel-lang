@@ -9,19 +9,28 @@ fn net_error(error: NetError) -> http.HttpError uses {} {
   Net(error)
 }
 
+fn server_config(head: u64, body: u64) -> http.Config uses {} {
+  let mut config = http.default_config()
+  config.max_head_bytes = head
+  config.max_body_bytes = body
+  take config
+}
+
 pub fn main(t: Test) -> Result[(), http.HttpError] {
   let input: Bytes = b"POST /upload HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4;ext=yes\r\nWiki\r\n5\r\npedia\r\n0\r\nx-check: yes\r\n\r\nNEXT"
   let complete = bytes.len(input) - 4
-  match http.parse_server_request(input, 1024, 9)? {
+  match http.parse_server_request(input, server_config(1024, 9))? {
     Some((request, end)) => {
       check(request.body == b"Wikipedia" && end == complete)
       check(http.header(request.trailers, "X-CHECK") == Some("yes"))
     },
     None() => check(false),
   }
-  check(http.parse_server_request(input, 1024, 8) == Error(BodyTooLarge()))
+  check(
+    http.parse_server_request(input, server_config(1024, 8)) == Error(BodyTooLarge())
+  )
   let empty: Bytes = b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
-  match http.parse_server_request(empty, 1024, 0)? {
+  match http.parse_server_request(empty, server_config(1024, 0))? {
     Some((request, end)) => check(
       request.body == b"" && request.trailers == [] && end == bytes.len(empty)
     ),
@@ -30,43 +39,37 @@ pub fn main(t: Test) -> Result[(), http.HttpError] {
   check(
     http.parse_server_request(
       b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nx\r\n",
-      1024,
-      9
+      server_config(1024, 9)
     ) == Error(Chunk())
   )
   check(
     http.parse_server_request(
       b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffffffff\r\n",
-      1024,
-      9
+      server_config(1024, 9)
     ) == Error(Chunk())
   )
   check(
     http.parse_server_request(
       b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\n",
-      1024,
-      9
+      server_config(1024, 9)
     ) == Error(BodyTooLarge())
   )
   check(
     http.parse_server_request(
       b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx!\r",
-      1024,
-      9
+      server_config(1024, 9)
     ) == Error(Chunk())
   )
   check(
     http.parse_server_request(
       b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nContent-Length: 1\r\n\r\n",
-      1024,
-      9
+      server_config(1024, 9)
     ) == Error(Malformed(HeaderName()))
   )
   check(
     http.parse_server_request(
       b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nConnection: keep-alive\r\n\r\n",
-      1024,
-      9
+      server_config(1024, 9)
     ) == Error(Malformed(HeaderName()))
   )
   let addr = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)

@@ -1516,7 +1516,7 @@ The server shares the client's wire parser and error type:
 RequestLine = { method_start: u64, method_end: u64, target_start: u64, target_end: u64, version: u8 }
 N fn http_wire.parse_request[k: size](buf: Bytes, mut line: RequestLine, mut headers: Inline[RawHeader, k], mut count: u64) -> Result[ParseStatus, HeadError] uses {}
 ServerRequest = { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool }
-fn http.parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
+fn http.parse_server_request(buf: Bytes, config: Config) -> Result[Option[(ServerRequest, u64)], HttpError] uses {}
 fn http.server_connection(n: Net, take stream: Stream of n, config: Config) -> ServerConnection
 fn http.serve_tls(n: Net, take stream: Stream of n, server: TlsServer, config: Config) -> Result[ServerConnection, HttpError]
 fn http.receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -> Result[ServerRequest, HttpError]
@@ -1526,9 +1526,12 @@ fn http.respond(mut c: ServerConnection, status: u16, headers: List[Header], bod
 `parse_request` follows httparse's strict request-line delimiters, accepts HTTP/1.0 and
 HTTP/1.1, and reuses `parse_headers`. Its initialized-header count and absolute consumed
 head offset follow `parse_response`. `parse_server_request` returns an owned request and
-the consumed head-plus-body byte count, or `None` for incomplete input. It accepts at most
-16 headers, checks the caller's head and body byte limits, and reads a Content-Length or chunked body (zero bytes when neither framing is
-present). Malformed heads, conflicting Content-Length and Transfer-Encoding, and
+the consumed head-plus-body byte count, or `None` for incomplete input. Both it and
+`receive_request` enforce `Config.max_headers` (100 by default), `max_head_bytes` and
+`max_body_bytes`, and read a Content-Length or chunked body (zero bytes when neither
+framing is present). The 16-entry parser scratch buffer is a batch size, never a
+message limit. Header counts and framing checks span every batch. Trailer blocks
+obey the same header-count and head-byte limits. Malformed heads, conflicting Content-Length and Transfer-Encoding, and
 unsupported transfer codings fail. Bytes after the declared body are excluded from the request.
 
 Chunked requests reuse `http_wire.parse_chunk_size`, including chunk extensions and

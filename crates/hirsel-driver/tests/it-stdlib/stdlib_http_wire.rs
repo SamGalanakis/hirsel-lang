@@ -60,11 +60,18 @@ fn literal(bytes: &[u8]) -> String {
 }
 
 const HELPERS: &str = r#"
+fn server_config(head: u64, body: u64) -> std@1/http.Config uses {} {
+  let mut config = std@1/http.default_config()
+  config.max_head_bytes = head
+  config.max_body_bytes = body
+  take config
+}
+
 fn empty() -> std@1/http_wire.RawHeader {
   std@1/http_wire.RawHeader(name_start: 0, name_end: 0, value_start: 0, value_end: 0)
 }
 fn server_parse(t: Test, buf: Bytes, head: u64, body: u64, expected: Result[Option[(std@1/http.ServerRequest, u64)], std@1/http.HttpError]) {
-  test.check(t, std@1/http.parse_server_request(buf, head, body) == expected)
+  test.check(t, std@1/http.parse_server_request(buf, server_config(head, body)) == expected)
 }
 fn request(t: Test, buf: Bytes, expected: Result[std@1/http_wire.ParseStatus, std@1/http_wire.HeadError]) {
   let mut line = std@1/http_wire.RequestLine(method_start: 0, method_end: 0, target_start: 0, target_end: 0, version: 0)
@@ -695,7 +702,7 @@ fn httparse_request_vectors_and_content_length_boundaries() {
         }
         body.push_str(r#"
 let request_bytes: Bytes = b"POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\nabcNEXT"
-match std@1/http.parse_server_request(request_bytes, 1024, 3) {
+match std@1/http.parse_server_request(request_bytes, server_config(1024, 3)) {
   Ok(Some((r, consumed))) => {
     test.check(t, r.method == "POST" && r.target == "/" && r.body == b"abc")
     match r.version { Http11() => (), _ => test.check(t, false) }

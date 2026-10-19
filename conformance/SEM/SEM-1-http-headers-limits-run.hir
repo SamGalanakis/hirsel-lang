@@ -1,0 +1,188 @@
+// rule: SEM-1
+// expect: test
+fn fields(count: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, "X-")
+    u64.format_into(i, mut out)
+    text.append(mut out, ": value\r\n")
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+fn wire(value: String) -> unique Bytes uses {} {
+  unique string.as_bytes(value)
+}
+
+fn http_net(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+fn peer(t: Test, bytes: Bytes) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([Send(unique bytes), Close()])]
+      )
+    ],
+    []
+  )
+}
+
+fn rejected(t: Test, input: Bytes, config: http.Config, expected: http.HttpError) -> Result[
+  (),
+  http.HttpError
+] {
+  test.check(t, http.parse_server_request(input, config) == Error(expected))
+  let n = peer(t, input)
+  let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
+  let mut c = http.server_connection(n, take stream, config)
+  test.check(t, http.receive_request(mut c, None()) == Error(expected))
+  Ok(())
+}
+
+fn client_rejected(t: Test, input: Bytes, config: http.Config, expected: http.HttpError) -> Result[
+  (),
+  http.HttpError
+] {
+  let n = peer(t, input)
+  let mut r = http.request(n, config, Get(), "http://example.com", [])?
+  http.send_bodiless(mut r)?
+  test.check(t, http.receive_head(mut r) == Error(expected))
+  Ok(())
+}
+
+@test
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  config.max_headers = 40
+  let request = wire(
+    string.concat("GET / HTTP/1.1\r\n", string.concat(fields(41), "\r\n"))
+  )
+  rejected(t, request, config, Malformed(TooManyHeaders()))
+}
+
+@test
+fn client_count(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  config.max_headers = 40
+  client_rejected(
+    t,
+    wire(string.concat("HTTP/1.1 200 OK\r\n", string.concat(fields(41), "\r\n"))),
+    config,
+    Malformed(TooManyHeaders())
+  )
+}
+
+@test
+fn trailer_count(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  config.max_headers = 40
+  let chunked = wire(
+    string.concat(
+      "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n",
+      string.concat(fields(41), "\r\n")
+    )
+  )
+  rejected(t, chunked, config, Malformed(TooManyHeaders()))
+}
+
+@test
+fn zero_count(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  config.max_headers = 0
+  rejected(t, b"GET / HTTP/1.1\r\nX: y\r\n\r\n", config, Malformed(TooManyHeaders()))?
+  match http.parse_server_request(b"GET / HTTP/1.1\r\n\r\n", config)? {
+    Some((empty_request, consumed)) => test.check(
+      t,
+      empty_request.headers == [] && consumed == 18
+    ),
+    None() => test.check(t, false),
+  }
+  Ok(())
+}
+
+@test
+fn head_bytes(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  let head = wire(
+    string.concat("GET / HTTP/1.1\r\n", string.concat(fields(40), "\r\n"))
+  )
+  config.max_head_bytes = bytes.len(head) - 1
+  rejected(t, head, config, HeadTooLarge())
+}
+
+@test
+fn client_head_bytes(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  let head = wire(
+    string.concat("HTTP/1.1 200 OK\r\n", string.concat(fields(40), "\r\n"))
+  )
+  config.max_head_bytes = bytes.len(head) - 1
+  client_rejected(t, head, config, HeadTooLarge())
+}
+
+@test
+fn conflicting_framing(t: Test) -> Result[(), http.HttpError] {
+  let prefix = string.concat("GET / HTTP/1.1\r\n", fields(15))
+  rejected(
+    t,
+    wire(
+      string.concat(prefix, "Content-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n")
+    ),
+    http.default_config(),
+    Malformed(TransferEncoding())
+  )
+}
+
+@test
+fn conflicting_lengths(t: Test) -> Result[(), http.HttpError] {
+  let prefix = string.concat("GET / HTTP/1.1\r\n", fields(15))
+  rejected(
+    t,
+    wire(string.concat(prefix, "Content-Length: 0\r\nContent-Length: 1\r\n\r\nx")),
+    http.default_config(),
+    Malformed(ContentLength())
+  )
+}
+
+@test
+fn repeated_encoding(t: Test) -> Result[(), http.HttpError] {
+  let prefix = string.concat("GET / HTTP/1.1\r\n", fields(15))
+  rejected(
+    t,
+    wire(
+      string.concat(
+        prefix,
+        "Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n"
+      )
+    ),
+    http.default_config(),
+    Malformed(TransferEncoding())
+  )
+}
+
+@test
+fn client_conflicting_framing(t: Test) -> Result[(), http.HttpError] {
+  client_rejected(
+    t,
+    wire(
+      string.concat(
+        "HTTP/1.1 200 OK\r\n",
+        string.concat(
+          fields(15),
+          "Content-Length: 0\r\nTransfer-Encoding: chunked\r\n\r\n"
+        )
+      )
+    ),
+    http.default_config(),
+    Malformed(TransferEncoding())
+  )
+}

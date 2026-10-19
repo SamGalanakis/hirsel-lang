@@ -1,12 +1,19 @@
 // rule: SEM-1
 // expect: run
+fn server_config(head: u64, body: u64) -> http.Config uses {} {
+  let mut config = http.default_config()
+  config.max_head_bytes = head
+  config.max_body_bytes = body
+  take config
+}
+
 pub fn main() -> Result[(), http.HttpError] {
   let input: Bytes = b"POST /upload HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n4;ext=yes\r\nWiki\r\n5\r\npedia\r\n0\r\nx-check: yes\r\n\r\nNEXT"
   let complete = bytes.len(input) - 4
   let mut end: u64 = 1
   while end < complete {
     failure.check(
-      http.parse_server_request(bytes.slice(input, 0, end), 1024, 9)? == None(),
+      http.parse_server_request(bytes.slice(input, 0, end), server_config(1024, 9))? == None(),
       TextInvariant()
     )
     end += 4

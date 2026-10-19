@@ -1,0 +1,133 @@
+// rule: SEM-1
+// expect: test
+fn fields(count: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, "X-")
+    u64.format_into(i, mut out)
+    text.append(mut out, ": value\r\n")
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+fn wire(value: String) -> unique Bytes uses {} {
+  unique string.as_bytes(value)
+}
+
+fn http_net(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+fn peer(t: Test, bytes: Bytes) -> Net {
+  test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open([Send(unique bytes), Close()])]
+      )
+    ],
+    []
+  )
+}
+
+@test
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let head = string.concat("GET / HTTP/1.1\r\n", string.concat(fields(40), "\r\n"))
+  let next = "GET /next HTTP/1.1\r\nConnection: close\r\n\r\n"
+  let input = wire(string.concat(head, next))
+  let mut config = http.default_config()
+  config.max_headers = 40
+  config.max_head_bytes = string.byte_len(head)
+  match http.parse_server_request(input, config)? {
+    Some((request, end)) => test.check(
+      t,
+      list.len(request.headers) == 40 && end == string.byte_len(head)
+    ),
+    None() => test.check(t, false),
+  }
+  {
+    let n = test.net(
+      t,
+      [
+        NetPeer(
+          address: "example.com",
+          port: 80u16,
+          resolves_to: [],
+          tls: Plain(),
+          connections: [
+            Open(
+              [
+                Send(unique input),
+                Expect(
+                  b"HTTP/1.1 200 \r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
+                ),
+                Expect(
+                  b"HTTP/1.1 200 \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                ),
+                Close()
+              ]
+            )
+          ]
+        )
+      ],
+      []
+    )
+    let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
+    let mut c = http.server_connection(n, take stream, config)
+    let request = http.receive_request(mut c, None())?
+    test.check(t, list.len(request.headers) == 40)
+    http.respond(mut c, 200u16, [], b"", false)?
+    let next_request = http.receive_request(mut c, None())?
+    test.check(t, next_request.target == "/next")
+    http.respond(mut c, 200u16, [], b"", false)?
+  }
+  Ok(())
+}
+
+@test
+fn client_many(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  config.max_headers = 40
+  let response = wire(
+    string.concat("HTTP/1.1 200 OK\r\n", string.concat(fields(40), "\r\nok"))
+  )
+  let n = peer(t, response)
+  config.max_head_bytes = 65536
+  let mut r = http.request(n, config, Get(), "http://example.com", [])?
+  http.send_bodiless(mut r)?
+  let received = http.receive_head(mut r)?
+  test.check(t, list.len(received.headers) == 40 && http.read_all(mut r, 2)? == b"ok")
+  Ok(())
+}
+
+@test
+fn trailers_many(t: Test) -> Result[(), http.HttpError] {
+  let mut config = http.default_config()
+  config.max_headers = 40
+  let chunked = wire(
+    string.concat(
+      "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n",
+      string.concat(fields(40), "\r\n")
+    )
+  )
+  match http.parse_server_request(chunked, config)? {
+    Some((request, end)) => test.check(
+      t,
+      list.len(request.trailers) == 40 && end == bytes.len(chunked)
+    ),
+    None() => test.check(t, false),
+  }
+  let n = peer(t, chunked)
+  let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
+  let mut c = http.server_connection(n, take stream, config)
+  let request = http.receive_request(mut c, None())?
+  test.check(t, list.len(request.trailers) == 40)
+  http.respond(mut c, 200u16, [], b"", true)?
+  Ok(())
+}

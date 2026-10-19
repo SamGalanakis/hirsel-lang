@@ -648,6 +648,96 @@ pub fn end_request_body(mut r: Request, request_trailers: List[Header]) -> Resul
 
 // Batches use the existing noalloc parser without fixing Config.max_headers to
 // an implementation capacity. Offsets always refer to the original input.
+// A fixed scratch batch is not a message limit. Client, server and trailers
+// collect batches under the configured count bound and merge framing across them.
+type HttpHeadKind = ResponseHeaders | RequestHeaders | TrailerHeaders
+
+type HttpHeaderFields {
+  headers: List[Header],
+  content_length: Option[u64],
+  chunked: bool,
+}
+
+fn http_add_header_batch(
+  mut fields: HttpHeaderFields,
+  buf: Bytes,
+  raw: Inline[http_wire.RawHeader, 16],
+  count: u64,
+  version: u8,
+  limit: u64,
+  kind: HttpHeadKind
+) -> Result[(), HttpError] uses {} {
+  if core@1/list.len(fields.headers) > limit || count > limit - core@1/list.len(
+    fields.headers
+  ) {
+    return Error(Malformed(TooManyHeaders()))
+  }
+  let mut batch_cl: bool = false
+  let mut batch_te: bool = false
+  let mut hi: u64 = 0
+  while hi < count {
+    let name = http_text(buf, raw[hi].name_start, raw[hi].name_end)?
+    if kind == TrailerHeaders() && (http_same(name, "content-length") || http_same(
+      name,
+      "transfer-encoding"
+    ) || http_same(name, "host") || http_same(name, "connection")) {
+      return Error(Malformed(HeaderName()))
+    }
+    if http_same(name, "content-length") {
+      batch_cl = true
+    }
+    if http_same(name, "transfer-encoding") {
+      batch_te = true
+    }
+    hi += 1
+  }
+  if (batch_cl || fields.content_length != None()) && (batch_te || fields.chunked) {
+    return Error(Malformed(TransferEncoding()))
+  }
+  let frame = match http_wire.framing(buf, version, raw, count) {
+    Ok(f) => f,
+    Error(TransferEncoding()) => return Error(
+      if kind == ResponseHeaders() {
+        UnsupportedTransferEncoding()
+      } else {
+        Malformed(TransferEncoding())
+      }
+    ),
+    Error(e) => return Error(Malformed(e)),
+  }
+  let mut i: u64 = 0
+  while i < count {
+    let h = raw[i]
+    let name = http_text(buf, h.name_start, h.name_end)?
+    let value = http_text(buf, h.value_start, h.value_end)?
+    core@1/list.push(mut fields.headers, Header(name: take name, value: take value))
+    i += 1
+  }
+  if let Some(value) = frame.content_length {
+    if let Some(old) = fields.content_length {
+      if old != value {
+        return Error(Malformed(ContentLength()))
+      }
+    } else {
+      fields.content_length = Some(value)
+    }
+  }
+  if fields.chunked && frame.chunked {
+    return Error(
+      if kind == ResponseHeaders() {
+        UnsupportedTransferEncoding()
+      } else {
+        Malformed(TransferEncoding())
+      }
+    )
+  }
+  fields.chunked = fields.chunked || frame.chunked
+  if fields.chunked && fields.content_length != None() {
+    return Error(Malformed(TransferEncoding()))
+  }
+  Ok(())
+}
+
 fn http_parse_head(buf: Bytes, config: Config) -> Result[
   Option[(ResponseHead, u64)],
   HttpError
@@ -685,9 +775,7 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
   let mut count: u64 = 0
   let mut first: bool = true
   let mut start: u64 = 0
-  let mut headers: List[Header] = []
-  let mut content_length: Option[u64] = None()
-  let mut chunked: bool = false
+  let mut fields = HttpHeaderFields(headers: [], content_length: None(), chunked: false)
   while true {
     let parsed = if first {
       http_wire.parse_response(buf, mut line, mut raw, mut count)
@@ -710,57 +798,19 @@ fn http_parse_head(buf: Bytes, config: Config) -> Result[
       },
       Error(e) => return Error(Malformed(e)),
     }
-    if core@1/list.len(headers) > config.max_headers || count > config.max_headers - core@1/list.len(
-      headers
-    ) {
-      return Error(Malformed(TooManyHeaders()))
-    }
-    let mut batch_cl: bool = false
-    let mut batch_te: bool = false
-    let mut hi: u64 = 0
-    while hi < count {
-      let name = http_text(buf, raw[hi].name_start, raw[hi].name_end)?
-      if http_same(name, "content-length") {
-        batch_cl = true
-      }
-      if http_same(name, "transfer-encoding") {
-        batch_te = true
-      }
-      hi += 1
-    }
-    if (batch_cl || content_length != None()) && (batch_te || chunked) {
-      return Error(Malformed(TransferEncoding()))
-    }
-    let frame = match http_wire.framing(buf, line.version, raw, count) {
-      Ok(f) => f,
-      Error(TransferEncoding()) => return Error(UnsupportedTransferEncoding()),
-      Error(e) => return Error(Malformed(e)),
-    }
-    let mut i: u64 = 0
-    while i < count {
-      let h = raw[i]
-      let name = http_text(buf, h.name_start, h.name_end)?
-      let value = http_text(buf, h.value_start, h.value_end)?
-      core@1/list.push(mut headers, Header(name: take name, value: take value))
-      i += 1
-    }
-    if let Some(value) = frame.content_length {
-      if let Some(old) = content_length {
-        if old != value {
-          return Error(Malformed(ContentLength()))
-        }
-      } else {
-        content_length = Some(value)
-      }
-    }
-    if chunked && frame.chunked {
-      return Error(UnsupportedTransferEncoding())
-    }
-    chunked = chunked || frame.chunked
-    if chunked && content_length != None() {
-      return Error(Malformed(TransferEncoding()))
-    }
+    http_add_header_batch(
+      mut fields,
+      buf,
+      raw,
+      count,
+      line.version,
+      config.max_headers,
+      ResponseHeaders()
+    )?
     if complete {
+      let headers = copy fields.headers
+      let content_length = fields.content_length
+      let chunked = fields.chunked
       // Reason is informational; invalid UTF-8 is empty.
       let reason = match http_text(buf, line.reason_start, line.reason_end) {
         Ok(value) => take value,
@@ -1477,10 +1527,20 @@ fn http_server_body(frame: http_wire.Framing, limit: u64) -> Result[
   )
 }
 
-fn http_server_trailers(buf: Bytes, start: u64, limit: u64) -> Result[
+fn http_server_trailers(buf: Bytes, start: u64, config: Config) -> Result[
   Option[(List[Header], u64)],
   HttpError
 ] uses {} {
+  let size = core@1/bytes.len(buf) - start
+  let bounded = core@1/bytes.slice(
+    buf,
+    start,
+    start + if size > config.max_head_bytes {
+      config.max_head_bytes
+    } else {
+      size
+    }
+  )
   let empty = http_wire.RawHeader(
     name_start: 0,
     name_end: 0,
@@ -1506,57 +1566,59 @@ fn http_server_trailers(buf: Bytes, start: u64, limit: u64) -> Result[
     empty
   ]
   let mut count: u64 = 0
-  let end = match http_wire.parse_headers(buf, start, mut raw, mut count) {
-    Ok(Partial()) => {
-      if core@1/bytes.len(buf) - start >= limit {
-        return Error(HeadTooLarge())
-      }
-      return Ok(None())
-    },
-    Ok(Complete(end)) => end,
-    Error(error) => return Error(Malformed(error)),
-  }
-  if end - start > limit {
-    return Error(HeadTooLarge())
-  }
-  let mut headers: List[Header] = []
-  let mut i: u64 = 0
-  while i < count {
-    let name = http_text(buf, raw[i].name_start, raw[i].name_end)?
-    // Trailers cannot change the message boundary, connection policy or routing.
-    if http_same(name, "content-length") || http_same(name, "transfer-encoding") || http_same(
-      name,
-      "host"
-    ) || http_same(name, "connection") {
-      return Error(Malformed(HeaderName()))
+  let mut pos: u64 = 0
+  let mut fields = HttpHeaderFields(headers: [], content_length: None(), chunked: false)
+  while true {
+    let mut complete = false
+    match http_wire.parse_headers(bounded, pos, mut raw, mut count) {
+      Ok(Partial()) => {
+        if size >= config.max_head_bytes {
+          return Error(HeadTooLarge())
+        }
+        return Ok(None())
+      },
+      Ok(Complete(end)) => {
+        pos = end
+        complete = true
+      },
+      Error(TooManyHeaders()) => {
+        pos = raw[count - 1].value_end
+        while pos < core@1/bytes.len(bounded) && bounded[pos] != 10 {
+          pos += 1
+        }
+        pos += 1
+      },
+      Error(error) => return Error(Malformed(error)),
     }
-    core@1/list.push(
-      mut headers,
-      Header(
-        name: take name,
-        value: http_text(buf, raw[i].value_start, raw[i].value_end)?
-      )
-    )
-    i += 1
+    http_add_header_batch(
+      mut fields,
+      bounded,
+      raw,
+      count,
+      1u8,
+      config.max_headers,
+      TrailerHeaders()
+    )?
+    if complete {
+      return Ok(Some((copy fields.headers, start + pos)))
+    }
   }
-  Ok(Some((take headers, end)))
+  Ok(None())
 }
 
 // Returns exactly the consumed prefix. An incomplete size line, suffix or trailer
 // stays with the caller; payload bytes already decoded need never be buffered again.
-fn http_server_body_step(
-  mut body: ServerBody,
-  buf: Bytes,
-  head_limit: u64,
-  body_limit: u64
-) -> Result[u64, HttpError] uses {} {
+fn http_server_body_step(mut body: ServerBody, buf: Bytes, config: Config) -> Result[
+  u64,
+  HttpError
+] uses {} {
   let end = core@1/bytes.len(buf)
   let mut pos: u64 = 0
   while body.state != 5 {
     if body.state == 1 {
       let (consumed, size) = match http_wire.parse_chunk_size(buf, pos) {
         Ok(Partial()) => {
-          if end - pos >= head_limit {
+          if end - pos >= config.max_head_bytes {
             return Error(HeadTooLarge())
           }
           return Ok(pos)
@@ -1564,10 +1626,10 @@ fn http_server_body_step(
         Ok(Complete(consumed, size)) => (consumed, size),
         Error(_) => return Error(Chunk()),
       }
-      if consumed > head_limit {
+      if consumed > config.max_head_bytes {
         return Error(HeadTooLarge())
       }
-      if size > body_limit - core@1/list.len(body.output) {
+      if size > config.max_body_bytes - core@1/list.len(body.output) {
         return Error(BodyTooLarge())
       }
       pos += consumed
@@ -1608,7 +1670,7 @@ fn http_server_body_step(
       pos += 2
       body.state = 1
     } else {
-      let Some((headers, consumed)) = http_server_trailers(buf, pos, head_limit)? else {
+      let Some((headers, consumed)) = http_server_trailers(buf, pos, config)? else {
         return Ok(pos)
       }
       body.trailers = copy headers
@@ -1620,10 +1682,20 @@ fn http_server_body_step(
 }
 
 // Parse the request head once, before incrementally consuming its body.
-fn http_server_head(buf: Bytes, max_head_bytes: u64) -> Result[
+fn http_server_head(buf: Bytes, config: Config) -> Result[
   Option[(ServerRequest, http_wire.Framing, u64)],
   HttpError
 ] uses {} {
+  let size = core@1/bytes.len(buf)
+  let bounded = core@1/bytes.slice(
+    buf,
+    0,
+    if size > config.max_head_bytes {
+      config.max_head_bytes
+    } else {
+      size
+    }
+  )
   let empty = http_wire.RawHeader(
     name_start: 0,
     name_end: 0,
@@ -1656,79 +1728,100 @@ fn http_server_head(buf: Bytes, max_head_bytes: u64) -> Result[
     version: 0
   )
   let mut count: u64 = 0
-  let end = match http_wire.parse_request(buf, mut line, mut raw, mut count) {
-    Ok(Partial()) => {
-      if core@1/bytes.len(buf) >= max_head_bytes {
-        return Error(HeadTooLarge())
-      }
-      return Ok(None())
-    },
-    Ok(Complete(end)) => end,
-    Error(e) => return Error(Malformed(e)),
-  }
-  if end > max_head_bytes {
-    return Error(HeadTooLarge())
-  }
-  let frame = match http_wire.framing(buf, line.version, raw, count) {
-    Ok(f) => f,
-    Error(e) => return Error(Malformed(e)),
-  }
-  let mut headers: List[Header] = []
-  let mut i: u64 = 0
-  while i < count {
-    core@1/list.push(
-      mut headers,
-      Header(
-        name: http_text(buf, raw[i].name_start, raw[i].name_end)?,
-        value: http_text(buf, raw[i].value_start, raw[i].value_end)?
+  let mut first = true
+  let mut start: u64 = 0
+  let mut fields = HttpHeaderFields(headers: [], content_length: None(), chunked: false)
+  while true {
+    let parsed = if first {
+      http_wire.parse_request(bounded, mut line, mut raw, mut count)
+    } else {
+      http_wire.parse_headers(bounded, start, mut raw, mut count)
+    }
+    let mut complete = false
+    match parsed {
+      Ok(Partial()) => {
+        if size >= config.max_head_bytes {
+          return Error(HeadTooLarge())
+        }
+        return Ok(None())
+      },
+      Ok(Complete(end)) => {
+        start = end
+        complete = true
+      },
+      Error(TooManyHeaders()) => {
+        start = raw[count - 1].value_end
+        while start < core@1/bytes.len(bounded) && bounded[start] != 10 {
+          start += 1
+        }
+        start += 1
+      },
+      Error(error) => return Error(Malformed(error)),
+    }
+    http_add_header_batch(
+      mut fields,
+      bounded,
+      raw,
+      count,
+      line.version,
+      config.max_headers,
+      RequestHeaders()
+    )?
+    if complete {
+      let end = start
+      let headers = copy fields.headers
+      let frame = http_wire.Framing(
+        content_length: fields.content_length,
+        chunked: fields.chunked,
+        keep_alive: false
       )
-    )
-    i += 1
-  }
-  Ok(
-    Some(
-      (
-        ServerRequest(
-          method: http_text(buf, line.method_start, line.method_end)?,
-          target: http_text(buf, line.target_start, line.target_end)?,
-          version: if line.version == 1 {
-            Http11()
-          } else {
-            Http10()
-          },
-          keep_alive: http_server_keep_alive(
-            headers,
-            if line.version == 1 {
-              Http11()
-            } else {
-              Http10()
-            }
-          ),
-          headers: take headers,
-          body: b"",
-          trailers: []
-        ),
-        frame,
-        end
+      return Ok(
+        Some(
+          (
+            ServerRequest(
+              method: http_text(buf, line.method_start, line.method_end)?,
+              target: http_text(buf, line.target_start, line.target_end)?,
+              version: if line.version == 1 {
+                Http11()
+              } else {
+                Http10()
+              },
+              keep_alive: http_server_keep_alive(
+                headers,
+                if line.version == 1 {
+                  Http11()
+                } else {
+                  Http10()
+                }
+              ),
+              headers: take headers,
+              body: b"",
+              trailers: []
+            ),
+            frame,
+            end
+          )
+        )
       )
-    )
-  )
+    }
+    first = false
+  }
+  Ok(None())
 }
 
 // Complete includes decoded body and trailers; subsequent bytes belong to the next request.
-pub fn parse_server_request(buf: Bytes, max_head_bytes: u64, max_body_bytes: u64) -> Result[
+pub fn parse_server_request(buf: Bytes, config: Config) -> Result[
   Option[(ServerRequest, u64)],
   HttpError
 ] uses {} {
-  let mut Some((incoming, frame, end)) = http_server_head(buf, max_head_bytes)? else {
+  let mut Some((incoming, frame, end)) = http_server_head(buf, config)? else {
     return Ok(None())
   }
-  let mut body = http_server_body(frame, max_body_bytes)?
+  let mut body = http_server_body(frame, config.max_body_bytes)?
   let consumed = http_server_body_step(
     mut body,
     core@1/bytes.slice(buf, end, core@1/bytes.len(buf)),
-    max_head_bytes,
-    max_body_bytes
+    config
   )?
   if body.state != 5 {
     return Ok(None())
@@ -1844,7 +1937,7 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
   }
   while true {
     let buf = bufio.contents(c.input)
-    if let Some((parsed, frame, end)) = http_server_head(buf, c.config.max_head_bytes)? {
+    if let Some((parsed, frame, end)) = http_server_head(buf, c.config)? {
       let mut incoming = take parsed
       c.version = incoming.version
       c.head_request = incoming.method == "HEAD"
@@ -1852,12 +1945,7 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
       let mut body = http_server_body(frame, c.config.max_body_bytes)?
       while body.state != 5 {
         let unread = bufio.contents(c.input)
-        let consumed = http_server_body_step(
-          mut body,
-          unread,
-          c.config.max_head_bytes,
-          c.config.max_body_bytes
-        )?
+        let consumed = http_server_body_step(mut body, unread, c.config)?
         bufio.consume(mut c.input, consumed)
         if body.state != 5 && http_server_read_more(mut c, false, clock, deadline)? == 0 {
           return Error(Truncated())
