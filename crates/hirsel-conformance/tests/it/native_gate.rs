@@ -359,7 +359,7 @@ fn generated_programs_are_valid_and_directed_failures_fail_by_their_rule() {
 
 /// The larger generated window is reserved for the on-demand full gate.
 #[test]
-#[ignore = "on-demand generated program validity window"]
+#[ignore = "full gate: generated program validity window"]
 fn full_gate_generated_program_window_runs_by_the_reference() {
     on_compiler(|| {
         let seed = std::env::var("PROPTEST_RNG_SEED")

@@ -419,7 +419,7 @@ fn generated_confinement_differential() {
     confinement(4, 32);
 }
 #[test]
-#[ignore = "on-demand expanded confinement differential"]
+#[ignore = "full gate: expanded confinement differential"]
 fn full_gate_generated_confinement_differential() {
     confinement(128, 256);
 }
@@ -657,7 +657,7 @@ fn io_check_precedence_matrix() {
     precedence_file_matrix(1);
 }
 #[test]
-#[ignore = "on-demand expanded precedence matrix"]
+#[ignore = "full gate: expanded precedence matrix"]
 fn full_gate_io_check_precedence_matrix() {
     precedence_file_matrix(8);
     precedence_net_matrix();
