@@ -1,0 +1,34 @@
+// rule: SEM-5
+// expect: run
+// stdout: 312
+// stdout: 321
+// stdout: 321
+// Equal memberships reached in different orders must iterate differently.
+fn order(values: Set[u64]) -> u64 {
+  let mut digits: u64 = 0
+  for value in values {
+    digits = digits * 10 + value
+  }
+  digits
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let out = io.stdout(rt)?
+  let mut values: unique Set[u64] = set.empty()
+  set.insert(mut values, 3)
+  set.insert(mut values, 1)
+  set.insert(mut values, 2)
+  set.insert(mut values, 3)
+  let _ = out.print(out, f"{order(values)}\n")
+  failure.check(set.remove(mut values, 1), Bounds())
+  failure.check(!set.remove(mut values, 9), Bounds())
+  set.insert(mut values, 1)
+  set.insert(mut values, 2)
+  let _ = out.print(out, f"{order(values)}\n")
+  let mut digits: u64 = 0
+  for value in take values {
+    digits = digits * 10 + value
+  }
+  let _ = out.print(out, f"{digits}\n")
+  Ok(())
+}

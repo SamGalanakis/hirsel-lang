@@ -1,9 +1,9 @@
 // rule: CT-5
 // expect: run
-// stdout: 6
-// stdout: 6
+// stdout: 312
+// stdout: 312
 // "The same inputs give the same text": two declarations from one generator and shape get
-// the same body, whatever order the generator's set iterates in.
+// the same body, encoding the generator's set insertion order: c, a, b.
 type Triple {
   c: u64,
   a: u64,
@@ -19,11 +19,11 @@ fn total[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] {
   for f in fields {
     set.insert(mut names, copy f.name)
   }
-  let mut text = f"fn(value: {info.name}) -> u64 uses {{}} {{ 0"
+  let mut text = "0"
   for name in names {
-    text = f"{text} + value.{name}"
+    text = f"({text}) * 10 + value.{name}"
   }
-  Ok(codegen.body(f"{text} }}"))
+  Ok(codegen.body(f"fn(value: {info.name}) -> u64 uses {{}} {{ {text} }}"))
 }
 
 fn first(t: Triple) -> u64 uses {} = comptime total(shape(Triple))

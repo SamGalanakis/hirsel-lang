@@ -1270,8 +1270,11 @@ including move-only resource values. Map and Set removal require unique mutation
 leave missing keys unchanged (`None` or `false`). Map removal returns a unique option, transfers the stored
 value with its deep uniqueness and drops its stored key exactly once; Set removal drops its removed value
 exactly once. Remaining Map entries keep insertion order, and reinserting a removed
-key appends a new position. Removal shifts dense entries and repairs only the
-private index, taking expected O(n + index capacity) time without copying payloads.
+key appends a new position. Set also iterates in insertion order: inserting an
+existing element keeps its position, removal preserves the order of the remaining
+elements, and reinserting a removed element moves it to the end. Removal shifts
+dense entries and repairs only the private index, taking expected O(n + index
+capacity) time without copying payloads.
 
 ## SortedMap access
 
