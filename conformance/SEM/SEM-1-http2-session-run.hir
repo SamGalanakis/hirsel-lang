@@ -574,3 +574,59 @@ fn retired_stream_preserves_compression(t: Test) {
     std@1/http2.receive(mut server, idle) == Error(Wire(ConnectionError(Protocol())))
   )
 }
+
+@test
+fn goaway_refuses_new_requests(t: Test) {
+  let mut client = std@1/http2.session(Client(), 65536)
+  let mut server = std@1/http2.session(Server(), 65536)
+  handshake(mut client, mut server)
+  test.check(t, std@1/http2.open(mut client, request_fields(), false) == Ok(1))
+  test.check(
+    t,
+    transfer(mut server, std@1/http2.output(mut client)) == [
+      Headers(1, request_fields(), false)
+    ]
+  )
+  std@1/http2.goaway(mut server, NoError())
+  let (_, initial) = std@1/http2.drain_frames(mut server)
+  test.check(
+    t,
+    list.len(initial) == 1 && initial[0].kind == 7 && std@1/http2_wire.read_u32(
+      initial[0].payload,
+      0
+    ) == 1
+  )
+  // Stream 3 raced with GOAWAY. Its new dynamic entry must still be decoded.
+  let mut fields = request_fields()
+  list.push(mut fields, field(b"x", b"new"))
+  test.check(t, std@1/http2.open(mut client, fields, true) == Ok(3))
+  let (_, raced) = std@1/http2.drain_frames(mut client)
+  test.check(t, list.len(raced) == 1)
+  test.check(
+    t,
+    std@1/http2.receive(mut server, raced[0]) == Error(
+      Wire(StreamError(3, RefusedStream()))
+    )
+  )
+  let (_, resets) = std@1/http2.drain_frames(mut server)
+  test.check(t, list.len(resets) == 1 && resets[0].kind == 3 && resets[0].stream == 3)
+  test.check(
+    t,
+    std@1/http2.headers(mut client, 1, [field(b"x", b"new")], true) == Ok(())
+  )
+  test.check(
+    t,
+    transfer(mut server, std@1/http2.output(mut client)) == [
+      Headers(1, [field(b"x", b"new")], true)
+    ]
+  )
+  std@1/http2.goaway(mut server, NoError())
+  let (_, final) = std@1/http2.drain_frames(mut server)
+  test.check(
+    t,
+    list.len(final) == 1 && final[0].kind == 7 && std@1/http2_wire.read_u32(
+      final[0].payload,
+      0
+    ) == 1
+  )
+}

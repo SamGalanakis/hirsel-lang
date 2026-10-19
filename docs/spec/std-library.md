@@ -1514,6 +1514,9 @@ octets separately from the flow-control cost, which includes padding.
 that stream. `ping`, `reset` and `goaway` produce the corresponding control
 frames. SETTINGS window reductions can make existing stream windows negative;
 new DATA waits until sufficient credit arrives. GOAWAY stops new local streams.
+After sending GOAWAY, a server refuses later requests while still decoding their
+header blocks to preserve compression state for earlier active streams. Its last
+stream ID identifies a request whose validated headers were delivered.
 
 `connection(net, take stream, role, header_limit)` wraps this endpoint around a
 branded core Stream. It is a prior-knowledge API: plain streams use h2c; a TLS
