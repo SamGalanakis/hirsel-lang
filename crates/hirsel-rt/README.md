@@ -1109,3 +1109,9 @@ interpreter and an independent recursive reference on generated trees with
 parent components, dangling links and cycles. Neither simulated oracle consumes
 host faults. It catches disagreement between lexical normalization and physical
 link traversal; its ignored `full_gate_` version expands trees and paths.
+
+B13 (`tests/it/io_properties.rs`) compares check precedence with the independent
+interpreter under all condition subsets for cancellable requests, including
+expired scopes, and explicitly classifies every request's cancellation policy.
+It catches rights, argument and handle checks reordered across cancellation or
+provider faults. The ignored `full_gate_` version broadens argument data.

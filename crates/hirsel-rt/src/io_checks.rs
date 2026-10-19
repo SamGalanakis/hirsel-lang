@@ -84,6 +84,36 @@ impl State {
             _ => return Ok(None),
         };
         let root = self.directory(directory)?;
+        // A forged or foreign stream is a tool error before any language result,
+        // including denial. The interpreter checks this same boundary first.
+        let stream_writable = match request {
+            R::FileRead { file, .. }
+            | R::FileWrite { file, .. }
+            | R::FileAppend { file, .. }
+            | R::FileSeek { file, .. }
+            | R::Sync { file, .. } => {
+                let Some(Grant::File {
+                    directory: owner,
+                    writable,
+                    ..
+                }) = self.handles.rows.get(file)
+                else {
+                    return Err(AdapterError::InvalidHandle(*file));
+                };
+                if *owner != directory {
+                    return Err(AdapterError::InvalidHandle(*file));
+                }
+                Some(*writable)
+            }
+            R::WriteAll { file, .. } | R::Commit { file, .. } => {
+                if !matches!(self.handles.rows.get(file), Some(Grant::AtomicFile { directory: owner, .. }) if *owner == directory)
+                {
+                    return Err(AdapterError::InvalidHandle(*file));
+                }
+                None
+            }
+            _ => None,
+        };
         if self.access(directory)? == Access::Read
             && matches!(
                 request,
@@ -106,32 +136,15 @@ impl State {
             return Ok(Some(IoError::NotGranted));
         }
         let invalid = match request {
-            R::FileRead { file, .. }
-            | R::FileWrite { file, .. }
-            | R::FileAppend { file, .. }
-            | R::FileSeek { file, .. }
-            | R::Sync { file, .. } => {
-                let Some(Grant::File {
-                    directory: owner,
-                    writable,
-                    ..
-                }) = self.handles.rows.get(file)
-                else {
-                    return Err(AdapterError::InvalidHandle(*file));
-                };
-                if *owner != directory {
-                    return Err(AdapterError::InvalidHandle(*file));
-                }
-                matches!(request, R::FileRead { .. }) && *writable
-                    || matches!(request, R::FileWrite { .. } | R::FileAppend { .. }) && !*writable
+            R::FileRead { .. }
+            | R::FileWrite { .. }
+            | R::FileAppend { .. }
+            | R::FileSeek { .. }
+            | R::Sync { .. } => {
+                let writable = stream_writable.expect("stream ownership checked");
+                matches!(request, R::FileRead { .. }) && writable
+                    || matches!(request, R::FileWrite { .. } | R::FileAppend { .. }) && !writable
                     || matches!(request, R::FileSeek { offset, .. } if *offset > i64::MAX as u64)
-            }
-            R::WriteAll { file, .. } | R::Commit { file, .. } => {
-                if !matches!(self.handles.rows.get(file), Some(Grant::AtomicFile { directory: owner, .. }) if *owner == directory)
-                {
-                    return Err(AdapterError::InvalidHandle(*file));
-                }
-                false
             }
             R::SetPermissions {
                 path, permissions, ..

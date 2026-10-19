@@ -678,6 +678,15 @@ pub fn decode(schema: &C, value: Value, updates: &[(usize, Value)]) -> C {
             assert_eq!(bytes.len() as u64, count);
             (bytes, peer, truncated)
         })),
+        C::Accepted(_) => C::Accepted(result(value).map(|v| {
+            let Value::Tuple(mut fields) = v else {
+                panic!("accepted stream and address")
+            };
+            (
+                id(fields[0].take().unwrap()),
+                addr(fields[1].take().unwrap()),
+            )
+        })),
         C::NetHandle(_) => C::NetHandle(result(value).map(id)),
         C::Count(_) => C::Count(result(value).map(uint)),
         C::NetUnit(_) => C::NetUnit(result(value).map(|v| match v {

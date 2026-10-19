@@ -254,187 +254,6 @@ pub fn replay_interpreter_with_fixture(
                         Value::String(String::from_utf8(bytes.clone()).unwrap()),
                     ],
                 ),
-                Request::Open { directory, path } => (
-                    "file.open",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::Create { directory, path } => (
-                    "file.create",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::FileRead {
-                    directory,
-                    file,
-                    max,
-                } => (
-                    "file.read",
-                    vec![
-                        handle("Dir", *directory),
-                        handle("File", *file),
-                        Value::Sequence {
-                            kind: hirsel_types::BuiltinType::List,
-                            elements: Default::default(),
-                            arena: None,
-                        },
-                        reference::u64_value(*max),
-                    ],
-                ),
-                Request::FileSeek {
-                    directory,
-                    file,
-                    offset,
-                } => (
-                    "file.seek",
-                    vec![
-                        handle("Dir", *directory),
-                        handle("File", *file),
-                        reference::u64_value(*offset),
-                    ],
-                ),
-                Request::FileWrite {
-                    directory,
-                    file,
-                    bytes,
-                } => (
-                    "file.write",
-                    vec![
-                        handle("Dir", *directory),
-                        handle("File", *file),
-                        Value::Bytes(bytes.clone()),
-                    ],
-                ),
-                Request::FileAppend {
-                    directory,
-                    file,
-                    bytes,
-                } => (
-                    "file.append",
-                    vec![
-                        handle("Dir", *directory),
-                        handle("File", *file),
-                        Value::Bytes(bytes.clone()),
-                    ],
-                ),
-                Request::NarrowFile { directory, file } => (
-                    "file.narrow",
-                    vec![handle("Dir", *directory), handle("File", *file)],
-                ),
-                Request::Walk { directory } => ("file.walk", vec![handle("Dir", *directory)]),
-                Request::ReadDir { directory, path } => (
-                    "file.read_dir",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::Metadata { directory, path } => (
-                    "file.metadata",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::Mkdir { directory, path } => (
-                    "file.mkdir",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::SetPermissions {
-                    directory,
-                    path,
-                    permissions,
-                } => (
-                    "file.set_permissions",
-                    vec![
-                        handle("Dir", *directory),
-                        reference::path(path),
-                        Value::Integer(
-                            hirsel_interp::Integer::new(
-                                hirsel_types::Primitive::U32,
-                                *permissions as u128,
-                            )
-                            .unwrap(),
-                        ),
-                    ],
-                ),
-                Request::RemoveAll { directory, path } => (
-                    "dir.remove_all",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::RemoveDir { directory, path } => (
-                    "file.remove_dir",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::Rename {
-                    directory,
-                    from,
-                    to,
-                } => (
-                    "file.rename",
-                    vec![
-                        handle("Dir", *directory),
-                        reference::path(from),
-                        reference::path(to),
-                    ],
-                ),
-                Request::Size { directory, path } => (
-                    "file.size",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::Read { directory, path } => (
-                    "file.read_bytes",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::Write {
-                    directory,
-                    path,
-                    bytes,
-                } => (
-                    "file.write_bytes",
-                    vec![
-                        handle("Dir", *directory),
-                        reference::path(path),
-                        Value::Bytes(bytes.clone()),
-                    ],
-                ),
-                Request::Remove { directory, path } => (
-                    "file.remove",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::CreateAtomic { directory, path } => (
-                    "file.create_atomic",
-                    vec![handle("Dir", *directory), reference::path(path)],
-                ),
-                Request::WriteAll {
-                    directory,
-                    file,
-                    bytes,
-                } => (
-                    "file.write_all",
-                    vec![
-                        handle("Dir", *directory),
-                        handle("AtomicFile", *file),
-                        Value::Bytes(bytes.clone()),
-                    ],
-                ),
-                Request::Commit { directory, file } => (
-                    "file.commit",
-                    vec![handle("Dir", *directory), handle("AtomicFile", *file)],
-                ),
-                Request::Sync { directory, file } => (
-                    "file.sync",
-                    vec![handle("Dir", *directory), handle("File", *file)],
-                ),
-                Request::PutNew {
-                    directory,
-                    path,
-                    bytes,
-                    durable,
-                } => (
-                    "file.put_new",
-                    vec![
-                        handle("Dir", *directory),
-                        reference::path(path),
-                        Value::Bytes(bytes.clone()),
-                        Value::Variant {
-                            variant: u32::from(!*durable),
-                            fields: vec![],
-                        },
-                    ],
-                ),
                 Request::TestCrash {
                     test,
                     directory,
@@ -447,6 +266,30 @@ pub fn replay_interpreter_with_fixture(
                         reference::u64_value(*seed),
                     ],
                 ),
+                request @ (Request::Open { .. }
+                | Request::Create { .. }
+                | Request::FileRead { .. }
+                | Request::FileSeek { .. }
+                | Request::FileWrite { .. }
+                | Request::FileAppend { .. }
+                | Request::NarrowFile { .. }
+                | Request::Walk { .. }
+                | Request::ReadDir { .. }
+                | Request::Metadata { .. }
+                | Request::Mkdir { .. }
+                | Request::SetPermissions { .. }
+                | Request::RemoveAll { .. }
+                | Request::RemoveDir { .. }
+                | Request::Rename { .. }
+                | Request::Size { .. }
+                | Request::Read { .. }
+                | Request::Write { .. }
+                | Request::Remove { .. }
+                | Request::CreateAtomic { .. }
+                | Request::WriteAll { .. }
+                | Request::Commit { .. }
+                | Request::Sync { .. }
+                | Request::PutNew { .. }) => file_arguments(request).unwrap(),
                 Request::UdpBind { .. }
                 | Request::UdpSend { .. }
                 | Request::UdpRecv { .. }
@@ -913,4 +756,196 @@ pub(crate) fn decode(schema: &Completion, value: hirsel_interp::Value) -> Comple
         })),
         _ => panic!("network completion must use its typed decoder"),
     }
+}
+
+/// File request translation shared by tape replay and independent precedence probes.
+pub(crate) fn file_arguments(
+    request: &Request,
+) -> Option<(&'static str, Vec<hirsel_interp::Value>)> {
+    use hirsel_interp::{Value, library as reference};
+    let handle = |kind: &str, id| Value::Handle {
+        kind: kind.into(),
+        id,
+    };
+    Some(match request {
+        Request::Open { directory, path } => (
+            "file.open",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::Create { directory, path } => (
+            "file.create",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::FileRead {
+            directory,
+            file,
+            max,
+        } => (
+            "file.read",
+            vec![
+                handle("Dir", *directory),
+                handle("File", *file),
+                Value::Sequence {
+                    kind: hirsel_types::BuiltinType::List,
+                    elements: Default::default(),
+                    arena: None,
+                },
+                reference::u64_value(*max),
+            ],
+        ),
+        Request::FileSeek {
+            directory,
+            file,
+            offset,
+        } => (
+            "file.seek",
+            vec![
+                handle("Dir", *directory),
+                handle("File", *file),
+                reference::u64_value(*offset),
+            ],
+        ),
+        Request::FileWrite {
+            directory,
+            file,
+            bytes,
+        } => (
+            "file.write",
+            vec![
+                handle("Dir", *directory),
+                handle("File", *file),
+                Value::Bytes(bytes.clone()),
+            ],
+        ),
+        Request::FileAppend {
+            directory,
+            file,
+            bytes,
+        } => (
+            "file.append",
+            vec![
+                handle("Dir", *directory),
+                handle("File", *file),
+                Value::Bytes(bytes.clone()),
+            ],
+        ),
+        Request::NarrowFile { directory, file } => (
+            "file.narrow",
+            vec![handle("Dir", *directory), handle("File", *file)],
+        ),
+        Request::Walk { directory } => ("file.walk", vec![handle("Dir", *directory)]),
+        Request::ReadDir { directory, path } => (
+            "file.read_dir",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::Metadata { directory, path } => (
+            "file.metadata",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::Mkdir { directory, path } => (
+            "file.mkdir",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::SetPermissions {
+            directory,
+            path,
+            permissions,
+        } => (
+            "file.set_permissions",
+            vec![
+                handle("Dir", *directory),
+                reference::path(path),
+                Value::Integer(
+                    hirsel_interp::Integer::new(hirsel_types::Primitive::U32, *permissions as u128)
+                        .unwrap(),
+                ),
+            ],
+        ),
+        Request::RemoveAll { directory, path } => (
+            "dir.remove_all",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::RemoveDir { directory, path } => (
+            "file.remove_dir",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::Rename {
+            directory,
+            from,
+            to,
+        } => (
+            "file.rename",
+            vec![
+                handle("Dir", *directory),
+                reference::path(from),
+                reference::path(to),
+            ],
+        ),
+        Request::Size { directory, path } => (
+            "file.size",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::Read { directory, path } => (
+            "file.read_bytes",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::Write {
+            directory,
+            path,
+            bytes,
+        } => (
+            "file.write_bytes",
+            vec![
+                handle("Dir", *directory),
+                reference::path(path),
+                Value::Bytes(bytes.clone()),
+            ],
+        ),
+        Request::Remove { directory, path } => (
+            "file.remove",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::CreateAtomic { directory, path } => (
+            "file.create_atomic",
+            vec![handle("Dir", *directory), reference::path(path)],
+        ),
+        Request::WriteAll {
+            directory,
+            file,
+            bytes,
+        } => (
+            "file.write_all",
+            vec![
+                handle("Dir", *directory),
+                handle("AtomicFile", *file),
+                Value::Bytes(bytes.clone()),
+            ],
+        ),
+        Request::Commit { directory, file } => (
+            "file.commit",
+            vec![handle("Dir", *directory), handle("AtomicFile", *file)],
+        ),
+                Request::Sync { directory, file } => (
+                    "file.sync",
+                    vec![handle("Dir", *directory), handle("File", *file)],
+                ),
+                Request::PutNew {
+                    directory,
+                    path,
+                    bytes,
+                    durable,
+                } => (
+                    "file.put_new",
+                    vec![
+                        handle("Dir", *directory),
+                        reference::path(path),
+                        Value::Bytes(bytes.clone()),
+                        Value::Variant {
+                            variant: u32::from(!*durable),
+                            fields: vec![],
+                        },
+                    ],
+                ),
+        _ => return None,
+    })
 }

@@ -583,6 +583,25 @@ impl Library {
     fn file(&mut self, name: &str, call: &OperationCall<'_>) -> Result<Value, Error> {
         let a = &*call.arguments;
         let (tree, root, dir) = self.simulation.directory(arg(a, 0)?)?;
+        let atomic = if matches!(name, "file.write_all" | "file.commit") {
+            let id = self.simulation.id(arg(a, 1)?, "AtomicFile")?;
+            let Some(
+                grant @ Grant::Atomic {
+                    tree: owner_tree,
+                    dir: owner_dir,
+                    ..
+                },
+            ) = self.simulation.grants.get(&id)
+            else {
+                return Err(invalid("wrong atomic grant"));
+            };
+            if *owner_tree != tree || *owner_dir != dir {
+                return Err(invalid("wrong atomic directory"));
+            }
+            Some((id, grant.clone()))
+        } else {
+            None
+        };
         if !self.simulation.writable(dir)
             && matches!(
                 name,
@@ -811,20 +830,16 @@ impl Library {
             return Ok(ok(Value::Unit));
         }
         if matches!(name, "file.write_all" | "file.commit") {
-            let id = self.simulation.id(arg(a, 1)?, "AtomicFile")?;
-            let Some(Grant::Atomic {
-                tree: t,
+            let (id, grant) = atomic.expect("atomic ownership checked before cancellation");
+            let Grant::Atomic {
                 temp,
                 dst,
-                dir: d,
                 identity,
-            }) = self.simulation.grants.get(&id).cloned()
+                ..
+            } = grant
             else {
-                return Err(invalid("wrong atomic grant"));
+                unreachable!()
             };
-            if t != tree || d != dir {
-                return Err(invalid("wrong atomic directory"));
-            }
             if name == "file.commit" {
                 self.simulation.grants.remove(&id);
             }

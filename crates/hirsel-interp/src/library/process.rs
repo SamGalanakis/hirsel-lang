@@ -953,6 +953,7 @@ impl Simulation {
                 Value::Unit
             }
             "child.read_stdout" | "child.read_stderr" | "group.read_stdout" => {
+                let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
                 let max = match arg(a, 3)? {
                     Value::Integer(n) if n.kind() == Primitive::U64 => n.bits() as u64,
                     _ => return Err(invalid("max requires u64")),
@@ -964,7 +965,6 @@ impl Simulation {
                 } else if let Some(cause) = canceled {
                     error(failure_value(ProcessFailure::Canceled(cause)))
                 } else {
-                    let (child, _) = self.child_grant(arg(a, 0)?, arg(a, 1)?, kind)?;
                     let stream = if name == "child.read_stderr" {
                         ChildStream::Stderr
                     } else {

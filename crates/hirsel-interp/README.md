@@ -649,3 +649,6 @@ Directory operations normalize the caller's portable path lexically through
 `hirsel_run_config::confined_relative` before resolving snapshot symlinks.
 Physical link targets are still traversed component by component beneath the
 pinned directory.
+
+Secondary file and child handles are validated before authority, argument
+checks, cancellation or injected provider faults.
