@@ -1276,7 +1276,9 @@ conformance/LANG/LANG-10-later-local-function-bad.hir
 conformance/LANG/LANG-10-later-local-function-ok.hir
 conformance/LANG/LANG-10-local-generic-recursion-bad.hir
 conformance/LANG/LANG-10-local-self-bad.hir
+conformance/LANG/LANG-10-local-self-match-arm-bad.hir
 conformance/LANG/LANG-10-local-self-ok.hir
+conformance/LANG/LANG-10-self-tail-match-arm-run.hir
 conformance/LANG/LANG-10-self-tail-runtime.hir
 conformance/LANG/LANG-10-top-level-mutual.hir
 conformance/LANG/LANG-11-block-captured-value-run.hir

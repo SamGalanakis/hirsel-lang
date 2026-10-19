@@ -1,0 +1,33 @@
+// rule: LANG-10
+// expect: run
+// stdout: 2000-01-01 2000-01-11
+// A self call in a match arm is a tail call, including one whose result is an
+// opaque std type and one behind a guard: ten thousand restarts, far past
+// the call depth limit, reuse one frame.
+fn civil(y: i32) -> time.Date {
+  match date.new(y, 1, 1) {
+    Some(day) => day,
+    None() => civil(1970),
+  }
+}
+
+// Carries the date through `n` restarts and moves it one day per thousand.
+fn later(day: time.Date, n: u64, moved: i64) -> time.Date {
+  match n {
+    0 => match date.add_days(day, moved) {
+      Ok(next) => next,
+      Error(_) => day,
+    },
+    _ if n % 1000 == 0 => later(day, n - 1, moved + 1),
+    _ => later(day, n - 1, moved),
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let start = civil(2000)
+  let _ = out.print(io.stdout(rt)?, date.to_string(start))
+  let _ = out.print(io.stdout(rt)?, " ")
+  let _ = out.print(io.stdout(rt)?, date.to_string(later(start, 10000, 0)))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

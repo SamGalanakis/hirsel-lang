@@ -705,6 +705,85 @@ fn a_self_tail_witness_names_one_self_call_with_nothing_pending() {
     constructor.broken(witness());
 }
 
+/// `fn main(x: bool) -> () { let s = "live"; match x { true => main(x), _ => () } }`,
+/// with the arm's self call published as a tail site. `s` is released before
+/// the match unless `pending`, which leaves its release after the call.
+fn tail_after_match(pending: bool) -> Fixture {
+    let mut f = Fixture::unit();
+    let x = param(&mut f, TypeKind::Primitive(Primitive::Bool));
+    let s = f.slot(TypeKind::Primitive(Primitive::String), Storage::Local);
+    f.assign(s, Rvalue::Constant(Constant::String("live".into())), 0);
+    if !pending {
+        f.emit(InstructionKind::Drop {
+            place: PlaceId(s),
+            if_live: false,
+        });
+    }
+    let r = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
+    let exit = f.cleanup(vec![drop(s)]);
+    let pattern = |kind| MatchPattern {
+        place: PlaceId(x),
+        kind,
+    };
+    let arm = |pattern, target| MatchArm {
+        pattern: MatchPatternId(pattern),
+        guard: None,
+        target: BlockId(target),
+    };
+    let body = f.body();
+    body.matches.push(MatchTable {
+        scrutinee: PlaceId(x),
+        patterns: vec![
+            pattern(MatchPatternKind::Literal(Constant::Bool(true))),
+            pattern(MatchPatternKind::Wildcard),
+        ],
+        arms: vec![arm(0, 1), arm(1, 3)],
+    });
+    body.blocks[0].terminator = Terminator::Match {
+        table: MatchTableId(0),
+        from: 0,
+    };
+    body.blocks.push(block(
+        vec![],
+        Terminator::Call {
+            callee: Callee::Definition {
+                path: path("main"),
+                arguments: vec![],
+            },
+            arguments: vec![CallArgument {
+                parameter: ParamId(0),
+                value: copy(x),
+            }],
+            returns: Some(CallReturn {
+                destination: PlaceId(r),
+                next: BlockId(2),
+            }),
+            on_failure: CleanupId(exit),
+        },
+    ));
+    body.blocks.push(block(vec![], ret(r, exit)));
+    body.blocks.push(block(vec![], ret(0, exit)));
+    body.tail_sites.push(TailSite {
+        owner_body: BodyId(0),
+        call_block: BlockId(1),
+        kind: TailKind::SelfTail,
+        owned_loop_arguments: vec![],
+    });
+    owner_signature(&mut f, PassingMode::Borrow);
+    f
+}
+
+/// A pattern decision consumes no storage, so V replays liveness through it
+/// to a self call in an arm.
+#[test]
+fn a_self_tail_witness_holds_in_a_match_arm_only_with_nothing_pending() {
+    tail_after_match(false).valid();
+    tail_after_match(true).broken(vec![ViolationKind::WrongKind {
+        entity: "tail witness",
+        index: 1,
+    }]);
+}
+
 /// `let g: fn(String) -> R = || ..` where `R` may claim the argument's captures.
 fn promised_closure(promise: bool) -> Fixture {
     let mut f = Fixture::unit();

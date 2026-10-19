@@ -391,11 +391,8 @@ fn live_at_call(body: &Body, target: BlockId) -> Option<BTreeSet<u32>> {
                 _ => (),
             }
         }
-        // This replay conservatively stops at pattern decisions: it does not
-        // model the arm's binding transfers.
-        if matches!(b.terminator, Terminator::Match { .. }) {
-            continue;
-        }
+        // A pattern decision consumes no storage: each arm's binding transfers
+        // are explicit instructions in its guard or target, replayed above.
         if let Terminator::Call {
             arguments, returns, ..
         } = &b.terminator

@@ -414,7 +414,9 @@ validates many real copy assignments against an owner-size work bound.
 return, absence of post-call observable work and obligations, single-use counted
 Data temporaries, and surviving owner/borrow facts from the flow fixed point.
 A diverging self call has no continuation: its failure cleanup must hold only
-plain, moved or loop-carried obligations.
+plain, moved or loop-carried obligations. Initialization at the call is replayed
+along every normal edge, through pattern decisions, which consume no storage, so
+a self call in a match arm is checked like any other.
 Plain proofs use V's own nominal signatures and exact scoped declaration table.
 `ConstructorHole` is reserved/rejected pending spec issue #46; no optimized CFG
 recognizer can establish a missing source tail fact.

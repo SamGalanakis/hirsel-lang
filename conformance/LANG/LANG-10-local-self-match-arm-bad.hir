@@ -1,0 +1,14 @@
+// rule: LANG-10
+// expect: reject LANG-10 at line 9
+// The accepted twin is LANG-10-self-tail-match-arm-run: the same self call in a
+// match arm, made by a local function, which cannot refer to itself.
+pub fn main() -> Result[(), ()] {
+  fn civil(y: i32) -> time.Date {
+    match date.new(y, 1, 1) {
+      Some(day) => day,
+      None() => civil(1970),
+    }
+  }
+  let _ = civil(2000)
+  Ok(())
+}
