@@ -87,9 +87,12 @@ impl RuntimeBuild {
 }
 
 fn tool(stage: StageName, command: &mut Command) -> Result<std::process::Output, NativeError> {
-    command
-        .output()
-        .map_err(|e| NativeError::new(stage, format!("could not run {command:?}: {e}")))
+    command.output().map_err(|e| {
+        NativeError::new(
+            stage,
+            format!("could not run {:?}: {e}", command.get_program()),
+        )
+    })
 }
 
 /// Run `command` in its own process group to completion, or kill the group
@@ -105,7 +108,10 @@ fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Out
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            NativeError::new(StageName::Launch, format!("could not run {command:?}: {e}"))
+            NativeError::new(
+                StageName::Launch,
+                format!("could not run {:?}: {e}", command.get_program()),
+            )
         })?;
     // Each pipe reaches its end when every process of the group has exited.
     let (sender, ended) = std::sync::mpsc::channel();
@@ -162,7 +168,9 @@ fn checked(stage: StageName, command: &mut Command) -> Result<(), NativeError> {
     Err(NativeError::new(
         stage,
         format!(
-            "{command:?} failed with {}: {}{}",
+            "{:?} {:?} failed with {}: {}{}",
+            command.get_program(),
+            command.get_args().collect::<Vec<_>>(),
             output.status,
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
@@ -210,6 +218,25 @@ impl Toolchain {
         targets: &[&TargetSpec],
         runtime_builds: &[RuntimeBuild],
     ) -> Result<Self, NativeError> {
+        Self::in_tree_inputs(build_dir, targets, runtime_builds, None)
+    }
+
+    /// Construct a toolchain against a resident session's frozen Cargo inputs.
+    pub fn in_tree_with_inputs(
+        build_dir: &Path,
+        targets: &[&TargetSpec],
+        runtime_builds: &[RuntimeBuild],
+        inputs: &super::RuntimeInputs,
+    ) -> Result<Self, NativeError> {
+        Self::in_tree_inputs(build_dir, targets, runtime_builds, Some(inputs))
+    }
+
+    fn in_tree_inputs(
+        build_dir: &Path,
+        targets: &[&TargetSpec],
+        runtime_builds: &[RuntimeBuild],
+        inputs: Option<&super::RuntimeInputs>,
+    ) -> Result<Self, NativeError> {
         let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
         let [runtime_build, ..] = *runtime_builds else {
             return Err(NativeError::new(
@@ -243,14 +270,19 @@ impl Toolchain {
                 continue;
             }
             let archive = super::runtime_cache::archive(
+                inputs,
                 build_dir,
                 target,
                 &prefix,
                 runtime_build,
-                |build_dir| {
-                    let mut command =
-                        Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+                |build_dir, environment| {
+                    let cargo = environment
+                        .get(std::ffi::OsStr::new("CARGO"))
+                        .map_or(std::ffi::OsStr::new("cargo"), std::ffi::OsString::as_os_str);
+                    let mut command = Command::new(cargo);
                     command
+                        .env_clear()
+                        .envs(environment)
                         .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
                         .args(["build", "--quiet", "--release", "-p", "hirsel-rt", "--lib"])
                         .arg("--manifest-path")
@@ -263,9 +295,15 @@ impl Toolchain {
                         command.args(["--features", &features]);
                     }
                     let archive = if aarch64(target) {
-                        command
-                            .args(["--target", &target.triple])
-                            .env("CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER", &aarch64_cc);
+                        command.args(["--target", &target.triple]).env(
+                            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER",
+                            configured_path(
+                                "HIRSEL_AARCH64_CC",
+                                environment
+                                    .get(std::ffi::OsStr::new("HIRSEL_AARCH64_CC"))
+                                    .cloned(),
+                            )?,
+                        );
                         build_dir
                             .join(&target.triple)
                             .join("release/libhirsel_rt.a")
@@ -318,7 +356,10 @@ pub(super) fn environment_path(name: &str) -> Result<PathBuf, NativeError> {
     configured_path(name, std::env::var_os(name))
 }
 
-fn configured_path(name: &str, value: Option<std::ffi::OsString>) -> Result<PathBuf, NativeError> {
+pub(super) fn configured_path(
+    name: &str,
+    value: Option<std::ffi::OsString>,
+) -> Result<PathBuf, NativeError> {
     let path = value.map(PathBuf::from).ok_or_else(|| {
         NativeError::new(
             StageName::Link,
@@ -1989,6 +2030,27 @@ mod tests {
         assert_eq!(launched.exit, Some(0));
         assert_eq!(launched.stdout, b"/inputs/valgrind-support");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_tools_report_arguments_and_output_without_the_captured_environment() {
+        let error = checked(
+            StageName::Link,
+            Command::new("/bin/sh")
+                .args(["-c", "echo build-failed >&2; exit 7"])
+                .env("HIRSEL_TEST_SECRET", "snapshot-secret-value"),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("build-failed"), "{error}");
+        assert!(error.message.contains("exit status: 7"), "{error}");
+        assert!(!error.message.contains("snapshot-secret-value"), "{error}");
+        let error = tool(
+            StageName::Link,
+            Command::new("/missing/hirsel-test-tool")
+                .env("HIRSEL_TEST_SECRET", "snapshot-secret-value"),
+        )
+        .unwrap_err();
+        assert!(!error.message.contains("snapshot-secret-value"), "{error}");
     }
 
     #[test]

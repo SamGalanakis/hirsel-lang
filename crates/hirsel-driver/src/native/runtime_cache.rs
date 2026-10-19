@@ -3,29 +3,31 @@ use super::{NativeError, StageName, TargetSpec};
 use hirsel_syntax::ContentHash;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 type Packages = Vec<(String, PathBuf)>;
 
 fn dependencies(
     root: &Path,
-    cargo: &std::ffi::OsStr,
-    target: &TargetSpec,
+    cargo: &OsStr,
+    environment: &BTreeMap<OsString, OsString>,
 ) -> Result<Packages, NativeError> {
     let bytes = version(
         Command::new(cargo)
+            .env_clear()
+            .envs(environment)
             .current_dir(root)
             .args([
                 "metadata",
                 "--format-version",
                 "1",
                 "--locked",
-                "--filter-platform",
-                &target.triple,
                 "--manifest-path",
             ])
             .arg(root.join("Cargo.toml")),
@@ -155,32 +157,55 @@ fn version(command: &mut Command) -> Result<Vec<u8>, NativeError> {
     if !output.status.success() {
         return Err(NativeError::new(
             StageName::Link,
-            format!("{command:?}: {}", String::from_utf8_lossy(&output.stderr)),
+            format!(
+                "{:?} {:?} exited {}: {}",
+                command.get_program(),
+                command.get_args().collect::<Vec<_>>(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            ),
         ));
     }
     Ok(output.stdout)
 }
 
 fn context(
-    root: &Path,
-    cargo: &std::ffi::OsStr,
+    environment: &BTreeMap<OsString, OsString>,
     target: &TargetSpec,
     prefix: &Path,
 ) -> Result<Vec<Vec<u8>>, NativeError> {
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let cargo = environment
+        .get(OsStr::new("CARGO"))
+        .map_or(OsStr::new("cargo"), OsString::as_os_str);
+    let rustc = environment
+        .get(OsStr::new("RUSTC"))
+        .map_or(OsStr::new("rustc"), OsString::as_os_str);
+    let probe = |command: &mut Command| version(command.env_clear().envs(environment));
     let mut parts = vec![
         b"cargo build --release -p hirsel-rt --lib; panic=abort".to_vec(),
         format!("{target:?}").into_bytes(),
-        version(Command::new(cargo).arg("--version"))?,
-        version(Command::new(rustc).arg("-vV"))?,
-        version(Command::new(prefix.join("bin/clang")).arg("--version"))?,
+        probe(Command::new(cargo).arg("--version"))?,
+        probe(Command::new(rustc).arg("-vV"))?,
+        probe(Command::new(prefix.join("bin/clang")).arg("--version"))?,
     ];
     if target.triple.starts_with("aarch64") {
-        let compiler = super::link::environment_path("HIRSEL_AARCH64_CC")?;
+        let compiler = super::link::configured_path(
+            "HIRSEL_AARCH64_CC",
+            environment.get(OsStr::new("HIRSEL_AARCH64_CC")).cloned(),
+        )?;
         parts.push(compiler.as_os_str().as_encoded_bytes().to_vec());
-        parts.push(version(Command::new(compiler).arg("--version"))?);
+        parts.push(probe(Command::new(compiler).arg("--version"))?);
     }
-    let mut flags: Vec<_> = std::env::vars_os()
+    Ok(parts)
+}
+
+fn configuration(
+    root: &Path,
+    environment: &BTreeMap<OsString, OsString>,
+) -> Result<Vec<Vec<u8>>, NativeError> {
+    let mut parts = Vec::new();
+    let mut flags: Vec<_> = environment
+        .iter()
         .filter(|(name, _)| {
             let name = name.to_string_lossy();
             (name.starts_with("CARGO_PROFILE_")
@@ -210,9 +235,14 @@ fn context(
         parts.push(name.as_encoded_bytes().to_vec());
         parts.push(value.as_encoded_bytes().to_vec());
     }
-    let cargo_home = std::env::var_os("CARGO_HOME")
+    let cargo_home = environment
+        .get(OsStr::new("CARGO_HOME"))
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".cargo")));
+        .or_else(|| {
+            environment
+                .get(OsStr::new("HOME"))
+                .map(|p| PathBuf::from(p).join(".cargo"))
+        });
     if let Some(home) = cargo_home {
         for name in ["config", "config.toml"] {
             let path = home.join(name);
@@ -431,25 +461,95 @@ pub(super) fn write_private(cache: &Path, name: &str, bytes: &[u8]) -> Result<()
     result
 }
 
+/// Frozen Cargo-fallback inputs. Retain one per resident session; create a new
+/// snapshot to observe source/configuration or toolchain changes. Buck archives
+/// bypass this snapshot entirely.
+pub struct RuntimeInputs {
+    root: PathBuf,
+    environment: BTreeMap<OsString, OsString>,
+    source_key: String,
+    keys: Mutex<BTreeMap<(String, super::RuntimeBuild, PathBuf), String>>,
+}
+
+impl RuntimeInputs {
+    pub fn capture() -> Result<Self, NativeError> {
+        Self::capture_at(
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")),
+            std::env::vars_os().collect(),
+        )
+    }
+
+    fn capture_at(
+        root: &Path,
+        environment: BTreeMap<OsString, OsString>,
+    ) -> Result<Self, NativeError> {
+        let root = root.to_path_buf();
+        let cargo = environment
+            .get(OsStr::new("CARGO"))
+            .map_or(OsStr::new("cargo"), OsString::as_os_str);
+        // Include the dependency closure for every target in the same snapshot.
+        let packages = dependencies(&root, cargo, &environment)?;
+        let source_key = input_key(&root, &packages, &configuration(&root, &environment)?)?;
+        Ok(Self {
+            root,
+            environment,
+            source_key,
+            keys: Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    fn key(
+        &self,
+        target: &TargetSpec,
+        prefix: &Path,
+        runtime_build: super::RuntimeBuild,
+    ) -> Result<String, NativeError> {
+        let identity = (format!("{target:?}"), runtime_build, prefix.to_path_buf());
+        let mut keys = self.keys.lock().unwrap();
+        if let Some(key) = keys.get(&identity) {
+            return Ok(key.clone());
+        }
+        let mut parts = context(&self.environment, target, prefix)?;
+        parts.push(self.source_key.as_bytes().to_vec());
+        parts.push(runtime_build.features().into_bytes());
+        let hash =
+            ContentHash::of_parts("hirsel.native-runtime.v2", parts.iter().map(Vec::as_slice));
+        let key: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
+        keys.insert(identity, key.clone());
+        Ok(key)
+    }
+}
+
 pub(super) fn archive(
+    inputs: Option<&RuntimeInputs>,
     cache: &Path,
     target: &TargetSpec,
     prefix: &Path,
     runtime_build: super::link::RuntimeBuild,
-    build: impl FnOnce(&Path) -> Result<PathBuf, NativeError>,
+    build: impl FnOnce(&Path, &BTreeMap<OsString, OsString>) -> Result<PathBuf, NativeError>,
 ) -> Result<PathBuf, NativeError> {
-    let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
-    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let mut context = context(root, &cargo, target, prefix)?;
-    context.push(format!("runtime features: {}", runtime_build.features()).into_bytes());
-    let packages = dependencies(root, &cargo, target)?;
-    let key = input_key(root, &packages, &context)?;
+    static SHARED: OnceLock<Result<RuntimeInputs, NativeError>> = OnceLock::new();
+    let inputs = match inputs {
+        Some(inputs) => inputs,
+        None => SHARED
+            .get_or_init(RuntimeInputs::capture)
+            .as_ref()
+            .map_err(Clone::clone)?,
+    };
+    let key = inputs.key(target, prefix, runtime_build)?;
     publish(cache, &key, |build_dir| {
-        let built = build(build_dir)?;
-        if input_key(root, &packages, &context)? != key {
+        let built = build(build_dir, &inputs.environment)?;
+        // Never publish a build from mutable live inputs under a frozen key.
+        // Tool/config probes are intentionally paid only on a cache miss.
+        if RuntimeInputs::capture_at(&inputs.root, inputs.environment.clone())?.key(
+            target,
+            prefix,
+            runtime_build,
+        )? != key
+        {
             return Err(NativeError::new(
                 StageName::Link,
-                "runtime inputs changed during the build; retry",
+                "runtime inputs changed during the build; start a new session",
             ));
         }
         Ok(built)
@@ -460,6 +560,139 @@ pub(super) fn archive(
 mod tests {
     use super::*;
     const CRATES: &[&str] = &["hirsel-rt", "hirsel-kernels"];
+
+    #[test]
+    fn frozen_inputs_memoize_probes_and_keys_but_refuse_changed_builds() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("hirsel-runtime-snapshot-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let package = root.join("crates/hirsel-rt");
+        fs::create_dir_all(package.join("include")).unwrap();
+        fs::create_dir_all(package.join("src")).unwrap();
+        fs::write(root.join("Cargo.toml"), "workspace").unwrap();
+        fs::write(root.join("Cargo.lock"), "locked").unwrap();
+        fs::write(package.join("Cargo.toml"), "runtime").unwrap();
+        fs::write(package.join("include/hirsel_rt_v2.h"), "ABI").unwrap();
+        let source = package.join("src/lib.rs");
+        fs::write(&source, "first").unwrap();
+        let metadata = serde_json::json!({
+            "packages": [{"id": "rt", "name": "hirsel-rt", "version": "1", "source": null, "manifest_path": package.join("Cargo.toml")}],
+            "resolve": {"nodes": [{"id": "rt", "deps": []}]}
+        });
+        let metadata_path = root.join("metadata.json");
+        fs::write(&metadata_path, metadata.to_string()).unwrap();
+        let log = root.join("probes");
+        let prefix = root.join("llvm");
+        fs::create_dir_all(prefix.join("bin")).unwrap();
+        let script = format!(
+            "#!/bin/sh\necho probe >> '{}'\nif [ \"$1\" = metadata ]; then /bin/cat '{}'; else echo tool-v1; fi\n",
+            log.display(),
+            metadata_path.display()
+        );
+        for tool in [
+            root.join("cargo"),
+            root.join("rustc"),
+            prefix.join("bin/clang"),
+        ] {
+            fs::write(&tool, &script).unwrap();
+            fs::set_permissions(tool, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let environment: BTreeMap<OsString, OsString> = [
+            ("CARGO".into(), root.join("cargo").into_os_string()),
+            ("RUSTC".into(), root.join("rustc").into_os_string()),
+        ]
+        .into();
+        let inputs = RuntimeInputs::capture_at(&root, environment.clone()).unwrap();
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let variant = super::super::RuntimeBuild::default();
+        let key = inputs.key(&target, &prefix, variant).unwrap();
+        let probes = fs::read(&log).unwrap();
+        assert_eq!(inputs.key(&target, &prefix, variant).unwrap(), key);
+        assert_eq!(
+            fs::read(&log).unwrap(),
+            probes,
+            "a warm key must run no tool"
+        );
+        let diagnostic = super::super::RuntimeBuild {
+            diagnostic: true,
+            ..variant
+        };
+        assert_ne!(inputs.key(&target, &prefix, diagnostic).unwrap(), key);
+        let cache = root.join("cache");
+        let built = archive(
+            Some(&inputs),
+            &cache,
+            &target,
+            &prefix,
+            variant,
+            |dir, _| {
+                fs::create_dir_all(dir).map_err(io)?;
+                let archive = dir.join("rt.a");
+                fs::write(&archive, b"first archive").map_err(io)?;
+                Ok(archive)
+            },
+        )
+        .unwrap();
+        fs::write(&source, "second").unwrap();
+        let probes = fs::read(&log).unwrap();
+        assert_eq!(
+            archive(
+                Some(&inputs),
+                &cache,
+                &target,
+                &prefix,
+                variant,
+                |_, _| panic!("frozen archive must be reused")
+            )
+            .unwrap(),
+            built
+        );
+        assert_eq!(
+            fs::read(&log).unwrap(),
+            probes,
+            "a warm archive must run no tool or metadata"
+        );
+        let changed = RuntimeInputs::capture_at(&root, environment).unwrap();
+        assert_ne!(changed.key(&target, &prefix, variant).unwrap(), key);
+        let error = archive(
+            Some(&changed),
+            &cache,
+            &target,
+            &prefix,
+            variant,
+            |dir, _| {
+                fs::create_dir_all(dir).map_err(io)?;
+                let archive = dir.join("rt.a");
+                fs::write(&archive, b"changed build").map_err(io)?;
+                fs::write(&source, "third").map_err(io)?;
+                Ok(archive)
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("inputs changed during the build"),
+            "{error}"
+        );
+        assert!(
+            !cache
+                .join(format!(
+                    "{}.a",
+                    changed.key(&target, &prefix, variant).unwrap()
+                ))
+                .exists()
+        );
+        fs::remove_dir_all(root).unwrap();
+        let error = version(
+            Command::new("/bin/sh")
+                .args(["-c", "exit 7"])
+                .env("HIRSEL_TEST_SECRET", "snapshot-secret-value"),
+        )
+        .unwrap_err();
+        assert!(!error.message.contains("snapshot-secret-value"), "{error}");
+        assert!(error.message.contains("exit status: 7"), "{error}");
+    }
+
     #[test]
     fn distinct_runtime_inputs_publish_distinct_archives_and_identical_trees_share() {
         let root =

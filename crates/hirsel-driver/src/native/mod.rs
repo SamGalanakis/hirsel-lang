@@ -17,6 +17,7 @@ mod observe;
 mod pairwise;
 mod proofs;
 mod runtime_cache;
+pub use runtime_cache::RuntimeInputs;
 mod stages;
 mod testing;
 mod tool;

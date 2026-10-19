@@ -93,6 +93,16 @@ are dropped, so AArch64 links with lld rather than GNU ld. `native::test_path`'s
 dispatching `main` is LLVM IR compiled in process, and its adapters are ordinary
 link inputs.
 
+The Cargo fallback shares a frozen `native::RuntimeInputs` snapshot within the
+process. It discovers the runtime's local dependency closure and hashes source
+and configuration inputs once, then memoizes archive keys by target, variant and
+toolchain. A cache hit runs no metadata or tool-version probes and reuses that
+snapshot even after source edits. Resident sessions retain their own snapshot
+with `Toolchain::in_tree_with_inputs`; create a new snapshot/session to observe
+runtime source or configuration changes. A cache miss builds with the captured
+environment and rechecks all inputs before publishing; a change during the build
+refuses publication. Buck's prebuilt archives bypass this path.
+
 Memcheck executables select the input libc loader and library directory at
 link time; matching debug symbols sit in each object's adjacent `.debug/`
 directory, so mandatory
