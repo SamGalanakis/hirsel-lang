@@ -3096,6 +3096,14 @@ impl Checker<'_> {
         {
             content = loan_content::Content::default();
         }
+        // Taking plain bits copies them, so they hold no loan either (MODE-1),
+        // as `sources` judges: an error payload `?` takes from a borrowed
+        // Result is independent of the Result's bound.
+        if operand.usage == UseKind::Take
+            && !needs_release(self, self.place_type(operand.place), &self.definition.types)
+        {
+            content = loan_content::Content::default();
+        }
         content
     }
     fn dependencies(&self, model: &Model, state: &State, operand: &Operand) -> BTreeSet<usize> {

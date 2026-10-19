@@ -240,7 +240,9 @@ Local result returns receive a CFG source-inclusion proof against scoped local(x
 parameters (`InvalidResultSource` on failure). Borrowed parameter roots and derived
 source sets are independent of explicit loan IDs. Calls retain only the result
 sources declared by parameter ordinal; their other argument loans do not become
-result dependencies. Nested type contracts remain exact.
+result dependencies. Nested type contracts remain exact. A copied or taken plain
+operand holds no loan and no source: its bits are independent of the value it came
+from, as `?` taking a plain error payload from a borrowed Result shows.
 
 Branch values retain the union of their possible source loan IDs. Both instruction
 and cleanup `EndLoan { loan, if_active }` distinguish a definite end from an end

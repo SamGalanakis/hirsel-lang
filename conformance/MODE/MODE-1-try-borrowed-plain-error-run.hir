@@ -1,0 +1,31 @@
+// rule: MODE-1
+// expect: run
+// `?` on a Result related to `data` propagates its error payload by taking it from the
+// borrowed Result. The payload is a plain u64, whose bits hold no loan, so the Error the
+// function returns is global although the Result it came from is bounded by `data`.
+fn slice(data: Bytes, mut pos: u64) -> Result[Bytes, u64] in data uses {} {
+  let body = bytes.slice(data, pos, bytes.len(data))
+  pos = bytes.len(data)
+  Ok(body)
+}
+
+fn text(data: Bytes, mut pos: u64) -> Result[unique String, u64] uses {} {
+  let body = slice(data, mut pos)?
+  match string.from_bytes(unique body) {
+    Ok(s) => Ok(unique s),
+    Error(_) => Error(1),
+  }
+}
+
+pub fn main() -> Result[(), u64] {
+  let mut pos: u64 = 0
+  let s = text(b"ab", mut pos)?
+  failure.check(s == "ab" && pos == 2, Arithmetic())
+  let mut other: u64 = 0
+  let refused = match text(b"\xff", mut other) {
+    Ok(_) => false,
+    Error(code) => code == 1,
+  }
+  failure.check(refused && other == 1, Arithmetic())
+  Ok(())
+}
