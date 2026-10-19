@@ -214,7 +214,9 @@ Invariants and boundary:
   envelope, validates the whole payload in `hirsel_types::wire`'s detection order
   (each failure one `DecodeError` class) and only then materializes zeroed
   counted blocks and sequences, so a rejected input allocates nothing; a decoded
-  Map or Set carries an empty (unindexed) index. Program version 2 walks
+  Map or Set carries an empty (unindexed) index. A Path node encodes its run-context
+  identity's text and decodes by validating UTF-8 and interning it as `path.of` does.
+  Program version 2 walks
   private flat framing, active Packed extents and SoA columns in row order.
   Flat reconstruction patches native byte extents separately from wire element
   counts; sequential blocks retain exact used bytes and SoA blocks retain rounded

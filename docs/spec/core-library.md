@@ -334,6 +334,9 @@ type Metadata { kind: FileKind, size: u64, modified_unix_ns: Option[i128], permi
 type DirEntry { path: Path, kind: FileKind }
 ```
 
+`DirEntry` is `serializable` like `FileKind` and `Metadata`: a listed path is data, and
+reading the entry again still needs the `Dir`.
+
 `file.read_dir` lists direct children, including empty directories and symlinks,
 sorted by UTF-8 path bytes. Entry paths are relative to the supplied `Dir`, including
 the requested directory prefix. Invalid UTF-8 entry names return `FileFault`.
@@ -1200,7 +1203,9 @@ owner, and `None` carries no source identity. Matching preserves the payload's i
 constructors cannot fabricate a source brand, and joining `Some` values from different
 source owners cannot satisfy one exact owner. `string.byte_offset` extracts the relative
 offset and grants no new position. `Path` is an opaque plain core handle; `path.text`
-returns ordinary owned UTF-8 text and grants no host authority. Source libraries cannot emit
+returns ordinary owned UTF-8 text and grants no host authority. `Path` is
+[serializable](serialization.md#ser-1-serializable-schemas) as that text, and
+decoding constructs it as `path.of` does. Source libraries cannot emit
 reinterpretation or other privileged storage operations.
 
 ## Numeric and string details

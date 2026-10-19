@@ -240,6 +240,18 @@ impl<S: Stage> Machine<'_, S> {
                     out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
                     out.extend_from_slice(&bytes);
                 }
+                CodecNode::Path(_) => {
+                    if self.record(layout)?.kind != LayoutKind::Path {
+                        return fail(V::TypeConfusion, "a codec path off its layout");
+                    }
+                    let id = self.bits_at(at, 8)? as u64;
+                    let text = self
+                        .ops
+                        .path_text(id)
+                        .ok_or_else(|| err(V::Malformed, "unknown Path ID"))?;
+                    out.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                    out.extend_from_slice(text.as_bytes());
+                }
                 CodecNode::FlatText { .. } => {
                     let length = self.bits_at(at, 8)? as u64;
                     let (e, offset) = self.extent_at(at.at(8))?;
@@ -662,6 +674,13 @@ impl<S: Stage> Machine<'_, S> {
                         return Ok(Err(Malformed::Utf8));
                     }
                 }
+                // `path.of` admits any text.
+                CodecNode::Path(_) => {
+                    let n = check!(input.number(8)) as u64;
+                    if std::str::from_utf8(check!(input.take(n))).is_err() {
+                        return Ok(Err(Malformed::Utf8));
+                    }
+                }
                 CodecNode::Fields { fields, .. } => {
                     work.extend(fields.iter().rev().map(|f| Job::Visit(*f)));
                 }
@@ -948,6 +967,19 @@ impl<S: Stage> Machine<'_, S> {
                     let n = input.number(8).map_err(reread)? as u64;
                     let text = input.take(n).map_err(reread)?.to_vec();
                     self.codec_text(image, dest, node, &text)?;
+                }
+                CodecNode::Path(_) => {
+                    if self.record(layout)?.kind != LayoutKind::Path {
+                        return fail(V::TypeConfusion, "a codec path off its layout");
+                    }
+                    let n = input.number(8).map_err(reread)? as u64;
+                    let text = std::str::from_utf8(input.take(n).map_err(reread)?)
+                        .map_err(|_| err(V::Malformed, "a validated codec path reread"))?;
+                    let id = self
+                        .ops
+                        .intern_path(text)
+                        .ok_or_else(|| err(V::Unsupported, "the model cannot intern a Path"))?;
+                    self.codec_bytes(image, dest, &id.to_le_bytes());
                 }
                 CodecNode::Fields { fields, .. } => {
                     for (ordinal, child) in fields.iter().enumerate().rev() {

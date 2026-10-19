@@ -1,0 +1,52 @@
+// rule: SER-2
+// expect: run
+// A Path is data, not authority: it encodes as its lexical spelling under core's Path node,
+// decodes to the path path.of builds from that text, and reading through a decoded path
+// still needs the Dir it is used with. DirEntry is serializable with it.
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: T = read()?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let p = path.of("a/é")
+  test.check(
+    t,
+    codec.encode(p) == b"\x48\x53\x43\x31\x01\x00\x00\x00\x38\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x00\x63\x6f\x72\x65\x01\x00\x00\x00\x00\x00\x00\x00\x31\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x50\x61\x74\x68\x01\x00\x00\x00\x00\x0d\x0c\x00\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x61\x2f\xc3\xa9"
+  )
+  let decoded: Result[Path, DecodeError] = codec.decode(
+    b"\x48\x53\x43\x31\x01\x00\x00\x00\x38\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x00\x63\x6f\x72\x65\x01\x00\x00\x00\x00\x00\x00\x00\x31\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x50\x61\x74\x68\x01\x00\x00\x00\x00\x0d\x0c\x00\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x61\x2f\xc3\xa9"
+  )
+  test.check(t, decoded == Ok(p))
+  let surrogate: Result[Path, DecodeError] = codec.decode(
+    b"\x48\x53\x43\x31\x01\x00\x00\x00\x38\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x06\x04\x00\x00\x00\x00\x00\x00\x00\x63\x6f\x72\x65\x01\x00\x00\x00\x00\x00\x00\x00\x31\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x50\x61\x74\x68\x01\x00\x00\x00\x00\x0d\x0c\x00\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\x61\xed\xa0\x80"
+  )
+  test.check(t, surrogate == Error(Utf8()))
+  let text: Result[Path, DecodeError] = codec.decode(codec.encode("a/é"))
+  test.check(t, text == Error(SchemaMismatch()))
+  round(t, path.of(""))?
+  round(t, path.of("../x/./y//"))?
+  round(t, DirEntry(path: path.of("d/x"), kind: Symlink()))?
+  let dir = test.dir(t, [(path.of("d/a.txt"), b"x")])
+  match file.read_dir(dir, path.of("d")) {
+    Ok(entries) => {
+      round(t, entries)?
+      let read: Result[List[DirEntry], DecodeError] = codec.decode(
+        codec.encode(entries)
+      )
+      let back = read?
+      test.check(t, back == entries)
+      match file.read_bytes(dir, back[0].path) {
+        Ok(bytes) => test.check(t, bytes == b"x"),
+        Error(_) => test.check(t, false),
+      }
+    },
+    Error(_) => test.check(t, false),
+  }
+  Ok(())
+}

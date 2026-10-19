@@ -438,6 +438,8 @@ uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t len
  *   SEQUENTIAL payload index, align, first element offset, element node
  *   COLUMNS   payload index, align, data offset, capacity quantum, element node,
  *             column count, then (capacity multiplier, stride, field node) per column
+ *   PATH      no operands; native storage is a u64 run-context Path identity, the wire its text
+ *             as a String; decoding admits any UTF-8 text and interns it as path_of
  * Every walk is iterative: no native stack depth follows the data. codec_encode reads the value at
  * `value` (the root node's layout) and writes a fresh Bytes slice of the envelope at `out`.
  * codec_decode reads the Bytes slice at `bytes`, validates the envelope and the whole payload
@@ -461,6 +463,7 @@ uint64_t hirsel_rt_v2_hash_bytes(uint64_t state, const void *bytes, uint64_t len
 #define HIRSEL_RT_V2_CODEC_NODE_FLAT_SEQUENCE 13
 #define HIRSEL_RT_V2_CODEC_NODE_SEQUENTIAL 14
 #define HIRSEL_RT_V2_CODEC_NODE_COLUMNS 15
+#define HIRSEL_RT_V2_CODEC_NODE_PATH 16
 #define HIRSEL_RT_V2_CODEC_NO_NODE UINT64_MAX
 typedef struct hirsel_rt_v2_codec {
     const uint8_t *descriptor;

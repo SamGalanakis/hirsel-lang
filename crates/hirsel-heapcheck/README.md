@@ -283,7 +283,9 @@ producer that differs changes this crate or the producer):
   the whole input in the reference's detection order before it builds fresh,
   zeroed, counted blocks (a Map or Set with an empty index), so a malformed
   input yields its `DecodeError` and allocates nothing; past the reference's
-  value budget the run is `Unsupported`.
+  value budget the run is `Unsupported`. A Path node reads and interns its text
+  through `Operations::path_text` and `intern_path`; a model without them is
+  `Unsupported`.
 - `ReadStatic` allocates its constant's static blocks once (`Owner::Static`,
   immortal, published, each a named exemption) and installs every reference
   cell as an uncounted handle to its target block. A result that refers to

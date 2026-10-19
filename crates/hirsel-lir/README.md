@@ -581,6 +581,9 @@ layout. Variable flat blocks retain their payload nodes; native codec program
 version 2 distinguishes flat fields and Packed arms, sequential active extents,
 and declaration-order SoA columns addressed by stored capacity. Decoding checks
 wire data before rebuilding native framing or allocating counted storage.
+A Path node (a core `Path`, program node 16) is held to a `LayoutKind::Path`
+record and a scalar node never is: the runtime encodes the run-context
+identity's text and decodes by interning it as `path.of` does.
 
 LIR revision 31 (FAIL-2) adds `Terminator::Isolate { start, caught }`, the
 catch of `task.isolate`: every failure recorded since `start`, the u64 record

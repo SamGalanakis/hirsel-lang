@@ -180,6 +180,20 @@ fn schema_inner(
                 let SignatureKind::Type(d) = &signature.kind else {
                     return Ok(None);
                 };
+                // A core Path is data, not authority: it is transparent text, its lexical
+                // spelling, and decoding admits exactly what `path.of` admits.
+                if definition.is_core("Path") {
+                    if !d.serializable || !arguments.is_empty() {
+                        return Ok(None);
+                    }
+                    let text = SchemaId(schema.nodes.len() as u32);
+                    schema.nodes.push(SchemaNode::Scalar(Primitive::String));
+                    schema.nodes[memo[&id].0 as usize] = SchemaNode::Nominal {
+                        definition,
+                        representation: text,
+                    };
+                    continue;
+                }
                 // A generic core type declared serializable (Option, Result, ...) bounds
                 // none of its parameters, so its ordinary declaration still accepts File,
                 // resources, etc. Eligibility is proved after substitution.

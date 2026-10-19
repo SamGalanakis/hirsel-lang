@@ -152,6 +152,9 @@ impl Operations for Io {
             .get(id.checked_sub(1)? as usize)
             .map(String::as_str)
     }
+    fn intern_path(&mut self, text: &str) -> Option<u64> {
+        Some(self.path(text))
+    }
     fn close_handle(
         &mut self,
         handle: u64,

@@ -25,7 +25,6 @@ fn check(source: &str, expected: Option<&str>) {
 fn every_ineligible_leaf_has_a_data_twin() {
     for leaf in [
         "Dir",
-        "Path",
         "Instant",
         "File",
         "Arena",

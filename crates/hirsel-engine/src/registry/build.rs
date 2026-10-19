@@ -110,6 +110,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         if name == "Instant" {
             t.bounds.push(Bound::Sendable);
         }
+        serializable_core(name, &mut t);
         if let Some(protocol) = match name {
             "ScalarView" => Some("UnicodeScalars"),
             "PositionView" => Some("ScalarPositions"),
@@ -951,8 +952,9 @@ fn shape_data_bounds() -> Vec<Bound> {
 /// SER-1: the core errors and outcomes that can cross a runner call or be stored, and the
 /// data they carry. A generic one (`Option`, `Result`, `TxFailure`, `Bounded`) admits no
 /// bound on its parameters, so it is serializable exactly when its arguments are, proved
-/// after substitution. Capability holders (`Deadline`, `Command`), resources, opaque types
-/// (`Path`, `Sku`, so `DirEntry` and `StockError`) and test-script inputs stay out.
+/// after substitution. `Path` is transparent text: a Path is data, and its authority stays in
+/// the `Dir` it is used with. Capability holders (`Deadline`, `Command`), resources, other
+/// opaque types (`Instant`, `Sku`, so `StockError`) and test-script inputs stay out.
 fn serializable_core(name: &str, t: &mut TypeDefinition) {
     if matches!(
         name,
@@ -966,6 +968,8 @@ fn serializable_core(name: &str, t: &mut TypeDefinition) {
             | "ChannelError"
             | "FileError"
             | "FileKind"
+            | "Path"
+            | "DirEntry"
             | "Metadata"
             | "IpAddr"
             | "SocketAddr"

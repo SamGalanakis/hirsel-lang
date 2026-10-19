@@ -136,6 +136,22 @@ fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
                     fields: vec![],
                 }
             }
+            (
+                SchemaNode::Nominal {
+                    definition,
+                    representation,
+                },
+                _,
+            ) if definition.is_core("Path") => {
+                let Value::Record { fields, .. } = value else {
+                    return Err(invalid("codec Path value"));
+                };
+                let [Some(text)] = fields.as_slice() else {
+                    return Err(invalid("codec Path payload"));
+                };
+                children.push((*representation, text));
+                ValueNode::Wrapper(ValueId(0))
+            }
             (SchemaNode::Nominal { representation, .. }, _) => {
                 let inner = if let Value::Distinct { fields, .. } = value
                     && !matches!(
@@ -287,7 +303,12 @@ fn from_wire(
                             .pop()
                             .flatten()
                             .ok_or_else(|| invalid("codec nominal payload"))?;
-                        if runtime.get(definition).is_some_and(|n| n.distinct) {
+                        if definition.is_core("Path") {
+                            let Value::String(text) = child else {
+                                return Err(invalid("codec Path text"));
+                            };
+                            super::dispatch::path(&text)
+                        } else if runtime.get(definition).is_some_and(|n| n.distinct) {
                             let fields = if matches!(
                                 schema.nodes[representation.0 as usize],
                                 SchemaNode::Record(_)

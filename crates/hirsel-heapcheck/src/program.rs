@@ -279,6 +279,10 @@ pub trait Operations {
     fn path_text(&self, _id: u64) -> Option<&str> {
         None
     }
+    /// Intern `text` as `path.of` does, for a decoded Path.
+    fn intern_path(&mut self, _text: &str) -> Option<u64> {
+        None
+    }
 
     /// The one-based line and column of a failure site, a byte range of
     /// `definition`'s source, for `task.isolate`'s `Failure` (FAIL-2).

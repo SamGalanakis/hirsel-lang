@@ -41,6 +41,7 @@ pub const NODE_FLAT_VARIANT: u64 = 12;
 pub const NODE_FLAT_SEQUENCE: u64 = 13;
 pub const NODE_SEQUENTIAL: u64 = 14;
 pub const NODE_COLUMNS: u64 = 15;
+pub const NODE_PATH: u64 = 16;
 pub const NO_NODE: u64 = u64::MAX;
 
 const MAGIC: &[u8; 4] = b"HSC1";
@@ -153,6 +154,8 @@ enum Node {
         element: usize,
         columns: Vec<(u64, u64, usize)>,
     },
+    /// A core Path's run-context identity, on the wire as its text.
+    Path,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -366,6 +369,7 @@ impl Program {
                             .collect(),
                     }
                 }
+                NODE_PATH => Node::Path,
                 _ => fault("an unknown codec node kind"),
             };
             nodes.push(node);
@@ -744,7 +748,11 @@ enum Put {
 }
 
 /// The SER-2 payload of the value at `value`.
-unsafe fn encode_payload(program: &Program, value: *const u8) -> Stopped<Vec<u8>> {
+unsafe fn encode_payload(
+    ctx: *mut RunCtx,
+    program: &Program,
+    value: *const u8,
+) -> Stopped<Vec<u8>> {
     let mut out = Vec::new();
     let mut work = vec![Put::Visit(program.root, value)];
     // Open sets: where the elements begin, and each element's start.
@@ -858,7 +866,7 @@ unsafe fn encode_payload(program: &Program, value: *const u8) -> Stopped<Vec<u8>
                 if values > LIMIT_VALUES {
                     return Err(budget());
                 }
-                unsafe { encode_node(program, node, at, &mut out, &mut work, &mut sets) };
+                unsafe { encode_node(ctx, program, node, at, &mut out, &mut work, &mut sets) };
             }
         }
     }
@@ -869,6 +877,7 @@ unsafe fn encode_payload(program: &Program, value: *const u8) -> Stopped<Vec<u8>
 }
 
 unsafe fn encode_node(
+    ctx: *mut RunCtx,
     program: &Program,
     node: usize,
     at: *const u8,
@@ -899,6 +908,11 @@ unsafe fn encode_node(
                 let bytes = text_bytes(text, at);
                 out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
                 out.extend_from_slice(bytes);
+            }
+            Node::Path => {
+                let text = crate::io::Binding::get(ctx).path(word(at));
+                out.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                out.extend_from_slice(text.as_bytes());
             }
             Node::Fields(fields) => {
                 for &(offset, child) in fields.iter().rev() {
@@ -1077,7 +1091,7 @@ unsafe fn encode(
 ) -> Stopped<()> {
     unsafe {
         let (program, descriptor) = program(codec);
-        let payload = encode_payload(&program, value.cast())?;
+        let payload = encode_payload(ctx, &program, value.cast())?;
         let mut envelope = Vec::with_capacity(24 + descriptor.len() + payload.len());
         envelope.extend_from_slice(MAGIC);
         envelope.extend_from_slice(&WIRE_VERSION.to_le_bytes());
@@ -1279,6 +1293,13 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), Invalid> {
                             return Err(DecodeError::Utf8.into());
                         }
                     }
+                    // `path.of` admits any text.
+                    Node::Path => {
+                        let n = input.length()?;
+                        if std::str::from_utf8(input.take(n)?).is_err() {
+                            return Err(DecodeError::Utf8.into());
+                        }
+                    }
                     Node::Fields(fields) => {
                         work.extend(fields.iter().rev().map(|&(_, f)| Check::Visit(f)));
                     }
@@ -1451,6 +1472,13 @@ unsafe fn materialize(ctx: *mut RunCtx, program: &Program, bytes: &[u8], out: *m
                     let n = checked(input.number(8)) as u64;
                     let bytes = input.take(n).unwrap_or_else(|_| fault("codec reread"));
                     write_text(ctx, text, at, bytes);
+                }
+                Node::Path => {
+                    let n = checked(input.number(8)) as u64;
+                    let bytes = input.take(n).unwrap_or_else(|_| fault("codec reread"));
+                    let text = std::str::from_utf8(bytes).unwrap_or_else(|_| fault("codec reread"));
+                    let id = crate::io::Binding::get(ctx).intern_path(text);
+                    write(at, &id.to_le_bytes());
                 }
                 Node::Fields(fields) => {
                     for &(offset, child) in fields.iter().rev() {

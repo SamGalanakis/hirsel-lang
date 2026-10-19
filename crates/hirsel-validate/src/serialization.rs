@@ -13,6 +13,9 @@ pub(super) fn declaration(
     if !d.serializable && !d.bounds.contains(&Bound::Serializable) {
         return Ok(true);
     }
+    if s.definition.is_core("Path") {
+        return Ok(text_path(d, &[]));
+    }
     let conditional = d.serializable
         && s.definition.package_is("core", "1")
         && s.definition.0.modules.is_empty()
@@ -54,6 +57,20 @@ pub(super) fn declaration(
         &GenericDeclarations::signature(&generics),
         signatures,
     )
+}
+
+/// A core Path is data, not authority: an inert, nongeneric opaque handle whose schema is
+/// its text. The authority it is used with stays in a Dir, which is never serializable.
+fn text_path(d: &TypeDefinition, arguments: &[GenericArgument]) -> bool {
+    d.serializable
+        && d.generics.is_empty()
+        && arguments.is_empty()
+        && d.representation.is_none()
+        && d.capability.is_none()
+        && !d.resource
+        && d.drop.is_none()
+        && d.fact.is_none()
+        && d.authority == AuthoritySummary::inert()
 }
 
 pub(super) fn eligible(
@@ -100,6 +117,12 @@ pub(super) fn eligible(
                 let SignatureKind::Type(d) = &s.kind else {
                     return Ok(false);
                 };
+                if definition.is_core("Path") {
+                    if !text_path(d, &arguments) {
+                        return Ok(false);
+                    }
+                    continue;
+                }
                 // A generic core type declared serializable (Option, Result, ...) bounds
                 // none of its parameters, so its ordinary declaration still accepts File,
                 // resources, etc. Eligibility is proved after substitution.

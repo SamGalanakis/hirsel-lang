@@ -1,0 +1,12 @@
+// rule: SER-1
+// expect: accept
+// A Path is data, but the Dir it is used with is authority, so the record keeps only the
+// Path and the Dir is passed where the path is used.
+@serializable
+type Located {
+  path: Path,
+}
+
+fn example(d: Dir, l: Located) -> Result[Bytes, FileError] in d {
+  file.read_bytes(d, l.path)
+}

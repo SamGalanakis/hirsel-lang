@@ -895,6 +895,29 @@ fn only_core_ir_is_serializable_over_unbounded_parameters() {
 }
 
 #[test]
+fn only_the_core_path_is_serializable_as_opaque_text() {
+    // A core Path has no representation: its schema is its text. Without the core-identity
+    // check in serialization::text_path the same-spelled user twin is accepted, and without
+    // its authority check so is the core twin that holds a capability.
+    let mut user = serializable_declaration(TypeKind::Primitive(Primitive::U64));
+    user.definition = path("Path");
+    user.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
+    let SignatureKind::Type(d) = &mut user.kind else {
+        unreachable!()
+    };
+    d.representation = None;
+    let mut core = user.clone();
+    core.definition = hirsel_syntax::DefPath::core("Path");
+    verdict(core.clone(), true);
+    verdict(user, false);
+    let SignatureKind::Type(d) = &mut core.kind else {
+        unreachable!()
+    };
+    d.authority = AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("Gate"))].into());
+    verdict(core, false);
+}
+
+#[test]
 fn refined_distinct_ir_cannot_opt_in_but_unconstrained_data_can() {
     let mut s = serializable_declaration(TypeKind::Primitive(Primitive::U64));
     let SignatureKind::Type(d) = &mut s.kind else {

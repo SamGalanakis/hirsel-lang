@@ -28,6 +28,10 @@ enum Mutant {
     FlatZero,
     /// A char node at a u64 layout rather than u32.
     Char,
+    /// A path node at a u64 scalar layout rather than a Path.
+    Path,
+    /// A scalar node at a Path layout: the run-context identity is not data.
+    PathScalar,
 }
 
 /// Push `record` onto the fixture table.
@@ -153,6 +157,19 @@ fn plan(t: &mut Lir<Value>, decode: bool, m: Mutant) -> (CodecPlan, LayoutId) {
     } else {
         l::U32
     }));
+    let mut path = t.table.layouts[l::U64.0 as usize].clone();
+    path.kind = LayoutKind::Path;
+    let path = push(t, path);
+    nodes.push(CodecNode::Path(if m == Mutant::Path {
+        l::U64
+    } else {
+        path
+    }));
+    nodes.push(CodecNode::Scalar(if m == Mutant::PathScalar {
+        path
+    } else {
+        l::U64
+    }));
     let plan = CodecPlan {
         descriptor: vec![4],
         nodes,
@@ -267,6 +284,14 @@ fn a_char_node_is_a_u32_scalar() {
     pair(either(decode, Mutant::Char), |k| {
         *k == K::Type("codec plan")
     });
+}
+
+#[test]
+fn a_path_node_is_exactly_a_path_identity() {
+    for mutant in [Mutant::Path, Mutant::PathScalar] {
+        pair(either(encode, mutant), |k| *k == K::Type("codec plan"));
+        pair(either(decode, mutant), |k| *k == K::Type("codec plan"));
+    }
 }
 
 #[test]

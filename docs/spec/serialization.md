@@ -32,15 +32,19 @@ The serializable core types are the errors and outcomes that can cross a call or
 stored, and the data they carry. `Option`, `Result`, `TxFailure` and `Bounded` bound none
 of their parameters, so each is serializable exactly when its arguments are, proved after
 substitution. `DecodeError`, `CancelCause`, `CancelError`, `ChannelError`, `FileError`,
-`FileKind`, `Metadata`, `IpAddr`, `SocketAddr`, `UdpReceived`, `TlsFailure`, `NetError`,
+`FileKind`, `Path`, `DirEntry`, `Metadata`, `IpAddr`, `SocketAddr`, `UdpReceived`, `TlsFailure`, `NetError`,
 `GrantError`, `ExitStatus`, `ProcessOutput`, `PipelineOutput`, `ProcessError`,
 `InputError`, `EnvError`, `OutputError`, `ClockError`, `RandomError`, `WaitError`,
 `ArgError`, `FloatIntError`, `OutOfSpace`, `CliError`, `FailureKind`, `SourceSite` and
 `Failure` are serializable. Each encodes as its record or variant schema under a nominal
-node for package `core`, version `1`. No other core type is serializable: those that hold
-a capability (`Deadline`, `Command`), resources, opaque types (`Path`, `Instant`, `Sku`,
-and so `DirEntry` and `StockError`), scripted-provider inputs and compile-time shapes
-convert through a data type. The exact core identity matters: a same-spelled user type
+node for package `core`, version `1`. `Path` is data, not authority: the authority it is
+used with stays in the `Dir`, which is never serializable. Its schema is a nominal node
+over `String`, its lexical spelling as `path.text` returns it, so a decoded path equals
+the encoded one; decoding admits exactly the text `path.of` admits and constructs the
+path as `path.of` does. No other core type is serializable: those that hold a capability
+(`Deadline`, `Command`), resources, other opaque types (`Instant`, `Sku`, and so
+`StockError`), scripted-provider inputs and compile-time shapes convert through a data
+type. The exact core identity matters: a same-spelled user type
 gets no exemption.
 
 Schema admission and opt-in failures are SER-1 at the declaration or at the encoding use.

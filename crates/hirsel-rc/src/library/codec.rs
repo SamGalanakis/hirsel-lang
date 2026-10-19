@@ -355,6 +355,14 @@ impl<'a> Plan<'a> {
                     .collect();
                 self.variant(layout, &arms)?
             }
+            // A core Path is its run-context identity; the runtime resolves and interns
+            // its text.
+            SchemaNode::Nominal { definition, .. } if definition.is_core("Path") => {
+                if r.kind != LayoutKind::Path {
+                    return unsupported("a Path off its layout");
+                }
+                CodecNode::Path(layout)
+            }
             // A nominal over a scalar, box or sequence holds it as its one field.
             SchemaNode::Nominal { representation, .. } => {
                 self.fields(layout, &[*representation])?

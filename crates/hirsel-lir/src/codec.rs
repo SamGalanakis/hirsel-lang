@@ -96,6 +96,9 @@ pub enum CodecNode {
     /// `char`: a `u32` scalar layout; decoding admits only a Unicode scalar
     /// value.
     Char(LayoutId),
+    /// A core `Path`: a run-context path identity, encoded as its text (a
+    /// `String`); decoding admits any UTF-8 text and interns it as `path.of`.
+    Path(LayoutId),
 }
 
 impl CodecNode {
@@ -103,6 +106,7 @@ impl CodecNode {
         match self {
             Self::Scalar(layout)
             | Self::Char(layout)
+            | Self::Path(layout)
             | Self::Text { layout, .. }
             | Self::FlatText { layout, .. }
             | Self::Framed { layout, .. }
@@ -119,7 +123,11 @@ impl CodecNode {
     /// Every child node, in encoding order.
     pub fn children(&self) -> Vec<CodecNodeId> {
         match self {
-            Self::Scalar(_) | Self::Char(_) | Self::Text { .. } | Self::FlatText { .. } => vec![],
+            Self::Scalar(_)
+            | Self::Char(_)
+            | Self::Path(_)
+            | Self::Text { .. }
+            | Self::FlatText { .. } => vec![],
             Self::Framed { value, .. } => vec![*value],
             Self::Fields { fields, .. } => fields.clone(),
             Self::Variant { arms, .. } => arms.iter().flatten().copied().collect(),
@@ -317,6 +325,11 @@ impl CodecPlan {
                         return Err("a char node at a layout that is not u32".into());
                     }
                 }
+                CodecNode::Path(_) => {
+                    if r.kind != LayoutKind::Path {
+                        return Err("a path node at a layout that is not a Path".into());
+                    }
+                }
                 CodecNode::Text { storage, .. } => {
                     let LayoutKind::Slice { element } = r.kind else {
                         return Err("a text node at a layout that is not a slice".into());
@@ -478,6 +491,7 @@ impl CodecPlan {
                 }
                 CodecNode::Scalar(_)
                 | CodecNode::Char(_)
+                | CodecNode::Path(_)
                 | CodecNode::FlatText { .. }
                 | CodecNode::Framed { .. }
                 | CodecNode::Fields { .. }
@@ -534,6 +548,7 @@ impl CodecPlan {
                     body.extend([NODE_SCALAR, scalar_code(kind)?]);
                 }
                 CodecNode::Char(_) => body.extend([NODE_SCALAR, SCALAR_CHAR]),
+                CodecNode::Path(_) => body.push(NODE_PATH),
                 CodecNode::Text { storage, utf8, .. } => {
                     body.extend([
                         NODE_TEXT,
@@ -794,6 +809,7 @@ pub const NODE_FLAT_VARIANT: u64 = 12;
 pub const NODE_FLAT_SEQUENCE: u64 = 13;
 pub const NODE_SEQUENTIAL: u64 = 14;
 pub const NODE_COLUMNS: u64 = 15;
+pub const NODE_PATH: u64 = 16;
 /// A `NODE_SCALAR` code past the layout scalars: 4 bytes holding a Unicode
 /// scalar value.
 pub const SCALAR_CHAR: u64 = 13;
@@ -817,6 +833,7 @@ snapshot_enum!(CodecNode {
     FlatText { layout, utf8 },
     Framed { layout, value },
     Char(layout),
+    Path(layout),
 });
 snapshot_struct!(CodecPlan {
     descriptor,
