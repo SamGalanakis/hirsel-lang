@@ -21,6 +21,7 @@ impl Library {
             dir: owner,
             identity,
             position,
+            path: open,
             writable,
             ..
         }) = self.simulation.grants.get(&id).cloned()
@@ -89,6 +90,14 @@ impl Library {
                 }
                 ok(Value::Unit)
             }
+        } else if name == "file.sync" {
+            // A detached or unresolvable open path still syncs the file's bytes.
+            let open = self
+                .simulation
+                .resolve_stored(tree, dir, &open, true)
+                .unwrap_or_default();
+            self.simulation.durable_sync(tree, identity, &open);
+            ok(Value::Unit)
         } else {
             let max = integer_u64(arg(a, 3)?)?;
             let data = &self.simulation.file_contents[&identity];

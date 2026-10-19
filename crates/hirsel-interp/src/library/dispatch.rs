@@ -135,7 +135,7 @@ impl Library {
         let a = &*call.arguments;
         if matches!(
             name,
-            "file.read" | "file.seek" | "file.write" | "file.append"
+            "file.read" | "file.seek" | "file.write" | "file.append" | "file.sync"
         ) {
             return self.file_stream(name, a, context).map(Some);
         }
@@ -623,7 +623,7 @@ impl Library {
         }
         if !matches!(
             name,
-            "file.narrow" | "file.walk" | "file.write_all" | "file.commit" | "file.sync"
+            "file.narrow" | "file.walk" | "file.write_all" | "file.commit"
         ) {
             let invalid_path = hirsel_run_config::confined_relative(&root, path_text(arg(a, 1)?)?)
                 .is_none()
@@ -802,32 +802,6 @@ impl Library {
             } else {
                 none()
             });
-        }
-        if name == "file.sync" {
-            let id = self.simulation.id(arg(a, 1)?, "File")?;
-            let Some(Grant::File {
-                tree: t,
-                dir: d,
-                identity,
-                path: open,
-                ..
-            }) = self.simulation.grants.get(&id).cloned()
-            else {
-                return Err(invalid("wrong file grant"));
-            };
-            if t != tree || d != dir {
-                return Err(invalid("wrong file directory"));
-            }
-            if self.simulation.stale.contains(&id) {
-                return Ok(file_fault(1));
-            }
-            // A detached or unresolvable open path still syncs the file's bytes.
-            let open = self
-                .simulation
-                .resolve_stored(tree, dir, &open, true)
-                .unwrap_or_default();
-            self.simulation.durable_sync(tree, identity, &open);
-            return Ok(ok(Value::Unit));
         }
         if matches!(name, "file.write_all" | "file.commit") {
             let (id, grant) = atomic.expect("atomic ownership checked before cancellation");
