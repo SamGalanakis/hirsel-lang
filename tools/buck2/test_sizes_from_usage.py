@@ -37,7 +37,11 @@ mapped binaries included) every 250 ms and kills it past twice its memory_kb on
 two samples, then the scheduler requeues it with more. A binary reserves its
 largest PSS peak / 2 * 1.2, rounded up to 256 MiB, at least 512 MiB, and at
 least the escalated reservation of any run of it killed for memory (1.75x
-unless a larger retry reservation was observed).
+unless a larger retry reservation was observed). A run the memory guard stopped
+(crates/hirsel-guard caps a test's data at its kill line, so the pool never sees
+it) counts as such a kill: `guard-stops.json` records each stop's binary and
+reservation, and a binary with stops but no runs gets a row at its floor, with
+the stop's `cpu_count` (default 1).
 """
 
 import argparse
@@ -125,6 +129,23 @@ def kills(path, operations):
             if name:
                 floors[name].append(math.ceil(int(kill.group(2)) * ESCALATION))
     return floors
+
+
+def guard_stops(path=None):
+    """Each binary's memory guard stops: its escalated reservations (KiB) and
+    the CPUs a row without runs gets."""
+    path = path or HERE / "guard-stops.json"
+    if not path.exists():
+        return {}
+    return {name: ([math.ceil(stop["reserved_kb"] * ESCALATION) for stop in stops],
+                   max(stop.get("cpu_count", 1) for stop in stops))
+            for name, stops in json.loads(path.read_text()).items()}
+
+
+def stopped_row(floors, cpu):
+    """A binary the guard stopped before the pool measured it: its floor."""
+    return dict(cpu_count=cpu, memory_kb=max([MIN_MEMORY_KB] + [step(f) for f in floors]), cpu_class="",
+                runs=0, pss_runs=0, memory_kills=len(floors))
 
 
 def escalation_floors(paths, operations):
@@ -249,6 +270,9 @@ def main():
     # Prefer their retry evidence, without counting the same kill twice.
     for name, reservations in escalation_floors(args.pss, operations).items():
         floors[name] = reservations + [f for f in floors[name] if f > max(reservations)]
+    stops = guard_stops()
+    for name, (reservations, _) in stops.items():
+        floors[name] += reservations
     if args.native_stages:
         rows = json.loads((HERE / "test-sizes.json").read_text())
         rows.update(native_rows(found, peaks, floors))
@@ -258,6 +282,11 @@ def main():
         rows = json.loads((HERE / "test-sizes.json").read_text())
         rows.update({name: size(name, samples, peaks[name], floors[name])
                      for name, samples in sorted(found.items()) if not args.only or name in args.only})
+    for name, (reservations, cpu) in stops.items():
+        if name not in rows:
+            rows[name] = stopped_row(reservations, cpu)
+        else:
+            rows[name]["memory_kb"] = max([rows[name]["memory_kb"]] + [step(f) for f in reservations])
     write_rows(rows)
 
 

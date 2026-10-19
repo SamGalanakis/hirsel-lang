@@ -1,50 +1,15 @@
 //! Prechecked packages (docs/building.md, "The std precheck") change only how long checking
 //! takes: prechecked products equal freshly checked ones, and a precheck is used only for
 //! the exact compiler and sources it was checked under.
+use crate::precheck_fixture::*;
 use hirsel_driver::*;
 use hirsel_engine::*;
-use hirsel_syntax::PackageId;
 use std::{
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
 };
 
-struct Fixture(PathBuf);
 impl Fixture {
-    fn new() -> Self {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "hirsel-precheck-test-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-    fn write(&self, name: &str, source: &str) {
-        std::fs::write(self.0.join(name), source).unwrap();
-    }
-    /// A root package `name` depending on the package at `manifest`.
-    fn program(&self, name: &str, source: &str, manifest: &Path, dependency: &str) -> PathBuf {
-        self.write(&format!("{name}.hir"), source);
-        let manifest = serde_json::json!({
-            "schema": 1,
-            "package": {"name": name, "version": "1"},
-            "sources": [{"path": format!("{name}.hir"), "module": []}],
-            "dependencies": [{
-                "manifest": manifest,
-                "package": {"name": dependency, "version": "1"},
-                "expose": [],
-            }],
-            "entry": {"module": [], "name": "main"},
-        });
-        let path = self.0.join(format!("{name}.json"));
-        std::fs::write(&path, manifest.to_string()).unwrap();
-        path
-    }
     fn library(&self, source: &str) -> PathBuf {
         self.write("lib.hir", source);
         let manifest = serde_json::json!({
@@ -58,37 +23,6 @@ impl Fixture {
         path
     }
 }
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).unwrap();
-    }
-}
-fn package(name: &str) -> PackageId {
-    PackageId {
-        name: name.into(),
-        version: "1".into(),
-    }
-}
-fn std_manifest() -> PathBuf {
-    // Manifests are written into a temporary directory: name std absolutely.
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../stdlib/std@1/hirsel.json")
-        .canonicalize()
-        .unwrap()
-}
-fn load(path: &Path, cache: &PackageCache) -> LoadedProgram {
-    load_program_source_with_cache(path, None, cache).unwrap()
-}
-
-const STD_PROGRAM: &str = "pub type AppError = Grant(GrantError) | Output(OutputError)
-
-pub fn main(rt: Io) -> Result[(), AppError] {
-  let output = io.stdout(rt) ? Grant
-  out.print(output, string.trim(\" hello \")) ? Output
-  out.print(output, u64.to_string(42u64)) ? Output
-  Ok(())
-}
-";
 
 /// Every prechecked std definition lowers to the same TIR and has the same revision
 /// node as in a fresh check, in a program that places std's sources at other
@@ -173,43 +107,6 @@ fn prechecked_std_products_equal_fresh_ones() {
                 );
             }
         }
-    });
-}
-
-/// LANG-6: a definition hash is the same whether std is adopted from its precheck
-/// or checked from source, for every std definition and the program's closure.
-#[test]
-fn definition_hashes_are_the_same_with_and_without_the_std_precheck() {
-    with_compiler_stack(|| {
-        let f = Fixture::new();
-        let path = std::env::var_os("HIRSEL_PRECHECK")
-            .expect("set HIRSEL_PRECHECK to the toolchain's std precheck");
-        let precheck = Arc::new(Precheck::read(Path::new(&path)).unwrap());
-        let client = f.program("aaa", STD_PROGRAM, &std_manifest(), "std");
-        let mut prechecked = load(&client, &PackageCache::prechecked(vec![precheck]));
-        assert!(
-            prechecked.engine.prechecked(&package("std")),
-            "{:?}",
-            prechecked.precheck_notes
-        );
-        let mut reference = load(&client, &PackageCache::disabled());
-        assert!(!reference.engine.prechecked(&package("std")));
-        let mut hashes = |p: &mut LoadedProgram| {
-            let entry = p.entry.clone();
-            let mut all = p.engine.package_definition_hashes(&package("std")).unwrap();
-            all.hashes
-                .extend(p.engine.definition_hashes([entry]).unwrap().hashes);
-            all.hashes
-        };
-        let (actual, expected) = (hashes(&mut prechecked), hashes(&mut reference));
-        assert!(expected.len() > 1000, "{}", expected.len());
-        let differing: Vec<_> = expected
-            .iter()
-            .filter(|(path, hash)| actual.get(*path) != Some(*hash))
-            .map(|(path, _)| path.to_string())
-            .collect();
-        assert!(differing.is_empty(), "{differing:?}");
-        assert_eq!(actual.len(), expected.len());
     });
 }
 

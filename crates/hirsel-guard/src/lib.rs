@@ -158,13 +158,13 @@ pub fn jobs() -> usize {
 
 /// Text built on the stack: the reports run where allocation has failed.
 struct Line {
-    bytes: [u8; 320],
+    bytes: [u8; 384],
     len: usize,
 }
 impl Line {
     fn new() -> Self {
         Line {
-            bytes: [0; 320],
+            bytes: [0; 384],
             len: 0,
         }
     }
@@ -264,11 +264,52 @@ fn exhausted(size: usize) -> ! {
     }
     line.text(b" reached (HIRSEL_MEMORY_LIMIT); allocating ")
         .number(size as u64)
-        .text(
-            b" more bytes failed. Under Buck2 the limit is the test's measured reservation \
+        .text(b" more bytes failed");
+    if let Some(kib) = resident_peak_kib() {
+        line.text(b" with a resident peak of ")
+            .number(kib >> 10)
+            .text(b"M");
+    }
+    line.text(
+        b". Under Buck2 the limit is the test's measured reservation \
               (tools/buck2/test_sizes.bzl); report the program that grew rather than raising it.\n",
+    )
+    .exit(EXIT_STATUS)
+}
+
+/// The process's resident peak (`VmHWM`), read without allocating: it tells
+/// growth apart from reservations the data limit also counts.
+fn resident_peak_kib() -> Option<u64> {
+    let mut status = [0u8; 4096];
+    let fd = unsafe {
+        libc::open(
+            c"/proc/self/status".as_ptr(),
+            libc::O_RDONLY | libc::O_CLOEXEC,
         )
-        .exit(EXIT_STATUS)
+    };
+    if fd < 0 {
+        return None;
+    }
+    let mut len = 0;
+    while len < status.len() {
+        let n = unsafe { libc::read(fd, status[len..].as_mut_ptr().cast(), status.len() - len) };
+        if n <= 0 {
+            break;
+        }
+        len += n as usize;
+    }
+    unsafe { libc::close(fd) };
+    let status = &status[..len];
+    let at = status.windows(6).position(|w| w == b"VmHWM:")? + 6;
+    let mut kib = None::<u64>;
+    for &byte in &status[at..] {
+        match byte {
+            b' ' | b'\t' if kib.is_none() => {}
+            b'0'..=b'9' => kib = Some(kib.unwrap_or(0) * 10 + u64::from(byte - b'0')),
+            _ => break,
+        }
+    }
+    kib
 }
 
 #[cold]
@@ -362,6 +403,10 @@ mod tests {
         assert_eq!(output.status.code(), Some(EXIT_STATUS), "{stderr}");
         assert!(
             stderr.contains("hirsel: memory limit 128M reached (HIRSEL_MEMORY_LIMIT); allocating "),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(" more bytes failed with a resident peak of "),
             "{stderr}"
         );
         assert!(!String::from_utf8_lossy(&output.stdout).contains("allocated"));

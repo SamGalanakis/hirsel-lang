@@ -77,6 +77,30 @@ class NativeSizes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'no measured native stage'):
             sizes.native_rows({}, defaultdict(list), defaultdict(list))
 
+    def test_a_guard_stop_is_a_kill_floor_and_sizes_an_unmeasured_binary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'test-sizes.json').write_text(json.dumps(
+                {'hirsel-cli-test-cli': {'cpu_count': 2, 'memory_kb': 1048576, 'cpu_class': ''}}))
+            (root / 'guard-stops.json').write_text(json.dumps({
+                'hirsel-cli-test-cli': [{'reserved_kb': 1048576}],
+                'hirsel-driver-test-it-precheck': [{'reserved_kb': 2883584, 'cpu_count': 2}],
+            }))
+            usage = root / 'usage.log'
+            usage.write_text('10\ttest=run:-:root//:hirsel-lir-test-it\top=abc\twall_ms=1000\t'
+                             'cpu_usec=1200000\trequested_cpu=1\trequested_kb=524288\n')
+            trace = root / 'trace.jsonl'
+            trace.write_text(json.dumps(dict(event='usage', operation='abc', sampled=True, peak_memory_kb=100000)))
+            with patch.object(sizes, 'HERE', root), patch.object(sys, 'argv', [
+                    'sizes', '--usage', str(usage), '--pss', str(trace), '--only', 'hirsel-lir-test-it']):
+                sizes.main()
+            rows = json.loads((root / 'test-sizes.json').read_text())
+        # 1.75x the stopped run's reservation, rounded up to 256 MiB.
+        self.assertEqual(rows['hirsel-cli-test-cli']['memory_kb'], 1835008)
+        self.assertEqual(rows['hirsel-driver-test-it-precheck'],
+                         dict(cpu_count=2, memory_kb=5242880, cpu_class='', runs=0, pss_runs=0, memory_kills=1))
+        self.assertEqual(rows['hirsel-lir-test-it']['memory_kb'], 524288)
+
 
 if __name__ == '__main__':
     unittest.main()

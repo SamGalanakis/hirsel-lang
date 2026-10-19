@@ -834,6 +834,14 @@
       1792326729
     ]
   },
+  "hirsel-driver-test-it-precheck": {
+    "cpu_class": "",
+    "cpu_count": 2,
+    "memory_kb": 5242880,
+    "memory_kills": 1,
+    "pss_runs": 0,
+    "runs": 0
+  },
   "hirsel-driver-test-it-scaling": {
     "cpu_class": "",
     "cpu_count": 2,

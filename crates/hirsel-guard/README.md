@@ -17,8 +17,9 @@ workspace crate.
   above one the process inherited, and child processes, native executables
   included, inherit it.
 - An allocation the limit refuses ends the process at once: `hirsel: memory limit
-  4G reached (HIRSEL_MEMORY_LIMIT); allocating N more bytes failed. ...` on stderr,
-  exit status 71 (`EXIT_STATUS`). The report is built on the stack and written with
+  4G reached (HIRSEL_MEMORY_LIMIT); allocating N more bytes failed with a resident
+  peak of RM. ...` on stderr, exit status 71 (`EXIT_STATUS`). The resident peak
+  (`VmHWM`) tells growth apart from reservations the data limit also counts. The report is built on the stack and written with
   `write(2)`; nothing allocates after the failure. `spawn_failed(stack, error)` ends
   the same way when a thread's stack would not fit beside the process's `VmData`
   (pthread reports that as `EAGAIN`), and otherwise panics with the error.

@@ -1,0 +1,10 @@
+{
+  "hirsel-driver-test-it-precheck": [
+    {
+      "cpu_count": 2,
+      "date": "2026-10-19",
+      "reserved_kb": 2883584,
+      "stop": "precheck::definition_hashes_are_the_same_with_and_without_the_std_precheck reached the 5632M guard limit in hirsel-driver-test-it-shard-5 beside proof_export's workers, before it moved to its own binary, where its prechecked and reference sides run on two threads"
+    }
+  ]
+}

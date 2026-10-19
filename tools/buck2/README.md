@@ -380,6 +380,14 @@ killed for memory. The full native stages without measurements inherit the large
 stage's request, recorded as `fallback_from` in the evidence. Other binaries
 without a row reserve 1 CPU and 2 GiB.
 
+Each test run's data is capped at that same kill line (`HIRSEL_MEMORY_LIMIT`, set
+by `defs.bzl`; `crates/hirsel-guard`), so a run past it stops with `hirsel: memory
+limit ... reached` instead of being killed and retried. A stop counts as a memory
+kill: record it in `guard-stops.json` (the binary, the `reserved_kb` it ran under
+and what grew), and the generator raises that binary to 1.75 times the
+reservation, giving one with no measured runs yet a row at that floor with the
+stop's `cpu_count` (default 1).
+
 The inputs are read-only copies: each worker's `actions.log` and
 `actions.log.1` (`TEST_TARGET` and CPU per test run), the scheduler's usage
 events (`trace/*.jsonl` of kiln-resource-hints on the cache host: PSS peaks by
