@@ -273,6 +273,9 @@ Whole assignment transports I's receiving availability: live uses strict atomic
 Replace, dead uses initialization, mixed uses Replace.if_live and a tied conditional
 displaced release. Installation precedes old finalizers in both exchange forms;
 receiving loan promotion still follows the store. No dead storage origin is read.
+The displaced temporary of an assignment is aliased: the old content's uniqueness is
+I's flow knowledge, not the place's declaration, since a copy taken after the place
+was written still holds it.
 
 Named constant paths lower directly to operand-free ReadConstant, retaining the
 producer's checked type. Initializer literals and constructors occur only in the

@@ -1026,3 +1026,49 @@ fn two_tasks_counting_one_block_trap() {
         );
     });
 }
+
+/// `xs = take fresh` displaces content that `kept`, a copy of `xs`, still
+/// holds (MODE-2-release-failure-block-end-run).
+const DISPLACED: &str = "fn grow(mut xs: unique List[u64]) -> u64 uses {} {\n  let fresh: unique List[u64] = [1u64]\n  let kept = copy xs\n  xs = take fresh\n  list.len(kept)\n}\n\npub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let mut xs: unique List[u64] = [0u64]\n  if grow(mut xs) == 1u64 { let _ = out.print(io.stdout(rt)?, \"one\\n\") }\n  Ok(())\n}";
+
+/// The old content's uniqueness is flow knowledge, not the place's
+/// declaration, so a Replace's displaced temporary is aliased. Giving it the
+/// place's declared `unique` row back is the false claim lowering once made,
+/// and checked execution traps on it.
+#[test]
+fn a_displaced_value_claims_no_uniqueness() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(DISPLACED);
+        assert_eq!(printed(run(&mut engine, &[], true)), "one\n");
+        let mut grow = lowered(&mut engine, "grow");
+        let body = &grow.bodies[grow.entry.0 as usize];
+        let displaced: Vec<_> = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction.kind {
+                hirsel_tir::InstructionKind::Replace { displaced, .. } => {
+                    Some(body.places[displaced.0 as usize].root)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(displaced.len(), 1);
+        let local = displaced[0].0 as usize;
+        let mut row = grow.types.get(body.locals[local].ty).unwrap().clone();
+        assert_eq!(row.modes.uniqueness, hirsel_types::Uniqueness::Aliased);
+        row.modes.uniqueness = hirsel_types::Uniqueness::Unique;
+        let unique = grow.types.push(row);
+        let entry = grow.entry.0 as usize;
+        grow.bodies[entry].locals[local].ty = unique;
+        for place in &mut grow.bodies[entry].places {
+            if place.root.0 as usize == local && place.projection.is_empty() {
+                place.ty = unique;
+            }
+        }
+        assert_eq!(
+            trapped(run(&mut engine, &[grow], true)),
+            TrapRule::UniqueShared
+        );
+    });
+}

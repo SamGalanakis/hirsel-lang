@@ -56,6 +56,9 @@ pub(super) struct Builder<'a, 'b> {
     pub bindings: super::bindings::Bindings,
     pub owned: Vec<bool>,
     plain_locals: Vec<bool>,
+    /// Each declared-unique content row's aliased twin, pushed once: a push
+    /// copies a type store shared with a snapshot.
+    displaced_rows: BTreeMap<TypeId, TypeId>,
     /// Scope nesting depth of each local; cleanup releases nest by it (DROP-2).
     local_depth: Vec<u32>,
     /// The greatest depth in `local_depth`.
@@ -146,6 +149,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             bindings: Default::default(),
             owned: vec![],
             plain_locals: vec![],
+            displaced_rows: BTreeMap::new(),
             local_depth: vec![],
             max_depth: 0,
             cleanup_epoch: 0,
@@ -1169,6 +1173,25 @@ impl<'a, 'b> Builder<'a, 'b> {
         if_live: bool,
         span: Span,
     ) {
+        // The old content's uniqueness is flow knowledge, not the place's
+        // declaration: a copy taken since the place was written still holds
+        // it (MODE-2), so the displaced temporary claims no uniqueness.
+        let content = if self.types.get(content).unwrap().modes.uniqueness
+            == hirsel_types::Uniqueness::Unique
+        {
+            match self.displaced_rows.get(&content) {
+                Some(aliased) => *aliased,
+                None => {
+                    let mut row = self.types.get(content).unwrap().clone();
+                    row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
+                    let aliased = self.types.push(row);
+                    self.displaced_rows.insert(content, aliased);
+                    aliased
+                }
+            }
+        } else {
+            content
+        };
         let displaced = self
             .exchange(destination, value, content, if_live, span)
             .place;
