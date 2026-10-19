@@ -1,0 +1,34 @@
+// rule: OWN-3
+// expect: run
+// "A loan lasts from its creation until the last use of every value holding it, on every
+// path." The scrutinee borrows `rest`, and only the Some arm keeps a part of it, so the
+// None arm may move `rest` itself into the match's value: on that path nothing holding
+// the scrutinee's loan is used again.
+fn status_of(head: String) -> Result[String, String] uses {} {
+  let Some((_, rest)) = string.split_once(head, " ") else {
+    return Error("none")
+  }
+  let code = match string.split_once(rest, " ") {
+    Some((c, _)) => c,
+    None() => rest,
+  }
+  if code == "" {
+    return Error("empty")
+  }
+  Ok(unique head)
+}
+
+fn is(outcome: Result[String, String], expected: String) -> bool uses {} {
+  match outcome {
+    Ok(text) => text == expected,
+    Error(text) => text == expected,
+  }
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(is(status_of("HTTP/1.1 200 OK"), "HTTP/1.1 200 OK"), Arithmetic())
+  failure.check(is(status_of("HTTP/1.1 200"), "HTTP/1.1 200"), Arithmetic())
+  failure.check(is(status_of("HTTP/1.1"), "none"), Arithmetic())
+  failure.check(is(status_of("HTTP/1.1  OK"), "empty"), Arithmetic())
+  Ok(())
+}

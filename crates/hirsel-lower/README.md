@@ -187,6 +187,14 @@ that scope: an owned branch value moves to a temporary there, and a view of an
 owner that ends first, such as an arm binding that took its payload from a
 copied or owned scrutinee, moves that owner there and re-projects from it.
 
+`end_loans_at_last_use` ends each loan where it stops being needed on every path
+(OWN-3). Backward it tracks the loans later steps need through their accesses and the
+content they install, and the places whose content a later step reads before a write of
+the whole root replaces it; a point needs those loans and whatever its own forward
+content of those places holds. So a holder filled differently on two arms needs
+a loan only on the arm whose content holds it: a scrutinee's loan on `rest` ends before
+a `None` arm moves `rest` into the match's value, though the `Some` arm's part keeps it.
+
 Lowering consumes shared CaptureMode rows directly; no driver-specific tuple or ordinal conversion is needed.
 
 C3 lowering emits BindOrigin/EndOrigin to separate source binding incarnations

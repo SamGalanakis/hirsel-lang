@@ -3,7 +3,7 @@
 //! lexically; this pass ends each one where it stops being needed, and the
 //! presence pass (`loans.rs`) then retires the lexical ends that no longer
 //! apply. A loan is needed while some path reaches an access through it, a
-//! read of content holding it, or the destruction of such content when its
+//! read of content holding it on that path, or the destruction of such content when its
 //! type has user-visible destruction (DROP-1/2), including failure cleanups.
 use super::builder::Builder;
 use hirsel_tir::*;
@@ -61,6 +61,14 @@ impl Content {
         }
         held
     }
+    /// Every loan some installed content holds.
+    fn loans(&self) -> BTreeSet<u32> {
+        self.0
+            .values()
+            .flatten()
+            .flat_map(|(_, loans)| loans.iter().copied())
+            .collect()
+    }
     fn clear(&mut self, place: &Place) {
         let prefix = Part::path(place.projection.iter());
         // One element's write or move leaves the others' loans held.
@@ -92,12 +100,40 @@ impl Content {
     }
 }
 
-/// The loans one instruction or terminator needs active, and those it begins.
+/// The loans one instruction or terminator needs active through its own
+/// accesses and the content it installs, the places whose content it reads,
+/// the places whose content it replaces, and the loan it begins.
 #[derive(Default)]
 struct Step {
     needs: BTreeSet<u32>,
+    reads: Vec<PlaceId>,
+    defines: Vec<PlaceId>,
     begins: Option<u32>,
     cursors: Vec<(PlaceId, BTreeSet<u32>)>,
+}
+
+/// What is needed at a point: loans needed through later accesses, and places
+/// whose installed content a later step reads before replacing it.
+#[derive(Clone, Default, PartialEq, Eq)]
+struct Live {
+    loans: BTreeSet<u32>,
+    places: BTreeSet<u32>,
+}
+impl Live {
+    fn of(step: &Step) -> Self {
+        Self {
+            loans: step.needs.clone(),
+            places: step.reads.iter().map(|place| place.0).collect(),
+        }
+    }
+    fn after(successors: &[usize], live_in: &[Live]) -> Self {
+        let mut live = Self::default();
+        for next in successors {
+            live.loans.extend(&live_in[*next].loans);
+            live.places.extend(&live_in[*next].places);
+        }
+        live
+    }
 }
 
 impl Builder<'_, '_> {
@@ -146,7 +182,7 @@ impl Builder<'_, '_> {
                 }
             }
         }
-        // What each step needs, read against the content before it.
+        // What each step needs and reads, against the content before it.
         let mut steps: Vec<Vec<Step>> = Vec::with_capacity(blocks);
         for (block, state) in entry.iter().enumerate() {
             let Some(mut content) = state.clone() else {
@@ -156,39 +192,41 @@ impl Builder<'_, '_> {
             let mut row = vec![];
             for index in 0..self.body.blocks[block].instructions.len() {
                 let instruction = self.body.blocks[block].instructions[index].clone();
-                row.push(self.instruction_step(&content, &instruction));
+                let mut step = self.instruction_step(&content, &instruction);
+                let held = content.loans();
                 self.transfer_content(&mut content, &instruction.kind);
+                step.needs.extend(content.loans().difference(&held));
+                row.push(step);
                 self.record_destroyed_holders(&content);
             }
-            row.push(self.terminator_step(&content, block));
+            let mut step = self.terminator_step(block);
+            let held = content.loans();
             self.transfer_terminator(&mut content, block);
+            step.needs.extend(content.loans().difference(&held));
+            row.push(step);
             self.record_destroyed_holders(&content);
             steps.push(row);
         }
-        // Backward: the loans needed after each step.
+        // Backward: the loans and the places whose content is read after each
+        // step. A place whose content is replaced is not read through its old
+        // content, so a holder only one path fills needs its loans only there.
         let mut predecessors = vec![vec![]; blocks];
         for (block, next) in successors.iter().enumerate() {
             for &n in next {
                 predecessors[n].push(block);
             }
         }
-        let mut live_in = vec![BTreeSet::<u32>::new(); blocks];
+        let mut live_in = vec![Live::default(); blocks];
         let mut pending: VecDeque<_> = (0..blocks).rev().collect();
         let mut queued = vec![true; blocks];
         while let Some(block) = pending.pop_front() {
             queued[block] = false;
-            let mut needed: BTreeSet<u32> = successors[block]
-                .iter()
-                .flat_map(|n| live_in[*n].iter().copied())
-                .collect();
+            let mut live = Live::after(&successors[block], &live_in);
             for step in steps[block].iter().rev() {
-                if let Some(loan) = step.begins {
-                    needed.remove(&loan);
-                }
-                needed.extend(&step.needs);
+                self.live_before(&mut live, step);
             }
-            if needed != live_in[block] {
-                live_in[block] = needed;
+            if live != live_in[block] {
+                live_in[block] = live;
                 for &previous in &predecessors[block] {
                     if !queued[previous] {
                         queued[previous] = true;
@@ -197,20 +235,27 @@ impl Builder<'_, '_> {
                 }
             }
         }
+        // The loans needed at each block's entry and exit, against the content
+        // there: an exit reads its successors' places through its own content.
+        let mut needed_in = vec![BTreeSet::new(); blocks];
+        let mut exits = vec![BTreeSet::new(); blocks];
+        for block in 0..blocks {
+            let Some(mut content) = entry[block].clone() else {
+                continue;
+            };
+            needed_in[block] = self.needed(&content, &live_in[block]);
+            for index in 0..self.body.blocks[block].instructions.len() {
+                let kind = self.body.blocks[block].instructions[index].kind.clone();
+                self.transfer_content(&mut content, &kind);
+            }
+            let terminator = steps[block].last().unwrap();
+            let mut exit = self.needed(&content, &Live::of(terminator));
+            self.transfer_terminator(&mut content, block);
+            exit.extend(self.needed(&content, &Live::after(&successors[block], &live_in)));
+            exits[block] = exit;
+        }
         // End each loan where it stops being needed. Ends of loans that are
         // inactive there are removed by the presence pass.
-        let exits: Vec<BTreeSet<u32>> = (0..blocks)
-            .map(|block| {
-                let mut needed: BTreeSet<u32> = successors[block]
-                    .iter()
-                    .flat_map(|n| live_in[*n].iter().copied())
-                    .collect();
-                if let Some(terminator) = steps[block].last() {
-                    needed.extend(&terminator.needs);
-                }
-                needed
-            })
-            .collect();
         for block in 0..blocks {
             // An exhaustive switch's impossible fallback stays empty.
             if entry[block].is_none()
@@ -218,17 +263,11 @@ impl Builder<'_, '_> {
             {
                 continue;
             }
-            let mut after: Vec<BTreeSet<u32>> = vec![BTreeSet::new(); steps[block].len()];
-            let mut needed: BTreeSet<u32> = successors[block]
-                .iter()
-                .flat_map(|n| live_in[*n].iter().copied())
-                .collect();
+            let mut after: Vec<Live> = vec![Live::default(); steps[block].len()];
+            let mut live = Live::after(&successors[block], &live_in);
             for (index, step) in steps[block].iter().enumerate().rev() {
-                after[index] = needed.clone();
-                if let Some(loan) = step.begins {
-                    needed.remove(&loan);
-                }
-                needed.extend(&step.needs);
+                after[index] = live.clone();
+                self.live_before(&mut live, step);
             }
             let span = self.body.blocks[block].span;
             let instructions = std::mem::take(&mut self.body.blocks[block].instructions);
@@ -240,8 +279,9 @@ impl Builder<'_, '_> {
                 .flat_map(|p| exits[*p].iter().copied())
                 .collect();
             // Child loans have later IDs, so they end first.
-            let ended: Vec<u32> = incoming.difference(&live_in[block]).copied().collect();
-            let cursors = self.cursor_holders(entry[block].as_ref().unwrap());
+            let ended: Vec<u32> = incoming.difference(&needed_in[block]).copied().collect();
+            let mut content = entry[block].clone().unwrap();
+            let cursors = self.cursor_holders(&content);
             for &loan in ended.iter().rev() {
                 self.retire_cursors(&mut output, &cursors, loan, span, entry_failure);
                 output.push(Instruction {
@@ -253,16 +293,16 @@ impl Builder<'_, '_> {
                     on_failure: entry_failure,
                 });
             }
+            let mut before = needed_in[block].clone();
             for (index, instruction) in instructions.into_iter().enumerate() {
-                let before: BTreeSet<u32> = steps[block][index]
-                    .needs
-                    .union(&after[index])
-                    .copied()
-                    .chain(steps[block][index].begins)
-                    .collect();
+                before.extend(steps[block][index].begins);
+                self.transfer_content(&mut content, &instruction.kind);
+                // The last instruction's successor is the terminator, which
+                // reads against the content before it, as here.
+                let needed = self.needed(&content, &after[index]);
                 let (span, on_failure) = (instruction.span, instruction.on_failure);
                 output.push(instruction);
-                let ended: Vec<u32> = before.difference(&after[index]).copied().collect();
+                let ended: Vec<u32> = before.difference(&needed).copied().collect();
                 for loan in ended.iter().rev() {
                     self.retire_cursors(
                         &mut output,
@@ -280,9 +320,53 @@ impl Builder<'_, '_> {
                         on_failure,
                     });
                 }
+                before = needed;
             }
             self.body.blocks[block].instructions = output;
         }
+    }
+    /// The places live before `step`, from those live after it.
+    fn live_before(&self, live: &mut Live, step: &Step) {
+        live.places.retain(|place| {
+            !step
+                .defines
+                .iter()
+                .any(|defined| self.replaces(*defined, PlaceId(*place)))
+        });
+        live.places.extend(step.reads.iter().map(|place| place.0));
+        if let Some(loan) = step.begins {
+            live.loans.remove(&loan);
+        }
+        live.loans.extend(&step.needs);
+    }
+    /// Whether writing `defined` replaces all the content a read of `place`
+    /// uses. Only a whole root's write does: a part's write keeps the rows of
+    /// its ancestors, which a read of any part below them still uses.
+    fn replaces(&self, defined: PlaceId, place: PlaceId) -> bool {
+        let defined = &self.body.places[defined.0 as usize];
+        defined.projection.is_empty() && defined.root == self.body.places[place.0 as usize].root
+    }
+    /// The loans `live` needs against `content`: its own loans and those the
+    /// content of its places holds, each with whatever its source's content
+    /// holds.
+    fn needed(&self, content: &Content, live: &Live) -> BTreeSet<u32> {
+        let mut pending: Vec<u32> = live.loans.iter().copied().collect();
+        for place in &live.places {
+            for (_, loans) in content.place(&self.body.places[*place as usize]) {
+                pending.extend(loans);
+            }
+        }
+        let mut needs = BTreeSet::new();
+        while let Some(loan) = pending.pop() {
+            if !needs.insert(loan) {
+                continue;
+            }
+            let source = &self.body.places[self.loan_source(LoanId(loan)).0 as usize];
+            for (_, held) in content.place(source) {
+                pending.extend(held.into_iter().filter(|l| !needs.contains(l)));
+            }
+        }
+        needs
     }
     fn cursor_holders(&self, content: &Content) -> Vec<(PlaceId, BTreeSet<u32>)> {
         content
@@ -354,59 +438,45 @@ impl Builder<'_, '_> {
         }
     }
     /// Reading a place uses its access chain and the content it holds; a loan
-    /// is needed together with whatever its source's content holds.
-    fn read(&self, content: &Content, place: PlaceId, needs: &mut BTreeSet<u32>) {
-        self.access_chain(place, needs);
-        let mut pending: Vec<u32> = content
-            .place(&self.body.places[place.0 as usize])
-            .into_iter()
-            .flat_map(|(_, loans)| loans)
-            .collect();
-        pending.extend(needs.iter().copied());
-        while let Some(loan) = pending.pop() {
-            needs.insert(loan);
-            let source = &self.body.places[self.loan_source(LoanId(loan)).0 as usize];
-            for (_, held) in content.place(source) {
-                for dependency in held {
-                    if !needs.contains(&dependency) {
-                        pending.push(dependency);
-                    }
-                }
-            }
-        }
+    /// is needed together with whatever its source's content holds (`needed`).
+    fn read(&self, place: PlaceId, step: &mut Step) {
+        self.access_chain(place, &mut step.needs);
+        step.reads.push(place);
     }
-    fn cleanup_uses(&self, content: &Content, cleanup: CleanupId, needs: &mut BTreeSet<u32>) {
+    fn cleanup_uses(&self, cleanup: CleanupId, step: &mut Step) {
         for action in self.body.cleanup_actions(cleanup) {
             if let CleanupAction::Drop { place, .. } = action {
                 if self.destroyed(self.ty(*place)) {
-                    self.read(content, *place, needs);
+                    self.read(*place, step);
                 }
             }
         }
     }
     fn instruction_step(&self, content: &Content, instruction: &Instruction) -> Step {
-        let mut step = Step::default();
-        step.cursors = self.cursor_holders(content);
-        let needs = &mut step.needs;
-        self.cleanup_uses(content, instruction.on_failure, needs);
+        let mut step = Step {
+            cursors: self.cursor_holders(content),
+            ..Step::default()
+        };
+        self.cleanup_uses(instruction.on_failure, &mut step);
         match &instruction.kind {
-            InstructionKind::Defuse { place } => self.read(content, *place, needs),
+            InstructionKind::Defuse { place } => self.read(*place, &mut step),
             // Naming a value accesses its place without reading its content.
             InstructionKind::BindOrigin { source, place, .. } => {
-                self.access_chain(*source, needs);
-                self.access_chain(*place, needs);
+                self.access_chain(*source, &mut step.needs);
+                self.access_chain(*place, &mut step.needs);
             }
             InstructionKind::BindFields { source, fields } => {
-                self.access_chain(*source, needs);
+                self.access_chain(*source, &mut step.needs);
                 for field in fields {
-                    self.access_chain(*field, needs);
+                    self.access_chain(*field, &mut step.needs);
                 }
             }
             InstructionKind::Assign { destination, value } => {
-                self.access_chain(*destination, needs);
+                self.access_chain(*destination, &mut step.needs);
                 for operand in rvalue_operands(&self.body.rvalues[value.0 as usize]) {
-                    self.read(content, operand.place, needs);
+                    self.read(operand.place, &mut step);
                 }
+                step.defines.push(*destination);
             }
             InstructionKind::Replace {
                 destination,
@@ -414,65 +484,68 @@ impl Builder<'_, '_> {
                 displaced,
                 ..
             } => {
-                self.access_chain(*destination, needs);
-                self.read(content, value.place, needs);
+                self.access_chain(*destination, &mut step.needs);
+                self.read(value.place, &mut step);
                 if self.destroyed(self.ty(*destination)) {
-                    self.read(content, *destination, needs);
+                    self.read(*destination, &mut step);
                 }
-                self.access_chain(*displaced, needs);
+                self.access_chain(*displaced, &mut step.needs);
+                step.defines.extend([*destination, *displaced]);
             }
             InstructionKind::BeginLoan { id, place, .. } => {
-                self.read(content, *place, needs);
+                self.read(*place, &mut step);
                 step.begins = Some(id.0);
             }
             InstructionKind::Drop { place, .. } => {
                 if self.destroyed(self.ty(*place)) {
-                    self.read(content, *place, needs);
+                    self.read(*place, &mut step);
                 }
             }
-            InstructionKind::RunCleanup(cleanup) => self.cleanup_uses(content, *cleanup, needs),
-            InstructionKind::Check { condition, .. } => self.read(content, condition.place, needs),
-            InstructionKind::Snapshot { value, .. } => self.read(content, value.place, needs),
+            InstructionKind::RunCleanup(cleanup) => self.cleanup_uses(*cleanup, &mut step),
+            InstructionKind::Check { condition, .. } => self.read(condition.place, &mut step),
+            InstructionKind::Snapshot { value, .. } => self.read(value.place, &mut step),
+            InstructionKind::StorageLive(local) => {
+                step.defines.push(self.roots[local.0 as usize]);
+            }
             InstructionKind::EndOrigin(_)
-            | InstructionKind::StorageLive(_)
             | InstructionKind::StorageDead { .. }
             | InstructionKind::EndScope(_)
             | InstructionKind::EndLoan { .. } => {}
         }
         step
     }
-    fn terminator_step(&self, content: &Content, block: usize) -> Step {
+    fn terminator_step(&self, block: usize) -> Step {
         let mut step = Step::default();
-        let needs = &mut step.needs;
         match &self.body.blocks[block].terminator {
-            Terminator::Branch { condition, .. } => self.read(content, condition.place, needs),
-            Terminator::Switch { value, .. } => self.read(content, value.place, needs),
+            Terminator::Branch { condition, .. } => self.read(condition.place, &mut step),
+            Terminator::Switch { value, .. } => self.read(value.place, &mut step),
             Terminator::Match { table, .. } => {
                 let table = &self.body.matches[table.0 as usize];
-                self.read(content, table.scrutinee, needs);
+                self.read(table.scrutinee, &mut step);
                 for pattern in &table.patterns {
-                    self.read(content, pattern.place, needs);
+                    self.read(pattern.place, &mut step);
                 }
             }
             Terminator::Call {
                 callee,
                 arguments,
+                returns,
                 on_failure,
-                ..
             } => {
                 if let Callee::Indirect { value, .. } = callee {
-                    self.read(content, value.place, needs);
+                    self.read(value.place, &mut step);
                 }
                 for argument in arguments {
-                    self.read(content, argument.value.place, needs);
+                    self.read(argument.value.place, &mut step);
                 }
-                self.cleanup_uses(content, *on_failure, needs);
+                self.cleanup_uses(*on_failure, &mut step);
+                step.defines.extend(returns.as_ref().map(|r| r.destination));
             }
             Terminator::Return { value, cleanup } => {
-                self.read(content, value.place, needs);
-                self.cleanup_uses(content, *cleanup, needs);
+                self.read(value.place, &mut step);
+                self.cleanup_uses(*cleanup, &mut step);
             }
-            Terminator::Fail { cleanup, .. } => self.cleanup_uses(content, *cleanup, needs),
+            Terminator::Fail { cleanup, .. } => self.cleanup_uses(*cleanup, &mut step),
             Terminator::Goto(_) | Terminator::Unreachable => {}
         }
         step
