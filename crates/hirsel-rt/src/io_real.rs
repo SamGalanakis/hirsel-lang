@@ -511,7 +511,13 @@ impl Adapter for RealIo {
         match self.perform(request) {
             Err(AdapterError::Blocked) => {
                 let (readiness, log) = self.cooperative.as_mut().unwrap();
-                let committed = !readiness.cancellable(log.current());
+                let token = log.current();
+                let committed = !readiness.cancellable(token);
+                // Re-issued while its task stays parked (a held request a journal barrier
+                // released first registers its interest here): Readiness reports it from now.
+                if log.rows_of(token).is_some_and(|row| row.parked) {
+                    readiness.parked(token);
+                }
                 log.park(committed);
                 self.record(Event {
                     request: retry,
