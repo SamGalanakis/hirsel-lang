@@ -90,6 +90,15 @@ pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root
     Ok(roots)
 }
 
+/// Select the admission kind from the entry's checked nominal signature.
+pub fn entry_launch_kind(signature: &Signature) -> Result<LaunchKind, RunRefusal> {
+    if entry_roots(signature, LaunchKind::Test).is_ok() {
+        Ok(LaunchKind::Test)
+    } else {
+        entry_roots(signature, LaunchKind::Main).map(|_| LaunchKind::Main)
+    }
+}
+
 /// Code selection defaults to denial. Check every binding and root before host admission.
 pub fn admit_run(
     signature: &Signature,
