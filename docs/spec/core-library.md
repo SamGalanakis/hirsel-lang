@@ -464,7 +464,7 @@ TlsServer    = { identities: List[TlsIdentity], clients: TlsClientAuth }
 TlsClientAuth = Anonymous() | Request(Bytes) | Require(Bytes)    // PEM trust set
 TlsFailure   = UnknownIssuer() | Expired() | NotYetValid() | NameMismatch() | Revoked()
              | BadCertificate() | AlertReceived(u8) | HandshakeFailure() | PeerMisbehaved()
-             | Truncated()
+             | Truncated() | CertificateRequired()
 NetError     = NotGranted() | Canceled(CancelCause) | InvalidInput() | UnknownHost()
              | ResolverFailure() | ConnectionRefused() | ConnectionReset()
              | ConnectionAborted() | NotConnected() | AddrInUse() | AddrNotAvailable()
@@ -485,7 +485,7 @@ The scripted-peer types used by `test.net` and the `net.script@2` provider:
 NetPeer       = { address: String, port: u16, resolves_to: List[IpAddr],
                   tls: PeerTls, connections: List[NetConnection] }
 PeerTls       = Plain() | Certificate(List[String]) | Fails(TlsFailure)
-              | Presents(List[String], Bytes)
+              | Presents(List[String], Bytes) | Serves(TlsServer)
 NetConnection = Refused() | Unanswered() | Open(List[NetStep])
 NetStep       = Send(Bytes) | Expect(Bytes) | Stall() | Close() | Reset() | Truncate()
 NetListener   = { address: String, port: u16, clients: List[NetClient] }
@@ -722,7 +722,9 @@ server requests one; a server that requests none never sees it. `identity` is ch
 `tls.accept` checks an identity, after `roots` and `server_name`: an invalid one is
 `InvalidInput()`. A server refusing the certificate, or requiring one the client does not
 send, ends the handshake with its alert, such as `Tls(AlertReceived(116))`
-(`certificate_required`) or `Tls(AlertReceived(48))` (`unknown_ca`). The grant checks, the
+(`certificate_required`) or `Tls(AlertReceived(48))` (`unknown_ca`). A TLS 1.3 client
+finishes its handshake before the server checks its certificate, so on a host the alert can
+instead be the result of the stream's first read or write. The grant checks, the
 consumed stream and every other rule are those of `tls.connect`; wherever a rule names
 `tls.connect`, it covers `tls.connect_as`.
 
@@ -734,7 +736,7 @@ for the client's SNI name (a DNS subject alternative name, as a verifying client
 or the first identity when the client sends no SNI or none matches. `clients` decides client
 certificates: `Anonymous()` requests none; `Request(trust)` requests one and accepts a
 client that sends none; `Require(trust)` requests one and fails a client that sends none
-with `Tls(BadCertificate())`. A certificate the client sends is verified against `trust`
+with `Tls(CertificateRequired())`. A certificate the client sends is verified against `trust`
 alone (the PEM certificates there are the trust anchors) for client authentication, at the
 provider's time, as `tls.connect` verifies a server: an unknown issuer is
 `Tls(UnknownIssuer())`, and the other verification failures are the `TlsFailure`s
@@ -752,14 +754,15 @@ shutdown and `tls.connect` return `NotGranted()` with no effect, while timeout s
 `connect_addr` is `NotGranted()`. Truncation and `tls.close` behave as for `tls.connect`
 streams.
 
-`tls.peer` returns the client certificate chain a successful `tls.accept` verified on the
-stream, as the DER certificates the client sent, leaf first, concatenated (each DER
-certificate delimits itself), so a program reads the peer's identity as data, and the
-chain's SHA-256 identifies it; [`std@1/x509`](std-library.md#x509-certificate-fields) reads its subject and
-alternative names. It returns `None()` on every other stream: plain
-streams, streams upgraded by `tls.connect`, and `tls.accept` streams whose client sent no
-certificate. It reads handshake state only: it never blocks, is never a cancellation point,
-and answers the same after the stream's peer closes or resets.
+`tls.peer` returns the certificate chain the stream's peer presented and a successful
+handshake verified, on either side: the server's chain on a stream upgraded by
+`tls.connect` or `tls.connect_as`, and the client's on a `tls.accept` stream. It is the DER
+certificates the peer sent, leaf first, concatenated (each DER certificate delimits
+itself), so a program reads the peer's identity as data, and the chain's SHA-256
+identifies it; [`std@1/x509`](std-library.md#x509-certificate-fields) reads its subject and
+alternative names. It returns `None()` on plain streams and on `tls.accept` streams whose
+client sent no certificate. It reads handshake state only: it never blocks, is never a
+cancellation point, and answers the same after the stream's peer closes or resets.
 
 `net.listen` binds and listens with a backlog of 128. Host TCP listeners set
 `SO_REUSEADDR` before binding, so a stopped server can immediately listen on its port
@@ -849,7 +852,7 @@ socket namespaces and script cursors. Port-zero UDP binds choose an unused UDP
 port from 49152 upward in world order; exhaustion is `AddrNotAvailable()`.
 
 **Scripted peers.** `test.net` returns a fake `Net` served by its peers, whose rules are
-`(address, port, ConnectTls())` for a `Certificate` or `Fails` peer and
+`(address, port, ConnectTls())` for a `Certificate`, `Fails` or `Serves` peer and
 `(address, port, Connect())` for a `Plain` peer, plus `(literal, port, Listen())` for each
 listener's address. Duplicate `(address, port)` peers and duplicate listener addresses
 are invalid input. A `NetListener` with port 0 binds its clients to the first port-0
@@ -857,8 +860,8 @@ listen on that IP; clients target that listener's assigned address. Later port-0
 listens on that IP have no scripted clients.
 
 - A peer whose address is a canonical socket path is a Unix peer, with port 0 and no
-  `resolves_to`; its `tls` is `Plain()`, `Certificate(names)` or `Fails(f)`, and `tls.connect`
-  on its stream behaves as for a TCP peer of that `tls`. `test.net` grants
+  `resolves_to`; its `tls` is any peer's, and `tls.connect` on its stream behaves as for a
+  TCP peer of that `tls`. `test.net` grants
   `(path, 0, UnixConnect())` for it in place of `Connect`, `ConnectTls` and `UdpPeer` rules. Each `net.unix_connect` to it takes its next
   connection entry as a connect does; `Unanswered()` never completes. Its streams' `peer_addr`
   is `0.0.0.0` with port 0. A Unix peer is reached only by `net.unix_connect`.
@@ -904,12 +907,28 @@ listens on that IP have no scripted clients.
   client has `Expect(b"pong")`, then leaving its scope without accepting that client,
   fails LANG-9 immediately, even if the next statement would listen on the same address.
 - `tls.connect` to a `Certificate(names)` peer succeeds exactly when `server_name` is in
-  `names`, otherwise `Tls(NameMismatch())`; to a `Plain()` peer it is
-  `Tls(HandshakeFailure())`; to a `Fails(f)` peer it is `Tls(f)`, after the same grant checks
-  and with the same consumed stream and recorded events as any handshake failure. `roots`
-  is not consulted, and script bytes are plaintext. Scripted peers request no client
-  certificate, so `tls.connect_as` checks its identity and otherwise behaves as
-  `tls.connect`. `Presents` describes a client and is invalid input for a peer.
+  `names`, otherwise `Tls(NameMismatch())`, and the peer presents no certificate bytes, so
+  `tls.peer` is `None()`; to a `Plain()` peer it is `Tls(HandshakeFailure())`; to a
+  `Fails(f)` peer it is `Tls(f)`, after the same grant checks and with the same consumed
+  stream and recorded events as any handshake failure. `roots` is not consulted, and
+  script bytes are plaintext. A `Certificate` peer requests no client certificate, so
+  `tls.connect_as` checks its identity and otherwise behaves as `tls.connect`.
+- A `Serves(server)` peer is a TLS server: `test.net` validates `server` as `tls.accept`
+  does, and an invalid one is invalid input. The client sends `server_name` as SNI when it
+  is a DNS name, and none otherwise; the peer presents the identity that SNI selects, as
+  `tls.accept` selects one. The client accepts it exactly when its leaf certificate is
+  valid for `server_name` (a DNS or IP subject alternative name; time and chain are not
+  checked, and `roots` is not consulted), otherwise `Tls(NameMismatch())`. Then the
+  server's `clients` applies to the client: `Anonymous()` never sees an identity;
+  `Request(trust)` and `Require(trust)` verify the chain of the `tls.connect_as` identity
+  against `trust` as the host does but at the latest `notBefore` of its certificates, and
+  refuse it with the alert a rustls server sends for that failure, such as
+  `Tls(AlertReceived(48))` (`unknown_ca`) for an unknown issuer; `Require` refuses a
+  `tls.connect`, which presents none, with `Tls(AlertReceived(116))`
+  (`certificate_required`). Every refusal ends `tls.connect` itself, as a TLS 1.2 handshake
+  does. On success `tls.peer` returns the presented identity's chain as DER.
+- `Presents` describes a client and `Serves` a peer: each is invalid input in the other's
+  place.
 - `tls.accept` validates `server` as the host does, then handshakes with the stream's
   client by its `tls`. A `Certificate(names)` or `Presents(names, chain)` client sends the
   first of `names` as SNI when it is a DNS name, and none otherwise; the server selects its

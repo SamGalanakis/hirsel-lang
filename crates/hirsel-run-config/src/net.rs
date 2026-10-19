@@ -1,5 +1,5 @@
 //! Closed network grant data; execution engines enforce the validated rules.
-use crate::{ProviderContract, RunRefusal, invalid};
+use crate::{ProviderContract, RunRefusal, invalid, tls::ClientAuth};
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 
@@ -107,6 +107,15 @@ pub fn check_net_listeners(listeners: &[NetListener]) -> Result<(), String> {
                 "listener {index} has a client presenting no well-formed PEM certificate"
             ));
         }
+        if listener
+            .clients
+            .iter()
+            .any(|c| matches!(c.tls, PeerTls::Serves(_)))
+        {
+            return Err(format!(
+                "listener {index} has a client with serves, a scripted peer's TLS"
+            ));
+        }
     }
     Ok(())
 }
@@ -173,6 +182,27 @@ pub enum PeerTls {
     /// A client only: `Certificate(names)` that also presents the PEM certificate chain
     /// (leaf first) as its client certificate.
     Presents(Vec<String>, Vec<u8>),
+    /// A peer only: a server presenting the identity a client's SNI selects, which applies
+    /// its client policy to the identity a `tls.connect_as` presents.
+    Serves(TlsServer),
+}
+
+/// A scripted peer's `TlsServer`: PEM identities, and its client policy, which canonical
+/// bytes omit when it is `anonymous`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsServer {
+    pub identities: Vec<TlsIdentity>,
+    #[serde(default, skip_serializing_if = "ClientAuth::is_anonymous")]
+    pub clients: ClientAuth<Vec<u8>>,
+}
+
+/// A PEM certificate chain, leaf first, and the PEM private key of its leaf.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TlsIdentity {
+    pub chain: Vec<u8>,
+    pub key: Vec<u8>,
 }
 
 /// `TlsFailure`, in its docs/spec/core-library.md variant order.
@@ -189,6 +219,8 @@ pub enum TlsFailure {
     HandshakeFailure,
     PeerMisbehaved,
     Truncated,
+    /// A server requiring a client certificate received none.
+    CertificateRequired,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -353,10 +385,17 @@ pub fn canonical_unix_path(path: &str) -> bool {
 }
 
 /// A scripted peer names a host or IP literal, or a socket path: a Unix peer, which has
-/// port 0 and resolves to nothing. A peer's TLS is never a client's `Presents`.
+/// port 0 and resolves to nothing. A peer's TLS is never a client's `Presents`, and a
+/// `Serves` server loads as `tls.accept` loads one.
 pub fn check_peer_address(peer: &NetPeer) -> Result<(), String> {
-    if matches!(peer.tls, PeerTls::Presents(..)) {
-        return Err("presents is a scripted client's TLS, not a peer's".into());
+    match &peer.tls {
+        PeerTls::Presents(..) => {
+            return Err("presents is a scripted client's TLS, not a peer's".into());
+        }
+        PeerTls::Serves(server) if crate::tls::load(server).is_none() => {
+            return Err("a serves peer's server is not a valid TlsServer".into());
+        }
+        _ => {}
     }
     if canonical_unix_path(&peer.address) {
         if peer.port != 0 || !peer.resolves_to.is_empty() {

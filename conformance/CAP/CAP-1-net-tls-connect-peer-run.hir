@@ -1,0 +1,96 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+// tls.peer on a tls.connect stream returns the chain the server presented, as the DER
+// certificates, leaf first, concatenated. A scripted Serves peer presents the identity the
+// client's SNI selects, or its first when an IP literal sends no SNI; a leaf that does not
+// name the server name fails as a verifying client fails it. A Certificate peer sends no
+// certificate bytes, and a plain stream has none.
+// The self-signed P-256 identities of the server TLS tests, for localhost and 127.0.0.1,
+// alpha.hirsel.test and beta.hirsel.test; they secure nothing.
+fn localhost() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn alpha() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIB0DCCAXegAwIBAgIUYBHLp+oGYuodLqxoxhA50xBB2UEwCgYIKoZIzj0EAwIw\nHDEaMBgGA1UEAwwRYWxwaGEuaGlyc2VsLnRlc3QwIBcNMjYxMDE4MjEwOTE0WhgP\nMjEyNjA5MjQyMTA5MTRaMBwxGjAYBgNVBAMMEWFscGhhLmhpcnNlbC50ZXN0MFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7au0ixdB+sLjBrPCgisAh95HCgcGbMVj\nh0olRs0iWTPFS8RmicxQkHyT7nrRhm9/1VEf1+EwLZyPW/n7ZR1J06OBlDCBkTAd\nBgNVHQ4EFgQUR0YCm3QwnshTR7v952a9s9QJoQMwHwYDVR0jBBgwFoAUR0YCm3Qw\nnshTR7v952a9s9QJoQMwHAYDVR0RBBUwE4IRYWxwaGEuaGlyc2VsLnRlc3QwDAYD\nVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEw\nCgYIKoZIzj0EAwIDRwAwRAIgeLYTnt0CzqoZE3X9v3UgvgjC70DANY7O5SuVUuhE\nNtQCICNDEuq2R8XaAj3vjZN/foqt5Xlhl/DrvfYO4JyBeysw\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAQptwdbbMJ93QPZv\nROSpcV0e1bNiG70B5zkRVoKSwaehRANCAATtq7SLF0H6wuMGs8KCKwCH3kcKBwZs\nxWOHSiVGzSJZM8VLxGaJzFCQfJPuetGGb3/VUR/X4TAtnI9b+ftlHUnT\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn beta() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBzzCCAXSgAwIBAgIUUzLbOnuGy3GzVbVrBXKphBCMvAcwCgYIKoZIzj0EAwIw\nGzEZMBcGA1UEAwwQYmV0YS5oaXJzZWwudGVzdDAgFw0yNjEwMTgyMTA5MTRaGA8y\nMTI2MDkyNDIxMDkxNFowGzEZMBcGA1UEAwwQYmV0YS5oaXJzZWwudGVzdDBZMBMG\nByqGSM49AgEGCCqGSM49AwEHA0IABEhCKccTFEvvxoOuV9TJpt5OQHMQ53puOdEP\nwKMwrEIh1+Bt2pZOjfdZiKlQlMxwevT9Sm0qxunzlLzDGCupgVWjgZMwgZAwHQYD\nVR0OBBYEFO4RIvlzykxE3LAPFAIBKq3imQDVMB8GA1UdIwQYMBaAFO4RIvlzykxE\n3LAPFAIBKq3imQDVMBsGA1UdEQQUMBKCEGJldGEuaGlyc2VsLnRlc3QwDAYDVR0T\nAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYI\nKoZIzj0EAwIDSQAwRgIhALL/ehmqzxvFtOUiVpFTPAMWtWGpcgVjgU+gsm61hG55\nAiEAgswQRcrVDJvEDer1TwIaRMbBzwMX5DqB975G16ARPe0=\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNnaZ9Th9wW843Yod\nEA3EUaJa5HpyUHTuqK9/6Zs3syWhRANCAARIQinHExRL78aDrlfUyabeTkBzEOd6\nbjnRD8CjMKxCIdfgbdqWTo33WYipUJTMcHr0/UptKsbp85S8wxgrqYFV\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn peer(take address: String, take tls: PeerTls) -> NetPeer uses {} {
+  NetPeer(
+    address: address,
+    port: 443u16,
+    resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+    tls: tls,
+    connections: [Open([Send(b"hi")])]
+  )
+}
+
+fn serves(take identities: List[TlsIdentity]) -> PeerTls uses {} {
+  Serves(TlsServer(identities: identities, clients: Anonymous()))
+}
+
+fn chain(n: Net, s: Stream of n) -> Result[Bytes, NetError] {
+  Ok(
+    match tls.peer(n, s)? {
+      Some(der) => der,
+      None() => b"",
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      peer("beta.hirsel.test", serves([alpha(), beta()])),
+      peer("127.0.0.1", serves([localhost(), alpha()])),
+      peer("example.com", serves([localhost()])),
+      peer("named.test", Certificate(["named.test"]))
+    ],
+    []
+  )
+  // The SNI selects beta's identity, whose DER certificate tls.peer returns; a plain
+  // stream has no chain, and plaintext follows the handshake.
+  let s = net.connect(n, "beta.hirsel.test", 443u16, Unbounded())?
+  test.check(t, tls.peer(n, s)? == None())
+  let mut secure = tls.connect(n, take s, "beta.hirsel.test", WebPki())?
+  test.check(
+    t,
+    std@1/sha256.digest_hex(chain(n, secure)?) == "4078060b05f03fd867a0ed9b71721c0e9bb51c6d61dea9e6c385ea7065d3b6b7"
+  )
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)
+  // An IP literal sends no SNI: the first identity, which names 127.0.0.1.
+  let literal = net.connect(n, "127.0.0.1", 443u16, Unbounded())?
+  let by_ip = tls.connect(n, take literal, "127.0.0.1", WebPki())?
+  // The localhost certificate is 451 DER bytes; alpha's is 468.
+  test.check(t, bytes.len(chain(n, by_ip)?) == 451u64)
+  // A leaf for localhost does not name example.com.
+  let other = net.connect(n, "example.com", 443u16, Unbounded())?
+  test.check(
+    t,
+    match tls.connect(n, take other, "example.com", WebPki()) {
+      Error(Tls(NameMismatch())) => true,
+      _ => false,
+    }
+  )
+  // A Certificate peer is valid by name alone and presents no certificate bytes.
+  let plain = net.connect(n, "named.test", 443u16, Unbounded())?
+  let named = tls.connect(n, take plain, "named.test", WebPki())?
+  test.check(t, tls.peer(n, named)? == None())
+  Ok(())
+}

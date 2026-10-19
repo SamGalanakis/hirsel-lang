@@ -92,7 +92,7 @@ fn scripted_tls_success_close_name_mismatch_and_handshake_failure_replay_indepen
         replay_interpreter(io.tape(), &tree, &tree, io.handles().observed(), b"");
     }
 }
-pub const FAILURES: [TlsFailure; 10] = [
+pub const FAILURES: [TlsFailure; 11] = [
     TlsFailure::UnknownIssuer,
     TlsFailure::Expired,
     TlsFailure::NotYetValid,
@@ -103,6 +103,7 @@ pub const FAILURES: [TlsFailure; 10] = [
     TlsFailure::HandshakeFailure,
     TlsFailure::PeerMisbehaved,
     TlsFailure::Truncated,
+    TlsFailure::CertificateRequired,
 ];
 fn handshake(io: &RealIo) -> Completion {
     io.tape()

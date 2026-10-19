@@ -93,7 +93,7 @@ pub fn main(t: Test) -> Result[(), NetError] {
   test.check(
     t,
     refusal(n, tls.accept(n, take missing, server(Require(client_ca())))) == Some(
-      Tls(BadCertificate())
+      Tls(CertificateRequired())
     )
   )
   let (rogue, _) = net.accept(n, mut l)?

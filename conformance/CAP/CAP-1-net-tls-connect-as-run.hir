@@ -1,0 +1,106 @@
+// rule: CAP-1
+// expect: run
+// entry: main
+// A scripted Serves peer whose TlsServer requests or requires a client certificate
+// verifies the identity tls.connect_as presents against its trust set: a trusted identity
+// succeeds and tls.peer returns the server's chain; no certificate under Require and an
+// untrusted one end the handshake with the alert a rustls server sends, certificate_required
+// (116) and unknown_ca (48). Request admits a client without one, and Anonymous never asks.
+// The self-signed P-256 identity for localhost of the server TLS tests; it secures nothing.
+fn localhost() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+// The Hirsel test client CA, a second CA that did not issue agent-7's certificate, and
+// agent-7's identity (CN=agent-7, O=Hirsel, DNS:agent-7.hirsel.test, clientAuth) the first
+// issued; they secure nothing.
+fn client_ca() -> Bytes uses {} {
+  b"-----BEGIN CERTIFICATE-----\nMIIBpzCCAU2gAwIBAgIUJcRfXF74bJVJ8NZ8YidArcz1vjQwCgYIKoZIzj0EAwIw\nIDEeMBwGA1UEAwwVSGlyc2VsIHRlc3QgY2xpZW50IENBMCAXDTI2MTAxODIxMDkx\nNFoYDzIxMjYwOTI0MjEwOTE0WjAgMR4wHAYDVQQDDBVIaXJzZWwgdGVzdCBjbGll\nbnQgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQGTXKDWWVzSF/6j11hL/0j\nl7LqpUE91czErh4dg39NsxNQ+kBIm/fbGVyVX45XusV+wE3x7VFmwThPz/JlQlDX\no2MwYTAdBgNVHQ4EFgQUdvEur1L0uoOS5DVSHDqivdgWj3MwHwYDVR0jBBgwFoAU\ndvEur1L0uoOS5DVSHDqivdgWj3MwDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8E\nBAMCAgQwCgYIKoZIzj0EAwIDSAAwRQIhANh+iw/jA2yH4a18l0t5Qd6RU6GbGfkf\n5m2ElhFJM5H7AiBgnEFSo18hh+z9elj9+XbDONt+iN4AD+qoDXfJJuoyJg==\n-----END CERTIFICATE-----\n"
+}
+
+fn rogue_ca() -> Bytes uses {} {
+  b"-----BEGIN CERTIFICATE-----\nMIIBmzCCAUGgAwIBAgIUBWT/XtWhlmdbzybwL/oCe2ECWxUwCgYIKoZIzj0EAwIw\nGjEYMBYGA1UEAwwPSGlyc2VsIHJvZ3VlIENBMCAXDTI2MTAxODIxMDkxNFoYDzIx\nMjYwOTI0MjEwOTE0WjAaMRgwFgYDVQQDDA9IaXJzZWwgcm9ndWUgQ0EwWTATBgcq\nhkjOPQIBBggqhkjOPQMBBwNCAATfgMByoc3Z8flDhEp9WJMiYPs8z+NzWT7ze2VN\nplxYlM3LoGlUJecODqb4PRscesMf2Gj6JLVxW2vvmNS9J5h1o2MwYTAdBgNVHQ4E\nFgQUcrudHmY73RtIx7e3u5LmiHJreDowHwYDVR0jBBgwFoAUcrudHmY73RtIx7e3\nu5LmiHJreDowDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAgQwCgYIKoZI\nzj0EAwIDSAAwRQIgG4tXCHAqcRsLESs2UUEFjnKFBDfiebpwdvXBIy/10U0CIQCh\ngxp+4ghaEyo33FW2QPkqQSK2CyhIfFHtsNM2xp9qSw==\n-----END CERTIFICATE-----\n"
+}
+
+fn agent() -> TlsIdentity uses {} {
+  TlsIdentity(
+    chain: b"-----BEGIN CERTIFICATE-----\nMIIByzCCAXGgAwIBAgIBAjAKBggqhkjOPQQDAjAgMR4wHAYDVQQDDBVIaXJzZWwg\ndGVzdCBjbGllbnQgQ0EwIBcNMjYxMDE4MjEwOTE0WhgPMjEyNjA5MjQyMTA5MTRa\nMCMxDzANBgNVBAoMBkhpcnNlbDEQMA4GA1UEAwwHYWdlbnQtNzBZMBMGByqGSM49\nAgEGCCqGSM49AwEHA0IABBq+fIiXjclm1diAB7Uzl8UnveQ46UHux/5QuNDnAOjL\nrWNymvDm2j5auVVL0VMp1qZdd7nJdj7fbgmrh9lbbwmjgZYwgZMwHgYDVR0RBBcw\nFYITYWdlbnQtNy5oaXJzZWwudGVzdDAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQE\nAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAdBgNVHQ4EFgQUyRefgeRDGU9uJ2AY\n18GMoJQopgswHwYDVR0jBBgwFoAUdvEur1L0uoOS5DVSHDqivdgWj3MwCgYIKoZI\nzj0EAwIDSAAwRQIgJIFgh0yrF7HHLLNfKHEQvhBkBfZXE0geTKfLEMnxG2ICIQDa\n22RgPD8HBrDzAfYXkDGavFvWdz4sTwcUggwChLXE8g==\n-----END CERTIFICATE-----\n",
+    key: b"-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg9RGJ99p4blWe3/hv\nbzHeXTbsI8Cgh2sYxnOW/+AZunWhRANCAAQavnyIl43JZtXYgAe1M5fFJ73kOOlB\n7sf+ULjQ5wDoy61jcprw5to+WrlVS9FTKdamXXe5yXY+324Jq4fZW28J\n-----END PRIVATE KEY-----\n"
+  )
+}
+
+fn peer(port: u16, take clients: TlsClientAuth) -> NetPeer uses {} {
+  NetPeer(
+    address: "localhost",
+    port: port,
+    resolves_to: [V4([127u8, 0u8, 0u8, 1u8])],
+    tls: Serves(TlsServer(identities: [localhost()], clients: clients)),
+    connections: [Open([Send(b"hi")]), Open([])]
+  )
+}
+
+fn refusal(n: Net, take upgraded: Result[Stream of n, NetError]) -> Option[NetError] {
+  match upgraded {
+    Ok(_) => None(),
+    Error(e) => Some(e),
+  }
+}
+
+fn chain(n: Net, s: Stream of n) -> Result[Bytes, NetError] {
+  Ok(
+    match tls.peer(n, s)? {
+      Some(der) => der,
+      None() => b"",
+    }
+  )
+}
+
+pub fn main(t: Test) -> Result[(), NetError] {
+  let n = test.net(
+    t,
+    [
+      peer(443u16, Require(client_ca())),
+      peer(8443u16, Require(rogue_ca())),
+      peer(9443u16, Request(client_ca())),
+      peer(10443u16, Anonymous())
+    ],
+    []
+  )
+  // A trusted identity: the handshake succeeds and tls.peer returns the server's chain.
+  let s = net.connect(n, "localhost", 443u16, Unbounded())?
+  let mut secure = tls.connect_as(n, take s, "localhost", WebPki(), agent())?
+  let server = chain(n, secure)?
+  test.check(
+    t,
+    std@1/sha256.digest_hex(server) == "c5db3a941df2a39577f9d75abca8c4a681ec59633a5ec7c7bd50de01359d416e"
+  )
+  let mut buf: List[u8] = []
+  test.check(t, net.read(n, mut secure, mut buf, 8u64)? == 2u64)
+  // Require refuses a client that presents no certificate, and any trust set refuses one
+  // it did not issue.
+  let missing = net.connect(n, "localhost", 443u16, Unbounded())?
+  test.check(
+    t,
+    refusal(n, tls.connect(n, take missing, "localhost", WebPki())) == Some(
+      Tls(AlertReceived(116u8))
+    )
+  )
+  let untrusted = net.connect(n, "localhost", 8443u16, Unbounded())?
+  test.check(
+    t,
+    refusal(n, tls.connect_as(n, take untrusted, "localhost", WebPki(), agent())) == Some(
+      Tls(AlertReceived(48u8))
+    )
+  )
+  // Request admits a client without a certificate, and Anonymous never sees one.
+  let optional = net.connect(n, "localhost", 9443u16, Unbounded())?
+  let unauthenticated = tls.connect(n, take optional, "localhost", WebPki())?
+  test.check(t, chain(n, unauthenticated)? == server)
+  let anonymous = net.connect(n, "localhost", 10443u16, Unbounded())?
+  let unasked = tls.connect_as(n, take anonymous, "localhost", WebPki(), agent())?
+  test.check(t, chain(n, unasked)? == server)
+  Ok(())
+}

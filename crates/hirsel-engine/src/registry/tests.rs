@@ -729,7 +729,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
         ),
         (
             "TlsFailure",
-            "UnknownIssuer()|Expired()|NotYetValid()|NameMismatch()|Revoked()|BadCertificate()|AlertReceived(U8)|HandshakeFailure()|PeerMisbehaved()|Truncated()",
+            "UnknownIssuer()|Expired()|NotYetValid()|NameMismatch()|Revoked()|BadCertificate()|AlertReceived(U8)|HandshakeFailure()|PeerMisbehaved()|Truncated()|CertificateRequired()",
         ),
         (
             "NetError",
@@ -753,7 +753,7 @@ fn network_types_preserve_octet_sizes_variant_ordinals_and_script_fields() {
         ),
         (
             "PeerTls",
-            "Plain()|Certificate(List[String])|Fails(TlsFailure[])|Presents(List[String],Bytes)",
+            "Plain()|Certificate(List[String])|Fails(TlsFailure[])|Presents(List[String],Bytes)|Serves(TlsServer[])",
         ),
         (
             "NetConnection",

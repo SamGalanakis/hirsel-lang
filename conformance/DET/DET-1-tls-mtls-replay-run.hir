@@ -34,7 +34,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), NetError] {
   tls.close(n, take secure)?
   let (anonymous, _) = net.accept(n, mut l)?
   let refused = match tls.accept(n, take anonymous, server) {
-    Error(Tls(BadCertificate())) => true,
+    Error(Tls(CertificateRequired())) => true,
     _ => false,
   }
   // The DER certificate: 463 bytes, a SEQUENCE with a two-byte length.

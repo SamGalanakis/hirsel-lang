@@ -90,7 +90,7 @@ pub(super) struct ScriptStream {
     /// An accepted stream's client index and listen address: its `Expect`
     /// mismatches fail the test instead of resetting. Its `peer` is the client's TLS.
     client: Option<(usize, String)>,
-    /// What `tls.peer` returns: the verified chain a `tls.accept` client presented.
+    /// What `tls.peer` returns: the chain the handshake's peer presented.
     chain: Option<Vec<u8>>,
     mismatch: Option<String>,
 }
@@ -387,6 +387,7 @@ fn peer_tls(v: &Value) -> Result<PeerTls, Error> {
                 .collect::<Result<_, _>>()?,
             bytes(chain)?.to_vec(),
         ),
+        (4, [Some(server)]) => PeerTls::Serves(tls_server(server)?),
         _ => return Err(invalid("PeerTls representation")),
     })
 }
@@ -417,7 +418,7 @@ fn peer(v: &Value) -> Result<NetPeer, Error> {
         .map_err(|e| invalid(format!("test.net peer: {e}")))?;
     Ok(peer)
 }
-const TLS_FAILURES: [TlsFailure; 10] = [
+const TLS_FAILURES: [TlsFailure; 11] = [
     TlsFailure::UnknownIssuer,
     TlsFailure::Expired,
     TlsFailure::NotYetValid,
@@ -428,6 +429,7 @@ const TLS_FAILURES: [TlsFailure; 10] = [
     TlsFailure::HandshakeFailure,
     TlsFailure::PeerMisbehaved,
     TlsFailure::Truncated,
+    TlsFailure::CertificateRequired,
 ];
 fn tls_failure(v: &Value) -> Result<TlsFailure, Error> {
     match variant_fields(v)? {
@@ -1317,9 +1319,17 @@ impl Simulation {
                     }
                     let s = self.net_streams.get_mut(&id).unwrap();
                     match name {
-                        // Scripted peers never request a client certificate.
                         "tls.connect" | "tls.connect_as" => {
                             let server_name = text(arg(a, 2)?)?;
+                            let identity = match name {
+                                "tls.connect_as" => {
+                                    Some(identity(arg(a, 4)?)?.ok_or_else(|| {
+                                        invalid("identity checked before connect")
+                                    })?)
+                                }
+                                _ => None,
+                            };
+                            let s = self.net_streams.get_mut(&id).unwrap();
                             let outcome = if matches!(s.steps.front(), Some(NetStep::Stall)) {
                                 Err(if s.read_timeout.is_some() {
                                     NetFault::TimedOut
@@ -1330,23 +1340,17 @@ impl Simulation {
                                 // An accepted stream's client runs no TLS server.
                                 Err(NetFault::Tls(TlsFailure::HandshakeFailure))
                             } else {
-                                match &s.peer {
-                                    PeerTls::Certificate(names)
-                                        if names.iter().any(|n| n == server_name) =>
-                                    {
+                                match hirsel_run_config::tls::scripted_connect(
+                                    &s.peer,
+                                    server_name,
+                                    identity.as_ref(),
+                                ) {
+                                    Ok(chain) => {
                                         s.tls = true;
+                                        s.chain = chain;
                                         Ok(arg(a, 1)?.clone())
                                     }
-                                    PeerTls::Certificate(_) => {
-                                        Err(NetFault::Tls(TlsFailure::NameMismatch))
-                                    }
-                                    PeerTls::Plain => {
-                                        Err(NetFault::Tls(TlsFailure::HandshakeFailure))
-                                    }
-                                    PeerTls::Fails(failure) => Err(NetFault::Tls(*failure)),
-                                    PeerTls::Presents(..) => {
-                                        return Err(invalid("a peer's TLS is never Presents"));
-                                    }
+                                    Err(failure) => Err(NetFault::Tls(failure)),
                                 }
                             };
                             if outcome.as_ref().is_err_and(|e| *e != NetFault::Blocked)
@@ -1624,24 +1628,33 @@ fn identity(v: &Value) -> Result<Option<hirsel_run_config::tls::Identity>, Error
 }
 /// A `TlsServer` record loaded by the shared argument check; `None` when invalid.
 fn server(v: &Value) -> Result<Option<hirsel_run_config::tls::Server>, Error> {
+    Ok(hirsel_run_config::tls::load(&tls_server(v)?))
+}
+/// A `TlsServer` record's data: its identities' PEM chain and key, and its client policy.
+fn tls_server(v: &Value) -> Result<hirsel_run_config::TlsServer, Error> {
     use hirsel_run_config::tls::ClientAuth;
     let f = fields(v, "TlsServer", 2)?;
-    let identities = collection::elements(f[0], BuiltinType::List)?;
-    let pairs = identities
+    let identities = collection::elements(f[0], BuiltinType::List)?
         .iter()
         .map(|identity| {
             let f = fields(identity, "TlsIdentity", 2)?;
-            Ok((bytes(f[0])?, bytes(f[1])?))
+            Ok(hirsel_run_config::TlsIdentity {
+                chain: bytes(f[0])?.to_vec(),
+                key: bytes(f[1])?.to_vec(),
+            })
         })
-        .collect::<Result<Vec<(&[u8], &[u8])>, Error>>()?;
+        .collect::<Result<_, Error>>()?;
     let (tag, payload) = variant_fields(f[1])?;
     let clients = match (tag, payload) {
         (0, []) => ClientAuth::Anonymous,
-        (1, [Some(pem)]) => ClientAuth::Request(bytes(pem)?),
-        (2, [Some(pem)]) => ClientAuth::Require(bytes(pem)?),
+        (1, [Some(pem)]) => ClientAuth::Request(bytes(pem)?.to_vec()),
+        (2, [Some(pem)]) => ClientAuth::Require(bytes(pem)?.to_vec()),
         _ => return Err(invalid("TlsClientAuth representation")),
     };
-    Ok(hirsel_run_config::tls::server(&pairs, clients))
+    Ok(hirsel_run_config::TlsServer {
+        identities,
+        clients,
+    })
 }
 fn validate_peers(peers: &[NetPeer]) -> Result<(), Error> {
     let mut seen = BTreeMap::new();

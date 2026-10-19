@@ -10,7 +10,10 @@ chain plus a private key matching the leaf) without time, signing or Io, loads a
 `TlsServer` (identities plus the rustls client verifier of its trust set), answers whether
 an identity's leaf certificate names a server name and which identity an SNI selects, and
 decides a scripted client's server handshake (`scripted_accept`, verifying a presented chain
-at its latest notBefore); all engines use these argument checks before cancellation.
+at its latest notBefore) and a scripted peer's client handshake (`scripted_connect`: a
+`Serves` peer's SNI-selected identity, name-checked, then its client policy applied to a
+`tls.connect_as` identity at that identity's latest notBefore, refused with the alert a
+rustls server sends); all engines use these argument checks before cancellation.
 
 Host input read failures include the selected grants, run record or revocation path. A relative directory resolution failure includes its template-relative candidate.
 
@@ -89,8 +92,12 @@ Revocation references remain external host evidence selectors, not provider name
 explicit null. A peer has fields `address`, `port` (u16), `resolves_to` (canonical
 IP strings in resolver order), `tls` and `connections`. Variants use external
 snake_case tags: `"plain"`, `{"certificate":["example.com"]}`,
-`{"fails":f}` or, for a listener's client only, `{"presents":[["example.com"],[45,45]]}`
-(names, then the PEM chain it presents) for TLS, where `f` is a TlsFailure tag such as `"unknown_issuer"`
+`{"fails":f}`, for a listener's client only `{"presents":[["example.com"],[45,45]]}`
+(names, then the PEM chain it presents), or for a peer only
+`{"serves":{"identities":[{"chain":[45],"key":[45]}],"clients":{"require":[45]}}}` (a
+`TlsServer` that must load as `tls.accept` loads one; `clients` is `"anonymous"`,
+`{"request":..}` or `{"require":..}`, and canonical bytes omit it when anonymous) for TLS,
+where `f` is a TlsFailure tag such as `"unknown_issuer"`
 or `{"alert_received":40}`; `"refused"`, `"unanswered"` or `{"open":[steps]}`
 for connections; and `{"send":[0,255]}`, `{"expect":[71,69,84]}`, `"stall"`,
 `"close"`, `"reset"` or `"truncate"` for steps. `net.script@2` replaced

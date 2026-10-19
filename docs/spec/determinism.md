@@ -131,9 +131,12 @@ that sequence, outbound connects do not consume it, exhaustion is `AddrInUse()`,
 and the chosen local address is recorded in the listen completion for replay.
 A scripted listener with port 0 supplies clients for the first port-0 listen on
 its IP, using the assigned port. Peer variants are external snake_case tags: `"plain"`,
-`{"certificate": [names]}`, `{"fails": failure}` or, for a listener's client only,
-`{"presents": [[names], [bytes]]}` for TLS (a `TlsFailure` tag such as
-`"unknown_issuer"` or `{"alert_received": 40}`); `"refused"`, `"unanswered"` or
+`{"certificate": [names]}`, `{"fails": failure}`, for a listener's client only
+`{"presents": [[names], [bytes]]}`, or for a peer only
+`{"serves": {"identities": [{"chain": [bytes], "key": [bytes]}], "clients": auth}}` for TLS
+(a `TlsFailure` tag such as `"unknown_issuer"` or `{"alert_received": 40}`; `auth` is
+`{"request": [bytes]}` or `{"require": [bytes]}`, and an `"anonymous"` or absent `clients`
+is `Anonymous()`, which canonical bytes omit, so it never changes a record's identity); `"refused"`, `"unanswered"` or
 `{"open": [steps]}` for connections; `{"send": [bytes]}`, `{"expect": [bytes]}`, `"stall"`,
 `"close"`, `"reset"` and `"truncate"` for steps; bytes are arrays of `u8`. Peer data grants
 no authority beyond the explicit rules. An implementation that cannot enforce a requested

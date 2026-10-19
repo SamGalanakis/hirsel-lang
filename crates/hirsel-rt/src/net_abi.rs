@@ -34,6 +34,7 @@ impl NetErrorAbi {
             TlsFailure::HandshakeFailure => (7, 0),
             TlsFailure::PeerMisbehaved => (8, 0),
             TlsFailure::Truncated => (9, 0),
+            TlsFailure::CertificateRequired => (10, 0),
         };
         let (tag, word, extra) = match error {
             NetError::NotGranted => (0, 0, 0),

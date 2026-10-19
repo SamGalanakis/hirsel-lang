@@ -145,6 +145,7 @@ fn net_error(e: NetError) -> Value {
                 TlsFailure::HandshakeFailure => (7, vec![]),
                 TlsFailure::PeerMisbehaved => (8, vec![]),
                 TlsFailure::Truncated => (9, vec![]),
+                TlsFailure::CertificateRequired => (10, vec![]),
             };
             (16, vec![variant(t, f)])
         }

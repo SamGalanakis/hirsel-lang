@@ -93,7 +93,37 @@ fn tls_failure(v: &OpValue) -> Option<TlsFailure> {
         (7, _) => TlsFailure::HandshakeFailure,
         (8, _) => TlsFailure::PeerMisbehaved,
         (9, _) => TlsFailure::Truncated,
+        (10, _) => TlsFailure::CertificateRequired,
         _ => return None,
+    })
+}
+/// A `TlsServer`: its identities' PEM chain and key, and its client policy.
+fn tls_server(v: &OpValue) -> Option<hirsel_run_config::TlsServer> {
+    let [identities, clients] = fields(v)? else {
+        return None;
+    };
+    let identities = sequence(identities)?
+        .iter()
+        .map(|identity| {
+            let [chain, key] = fields(identity)? else {
+                return None;
+            };
+            Some(hirsel_run_config::TlsIdentity {
+                chain: bytes(chain)?,
+                key: bytes(key)?,
+            })
+        })
+        .collect::<Option<_>>()?;
+    let (tag, trust) = variant(clients)?;
+    let clients = match tag {
+        0 => ClientAuth::Anonymous,
+        1 => ClientAuth::Request(bytes(trust)?),
+        2 => ClientAuth::Require(bytes(trust)?),
+        _ => return None,
+    };
+    Some(hirsel_run_config::TlsServer {
+        identities,
+        clients,
     })
 }
 fn steps(v: &OpValue) -> Option<Vec<NetStep>> {
@@ -152,6 +182,7 @@ fn peer_tls(v: &OpValue) -> Option<PeerTls> {
                 bytes(chain)?,
             )
         }
+        (4, server) => PeerTls::Serves(tls_server(server)?),
         _ => return None,
     })
 }
@@ -249,6 +280,7 @@ fn error(e: NetError) -> OpValue {
                         TlsFailure::HandshakeFailure => 7,
                         TlsFailure::PeerMisbehaved => 8,
                         TlsFailure::Truncated => 9,
+                        TlsFailure::CertificateRequired => 10,
                         TlsFailure::AlertReceived(_) => unreachable!(),
                     },
                     OpValue::Unit,
@@ -468,28 +500,13 @@ impl Io {
                 }
             }
             (Some("tls"), "accept", [n, s, server]) => {
-                let [identities, clients] = fields(server)? else {
-                    return None;
-                };
-                let identities = sequence(identities)?
+                let server = tls_server(server)?;
+                let identities: Vec<(&[u8], &[u8])> = server
+                    .identities
                     .iter()
-                    .map(|identity| {
-                        let [chain, key] = fields(identity)? else {
-                            return None;
-                        };
-                        Some((bytes(chain)?, bytes(key)?))
-                    })
-                    .collect::<Option<Vec<_>>>()?;
-                let identities: Vec<(&[u8], &[u8])> =
-                    identities.iter().map(|(c, k)| (&c[..], &k[..])).collect();
-                let (tag, trust) = variant(clients)?;
-                let trust = if tag == 0 { vec![] } else { bytes(trust)? };
-                let clients = match tag {
-                    0 => ClientAuth::Anonymous,
-                    1 => ClientAuth::Request(&trust[..]),
-                    2 => ClientAuth::Require(&trust[..]),
-                    _ => return None,
-                };
+                    .map(|identity| (&identity.chain[..], &identity.key[..]))
+                    .collect();
+                let clients = server.clients.as_ref().map(Vec::as_slice);
                 let stream = self.network_id(s)?;
                 hirsel_rt::io::Adapter::tls_server(&mut self.network, stream, &identities, clients);
                 R::TlsAccept {

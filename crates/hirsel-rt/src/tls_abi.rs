@@ -164,6 +164,32 @@ pub struct TlsServerAbi {
     pub identities: *mut Header,
     pub clients: TlsClientAuthAbi,
 }
+impl TlsServerAbi {
+    /// The identities' `(chain, key)` PEM and the client policy's trust set, borrowed.
+    /// # Safety
+    /// The list and every slice are live for `'a`.
+    pub(crate) unsafe fn parts<'a>(&'a self) -> (Vec<(&'a [u8], &'a [u8])>, ClientAuth<&'a [u8]>) {
+        let payload = crate::alloc::payload(self.identities);
+        let count = usize::try_from(unsafe { payload.cast::<u64>().read() })
+            .unwrap_or_else(|_| crate::fault("identity count overflow"));
+        let first = crate::alloc::sequence_elements_offset(8) as usize;
+        let size = std::mem::size_of::<TlsIdentityAbi>();
+        let identities = (0..count)
+            .map(|index| unsafe {
+                (*payload.add(first + index * size).cast::<TlsIdentityAbi>()).bytes()
+            })
+            .collect();
+        let pem = &self.clients.pem;
+        let trust = || unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) };
+        let clients = match self.clients.tag {
+            0 => ClientAuth::Anonymous,
+            1 => ClientAuth::Request(trust()),
+            2 => ClientAuth::Require(trust()),
+            _ => crate::fault("TlsClientAuth tag out of range"),
+        };
+        (identities, clients)
+    }
+}
 
 /// `tls.accept(n, take s, server) -> Result[Stream of n, NetError]`. The taken handle
 /// transfers on every outcome; State closes it on data error. The server's material reaches
@@ -182,28 +208,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_tls_accept(
 ) -> u8 {
     let stream = unsafe { s.read() };
     unsafe { s.write(0) };
-    let list = unsafe { (*server).identities };
-    let payload = crate::alloc::payload(list);
-    let count = usize::try_from(unsafe { payload.cast::<u64>().read() })
-        .unwrap_or_else(|_| crate::fault("identity count overflow"));
-    let first = crate::alloc::sequence_elements_offset(8) as usize;
-    let size = std::mem::size_of::<TlsIdentityAbi>();
-    let identities: Vec<(&[u8], &[u8])> = (0..count)
-        .map(|index| unsafe {
-            (*payload.add(first + index * size).cast::<TlsIdentityAbi>()).bytes()
-        })
-        .collect();
-    let clients = unsafe { &(*server).clients };
-    let trust = || {
-        let pem = &clients.pem;
-        unsafe { crate::io::slice_bytes(pem.owner, pem.start, pem.length) }
-    };
-    let clients = match clients.tag {
-        0 => ClientAuth::Anonymous,
-        1 => ClientAuth::Request(trust()),
-        2 => ClientAuth::Require(trust()),
-        _ => crate::fault("TlsClientAuth tag out of range"),
-    };
+    let (identities, clients) = unsafe { (*server).parts() };
     let binding = unsafe { Binding::get(ctx) };
     binding.tls_server(stream, &identities, clients);
     let server = crate::net::TlsServerDigest::of(&identities, clients);

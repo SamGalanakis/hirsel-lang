@@ -488,7 +488,8 @@ loads it into State with the shared `hirsel_run_config::tls::server`, the tape r
 records only the chain and trust-set PEM SHA-256s, and the provider receives the loaded
 server (`tests/it/tls_server.rs`). `tls.connect_as` passes its client identity through
 `Adapter::tls_identity` the same way and the tape names its chain digest. `tls.peer` is a
-recorded request whose completion is the DER chain a server verified (`net_tls::peer`).
+recorded request whose completion is the DER chain the handshake verified, the server's on a
+client and a client's on a server (`net_tls::peer`).
 Scripted worlds
 attach independently at the same provider seam. UDP uses `UdpBind` and `UdpPeer`
 rules and an originating-Net socket grant. `State::net_error` validates arguments
@@ -963,7 +964,12 @@ secured stream and as end of stream otherwise. A scripted client's `tls` answers
 `Certificate(names)` or `Presents(names, chain)` client sends its first DNS name as SNI,
 accepts the selected identity when its leaf names one of `names` and otherwise sends
 bad_certificate; a `Presents` chain is verified against a `Request` or `Require` trust set
-at its latest notBefore and becomes the stream's `tls.peer` chain.
+at its latest notBefore and becomes the stream's `tls.peer` chain. A scripted peer answers
+`tls.connect` through `tls::scripted_connect`: a `Serves(server)` peer presents the identity
+its SNI selects, which must name the server name, verifies a `tls.connect_as` identity
+against its client policy, refusing with the alert a rustls server sends, and its chain
+becomes the stream's `tls.peer` chain; `test_net_abi.rs` reads its `TlsServer` with the
+`tls.accept` decoder.
 
 `test.net` decodes the nested core peer values through `test_net_abi.rs` and creates
 an isolated ScriptNet in State, with peer-derived rules. Every request and result

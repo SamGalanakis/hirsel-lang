@@ -347,6 +347,12 @@ fn certificate_alert_and_protocol_failures_keep_their_public_variants() {
         )),
         TlsFailure::PeerMisbehaved
     );
+    // rustls reports a peer that sent no certificate where one is required apart from a
+    // bad one.
+    assert_eq!(
+        failure(&E::NoCertificatesPresented),
+        TlsFailure::CertificateRequired
+    );
 }
 
 #[test]

@@ -110,7 +110,7 @@ fn parse_roots(word: &str) -> Result<RootsDigest, String> {
     }
 }
 
-const TLS: [(&str, TlsFailure); 9] = [
+const TLS: [(&str, TlsFailure); 10] = [
     ("unknown-issuer", TlsFailure::UnknownIssuer),
     ("expired", TlsFailure::Expired),
     ("not-yet-valid", TlsFailure::NotYetValid),
@@ -120,6 +120,7 @@ const TLS: [(&str, TlsFailure); 9] = [
     ("handshake-failure", TlsFailure::HandshakeFailure),
     ("peer-misbehaved", TlsFailure::PeerMisbehaved),
     ("truncated", TlsFailure::Truncated),
+    ("certificate-required", TlsFailure::CertificateRequired),
 ];
 const ERRORS: [(&str, NetError); 15] = [
     ("not-granted", NetError::NotGranted),

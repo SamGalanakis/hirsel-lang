@@ -145,7 +145,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "TlsFailure",
             "",
-            "UnknownIssuer()|Expired()|NotYetValid()|NameMismatch()|Revoked()|BadCertificate()|AlertReceived(u8)|HandshakeFailure()|PeerMisbehaved()|Truncated()",
+            "UnknownIssuer()|Expired()|NotYetValid()|NameMismatch()|Revoked()|BadCertificate()|AlertReceived(u8)|HandshakeFailure()|PeerMisbehaved()|Truncated()|CertificateRequired()",
         ),
         (
             "NetError",
@@ -155,7 +155,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "PeerTls",
             "",
-            "Plain()|Certificate(List[String])|Fails(TlsFailure)|Presents(List[String],Bytes)",
+            "Plain()|Certificate(List[String])|Fails(TlsFailure)|Presents(List[String],Bytes)|Serves(TlsServer)",
         ),
         (
             "NetConnection",

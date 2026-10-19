@@ -59,14 +59,11 @@ pub(crate) fn server(server: &Server) -> Result<ServerConnection, NetError> {
     ServerConnection::new(Arc::new(config)).map_err(|e| NetError::Tls(failure(&e)))
 }
 
-/// What `tls.peer` returns for a connection: the chain a server verified, never a client's.
+/// What `tls.peer` returns for a connection: the chain its peer presented and the
+/// handshake verified, the server's on a client and a client's, if any, on a server.
 pub(crate) fn peer(conn: &Connection) -> Option<Vec<u8>> {
-    match conn {
-        Connection::Server(conn) => conn
-            .peer_certificates()
-            .map(hirsel_run_config::tls::chain_der),
-        Connection::Client(_) => None,
-    }
+    conn.peer_certificates()
+        .map(hirsel_run_config::tls::chain_der)
 }
 
 /// The host provider verifies with the trust anchors parsed by the shared argument checks,

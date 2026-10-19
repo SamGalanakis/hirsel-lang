@@ -161,9 +161,10 @@ step makes reads of a secured stream `Tls(Truncated())`; request events retain t
 `tls.accept` loads its `TlsServer` with the shared `hirsel_run_config::tls::server` check
 and answers from the accepted client's `tls` with `tls::scripted_accept` (SNI selection,
 leaf names, client-chain verification); its request event records each chain's and the
-trust set's SHA-256, never a key. A verified `Presents` chain is what `tls.peer` returns;
-`tls.connect_as` checks its identity and records its chain digest, and scripted peers never
-request it.
+trust set's SHA-256, never a key. A verified `Presents` chain is what `tls.peer` returns.
+`tls.connect` and `tls.connect_as` answer from the peer's `tls` with `tls::scripted_connect`:
+a `Serves` peer's presented chain is what `tls.peer` returns, and its client policy checks
+the `tls.connect_as` identity, whose chain digest the request event records.
 Read and read_into share a canonical byte-delivery event, and explicit/implicit
 close share the same handle event. Scripted listeners (test.net's third argument or
 `listeners` of `net.script@2`) accept their clients in list order, then return

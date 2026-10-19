@@ -494,7 +494,7 @@ fn a_standalone_net_grant_is_admitted_exactly_as_the_record_field() {
     assert!(admit(json!(null)).is_err());
 }
 
-const FAILURES: [(TlsFailure, &str); 10] = [
+const FAILURES: [(TlsFailure, &str); 11] = [
     (TlsFailure::UnknownIssuer, r#""unknown_issuer""#),
     (TlsFailure::Expired, r#""expired""#),
     (TlsFailure::NotYetValid, r#""not_yet_valid""#),
@@ -505,6 +505,7 @@ const FAILURES: [(TlsFailure, &str); 10] = [
     (TlsFailure::HandshakeFailure, r#""handshake_failure""#),
     (TlsFailure::PeerMisbehaved, r#""peer_misbehaved""#),
     (TlsFailure::Truncated, r#""truncated""#),
+    (TlsFailure::CertificateRequired, r#""certificate_required""#),
 ];
 
 #[test]
@@ -713,4 +714,64 @@ fn unix_script_peers_are_port_zero_paths() {
     let mut relative = peer(0, json!([]), json!("plain"));
     relative["address"] = "run/app.sock".into();
     invalid(script(relative), "io.net.peers.address");
+}
+
+// The self-signed P-256 localhost identity of the server TLS tests
+// (crates/hirsel-rt/tests/it/tls-data), and an unrelated key; they secure nothing.
+const SERVER_CERT: &str = "-----BEGIN CERTIFICATE-----\nMIIBvzCCAWWgAwIBAgIUXAisGaXux44e/teLTZY7sfdYKHwwCgYIKoZIzj0EAwIw\nFDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MTAxODE0NTA1NVoYDzIxMjYwOTI0\nMTQ1MDU1WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO\nPQMBBwNCAARHCu2+3aPnOcEqhBrjTYyciKww3OkEDezzVdScn+/nS3yBklr91ESv\nnqd76VxHume80kFcTp+EIOGXxk4thsAjo4GSMIGPMB0GA1UdDgQWBBRzaaWDBY9p\nzVRRR08fs0Jfx6obojAfBgNVHSMEGDAWgBRzaaWDBY9pzVRRR08fs0Jfx6obojAa\nBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TAQH/BAIwADAOBgNVHQ8B\nAf8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwCgYIKoZIzj0EAwIDSAAwRQIg\nKweCe/XBTPcNO478Bgddho1WwmFHdJ1ydLXslfEWSfwCIQCtWu7Q6ErDKiFrMkQ+\n4qBlr6omzOLjr4NucvfxRH0AyA==\n-----END CERTIFICATE-----\n";
+const SERVER_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgdwnEWT+5wW5YF0bo\n0r5SXzfCajmDI+dYjUaDaGzyBIehRANCAARHCu2+3aPnOcEqhBrjTYyciKww3OkE\nDezzVdScn+/nS3yBklr91ESvnqd76VxHume80kFcTp+EIOGXxk4thsAj\n-----END PRIVATE KEY-----\n";
+const OTHER_KEY: &str = "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgFD3CxPNtNZAwpcag\nrHsUkJEIM+0UdizTBq/YVe/m5y2hRANCAATq2wzoRnCgvo/nS120U87CJqPr2Bll\ntrhCgv4Ildnh5D8wJHEUkWcQA8mqtpTkBgtUkk/t5aADqLpQs2eNrjFo\n-----END PRIVATE KEY-----\n";
+
+#[test]
+fn a_serving_peer_is_a_loadable_server_whose_anonymous_policy_is_absent_from_canonical_bytes() {
+    let serves = |key: &str, clients: Option<Value>| {
+        let mut server = json!({"identities": [
+            {"chain": SERVER_CERT.as_bytes(), "key": key.as_bytes()}
+        ]});
+        if let Some(clients) = clients {
+            server["clients"] = clients;
+        }
+        let mut net = script();
+        net["peers"][0]["tls"] = json!({"serves": server});
+        net
+    };
+    let canonical = |net: Value| {
+        let run = validate(net).unwrap();
+        assert_eq!(RunConfig::validate(run.canonical()).unwrap(), run);
+        String::from_utf8(run.canonical().to_vec()).unwrap()
+    };
+    // Anonymous, spelled or not, is one record without a clients member.
+    let absent = canonical(serves(SERVER_KEY, None));
+    assert!(absent.contains(r#""serves":{"identities""#) && !absent.contains("clients"));
+    assert_eq!(
+        canonical(serves(SERVER_KEY, Some(json!("anonymous")))),
+        absent
+    );
+    let trust = SERVER_CERT.as_bytes();
+    assert!(
+        canonical(serves(SERVER_KEY, Some(json!({"require": trust}))))
+            .contains(r#""clients":{"require":["#)
+    );
+    let run = validate(serves(SERVER_KEY, Some(json!({"request": trust})))).unwrap();
+    let PeerTls::Serves(server) = &run.net_grant().unwrap().peers.as_ref().unwrap()[0].tls else {
+        panic!("serves")
+    };
+    assert_eq!(server.clients, tls::ClientAuth::Request(trust.to_vec()));
+    // The server loads as tls.accept loads one: a key that is not the leaf's, an empty
+    // identity list and a malformed trust set are invalid.
+    invalid(serves(OTHER_KEY, None), "io.net.peers.address");
+    let mut empty = serves(SERVER_KEY, None);
+    empty["peers"][0]["tls"]["serves"]["identities"] = json!([]);
+    invalid(empty, "io.net.peers.address");
+    invalid(
+        serves(SERVER_KEY, Some(json!({"require": [1, 2, 3]}))),
+        "io.net.peers.address",
+    );
+    // Serves is a peer's TLS, never a listener's client's.
+    let mut net = script();
+    net["listeners"] = json!([{"address": "127.0.0.1", "port": 8080, "clients": [
+        {"address": "192.0.2.1", "port": 40001,
+         "tls": serves(SERVER_KEY, None)["peers"][0]["tls"], "steps": []}
+    ]}]);
+    invalid(net, "io.net.listeners");
 }

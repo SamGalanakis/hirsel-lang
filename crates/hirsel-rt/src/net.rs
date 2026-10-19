@@ -125,6 +125,7 @@ pub enum TlsFailure {
     HandshakeFailure,
     PeerMisbehaved,
     Truncated,
+    CertificateRequired,
 }
 /// Scripted `Fails(f)` peers carry the same closed set in RunConfig data.
 impl From<hirsel_run_config::TlsFailure> for TlsFailure {
@@ -141,6 +142,7 @@ impl From<hirsel_run_config::TlsFailure> for TlsFailure {
             F::HandshakeFailure => Self::HandshakeFailure,
             F::PeerMisbehaved => Self::PeerMisbehaved,
             F::Truncated => Self::Truncated,
+            F::CertificateRequired => Self::CertificateRequired,
         }
     }
 }
@@ -158,6 +160,7 @@ impl From<TlsFailure> for hirsel_run_config::TlsFailure {
             F::HandshakeFailure => Self::HandshakeFailure,
             F::PeerMisbehaved => Self::PeerMisbehaved,
             F::Truncated => Self::Truncated,
+            F::CertificateRequired => Self::CertificateRequired,
         }
     }
 }
@@ -898,7 +901,8 @@ impl crate::io::State {
                             // A client's Presents never names a checked peer.
                             hirsel_run_config::PeerTls::Certificate(_)
                             | hirsel_run_config::PeerTls::Fails(_)
-                            | hirsel_run_config::PeerTls::Presents(..) => NetOperation::ConnectTls,
+                            | hirsel_run_config::PeerTls::Presents(..)
+                            | hirsel_run_config::PeerTls::Serves(_) => NetOperation::ConnectTls,
                         },
                     })
                     .chain(listeners.iter().map(|listener| NetRule {

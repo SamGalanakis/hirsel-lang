@@ -264,6 +264,7 @@ fn tls_failure(f: TlsFailure) -> Value {
         TlsFailure::HandshakeFailure => variant(7, vec![]),
         TlsFailure::PeerMisbehaved => variant(8, vec![]),
         TlsFailure::Truncated => variant(9, vec![]),
+        TlsFailure::CertificateRequired => variant(10, vec![]),
     }
 }
 fn rule_value(r: &NetRule) -> Value {
@@ -303,6 +304,26 @@ fn peer_tls(tls: &PeerTls) -> Value {
                 Value::Bytes(chain.clone()),
             ],
         ),
+        PeerTls::Serves(server) => {
+            let identity = |i: &hirsel_run_config::TlsIdentity| {
+                record(
+                    "TlsIdentity",
+                    vec![Value::Bytes(i.chain.clone()), Value::Bytes(i.key.clone())],
+                )
+            };
+            let clients = match &server.clients {
+                ClientAuth::Anonymous => variant(0, vec![]),
+                ClientAuth::Request(pem) => variant(1, vec![Value::Bytes(pem.clone())]),
+                ClientAuth::Require(pem) => variant(2, vec![Value::Bytes(pem.clone())]),
+            };
+            variant(
+                4,
+                vec![record(
+                    "TlsServer",
+                    vec![list(server.identities.iter().map(identity)), clients],
+                )],
+            )
+        }
     }
 }
 fn peer(p: &NetPeer) -> Value {
@@ -626,6 +647,7 @@ fn result(value: Value) -> Result<Value, NetError> {
                 7 => TlsFailure::HandshakeFailure,
                 8 => TlsFailure::PeerMisbehaved,
                 9 => TlsFailure::Truncated,
+                10 => TlsFailure::CertificateRequired,
                 _ => panic!("TLS tag"),
             })
         }

@@ -32,7 +32,7 @@ enum Remote {
 struct Connection {
     remote: Remote,
     tls: bool,
-    /// What `tls.peer` returns: the verified chain a `tls.accept` client presented.
+    /// What `tls.peer` returns: the chain the handshake's peer presented.
     peer: Option<Vec<u8>>,
     steps: Vec<NetStep>,
     step: usize,
@@ -461,13 +461,13 @@ impl NetProvider for ScriptNet {
             })
             .ok_or(NetError::UnknownHost))
     }
-    /// Scripted peers never request a client certificate: a valid `identity` goes unused.
+    /// Only a `Serves` peer asks for `identity`; `roots` is never consulted.
     fn tls_connect(
         &mut self,
         id: u64,
         server_name: &str,
         _roots: &RootsDigest,
-        _identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
+        identity: Option<&std::sync::Arc<rustls::sign::CertifiedKey>>,
     ) -> Provided<()> {
         let s = self.connection(id)?;
         // Owner 385145: upgrading an already secured Stream consumes it with
@@ -489,16 +489,19 @@ impl NetProvider for ScriptNet {
         let Remote::Peer(peer_index) = s.remote else {
             return Ok(Err(NetError::Tls(TlsFailure::HandshakeFailure)));
         };
-        let peer = &self.peers[peer_index];
-        Ok(match &peer.tls {
-            PeerTls::Plain => Err(NetError::Tls(TlsFailure::HandshakeFailure)),
-            PeerTls::Certificate(names) if names.iter().any(|n| n == server_name) => {
-                self.connection(id)?.tls = true;
+        let verdict = hirsel_run_config::tls::scripted_connect(
+            &self.peers[peer_index].tls,
+            server_name,
+            identity.map(|identity| &**identity),
+        );
+        Ok(match verdict {
+            Ok(peer) => {
+                let s = self.connection(id)?;
+                s.tls = true;
+                s.peer = peer;
                 Ok(())
             }
-            PeerTls::Certificate(_) => Err(NetError::Tls(TlsFailure::NameMismatch)),
-            PeerTls::Fails(failure) => Err(NetError::Tls((*failure).into())),
-            PeerTls::Presents(..) => return Err(AdapterError::InvalidCompletion),
+            Err(failure) => Err(NetError::Tls(failure.into())),
         })
     }
     fn tls_accept(&mut self, id: u64, server: &hirsel_run_config::tls::Server) -> Provided<()> {

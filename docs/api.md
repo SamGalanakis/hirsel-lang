@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1380 exported definitions; 509 variants.
+1380 exported definitions; 511 variants.
 
 ## Types and roots
 
@@ -1026,7 +1026,7 @@ Variant of OutputError.
 
 <a id="def-core_401_2fPeerTls"></a>
 
-- `type PeerTls uses {} = Plain() | Certificate(List[String]) | Fails(TlsFailure) | Presents(List[String], Bytes)`
+- `type PeerTls uses {} = Plain() | Certificate(List[String]) | Fails(TlsFailure) | Presents(List[String], Bytes) | Serves(TlsServer)`
 
 <a id="def-core_401_2fPeerTls_23Certificate"></a>
 
@@ -1049,6 +1049,12 @@ Variant of PeerTls.
 <a id="def-core_401_2fPeerTls_23Presents"></a>
 
 - `Presents(List[String], Bytes) -> PeerTls`
+
+Variant of PeerTls.
+
+<a id="def-core_401_2fPeerTls_23Serves"></a>
+
+- `Serves(TlsServer) -> PeerTls`
 
 Variant of PeerTls.
 
@@ -1408,7 +1414,7 @@ Variant of TlsClientAuth.
 
 <a id="def-core_401_2fTlsFailure"></a>
 
-- `type TlsFailure: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = UnknownIssuer() | Expired() | NotYetValid() | NameMismatch() | Revoked() | BadCertificate() | AlertReceived(u8) | HandshakeFailure() | PeerMisbehaved() | Truncated()`
+- `type TlsFailure: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = UnknownIssuer() | Expired() | NotYetValid() | NameMismatch() | Revoked() | BadCertificate() | AlertReceived(u8) | HandshakeFailure() | PeerMisbehaved() | Truncated() | CertificateRequired()`
 
 <a id="def-core_401_2fTlsFailure_23AlertReceived"></a>
 
@@ -1419,6 +1425,12 @@ Variant of TlsFailure.
 <a id="def-core_401_2fTlsFailure_23BadCertificate"></a>
 
 - `BadCertificate() -> TlsFailure`
+
+Variant of TlsFailure.
+
+<a id="def-core_401_2fTlsFailure_23CertificateRequired"></a>
+
+- `CertificateRequired() -> TlsFailure`
 
 Variant of TlsFailure.
 

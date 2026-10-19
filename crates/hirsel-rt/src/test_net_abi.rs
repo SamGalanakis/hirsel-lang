@@ -1,16 +1,17 @@
 //! Fixed core@1 `test.net` ABI. The layouts are the ordinary repr-C core layouts:
-//! NetPeer (88 bytes), IpAddr (20), NetConnection (16), NetStep (32), PeerTls (40:
-//! u32 tag, payload at 8; Presents' Bytes at 16), TlsFailure (8: u32 tag,
-//! AlertReceived's u8 at 4), SocketAddr (24: IpAddr, port at 20), NetListener (40:
-//! address String, port at 24, clients at 32) and NetClient (72: SocketAddr, PeerTls at
-//! 24, steps at 64).
+//! NetPeer (96 bytes), IpAddr (20), NetConnection (16), NetStep (32), PeerTls (48:
+//! u32 tag, payload at 8; Presents' Bytes at 16; Serves' 40-byte TlsServer at 8),
+//! TlsFailure (8: u32 tag, AlertReceived's u8 at 4), SocketAddr (24: IpAddr, port at 20),
+//! NetListener (40: address String, port at 24, clients at 32) and NetClient (80:
+//! SocketAddr, PeerTls at 24, steps at 72).
 //! Native campaign programs exercise these layouts.
 use crate::{
     Header, RunCtx,
     io::{Completion, Request},
 };
 use hirsel_run_config::{
-    NetClient, NetConnection, NetListener, NetPeer, NetStep, PeerTls, TlsFailure,
+    NetClient, NetConnection, NetListener, NetPeer, NetStep, PeerTls, TlsFailure, TlsIdentity,
+    TlsServer,
 };
 
 unsafe fn list<T>(
@@ -86,6 +87,7 @@ unsafe fn failure(at: *const u8) -> TlsFailure {
         7 => TlsFailure::HandshakeFailure,
         8 => TlsFailure::PeerMisbehaved,
         9 => TlsFailure::Truncated,
+        10 => TlsFailure::CertificateRequired,
         _ => crate::fault("Test peer TlsFailure tag"),
     }
 }
@@ -98,6 +100,20 @@ unsafe fn tls(at: *const u8) -> PeerTls {
             unsafe { list(pointer(at.add(8)), 24, |at| text(at)) },
             unsafe { bytes(at.add(16)) },
         ),
+        4 => {
+            let server = unsafe { &*at.add(8).cast::<crate::tls_abi::TlsServerAbi>() };
+            let (identities, clients) = unsafe { server.parts() };
+            PeerTls::Serves(TlsServer {
+                identities: identities
+                    .into_iter()
+                    .map(|(chain, key)| TlsIdentity {
+                        chain: chain.to_vec(),
+                        key: key.to_vec(),
+                    })
+                    .collect(),
+                clients: clients.map(<[u8]>::to_vec),
+            })
+        }
         _ => crate::fault("Test peer PeerTls tag"),
     }
 }
@@ -107,7 +123,7 @@ unsafe fn peer(at: *const u8) -> NetPeer {
         port: unsafe { at.add(24).cast::<u16>().read() },
         resolves_to: unsafe { list(pointer(at.add(32)), 20, |at| ip(at)) },
         tls: unsafe { tls(at.add(40)) },
-        connections: unsafe { list(pointer(at.add(80)), 16, |at| connection(at)) },
+        connections: unsafe { list(pointer(at.add(88)), 16, |at| connection(at)) },
     }
 }
 unsafe fn socket_addr(at: *const u8) -> (String, u16) {
@@ -120,13 +136,13 @@ unsafe fn listener(at: *const u8) -> NetListener {
         address: unsafe { text(at) },
         port: unsafe { at.add(24).cast::<u16>().read() },
         clients: unsafe {
-            list(pointer(at.add(32)), 72, |at| {
+            list(pointer(at.add(32)), 80, |at| {
                 let (address, port) = socket_addr(at);
                 NetClient {
                     address,
                     port,
                     tls: tls(at.add(24)),
-                    steps: list(pointer(at.add(64)), 32, |at| step(at)),
+                    steps: list(pointer(at.add(72)), 32, |at| step(at)),
                 }
             })
         },
@@ -147,7 +163,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_net(
 ) -> u8 {
     let request = Request::TestNet {
         test: unsafe { test.read() },
-        peers: unsafe { list(peers, 88, |at| peer(at)) },
+        peers: unsafe { list(peers, 96, |at| peer(at)) },
         listeners: unsafe { list(listeners, 40, |at| listener(at)) },
     };
     let completion = match unsafe { crate::io::capability_call(ctx, request) } {

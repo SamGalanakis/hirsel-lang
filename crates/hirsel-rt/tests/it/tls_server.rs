@@ -374,7 +374,7 @@ fn a_missing_or_untrusted_client_certificate_is_refused() {
         (
             ClientAuth::Require(CLIENT_CA),
             None,
-            TlsFailure::BadCertificate,
+            TlsFailure::CertificateRequired,
         ),
         (
             ClientAuth::Require(ROGUE_CA),
@@ -487,7 +487,7 @@ fn an_empty_identity_list_or_trust_set_is_invalid_input() {
 }
 
 /// `tls.connect_as` presents its identity to a rustls server that requires one, as
-/// rustls/tests/api.rs client_auth does.
+/// rustls/tests/api.rs client_auth does, and `tls.peer` returns the server's chain.
 #[test]
 fn connect_as_presents_the_client_identity_to_a_requiring_server() {
     for identity in [Some((CLIENT, CLIENT_KEY)), None] {
@@ -561,10 +561,13 @@ fn connect_as_presents_the_client_identity_to_a_requiring_server() {
             max: 1,
         });
         let seen = server.join().unwrap();
+        // The client's tls.peer is the server chain it verified, as rustls reports it.
+        let peer = io.call(Request::TlsPeer { net, stream });
         if identity.is_some() {
             assert_eq!(connected, Ok(Completion::NetUnit(Ok(()))));
             assert_eq!(written, Ok(Completion::NetUnit(Ok(()))));
             assert_eq!(seen, Some(der(CLIENT)));
+            assert_eq!(peer, Ok(Completion::Certificates(Ok(Some(der(ALPHA.0))))));
         } else {
             // The server refuses with certificate_required at the first exchange.
             assert_eq!(seen, None);

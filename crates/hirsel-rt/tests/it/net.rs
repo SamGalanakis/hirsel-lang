@@ -792,6 +792,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
         NetError::Tls(TlsFailure::HandshakeFailure),
         NetError::Tls(TlsFailure::PeerMisbehaved),
         NetError::Tls(TlsFailure::Truncated),
+        NetError::Tls(TlsFailure::CertificateRequired),
         NetError::Fault(7),
     ];
     let requests = vec![

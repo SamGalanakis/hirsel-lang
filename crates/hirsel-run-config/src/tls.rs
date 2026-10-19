@@ -57,8 +57,10 @@ pub fn serves(identity: &Identity, name: &str) -> bool {
 
 /// A `TlsClientAuth`: whether a server handshake asks for a client certificate, and the
 /// trust set it verifies one against.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClientAuth<T> {
+    #[default]
     Anonymous,
     Request(T),
     Require(T),
@@ -70,6 +72,16 @@ impl<T> ClientAuth<T> {
             Self::Request(t) => ClientAuth::Request(f(t)),
             Self::Require(t) => ClientAuth::Require(f(t)),
         }
+    }
+    pub fn as_ref(&self) -> ClientAuth<&T> {
+        match self {
+            Self::Anonymous => ClientAuth::Anonymous,
+            Self::Request(t) => ClientAuth::Request(t),
+            Self::Require(t) => ClientAuth::Require(t),
+        }
+    }
+    pub fn is_anonymous(&self) -> bool {
+        matches!(self, Self::Anonymous)
     }
 }
 
@@ -110,6 +122,16 @@ pub fn server(identities: &[(&[u8], &[u8])], clients: ClientAuth<&[u8]>) -> Opti
         identities,
         clients,
     })
+}
+
+/// Load a `TlsServer`'s data as `server` does.
+pub fn load(server: &crate::TlsServer) -> Option<Server> {
+    let identities = server
+        .identities
+        .iter()
+        .map(|identity| (identity.chain.as_slice(), identity.key.as_slice()))
+        .collect::<Vec<_>>();
+    self::server(&identities, server.clients.as_ref().map(Vec::as_slice))
 }
 
 /// Every PEM certificate of `pem`, in order; empty or malformed PEM is invalid.
@@ -164,12 +186,26 @@ pub fn verify_client(
     verifier: &dyn ClientCertVerifier,
     chain: &[CertificateDer<'_>],
     now: UnixTime,
-) -> Result<(), TlsFailure> {
-    let (leaf, intermediates) = chain.split_first().ok_or(TlsFailure::BadCertificate)?;
+) -> Result<(), rustls::Error> {
+    let (leaf, intermediates) = chain
+        .split_first()
+        .ok_or(rustls::Error::NoCertificatesPresented)?;
     verifier
         .verify_client_cert(leaf, intermediates, now)
         .map(|_| ())
-        .map_err(|e| failure(&e))
+}
+
+/// The alert a server sends refusing a client certificate, as rustls 0.23.46's
+/// `CommonState::send_cert_verify_error_alert` chooses it, and `certificate_required` for
+/// none under a mandatory policy (src/server/tls13.rs, tls12.rs).
+fn refusal_alert(error: &rustls::Error) -> u8 {
+    use rustls::{AlertDescription as A, Error as E};
+    u8::from(match error {
+        E::InvalidCertificate(cert) => A::from(cert.clone()),
+        E::PeerMisbehaved(_) => A::IllegalParameter,
+        E::NoCertificatesPresented => A::CertificateRequired,
+        _ => A::HandshakeFailure,
+    })
 }
 
 /// The time at which a scripted world verifies a client chain, where time is not checked:
@@ -194,7 +230,8 @@ pub fn scripted_accept(
 ) -> Result<Option<Vec<u8>>, TlsFailure> {
     use crate::PeerTls;
     let (names, presented) = match client {
-        PeerTls::Plain => return Err(TlsFailure::HandshakeFailure),
+        // A peer's Serves, which no validated client has, runs no TLS client either.
+        PeerTls::Plain | PeerTls::Serves(_) => return Err(TlsFailure::HandshakeFailure),
         PeerTls::Fails(failure) => return Err(*failure),
         PeerTls::Certificate(names) => (names, None),
         PeerTls::Presents(names, chain) => (names, Some(chain)),
@@ -208,14 +245,55 @@ pub fn scripted_accept(
         return Ok(None);
     };
     match presented {
-        None if verifier.client_auth_mandatory() => Err(TlsFailure::BadCertificate),
+        None if verifier.client_auth_mandatory() => Err(TlsFailure::CertificateRequired),
         None => Ok(None),
         Some(pem) => {
             let chain = chain(pem).ok_or(TlsFailure::BadCertificate)?;
-            verify_client(verifier, &chain, issued(&chain))?;
+            verify_client(verifier, &chain, issued(&chain)).map_err(|e| failure(&e))?;
             Ok(Some(chain_der(&chain)))
         }
     }
+}
+
+/// A scripted peer's answer to a client handshake for `server_name` presenting `identity`
+/// when asked (docs/spec/core-library.md, scripted peers). A `Serves` server presents the
+/// identity the SNI selects, which the client verifies by name alone, then verifies the
+/// client's chain, if it asks for one, at `issued`, refusing with the alert a rustls server
+/// sends. Success carries what `tls.peer` returns: the presented chain, and nothing for a
+/// `Certificate` peer, which sends no certificate bytes.
+pub fn scripted_connect(
+    peer: &crate::PeerTls,
+    server_name: &str,
+    identity: Option<&Identity>,
+) -> Result<Option<Vec<u8>>, TlsFailure> {
+    use crate::PeerTls;
+    let server = match peer {
+        // A client's Presents, which no validated peer has, runs no TLS server either.
+        PeerTls::Plain | PeerTls::Presents(..) => return Err(TlsFailure::HandshakeFailure),
+        PeerTls::Fails(failure) => return Err(*failure),
+        PeerTls::Certificate(names) if names.iter().any(|name| name == server_name) => {
+            return Ok(None);
+        }
+        PeerTls::Certificate(_) => return Err(TlsFailure::NameMismatch),
+        PeerTls::Serves(server) => load(server).ok_or(TlsFailure::HandshakeFailure)?,
+    };
+    let presented = select(&server.identities, sni(server_name));
+    if !serves(presented, server_name) {
+        return Err(TlsFailure::NameMismatch);
+    }
+    if let Some(verifier) = server.clients.as_deref() {
+        let refused = match identity {
+            None if verifier.client_auth_mandatory() => {
+                Some(rustls::Error::NoCertificatesPresented)
+            }
+            None => None,
+            Some(identity) => verify_client(verifier, &identity.cert, issued(&identity.cert)).err(),
+        };
+        if let Some(error) = refused {
+            return Err(TlsFailure::AlertReceived(refusal_alert(&error)));
+        }
+    }
+    Ok(Some(chain_der(&presented.cert)))
 }
 
 /// Condense rustls Error/CertificateError into TLS failures.
@@ -230,7 +308,7 @@ pub fn failure(error: &rustls::Error) -> TlsFailure {
             C::Revoked => TlsFailure::Revoked,
             _ => TlsFailure::BadCertificate,
         },
-        E::NoCertificatesPresented => TlsFailure::BadCertificate,
+        E::NoCertificatesPresented => TlsFailure::CertificateRequired,
         E::AlertReceived(alert) => TlsFailure::AlertReceived(u8::from(*alert)),
         E::PeerMisbehaved(_)
         | E::InappropriateMessage { .. }
