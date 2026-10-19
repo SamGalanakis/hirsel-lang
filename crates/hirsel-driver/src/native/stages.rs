@@ -359,10 +359,9 @@ pub fn build_program(
             hirsel_rc::insert::insert(placed, table, &proofs)
         })
         .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
+        // Elision only cancels a copy against the release after it, so one
+        // validation of its output also judges insertion's.
         if options.elide {
-            // Elision rewrites a validated unit, so insertion's output is
-            // sealed first and elision's again below.
-            unit = seal(StageName::Perceus, || validate_rc(unit, &inputs))?.into_raw();
             unit = timed(Phase::Rc, || hirsel_rc::elide::elide(unit, table))
                 .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
         }

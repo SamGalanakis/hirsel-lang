@@ -28,6 +28,10 @@ Invariants:
   and never scan every slot at a site (`lacking` lists the slots that hold
   something). `hirsel-pipeline-tests/tests/rc/rc_scaling.rs` gates the whole pipeline at eight times the
   statements.
+- A slot's moved, taken and pending parts are `paths::Tris` rows: a `yes`
+  and a `maybe` bitset over the field paths `Facts` interns once per unit,
+  the first 64 inline. Copying or joining a slot state copies and combines
+  words, never paths; output that follows path order sorts by path.
 
 ## Append fusion (`append_into`)
 
@@ -232,7 +236,10 @@ names every program of a group);
   allocates nothing; its first reserve or growth allocates.
 - `elide::elide`: Rc to Rc. A copy immediately followed by insertion's release
   of the same slot cancels into a move (a partial copy into a partial move
-  plus the rest's drop). Flat copies stay; nothing allocates.
+  plus the rest's drop). Flat copies stay; nothing allocates. It leaves
+  every other count as insertion placed it, so the driver validates the Rc
+  stage once, after elision, and a fault in insertion's output is still one
+  in elision's.
 - `insert` also holds the shared machinery: layout queries, place
   flattening, the unit `Editor` (finish drops unreachable blocks, unnamed edges
   and failure edges, undefined values and undischarged anchors, and rebuilds

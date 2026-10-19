@@ -21,4 +21,5 @@ pub mod specialize_drop;
 pub mod statics;
 
 mod pass_error;
+mod paths;
 pub use pass_error::PassError;

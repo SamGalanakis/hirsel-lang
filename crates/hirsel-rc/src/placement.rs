@@ -945,7 +945,7 @@ fn exit_everywhere(
                 continue;
             };
             let mut post = None;
-            flow.block(b, state, |j, _, s| {
+            flow.block_after(b, state, |j, s| {
                 if j == i {
                     post = Some(s.clone());
                 }

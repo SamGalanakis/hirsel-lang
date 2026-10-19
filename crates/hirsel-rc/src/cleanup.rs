@@ -38,6 +38,7 @@
 use crate::PassError;
 use crate::insert::{Editor, Facts, Flow, Lay, Place, Root, State, Step, Tri, Versions, type_of};
 use crate::instance::Instances;
+use crate::paths::{Paths, Tris};
 use hirsel_core_contract::Passing;
 use hirsel_intern::work::{self, Counter};
 use hirsel_lir::abi_types::FnAbiId;
@@ -538,13 +539,13 @@ type Flags = BTreeMap<Part, ValueId>;
 
 /// Presence of an inline part. Descendant holes do not remove the containing
 /// part; a recursive drop uses their own flags in the original drop order.
-fn presence(s: &crate::insert::SlotState, path: &[Step]) -> Tri {
+fn presence(s: &crate::insert::SlotState, paths: &Paths, path: &[Step]) -> Tri {
     if content_of(s.live, s.init) == Tri::No {
         return Tri::No;
     }
     let mut value = content_of(s.live, s.init);
-    for (p, &moved) in &s.moved {
-        if path.starts_with(p) {
+    for (p, moved) in s.moved.iter() {
+        if path.starts_with(paths.steps(p)) {
             if moved == Tri::Yes {
                 return Tri::No;
             }
@@ -558,23 +559,24 @@ fn presence(s: &crate::insert::SlotState, path: &[Step]) -> Tri {
 
 pub(crate) fn absent(
     s: &crate::insert::SlotState,
+    paths: &Paths,
     path: &mut Vec<Step>,
     layout: LayoutId,
     lay: Lay<'_>,
 ) -> bool {
-    if presence(s, path) == Tri::No || lay.trivial(layout) {
+    if presence(s, paths, path) == Tri::No || lay.trivial(layout) {
         return true;
     }
     let Some(record) = lay.get(layout) else {
         return false;
     };
-    if record.finalizer.is_some() && s.fields_pending.get(path.as_slice()) != Some(&Tri::Yes) {
+    if record.finalizer.is_some() && s.fields_pending.at(paths, path) != Tri::Yes {
         return false;
     }
     if let LayoutKind::Inline { element, count } = record.kind {
         return (0..count).all(|index| {
             path.push(Step::Inline(index));
-            let empty = absent(s, path, element, lay);
+            let empty = absent(s, paths, path, element, lay);
             path.pop();
             empty
         });
@@ -584,7 +586,7 @@ pub(crate) fn absent(
             tag.variants.iter().all(|variant| {
                 variant.fields.iter().all(|field| {
                     path.push(Step::Variant(variant.ordinal, field.ordinal));
-                    let empty = absent(s, path, field.layout, lay);
+                    let empty = absent(s, paths, path, field.layout, lay);
                     path.pop();
                     empty
                 })
@@ -594,7 +596,7 @@ pub(crate) fn absent(
     if matches!(record.kind, LayoutKind::Aggregate | LayoutKind::Resource) {
         return record.fields.iter().all(|field| {
             path.push(Step::Field(field.ordinal));
-            let empty = absent(s, path, field.layout, lay);
+            let empty = absent(s, paths, path, field.layout, lay);
             path.pop();
             empty
         });
@@ -604,6 +606,7 @@ pub(crate) fn absent(
 
 fn owner_presence(
     s: &crate::insert::SlotState,
+    paths: &Paths,
     path: &[Step],
     layout: LayoutId,
     lay: Lay<'_>,
@@ -612,10 +615,10 @@ fn owner_presence(
     // `flag_content`).
     if s.owned_empty && (path.is_empty() || !lay.trivial(layout)) {
         Tri::No
-    } else if !lay.trivial(layout) && absent(s, &mut path.to_vec(), layout, lay) {
+    } else if !lay.trivial(layout) && absent(s, paths, &mut path.to_vec(), layout, lay) {
         Tri::No
     } else {
-        presence(s, path)
+        presence(s, paths, path)
     }
 }
 
@@ -677,15 +680,16 @@ fn join_flags(
         };
         let s = &state.slots[slot.index()];
         let layout = ed.unit.types[ed.unit.slots[slot.index()].ty.index()].layout;
-        if !lay.trivial(layout) && owner_presence(s, &[], layout, lay) == Tri::Maybe {
+        let paths = facts.paths();
+        if !lay.trivial(layout) && owner_presence(s, &paths, &[], layout, lay) == Tri::Maybe {
             wanted.insert((slot, Vec::new()), layout);
         }
-        for (path, &moved) in &s.moved {
+        for (path, moved) in s.moved.sorted(&paths) {
             if moved == Tri::Maybe
                 && let Some(part) = inline_part_layout(lay, layout, path)?
                 && !lay.trivial(part)
             {
-                wanted.insert((slot, path.clone()), part);
+                wanted.insert((slot, path.to_vec()), part);
             }
         }
     }
@@ -727,7 +731,7 @@ fn join_flags(
             .map(|(p, &layout)| {
                 (
                     p.clone(),
-                    owner_presence(&st.slots[p.0.index()], &p.1, layout, lay),
+                    owner_presence(&st.slots[p.0.index()], &facts.paths(), &p.1, layout, lay),
                 )
             })
             .collect()
@@ -1192,7 +1196,9 @@ impl Lowering<'_, '_> {
         let s = &st.slots[slot.index()];
         let mut actions = Vec::new();
         let layout = self.place_layout(slot, &path)?;
-        if !self.lay.trivial(layout) && owner_presence(s, &path, layout, self.lay) != Tri::No {
+        if !self.lay.trivial(layout)
+            && owner_presence(s, &self.facts.paths(), &path, layout, self.lay) != Tri::No
+        {
             if s.live == Tri::Maybe || s.init == Tri::Maybe {
                 let Some(&flag) = self.flags.get(&Vec::new()) else {
                     return Err(PassError::Unsupported(format!(
@@ -1600,9 +1606,9 @@ impl Lowering<'_, '_> {
         let state = crate::insert::SlotState {
             live: Tri::Yes,
             init: Tri::Yes,
-            moved: BTreeMap::new(),
-            taken: BTreeMap::new(),
-            fields_pending: BTreeMap::new(),
+            moved: Tris::EMPTY,
+            taken: Tris::EMPTY,
+            fields_pending: Tris::EMPTY,
             versions: crate::insert::Versions::One(version),
             owned_empty: false,
         };
@@ -1786,9 +1792,9 @@ impl Lowering<'_, '_> {
         let state = crate::insert::SlotState {
             live: Tri::Yes,
             init: Tri::Yes,
-            moved: BTreeMap::new(),
-            taken: BTreeMap::new(),
-            fields_pending: BTreeMap::new(),
+            moved: Tris::EMPTY,
+            taken: Tris::EMPTY,
+            fields_pending: Tris::EMPTY,
             versions: crate::insert::Versions::One(local.version.unwrap()),
             owned_empty: false,
         };
@@ -1988,30 +1994,32 @@ impl Lowering<'_, '_> {
         layout: LayoutId,
         out: &mut Vec<Action>,
     ) -> Result<(), PassError> {
-        if s.moved.get(&path) == Some(&Tri::Yes) || self.lay.trivial(layout) {
+        let paths = self.facts.paths();
+        let moved = s.moved.at(&paths, &path);
+        if moved == Tri::Yes || self.lay.trivial(layout) {
             return Ok(());
         }
-        let under: Vec<Tri> = s
-            .taken
-            .iter()
-            .chain(s.fields_pending.iter())
-            .filter(|(q, t)| q.len() > path.len() && q.starts_with(&path) && **t != Tri::No)
-            .map(|(_, t)| *t)
-            .collect();
-        if s.moved.get(&path) == Some(&Tri::Maybe) {
+        // Whether any part under `path` is taken or a pending shell.
+        let under = s.taken.iter().chain(s.fields_pending.iter()).any(|(q, _)| {
+            let q = paths.steps(q);
+            q.len() > path.len() && q.starts_with(&path)
+        });
+        if moved == Tri::Maybe {
             let condition = self
                 .flags
                 .get(&path)
                 .copied()
                 .ok_or_else(|| PassError::Malformed(format!("no drop flag for {path:?}")))?;
             let mut present = s.clone();
-            present.moved.remove(&path);
+            present
+                .moved
+                .set(paths.get(&path).expect("a moved path is interned"), Tri::No);
             let mut actions = Vec::new();
             self.plan(&present, path, layout, &mut actions)?;
             out.push(Action::Conditional { condition, actions });
             return Ok(());
         }
-        if under.is_empty() && !self.inline_finalizer(layout) {
+        if !under && !self.inline_finalizer(layout) {
             out.push(Action::Release {
                 path,
                 layout,
@@ -2025,8 +2033,8 @@ impl Lowering<'_, '_> {
             .ok_or_else(|| PassError::Malformed(format!("{layout:?} outside the table")))?;
         if let LayoutKind::Box { .. } = record.kind {
             let mut moved = Vec::new();
-            for (part, state) in &s.taken {
-                if *state == Tri::No || !part.starts_with(&path) {
+            for (part, state) in s.taken.sorted(&paths) {
+                if !part.starts_with(&path) {
                     continue;
                 }
                 match (&part[path.len()..], state) {
@@ -2048,13 +2056,13 @@ impl Lowering<'_, '_> {
             return Ok(());
         }
         if record.kind == LayoutKind::Variant {
-            if under.is_empty() {
+            if !under {
                 out.push(Action::Variant { path, layout });
                 return Ok(());
             }
             return self.plan_variant(s, path, record, out);
         }
-        if under.is_empty() && matches!(record.kind, LayoutKind::Inline { .. }) {
+        if !under && matches!(record.kind, LayoutKind::Inline { .. }) {
             out.push(Action::Inline { path, layout });
             return Ok(());
         }
@@ -2072,13 +2080,14 @@ impl Lowering<'_, '_> {
                 record.kind
             )));
         }
-        if record.finalizer.is_some() && s.fields_pending.get(&path) != Some(&Tri::Yes) {
-            if s.fields_pending.get(&path) == Some(&Tri::Maybe) {
+        let pending = s.fields_pending.at(&paths, &path);
+        if record.finalizer.is_some() && pending != Tri::Yes {
+            if pending == Tri::Maybe {
                 return Err(PassError::Malformed(
                     "a retained defused shell crossed its straight-line region".into(),
                 ));
             }
-            if !under.is_empty() {
+            if under {
                 return Err(PassError::Malformed(
                     "a field moved out of a live resource".into(),
                 ));
@@ -2476,12 +2485,9 @@ mod pending_tests {
         state.slots[slot.index()].live = Tri::Yes;
         state.slots[slot.index()].init = Tri::Yes;
         state.slots[slot.index()].versions = Versions::One(version);
-        state.slots[slot.index()]
-            .moved
-            .insert(vec![Step::Field(0)], Tri::Yes);
-        state.slots[slot.index()]
-            .taken
-            .insert(vec![Step::Field(0)], Tri::Yes);
+        let field = facts.intern(&[Step::Field(0)]);
+        state.slots[slot.index()].moved.set(field, Tri::Yes);
+        state.slots[slot.index()].taken.set(field, Tri::Yes);
         let before = state.slots[slot.index()].clone();
         flow.fields_pending(&mut state, address);
         let slot_state = &state.slots[slot.index()];
@@ -2514,9 +2520,16 @@ mod pending_tests {
             "a live parent cannot already have a field taken"
         );
         let mut empty = slot_state.clone();
-        empty.moved.insert(vec![Step::Field(1)], Tri::Yes);
-        empty.taken.insert(vec![Step::Field(1)], Tri::Yes);
-        assert!(absent(&empty, &mut vec![], resource, lay));
+        let field = lowering.facts.intern(&[Step::Field(1)]);
+        empty.moved.set(field, Tri::Yes);
+        empty.taken.set(field, Tri::Yes);
+        assert!(absent(
+            &empty,
+            &lowering.facts.paths(),
+            &mut vec![],
+            resource,
+            lay
+        ));
         let mut actions = vec![];
         lowering
             .plan(&empty, vec![], resource, &mut actions)
@@ -2556,9 +2569,9 @@ mod pending_tests {
         let mut state = crate::insert::SlotState {
             live: Tri::Yes,
             init: Tri::Yes,
-            moved: BTreeMap::new(),
-            taken: BTreeMap::new(),
-            fields_pending: BTreeMap::new(),
+            moved: Tris::EMPTY,
+            taken: Tris::EMPTY,
+            fields_pending: Tris::EMPTY,
             versions: Versions::None,
             owned_empty: false,
         };
@@ -2580,15 +2593,18 @@ mod pending_tests {
             paths(&actions),
             [vec![], vec![Step::Field(1)], vec![Step::Field(0)]]
         );
-        state.fields_pending.insert(vec![], Tri::Yes);
+        state
+            .fields_pending
+            .set(lowering.facts.intern(&[]), Tri::Yes);
         let mut actions = vec![];
         lowering.plan(&state, vec![], parent, &mut actions).unwrap();
         assert_eq!(
             paths(&actions),
             [vec![Step::Field(1)], vec![Step::Field(0)]]
         );
-        state.moved.insert(vec![Step::Field(1)], Tri::Yes);
-        state.taken.insert(vec![Step::Field(1)], Tri::Yes);
+        let field = lowering.facts.intern(&[Step::Field(1)]);
+        state.moved.set(field, Tri::Yes);
+        state.taken.set(field, Tri::Yes);
         let mut actions = vec![];
         lowering.plan(&state, vec![], parent, &mut actions).unwrap();
         assert_eq!(paths(&actions), [vec![Step::Field(0)]]);

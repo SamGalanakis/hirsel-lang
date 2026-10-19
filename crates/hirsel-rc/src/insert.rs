@@ -24,6 +24,7 @@
 //! stage validator replays ownership independently and never reads them.
 use crate::PassError;
 use crate::import::STATE_RELEASE;
+use crate::paths::{PathId, Paths, Tris};
 use hirsel_core_contract::Passing;
 use hirsel_lir::ir::{
     AddressBase, AddressId, AddressInfo, ArgumentValue, Block, BlockId, BlockKind, CaptureUse,
@@ -37,6 +38,7 @@ use hirsel_lir::layout_types::{
 };
 use hirsel_lir::persistent::{Element, PVec};
 use hirsel_lir::stage::{Placed, Rc, Stage};
+use std::cell::{Ref, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Lower a Placed unit to Rc: release every non-destructible slot content at
@@ -478,6 +480,10 @@ pub struct Facts {
     pub loan_slot: Vec<Option<SlotId>>,
     /// Each compiler-local region's mark value.
     pub marks: Vec<Option<ValueId>>,
+    /// The unit's field paths, interned as the analyses meet them.
+    paths: RefCell<Paths>,
+    /// Per address, its place's interned path once asked for.
+    place_paths: RefCell<Vec<Option<PathId>>>,
 }
 
 impl Facts {
@@ -675,6 +681,8 @@ impl Facts {
             tag_views,
             loan_slot,
             marks,
+            paths: RefCell::default(),
+            place_paths: RefCell::default(),
         }
     }
 
@@ -696,6 +704,26 @@ impl Facts {
             Root::Slot(s) => Some((s, &p.path)),
             Root::Value(_) => None,
         }
+    }
+
+    /// `slot_of` with the path interned.
+    pub(crate) fn slot_path(&self, address: AddressId) -> Option<(SlotId, PathId)> {
+        let (slot, path) = self.slot_of(address)?;
+        let mut cache = self.place_paths.borrow_mut();
+        if cache.len() <= address.index() {
+            cache.resize(address.index() + 1, None);
+        }
+        let id = *cache[address.index()].get_or_insert_with(|| self.intern(path));
+        Some((slot, id))
+    }
+
+    pub(crate) fn intern(&self, path: &[Step]) -> PathId {
+        self.paths.borrow_mut().intern(path)
+    }
+
+    /// The unit's interned paths. Interning while this is held panics.
+    pub(crate) fn paths(&self) -> Ref<'_, Paths> {
+        self.paths.borrow()
     }
 }
 
@@ -1164,12 +1192,12 @@ pub(crate) struct SlotState {
     pub live: Tri,
     pub init: Tri,
     /// Absent owners: transferred parts and inactive variant fields.
-    pub moved: BTreeMap<Vec<Step>, Tri>,
+    pub moved: Tris,
     /// Actual transfers, separate from fields absent on inactive variant edges.
-    pub taken: BTreeMap<Vec<Step>, Tri>,
+    pub taken: Tris,
     /// Resource shells whose parent finalizer is already suppressed/completed.
     /// Defuse regions empty these shells before any join.
-    pub fields_pending: BTreeMap<Vec<Step>, Tri>,
+    pub fields_pending: Tris,
     /// Versions that may name the content here.
     pub versions: Versions,
     /// Proved to own nothing on every path since its last write, as C's
@@ -1216,15 +1244,77 @@ impl SlotState {
     const DEAD: Self = Self {
         live: Tri::No,
         init: Tri::No,
-        moved: BTreeMap::new(),
-        taken: BTreeMap::new(),
-        fields_pending: BTreeMap::new(),
+        moved: Tris::EMPTY,
+        taken: Tris::EMPTY,
+        fields_pending: Tris::EMPTY,
         versions: Versions::None,
         owned_empty: false,
     };
     /// Whole and definitely initialized: no part moved out on any path.
     pub fn whole(&self) -> bool {
-        self.init == Tri::Yes && self.taken.values().all(|t| *t == Tri::No)
+        self.init == Tri::Yes && self.taken.is_empty()
+    }
+
+    /// A mutable loan or an address argument may write any part overlapping
+    /// `path`: of those, only the parts actually taken stay absent.
+    fn expose(&mut self, path: PathId, paths: &Paths) {
+        let at = paths.steps(path);
+        self.moved.retain(|q| !overlap(paths.steps(q), at));
+        for (q, t) in self.taken.iter() {
+            if overlap(paths.steps(q), at) {
+                self.moved.set(q, t);
+            }
+        }
+    }
+
+    /// The part at `path` and everything under it are gone, as a take or a
+    /// drop of it leaves them: whole storage is uninitialized, a part
+    /// becomes taken.
+    fn remove(&mut self, path: PathId, paths: &Paths) {
+        let at = paths.steps(path);
+        if at.is_empty() {
+            self.init = Tri::No;
+            self.moved.clear();
+            self.taken.clear();
+            self.fields_pending.clear();
+            self.versions = Versions::None;
+        } else if !through_slot(at) {
+            let below = |q: PathId| {
+                let q = paths.steps(q);
+                q.len() > at.len() && overlap(q, at)
+            };
+            self.taken.retain(|q| !below(q));
+            self.moved.retain(|q| !below(q));
+            self.taken.set(path, Tri::Yes);
+            self.moved.set(path, Tri::Yes);
+        }
+        if self.init == Tri::No {
+            self.owned_empty = false;
+        }
+    }
+
+    /// A store of new content at `path` (`whole` unless it reaches into an
+    /// element named without a count check).
+    fn write(&mut self, path: PathId, paths: &Paths, whole: bool) {
+        let at = paths.steps(path);
+        if at.is_empty() {
+            self.init = Tri::Yes;
+            self.moved.clear();
+            self.taken.clear();
+        } else if whole {
+            self.taken.retain(|q| {
+                let q = paths.steps(q);
+                !(q.len() > at.len() && overlap(q, at))
+            });
+            self.moved.retain(|q| !overlap(paths.steps(q), at));
+        }
+        self.taken.retain(|q| {
+            let q = paths.steps(q);
+            !(q.len() >= at.len() && overlap(q, at))
+        });
+        self.fields_pending
+            .retain(|q| !paths.steps(q).starts_with(at));
+        self.owned_empty = false;
     }
 }
 
@@ -1233,52 +1323,13 @@ impl SlotState {
         self.live = self.live.join(other.live);
         if self.init == Tri::No {
             self.moved = other.moved.clone();
-        } else if other.init != Tri::No && self.moved != other.moved {
-            let keys: BTreeSet<_> = self
-                .moved
-                .keys()
-                .chain(other.moved.keys())
-                .cloned()
-                .collect();
-            for key in keys {
-                let l = self.moved.get(&key).copied().unwrap_or(Tri::No);
-                let r = other.moved.get(&key).copied().unwrap_or(Tri::No);
-                self.moved.insert(key, l.join(r));
-            }
-        }
-        if self.init == Tri::No {
             self.taken = other.taken.clone();
-        } else if other.init != Tri::No && self.taken != other.taken {
-            let keys: BTreeSet<_> = self
-                .taken
-                .keys()
-                .chain(other.taken.keys())
-                .cloned()
-                .collect();
-            for key in keys {
-                let left = self.taken.get(&key).copied().unwrap_or(Tri::No);
-                let right = other.taken.get(&key).copied().unwrap_or(Tri::No);
-                self.taken.insert(key, left.join(right));
-            }
-        }
-        if self.init == Tri::No {
             self.fields_pending = other.fields_pending.clone();
-        } else if other.init != Tri::No && self.fields_pending != other.fields_pending {
-            let paths: BTreeSet<_> = self
-                .fields_pending
-                .keys()
-                .chain(other.fields_pending.keys())
-                .cloned()
-                .collect();
-            for path in paths {
-                let left = self.fields_pending.get(&path).copied().unwrap_or(Tri::No);
-                let right = other.fields_pending.get(&path).copied().unwrap_or(Tri::No);
-                self.fields_pending.insert(path, left.join(right));
-            }
-        }
-        if self.init == Tri::No {
             self.owned_empty = other.owned_empty;
         } else if other.init != Tri::No {
+            self.moved.join(&other.moved);
+            self.taken.join(&other.taken);
+            self.fields_pending.join(&other.fields_pending);
             self.owned_empty &= other.owned_empty;
         }
         self.init = self.init.join(other.init);
@@ -1389,9 +1440,9 @@ impl<S: Stage> Flow<'_, S> {
                         Tri::No
                     },
                     init: if entered { Tri::Yes } else { Tri::No },
-                    moved: BTreeMap::new(),
-                    taken: BTreeMap::new(),
-                    fields_pending: BTreeMap::new(),
+                    moved: Tris::EMPTY,
+                    taken: Tris::EMPTY,
+                    fields_pending: Tris::EMPTY,
                     versions,
                     owned_empty: false,
                 }
@@ -1491,7 +1542,7 @@ impl<S: Stage> Flow<'_, S> {
                 continue;
             };
             transferred(self.code[b.index()].len() + 1);
-            let new = self.block(b, state, |_, _, _| {});
+            let new = self.block_after(b, state, |_, _| {});
             let first = outs[b.index()].is_empty();
             for (i, (edge, out)) in new.iter().enumerate() {
                 let target = self.unit.tables.edges[edge.index()].target;
@@ -1513,26 +1564,54 @@ impl<S: Stage> Flow<'_, S> {
     pub fn block(
         &self,
         b: BlockId,
-        mut st: State,
+        st: State,
         mut visit: impl FnMut(usize, &State, &State),
+    ) -> Vec<(EdgeId, State)> {
+        self.walk(b, st, true, |i, pre, post| {
+            visit(i, pre.expect("kept before every instruction"), post)
+        })
+    }
+
+    /// `block` for a visitor of the state after each instruction only. It
+    /// keeps no state from before an instruction that its failure edge does
+    /// not start from, so the walk writes slots it owns instead of copying
+    /// them out of a state it shares.
+    pub fn block_after(
+        &self,
+        b: BlockId,
+        st: State,
+        mut visit: impl FnMut(usize, &State),
+    ) -> Vec<(EdgeId, State)> {
+        self.walk(b, st, false, |i, _, post| visit(i, post))
+    }
+
+    fn walk(
+        &self,
+        b: BlockId,
+        mut st: State,
+        keep: bool,
+        mut visit: impl FnMut(usize, Option<&State>, &State),
     ) -> Vec<(EdgeId, State)> {
         let unit = self.unit;
         let mut outs = Vec::new();
         let insts = &self.code[b.index()];
         for (i, inst) in insts.iter().enumerate() {
-            let pre = st.clone();
-            self.inst(inst, &mut st);
-            visit(i, &pre, &st);
-            if let Some(failure) = Inst::failure(inst)
-                && failure != PENDING_FAILURE
-            {
-                let fst = match inst {
-                    Inst::Release { .. }
+            // A failure edge leaves from after a release, a reset, a drop or
+            // a region exit, and from before anything else.
+            let failure = Inst::failure(inst).filter(|&f| f != PENDING_FAILURE);
+            let after = matches!(
+                inst,
+                Inst::Release { .. }
                     | Inst::Reset { .. }
                     | Inst::Drop { .. }
-                    | Inst::RegionExit { .. } => st.clone(),
-                    _ => {
-                        let mut f = pre;
+                    | Inst::RegionExit { .. }
+            );
+            let pre = (keep || failure.is_some() && !after).then(|| st.clone());
+            self.inst(inst, &mut st);
+            visit(i, pre.as_ref(), &st);
+            if let Some(failure) = failure {
+                let fst = match pre {
+                    Some(mut f) if !after => {
                         for v in consumed(unit, self.lay, inst) {
                             if owns(unit, self.lay, v) {
                                 take_credit(&mut f.credits, v);
@@ -1540,12 +1619,13 @@ impl<S: Stage> Flow<'_, S> {
                         }
                         f
                     }
+                    _ => st.clone(),
                 };
                 outs.push(self.failure(failure, fst));
             }
         }
         let term = &unit.terminators[b.index()];
-        let pre = st.clone();
+        let pre = keep.then(|| st.clone());
         match *term {
             Terminator::Call {
                 call,
@@ -1560,15 +1640,9 @@ impl<S: Stage> Flow<'_, S> {
                             }
                         }
                         ArgumentValue::Address { address, version } => {
-                            if let Some((slot, path)) = self.facts.slot_of(address) {
+                            if let Some((slot, path)) = self.facts.slot_path(address) {
                                 let slot = &mut st.slots[slot.index()];
-                                slot.moved.retain(|p, _| !overlap(p, path));
-                                slot.moved.extend(
-                                    slot.taken
-                                        .iter()
-                                        .filter(|(p, _)| overlap(p, path))
-                                        .map(|(p, &t)| (p.clone(), t)),
-                                );
+                                slot.expose(path, &self.facts.paths());
                                 slot.owned_empty = false;
                                 slot.versions = Versions::One(version);
                             }
@@ -1582,7 +1656,7 @@ impl<S: Stage> Flow<'_, S> {
                 if let Some(r) = unit.tables.calls[call.index()].result {
                     self.create(&mut st, r);
                 }
-                visit(insts.len(), &pre, &st);
+                visit(insts.len(), pre.as_ref(), &st);
                 if let Some(normal) = normal {
                     outs.push(self.leave(normal, st));
                 }
@@ -1594,13 +1668,13 @@ impl<S: Stage> Flow<'_, S> {
                 }
             }
             Terminator::Raise(failure) => {
-                visit(insts.len(), &pre, &st);
+                visit(insts.len(), pre.as_ref(), &st);
                 outs.push(self.failure(failure, st));
                 return outs;
             }
             _ => {}
         }
-        visit(insts.len(), &pre, &st);
+        visit(insts.len(), pre.as_ref(), &st);
         for e in Terminator::normal_edges(term, &unit.pools) {
             let mut state = st.clone();
             self.switch_parts(term, e, &mut state);
@@ -1612,6 +1686,8 @@ impl<S: Stage> Flow<'_, S> {
                     .find(|f| f.environment.is_none() && f.value == condition)
             {
                 let path = flag_steps(unit, self.code, flag.path).expect("validated flag path");
+                let id = self.facts.intern(&path);
+                let paths = self.facts.paths();
                 let slot = &mut state.slots[flag.slot.index()];
                 if e == yes {
                     slot.owned_empty = false;
@@ -1626,12 +1702,13 @@ impl<S: Stage> Flow<'_, S> {
                 } else if e == yes {
                     slot.live = Tri::Yes;
                     slot.init = Tri::Yes;
-                    slot.moved.retain(|p, _| !path.starts_with(p));
-                    slot.taken.retain(|p, _| !path.starts_with(p));
+                    slot.moved.retain(|p| !path.starts_with(paths.steps(p)));
+                    slot.taken.retain(|p| !path.starts_with(paths.steps(p)));
                 } else {
-                    slot.taken.insert(path.clone(), Tri::Yes);
-                    slot.moved.insert(path, Tri::Yes);
+                    slot.taken.set(id, Tri::Yes);
+                    slot.moved.set(id, Tri::Yes);
                 }
+                drop(paths);
                 self.remember_empty(&mut state, flag.slot);
             }
             outs.push(self.leave(e, state));
@@ -1676,18 +1753,16 @@ impl<S: Stage> Flow<'_, S> {
                 for field in &variant.fields {
                     let mut path = prefix.clone();
                     path.push(Step::Variant(variant.ordinal, field.ordinal));
-                    state.slots[slot.index()].moved.insert(path, Tri::Yes);
+                    let path = self.facts.intern(&path);
+                    state.slots[slot.index()].moved.set(path, Tri::Yes);
                 }
             } else {
                 for field in &variant.fields {
                     let mut path = prefix.clone();
                     path.push(Step::Variant(variant.ordinal, field.ordinal));
-                    let actual = state.slots[slot.index()]
-                        .taken
-                        .get(&path)
-                        .copied()
-                        .unwrap_or(Tri::No);
-                    state.slots[slot.index()].moved.insert(path, actual);
+                    let path = self.facts.intern(&path);
+                    let s = &mut state.slots[slot.index()];
+                    s.moved.set(path, s.taken.get(path));
                 }
             }
         }
@@ -1702,10 +1777,13 @@ impl<S: Stage> Flow<'_, S> {
             return;
         }
         let s = &st.slots[slot.index()];
+        let paths = self.facts.paths();
         if s.init != Tri::No
             && !s.owned_empty
-            && (s.moved.get(&Vec::new()) == Some(&Tri::Yes)
-                || crate::cleanup::absent(s, &mut Vec::new(), layout, self.lay))
+            && (paths
+                .get(&[])
+                .is_some_and(|whole| s.moved.get(whole) == Tri::Yes)
+                || crate::cleanup::absent(s, &paths, &mut Vec::new(), layout, self.lay))
         {
             st.slots[slot.index()].owned_empty = true;
         }
@@ -1751,15 +1829,15 @@ impl<S: Stage> Flow<'_, S> {
         }
     }
 
-    fn place(&self, address: AddressId) -> Option<(SlotId, Vec<Step>)> {
-        self.facts.slot_of(address).map(|(s, p)| (s, p.to_vec()))
+    fn place(&self, address: AddressId) -> Option<(SlotId, PathId)> {
+        self.facts.slot_path(address)
     }
 
     /// Shared effect for Defuse and completed explicit finalization. It keeps
     /// storage/version and all remaining field owners intact.
     pub(crate) fn fields_pending(&self, st: &mut State, address: AddressId) {
         if let Some((slot, path)) = self.place(address) {
-            st.slots[slot.index()].fields_pending.insert(path, Tri::Yes);
+            st.slots[slot.index()].fields_pending.set(path, Tri::Yes);
         }
     }
 
@@ -1841,18 +1919,16 @@ impl<S: Stage> Flow<'_, S> {
                                                 variant.ordinal,
                                                 field.ordinal,
                                             ));
-                                            st.slots[slot.index()].moved.insert(absent, Tri::Yes);
+                                            let absent = self.facts.intern(&absent);
+                                            st.slots[slot.index()].moved.set(absent, Tri::Yes);
                                         }
                                     } else {
                                         for field in &variant.fields {
                                             let mut present = path[..n].to_vec();
                                             present.push(Step::Variant(selected, field.ordinal));
-                                            let actual = st.slots[slot.index()]
-                                                .taken
-                                                .get(&present)
-                                                .copied()
-                                                .unwrap_or(Tri::No);
-                                            st.slots[slot.index()].moved.insert(present, actual);
+                                            let present = self.facts.intern(&present);
+                                            let s = &mut st.slots[slot.index()];
+                                            s.moved.set(present, s.taken.get(present));
                                         }
                                     }
                                 }
@@ -1892,25 +1968,7 @@ impl<S: Stage> Flow<'_, S> {
                 if mode == ReadMode::Take
                     && let Some((slot, path)) = self.place(address)
                 {
-                    let s = &mut st.slots[slot.index()];
-                    if path.is_empty() {
-                        s.init = Tri::No;
-
-                        s.moved.clear();
-                        s.taken.clear();
-                        s.fields_pending.clear();
-                        s.versions = Versions::None;
-                    } else if !through_slot(&path) {
-                        s.taken
-                            .retain(|q, _| !(q.len() > path.len() && overlap(q, &path)));
-                        s.moved
-                            .retain(|q, _| !(q.len() > path.len() && overlap(q, &path)));
-                        s.taken.insert(path.clone(), Tri::Yes);
-                        s.moved.insert(path, Tri::Yes);
-                    }
-                    if s.init == Tri::No {
-                        s.owned_empty = false;
-                    }
+                    st.slots[slot.index()].remove(path, &self.facts.paths());
                     self.remember_empty(st, slot);
                 }
                 self.create(st, result);
@@ -1922,21 +1980,9 @@ impl<S: Stage> Flow<'_, S> {
             } => {
                 take_credit(&mut st.credits, value);
                 if let Some((slot, path)) = self.place(address) {
+                    let paths = self.facts.paths();
                     let s = &mut st.slots[slot.index()];
-
-                    if path.is_empty() {
-                        s.init = Tri::Yes;
-                        s.moved.clear();
-                        s.taken.clear();
-                    } else if !through_slot(&path) {
-                        s.taken
-                            .retain(|q, _| !(q.len() > path.len() && overlap(q, &path)));
-                        s.moved.retain(|q, _| !overlap(q, &path));
-                    }
-                    s.taken
-                        .retain(|q, _| !(q.len() >= path.len() && overlap(q, &path)));
-                    s.fields_pending.retain(|p, _| !p.starts_with(&path));
-                    s.owned_empty = false;
+                    s.write(path, &paths, !through_slot(paths.steps(path)));
                     s.versions = Versions::One(version);
                 }
             }
@@ -2000,32 +2046,30 @@ impl<S: Stage> Flow<'_, S> {
                 take_credit(&mut st.credits, value);
                 if let Some((slot, path)) = self.place(address) {
                     let before = st.slots[slot.index()].init;
-                    let phases = st.slots[slot.index()]
-                        .fields_pending
-                        .iter()
-                        .filter_map(|(p, &t)| {
-                            p.strip_prefix(path.as_slice())
-                                .map(|suffix| (suffix.to_vec(), t))
-                        })
-                        .collect();
-                    let s = &mut st.slots[slot.index()];
-
-                    if path.is_empty() {
-                        s.init = Tri::Yes;
-                        s.moved.clear();
-                        s.taken.clear();
-                    } else {
-                        s.taken
-                            .retain(|q, _| !(q.len() > path.len() && overlap(q, &path)));
-                        s.moved.retain(|q, _| !overlap(q, &path));
+                    // The displaced content keeps its pending shells, at
+                    // their paths relative to the replaced part.
+                    let suffixes: Vec<(Vec<Step>, Tri)> = {
+                        let paths = self.facts.paths();
+                        let at = paths.steps(path);
+                        st.slots[slot.index()]
+                            .fields_pending
+                            .iter()
+                            .filter_map(|(p, t)| {
+                                paths.steps(p).strip_prefix(at).map(|suffix| (suffix.to_vec(), t))
+                            })
+                            .collect()
+                    };
+                    let mut phases = Tris::EMPTY;
+                    for (suffix, t) in suffixes {
+                        phases.set(self.facts.intern(&suffix), t);
                     }
-                    s.taken
-                        .retain(|q, _| !(q.len() >= path.len() && overlap(q, &path)));
-                    s.fields_pending.retain(|p, _| !p.starts_with(&path));
-                    s.owned_empty = false;
+                    let paths = self.facts.paths();
+                    let whole = paths.steps(path).is_empty();
+                    let s = &mut st.slots[slot.index()];
+                    s.write(path, &paths, true);
                     s.versions = Versions::One(version);
                     let d = &mut st.slots[displaced.index()];
-                    d.init = if path.is_empty() { before } else { Tri::Yes };
+                    d.init = if whole { before } else { Tri::Yes };
                     d.moved.clear();
                     d.taken.clear();
 
@@ -2055,39 +2099,14 @@ impl<S: Stage> Flow<'_, S> {
                 st.loans[loan.index()] = Tri::Yes;
                 if mutable && let Some((slot, path)) = self.place(address) {
                     let state = &mut st.slots[slot.index()];
-                    state.moved.retain(|p, _| !overlap(p, &path));
-                    state.moved.extend(
-                        state
-                            .taken
-                            .iter()
-                            .filter(|(p, _)| overlap(p, &path))
-                            .map(|(p, &t)| (p.clone(), t)),
-                    );
+                    state.expose(path, &self.facts.paths());
                     state.owned_empty = false;
                 }
             }
             Inst::EndLoan { loan, .. } => st.loans[loan.index()] = Tri::No,
             Inst::Drop { address, .. } => {
                 if let Some((slot, path)) = self.place(address) {
-                    let s = &mut st.slots[slot.index()];
-                    if path.is_empty() {
-                        s.init = Tri::No;
-
-                        s.moved.clear();
-                        s.taken.clear();
-                        s.fields_pending.clear();
-                        s.versions = Versions::None;
-                    } else if !through_slot(&path) {
-                        s.taken
-                            .retain(|q, _| !(q.len() > path.len() && overlap(q, &path)));
-                        s.moved
-                            .retain(|q, _| !(q.len() > path.len() && overlap(q, &path)));
-                        s.taken.insert(path.clone(), Tri::Yes);
-                        s.moved.insert(path, Tri::Yes);
-                    }
-                    if s.init == Tri::No {
-                        s.owned_empty = false;
-                    }
+                    st.slots[slot.index()].remove(path, &self.facts.paths());
                     self.remember_empty(st, slot);
                 }
             }
@@ -2647,7 +2666,7 @@ fn split_cleanups(
             let Some(state) = state.filter(|_| !cleanup(&ed.unit, block)) else {
                 continue;
             };
-            for (e, out) in flow.block(block, state, |_, _, _| {}) {
+            for (e, out) in flow.block_after(block, state, |_, _| {}) {
                 let target = ed.unit.tables.edges[e.index()].target;
                 if cleanup(&ed.unit, target) {
                     incoming[target.index()].push((e, out));
@@ -2752,7 +2771,7 @@ fn split_cleanups(
                 lay,
                 facts,
             };
-            let outs = flow.block(target, joined.expect("a group has a member"), |_, _, _| {});
+            let outs = flow.block_after(target, joined.expect("a group has a member"), |_, _| {});
             for (e, out) in outs {
                 let t = ed.unit.tables.edges[e.index()].target;
                 if cleanup(&ed.unit, t) {
@@ -3159,7 +3178,7 @@ fn release_pass(
                 continue;
             };
             let block = BlockId(b as u32);
-            flow.block(block, state, |i, _, post| {
+            flow.block_after(block, state, |i, post| {
                 if wanted.contains(&(block, i)) {
                     after_states.insert((block, i), post.clone());
                 }
@@ -3674,7 +3693,7 @@ fn prune_phis<S: Stage>(ed: &mut Editor<S>, lay: Lay<'_>, facts: &mut Facts) {
             let block = BlockId(b as u32);
             let end = ed.code[b].len();
             let mut post = None;
-            flow.block(block, state, |i, _, after| {
+            flow.block_after(block, state, |i, after| {
                 if i == end {
                     post = Some(after.clone());
                 }
@@ -4868,7 +4887,15 @@ mod tests {
     #[test]
     fn a_slot_absorbs_dead_storage_exactly_when_the_join_changes_nothing() {
         let tris = [Tri::No, Tri::Yes, Tri::Maybe];
-        let path = vec![Step::Field(0)];
+        let mut paths = Paths::default();
+        let path = paths.intern(&[Step::Field(0)]);
+        let row = |t: Option<Tri>| {
+            let mut row = Tris::EMPTY;
+            if let Some(t) = t {
+                row.set(path, t);
+            }
+            row
+        };
         for live in tris {
             for init in tris {
                 for moved in [None, Some(Tri::No), Some(Tri::Yes), Some(Tri::Maybe)] {
@@ -4878,12 +4905,9 @@ mod tests {
                                 let state = SlotState {
                                     live,
                                     init,
-                                    moved: moved.into_iter().map(|t| (path.clone(), t)).collect(),
-                                    taken: taken.into_iter().map(|t| (path.clone(), t)).collect(),
-                                    fields_pending: pending
-                                        .into_iter()
-                                        .map(|t| (path.clone(), t))
-                                        .collect(),
+                                    moved: row(moved),
+                                    taken: row(taken),
+                                    fields_pending: row(pending),
                                     versions: version.into(),
                                     owned_empty: false,
                                 };

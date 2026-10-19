@@ -316,6 +316,85 @@ fn elision_turns_a_final_copy_into_a_move() {
     assert!(optimized_dups < plain_dups);
 }
 
+/// The native stages validate insertion's output once, after elision, so
+/// elision must leave an insertion fault visible: a unit that lost a release
+/// elision does not cancel still fails the Rc validator once elision has
+/// rewritten the rest of it.
+#[test]
+fn elision_leaves_an_insertion_fault_to_the_rc_validator() {
+    use hirsel_lir::ir::{Inst, ReadMode};
+    let source = format!(
+        "{P}fn main() -> u64 {{ let t: box P = box P(a: 1, b: 2); let u = copy t; let v = copy u; 3 }}"
+    );
+    let (program, lowered) = lower_valid(&source);
+    let table = lowered.table.clone();
+    let manifest = manifest(&program);
+    let target = target();
+    let operations = program.operation_registry();
+    let inputs = Inputs {
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let m = lowered
+        .units
+        .iter()
+        .position(|u| u.header.definition.0.name == "main")
+        .unwrap();
+    let instance = InstanceId(m as u32);
+    let options = Options::for_instance(false, &lowered.instances, instance);
+    let placed =
+        hirsel_rc::placement::place(lowered.units[m].clone(), &table, &options).expect("placement");
+    let proofs = Proofs::for_instance(&lowered.instances, instance);
+    let rc = hirsel_rc::insert::insert(placed, &table, &proofs).expect("insertion");
+    let elided = |u: LirUnit<Rc>| {
+        let before = dump(&u);
+        let after = hirsel_rc::elide::elide(u, &table).expect("elision");
+        assert_ne!(dump(&after), before, "elision rewrites the unit");
+        after
+    };
+    if let Err(e) = hirsel_lir::validate::validate_rc(elided(rc.clone()), &inputs) {
+        panic!("the faithful unit: {:?}", e.violations);
+    }
+    // Lose a release outside every copy, take, release window elision cancels.
+    let mut ed = hirsel_rc::insert::Editor::new(rc);
+    let (b, i) = ed
+        .code
+        .iter()
+        .enumerate()
+        .find_map(|(b, code)| {
+            (0..code.len())
+                .find(|&i| {
+                    matches!(code[i], Inst::Release { .. })
+                        && !(i >= 2
+                            && matches!(
+                                code[i - 1],
+                                Inst::Read {
+                                    mode: ReadMode::Take,
+                                    ..
+                                }
+                            )
+                            && matches!(code[i - 2], Inst::Copy { .. }))
+                })
+                .map(|i| (b, i))
+        })
+        .expect("a release elision keeps");
+    ed.code[b].remove(i);
+    let fault = hirsel_lir::validate::validate_rc(elided(ed.finish()), &inputs)
+        .err()
+        .expect("a lost release stays a validation failure after elision");
+    assert!(
+        fault
+            .violations
+            .iter()
+            .any(|v| matches!(v.kind, hirsel_lir::validate::ViolationKind::Leak(_))),
+        "{:?}",
+        fault.violations
+    );
+}
+
 /// A flat record built from a literal and an integer, copied explicitly, its
 /// original's fixed field rewritten: the copy keeps its bytes (MEM-12), and
 /// every mode runs clean on the ledger (LIR schema revision 4).
