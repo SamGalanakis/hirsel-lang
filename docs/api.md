@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1363 exported definitions; 494 variants.
+1380 exported definitions; 509 variants.
 
 ## Types and roots
 
@@ -302,6 +302,10 @@ Variant of DecodeError.
 
 - `type DirEntry: serializable uses {} = { path: Path, kind: FileKind }`
 
+<a id="def-core_401_2fDirGrant"></a>
+
+- `type DirGrant: serializable uses {} = { path: String, access: GrantAccess }`
+
 <a id="def-core_401_2fDurability"></a>
 
 - `type Durability: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Durable() | Volatile()`
@@ -317,6 +321,10 @@ Variant of Durability.
 - `Volatile() -> Durability`
 
 Variant of Durability.
+
+<a id="def-core_401_2fEntry"></a>
+
+- `opaque type Entry[F]: plain + copyable + inert + sendable + noalloc_drop uses {}`
 
 <a id="def-core_401_2fEnv"></a>
 
@@ -512,6 +520,22 @@ Variant of FloatIntError.
 
 Variant of FloatIntError.
 
+<a id="def-core_401_2fGrantAccess"></a>
+
+- `type GrantAccess: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Read() | ReadWrite()`
+
+<a id="def-core_401_2fGrantAccess_23Read"></a>
+
+- `Read() -> GrantAccess`
+
+Variant of GrantAccess.
+
+<a id="def-core_401_2fGrantAccess_23ReadWrite"></a>
+
+- `ReadWrite() -> GrantAccess`
+
+Variant of GrantAccess.
+
 <a id="def-core_401_2fGrantError"></a>
 
 - `type GrantError: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = NotGranted()`
@@ -522,6 +546,10 @@ Variant of FloatIntError.
 
 Variant of GrantError.
 
+<a id="def-core_401_2fGrantSet"></a>
+
+- `type GrantSet: serializable uses {} = { stdout: bool, stderr: bool, tasks: bool, monotonic_clock: bool, wall_clock: bool, random: bool, dirs: List[DirGrant], net: List[NetRule], process: List[ProcessRule] }`
+
 <a id="def-core_401_2fGroupOutput"></a>
 
 - `type GroupOutput uses {} = { statuses: List[ExitStatus], stderr: List[Bytes] }`
@@ -529,6 +557,28 @@ Variant of GrantError.
 <a id="def-core_401_2fHasher"></a>
 
 - `type Hasher[T] uses {} = { hash: fn(T, u64) -> u64 uses {} }`
+
+<a id="def-core_401_2fInDoubtReason"></a>
+
+- `type InDoubtReason: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Lost() | TimedOut() | Abandoned()`
+
+<a id="def-core_401_2fInDoubtReason_23Abandoned"></a>
+
+- `Abandoned() -> InDoubtReason`
+
+Variant of InDoubtReason.
+
+<a id="def-core_401_2fInDoubtReason_23Lost"></a>
+
+- `Lost() -> InDoubtReason`
+
+Variant of InDoubtReason.
+
+<a id="def-core_401_2fInDoubtReason_23TimedOut"></a>
+
+- `TimedOut() -> InDoubtReason`
+
+Variant of InDoubtReason.
 
 <a id="def-core_401_2fInline"></a>
 
@@ -762,7 +812,7 @@ Variant of NetError.
 
 <a id="def-core_401_2fNetOperation"></a>
 
-- `type NetOperation: plain + copyable + data + key + sendable + inert + noalloc_drop uses {} = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer() | ListenTls() | UnixConnect() | UnixListen() | UnixListenRemoveStale()`
+- `type NetOperation: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Connect() | ConnectTls() | Listen() | UdpBind() | UdpPeer() | ListenTls() | UnixConnect() | UnixListen() | UnixListenRemoveStale()`
 
 <a id="def-core_401_2fNetOperation_23Connect"></a>
 
@@ -824,7 +874,7 @@ Variant of NetOperation.
 
 <a id="def-core_401_2fNetRule"></a>
 
-- `type NetRule uses {} = { address: String, port: u16, operation: NetOperation }`
+- `type NetRule: serializable uses {} = { address: String, port: u16, operation: NetOperation }`
 
 <a id="def-core_401_2fNetStep"></a>
 
@@ -881,6 +931,40 @@ Variant of NetTimeout.
 - `Unbounded() -> NetTimeout`
 
 Variant of NetTimeout.
+
+<a id="def-core_401_2fNotRunReason"></a>
+
+- `type NotRunReason: plain + copyable + data + key + sendable + inert + noalloc_drop + serializable uses {} = Denied() | VersionMismatch() | Unreachable() | Overloaded() | Rejected()`
+
+<a id="def-core_401_2fNotRunReason_23Denied"></a>
+
+- `Denied() -> NotRunReason`
+
+Variant of NotRunReason.
+
+<a id="def-core_401_2fNotRunReason_23Overloaded"></a>
+
+- `Overloaded() -> NotRunReason`
+
+Variant of NotRunReason.
+
+<a id="def-core_401_2fNotRunReason_23Rejected"></a>
+
+- `Rejected() -> NotRunReason`
+
+Variant of NotRunReason.
+
+<a id="def-core_401_2fNotRunReason_23Unreachable"></a>
+
+- `Unreachable() -> NotRunReason`
+
+Variant of NotRunReason.
+
+<a id="def-core_401_2fNotRunReason_23VersionMismatch"></a>
+
+- `VersionMismatch() -> NotRunReason`
+
+Variant of NotRunReason.
 
 <a id="def-core_401_2fOption"></a>
 
@@ -1044,7 +1128,7 @@ Variant of ProcessError.
 
 <a id="def-core_401_2fProcessRule"></a>
 
-- `type ProcessRule uses {} = { program: String, env: List[String] }`
+- `type ProcessRule: serializable uses {} = { program: String, env: List[String] }`
 
 <a id="def-core_401_2fProcessScript"></a>
 
@@ -1091,6 +1175,44 @@ Variant of Result.
 - `Ok(T) -> Result[T, E]`
 
 Variant of Result.
+
+<a id="def-core_401_2fRunError"></a>
+
+- `type RunError[E] uses {E} = NotRun(NotRunReason) | InDoubt(InDoubtReason) | Failed(E) | Faulted(Failure) | Canceled(CancelCause)`
+
+<a id="def-core_401_2fRunError_23Canceled"></a>
+
+- `Canceled(CancelCause) -> RunError[E]`
+
+Variant of RunError.
+
+<a id="def-core_401_2fRunError_23Failed"></a>
+
+- `Failed(E) -> RunError[E]`
+
+Variant of RunError.
+
+<a id="def-core_401_2fRunError_23Faulted"></a>
+
+- `Faulted(Failure) -> RunError[E]`
+
+Variant of RunError.
+
+<a id="def-core_401_2fRunError_23InDoubt"></a>
+
+- `InDoubt(InDoubtReason) -> RunError[E]`
+
+Variant of RunError.
+
+<a id="def-core_401_2fRunError_23NotRun"></a>
+
+- `NotRun(NotRunReason) -> RunError[E]`
+
+Variant of RunError.
+
+<a id="def-core_401_2fRunner"></a>
+
+- `@capability(global) opaque type Runner: plain + copyable + sendable + noalloc_drop uses {Runner}`
 
 <a id="def-core_401_2fScalarView"></a>
 
@@ -6614,6 +6736,10 @@ References: [`core@1/InputError`](#def-core_401_2fInputError), [`core@1/Option`]
 
 - `@noalloc fn io.random(rt: Io) -> Result[Random, GrantError]`
 
+<a id="def-core_401_2fio_2frunner"></a>
+
+- `@noalloc fn io.runner(rt: Io, name: String) -> Result[Runner, GrantError]`
+
 <a id="def-core_401_2fio_2fstderr"></a>
 
 - `@noalloc fn io.stderr(rt: Io) -> Result[Stderr, GrantError]`
@@ -7964,6 +8090,37 @@ References: [`core@1/Result`](#def-core_401_2fResult)
 References: [`core@1/Result`](#def-core_401_2fResult)
 
 
+## runner
+
+<a id="def-core_401_2frunner_2fcall"></a>
+
+- `fn runner.call[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]`
+
+<a id="def-core_401_2frunner_2fcompute"></a>
+
+- `fn runner.compute[A: serializable, R: serializable, E: serializable](r: Runner, f: Entry[fn(a: A) -> Result[R, E]], a: A) -> unique Result[R, RunError[E]]`
+
+<a id="def-core_401_2frunner_2fentry_5fpath"></a>
+
+- `fn runner.entry_path[F](f: Entry[F]) -> String`
+
+<a id="def-core_401_2frunner_2fgrants"></a>
+
+- `fn runner.grants(r: Runner) -> GrantSet`
+
+<a id="def-core_401_2frunner_2fnarrow"></a>
+
+- `fn runner.narrow(r: Runner, keep: GrantSet) -> Result[Runner, GrantError]`
+
+<a id="def-core_401_2frunner_2fonly"></a>
+
+- `fn runner.only(r: Runner, definitions: List[String]) -> Result[Runner, GrantError]`
+
+<a id="def-core_401_2frunner_2fspawn"></a>
+
+- `fn runner.spawn[A: serializable, R: serializable, E: serializable](s: Scope, r: Runner, f: Entry[fn(rt: Io, a: A) -> Result[R, E]], a: A) -> Task[Result[R, RunError[E]]] of s`
+
+
 ## scalar
 
 <a id="def-std_401_2fscalar_2fFormatError"></a>
@@ -9072,6 +9229,10 @@ References: [`core@1/i64`](#def-core_401_2fi64), [`std@1/test/Source`](#def-std_
 - `pub fn test.range_u64(mut s: Source, low: u64, high: u64) -> u64 uses {}`
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
+
+<a id="def-core_401_2ftest_2frunner"></a>
+
+- `fn test.runner(t: Test) -> Runner`
 
 <a id="def-core_401_2ftest_2fseed"></a>
 
