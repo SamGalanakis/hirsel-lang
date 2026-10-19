@@ -79,6 +79,7 @@ N fn test.check(t: Test, condition: bool) -> ()
 N fn test.check_case(t: Test, ok: bool, case: u64) -> ()
 N fn test.fail(t: Test) -> Never
 N fn test.seed(t: Test) -> u64
+N fn test.tasks(t: Test) -> Tasks
 N fn test.log(t: Test, text: String) -> ()
 N fn test.expect_snapshot(t: Test, name: String, text: String) -> ()
 fn test.dir(t: Test, entries: List[(Path, Bytes)]) -> Dir
@@ -596,7 +597,10 @@ decides the test's outcome (`hirsel test` in the building guide).
 `test.dir` creates a confined fake file system from its
 entries; `test.net` creates a fake `Net` served by scripted peers ([below](#network));
 `test.process` creates a fake `Proc` served by scripted runs and children
-([below](#processes)).
+([below](#processes)). `test.tasks` returns a `Tasks` for the test's own tasks, channels, mutexes and
+atomics, scheduled by the run's scheduler (`inputs.scheduler` in
+[determinism.md](determinism.md#run-configuration)); it grants no host authority, and every
+call returns an equivalent capability.
 
 ## Concurrency
 

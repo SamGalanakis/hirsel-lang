@@ -89,6 +89,7 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         }
         Request::Process { io } => format!("process {io}"),
         Request::Ready { wait, points } => format!("ready {wait} {points}"),
+        Request::Schedule { count, choice } => format!("schedule {count} {choice}"),
         Request::RandomBytes { random, count } => format!("random_bytes {random} {count}"),
         Request::SleepUntil { clock, deadline } => format!("sleep_until {clock} {deadline}"),
         Request::TestProcess {
@@ -429,6 +430,10 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
         ["ready", wait, points] => Request::Ready {
             wait: number(wait)?,
             points: number(points)?,
+        },
+        ["schedule", count, choice] => Request::Schedule {
+            count: number(count)?,
+            choice: number(choice)?,
         },
         ["random_bytes", random, count] => Request::RandomBytes {
             random: number(random)?,

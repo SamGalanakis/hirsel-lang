@@ -173,7 +173,7 @@ pub fn replay_interpreter_with_fixture(
                 | Request::ChildKill { .. } => {
                     panic!("process tapes replay through tests/it/process.rs")
                 }
-                Request::Ready { .. } => {
+                Request::Ready { .. } | Request::Schedule { .. } => {
                     panic!("the interpreter oracle runs no cooperative host scheduler")
                 }
                 Request::RandomBytes { .. } | Request::SleepUntil { .. } => {
@@ -206,6 +206,7 @@ pub fn replay_interpreter_with_fixture(
                 ),
                 Request::TestFail { test } => ("test.fail", vec![handle("Test", *test)]),
                 Request::TestSeed { test } => ("test.seed", vec![handle("Test", *test)]),
+                Request::TestTasks { test } => ("test.tasks", vec![handle("Test", *test)]),
                 Request::TestLog { test, text } => (
                     "test.log",
                     vec![handle("Test", *test), Value::String(text.clone())],

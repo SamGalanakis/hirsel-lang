@@ -1,0 +1,35 @@
+// Two tasks each add one to a shared counter by loading it and then storing one more.
+// Every atomic operation is a scheduling point, so when both loads run before either
+// store, one addition is lost. The default fifo@1 schedule never interleaves them that
+// way; `hirsel test --explore` finds a schedule that does.
+
+fn add_one(tasks: Tasks, counter: Atomic[u64]) {
+  let seen = atomic.load(tasks, counter)
+  atomic.store(tasks, counter, seen + 1)
+}
+
+fn count(tasks: Tasks) -> u64 {
+  let counter: Atomic[u64] = atomic.create(tasks, 0u64)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let a = task.async(s, fn() { add_one(tasks, copy counter) })
+      let b = task.async(s, fn() { add_one(tasks, copy counter) })
+      task.await(s, take a)
+      task.await(s, take b)
+    }
+  )
+  atomic.load(tasks, counter)
+}
+
+@test
+fn both_additions_land(t: Test) {
+  test.check(t, count(test.tasks(t)) == 2)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let out = io.stdout(rt)?
+  let _ = out.print(out, if count(tasks) == 2 { "2 additions\n" } else { "lost an addition\n" })
+  Ok(())
+}

@@ -221,6 +221,10 @@ pub enum Request {
     TestSeed {
         test: u64,
     },
+    /// `test.tasks`: a Tasks capability for the test's own tasks, under the run's scheduler.
+    TestTasks {
+        test: u64,
+    },
     /// `test.log`: one escaped Test report record.
     TestLog {
         test: u64,
@@ -494,6 +498,12 @@ pub enum Request {
         wait: u64,
         points: u64,
     },
+    /// A scheduling input of a seeded scheduler (`inputs.scheduler`), never a capability
+    /// request: candidate `choice` of the `count` runnable tasks ran next.
+    Schedule {
+        count: u64,
+        choice: u64,
+    },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClockError {
@@ -611,7 +621,7 @@ pub enum Completion {
     Blocked {
         committed: bool,
     },
-    /// The completion of `Request::Ready`.
+    /// The completion of a scheduling input, `Request::Ready` or `Request::Schedule`.
     Ready,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1267,6 +1277,12 @@ impl State {
                 };
                 Ok(C::Size(Ok(*seed)))
             }
+            R::TestTasks { test } => {
+                if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
+                    return Err(AdapterError::InvalidHandle(*test));
+                }
+                Ok(C::Handle(Ok(self.handles.insert(Grant::Tasks))))
+            }
             R::TestLog { test, text } => {
                 if !matches!(self.handles.rows.get(test), Some(Grant::Test { .. })) {
                     return Err(AdapterError::InvalidHandle(*test));
@@ -1889,6 +1905,10 @@ pub trait Adapter {
     /// Whether the request parked under `token` has committed no effect yet.
     fn cancellable(&self, _token: u64) -> bool {
         true
+    }
+    /// A seeded scheduler's choice among runnable candidates; replay supplies the recorded choice.
+    fn schedule(&mut self, _count: u64, choice: u64) -> Result<u64, AdapterError> {
+        Ok(choice)
     }
     /// A scheduling point with a parked request: the requests to re-issue now. A
     /// cooperative host answers the tokens whose interest is ready, in token order; the
@@ -3153,6 +3173,27 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_seed(
         crate::fault("Test completion mismatch");
     };
     unsafe { out.write(seed) };
+    crate::STATUS_OK
+}
+
+/// # Safety
+/// A live Test grant is borrowed and out is writable handle storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_test_tasks(
+    ctx: *mut crate::RunCtx,
+    _destination: *mut u8,
+    out: *mut u64,
+    test: *const u64,
+) -> u8 {
+    let Ok(completion) =
+        (unsafe { capability_call(ctx, Request::TestTasks { test: test.read() }) })
+    else {
+        return crate::STATUS_FAILURE;
+    };
+    let Completion::Handle(Ok(tasks)) = completion else {
+        crate::fault("Test completion mismatch");
+    };
+    unsafe { out.write(tasks) };
     crate::STATUS_OK
 }
 

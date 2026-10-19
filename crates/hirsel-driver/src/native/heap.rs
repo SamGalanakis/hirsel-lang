@@ -347,6 +347,11 @@ impl Operations for Io {
                     bits: self.test_seed.into(),
                 })
             }
+            (Some("test"), "tasks", [OpValue::Handle(test)])
+                if matches!(self.grants.get(test), Some(IoGrant::Test)) =>
+            {
+                OpOutcome::Value(OpValue::Handle(self.grant(IoGrant::Tasks)))
+            }
             (Some("test"), "log", [OpValue::Handle(test), OpValue::Bytes(text)])
                 if matches!(self.grants.get(test), Some(IoGrant::Test)) =>
             {

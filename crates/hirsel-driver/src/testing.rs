@@ -1,6 +1,7 @@
 //! Package test discovery and isolated launches over ordinary checked functions.
 //! Substring/OR filters adapt Rust libtest filter_tests (third-party/NOTICES.md).
 use hirsel_engine::{DefinitionQueries, LoadedProgram, RunOutcome, SimulationConfig, ToolError};
+pub use hirsel_run_config::Scheduler;
 use hirsel_syntax::{DefPath, FileContext};
 use hirsel_types::{SignatureKind, TypeKind};
 use sha2::{Digest, Sha256};
@@ -23,6 +24,64 @@ pub struct Test {
     /// A bench's generated loop entries by iteration count: 0, then 1 to 10^9 by
     /// powers of ten. Empty for a test.
     pub loops: Vec<(u64, DefPath)>,
+    /// The launch's scheduler (`inputs.scheduler`); `None` is the default `fifo@1`.
+    pub scheduler: Option<Scheduler>,
+}
+
+/// The schedules each selected test runs under.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum Schedules {
+    /// One run under the default scheduler.
+    #[default]
+    Default,
+    /// One run under this scheduler, as when replaying an explored failure.
+    One(Scheduler),
+    /// Runs under seeds 0 to `count - 1` of `policy` (whose own seed is unused), stopping
+    /// at the first failure.
+    Explore { policy: Scheduler, count: u64 },
+}
+
+impl Schedules {
+    /// The scheduler of each run, in order.
+    pub fn runs(&self) -> impl Iterator<Item = Option<Scheduler>> + '_ {
+        let count = match self {
+            Schedules::Default | Schedules::One(_) => 1,
+            Schedules::Explore { count, .. } => *count,
+        };
+        (0..count).map(move |seed| match self {
+            Schedules::Default => None,
+            Schedules::One(scheduler) => Some(scheduler.clone()),
+            Schedules::Explore { policy, .. } => Some(Scheduler {
+                seed,
+                ..policy.clone()
+            }),
+        })
+    }
+}
+
+/// Run `test` under each of `schedules` until one fails (a Blocked run included, CONC-8):
+/// that run's result, else the last run's.
+pub fn explore(
+    test: &Test,
+    schedules: &Schedules,
+    mut run: impl FnMut(&Test) -> TestResult,
+) -> TestResult {
+    let mut last = None;
+    for (index, scheduler) in schedules.runs().enumerate() {
+        let launch = Test {
+            scheduler,
+            ..test.clone()
+        };
+        let mut result = run(&launch);
+        result.scheduler = launch.scheduler;
+        result.schedules = index as u64 + 1;
+        let failed = result.failure.is_some();
+        last = Some(result);
+        if failed {
+            break;
+        }
+    }
+    last.expect("at least one schedule")
 }
 
 /// Which marked functions `discover` selects.
@@ -63,6 +122,10 @@ pub struct TestResult {
     pub failure: Option<String>,
     /// The test's Test report with log text unescaped, then snapshot diffs.
     pub report: String,
+    /// The scheduler of the reported run, when one was selected or explored.
+    pub scheduler: Option<Scheduler>,
+    /// How many schedules ran.
+    pub schedules: u64,
 }
 
 /// One bench's calibrated measurement, or its failure.
@@ -198,6 +261,8 @@ impl Test {
             seed: self.seed,
             failure: (!failures.is_empty()).then(|| failures.join("; ")),
             report,
+            scheduler: self.scheduler.clone(),
+            schedules: 1,
         }
     }
 }
@@ -408,6 +473,7 @@ pub fn discover(
             definition,
             entry,
             loops,
+            scheduler: None,
         });
     }
     Ok(tests)
@@ -418,25 +484,28 @@ pub fn run_interpreted(
     tests: &[Test],
     checked: bool,
     bless: bool,
+    schedules: &Schedules,
 ) -> Vec<TestResult> {
     tests
         .iter()
         .map(|test| {
-            let (failure, stdout) = match execute(program, test, checked, 0) {
-                Ok(execution) => {
-                    let stdout = match &execution.observation {
-                        Some(observation) => observation.output.clone(),
-                        None => execution.tooling_output,
-                    };
-                    let failure = match execution.outcome {
-                        Ok(outcome) => outcome_failure(&outcome),
-                        Err(error) => Some(format!("runtime error: {error:?}")),
-                    };
-                    (failure, stdout)
-                }
-                Err(error) => (Some(format!("runtime error: {error}")), vec![]),
-            };
-            test.result(failure, &stdout, bless)
+            explore(test, schedules, |test| {
+                let (failure, stdout) = match execute(program, test, checked, 0) {
+                    Ok(execution) => {
+                        let stdout = match &execution.observation {
+                            Some(observation) => observation.output.clone(),
+                            None => execution.tooling_output,
+                        };
+                        let failure = match execution.outcome {
+                            Ok(outcome) => outcome_failure(&outcome),
+                            Err(error) => Some(format!("runtime error: {error:?}")),
+                        };
+                        (failure, stdout)
+                    }
+                    Err(error) => (Some(format!("runtime error: {error}")), vec![]),
+                };
+                test.result(failure, &stdout, bless)
+            })
         })
         .collect()
 }
@@ -456,6 +525,7 @@ pub fn execute(
     let simulation = SimulationConfig {
         grants: Default::default(),
         test_seed: test.seed,
+        scheduler: test.scheduler.clone(),
         ..Default::default()
     };
     let run = if checked {
@@ -487,6 +557,7 @@ pub fn run_path(
     override_seed: Option<u64>,
     bless: bool,
     max_steps: Option<u64>,
+    schedules: &Schedules,
 ) -> Result<Vec<TestResult>, ToolError> {
     let mut program = crate::COMPILER.load_test_package(path)?;
     let tests = discover(&mut program, filters, override_seed, Selection::Tests)?;
@@ -497,7 +568,13 @@ pub fn run_path(
         },
         ..Default::default()
     }));
-    Ok(run_interpreted(&mut program, &tests, false, bless))
+    Ok(run_interpreted(
+        &mut program,
+        &tests,
+        false,
+        bless,
+        schedules,
+    ))
 }
 
 /// Benches run interpreted, each launch timed around the interpreter's execution.
@@ -557,6 +634,40 @@ mod tests {
         assert_eq!(measured, Ok((100_000, 700_000)));
         let failed = super::calibrate(Duration::from_micros(1), |_| Err("boom".into()));
         assert_eq!(failed, Err("boom".into()));
+    }
+
+    #[test]
+    fn exploration_runs_seeds_in_order_and_stops_at_the_first_failure() {
+        use super::{Scheduler, Schedules, Test, explore};
+        let test = Test {
+            definition: hirsel_syntax::DefPath::core("probe"),
+            entry: hirsel_syntax::DefPath::core("probe"),
+            seed: 3,
+            source: Default::default(),
+            loops: vec![],
+            scheduler: None,
+        };
+        let schedules = Schedules::Explore {
+            policy: Scheduler::parse("pct@1:0").unwrap(),
+            count: 10,
+        };
+        let mut ran = Vec::new();
+        // Seed 4's run is Blocked (CONC-8), a failure like any other.
+        let result = explore(&test, &schedules, |launch| {
+            let scheduler = launch.scheduler.clone().unwrap();
+            ran.push(scheduler.seed);
+            let failure = (scheduler.seed == 4).then(|| "runtime failure: blocked".to_string());
+            launch.result(failure, b"", false)
+        });
+        assert_eq!(ran, [0, 1, 2, 3, 4]);
+        assert_eq!(result.scheduler.unwrap().to_string(), "pct@1:4");
+        assert_eq!((result.schedules, result.seed), (5, 3));
+        let passed = explore(&test, &schedules, |launch| launch.result(None, b"", false));
+        assert_eq!((passed.failure, passed.schedules), (None, 10));
+        let default = explore(&test, &Schedules::Default, |launch| {
+            launch.result(None, b"", false)
+        });
+        assert_eq!((default.scheduler, default.schedules), (None, 1));
     }
 
     #[test]

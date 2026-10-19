@@ -11,9 +11,11 @@
 //!
 //! The schedule is the reference interpreter's, so both observe the same interleaving:
 //!
-//! - one FIFO queue of runnable tasks; a spawned child joins its back;
+//! - one queue of runnable tasks; a spawned child joins its back;
 //! - after every capability operation ([`yield_now`]) the running task, when another is
-//!   runnable, joins the back and the front runs;
+//!   runnable, joins the back and the run's scheduler policy ([`pick`]) chooses the task to
+//!   run: under `fifo@1` the front, under a seeded policy (`hirsel_kernels::schedule`) any,
+//!   which may be the running task itself;
 //! - a task that must wait (a join, a scope exit) parks with what it waits for ([`Wait`]).
 //!   Scheduling points are every yield and whenever the running task stops (it parked, holds
 //!   its result or completed). At each, the parked tasks whose wait may be over are polled:
@@ -43,6 +45,8 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ptr::NonNull;
+
+use hirsel_kernels::schedule::{Algorithm, Schedule};
 
 use crate::context::RunCtx;
 use crate::failure::{Chained, FailureState};
@@ -176,6 +180,8 @@ struct Task {
     woken: bool,
     /// The task parked joining it.
     awaited_by: Option<u32>,
+    /// Its scheduling priority under `pct@1`, drawn when it was created.
+    priority: u64,
 }
 
 /// A task set (CONC-2): its scope and its members' Task words in add order, `None` once
@@ -234,6 +240,8 @@ pub(crate) struct Scheduler {
     vacant_sets: Vec<u32>,
     /// Children that held their result or failed so far: the next one's completion order.
     completions: u64,
+    /// The run's scheduler policy (`inputs.scheduler`).
+    schedule: Schedule,
 }
 
 fn handle(index: u32, generation: u32) -> u64 {
@@ -241,13 +249,15 @@ fn handle(index: u32, generation: u32) -> u64 {
 }
 
 impl Scheduler {
-    fn new() -> Scheduler {
-        let mut scheduler = Scheduler::default();
-        scheduler
-            .tasks
-            .push(Some(Task::new(1, None, Vec::new(), None)));
-        scheduler.generation = 1;
-        scheduler
+    fn new(mut schedule: Schedule) -> Scheduler {
+        let mut root = Task::new(1, None, Vec::new(), None);
+        root.priority = schedule.admit();
+        Scheduler {
+            tasks: vec![Some(root)],
+            generation: 1,
+            schedule,
+            ..Scheduler::default()
+        }
     }
     fn task(&mut self, index: u32) -> &mut Task {
         self.tasks[index as usize]
@@ -542,6 +552,7 @@ impl Task {
             parked_at: 0,
             woken: false,
             awaited_by: None,
+            priority: 0,
         }
     }
 }
@@ -574,9 +585,10 @@ pub(crate) fn scheduler(ctx: *mut RunCtx) -> &'static mut Scheduler {
     // SAFETY: the context is live for the whole run, and the scheduler is only reached
     // through it, by the one running task; no reference is kept across a switch.
     unsafe {
-        (*ctx)
-            .tasks
-            .get_or_insert_with(|| Box::new(Scheduler::new()))
+        (*ctx).tasks.get_or_insert_with(|| {
+            let schedule = std::mem::take(&mut (*ctx).schedule);
+            Box::new(Scheduler::new(schedule))
+        })
     }
 }
 
@@ -744,7 +756,44 @@ unsafe fn run_next(ctx: *mut RunCtx) -> Stopped<()> {
     Ok(())
 }
 
-/// Poll the parked tasks and take the front of the queue.
+/// A scheduling point: the task that ran last stopped or joined the back of the queue, and
+/// the policy takes the task to run next off the nonempty queue. At a `pct@1` change point the
+/// task that ran last takes its lowered priority first. A choice the policy could have made
+/// otherwise is a scheduling input of the run, recorded on its tape and, in replay, taken
+/// from it.
+///
+/// # Safety
+/// `ctx` is live and no borrow of its Io adapter or scheduler is held.
+unsafe fn pick(ctx: *mut RunCtx) -> Stopped<Option<u32>> {
+    let s = scheduler(ctx);
+    if s.schedule.algorithm() == Algorithm::Fifo || s.runnable.is_empty() {
+        return Ok(s.runnable.pop_front());
+    }
+    if let Some(priority) = s.schedule.point()
+        && let Some(Some(ran)) = s.tasks.get_mut(s.current as usize)
+    {
+        ran.priority = priority;
+    }
+    let priorities: Vec<u64> = s
+        .runnable
+        .iter()
+        .map(|&task| s.tasks[task as usize].as_ref().map_or(0, |t| t.priority))
+        .collect();
+    let mut choice = s.schedule.choose(&priorities);
+    // SAFETY: the context is live; a run without an Io binding records nothing.
+    if s.schedule.recorded(priorities.len()) && !unsafe { (*ctx).io_data() }.is_null() {
+        let binding = unsafe { crate::io::Binding::get(ctx) };
+        let count = priorities.len() as u64;
+        choice = match binding.adapter.schedule(count, choice as u64) {
+            Ok(choice) if choice < count => choice as usize,
+            Ok(_) => crate::fault("a scheduling input outside the runnable queue"),
+            Err(error) => return Err(Stop::refusal(error)),
+        };
+    }
+    Ok(scheduler(ctx).runnable.remove(choice))
+}
+
+/// Poll the parked tasks and take the next task to run ([`pick`]).
 ///
 /// # Safety
 /// `ctx` is live.
@@ -756,11 +805,12 @@ unsafe fn next_task(ctx: *mut RunCtx) -> Stopped<u32> {
         unsafe { poll_parked(ctx) }?;
     }
     // CONC-8: no task can run and nothing outside the run can wake one.
-    scheduler(ctx).runnable.pop_front().ok_or(Stop::Blocked)
+    unsafe { pick(ctx) }?.ok_or(Stop::Blocked)
 }
 
 /// The yield after a capability operation: the parked tasks are polled and, when another task
-/// is runnable, the running task joins the back of the queue and the front runs.
+/// is runnable, the running task joins the back of the queue and the policy picks the task to
+/// run, which may be the running task again.
 ///
 /// # Safety
 /// `ctx` is live and no borrow of its Io adapter or scheduler is held.
@@ -781,10 +831,12 @@ pub(crate) unsafe fn try_yield(ctx: *mut RunCtx) -> Stopped<()> {
     // SAFETY: the context is live.
     unsafe { poll_parked(ctx) }?;
     let s = scheduler(ctx);
-    let Some(next) = s.runnable.pop_front() else {
+    if s.runnable.is_empty() {
         return Ok(());
-    };
+    }
     s.runnable.push_back(s.current);
+    // SAFETY: the context is live and the queue is nonempty.
+    let next = unsafe { pick(ctx) }?.unwrap_or_else(|| crate::fault("an empty runnable queue"));
     unsafe { switch_to(ctx, next) };
     Ok(())
 }
@@ -809,8 +861,11 @@ unsafe fn try_block(ctx: *mut RunCtx, wait: Wait, yielded: bool) -> Stopped<()> 
         // SAFETY: the context is live.
         unsafe { poll_parked(ctx) }?;
         let s = scheduler(ctx);
-        if let Some(next) = s.runnable.pop_front() {
+        if !s.runnable.is_empty() {
             s.runnable.push_back(s.current);
+            // SAFETY: the context is live and the queue is nonempty.
+            let next =
+                unsafe { pick(ctx) }?.unwrap_or_else(|| crate::fault("an empty runnable queue"));
             unsafe { switch_to(ctx, next) };
         }
     }
@@ -1170,6 +1225,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     let generation = s.fresh_generation();
     let mut task = Task::new(generation, Some(scope), path, canceled);
     task.code = Some((code, environment, operation_site));
+    task.priority = s.schedule.admit();
     let index = match s.vacant_tasks.pop() {
         Some(index) => index,
         None => {

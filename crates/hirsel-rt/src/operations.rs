@@ -185,6 +185,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         | "test.check_case"
         | "test.fail"
         | "test.seed"
+        | "test.tasks"
         | "test.log"
         | "test.expect_snapshot"
         | "test.dir"
@@ -1380,6 +1381,13 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
     },
     AbiExport {
         caller_site: false,
+        symbol: "hirsel_rt_v2_test_tasks",
+        destination: true,
+        result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
         symbol: "hirsel_rt_v2_test_log",
         destination: false,
         result: None,
@@ -2047,6 +2055,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "test.log",
     "test.net",
     "test.seed",
+    "test.tasks",
     // CT-3: compile-time only; no run-time code holds a TypeShape or Body.
     "type_shape.info",
     "codegen.body",

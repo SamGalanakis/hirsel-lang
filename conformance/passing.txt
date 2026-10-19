@@ -1943,6 +1943,7 @@ conformance/LANG/LANG-9-test-report-run.hir
 conformance/LANG/LANG-9-test-runner-fakes.hir
 conformance/LANG/LANG-9-test-runner-shadowed-types.hir
 conformance/LANG/LANG-9-test-snapshot-name-fail.hir
+conformance/LANG/LANG-9-test-tasks-run.hir
 conformance/LANG/LANG-9-testhelpers-approx-boundary-run.hir
 conformance/LANG/LANG-9-testhelpers-approx-infinity-fail.hir
 conformance/LANG/LANG-9-testhelpers-approx-negative-fail.hir

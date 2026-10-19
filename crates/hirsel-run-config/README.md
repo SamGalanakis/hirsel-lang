@@ -77,8 +77,11 @@ Known provider contracts have one closed enumeration, `ProviderContract`:
 `clock.wall.unix_ns@1`, `net.stream@1`, `net.script@2`, `process.spawn@1`,
 `process.script@1`, the code admission policies `admit.any@1` and `admit.safe@1`, and `budgets.none@1` and `budgets.limits@1`. The validator checks the exact projection and version.
 These names are identical for real hosts and simulation/replay; execution origin
-belongs to tooling provenance. Unknown contracts and versions and
-scheduler policy refuse as Unsupported until adapters can enforce them.
+belongs to tooling provenance. Unknown contracts and versions refuse as Unsupported.
+`inputs.scheduler` names `fifo`, `random` or `pct`, version 1 (docs/spec/determinism.md,
+"Scheduler"); any other refuses as Unsupported. `Config::scheduler` projects its launch
+word (`Scheduler::CONTRACTS`, shared with `hirsel_kernels::schedule::Algorithm::code`) and
+seed, and `Scheduler::parse` reads the `name@1:seed` spelling of `hirsel test --scheduler`.
 Revocation references remain external host evidence selectors, not provider names.
 
 `net.stream@1` takes `rules`; `net.script@2` additionally requires `peers`

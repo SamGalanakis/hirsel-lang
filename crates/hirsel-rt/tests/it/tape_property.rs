@@ -147,6 +147,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         TestCheckCase { test: n.wrapping_add(29), condition: n.wrapping_add(4) % 2 == 0, case: n.wrapping_add(1) },
         TestFail { test: n.wrapping_add(29) },
         TestSeed { test: n.wrapping_add(29) },
+        TestTasks { test: n.wrapping_add(29) },
         TestLog { test: n.wrapping_add(29), text: if n == 0 { String::new() } else { format!("{text}#text") } },
         TestSnapshot { test: n.wrapping_add(29), name: if n == 0 { String::new() } else { format!("{text}#name") }, text: if n == 0 { String::new() } else { format!("{text}#text") } },
         TestNet { test: n.wrapping_add(29), peers: peers, listeners: listeners },
@@ -204,7 +205,8 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         LocalAddr { net: n.wrapping_add(17), listener: n.wrapping_add(13) },
         UnixConnect { net: n.wrapping_add(17), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         UnixListen { net: n.wrapping_add(17), path: if n == 0 { String::new() } else { format!("{text}#path") } },
-        Ready { wait: n.wrapping_add(30), points: n.wrapping_add(20) }
+        Ready { wait: n.wrapping_add(30), points: n.wrapping_add(20) },
+        Schedule { count: n.wrapping_add(2), choice: n % 2 }
     }
 }
 

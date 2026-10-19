@@ -14,13 +14,15 @@ pub fn test_path(
     seed: Option<u64>,
     backend: Backend,
     bless: bool,
+    schedules: &crate::testing::Schedules,
 ) -> Result<Vec<TestResult>, ToolError> {
     let mut loaded = crate::COMPILER.load_test_package(path)?;
     let tests = crate::testing::discover(&mut loaded, filters, seed, Selection::Tests)?;
     if tests.is_empty() {
         return Ok(vec![]);
     }
-    run(&mut loaded, &tests, backend, bless).map_err(|e| ToolError::Runtime(e.to_string()))
+    run(&mut loaded, &tests, backend, bless, schedules)
+        .map_err(|e| ToolError::Runtime(e.to_string()))
 }
 
 /// Benches build at the ordinary executable optimization level and time each launch of
@@ -87,17 +89,26 @@ impl Executable {
         })
     }
 
-    /// Launches entry `index`: its failure text (None when it passed), its stdout and
-    /// the launch's wall time.
-    fn launch(&self, index: usize) -> Result<(Option<String>, Vec<u8>, Duration), NativeError> {
+    /// Launches entry `index` under `scheduler` (the default without one): its failure text
+    /// (None when it passed), its stdout and the launch's wall time.
+    fn launch(
+        &self,
+        index: usize,
+        scheduler: Option<&hirsel_run_config::Scheduler>,
+    ) -> Result<(Option<String>, Vec<u8>, Duration), NativeError> {
         let sites = super::Sites::new(&self.input);
         let record = self.scratch.0.join("observation");
         let _ = std::fs::remove_file(&record);
         let start = Instant::now();
-        let output = Command::new(&self.path)
+        let mut command = Command::new(&self.path);
+        command
             .arg(index.to_string())
             .env_clear()
-            .env("HIRSEL_RT_OBSERVATION", &record)
+            .env("HIRSEL_RT_OBSERVATION", &record);
+        if let Some(scheduler) = scheduler {
+            command.env("HIRSEL_RT_SCHEDULER", scheduler.to_string());
+        }
+        let output = command
             .output()
             .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
         let elapsed = start.elapsed();
@@ -126,12 +137,25 @@ fn run(
     tests: &[Test],
     backend: Backend,
     bless: bool,
+    schedules: &crate::testing::Schedules,
 ) -> Result<Vec<TestResult>, NativeError> {
     let executable = Executable::build(loaded, tests, backend, OptLevel::None)?;
     let mut results = Vec::new();
     for (index, test) in tests.iter().enumerate() {
-        let (failure, stdout, _) = executable.launch(index)?;
-        results.push(test.result(failure, &stdout, bless));
+        let mut error = None;
+        let result = crate::testing::explore(test, schedules, |launch| {
+            match executable.launch(index, launch.scheduler.as_ref()) {
+                Ok((failure, stdout, _)) => launch.result(failure, &stdout, bless),
+                Err(e) => {
+                    error = Some(e);
+                    launch.result(Some(String::new()), &[], false)
+                }
+            }
+        });
+        if let Some(error) = error {
+            return Err(error);
+        }
+        results.push(result);
     }
     Ok(results)
 }
@@ -158,15 +182,16 @@ fn bench(
     for (ordinal, bench) in benches.iter().enumerate() {
         let first = ordinal * bench.loops.len();
         let mut error = None;
-        let measured =
-            crate::testing::calibrate(target, |index| match executable.launch(first + index) {
+        let measured = crate::testing::calibrate(target, |index| {
+            match executable.launch(first + index, None) {
                 Ok((None, _, elapsed)) => Ok(elapsed),
                 Ok((Some(failure), _, _)) => Err(failure),
                 Err(e) => {
                     error = Some(e);
                     Err(String::new())
                 }
-            });
+            }
+        });
         if let Some(error) = error {
             return Err(error);
         }

@@ -48,6 +48,8 @@ pub struct SimulationConfig {
     pub process: Option<hirsel_run_config::ProcessGrant>,
     pub random_seed: u64,
     pub test_seed: u64,
+    /// The run's scheduler policy (`inputs.scheduler`); `None` is `fifo@1`.
+    pub scheduler: Option<hirsel_run_config::Scheduler>,
     pub grants: BTreeSet<String>,
     /// Configured Io projections, independent of the root Io grant.
     pub projections: BTreeSet<String>,
@@ -75,6 +77,7 @@ impl Default for SimulationConfig {
             process: None,
             random_seed: 0,
             test_seed: 0,
+            scheduler: None,
             grants: ["Io", "Args", "Env"]
                 .into_iter()
                 .map(str::to_owned)

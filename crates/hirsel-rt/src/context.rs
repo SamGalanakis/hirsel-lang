@@ -135,6 +135,8 @@ pub struct RunCtx {
     pub(crate) driver: crate::stop::Driver,
     /// The running program's failure table (`crate::isolate`).
     pub(crate) failure_table: Option<std::sync::Arc<crate::isolate::FailureTable>>,
+    /// The scheduler policy the run's tasks start with (`inputs.scheduler`).
+    pub(crate) schedule: hirsel_kernels::schedule::Schedule,
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
@@ -354,6 +356,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         tasks: None,
         driver: crate::stop::Driver::default(),
         failure_table: None,
+        schedule: Default::default(),
         #[cfg(feature = "measurement")]
         measurement_output: None,
         #[cfg(feature = "measurement")]

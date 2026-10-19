@@ -29,6 +29,9 @@ pub(super) struct Tasks {
     sets: BTreeMap<u64, TaskSet>,
     /// Children completed so far: the next completion's place in completion order.
     completions: u64,
+    /// The run's scheduler policy (`inputs.scheduler`) and the root task's priority.
+    pub schedule: hirsel_kernels::schedule::Schedule,
+    pub root_priority: u64,
 }
 struct TaskSet {
     scope: u64,
@@ -60,6 +63,8 @@ struct Child {
     /// Its place in completion order, which `task.await_any` reports first.
     completed: u64,
     result: Option<OperationResult>,
+    /// Its scheduling priority under `pct@1`, drawn when it was spawned.
+    priority: u64,
 }
 pub(super) enum Pending {
     Scope {
@@ -100,6 +105,14 @@ impl Tasks {
             .filter_map(|child| child.result.as_ref())
             .map(crate::resources::result_bytes)
             .fold(0, u64::saturating_add)
+    }
+
+    /// The priority of live task `id` (the root is 0).
+    pub fn priority(&mut self, id: u64) -> Option<&mut u64> {
+        if id == 0 {
+            return Some(&mut self.root_priority);
+        }
+        self.tasks.get_mut(&id).map(|child| &mut child.priority)
     }
     fn fresh(&mut self) -> u64 {
         self.next += 1;
@@ -427,6 +440,7 @@ impl Library {
                         detached: false,
                         completed: 0,
                         result: None,
+                        priority: self.tasks.schedule.admit(),
                     },
                 );
                 self.tasks.starts.push(TaskStart {

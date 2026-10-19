@@ -533,7 +533,14 @@ stackful fibers: guarded 8 MiB lazily committed stacks, registered with Valgrind
 callee-saved register switch for x86-64 and AArch64. The scheduler is cooperative and
 single-threaded, with the reference interpreter's schedule:
 
-- one FIFO queue of runnable tasks;
+- one queue of runnable tasks, from which the run's scheduler policy (`inputs.scheduler`,
+  `hirsel_kernels::schedule`) takes the next task at every scheduling point (`tasks::pick`):
+  the front under the default `fifo@1`, a seeded choice under `random@1` and `pct@1`, whose
+  task priorities live in the task rows. A seeded choice among two or more tasks goes
+  through `Adapter::schedule`: `RealIo` records it as a `schedule <count> <choice>` tape
+  event and `SimIo` replays the recorded choice. Production launches take the policy from
+  their run record; harness launches from `HIRSEL_RT_SCHEDULER` (`name@1:seed`), which the
+  test runner sets per explored launch;
 - a yield after every capability operation (`yield_now`, called by the Io entries and the task entries);
 - a task that must wait (a join, a scope exit) parks with what it waits for;
 - every yield and every stop of the running task is a scheduling point, which polls the

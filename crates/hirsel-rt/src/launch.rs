@@ -128,6 +128,9 @@ impl<A: Adapter> Adapter for Shared<A> {
     fn cancellable(&self, token: u64) -> bool {
         self.0.borrow().cancellable(token)
     }
+    fn schedule(&mut self, count: u64, choice: u64) -> Result<u64, AdapterError> {
+        self.0.borrow_mut().schedule(count, choice)
+    }
     fn parked(&mut self, token: u64) {
         self.0.borrow_mut().parked(token);
     }
@@ -375,6 +378,7 @@ pub fn render_tape(tape: &[Event]) -> Result<String, String> {
             }
             Request::TestFail { test } => format!("fail {test}"),
             Request::TestSeed { test } => format!("test_seed {test}"),
+            Request::TestTasks { test } => format!("test_tasks {test}"),
             Request::TestLog { test, text } => format!("test_log {test} {}", hex(text.as_bytes())),
             Request::TestSnapshot { test, name, text } => format!(
                 "test_snapshot {test} {} {}",
@@ -680,6 +684,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 },
                 ["fail", t] => Request::TestFail { test: number(t)? },
                 ["test_seed", t] => Request::TestSeed { test: number(t)? },
+                ["test_tasks", t] => Request::TestTasks { test: number(t)? },
                 ["test_log", t, text] => Request::TestLog {
                     test: number(t)?,
                     text: string(text)?,
@@ -1492,6 +1497,21 @@ pub(crate) unsafe fn execute(
             }
         }
     };
+    // The run record's scheduler, else the harness's (`HIRSEL_RT_SCHEDULER`, `name@1:seed`),
+    // which a test runner sets for each launch it explores.
+    let scheduler = match &requested {
+        Some(run) => run.record().inputs.scheduler.clone(),
+        None => match std::env::var("HIRSEL_RT_SCHEDULER") {
+            Ok(text) => match hirsel_run_config::Scheduler::parse(&text) {
+                Some(scheduler) => Some(scheduler),
+                None => return Err(format!("the scheduler `{text}` is not supported")),
+            },
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err("the scheduler is not UTF-8".into());
+            }
+        },
+    };
     // net.script@2 peers serve the root Net's world; the rules alone decide policy.
     let net_rules = net.as_ref().map(NetRule::from_config).unwrap_or_default();
     let net_script = net.and_then(|grant| Some((grant.peers?, grant.listeners)));
@@ -1737,6 +1757,14 @@ pub(crate) unsafe fn execute(
     #[cfg(feature = "measurement")]
     if let Some(file) = profile {
         unsafe { &mut *ctx }.set_profile_output(file);
+    }
+    if let Some(scheduler) = &scheduler {
+        let algorithm = scheduler
+            .code()
+            .and_then(hirsel_kernels::schedule::Algorithm::from_code)
+            .unwrap_or_else(|| crate::fault("an unsupported validated scheduler"));
+        unsafe { &mut *ctx }.schedule =
+            hirsel_kernels::schedule::Schedule::new(algorithm, scheduler.seed);
     }
     let mut binding = Box::new(Binding::from_box(adapter).with_arguments(arguments.clone()));
     unsafe { binding.bind(&mut *ctx) };

@@ -181,6 +181,9 @@ hirsel test app/manifest.json --native
 hirsel test app/manifest.json --native --backend cranelift
 hirsel test app/manifest.json --bless             # accept the actual snapshots
 hirsel test app/manifest.json --bench --bench-time 500
+hirsel test app/manifest.json --explore 100       # 100 seeded random@1 schedules per test
+hirsel test app/manifest.json --explore 100 --scheduler pct@1
+hirsel test app/manifest.json race --scheduler random@1:7   # replay one schedule
 ```
 
 Test manifests may omit `entry`; no launch main is needed. Mark ordinary functions
@@ -211,6 +214,20 @@ failed test the runner prints its report, indented, with log text unescaped, so
 `test.assert_eq` shows both values and a failed property shows its shrunk
 counterexample followed by the seed and case that `--seed` replays. A passing test's
 report is not printed.
+
+### Schedules
+
+A test's tasks (`test.tasks`) run under the run's scheduler (`inputs.scheduler` in
+[determinism.md](spec/determinism.md#run-configuration)), `fifo@1` by default.
+`--scheduler <name@1:seed>` runs every selected test once under that scheduler.
+`--explore <n>` runs each selected test under seeds 0 to n-1 of `random@1`, or of the policy
+`--scheduler <name@1>` names (`random@1` or `pct@1`, without a seed), and stops that test
+at its first failing schedule, a Blocked run (CONC-8) included. The runner then prints the
+failing scheduler and how many schedules ran, `(seed=S, scheduler=pct@1:7, schedule 8)`,
+and under the failure's report a `replay:` line: the `hirsel test` command that reruns
+exactly that schedule, in the same engine. A passing test prints how many schedules it
+explored. With `--json` each test also carries `scheduler`, `schedules` and `replay`.
+The same seed selects the same schedule interpreted and native.
 
 ### Snapshots
 

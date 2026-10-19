@@ -6,5 +6,6 @@ hirsel_guard::install!();
 pub mod disk;
 pub mod integer;
 pub mod report;
+pub mod schedule;
 pub mod siphash;
 pub mod unicode;

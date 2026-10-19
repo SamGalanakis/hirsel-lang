@@ -30,11 +30,20 @@ pub struct Library {
 }
 impl Library {
     pub fn new(run: &RunConfiguration, config: SimulationConfig) -> Result<Self, Error> {
+        let mut tasks = super::tasks::Tasks::default();
+        if let Some(scheduler) = &config.scheduler {
+            let algorithm = scheduler
+                .code()
+                .and_then(hirsel_kernels::schedule::Algorithm::from_code)
+                .ok_or_else(|| invalid("unsupported scheduler"))?;
+            tasks.schedule = hirsel_kernels::schedule::Schedule::new(algorithm, scheduler.seed);
+        }
+        tasks.root_priority = tasks.schedule.admit();
         Ok(Self {
             simulation: Simulation::new(run, config)?,
             entry_signature: None,
             exit_report: None,
-            tasks: Default::default(),
+            tasks,
             channels: Default::default(),
             synchronizers: Default::default(),
             network_waits: Default::default(),
@@ -44,6 +53,11 @@ impl Library {
             next_shared: 0,
             drop_failure: None,
         })
+    }
+    /// Whether the last choice among `count` runnable tasks is a scheduling input a recording
+    /// keeps (`hirsel_kernels::schedule::Schedule::recorded`).
+    pub fn schedule_recorded(&self, count: usize) -> bool {
+        self.tasks.schedule.recorded(count)
     }
     /// `stdin.read` over the configured input; a host adapter resumes a parked read here.
     pub fn read_stdin(
@@ -444,6 +458,11 @@ impl Library {
             "test.seed" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;
                 u64_value(self.simulation.config.test_seed)
+            }
+            // The test's own tasks, under the run's scheduler; no host authority.
+            "test.tasks" => {
+                self.simulation.id(arg(a, 0)?, "Test")?;
+                self.simulation.handle("Tasks", Grant::Root("Tasks".into()))
             }
             // Test report records (hirsel_kernels::report); an invalid snapshot name
             // fails LANG-9 before anything is reported.
@@ -1191,7 +1210,9 @@ impl Operations for Library {
         self.tasks.current = id;
         self.tasks.shielded = shielded;
     }
-    fn choose_task(&self, runnable: &[u64]) -> Result<usize, Error> {
+    /// The recorded resume in replay; otherwise the run's scheduler policy chooses, after
+    /// lowering the priority of the task that ran last at a `pct@1` change point.
+    fn choose_task(&mut self, runnable: &[u64]) -> Result<usize, Error> {
         if let Some(event) = self.simulation.next_replay() {
             if event.operation != "task.resume" || event.input.len() != 8 {
                 return Err(invalid("missing task scheduling input"));
@@ -1202,7 +1223,17 @@ impl Operations for Library {
                 .position(|candidate| *candidate == id)
                 .ok_or_else(|| invalid("scheduling input selects a blocked task"));
         }
-        Ok(0)
+        if let Some(priority) = self.tasks.schedule.point() {
+            let ran = self.tasks.current;
+            if let Some(slot) = self.tasks.priority(ran) {
+                *slot = priority;
+            }
+        }
+        let priorities: Vec<u64> = runnable
+            .iter()
+            .map(|&id| self.tasks.priority(id).map_or(0, |p| *p))
+            .collect();
+        Ok(self.tasks.schedule.choose(&priorities))
     }
     fn task_resumed(&mut self, id: u64, context: &mut OperationContext<'_>) -> Result<(), Error> {
         self.simulation.record(
@@ -1482,7 +1513,7 @@ primary_operations! { self, call, context, name, a, value;
     Primitive: "slots.empty" | "slots.insert" | "slots.get" | "slots.remove" => {
         return super::slots::call(name, a).map(Some);
     },
-    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" => {
+    Capability: "io.stdin" | "io.stderr" | "stdin.read" | "err.print" | "env.get" | "env.narrow" | "clock.monotonic" | "clock.wall" | "io.monotonic_clock" | "io.wall_clock" | "io.stdout" | "io.random" | "random.bytes" | "io.net" | "io.tasks" | "io.dir" | "dir.narrow" | "dir.read_only" | "arg.len" | "arg.text" | "arg.path" | "out.print" | "test.check" | "test.check_case" | "test.fail" | "test.seed" | "test.tasks" | "test.log" | "test.expect_snapshot" | "test.dir" | "file.open" | "file.create" | "file.read" | "file.seek" | "file.write" | "file.append" | "file.narrow" | "file.walk" | "file.size" | "file.read_dir" | "file.metadata" | "file.mkdir" | "file.rename" | "file.remove_dir" | "file.set_permissions" | "dir.remove_all" | "file.read_bytes" | "file.write_bytes" | "file.remove" | "file.create_atomic" | "file.write_all" | "file.commit" | "file.sync" | "file.put_new" | "test.crash" => {
             // A rejected replay never publishes effects or consumes grants/faults.
             if !context.configuration.inputs.is_empty() {
                 let saved = self.simulation.clone();

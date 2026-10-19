@@ -168,6 +168,21 @@ impl Adapter for SimIo {
     fn cancellable(&self, token: u64) -> bool {
         self.waits.rows_of(token).is_none_or(|row| !row.committed)
     }
+    /// The recorded choice among `count` runnable tasks: the next event is a `schedule` of
+    /// as many candidates, whatever the policy chose (the trace is authoritative, DET-1).
+    fn schedule(&mut self, count: u64, _choice: u64) -> Result<u64, AdapterError> {
+        match self.tape.get(self.position).map(|event| &event.request) {
+            Some(Request::Schedule {
+                count: recorded,
+                choice,
+            }) if *recorded == count && *choice < count => {
+                self.position += 1;
+                Ok(*choice)
+            }
+            Some(_) => Err(AdapterError::ReplayMismatch(self.position)),
+            None => Err(AdapterError::MissingInput(self.position)),
+        }
+    }
     /// The waits the recording re-issued at this scheduling point: the `ready` events at
     /// the tape's head whose wait has waited through exactly the recorded points.
     fn ready(&mut self) -> Result<Ready, AdapterError> {

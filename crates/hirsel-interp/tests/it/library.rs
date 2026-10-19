@@ -1303,6 +1303,40 @@ fn argument_snapshot_preserves_empty_unicode_and_option_like_text() {
     }
 }
 
+// A seeded scheduler is no conformance header. The interpreter's choices follow the
+// policy kernel's draws (random@1 seed 7: words mod 2, then mod 3), a lone candidate draws
+// nothing, and the run record's scheduler words name the kernel's policies.
+#[test]
+fn seeded_scheduler_choices_follow_the_policy_and_its_words() {
+    use hirsel_kernels::schedule::Algorithm;
+    use hirsel_run_config::Scheduler;
+    let h = Harness::new(Default::default());
+    let mut library = Library::new(
+        &h.run,
+        SimulationConfig {
+            scheduler: Scheduler::parse("random@1:7"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let chosen: Vec<usize> = [&[4u64, 9][..], &[4], &[4, 9, 12]]
+        .into_iter()
+        .map(|runnable| library.choose_task(runnable).unwrap())
+        .collect();
+    assert_eq!(chosen, [1, 0, 0]);
+    assert!(library.schedule_recorded(2) && !library.schedule_recorded(1));
+    let fifo = Library::new(&h.run, Default::default()).unwrap();
+    assert!(!fifo.schedule_recorded(3));
+    for (name, word) in Scheduler::CONTRACTS {
+        let expected = match name {
+            "fifo" => Algorithm::Fifo,
+            "random" => Algorithm::Random,
+            _ => Algorithm::Pct,
+        };
+        assert_eq!(Algorithm::from_code(word), Some(expected), "{name}");
+    }
+}
+
 // Scheduling input cannot be expressed by a conformance header. A recorded
 // runnable choice must control replay; an unavailable task is not a substitute.
 #[test]

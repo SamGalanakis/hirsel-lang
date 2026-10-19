@@ -252,9 +252,6 @@ operation_boundary! {
     /// Absolute deadline of a parked timer, independent of host readiness or replay.
     /// The scheduler polls timers by deadline, preserving suspension order on ties.
     fn wait_deadline(&self, _token: u64) -> Option<u64> { None }
-    fn choose_task(&self, _runnable: &[u64]) -> Result<usize, Error> {
-        Ok(0)
-    }
     /// A detached result is destroyed on the child's stack before completion.
     fn discard_task_result(&self, _id: u64) -> bool { false }
     fn handles_failure(&self, _token: u64) -> bool {
@@ -265,6 +262,11 @@ operation_boundary! {
     fn retained_bytes(&self) -> u64 { 0 }
     }
     mutable {
+    /// A scheduling point: the index in `runnable` (queue order, nonempty) of the task to run
+    /// next, the task that ran last being current (`enter_task`).
+    fn choose_task(&mut self, _runnable: &[u64]) -> Result<usize, Error> {
+        Ok(0)
+    }
     /// At every poll, before the parked tasks: cancel the scopes whose deadline is due
     /// (CONC-3), in deadline order with ties in entry order.
     fn expire_deadlines(&mut self, _context: &mut OperationContext<'_>) -> Result<(), Error> {

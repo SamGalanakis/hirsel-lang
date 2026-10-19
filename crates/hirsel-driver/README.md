@@ -200,7 +200,7 @@ tapes replay in either engine. `HostLibrary` and H's `ScriptIo` use the runtime'
 `io_checks` preflight before completing cancellation, so program errors win while
 provider outcomes and elapsed deadlines remain after cancellation.
 
-`testing` selects checked root-package `@test` functions, generates ordinary in-memory Test/Result launch adapters in each defining module, and runs independent interpreter contexts. `native::test_path` emits one executable with all selected adapters and starts one process per test; LLVM and Cranelift share selection, seeds and results.
+`testing` selects checked root-package `@test` functions, generates ordinary in-memory Test/Result launch adapters in each defining module, and runs independent interpreter contexts. `native::test_path` emits one executable with all selected adapters and starts one process per test; LLVM and Cranelift share selection, seeds and results. `testing::Schedules` selects each test's scheduler runs (the default, one `--scheduler`, or `--explore` seeds of a policy) and `testing::explore` stops a test at its first failing schedule, reporting its scheduler and run count; the interpreter takes the scheduler through `SimulationConfig::scheduler` and a native launch through `HIRSEL_RT_SCHEDULER`. Interpreted host runs (`HostLibrary::choose_task`) pass a seeded choice through the runtime adapter's `schedule`, so it is recorded and replayed like the native one.
 
 Failure observations retain and compare the original operation site independently
 of the primary attribution. Tooling reports render both complete locations.

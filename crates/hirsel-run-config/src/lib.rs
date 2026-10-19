@@ -178,6 +178,47 @@ pub struct Scheduler {
     pub version: u32,
     pub seed: u64,
 }
+impl Scheduler {
+    /// The supported scheduler contracts by launch word (docs/spec/determinism.md);
+    /// `hirsel_kernels::schedule::Algorithm::code` uses the same words.
+    pub const CONTRACTS: [(&'static str, u64); 3] = [("fifo", 0), ("random", 1), ("pct", 2)];
+    /// The launch word of a supported contract, version 1.
+    pub fn code(&self) -> Option<u64> {
+        Self::CONTRACTS
+            .into_iter()
+            .find(|(name, _)| *name == self.algorithm && self.version == 1)
+            .map(|(_, code)| code)
+    }
+    /// `name@1:seed`, the spelling of `hirsel test --scheduler`.
+    pub fn parse(text: &str) -> Option<Scheduler> {
+        let (contract, seed) = text.split_once(':')?;
+        let (algorithm, version) = contract.split_once('@')?;
+        let scheduler = Scheduler {
+            algorithm: algorithm.into(),
+            version: version
+                .parse()
+                .ok()
+                .filter(|v: &u32| v.to_string() == version)?,
+            seed: seed.parse().ok().filter(|s: &u64| s.to_string() == seed)?,
+        };
+        scheduler.code().map(|_| scheduler)
+    }
+    pub fn from_code(code: u64, seed: u64) -> Option<Scheduler> {
+        Self::CONTRACTS
+            .into_iter()
+            .find(|(_, word)| *word == code)
+            .map(|(name, _)| Scheduler {
+                algorithm: name.into(),
+                version: 1,
+                seed,
+            })
+    }
+}
+impl std::fmt::Display for Scheduler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}:{}", self.algorithm, self.version, self.seed)
+    }
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Access {
@@ -329,7 +370,8 @@ pub struct ValidatedRun {
 ///
 /// ```compile_fail
 /// let forged = hirsel_run_config::Config {
-///     hash_seed: 0, random_seed: 0, test_seed: 0, run_identity: [0; 32],
+///     hash_seed: 0, random_seed: 0, test_seed: 0, scheduler: 0, scheduler_seed: 0,
+///     run_identity: [0; 32],
 /// };
 /// ```
 #[repr(C)]
@@ -338,9 +380,16 @@ pub struct Config {
     hash_seed: u64,
     random_seed: u64,
     test_seed: u64,
+    /// The scheduler contract's launch word ([`Scheduler::CONTRACTS`]); 0 is `fifo@1`.
+    scheduler: u64,
+    scheduler_seed: u64,
     run_identity: [u8; 32],
 }
 impl Config {
+    /// The scheduler contract's launch word and its seed.
+    pub fn scheduler(&self) -> (u64, u64) {
+        (self.scheduler, self.scheduler_seed)
+    }
     pub fn hash_seed(&self) -> u64 {
         self.hash_seed
     }
@@ -691,6 +740,13 @@ impl ValidatedRun {
             hash_seed: self.record.inputs.hash_seed,
             random_seed: self.record.inputs.random_seed,
             test_seed: self.record.inputs.test_seed,
+            scheduler: self
+                .record
+                .inputs
+                .scheduler
+                .as_ref()
+                .map_or(0, |s| s.code().expect("validated scheduler")),
+            scheduler_seed: self.record.inputs.scheduler.as_ref().map_or(0, |s| s.seed),
             run_identity: self.identity,
         }
     }
@@ -1024,7 +1080,12 @@ fn supported_providers(record: &RunConfig) -> Result<(), RunRefusal> {
     let unsupported = |field: &str| RunRefusal::Unsupported {
         field: field.into(),
     };
-    if record.inputs.scheduler.is_some() {
+    if record
+        .inputs
+        .scheduler
+        .as_ref()
+        .is_some_and(|s| s.code().is_none())
+    {
         return Err(unsupported("inputs.scheduler.algorithm"));
     }
     if let Some(io) = &record.io {

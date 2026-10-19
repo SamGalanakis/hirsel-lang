@@ -45,8 +45,9 @@ fn empty_record_has_fixed_bytes_and_an_independent_sha256_vector() {
         (config.hash_seed(), config.random_seed(), config.test_seed()),
         (0, 0, 0)
     );
+    assert_eq!(config.scheduler(), (0, 0));
     assert_eq!(config.run_identity(), run.identity());
-    assert_eq!(std::mem::size_of::<Config>(), 56);
+    assert_eq!(std::mem::size_of::<Config>(), 72);
 }
 #[test]
 fn human_key_order_whitespace_and_escape_spelling_normalize() {
@@ -671,6 +672,45 @@ fn unenforceable_tasks_net_and_scheduler_policy_refuses() {
         record.io = Some(IoGrants::default());
         record.inputs.scheduler = None;
         valid(&record);
+    }
+}
+
+#[test]
+fn scheduler_contracts_validate_and_project_their_word_and_seed() {
+    assert_eq!(valid(&empty()).config().scheduler(), (0, 0));
+    for (algorithm, word) in [("fifo", 0), ("random", 1), ("pct", 2)] {
+        let mut record = empty();
+        record.inputs.scheduler = Some(Scheduler {
+            algorithm: algorithm.into(),
+            version: 1,
+            seed: 7,
+        });
+        assert_eq!(valid(&record).config().scheduler(), (word, 7));
+        record.inputs.scheduler.as_mut().unwrap().version = 2;
+        assert_eq!(
+            record.validated(),
+            Err(RunRefusal::Unsupported {
+                field: "inputs.scheduler.algorithm".into()
+            })
+        );
+    }
+    let parsed = Scheduler::parse("pct@1:42").unwrap();
+    assert_eq!(
+        (parsed.algorithm.as_str(), parsed.version, parsed.seed),
+        ("pct", 1, 42)
+    );
+    assert_eq!(parsed.to_string(), "pct@1:42");
+    for text in [
+        "pct@2:1",
+        "pct@1:01",
+        "pct@01:1",
+        "pct@1",
+        "pct:1",
+        "chaos@1:1",
+        "random@1:-1",
+        "random@1:18446744073709551616",
+    ] {
+        assert_eq!(Scheduler::parse(text), None, "{text}");
     }
 }
 

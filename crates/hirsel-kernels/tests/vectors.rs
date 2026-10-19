@@ -96,3 +96,52 @@ fn siphash13_independent_standard_library_oracle() {
         assert_eq!(siphash::siphash13(&data, 0, 0), oracle.finish());
     }
 }
+
+/// Choices from an independent SplitMix64 transcription (Python), not from the kernel.
+#[test]
+fn scheduler_policies_follow_their_seeded_words() {
+    use hirsel_kernels::schedule::{Algorithm, Schedule};
+    let mut fifo = Schedule::new(Algorithm::Fifo, 7);
+    assert_eq!(
+        (fifo.admit(), fifo.point(), fifo.choose(&[0, 0, 0])),
+        (0, None, 0)
+    );
+    // random@1 seed 7: words mod 2, 3, 4, 5, 2, 3; a lone candidate draws nothing.
+    let mut random = Schedule::new(Algorithm::Random, 7);
+    let mut chosen = Vec::new();
+    for n in [2, 3, 1, 4, 5, 2, 1, 3] {
+        assert_eq!(random.point(), None);
+        chosen.push(random.choose(&vec![0; n]));
+    }
+    assert_eq!(chosen, [1, 0, 0, 2, 3, 0, 0, 0]);
+    // pct@1 seed 5: depth 3, horizon 64, change points 8 (to priority 1) and 6 (to 2).
+    let mut pct = Schedule::new(Algorithm::Pct, 5);
+    let priorities = [pct.admit(), pct.admit(), pct.admit()];
+    assert_eq!(
+        priorities,
+        [
+            1733626130553941733,
+            3510497739974877221,
+            9090219046513020307
+        ]
+    );
+    let points: Vec<_> = (0..10).map(|_| pct.point()).collect();
+    let mut expected = [None; 10];
+    expected[5] = Some(2);
+    expected[7] = Some(1);
+    assert_eq!(points, expected);
+    assert_eq!(
+        pct.choose(&[priorities[0], priorities[2], priorities[1]]),
+        1
+    );
+    assert_eq!(pct.choose(&[5, 5, 1]), 0, "ties keep queue order");
+    for _ in 0..60 {
+        pct.point();
+    }
+    assert_eq!(pct.choose(&[1, 2, 3]), 0, "past the horizon the front runs");
+    assert!(!fifo.recorded(3) && !random.recorded(1) && random.recorded(2));
+    for algorithm in [Algorithm::Fifo, Algorithm::Random, Algorithm::Pct] {
+        assert_eq!(Algorithm::from_code(algorithm.code()), Some(algorithm));
+    }
+    assert_eq!(Algorithm::from_code(3), None);
+}

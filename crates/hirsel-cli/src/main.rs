@@ -4,7 +4,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--json | --safe] <source|manifest.json> | test [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <manifest.json> [filter...] | run [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [-- args...] | build [--release | --debug] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | fmt [--check] <file> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | doc <manifest.json> [-o <out.md>] [--json] | precheck <package manifest.json> -o <file>";
 
 mod execution_policy;
 mod measure;
@@ -29,6 +29,7 @@ enum Command {
         /// `--bench` and its target time per bench.
         bench: Option<std::time::Duration>,
         backend: hirsel_driver::native::Backend,
+        schedules: hirsel_driver::testing::Schedules,
     },
     Precheck {
         manifest: OsString,
@@ -173,8 +174,25 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             let (mut manifest, mut filters, mut seed, mut json, mut native, mut selected) =
                 (None, Vec::new(), None, false, false, None);
             let (mut bless, mut max_steps, mut bench, mut bench_time) = (false, None, false, None);
+            let (mut scheduler, mut explore) = (None::<String>, None);
             while let Some(arg) = args.next()? {
                 match arg {
+                    Long("scheduler") if scheduler.is_none() => {
+                        scheduler = Some(
+                            args.value()?
+                                .into_string()
+                                .map_err(|_| "--scheduler must be UTF-8")?,
+                        );
+                    }
+                    Long("explore") if explore.is_none() => {
+                        explore = Some(
+                            args.value()?
+                                .to_str()
+                                .and_then(|v| v.parse::<u64>().ok())
+                                .filter(|&n| n > 0)
+                                .ok_or("--explore requires a positive number of schedules")?,
+                        );
+                    }
                     Long("json") if !json => json = true,
                     Long("bless") if !bless => bless = true,
                     Long("bench") if !bench => bench = true,
@@ -223,7 +241,30 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             if bench_time.is_some() && !bench {
                 return Err("--bench-time requires --bench".into());
             }
+            if bench && (scheduler.is_some() || explore.is_some()) {
+                return Err("--bench takes neither --scheduler nor --explore".into());
+            }
+            use hirsel_driver::testing::{Scheduler, Schedules};
+            let schedules = match (explore, scheduler) {
+                (None, None) => Schedules::Default,
+                (None, Some(text)) => Schedules::One(Scheduler::parse(&text).ok_or(
+                    "--scheduler requires fifo@1, random@1 or pct@1 and a u64 seed, as random@1:7",
+                )?),
+                (Some(count), text) => Schedules::Explore {
+                    policy: Scheduler::parse(&format!(
+                        "{}:0",
+                        text.as_deref().unwrap_or("random@1")
+                    ))
+                    .filter(|policy| {
+                        policy.algorithm != "fifo"
+                            && text.as_deref().is_none_or(|t| !t.contains(':'))
+                    })
+                    .ok_or("--explore takes --scheduler random@1 or pct@1, without a seed")?,
+                    count,
+                },
+            };
             Command::Test {
+                schedules,
                 max_steps: max_steps.unwrap_or(Some(DEFAULT_RUN_MAX_STEPS)),
                 bench: bench.then(|| {
                     std::time::Duration::from_millis(
@@ -584,6 +625,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
             max_steps: _,
             bench: Some(target),
             backend,
+            schedules: _,
         } => {
             let results = if native {
                 hirsel_driver::native::bench_path(
@@ -647,6 +689,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
             max_steps,
             bench: None,
             backend,
+            schedules,
         } => {
             let results = if native {
                 hirsel_driver::native::test_path(
@@ -655,6 +698,7 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                     seed,
                     backend,
                     bless,
+                    &schedules,
                 )
             } else {
                 hirsel_driver::testing::run_path(
@@ -663,14 +707,36 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                     seed,
                     bless,
                     max_steps,
+                    &schedules,
                 )
+            };
+            // The command that reruns one test under the schedule it failed in.
+            let replay = |result: &hirsel_driver::testing::TestResult| {
+                let scheduler = result.scheduler.as_ref()?;
+                let mut command = format!(
+                    "hirsel test {} {} --scheduler {scheduler}",
+                    Path::new(&manifest).display(),
+                    result.name
+                );
+                if let Some(seed) = seed {
+                    command.push_str(&format!(" --seed {seed}"));
+                }
+                if native {
+                    command.push_str(" --native");
+                    if backend != hirsel_driver::native::Backend::default() {
+                        command.push_str(&format!(" --backend {}", backend.name()));
+                    }
+                }
+                Some(command)
             };
             return match results {
                 Ok(results) => {
                     let failed = results.iter().filter(|r| r.failure.is_some()).count();
                     if json {
                         let tests: Vec<_> = results.iter().map(|r| serde_json::json!({
-                            "name": r.name, "seed": r.seed, "status": if r.failure.is_some() { "failed" } else { "passed" }, "failure": r.failure, "report": r.report
+                            "name": r.name, "seed": r.seed, "status": if r.failure.is_some() { "failed" } else { "passed" }, "failure": r.failure, "report": r.report,
+                            "scheduler": r.scheduler.as_ref().map(|s| s.to_string()), "schedules": r.schedules,
+                            "replay": r.failure.as_ref().and_then(|_| replay(r))
                         })).collect();
                         println!(
                             "{}",
@@ -678,8 +744,22 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                         );
                     } else {
                         for result in &results {
+                            // A selected or explored schedule: the failing run's scheduler,
+                            // and how many schedules an exploration ran.
+                            let schedule = match (&schedules, &result.scheduler) {
+                                (hirsel_driver::testing::Schedules::Explore { .. }, Some(s))
+                                    if result.failure.is_some() =>
+                                {
+                                    format!(", scheduler={s}, schedule {}", result.schedules)
+                                }
+                                (hirsel_driver::testing::Schedules::Explore { .. }, _) => {
+                                    format!(", {} schedules", result.schedules)
+                                }
+                                (_, Some(s)) => format!(", scheduler={s}"),
+                                (_, None) => String::new(),
+                            };
                             println!(
-                                "test {} ... {} (seed={}){}",
+                                "test {} ... {} (seed={}{schedule}){}",
                                 result.name,
                                 if result.failure.is_some() {
                                     "FAILED"
@@ -693,10 +773,13 @@ fn execute_command(args: Vec<OsString>) -> u8 {
                                     .map(|f| format!(": {f}"))
                                     .unwrap_or_default()
                             );
-                            // A failed test's report follows it, indented.
+                            // A failed test's report follows it, indented, then its replay.
                             if result.failure.is_some() {
                                 for line in result.report.lines() {
                                     println!("    {line}");
+                                }
+                                if let Some(command) = replay(result) {
+                                    println!("    replay: {command}");
                                 }
                             }
                         }

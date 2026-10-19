@@ -236,6 +236,35 @@ seed describes simulator policy; the recorded event and scheduling trace is the
 authoritative replay input. A user `Hasher` receives only an explicit seed from its caller,
 never the hidden placement seed.
 
+**Scheduler.** `inputs.scheduler` is absent or null, or `{"algorithm", "version", "seed"}`
+naming one of three contracts, each version 1; any other algorithm or version refuses
+the launch as unsupported. It chooses only which runnable task runs at each scheduling
+point of `tasks.cooperative@1`, the queue order being that of
+[CONC-1](concurrency.md#conc-1-runtime)'s cooperative runtime: a spawned or woken task joins
+the back, and a yielding task joins the back before the choice. A scheduling point is each
+choice made while at least one task is runnable. No contract changes what a program means
+([DET-3](#det-3-no-switches)): every schedule it selects is one a cooperative runtime may
+take, and the seed only selects among them. Each draw `w` is the next SplitMix64 output of
+the scheduler seed, exactly as `random.splitmix64@1` advances its state.
+
+- `fifo@1`, the default and the meaning of an absent scheduler: the front of the queue
+  runs. It draws nothing.
+- `random@1`: with `n` runnable tasks, candidate `w mod n` in queue order runs; with one
+  runnable task it runs and nothing is drawn.
+- `pct@1` (probabilistic concurrency testing, Burckhardt et al., ASPLOS 2010): at
+  admission it draws the depth `d = 1 + w mod 3`, the horizon `k = 2^(2 + w mod 11)` and
+  `d - 1` change points `c_i = 1 + w mod k` for `i = 1, ..., d - 1`; each task then draws
+  its priority `d + (w >> 1)` when it is created, the root task first and every spawned
+  child at its spawn. At scheduling point `p` (counted from 1), when `p` equals some `c_i`,
+  the task that ran last takes priority `i` (the largest such `i`), and then the runnable
+  task with the highest priority runs, the earliest in queue order on a tie. After point
+  `k` the front of the queue runs, so every runnable task keeps running.
+
+A choice under `random@1` or `pct@1` among two or more runnable tasks is a scheduling input:
+a recording keeps it as a `schedule` event with the candidate count and the chosen index,
+and replay takes the recorded choice, refusing a recording whose next event is not a choice
+among as many candidates. The recorded schedule, not the seed, is the replay input.
+
 **Snapshots.** `Args` and `Env` are validated UTF-8 launch snapshots. A non-UTF-8 host
 argument, key or value refuses the launch with a structured launch-input error naming the
 item. A denied `Env` key returns `NotGranted`; a granted unset key returns `Ok(None)`.

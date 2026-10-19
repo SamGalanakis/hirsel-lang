@@ -1556,6 +1556,7 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::TestCheckCase { .. } => false,
             Request::TestFail { .. } => false,
             Request::TestSeed { .. } => false,
+            Request::TestTasks { .. } => false,
             Request::TestLog { .. } => false,
             Request::TestSnapshot { .. } => false,
             Request::TestNet { .. } => false,
@@ -1614,6 +1615,7 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::UnixConnect { .. } => true,
             Request::UnixListen { .. } => false,
             Request::Ready { .. } => false,
+            Request::Schedule { .. } => false,
         };
         assert_eq!(
             hirsel_rt::io_checks::cancel(&mut Classification, &request, 3).unwrap(),

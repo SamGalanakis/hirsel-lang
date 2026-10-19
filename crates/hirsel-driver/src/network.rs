@@ -313,6 +313,7 @@ impl HostLibrary {
             env: record.env.clone().unwrap_or_default(),
             random_seed: record.inputs.random_seed,
             test_seed: record.inputs.test_seed,
+            scheduler: record.inputs.scheduler.clone(),
             ..Default::default()
         };
         let mut library = Library::new(run, config)?;
@@ -1735,6 +1736,24 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             },
             Some(_) => None,
             None => self.library.wait_deadline(token),
+        }
+    }
+    /// The policy's choice, through the tape: recorded live, taken from the recording in
+    /// replay, as the native scheduler does.
+    fn choose_task(&mut self, runnable: &[u64]) -> Result<usize, Error> {
+        let choice = self.library.choose_task(runnable)?;
+        if !self.library.schedule_recorded(runnable.len()) {
+            return Ok(choice);
+        }
+        let count = runnable.len() as u64;
+        match self.io.adapter().schedule(count, choice as u64) {
+            Ok(choice) if choice < count => Ok(choice as usize),
+            Ok(_) => Err(invalid()),
+            Err(e) => {
+                let message = format!("{e:?}");
+                self.refused.get_or_insert(message.clone());
+                Err(Error::Unavailable(format!("host scheduling: {message}")))
+            }
         }
     }
     fn take_yield(&mut self) -> bool {

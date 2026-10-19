@@ -516,6 +516,14 @@ impl Adapter for RealIo {
             .as_ref()
             .is_none_or(|(readiness, _)| readiness.cancellable(token))
     }
+    fn schedule(&mut self, count: u64, choice: u64) -> Result<u64, AdapterError> {
+        self.record(Event {
+            request: Request::Schedule { count, choice },
+            completion: Completion::Ready,
+            fault: None,
+        })?;
+        Ok(choice)
+    }
     /// The tokens the Readiness finds ready, each recorded as its wait's `ready` event, in
     /// token (so ordinal) order, before any of them is re-issued.
     fn ready(&mut self) -> Result<Ready, AdapterError> {

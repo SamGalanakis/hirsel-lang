@@ -1776,6 +1776,127 @@ example_tests!(todo_package_tests, "todo", 1);
 example_tests!(todo_api_package_tests, "todo-api", 2);
 example_tests!(wordscan_package_tests, "wordscan", 1);
 
+/// Schedule exploration (docs/building.md, "Schedules"), which no corpus header can select:
+/// the race example's lost addition, which fifo@1 never schedules, is found by random@1 at
+/// seed 1 and by pct@1 at seed 7, alike interpreted and on both native backends, and the
+/// printed replay command reproduces the same failure and report.
+#[test]
+fn explore_finds_the_race_examples_lost_addition_and_its_replay_reproduces_it() {
+    let fixture = Fixture::new("race", include_str!("../../../examples/race/main.hir"));
+    let manifest = fixture.0.join("hirsel.json");
+    let first_test = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(args)
+            .arg("--json")
+            .output()
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|_| panic!("{args:?}: {output:?}"));
+        json["tests"][0].clone()
+    };
+    let manifest_arg = manifest.to_str().unwrap();
+    for engine in [
+        &[][..],
+        &["--native", "--backend", "llvm"],
+        &["--native", "--backend", "cranelift"],
+    ] {
+        let mut args = vec!["test", manifest_arg];
+        args.extend(engine);
+        let fifo = first_test(&args);
+        assert_eq!(fifo["status"], "passed", "{engine:?}: {fifo}");
+        for (policy, found) in [("random@1", 1u64), ("pct@1", 7)] {
+            let mut explore = args.clone();
+            explore.extend(["--explore", "20", "--scheduler", policy]);
+            let explored = first_test(&explore);
+            assert_eq!(explored["status"], "failed", "{engine:?}: {explored}");
+            assert_eq!(explored["scheduler"], format!("{policy}:{found}"));
+            assert_eq!(explored["schedules"], found + 1);
+            assert!(
+                explored["failure"].as_str().unwrap().contains("LANG-9"),
+                "{explored}"
+            );
+            let replay = explored["replay"].as_str().unwrap();
+            let words: Vec<&str> = replay.split(' ').collect();
+            assert_eq!(words[..2], ["hirsel", "test"], "{replay}");
+            let replayed = first_test(&words[1..]);
+            for field in ["name", "status", "failure", "report", "scheduler"] {
+                assert_eq!(replayed[field], explored[field], "{replay}: {field}");
+            }
+            assert_eq!(replayed["schedules"], 1);
+        }
+    }
+}
+
+/// A seeded choice is a recorded scheduling input (docs/spec/determinism.md, "Scheduler"):
+/// under random@1 seed 1 the race example loses an addition, its tape carries `schedule`
+/// events, and the tape replays that output in every engine, whichever engine recorded it,
+/// while a tape whose first choice is altered is refused.
+#[test]
+fn seeded_schedules_record_and_replay_across_engines() {
+    let fixture = Fixture::new("race", include_str!("../../../examples/race/main.hir"));
+    let manifest = fixture.0.join("hirsel.json");
+    let grants = fixture.0.join("grants.json");
+    std::fs::write(
+        &grants,
+        r#"{"inputs":{"hash_seed":0,"random_seed":0,"test_seed":0,"scheduler":{"algorithm":"random","version":1,"seed":1}},"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"args":[]}"#,
+    )
+    .unwrap();
+    let expected = b"lost an addition\n";
+    let engines: [&[&str]; 3] = [
+        &[],
+        &["--native", "--backend", "llvm"],
+        &["--native", "--backend", "cranelift"],
+    ];
+    let replay = |engine: &[&str], tape: &std::path::Path| {
+        Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .args(engine)
+            .arg(&manifest)
+            .arg("--replay")
+            .arg(tape)
+            .output()
+            .unwrap()
+    };
+    for (index, recorder) in engines[..2].iter().enumerate() {
+        let tape = fixture.0.join(format!("race-{index}.tape"));
+        let live = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .args(*recorder)
+            .arg(&manifest)
+            .arg("--grants")
+            .arg(&grants)
+            .arg("--record")
+            .arg(&tape)
+            .output()
+            .unwrap();
+        assert!(live.status.success(), "{recorder:?}: {live:?}");
+        assert_eq!(live.stdout, expected, "{recorder:?}");
+        let text = std::fs::read_to_string(&tape).unwrap();
+        assert!(
+            text.lines().any(|line| line.starts_with("schedule 2 1 ")),
+            "{recorder:?}: {text}"
+        );
+        for engine in engines {
+            let replayed = replay(engine, &tape);
+            assert!(
+                replayed.status.success(),
+                "{recorder:?} -> {engine:?}: {replayed:?}"
+            );
+            assert_eq!(replayed.stdout, expected, "{recorder:?} -> {engine:?}");
+        }
+        let altered = fixture.0.join(format!("race-{index}-altered.tape"));
+        std::fs::write(&altered, text.replacen("schedule 2 1 ", "schedule 2 0 ", 1)).unwrap();
+        for engine in engines {
+            let replayed = replay(engine, &altered);
+            assert!(
+                !replayed.status.success(),
+                "{recorder:?} -> {engine:?}: {replayed:?}"
+            );
+            assert_ne!(replayed.stdout, expected, "{recorder:?} -> {engine:?}");
+        }
+    }
+}
+
 // The corpus checks codecs; this runs the example's manifest and grant surface.
 #[test]
 fn fetchjson_reuses_one_scripted_connection() {

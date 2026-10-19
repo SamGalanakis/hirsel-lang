@@ -171,6 +171,7 @@ hirsel_test(
         "examples/markdown/main.hir",
         "examples/mdtoc/hirsel.json",
         "examples/mdtoc/main.hir",
+        "examples/race/main.hir",
         "examples/sortuniq/demo.json",
         "examples/sortuniq/hirsel.json",
         "examples/sortuniq/main.hir",
@@ -218,7 +219,7 @@ hirsel_test(
     bin_exes = {
         "hirsel": "//:hirsel-cli-bin-hirsel",
     },
-    shards = 45,
+    shards = 47,
     data = glob([
         "conformance/**",
         "packages/**",
@@ -281,6 +282,7 @@ hirsel_test(
         "examples/markdown/main.hir",
         "examples/mdtoc/hirsel.json",
         "examples/mdtoc/main.hir",
+        "examples/race/main.hir",
         "examples/sortuniq/demo.json",
         "examples/sortuniq/hirsel.json",
         "examples/sortuniq/main.hir",
