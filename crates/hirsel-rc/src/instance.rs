@@ -1062,10 +1062,13 @@ impl Expander<'_, '_, '_> {
                     .layout(&actuals.store, ty)
                     .map_err(|e| InstanceError::Layout(path.clone(), e))?
             };
+            // A taken capture holding more than bits moves out of the
+            // environment under a live bit: a copy would leave the environment
+            // a second holder until the call returns, so the taken value would
+            // not be unique (a freeze or an in-place update needs it to be).
             if taken.contains(&(source_ordinal as u32))
                 && usage == CaptureUse::Take
-                && self.layouts.record(layout).copy
-                    == hirsel_lir::layout_types::CopyRecipe::NotCopyable
+                && self.layouts.record(layout).copy != hirsel_lir::layout_types::CopyRecipe::Bits
             {
                 movable.push(ordinal as u32);
             }

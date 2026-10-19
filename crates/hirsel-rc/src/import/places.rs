@@ -592,6 +592,14 @@ impl Importer<'_, '_> {
         })
     }
 
+    /// Whether the environment moves capture `ordinal` out under a live bit.
+    fn movable_capture(&self, ordinal: u32) -> bool {
+        self.out.tables.environment().is_some_and(|environment| {
+            matches!(&self.layouts.record(environment).kind,
+                LayoutKind::Environment { movable } if movable.contains(&ordinal))
+        })
+    }
+
     pub(super) fn clear_capture(&mut self, ordinal: u32) -> R<()> {
         let environment = self
             .out
@@ -715,14 +723,14 @@ impl Importer<'_, '_> {
         } else if usage == UseKind::Take
             && matches!(
                 self.out.slots[place.slot.index()].kind,
-                SlotKind::Capture(_)
+                SlotKind::Capture(ordinal) if !self.movable_capture(ordinal)
             )
             && self.record(ty).copy != CopyRecipe::NotCopyable
         {
             // A closure body's captures are its caller's environment, lent
-            // for the call as a borrowed parameter is: taking a copyable one
-            // (a `once` closure's `take x`) copies it, and the environment
-            // still releases it whole.
+            // for the call as a borrowed parameter is: a capture without a
+            // live bit holds only bits, so taking it (a `once` closure's
+            // `take x`) copies it.
             UseKind::Copy
         } else if usage == UseKind::Take
             && place.crosses

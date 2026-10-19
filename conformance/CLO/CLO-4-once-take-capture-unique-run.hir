@@ -1,0 +1,98 @@
+// rule: CLO-4
+// expect: run
+// stdout: 7 1 0 1
+// A once closure's `take x` of a counted capture moves it out of the environment, so the
+// taken value is unique and freezes (MEM-11). The environment still releases a capture its
+// call left in place: the untaken branch, and a closure dropped without a call. A borrowed
+// capture of a scoped closure leaves the owner unique once the call returns.
+fn count(take files: unique Map[String, String]) -> u64 {
+  let frozen: Shared[Map[String, String]] = shared.freeze(take files)
+  shared.with(
+    frozen,
+    fn(m: Map[String, String]) -> u64 {
+      map.len(m)
+    }
+  )
+}
+
+fn build() -> unique Map[String, String] uses {} {
+  let mut m: Map[String, String] = map.empty()
+  map.insert(mut m, "a", "b")
+  take m
+}
+
+fn invoke(take action: once fn(bool) -> u64, pick: bool) -> u64 uses {action} {
+  action(pick)
+}
+
+fn discard(take action: once fn() -> u64) -> u64 {
+  0
+}
+
+fn apply(f: fn() -> u64) -> u64 {
+  f()
+}
+
+fn digit(n: u64) -> String {
+  if n == 0 {
+    "0"
+  } else if n == 1 {
+    "1"
+  } else if n == 7 {
+    "7"
+  } else {
+    "wrong"
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let first = build()
+  let untaken = invoke(
+    fn(pick: bool) -> u64 {
+      if pick {
+        count(take first)
+      } else {
+        7
+      }
+    },
+    false
+  )
+  let second = build()
+  let taken = invoke(
+    fn(pick: bool) -> u64 {
+      if pick {
+        count(take second)
+      } else {
+        7
+      }
+    },
+    true
+  )
+  let third = build()
+  let dropped = discard(
+    fn() -> u64 {
+      count(take third)
+    }
+  )
+  let fourth = build()
+  let seen = apply(
+    fn() -> u64 {
+      map.len(fourth)
+    }
+  )
+  let borrowed = if seen == 1 {
+    count(take fourth)
+  } else {
+    0
+  }
+  let stdout = io.stdout(rt)?
+  let _ = out.print(stdout, digit(untaken))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(taken))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(dropped))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(borrowed))
+  let _ = out.print(stdout, "\n")
+  Ok(())
+}

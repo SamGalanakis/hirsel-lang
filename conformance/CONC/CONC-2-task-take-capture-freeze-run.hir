@@ -1,0 +1,59 @@
+// rule: CONC-2
+// expect: run
+// stdout: 1 1
+// A unique Map moved into a task by a `take` capture, through the scope body's own take
+// capture, is the child's only holder: the child freezes it (MEM-11). The scope body's take
+// leaves its environment no holder either.
+fn count(take files: unique Map[String, String]) -> u64 {
+  let frozen: Shared[Map[String, String]] = shared.freeze(take files)
+  shared.with(
+    frozen,
+    fn(m: Map[String, String]) -> u64 {
+      map.len(m)
+    }
+  )
+}
+
+fn build() -> unique Map[String, String] uses {} {
+  let mut m: Map[String, String] = map.empty()
+  map.insert(mut m, "a", "b")
+  take m
+}
+
+fn digit(n: u64) -> String {
+  if n == 1 {
+    "1"
+  } else {
+    "wrong"
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let files = build()
+  let child_count = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let child = task.async(
+        s,
+        fn() -> u64 {
+          count(take files)
+        }
+      )
+      task.await(s, take child)
+    }
+  )
+  let more = build()
+  let body_count = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      count(take more)
+    }
+  )
+  let stdout = io.stdout(rt)?
+  let _ = out.print(stdout, digit(child_count))
+  let _ = out.print(stdout, " ")
+  let _ = out.print(stdout, digit(body_count))
+  let _ = out.print(stdout, "\n")
+  Ok(())
+}
