@@ -1,6 +1,9 @@
 // rule: SEM-3
 // expect: run
-// Zig SHA-256 reference vectors and padding boundaries.
+// steps: 20000000
+// sixty-five split digests of a 128-byte message
+// Zig SHA-256 reference vectors and padding boundaries: every split of one
+// 128-byte message into two updates gives its one-shot digest.
 fn digest_hex(data: Inline[u8, 32]) -> String {
   let mut out: List[u8] = []
   for byte in data {
@@ -11,19 +14,16 @@ fn digest_hex(data: Inline[u8, 32]) -> String {
 
 pub fn main() -> Result[(), ()] {
   let data = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  let mut state0 = std@1/sha256.new()
-  std@1/sha256.update(mut state0, bytes.slice(data, 0, 0))
-  std@1/sha256.update(mut state0, bytes.slice(data, 0, 128))
+  let whole = std@1/sha256.digest(data)
   failure.check(
-    digest_hex(std@1/sha256.finish(take state0)) == "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e",
+    digest_hex(whole) == "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e",
     TextInvariant()
   )
-  let mut state1 = std@1/sha256.new()
-  std@1/sha256.update(mut state1, bytes.slice(data, 0, 1))
-  std@1/sha256.update(mut state1, bytes.slice(data, 1, 128))
-  failure.check(
-    digest_hex(std@1/sha256.finish(take state1)) == "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e",
-    TextInvariant()
-  )
+  for split in 0u64..65u64 {
+    let mut state = std@1/sha256.new()
+    std@1/sha256.update(mut state, bytes.slice(data, 0, split))
+    std@1/sha256.update(mut state, bytes.slice(data, split, 128))
+    failure.check(std@1/sha256.finish(take state) == whole, TextInvariant())
+  }
   Ok(())
 }
