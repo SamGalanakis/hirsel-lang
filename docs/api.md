@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1238 exported definitions; 383 variants.
+1242 exported definitions; 384 variants.
 
 ## Types and roots
 
@@ -9524,6 +9524,41 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/uri/Uri`](#def-st
 - `pub fn utf8.decode_lossy(data: Bytes) -> unique String uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core_401_2fString)
+
+
+## x509
+
+<a id="def-std_401_2fx509_2fCertificate"></a>
+
+- `pub type x509.Certificate { subject: String, names: List[String], uris: List[String], }`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-std_401_2fx509_2fX509Error"></a>
+
+- `pub type x509.X509Error = Malformed(u64)`
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fx509_2fX509Error_23Malformed"></a>
+
+- `Malformed(u64) -> x509.X509Error`
+
+Variant of x509.X509Error.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fx509_2fcertificates"></a>
+
+- `pub fn x509.certificates(chain: Bytes) -> Result[List[Bytes], X509Error] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/x509/X509Error`](#def-std_401_2fx509_2fX509Error)
+
+<a id="def-std_401_2fx509_2fparse"></a>
+
+- `pub fn x509.parse(der: Bytes) -> Result[Certificate, X509Error] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/x509/Certificate`](#def-std_401_2fx509_2fCertificate), [`std@1/x509/X509Error`](#def-std_401_2fx509_2fX509Error)
 
 
 ## xxhash64
