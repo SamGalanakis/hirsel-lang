@@ -8,4 +8,3 @@ hirsel-cli-test-examples::datastar_package_tests	same: datastar@1/tests.hir call
 hirsel-cli-test-examples::tasks_package_tests	same datastar caller break	http-fixes	2026-10-20
 hirsel-cli-test-examples::tasks_end_to_end_interpreted	same datastar caller break	http-fixes	2026-10-20
 hirsel-cli-test-examples::tasks_end_to_end_llvm	same datastar caller break	http-fixes	2026-10-20
-hirsel-driver-test-it-scaling	launcher runs the 2-CPU action at 4 test threads; 1G data limit	launcher-threads	2026-10-20
