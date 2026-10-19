@@ -451,11 +451,12 @@ primary      = literal | f-string | value-path | "heap" | "result"
              | "(", ")" | "(", expression, ")"
              | "(", expression, ",", list(expression), ")"
              | "[", list(expression), "]"
-             | block | if-expr | match-expr | closure
+             | block | loop-label, ":", block | if-expr | match-expr | closure
              | "shape", "(", type, ")"
              | "before", "(", expression, ")"
              | "todo", [ "(", string, ")" ]
-             | "return", [ expression ] | "break", [ loop-label ] | "continue", [ loop-label ] ; (* LANG-1/2/11, MEM-4, FACT-1, CT-3 *)
+             | "return", [ expression ] | "break", [ loop-label, [ expression ] ]
+             | "continue", [ loop-label ] ; (* LANG-1/2/11, MEM-4, FACT-1, CT-3 *)
 if-expr      = "if", ( expression | let-cond ), block, [ "else", (block | if-expr) ] ; (* LANG-1/13 *)
 match-expr   = "match", expression, "{",
                [ arm, { entry-sep, arm }, [ entry-sep ] ], "}" ; (* LANG-7/13 *)
@@ -483,16 +484,19 @@ Labels and payload arity are checked against the expected type. A record rest pa
 last and needs a comma after preceding fields (`Rec(x: x, ..)`). A range pattern is
 closed (`a..=b`) and its bounds are literals. A parenthesized alternation inside an
 alternation is the same alternation (`(A | B) | C` is `A | B | C`). A `let` with `else` takes a refutable
-pattern; its initializer cannot end in a block unless parenthesized. A `let-cond` takes a
+pattern; its initializer cannot end in a block (a labelled block included) unless parenthesized. A `let-cond` takes a
 refutable pattern, and its expression cannot be an unparenthesized `&&` or `||` (no let
 chains). There is no qualified variant constructor.
 
 A statement expression becomes the block's tail exactly when it is last and not followed
 by a semicolon. An assignment's left side parses as an expression and must check as a
 mutable place. `return` consumes the rest of the current expression and binds below
-range. `break` and `continue` carry no values. A loop label such as `'outer` may
-prefix a `for` or `while` statement (`'outer: for x in xs { ... }`), and
-`break 'outer` or `continue 'outer` selects that enclosing loop. Unlabelled
+range. A loop label such as `'outer` may
+prefix a `for` or `while` statement (`'outer: for x in xs { ... }`) or a block
+(`'outer: { ... }`, LANG-11), and `break 'outer` or `continue 'outer` selects
+that enclosing loop or block. Only a labelled exit to a labelled block carries a
+value: `break 'outer value`, whose value consumes the rest of the expression as
+`return`'s does; a value break naming a loop is LANG-1. Unlabelled
 exits select the innermost loop. Labels occupy a separate lexical namespace,
 are visible within their loop (including a while condition, excluding a for
 source expression), and cannot shadow an active label in the same function.
@@ -500,10 +504,10 @@ An unknown, out-of-scope or shadowed label is LANG-7. A closure or local
 function starts a new label scope; an exit cannot cross a function boundary.
 A label name is an ordinary non-keyword name, excluding `_`; a closing
 apostrophe belongs to a character literal instead. A bare exit ends at a
-statement newline, so its label must be on the same logical line. Labelled
+statement newline, so its label, and a break value, must start on the same logical line. Labelled
 exits end the same loans and clean up every exited scope in the same order
 as an unlabelled exit to that loop; a continue retains the selected loop's
-iteration preparation. No blocks other than loops may be labelled. Constructors use ordinary call
+iteration preparation. Only loops and blocks may be labelled. Constructors use ordinary call
 syntax; field and variant names are resolved against the expected type. `[a, b]` is a
 sequence literal whose kind (`Array`, `List`, `Inline`) comes from the expected type; an
 empty sequence literal also needs one. `box e` builds the block a `box T` needs. The

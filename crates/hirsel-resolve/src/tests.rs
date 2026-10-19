@@ -141,7 +141,14 @@ impl Tree {
         self.expr(ExprKind::Literal(Literal::Integer(number.into())), line)
     }
     fn block(&mut self, statements: Vec<StmtId>, tail: Option<ExprId>, line: u32) -> ExprId {
-        self.expr(ExprKind::Block { statements, tail }, line)
+        self.expr(
+            ExprKind::Block {
+                label: None,
+                statements,
+                tail,
+            },
+            line,
+        )
     }
     fn call(&mut self, name: &str, args: Vec<ExprId>, line: u32) -> ExprId {
         let callee = self.value(name, line);

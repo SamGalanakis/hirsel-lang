@@ -16,6 +16,7 @@ mod type_display;
 mod types;
 use hirsel_check_protocol::body::*;
 use hirsel_diag::{Diagnostic, RuleId};
+use hirsel_intern::Symbol;
 use hirsel_intern::work::{self, Counter};
 use hirsel_span::Span;
 use hirsel_syntax as ast;
@@ -251,7 +252,20 @@ struct Frame {
     parameters: Vec<TypeId>,
     locals: BTreeMap<LocalId, TypeId>,
     loops: Vec<ast::StmtId>,
+    /// Enclosing labelled blocks, innermost last (LANG-11).
+    blocks: Vec<LabelledBlock>,
     restricted: Vec<(ResolvedName, Span)>,
+}
+/// A labelled block being checked: its result type is its expected type, or
+/// the first typed break value or tail (LANG-11).
+struct LabelledBlock {
+    label: Symbol,
+    /// How many loops enclosed the block, so an unlabelled exit inside it
+    /// can tell whether its innermost loop lies outside the block.
+    loops: usize,
+    ty: Option<TypeId>,
+    /// Whether the tail was checked against `ty`, which then reported any mismatch.
+    tail_checked: bool,
 }
 /// Each work item owns its lexical frame and expected type; exits never change
 /// a global current-function pointer. Both static branches always get checked.
@@ -273,6 +287,7 @@ enum After {
     MatchArm(ast::ExprId, usize, Option<TypeId>, usize),
     IfThen(ast::ExprId, Option<TypeId>, usize),
     For(ast::StmtId, usize),
+    LabelledTail(ast::ExprId, Option<TypeId>, usize),
     Closure(ast::ExprId, Option<TypeId>, usize, usize, FunctionType),
     LocalFunction(ast::StmtId, usize, usize, FunctionType),
     LoopEnd(usize, usize),
@@ -777,6 +792,7 @@ impl Checker<'_, '_> {
             parameters: vec![],
             locals: BTreeMap::new(),
             loops: vec![],
+            blocks: vec![],
             restricted: vec![],
         });
         i
@@ -864,7 +880,9 @@ impl Checker<'_, '_> {
     fn final_return(&mut self, body: ast::ExprId) {
         let expr = &self.input.tree.expressions[body.0 as usize];
         let last = match &expr.kind {
-            ast::ExprKind::Block { tail, statements } => tail.or_else(|| {
+            ast::ExprKind::Block {
+                tail, statements, ..
+            } => tail.or_else(|| {
                 statements.last().and_then(|s| {
                     match self.input.tree.statements[s.0 as usize].kind {
                         ast::StmtKind::Expr(e) => Some(e),
@@ -927,8 +945,20 @@ impl Checker<'_, '_> {
             | E::Shape(_)
             | E::Todo(_)
             | E::Error
-            | E::Break(_)
+            | E::Break { value: None, .. }
             | E::Continue(_) => self.finish(id, expected, frame)?,
+            E::Break {
+                label,
+                value: Some(value),
+            } => {
+                let target = self.frames[frame]
+                    .blocks
+                    .iter()
+                    .rev()
+                    .find(|b| Some(b.label) == label)
+                    .and_then(|b| b.ty);
+                self.schedule(id, expected, frame, vec![(value, target)]);
+            }
             E::Call { callee, arguments }
                 if let ast::ExprKind::Formatter(step) =
                     self.input.tree.expressions[callee.0 as usize].kind =>
@@ -1106,7 +1136,31 @@ impl Checker<'_, '_> {
                     self.schedule(id, expected, frame, vec![(base, None), (index, Some(u64))]);
                 }
             }
-            E::Block { statements, tail } => {
+            E::Block {
+                label: Some(label),
+                statements,
+                tail,
+            } => {
+                self.check_label_shadow(label, self.span(id), frame);
+                let loops = self.frames[frame].loops.len();
+                self.frames[frame].blocks.push(LabelledBlock {
+                    label,
+                    loops,
+                    ty: expected,
+                    tail_checked: false,
+                });
+                self.work.push(Work::Finish(id, expected, frame));
+                if let Some(t) = tail {
+                    self.work
+                        .push(Work::AfterChild(After::LabelledTail(t, expected, frame)));
+                }
+                for stmt in statements.into_iter().rev() {
+                    self.work.push(Work::Statement(stmt, frame));
+                }
+            }
+            E::Block {
+                statements, tail, ..
+            } => {
                 self.work.push(Work::Finish(id, expected, frame));
                 if let Some(t) = tail {
                     if let Some(site) = self.expected_sites.get(&id).cloned() {
@@ -1427,6 +1481,37 @@ impl Checker<'_, '_> {
                 }
             }
             E::Try { value, map_error } => self.try_type(id, value, map_error.as_ref(), frame)?,
+            E::Block {
+                label: Some(_),
+                tail,
+                ..
+            } => {
+                let block = self.frames[frame]
+                    .blocks
+                    .pop()
+                    .expect("entered labelled block");
+                let t = tail
+                    .map(|t| self.value(t))
+                    .unwrap_or_else(|| self.ty(TypeKind::Tuple(vec![].into())));
+                match block.ty {
+                    _ if self.invalid(t) => self.error(),
+                    None => t,
+                    Some(ty) if self.invalid(ty) => self.error(),
+                    Some(ty) if self.bottom(t) || block.tail_checked || self.compatible(t, ty) => {
+                        ty
+                    }
+                    Some(ty) => {
+                        self.type_mismatch(
+                            const { RuleId::of("LANG-7") },
+                            tail.map_or(self.span(id), |t| self.span(t)),
+                            "a labelled block's tail and its break values have different types",
+                            t,
+                            ty,
+                        );
+                        self.error()
+                    }
+                }
+            }
             E::Block { tail, .. } => tail
                 .map(|t| self.value(t))
                 .unwrap_or_else(|| self.ty(TypeKind::Tuple(vec![].into()))),
@@ -1504,7 +1589,75 @@ impl Checker<'_, '_> {
                 }
                 self.primitive(Primitive::Never)
             }
-            E::Break(label) | E::Continue(label) => {
+            E::Break {
+                label: Some(label),
+                value,
+            } if self.frames[frame].blocks.iter().any(|b| b.label == label) => {
+                let unit = self.ty(TypeKind::Tuple(vec![].into()));
+                let t = value.map_or(unit, |v| self.value(v));
+                let block = self.frames[frame]
+                    .blocks
+                    .iter()
+                    .rposition(|b| b.label == label)
+                    .expect("matched labelled block");
+                match self.frames[frame].blocks[block].ty {
+                    _ if self.invalid(t) || self.bottom(t) => {}
+                    None => self.frames[frame].blocks[block].ty = Some(t),
+                    // A typed operand was checked against `ty` when entered.
+                    Some(_) if value.is_some() => {}
+                    Some(ty) if self.invalid(ty) || self.compatible(t, ty) => {}
+                    Some(ty) => self.type_mismatch(
+                        const { RuleId::of("LANG-7") },
+                        self.span(id),
+                        "a break without a value gives the labelled block ()",
+                        t,
+                        ty,
+                    ),
+                }
+                self.primitive(Primitive::Never)
+            }
+            E::Continue(Some(label))
+                if self.frames[frame].blocks.iter().any(|b| b.label == label) =>
+            {
+                self.report(
+                    const { RuleId::of("LANG-7") },
+                    self.span(id),
+                    "continue needs a loop label, and this label names a block",
+                );
+                self.error()
+            }
+            E::Break {
+                label: Some(label),
+                value: Some(_),
+            } if self.frames[frame].loops.iter().any(|statement| {
+                self.input.tree.statements[statement.0 as usize]
+                    .kind
+                    .loop_label()
+                    == Some(label)
+            }) =>
+            {
+                self.report(
+                    const { RuleId::of("LANG-1") },
+                    self.span(id),
+                    "only a labelled block takes a break value; a loop has no result",
+                );
+                self.error()
+            }
+            E::Break { label: None, .. } | E::Continue(None)
+                if self.frames[frame]
+                    .blocks
+                    .last()
+                    .is_some_and(|b| b.loops == self.frames[frame].loops.len())
+                    && !self.frames[frame].loops.is_empty() =>
+            {
+                self.report(
+                    const { RuleId::of("LANG-7") },
+                    self.span(id),
+                    "an unlabelled exit cannot leave a labelled block; name the loop's label",
+                );
+                self.error()
+            }
+            E::Break { label, .. } | E::Continue(label) => {
                 let found = self.frames[frame].loops.iter().rev().any(|statement| {
                     label.is_none()
                         || self.input.tree.statements[statement.0 as usize]
@@ -1608,20 +1761,28 @@ impl Checker<'_, '_> {
     }
     fn enter_loop(&mut self, id: ast::StmtId, frame: usize) {
         if let Some(label) = self.input.tree.statements[id.0 as usize].kind.loop_label() {
-            if self.frames[frame].loops.iter().any(|outer| {
+            let span = self.input.tree.statements[id.0 as usize].origin.span;
+            self.check_label_shadow(label, span, frame);
+        }
+        self.frames[frame].loops.push(id);
+    }
+    /// Loop and block labels share one namespace and never shadow (LANG-11).
+    fn check_label_shadow(&mut self, label: Symbol, span: Span, frame: usize) {
+        let f = &self.frames[frame];
+        if f.blocks.iter().any(|b| b.label == label)
+            || f.loops.iter().any(|outer| {
                 self.input.tree.statements[outer.0 as usize]
                     .kind
                     .loop_label()
                     == Some(label)
-            }) {
-                self.report(
-                    const { RuleId::of("LANG-7") },
-                    self.input.tree.statements[id.0 as usize].origin.span,
-                    "loop label shadows an enclosing loop label",
-                );
-            }
+            })
+        {
+            self.report(
+                const { RuleId::of("LANG-7") },
+                span,
+                "a label shadows an enclosing loop or block label",
+            );
         }
-        self.frames[frame].loops.push(id);
     }
     fn statement(&mut self, id: ast::StmtId, frame: usize) -> Result<(), QueryError> {
         use ast::StmtKind as S;
@@ -2055,6 +2216,15 @@ impl Checker<'_, '_> {
                 self.work
                     .push(Work::AfterChild(After::LoopEnd(frame, previous)));
                 self.work.push(Work::Enter(body, Some(unit), frame));
+            }
+            After::LabelledTail(tail, expected, frame) => {
+                let block = self.frames[frame]
+                    .blocks
+                    .last_mut()
+                    .expect("entered labelled block");
+                block.tail_checked = block.ty.is_some();
+                let expected = block.ty.or(expected);
+                self.work.push(Work::Enter(tail, expected, frame));
             }
             After::LoopEnd(frame, restricted) => {
                 self.frames[frame].loops.pop();

@@ -133,6 +133,24 @@ impl Parser<'_> {
             let path = self.path(false)?;
             return Ok(self.push_expr(start, ExprKind::Path(path)));
         }
+        if let Some(Token {
+            kind: TokenKind::Label(label),
+            ..
+        }) = self.token(0)
+            && self.text_at(1) == ":"
+            && self.text_at(2) == "{"
+        {
+            let label = *label;
+            self.pos += 2;
+            let block = self.block_context()?;
+            let origin = self.origin(start);
+            let expr = &mut self.tree.expressions[block.0 as usize];
+            if let ExprKind::Block { label: slot, .. } = &mut expr.kind {
+                *slot = Some(label);
+            }
+            expr.origin = origin;
+            return Ok(block);
+        }
         let kind = if self.eat("(") {
             if self.eat(")") {
                 ExprKind::Tuple(vec![])
@@ -253,7 +271,18 @@ impl Parser<'_> {
             };
             ExprKind::Return(value)
         } else if self.eat("break") {
-            ExprKind::Break(self.exit_label())
+            let label = self.exit_label();
+            // Only a labelled exit takes an operand: `break 'l value` (LANG-11).
+            let value = if label.is_none()
+                || (self.whitespace == 0 && self.newline())
+                || self.eof()
+                || matches!(self.text_at(0), ";" | "}" | ")" | "]" | ",")
+            {
+                None
+            } else {
+                Some(self.expr(0)?)
+            };
+            ExprKind::Break { label, value }
         } else if self.eat("continue") {
             ExprKind::Continue(self.exit_label())
         } else if self.eat("heap") {
@@ -381,7 +410,14 @@ impl Parser<'_> {
                 }
             }
         }
-        Ok(self.push_expr(start, ExprKind::Block { statements, tail }))
+        Ok(self.push_expr(
+            start,
+            ExprKind::Block {
+                label: None,
+                statements,
+                tail,
+            },
+        ))
     }
     fn block_valued(&self, e: ExprId) -> bool {
         matches!(
@@ -409,13 +445,18 @@ impl Parser<'_> {
             let label = *label;
             self.pos += 1;
             self.expect(":", const { RuleId::of("LANG-1") })?;
-            if !self.at("for") && !self.at("while") {
+            if self.at("{") {
+                // A labelled block is an expression statement (LANG-11).
+                self.pos = start;
+                None
+            } else if !self.at("for") && !self.at("while") {
                 return self.fail(
                     const { RuleId::of("LANG-1") },
-                    "only for and while may have a loop label",
+                    "only for, while and a block may have a label",
                 );
+            } else {
+                Some(label)
             }
-            Some(label)
         } else {
             None
         };

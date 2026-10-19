@@ -497,7 +497,10 @@ pub enum ExprKind {
         value: ExprId,
         map_error: Option<Path>,
     },
+    /// A block; with a label it is a labelled block (`'l: { .. }`), whose value is
+    /// its tail or the operand of a `break 'l` inside it (LANG-11).
     Block {
+        label: Option<Symbol>,
         statements: Vec<StmtId>,
         tail: Option<ExprId>,
     },
@@ -515,7 +518,11 @@ pub enum ExprKind {
         body: ExprId,
     },
     Return(Option<ExprId>),
-    Break(Option<Symbol>),
+    /// `break`, `break 'l` or `break 'l value`; only a labelled block takes a value (LANG-11).
+    Break {
+        label: Option<Symbol>,
+        value: Option<ExprId>,
+    },
     Continue(Option<Symbol>),
     Shape(TypeExprId),
     Before(ExprId),
@@ -976,6 +983,128 @@ pub const MAX_PATTERN_CHOICES: usize = 256;
 /// reaches, keyed by the or-pattern.
 pub type PatternChoice = std::collections::BTreeMap<PatternId, PatternId>;
 impl SyntaxTree {
+    /// The labelled block each `break 'l` under `root` leaves, keyed by the
+    /// break (LANG-11). Labels resolve lexically; a closure or local function
+    /// body starts a new label scope, and a break naming a loop or no enclosing
+    /// label is absent.
+    pub fn block_exits(&self, root: ExprId) -> std::collections::BTreeMap<ExprId, ExprId> {
+        enum Step {
+            Expr(ExprId),
+            Stmt(StmtId),
+            Leave,
+            Restore(Vec<(Symbol, ExprId)>),
+        }
+        let mut exits = std::collections::BTreeMap::new();
+        let mut active: Vec<(Symbol, ExprId)> = vec![];
+        let mut work = vec![Step::Expr(root)];
+        while let Some(step) = work.pop() {
+            let id = match step {
+                Step::Expr(id) => id,
+                Step::Stmt(id) => {
+                    match &self.statements[id.0 as usize].kind {
+                        StmtKind::Let {
+                            value, otherwise, ..
+                        } => work.extend(otherwise.iter().chain([value]).map(|e| Step::Expr(*e))),
+                        StmtKind::Assign { place, value, .. } => {
+                            work.extend([Step::Expr(*value), Step::Expr(*place)])
+                        }
+                        StmtKind::Expr(value) => work.push(Step::Expr(*value)),
+                        StmtKind::While {
+                            condition, body, ..
+                        } => work.extend([Step::Expr(*body), Step::Expr(*condition)]),
+                        StmtKind::For { source, body, .. } => {
+                            work.extend([Step::Expr(*body), Step::Expr(*source)])
+                        }
+                        StmtKind::Function { body, .. } => {
+                            work.push(Step::Restore(std::mem::take(&mut active)));
+                            work.push(Step::Expr(*body));
+                        }
+                    }
+                    continue;
+                }
+                Step::Leave => {
+                    active.pop();
+                    continue;
+                }
+                Step::Restore(outer) => {
+                    active = outer;
+                    continue;
+                }
+            };
+            let mut children = vec![];
+            match &self.expressions[id.0 as usize].kind {
+                ExprKind::Block {
+                    label,
+                    statements,
+                    tail,
+                } => {
+                    if let Some(label) = label {
+                        active.push((*label, id));
+                        work.push(Step::Leave);
+                    }
+                    children.extend(statements.iter().map(|s| Step::Stmt(*s)));
+                    children.extend(tail.map(Step::Expr));
+                }
+                ExprKind::Break { label, value } => {
+                    if let Some(&(_, block)) = active.iter().rev().find(|(l, _)| Some(*l) == *label)
+                    {
+                        exits.insert(id, block);
+                    }
+                    children.extend(value.map(Step::Expr));
+                }
+                ExprKind::Closure { body, .. } => {
+                    work.push(Step::Restore(std::mem::take(&mut active)));
+                    children.push(Step::Expr(*body));
+                }
+                ExprKind::Tuple(values) | ExprKind::Sequence(values) => {
+                    children.extend(values.iter().map(|e| Step::Expr(*e)))
+                }
+                ExprKind::Call { callee, arguments } => {
+                    children.push(Step::Expr(*callee));
+                    children.extend(arguments.iter().map(|a| Step::Expr(a.value)));
+                }
+                ExprKind::Field { base: value, .. }
+                | ExprKind::Unary { value, .. }
+                | ExprKind::Try { value, .. }
+                | ExprKind::Before(value)
+                | ExprKind::Comptime(value)
+                | ExprKind::Return(Some(value)) => children.push(Step::Expr(*value)),
+                ExprKind::Index { base, index } => {
+                    children.extend([Step::Expr(*base), Step::Expr(*index)])
+                }
+                ExprKind::Binary { left, right, .. } => {
+                    children.extend([Step::Expr(*left), Step::Expr(*right)])
+                }
+                ExprKind::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    children.extend([Step::Expr(*condition), Step::Expr(*then_branch)]);
+                    children.extend(else_branch.map(Step::Expr));
+                }
+                ExprKind::Match { value, arms } => {
+                    children.push(Step::Expr(*value));
+                    for arm in arms {
+                        children.extend(arm.guard.map(Step::Expr));
+                        children.push(Step::Expr(arm.body));
+                    }
+                }
+                ExprKind::Literal(_)
+                | ExprKind::Path(_)
+                | ExprKind::Return(None)
+                | ExprKind::Continue(_)
+                | ExprKind::Shape(_)
+                | ExprKind::Heap
+                | ExprKind::Result
+                | ExprKind::Todo(_)
+                | ExprKind::Formatter(_)
+                | ExprKind::Error => {}
+            }
+            work.extend(children.into_iter().rev());
+        }
+        exits
+    }
     /// Whether an expression's last token closes a block, closure or match, so
     /// a following `else` would continue it (LANG-13). With `grouped`, a
     /// parenthesized expression ends in `)`; without, parentheses are ignored.
@@ -992,7 +1121,11 @@ impl SyntaxTree {
                 | ExprKind::If { .. }
                 | ExprKind::Match { .. }
                 | ExprKind::Closure { .. } => return true,
-                ExprKind::Unary { value, .. } | ExprKind::Return(Some(value)) => e = *value,
+                ExprKind::Unary { value, .. }
+                | ExprKind::Return(Some(value))
+                | ExprKind::Break {
+                    value: Some(value), ..
+                } => e = *value,
                 ExprKind::Binary { right, .. } => e = *right,
                 _ => return false,
             }
@@ -1131,6 +1264,7 @@ mod tests {
         tree.expressions.push(Expr {
             origin,
             kind: ExprKind::Block {
+                label: None,
                 statements: vec![],
                 tail: Some(ExprId(0)),
             },

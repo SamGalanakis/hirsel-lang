@@ -263,7 +263,14 @@ impl Fixture {
             .into_iter()
             .map(|e| self.statement(StmtKind::Expr(e)))
             .collect();
-        self.expr(ExprKind::Block { statements, tail }, ty)
+        self.expr(
+            ExprKind::Block {
+                label: None,
+                statements,
+                tail,
+            },
+            ty,
+        )
     }
     pub fn capability(&mut self, name: &str, kind: CapabilityKind) -> TypeId {
         self.nominal(

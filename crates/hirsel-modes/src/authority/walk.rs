@@ -13,6 +13,23 @@ mod patterns;
 mod promises;
 use crate::explain::{Cause, Explanation, Fact, Requirement};
 
+/// A labelled block being walked: its consumer's context and each break
+/// that leaves it, with that path's state (LANG-11).
+struct BlockExit {
+    label: hirsel_intern::Symbol,
+    context: Option<(CaptureContext, Option<TypeId>, RuleId)>,
+    paths: Vec<PathState>,
+}
+/// The flow state of one path that reaches a join, with the value it yields.
+#[derive(Clone)]
+struct PathState {
+    value: Option<ExprId>,
+    binding_types: BindingTypes,
+    identities: Identities,
+    identity_changes: BTreeMap<Origin, Span>,
+    invalid: BTreeMap<TypeId, Span>,
+    pending_tasks: BTreeMap<ExprId, Span>,
+}
 #[derive(Clone)]
 struct Frame {
     owner: NameSite,
@@ -144,6 +161,7 @@ pub(super) struct Checker<'a> {
     task_bindings: BTreeMap<BindingKey, BTreeSet<ExprId>>,
     pending_tasks: BTreeMap<ExprId, Span>,
     loop_task_exits: Vec<(hirsel_syntax::StmtId, BTreeMap<ExprId, Span>)>,
+    block_exits: Vec<BlockExit>,
     cursor_loops: BTreeMap<hirsel_syntax::StmtId, CursorPlan>,
     /// The callee path of the direct call being entered, which is not a value.
     direct_callee: Option<ExprId>,
@@ -379,6 +397,7 @@ impl<'a> Checker<'a> {
             task_bindings: BTreeMap::new(),
             pending_tasks: BTreeMap::new(),
             loop_task_exits: vec![],
+            block_exits: vec![],
             cursor_loops: BTreeMap::new(),
             direct_callee: None,
             clauses: vec![],
@@ -555,7 +574,9 @@ impl<'a> Checker<'a> {
     /// innermost tail, which the consumer receives as if written directly.
     fn transparent_value(&self, mut e: ExprId) -> ExprId {
         while let ExprKind::Block {
-            tail: Some(tail), ..
+            label: None,
+            tail: Some(tail),
+            ..
         } = self.tree.expressions[e.0 as usize].kind
         {
             e = tail;
@@ -749,8 +770,12 @@ impl<'a> Checker<'a> {
     }
     fn falls_through(&self, e: ExprId) -> bool {
         match &self.tree.expressions[e.0 as usize].kind {
-            ExprKind::Return(_) | ExprKind::Break(_) | ExprKind::Continue(_) => false,
-            ExprKind::Block { statements, tail } => {
+            ExprKind::Return(_) | ExprKind::Break { .. } | ExprKind::Continue(_) => false,
+            // A break that leaves a labelled block continues after it (LANG-11).
+            ExprKind::Block { label: Some(_), .. } => true,
+            ExprKind::Block {
+                statements, tail, ..
+            } => {
                 statements
                     .iter()
                     .all(|s| match self.tree.statements[s.0 as usize].kind {
@@ -766,6 +791,88 @@ impl<'a> Checker<'a> {
             } => self.falls_through(*then_branch) || self.falls_through(*other),
             ExprKind::Match { arms, .. } => arms.iter().any(|a| self.falls_through(a.body)),
             _ => true,
+        }
+    }
+    /// Kept out of `walk`, whose frame recursion depth multiplies: the entry
+    /// state is boxed.
+    #[inline(never)]
+    fn enter_block(
+        &mut self,
+        label: hirsel_intern::Symbol,
+        context: Option<(CaptureContext, Option<TypeId>, RuleId)>,
+    ) -> Box<PathState> {
+        self.block_exits.push(BlockExit {
+            label,
+            context,
+            paths: vec![],
+        });
+        Box::new(self.path_state(None))
+    }
+    #[inline(never)]
+    fn leave_block(&mut self, target: usize, value: Option<ExprId>) {
+        let path = self.path_state(value);
+        self.block_exits[target].paths.push(path);
+    }
+    fn path_state(&self, value: Option<ExprId>) -> PathState {
+        PathState {
+            value,
+            binding_types: self.binding_types.clone(),
+            identities: self.identities.clone(),
+            identity_changes: self.identity_changes.clone(),
+            invalid: self.invalid.clone(),
+            pending_tasks: self.pending_tasks.clone(),
+        }
+    }
+    /// A labelled block's result joins its fallthrough path, when `tail` is
+    /// `Some`, with each break that leaves it, as a match joins its arms
+    /// (LANG-11).
+    #[inline(never)]
+    fn join_block(
+        &mut self,
+        e: ExprId,
+        before: Box<PathState>,
+        tail: Option<Option<ExprId>>,
+        breaks: Vec<PathState>,
+    ) {
+        if breaks.is_empty() {
+            return;
+        }
+        let paths: Vec<_> = tail
+            .map(|tail| self.path_state(tail))
+            .into_iter()
+            .chain(breaks)
+            .collect();
+        let results: Vec<_> = paths.iter().filter_map(|p| p.value).collect();
+        self.pending_tasks = BTreeMap::new();
+        self.identity_changes = before.identity_changes.clone();
+        self.invalid = before.invalid.clone();
+        for path in &paths {
+            self.pending_tasks.extend(path.pending_tasks.clone());
+            self.identity_changes.extend(path.identity_changes.clone());
+            self.invalid.extend(path.invalid.clone());
+        }
+        let mut paths = paths.into_iter();
+        let first = paths.next().expect("a break reaches the join");
+        let rest: Vec<_> = paths.collect();
+        self.identities = first.identities.clone();
+        for path in &rest {
+            self.join_identities(
+                NameSite::Expression(e),
+                &before.identities,
+                &path.identities,
+            );
+        }
+        if !results.is_empty() {
+            self.join_expression(e, &results);
+        }
+        self.binding_types = before.binding_types.clone();
+        for key in before.binding_types.changed_keys(&[&first.binding_types]) {
+            if let Some(actual) = first.binding_types.get(&key) {
+                self.binding_types.insert(key, *actual);
+            }
+        }
+        for path in &rest {
+            self.join_bindings(&before.binding_types, &path.binding_types);
         }
     }
     fn proof_failure<T>(&mut self, error: QueryError, fallback: T) -> T {
@@ -949,7 +1056,12 @@ impl<'a> Checker<'a> {
             }
         }
         match kind {
-            ExprKind::Block { statements, tail } => {
+            ExprKind::Block {
+                label,
+                statements,
+                tail,
+            } => {
+                let entry = label.map(|label| self.enter_block(label, context.clone()));
                 let local_patterns: Vec<_> = statements
                     .iter()
                     .filter_map(|s| match self.tree.statements[s.0 as usize].kind {
@@ -975,8 +1087,18 @@ impl<'a> Checker<'a> {
                 if let Some(tail) = tail.filter(|_| reachable) {
                     self.expr(tail, context);
                     used = used.join(self.used(tail));
-                    self.copy_value_type(e, tail);
-                    self.task_values.insert(e, self.task_handles(tail));
+                    // A labelled block's value comes from its breaks when its
+                    // tail diverges (LANG-11).
+                    if label.is_none() || self.falls_through(tail) {
+                        self.copy_value_type(e, tail);
+                        self.task_values.insert(e, self.task_handles(tail));
+                    }
+                }
+                if let Some(entry) = entry {
+                    let exit = self.block_exits.pop().expect("walked labelled block");
+                    let falls = reachable && tail.is_none_or(|tail| self.falls_through(tail));
+                    self.join_block(e, entry, falls.then_some(tail), exit.paths);
+                } else if let Some(tail) = tail.filter(|_| reachable) {
                     // A block is transparent (spec issue #50): one that names
                     // storage declared outside it has that storage's identity.
                     // The storage is named, not computed: a binding declared
@@ -1653,7 +1775,20 @@ impl<'a> Checker<'a> {
                 // preserve the complete call-refined occurrence, not H's template.
                 self.copy_value_type(e, value);
             }
-            ExprKind::Break(label) | ExprKind::Continue(label) => {
+            ExprKind::Break {
+                label: Some(label),
+                value,
+            } if let Some(target) = self.block_exits.iter().rposition(|b| b.label == label) => {
+                if let Some(value) = value {
+                    let context = self.block_exits[target].context.clone();
+                    self.expr(value, context);
+                    used = self.used(value);
+                }
+                if value.is_none_or(|value| self.falls_through(value)) {
+                    self.leave_block(target, value);
+                }
+            }
+            ExprKind::Break { label, .. } | ExprKind::Continue(label) => {
                 if let Some(target) = self.loop_task_exits.iter().rposition(|(statement, _)| {
                     label.is_none()
                         || self.tree.statements[statement.0 as usize].kind.loop_label() == label
@@ -1813,8 +1948,7 @@ impl<'a> Checker<'a> {
                     None => nesting == 0,
                 },
             ),
-            ExprKind::Break(_) => (false, false),
-            ExprKind::Return(value) => (
+            ExprKind::Break { value, .. } | ExprKind::Return(value) => (
                 false,
                 value.is_some_and(|value| self.loop_control(value, target, nesting).1),
             ),
@@ -1849,7 +1983,11 @@ impl<'a> Checker<'a> {
                     (flow.0 || branch.0, flow.1 || branch.1)
                 })
             }
-            ExprKind::Block { statements, tail } => {
+            ExprKind::Block {
+                label,
+                statements,
+                tail,
+            } => {
                 let (mut next, mut back) = (true, false);
                 for statement in statements {
                     if !next {
@@ -1897,7 +2035,8 @@ impl<'a> Checker<'a> {
                         back |= flow.1;
                     }
                 }
-                (next, back)
+                // A break that leaves a labelled block continues after it (LANG-11).
+                (next || label.is_some(), back)
             }
             _ => sequence(self, target, nesting, self.expression_children(expression)),
         }

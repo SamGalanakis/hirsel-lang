@@ -43,7 +43,6 @@ impl Builder<'_, '_> {
                 | ExprKind::Path(_)
                 | ExprKind::Formatter(_)
                 | ExprKind::Heap
-                | ExprKind::Break(_)
                 | ExprKind::Continue(_)
                 | ExprKind::Todo(_) => {}
                 ExprKind::Tuple(xs) | ExprKind::Sequence(xs) => pending.extend(xs),
@@ -75,7 +74,9 @@ impl Builder<'_, '_> {
                     value,
                     map_error: None,
                 } => pending.push(*value),
-                ExprKind::Block { statements, tail } => {
+                ExprKind::Block {
+                    statements, tail, ..
+                } => {
                     pending.extend(tail);
                     for statement in statements {
                         match &self.input.tree.statements[statement.0 as usize].kind {
@@ -116,7 +117,7 @@ impl Builder<'_, '_> {
                         pending.push(arm.body);
                     }
                 }
-                ExprKind::Return(value) => pending.extend(value),
+                ExprKind::Return(value) | ExprKind::Break { value, .. } => pending.extend(value),
                 // Captures, implicit mapper inputs and materialized shape code
                 // are deliberately outside this small proof.
                 ExprKind::Closure { .. }

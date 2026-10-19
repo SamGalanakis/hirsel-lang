@@ -1,0 +1,38 @@
+// rule: DROP-2
+// expect: run
+// stdout: kept
+// stdout: inner
+// stdout: block
+// stdout: loop-inner
+// stdout: loop-block
+// stdout: after
+// stdout: value
+resource type Trace {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let picked: Trace = 'pick: {
+    let block = Trace(stdout: stdout, text: "block\n")
+    {
+      let inner = Trace(stdout: stdout, text: "inner\n")
+      let kept = Trace(stdout: stdout, text: "value\n")
+      let _ = out.print(stdout, "kept\n")
+      break 'pick kept
+    }
+  }
+  'done: {
+    let block = Trace(stdout: stdout, text: "loop-block\n")
+    for i in 0u64..3 {
+      let inner = Trace(stdout: stdout, text: "loop-inner\n")
+      break 'done
+    }
+  }
+  let _ = out.print(stdout, "after\n")
+  Ok(())
+}

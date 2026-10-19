@@ -31,6 +31,18 @@ pub(super) struct Loop {
     pub exits: Vec<State>,
     pub feedback: Vec<State>,
 }
+/// A labelled block being lowered (LANG-11): its result slot, the scope it
+/// opens inside `outer`, and the states its breaks reach `exit` with.
+pub(super) struct LabelledBlock {
+    pub block: ExprId,
+    pub label: hirsel_intern::Symbol,
+    pub destination: PlaceId,
+    pub lent: Option<ScopeId>,
+    pub outer: ScopeId,
+    pub scope: Option<ScopeId>,
+    pub exit: BlockId,
+    pub exits: Vec<State>,
+}
 pub(super) struct Builder<'a, 'b> {
     pub input: &'b Input<'a>,
     pub decisions: &'b decisions::Decisions<'a>,
@@ -51,6 +63,7 @@ pub(super) struct Builder<'a, 'b> {
     cleanup_epoch: usize,
     pub roots: Vec<PlaceId>,
     pub loops: Vec<Loop>,
+    pub blocks: Vec<LabelledBlock>,
     pub loan_count: u32,
     loan_sources: Vec<(PlaceId, bool)>,
     /// For a call result holding argument loans, by destination place: the
@@ -138,6 +151,7 @@ impl<'a, 'b> Builder<'a, 'b> {
             cleanup_epoch: 0,
             roots: vec![],
             loops: vec![],
+            blocks: vec![],
             loan_count: 0,
             loan_sources: vec![],
             call_retention: BTreeMap::new(),

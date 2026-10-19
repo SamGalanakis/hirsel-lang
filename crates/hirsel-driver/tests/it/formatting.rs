@@ -56,6 +56,7 @@ impl ParserPhase for EmptyFunction {
         let expression = Expr {
             origin,
             kind: ExprKind::Block {
+                label: None,
                 statements: vec![],
                 tail: None,
             },

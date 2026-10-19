@@ -372,8 +372,11 @@ impl Checker<'_> {
             return None;
         }
         let leaf = match self.tree.expressions[expression.0 as usize].kind.clone() {
+            // A labelled block joins its breaks: no single leaf (LANG-11).
             ExprKind::Block {
-                tail: Some(tail), ..
+                label: None,
+                tail: Some(tail),
+                ..
             } => return self.brandless_variant(tail, expected),
             ExprKind::Unary {
                 op: UnaryOp::Take | UnaryOp::Copy,

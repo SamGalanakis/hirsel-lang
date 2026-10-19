@@ -301,6 +301,7 @@ impl Checker<'_> {
         };
         let tail = match &self.tree.expressions[body.0 as usize].kind {
             ExprKind::Block {
+                label: None,
                 statements,
                 tail: Some(tail),
             } if statements.is_empty() => *tail,

@@ -509,8 +509,10 @@ pub(super) fn children(tree: &ast::SyntaxTree, id: ast::ExprId) -> Vec<ast::Expr
                     .flat_map(|a| a.guard.into_iter().chain(std::iter::once(a.body))),
             )
             .collect(),
-        E::Return(e) => e.iter().copied().collect(),
-        E::Block { statements, tail } => statements
+        E::Return(e) | E::Break { value: e, .. } => e.iter().copied().collect(),
+        E::Block {
+            statements, tail, ..
+        } => statements
             .iter()
             .flat_map(|s| match &tree.statements[s.0 as usize].kind {
                 ast::StmtKind::Let {

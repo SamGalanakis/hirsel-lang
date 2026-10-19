@@ -143,6 +143,9 @@ pub(super) struct Graph {
     /// borrows the part would read storage the block ends (LANG-11).
     pub ending: BTreeMap<ExprId, (ExprId, ExprId)>,
     pub statements: Statements,
+    /// Each labelled block's break operands: with its tail, the value
+    /// positions of the block (LANG-11).
+    pub block_breaks: BTreeMap<ExprId, Vec<ExprId>>,
 }
 /// The block statement whose temporaries hold each evaluated value, and the
 /// statement each block statement is nested in. A block's tail belongs to
@@ -215,6 +218,66 @@ struct Environment {
     consumer: Option<ExprId>,
     /// The block statement whose temporaries this expression's value joins.
     statement: Option<StmtId>,
+    /// Enclosing labelled blocks, innermost last (LANG-11).
+    blocks: Vec<BlockTarget>,
+}
+/// A labelled block a break can leave: the break's operand is evaluated as
+/// the block's tail is, then the exited scopes end before the join (LANG-11).
+#[derive(Clone)]
+struct BlockTarget {
+    label: hirsel_intern::Symbol,
+    block: ExprId,
+    join: usize,
+    /// The scope depth outside the block and the statement holding it.
+    depth: usize,
+    statement: Option<StmtId>,
+    context: Context,
+    escaping: bool,
+    owning: bool,
+    consumer: Option<ExprId>,
+    operation: ExprId,
+}
+/// The places in the value positions of `value` (through transparent block
+/// tails, branches, arms and a labelled block's breaks) that name one of
+/// `locals`, with whether the place is the whole binding (LANG-11).
+fn local_value_places(
+    tree: &SyntaxTree,
+    body: &CheckedBody,
+    rows: &super::source_rows::SourceRows,
+    block_breaks: &BTreeMap<ExprId, Vec<ExprId>>,
+    value: ExprId,
+    locals: &[usize],
+) -> Vec<(ExprId, bool)> {
+    let mut found = vec![];
+    let mut positions = vec![value];
+    while let Some(position) = positions.pop() {
+        match &tree.expressions[position.0 as usize].kind {
+            ExprKind::Block { tail, .. } => {
+                positions.extend(tail);
+                positions.extend(block_breaks.get(&position).into_iter().flatten());
+            }
+            ExprKind::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                positions.push(*then_branch);
+                positions.extend(else_branch);
+            }
+            ExprKind::Match { arms, .. } => positions.extend(arms.iter().map(|arm| arm.body)),
+            ExprKind::Unary { .. } => {}
+            _ => {
+                if let Some(p) = rows
+                    .source_place(position)
+                    .and_then(|_| place(body, position, rows))
+                    .filter(|p| locals.contains(&p.binding))
+                {
+                    found.push((position, p.projections.is_empty()));
+                }
+            }
+        }
+    }
+    found
 }
 enum Job {
     Expr {
@@ -445,8 +508,18 @@ pub(super) fn build(
             tree.expressions[root.0 as usize].origin.span,
         );
         let mut entry = reserve(&mut nodes, tree.expressions[root.0 as usize].origin.span);
+        let mut block_breaks: BTreeMap<ExprId, Vec<ExprId>> = BTreeMap::new();
+        for (exit, block) in tree.block_exits(root) {
+            if let ExprKind::Break {
+                value: Some(value), ..
+            } = tree.expressions[exit.0 as usize].kind
+            {
+                block_breaks.entry(block).or_default().push(value);
+            }
+        }
         let env = Environment {
             owner: owner.clone(),
+            blocks: vec![],
             breaks: vec![],
             scopes: vec![],
             lifetime: 0,
@@ -745,6 +818,7 @@ pub(super) fn build(
                             }
                         }
                         ExprKind::Block {
+                            label,
                             statements: block_statements,
                             tail,
                         } => {
@@ -772,48 +846,51 @@ pub(super) fn build(
                             lifetimes
                                 .bindings
                                 .extend(locals.iter().map(|index| (*index, env.lifetime)));
+                            // A labelled block's breaks rejoin its tail here (LANG-11).
+                            let join = if let Some(label) = label {
+                                let join = node(
+                                    &mut nodes,
+                                    Op::IdentityReady(NameSite::Expression(expression)),
+                                    vec![next],
+                                    expr.origin.span,
+                                );
+                                env.blocks.push(BlockTarget {
+                                    label: *label,
+                                    block: expression,
+                                    join,
+                                    depth: env.scopes.len(),
+                                    statement: env.statement,
+                                    context,
+                                    escaping,
+                                    owning,
+                                    consumer: env.consumer,
+                                    operation,
+                                });
+                                join
+                            } else {
+                                next
+                            };
                             let end = node(
                                 &mut nodes,
                                 Op::Kill(locals.clone()),
-                                vec![next],
+                                vec![join],
                                 expr.origin.span,
                             );
-                            let mut positions: Vec<ExprId> = tail.iter().copied().collect();
-                            while let Some(position) = positions.pop() {
-                                match &tree.expressions[position.0 as usize].kind {
-                                    ExprKind::Block {
-                                        tail: Some(inner), ..
-                                    } => positions.push(*inner),
-                                    ExprKind::If {
-                                        then_branch,
-                                        else_branch,
-                                        ..
-                                    } => {
-                                        positions.push(*then_branch);
-                                        positions.extend(else_branch);
-                                    }
-                                    ExprKind::Match { arms, .. } => {
-                                        positions.extend(arms.iter().map(|arm| arm.body))
-                                    }
-                                    ExprKind::Unary { .. } => {}
-                                    _ => {
-                                        let local = rows
-                                            .source_place(position)
-                                            .and_then(|_| place(body, position, rows))
-                                            .filter(|p| locals.contains(&p.binding));
-                                        match local {
-                                            Some(p) if p.projections.is_empty() => {
-                                                leaving.insert(position);
-                                            }
-                                            Some(_) => {
-                                                ending.insert(
-                                                    position,
-                                                    (expression, env.consumer.unwrap_or(operation)),
-                                                );
-                                            }
-                                            None => {}
-                                        }
-                                    }
+                            for (position, whole) in local_value_places(
+                                tree,
+                                body,
+                                rows,
+                                &block_breaks,
+                                expression,
+                                &locals,
+                            ) {
+                                if whole {
+                                    leaving.insert(position);
+                                } else {
+                                    ending.insert(
+                                        position,
+                                        (expression, env.consumer.unwrap_or(operation)),
+                                    );
                                 }
                             }
                             env.scopes.push(locals);
@@ -1153,7 +1230,77 @@ pub(super) fn build(
                             }
                             continue;
                         }
-                        ExprKind::Break(label) | ExprKind::Continue(label) => {
+                        ExprKind::Break {
+                            label: Some(label),
+                            value,
+                        } if let Some(target) =
+                            env.blocks.iter().rev().find(|b| b.label == *label).cloned() =>
+                        {
+                            let exited: Vec<usize> = env
+                                .scopes
+                                .iter()
+                                .skip(target.depth)
+                                .flatten()
+                                .copied()
+                                .collect();
+                            let exits = exit_statements(
+                                &mut nodes,
+                                &statements,
+                                env.statement,
+                                target.statement,
+                                target.join,
+                                expr.origin.span,
+                            );
+                            let kill = node(
+                                &mut nodes,
+                                Op::Kill(exited.clone()),
+                                vec![exits],
+                                expr.origin.span,
+                            );
+                            let Some(value) = value else {
+                                nodes[entry].op = Op::Finish {
+                                    expression: target.block,
+                                    context: target.context,
+                                    children: vec![],
+                                    fresh: true,
+                                };
+                                nodes[entry].next = vec![kill];
+                                continue;
+                            };
+                            let consumer = target.consumer.unwrap_or(target.operation);
+                            for (position, whole) in
+                                local_value_places(tree, body, rows, &block_breaks, *value, &exited)
+                            {
+                                if whole {
+                                    leaving.insert(position);
+                                } else {
+                                    ending.insert(position, (target.block, consumer));
+                                }
+                            }
+                            let forward = node(
+                                &mut nodes,
+                                Op::Forward {
+                                    expression: target.block,
+                                    child: *value,
+                                },
+                                vec![kill],
+                                expr.origin.span,
+                            );
+                            let mut env = env;
+                            env.consumer = target.consumer;
+                            jobs.push(Job::Expr {
+                                entry,
+                                expression: *value,
+                                context: target.context,
+                                operation: *value,
+                                escaping: target.escaping,
+                                owning: target.owning,
+                                next: forward,
+                                env,
+                            });
+                            continue;
+                        }
+                        ExprKind::Break { label, .. } | ExprKind::Continue(label) => {
                             if let Some(&(break_to, continue_to, depth, loop_statement)) =
                                 env.breaks.iter().rev().find(|(_, _, _, statement)| {
                                     label.is_none()
@@ -1161,7 +1308,7 @@ pub(super) fn build(
                                             == *label
                                 })
                             {
-                                let target = if matches!(expr.kind, ExprKind::Break(_)) {
+                                let target = if matches!(expr.kind, ExprKind::Break { .. }) {
                                     break_to
                                 } else {
                                     continue_to
@@ -1780,6 +1927,7 @@ pub(super) fn build(
             leaving,
             ending,
             statements,
+            block_breaks,
         });
     }
     Ok(graphs)
@@ -1840,8 +1988,10 @@ fn entry_snapshots(tree: &SyntaxTree, owner: NameSite) -> Vec<ExprId> {
                         .flat_map(|a| a.guard.iter().chain(std::iter::once(&a.body))),
                 );
             }
-            ExprKind::Return(value) => pending.extend(value),
-            ExprKind::Block { statements, tail } => {
+            ExprKind::Return(value) | ExprKind::Break { value, .. } => pending.extend(value),
+            ExprKind::Block {
+                statements, tail, ..
+            } => {
                 pending.extend(tail);
                 for statement in statements {
                     match &tree.statements[statement.0 as usize].kind {

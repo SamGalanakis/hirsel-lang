@@ -390,6 +390,31 @@ fn clamp(x: u64) -> u64 {
 }
 ```
 
+A labelled block `'l: { .. }` is an expression whose value is its tail or the operand of a
+`break 'l value` inside it, which leaves every enclosing scope up to and including the
+block's (`break 'l` alone gives `()`). The tail and the break operands join as an `if`'s
+branches do: they have one type, checked against the block's expected type or else taken
+from the first of them, and the block is transparent to its consumer's use through each of
+them. Only a labelled block takes a break value: a loop has no result, so wrap the loop in
+a labelled block to compute one. `break 'l value` has type `Never`, evaluates its operand
+first, then ends the loans and cleans up the scopes it leaves exactly as a labelled loop
+exit does. A labelled block's label shares the loop-label namespace and its rules. An
+unlabelled `break` or `continue` cannot leave a labelled block to reach a loop outside it,
+and `continue` cannot name a block (LANG-7).
+
+```hirsel
+fn find(rows: List[List[u64]]) -> Option[(u64, u64)] {
+  'search: {
+    for i in 0u64..list.len(rows) {
+      for j in 0u64..list.len(rows[i]) {
+        if rows[i][j] == 7 { break 'search Some((i, j)) }
+      }
+    }
+    None()
+  }
+}
+```
+
 ### LANG-12: Arguments
 
 A parameter declared with a label (`fn rename(from src: Path, to dst: Path)`) must be

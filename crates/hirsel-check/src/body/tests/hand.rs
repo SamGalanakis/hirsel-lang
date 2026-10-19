@@ -179,7 +179,11 @@ impl Fixture {
         (out, self.provider.reads)
     }
     fn block(&mut self, statements: Vec<ast::StmtId>, tail: Option<ast::ExprId>) -> ast::ExprId {
-        self.expr(ast::ExprKind::Block { statements, tail })
+        self.expr(ast::ExprKind::Block {
+            label: None,
+            statements,
+            tail,
+        })
     }
 }
 #[test]

@@ -130,6 +130,8 @@ fn grammar_document_examples_parse_in_their_grammatical_contexts() {
         "return x + y",
         "break",
         "continue",
+        "'done: { 0 }",
+        "'done: { break 'done x + y }",
         "todo",
         "todo(\"later\")",
     ] {

@@ -376,7 +376,7 @@ holes, and recovers silently when the hole's append already reported. Ordinary
 call checking checks every option, including a `name$` width's path (LANG-7 for
 a non-u64).
 
-Each function frame retains its active loop statements. Labelled exits require a matching enclosing label and active labels cannot shadow; nested callable frames start empty (LANG-7).
+Each function frame retains its active loop statements and labelled blocks. Labelled exits require a matching enclosing label and active loop and block labels cannot shadow; nested callable frames start empty (LANG-7). A labelled block's type is its expected type, else the first typed break operand or tail; the tail is checked against it once known. A value break naming a loop is LANG-1; `continue` naming a block, and an unlabelled exit whose innermost loop lies outside an enclosing labelled block, are LANG-7. Tail eligibility treats nothing inside a labelled block as a tail and joins each break's state at the block's end; the allocation audit treats a labelled block as exposing its bindings and destroys a break operand exactly when its block's value is destroyed (LANG-11).
 
 Generic named function values infer every type/size actual from the immediate complete
 monomorphic callable expectation. H checks structural bounds and records the

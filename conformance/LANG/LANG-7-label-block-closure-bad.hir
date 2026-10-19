@@ -1,0 +1,10 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 6
+fn f() -> u64 {
+  'value: {
+    let g = fn() -> u64 {
+      break 'value 1
+    }
+    g()
+  }
+}

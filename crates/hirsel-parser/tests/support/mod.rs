@@ -3,6 +3,24 @@ use hirsel_intern::Symbol;
 use hirsel_span::{FileId, SourceMap, Span};
 use hirsel_syntax::*;
 
+/// An apostrophe followed by a name that no apostrophe closes is a label, as
+/// the lexer reads it; a closing apostrophe keeps a character literal.
+fn label_len(rest: &str) -> Option<usize> {
+    let bytes = rest.as_bytes();
+    if bytes.first() != Some(&b'\'')
+        || !bytes
+            .get(1)
+            .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+    {
+        return None;
+    }
+    let end = 1 + bytes[1..]
+        .iter()
+        .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_')
+        .count();
+    (bytes.get(end) != Some(&b'\'')).then_some(end)
+}
+
 pub fn tokenize(file: FileId, source: &str) -> Vec<Token> {
     let mut tokens = vec![];
     let mut pos = 0;
@@ -46,6 +64,9 @@ pub fn tokenize(file: FileId, source: &str) -> Vec<Token> {
                 .take_while(|b| matches!(b, b' ' | b'\t'))
                 .count();
             TokenKind::Trivia(TriviaKind::Space)
+        } else if let Some(len) = label_len(rest) {
+            pos += len;
+            TokenKind::Label(Symbol::intern(&rest[1..len]))
         } else if rest.starts_with('\'') {
             pos += 1;
             while pos < source.len() {

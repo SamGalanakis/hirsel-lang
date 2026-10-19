@@ -1079,7 +1079,7 @@ impl Catalogue<'_> {
             ExprKind::Try { value, .. } | ExprKind::Before(value) | ExprKind::Comptime(value) => {
                 self.expr(value, scope)
             }
-            ExprKind::Return(value) => {
+            ExprKind::Return(value) | ExprKind::Break { value, .. } => {
                 if let Some(v) = value {
                     self.expr(v, scope);
                 }
@@ -1113,7 +1113,9 @@ impl Catalogue<'_> {
                     self.expr(arm.body, &nested);
                 }
             }
-            ExprKind::Block { statements, tail } => {
+            ExprKind::Block {
+                statements, tail, ..
+            } => {
                 let mut nested = scope.to_vec();
                 // Later statements end here: before the tail, else after the last one.
                 let rest_end = match (tail, statements.last()) {

@@ -40,7 +40,7 @@ item 7 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, 
 item 8 DefPath(ItemPath { package: PackageId { name: "fixture", version: "1" }, modules: ["examples"], name: "C" }) Origin { span: Span { file: FileId(0), start: 375, end: 406 }, tokens: TokenRange { start: 189, end: 205 } } TokenRange { start: 188, end: 205 } hash=[67, a7, 8a, 02, 16, bc, cd, bb, fb, ea, cb, 91, 65, 67, dc, 66, e1, 63, 84, d3, ae, ec, 0b, ae, 5a, d5, 1d, 28, 7b, 0b, 92, 1b]
   Public []
   Const { ty: TypeExprId(14), value: ExprId(6) }
-expr 0 Origin { span: Span { file: FileId(0), start: 176, end: 178 }, tokens: TokenRange { start: 93, end: 95 } }: Block { statements: [], tail: None }
+expr 0 Origin { span: Span { file: FileId(0), start: 176, end: 178 }, tokens: TokenRange { start: 93, end: 95 } }: Block { label: None, statements: [], tail: None }
 expr 1 Origin { span: Span { file: FileId(0), start: 214, end: 215 }, tokens: TokenRange { start: 110, end: 111 } }: Path(Path { package: None, segments: [Symbol("v")] })
 expr 2 Origin { span: Span { file: FileId(0), start: 219, end: 222 }, tokens: TokenRange { start: 114, end: 115 } }: Literal(Integer("100"))
 expr 3 Origin { span: Span { file: FileId(0), start: 214, end: 222 }, tokens: TokenRange { start: 110, end: 115 } }: Binary { op: Le, left: ExprId(1), right: ExprId(2) }

@@ -1,3 +1,0 @@
-// rule: LANG-1
-// expect: reject LANG-1 at line 3
-fn f() { 'outer: { () } }

@@ -231,7 +231,7 @@ impl<'a> Scanner<'a> {
                 const { RuleId::of("LANG-1") },
                 start,
                 self.pos,
-                "loop label requires a non-keyword name other than underscore",
+                "a label requires a non-keyword name other than underscore",
             );
         }
         TokenKind::Label(symbol)

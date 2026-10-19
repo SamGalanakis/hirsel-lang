@@ -1,0 +1,14 @@
+// rule: OWN-2
+// expect: reject OWN-2 at line 13
+fn consume(take values: List[u64]) {}
+
+fn f(take values: List[u64], early: bool) {
+  let kept: List[u64] = 'pick: {
+    if early {
+      break 'pick take values
+    }
+    []
+  }
+  consume(take kept)
+  consume(take values)
+}

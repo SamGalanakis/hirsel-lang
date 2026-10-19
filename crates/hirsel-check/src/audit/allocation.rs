@@ -448,8 +448,9 @@ impl<'a> Audit<'a, '_> {
                     (ResolvedName::Local(_), NameSite::Pattern(pattern), _) => {
                         match lets.get(&pattern) {
                             Some(&(block, index)) => {
-                                let ast::ExprKind::Block { statements, tail } =
-                                    self.input.tree.expressions[block.0 as usize].kind.clone()
+                                let ast::ExprKind::Block {
+                                    statements, tail, ..
+                                } = self.input.tree.expressions[block.0 as usize].kind.clone()
                                 else {
                                     unreachable!()
                                 };
@@ -556,7 +557,12 @@ impl<'a> Audit<'a, '_> {
             return Ownership::Yielded;
         }
         match self.input.tree.expressions[e.0 as usize].kind.clone() {
-            ast::ExprKind::Block { statements, tail } => self.rest(name, &statements, tail),
+            // A labelled block's breaks leave from inside its statements:
+            // not followed here (LANG-11).
+            ast::ExprKind::Block { label: Some(_), .. } => Ownership::Exposed,
+            ast::ExprKind::Block {
+                statements, tail, ..
+            } => self.rest(name, &statements, tail),
             ast::ExprKind::If {
                 condition,
                 then_branch,
@@ -702,6 +708,9 @@ impl<'a> Audit<'a, '_> {
     fn temporaries(&mut self, root: ExprId, can_fail: bool) -> Result<EffectResult, QueryError> {
         let mut result = EffectResult::default();
         let mut todo = vec![(root, can_fail)];
+        // A break value is destroyed exactly when its labelled block's value is (LANG-11).
+        let exits = self.input.tree.block_exits(root);
+        let mut destroyed_blocks = BTreeMap::new();
         while let Some((e, destroyed)) = todo.pop() {
             let kind = self.input.tree.expressions[e.0 as usize].kind.clone();
             // A read of a binding's storage or of a constant destroys nothing.
@@ -759,7 +768,14 @@ impl<'a> Audit<'a, '_> {
                 }
             }
             match kind {
-                ast::ExprKind::Block { statements, tail } => {
+                ast::ExprKind::Block {
+                    label,
+                    statements,
+                    tail,
+                } => {
+                    if label.is_some() {
+                        destroyed_blocks.insert(e, destroyed);
+                    }
                     if let Some(tail) = tail {
                         todo.push((tail, destroyed));
                     }
@@ -855,6 +871,16 @@ impl<'a> Audit<'a, '_> {
                 ast::ExprKind::Try { value, .. } | ast::ExprKind::Return(Some(value)) => {
                     todo.push((value, false))
                 }
+                ast::ExprKind::Break {
+                    value: Some(value), ..
+                } => todo.push((
+                    value,
+                    exits
+                        .get(&e)
+                        .and_then(|block| destroyed_blocks.get(block))
+                        .copied()
+                        .unwrap_or(true),
+                )),
                 _ => (),
             }
         }
@@ -1143,7 +1169,9 @@ impl<'a> Audit<'a, '_> {
                         }
                     }
                 }
-                ast::ExprKind::Block { statements, tail } => {
+                ast::ExprKind::Block {
+                    statements, tail, ..
+                } => {
                     if let Some(tail) = tail {
                         todo.push((*tail, prohibited, escaping));
                     }
@@ -1233,7 +1261,9 @@ impl<'a> Audit<'a, '_> {
                         todo.push((arm.body, prohibited, escaping));
                     }
                 }
-                ast::ExprKind::Return(value) => {
+                // A break value is the labelled block's result: assumed to
+                // escape like a returned one (LANG-11).
+                ast::ExprKind::Return(value) | ast::ExprKind::Break { value, .. } => {
                     if let Some(value) = value {
                         todo.push((*value, prohibited, true));
                     }
@@ -1322,7 +1352,9 @@ fn children(kind: &ast::ExprKind) -> Vec<ExprId> {
                     .flat_map(|a| a.guard.iter().copied().chain(std::iter::once(a.body))),
             )
             .collect(),
-        ast::ExprKind::Return(e) => e.iter().copied().collect(),
+        ast::ExprKind::Return(e) | ast::ExprKind::Break { value: e, .. } => {
+            e.iter().copied().collect()
+        }
         ast::ExprKind::Block { tail, .. } => tail.iter().copied().collect(),
         _ => vec![],
     }

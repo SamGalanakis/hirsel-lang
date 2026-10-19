@@ -134,7 +134,11 @@ impl Fixture {
         self.e(ExprKind::Literal(Literal::Integer(s.into())))
     }
     fn block(&mut self, statements: Vec<StmtId>, tail: Option<ExprId>) -> ExprId {
-        self.e(ExprKind::Block { statements, tail })
+        self.e(ExprKind::Block {
+            label: None,
+            statements,
+            tail,
+        })
     }
     fn item(&mut self, name: &str, kind: ItemKind) {
         let s = self.s(name);
@@ -685,7 +689,13 @@ fn flow_control_closures_and_special_expressions() {
         f.e(ExprKind::Closure { signature, body })
     });
     for (text, kind) in [
-        ("break", ExprKind::Break(None)),
+        (
+            "break",
+            ExprKind::Break {
+                label: None,
+                value: None,
+            },
+        ),
         ("continue", ExprKind::Continue(None)),
         ("return", ExprKind::Return(None)),
         ("heap", ExprKind::Heap),
@@ -786,7 +796,10 @@ fn all_statements_and_final_expression_discard() {
     let one = f.int("1");
     let x = f.value("x");
     let condition = f.value("ok");
-    let br = f.e(ExprKind::Break(None));
+    let br = f.e(ExprKind::Break {
+        label: None,
+        value: None,
+    });
     let br = f.st(StmtKind::Expr(br));
     let body = f.block(vec![br], None);
     let cont = f.e(ExprKind::Continue(None));

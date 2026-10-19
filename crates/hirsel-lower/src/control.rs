@@ -241,6 +241,9 @@ impl Builder<'_, '_> {
             span,
         });
         self.scope = scope;
+        if let Some(target) = self.blocks.last_mut().filter(|b| b.block == id) {
+            target.scope = Some(scope);
+        }
         for statement in statements {
             if self.current.is_none() {
                 break;
@@ -274,41 +277,7 @@ impl Builder<'_, '_> {
                 None => Some(self.unit(span)),
             };
             if let Some(value) = value {
-                // The block value is extracted into the enclosing scope before
-                // the block's named owners are cleaned (also for Return). A
-                // borrowed tail that names storage outliving the block is that
-                // borrow (spec issue #50): it needs no slot of its own, and a
-                // non-owning slot would have no storage-ending action.
-                self.scope = parent;
-                let result = if !self.value_owned(value) && self.outlives(value.place, scope) {
-                    value
-                } else {
-                    self.transport(value, Storage::Temporary, span)
-                };
-                if !self
-                    .lifetime(
-                        &self
-                            .types
-                            .get(self.ty(result.place))
-                            .unwrap()
-                            .modes
-                            .relation,
-                    )
-                    .is_global()
-                {
-                    // Only the extracted content keeps permissions. Dead
-                    // sibling holders must release theirs in this scope, before
-                    // their source temporaries are destroyed by its cleanup.
-                    let retained = self.transitive_operand_loans(&Operand {
-                        place: result.place,
-                        usage: result.usage,
-                    });
-                    for (loan, s) in &mut self.state.loans {
-                        if *s == scope && retained.contains(&loan.0) {
-                            *s = parent;
-                        }
-                    }
-                }
+                let result = self.extract_block_value(value, scope, parent, span);
                 self.exit_scope(scope, span);
                 Some(result)
             } else {
@@ -319,6 +288,125 @@ impl Builder<'_, '_> {
         };
         self.scope = parent;
         Ok(result)
+    }
+    /// A block value is extracted into the enclosing scope `parent` before
+    /// the owners of the block's `scope` are cleaned (also for Return and a
+    /// break that leaves a labelled block). A borrowed value that names
+    /// storage outliving the block is that borrow (spec issue #50): it needs no
+    /// slot of its own, and a non-owning slot would have no storage-ending
+    /// action. Leaves `self.scope` at `parent`.
+    fn extract_block_value(
+        &mut self,
+        value: Value,
+        scope: ScopeId,
+        parent: ScopeId,
+        span: Span,
+    ) -> Value {
+        self.scope = parent;
+        let result = if !self.value_owned(value) && self.outlives(value.place, scope) {
+            value
+        } else {
+            self.transport(value, Storage::Temporary, span)
+        };
+        if !self
+            .lifetime(
+                &self
+                    .types
+                    .get(self.ty(result.place))
+                    .unwrap()
+                    .modes
+                    .relation,
+            )
+            .is_global()
+        {
+            // Only the extracted content keeps permissions. Dead sibling
+            // holders must release theirs in this scope, before their source
+            // temporaries are destroyed by its cleanup.
+            let retained = self.transitive_operand_loans(&Operand {
+                place: result.place,
+                usage: result.usage,
+            });
+            let moved: Vec<_> = self
+                .state
+                .loans
+                .iter()
+                .filter(|(loan, s)| self.within(*s, scope) && retained.contains(&loan.0))
+                .map(|(loan, _)| loan.0)
+                .collect();
+            for (loan, s) in &mut self.state.loans {
+                if moved.contains(&loan.0) {
+                    *s = parent;
+                }
+            }
+        }
+        result
+    }
+    /// A labelled block (LANG-11) joins its tail and each break that leaves
+    /// it in one result slot of the enclosing scope, as an `if` joins its
+    /// branches.
+    pub fn labelled_block(
+        &mut self,
+        id: ExprId,
+        label: hirsel_intern::Symbol,
+        statements: Vec<StmtId>,
+        tail: Option<ExprId>,
+        bodies: &mut Vec<Option<Body>>,
+    ) -> Result<Option<Value>> {
+        let span = self.span(id)?;
+        let ty = self.decision(id)?.ty;
+        let lent = self.lent_join(id)?;
+        let destination = self.slot(ty, Storage::Temporary, span, false);
+        self.emit(InstructionKind::StorageLive(self.root(destination)), span);
+        let exit = self.block(span);
+        self.blocks.push(super::builder::LabelledBlock {
+            block: id,
+            label,
+            destination,
+            lent,
+            outer: self.scope,
+            scope: None,
+            exit,
+            exits: vec![],
+        });
+        let value = self.source_block(id, statements, tail, bodies)?;
+        let mut states = self.blocks.pop().expect("lowered labelled block").exits;
+        if let Some(value) = value {
+            self.transfer_to(destination, value, lent, span);
+            states.push(self.state.clone());
+            self.terminate(Terminator::Goto(exit), span);
+        }
+        self.join_value(exit, destination, states, span)
+    }
+    /// `break 'l value`: the value leaves every scope up to the labelled
+    /// block's, as its tail does, and joins its result (LANG-11).
+    pub fn block_exit(
+        &mut self,
+        target: usize,
+        value: Option<ExprId>,
+        span: Span,
+        bodies: &mut Vec<Option<Body>>,
+    ) -> Result<Option<Value>> {
+        let value = match value {
+            Some(e) => match self.expression(e, bodies)? {
+                Some(v) => v,
+                None => return Ok(None),
+            },
+            None => self.unit(span),
+        };
+        let current = self.scope;
+        let block = &self.blocks[target];
+        let (outer, destination, lent, exit) =
+            (block.outer, block.destination, block.lent, block.exit);
+        let Some(scope) = block.scope else {
+            return self.error(span, "break before its labelled block's scope");
+        };
+        let value = self.extract_block_value(value, scope, outer, span);
+        self.exit_scope(scope, span);
+        self.transfer_to(destination, value, lent, span);
+        self.blocks[target].exits.push(self.state.clone());
+        self.terminate(Terminator::Goto(exit), span);
+        self.scope = current;
+        Ok(None)
     }
     pub fn statement(&mut self, id: StmtId, bodies: &mut Vec<Option<Body>>) -> Result<()> {
         let Some(statement) = self.input.tree.statements.get(id.0 as usize).cloned() else {

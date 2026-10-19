@@ -73,6 +73,7 @@ impl Parser<'_> {
         let block = self.synthetic_expr(
             whole,
             ExprKind::Block {
+                label: None,
                 statements,
                 tail: Some(tail),
             },
@@ -245,6 +246,7 @@ impl Parser<'_> {
             let block = self.synthetic_expr(
                 origin,
                 ExprKind::Block {
+                    label: None,
                     statements: vec![bind, append, pad],
                     tail: None,
                 },

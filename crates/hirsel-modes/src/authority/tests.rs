@@ -363,6 +363,7 @@ fn task_handle_consumption_is_required_on_every_reachable_branch() {
         );
         let root = f.expr(
             ExprKind::Block {
+                label: None,
                 statements: vec![binding],
                 tail: Some(branch),
             },
@@ -472,6 +473,7 @@ fn local_named_functions_publish_empty_and_nonempty_capture_rows() {
         };
         let root = f.expr(
             ExprKind::Block {
+                label: None,
                 statements: vec![statement],
                 tail: Some(unit),
             },
@@ -547,7 +549,10 @@ fn loop_control_cannot_consume_a_task_handle_in_unreachable_code() {
             });
             let control = f.expr(
                 if breaks {
-                    ExprKind::Break(None)
+                    ExprKind::Break {
+                        label: None,
+                        value: None,
+                    }
                 } else {
                     ExprKind::Continue(None)
                 },
@@ -569,6 +574,7 @@ fn loop_control_cannot_consume_a_task_handle_in_unreachable_code() {
             };
             let root = f.expr(
                 ExprKind::Block {
+                    label: None,
                     statements: vec![bind, loop_statement],
                     tail,
                 },

@@ -83,8 +83,11 @@ impl Builder<'_, '_> {
     /// The value a chain of transparent blocks yields (spec #50): the
     /// innermost tail, which the consumer receives as if written directly.
     pub(super) fn transparent_value(&self, mut id: ExprId) -> ExprId {
+        // A labelled block joins its breaks in its own slot (LANG-11).
         while let ExprKind::Block {
-            tail: Some(tail), ..
+            label: None,
+            tail: Some(tail),
+            ..
         } = &self.input.tree.expressions[id.0 as usize].kind
         {
             id = *tail;
@@ -94,6 +97,7 @@ impl Builder<'_, '_> {
     /// The authority pass's rule for a transparent block's identity.
     pub(super) fn names_outer_storage(&self, id: ExprId) -> bool {
         let ExprKind::Block {
+            label: None,
             statements,
             tail: Some(tail),
         } = &self.input.tree.expressions[id.0 as usize].kind
@@ -568,7 +572,14 @@ impl Builder<'_, '_> {
                     usage: row.usage,
                 }
             }
-            ExprKind::Block { statements, tail } => {
+            ExprKind::Block {
+                label: Some(label),
+                statements,
+                tail,
+            } => return self.labelled_block(id, label, statements, tail, bodies),
+            ExprKind::Block {
+                statements, tail, ..
+            } => {
                 return self.source_block(id, statements, tail, bodies);
             }
             ExprKind::If {
@@ -594,10 +605,16 @@ impl Builder<'_, '_> {
                 self.return_value(value, span, bodies)?;
                 return Ok(None);
             }
-            ExprKind::Break(label) | ExprKind::Continue(label) => {
+            ExprKind::Break {
+                label: Some(label),
+                value,
+            } if let Some(target) = self.blocks.iter().rposition(|b| b.label == label) => {
+                return self.block_exit(target, value, span, bodies);
+            }
+            ExprKind::Break { label, .. } | ExprKind::Continue(label) => {
                 let is_break = matches!(
                     self.input.tree.expressions[id.0 as usize].kind,
-                    ExprKind::Break(_)
+                    ExprKind::Break { .. }
                 );
                 let Some(target) = self.loops.iter().rposition(|lp| {
                     label.is_none()

@@ -391,7 +391,7 @@ Core `replace` is a lowered intrinsic: normal call argument preparation precedes
 one TIR `Replace`, and the displaced temporary becomes the call result without
 destruction. Assignment uses the same exchange helper, then drops that temporary.
 
-Labelled exits select an enclosing Loop entry, end its exited scopes with existing cleanup, and publish break/feedback states to that selected entry. Inner loop preparation ends on an outer exit; the selected loop preparation survives continue.
+Labelled exits select an enclosing Loop entry, end its exited scopes with existing cleanup, and publish break/feedback states to that selected entry. Inner loop preparation ends on an outer exit; the selected loop preparation survives continue. A labelled block lowers as an `if` join: one result slot in the enclosing scope, its tail and each `break 'l value` transferred into it (lent for a borrowed join), and the break extracting its value as a block tail does before the exited scopes clean up (LANG-11). No TIR construct is added.
 
 `Input.track_caller` transports declaration metadata into TIR. Internal contract
 invocations inherit attribution; source function-value calls retain their boundary.

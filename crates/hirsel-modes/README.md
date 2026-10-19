@@ -955,7 +955,7 @@ declaration for direct calls and re-proves f's body, including unused functions.
 Failed proofs report MODE-2 at f with a note naming the association; an explicit
 promise is redundant and runs the same proof once.
 
-Ownership CFG environments retain all active lexical loop targets. Labelled edges end statements and scoped bindings up to their selected loop. Authority task obligations follow that same target, and header convergence includes labelled continues from nested loops.
+Ownership CFG environments retain all active lexical loop targets and labelled blocks. Labelled edges end statements and scoped bindings up to their selected loop. Authority task obligations follow that same target, and header convergence includes labelled continues from nested loops. A labelled block is an `if`-like join (LANG-11): each break operand is evaluated in the block's context, forwarded to the block, then ends the scopes and statements it leaves before the block's `IdentityReady` join; `Graph.block_breaks` adds break operands to every transparent value-position scan, while transparent tail chains stop at a labelled block. The authority walk joins each break's path state with the fallthrough as a match joins its arms.
 
 Contextually instantiated named function references rebuild their declared callable
 with actual generic authority before receipt. J proves sendable/inert bounds at

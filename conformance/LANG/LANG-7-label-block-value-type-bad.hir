@@ -1,0 +1,10 @@
+// rule: LANG-7
+// expect: reject LANG-7 at line 6
+fn f(early: bool) -> u64 {
+  'value: {
+    if early {
+      break 'value true
+    }
+    3
+  }
+}

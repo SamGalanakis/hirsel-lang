@@ -58,6 +58,7 @@ fn branch_moves_join_but_early_returns_do_not_reach_the_join() {
         };
         let branch = f.expr(
             ExprKind::Block {
+                label: None,
                 statements: vec![statement],
                 tail,
             },
@@ -106,6 +107,7 @@ fn loops_reach_a_fixed_point_and_reinitialisation_repairs_a_move() {
         }
         let body = f.expr(
             ExprKind::Block {
+                label: None,
                 statements,
                 tail: None,
             },

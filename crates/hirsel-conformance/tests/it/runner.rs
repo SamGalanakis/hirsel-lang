@@ -209,7 +209,8 @@ fn reject(id: &str, line: usize) -> Expect {
 
 #[test]
 fn production_rejection_needs_the_exact_rule_and_line_and_its_twin_is_accepted() {
-    let bad = "// rule: LANG-1\n// expect: reject LANG-1 at line 3\nfn f() { 'outer: { () } }\n";
+    let bad =
+        "// rule: LANG-1\n// expect: reject LANG-1 at line 3\nfn f() { 'outer: if true { () } }\n";
     production(
         bad,
         &[

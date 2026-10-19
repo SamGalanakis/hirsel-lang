@@ -36,5 +36,5 @@ expr 24 Origin { span: Span { file: FileId(0), start: 72, end: 73 }, tokens: Tok
 expr 25 Origin { span: Span { file: FileId(0), start: 68, end: 73 }, tokens: TokenRange { start: 56, end: 61 } }: Binary { op: Mul, left: ExprId(23), right: ExprId(24) }
 expr 26 Origin { span: Span { file: FileId(0), start: 64, end: 73 }, tokens: TokenRange { start: 52, end: 61 } }: Binary { op: Add, left: ExprId(22), right: ExprId(25) }
 expr 27 Origin { span: Span { file: FileId(0), start: 57, end: 73 }, tokens: TokenRange { start: 50, end: 61 } }: Return(Some(ExprId(26)))
-expr 28 Origin { span: Span { file: FileId(0), start: 7, end: 75 }, tokens: TokenRange { start: 6, end: 63 } }: Block { statements: [StmtId(0)], tail: Some(ExprId(27)) }
+expr 28 Origin { span: Span { file: FileId(0), start: 7, end: 75 }, tokens: TokenRange { start: 6, end: 63 } }: Block { label: None, statements: [StmtId(0)], tail: Some(ExprId(27)) }
 stmt 0 Origin { span: Span { file: FileId(0), start: 9, end: 55 }, tokens: TokenRange { start: 8, end: 50 } }: Expr(ExprId(21))

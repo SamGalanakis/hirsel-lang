@@ -35,8 +35,10 @@ pub(crate) fn expression_children(tree: &SyntaxTree, e: ExprId) -> Vec<ExprId> {
             )
             .collect(),
         ExprKind::Closure { body, .. } => vec![*body],
-        ExprKind::Return(value) => value.iter().copied().collect(),
-        ExprKind::Block { statements, tail } => statements
+        ExprKind::Return(value) | ExprKind::Break { value, .. } => value.iter().copied().collect(),
+        ExprKind::Block {
+            statements, tail, ..
+        } => statements
             .iter()
             .flat_map(|s| match &tree.statements[s.0 as usize].kind {
                 StmtKind::Let {

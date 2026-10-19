@@ -225,7 +225,16 @@ impl Normalizer<'_, '_> {
                     self.contract_path(p, None, e, locals)?;
                 }
             }
-            ast::ExprKind::Block { statements, tail } => {
+            ast::ExprKind::Block {
+                label,
+                statements,
+                tail,
+            } => {
+                // An unlabelled block keeps its encoding (LANG-11).
+                if let Some(label) = label {
+                    e.tag("label");
+                    e.tag(label.as_str());
+                }
                 e.tag("block");
                 let mut scoped = locals.clone();
                 e.number(statements.len() as u64);
@@ -286,11 +295,16 @@ impl Normalizer<'_, '_> {
                     self.expression(*x, e, active, locals)?;
                 }
             }
-            ast::ExprKind::Break(label) => {
+            ast::ExprKind::Break { label, value } => {
                 e.tag("break");
                 if let Some(label) = label {
                     e.tag("label");
                     e.tag(label.as_str());
+                }
+                // A valueless break keeps its encoding (LANG-11).
+                if let Some(value) = value {
+                    e.tag("value");
+                    self.expression(*value, e, active, locals)?;
                 }
             }
             ast::ExprKind::Continue(label) => {

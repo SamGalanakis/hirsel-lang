@@ -1,0 +1,9 @@
+// rule: LANG-1
+// expect: accept
+fn f() {
+  'outer: {
+    if true {
+      ()
+    }
+  }
+}

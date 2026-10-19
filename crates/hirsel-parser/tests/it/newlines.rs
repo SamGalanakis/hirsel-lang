@@ -21,7 +21,10 @@ fn body(source: &str) -> (SyntaxFile, ExprId) {
     (output.syntax, body)
 }
 fn block(file: &SyntaxFile, id: ExprId) -> (&[StmtId], Option<ExprId>) {
-    let ExprKind::Block { statements, tail } = &file.tree.expressions[id.0 as usize].kind else {
+    let ExprKind::Block {
+        statements, tail, ..
+    } = &file.tree.expressions[id.0 as usize].kind
+    else {
         panic!("block")
     };
     (statements, *tail)

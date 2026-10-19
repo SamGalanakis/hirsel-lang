@@ -73,6 +73,6 @@ alongside holes for formatting. `@format(path)` parses to
 `AttributeArgument::Format`. Recovery treats Head and Tail pieces
 as braces.
 
-Loop labels are retained on for/while statements and optional break/continue targets. Only loops may be labelled; lexical target validation belongs to body checking.
+Loop labels are retained on for/while statements and optional break/continue targets. A label followed by `:` and `{` is a labelled block expression (`Block.label`), and `break 'l` takes an optional same-line operand; only loops and blocks may be labelled. Lexical target validation belongs to body checking.
 
 `@test` is a zero-argument function-definition attribute; semantic LANG-9 signature validation belongs to signature normalization.

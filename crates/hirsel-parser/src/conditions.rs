@@ -22,6 +22,7 @@ impl Parser<'_> {
             self.synthetic_expr(
                 header,
                 ExprKind::Block {
+                    label: None,
                     statements: vec![],
                     tail: None,
                 },
@@ -41,12 +42,19 @@ impl Parser<'_> {
         let (pattern, value) = self.let_condition()?;
         let header = self.origin(start);
         let body = self.block()?;
-        let exit = self.synthetic_expr(header, ExprKind::Break(None));
+        let exit = self.synthetic_expr(
+            header,
+            ExprKind::Break {
+                label: None,
+                value: None,
+            },
+        );
         let matching = self.refusing(start, pattern, value, body, exit);
         let whole = self.origin(start);
         let block = self.synthetic_expr(
             whole,
             ExprKind::Block {
+                label: None,
                 statements: vec![],
                 tail: Some(matching),
             },

@@ -313,6 +313,7 @@ impl Fixture {
         let ty = self.checked.expressions[tail.0 as usize].ty;
         self.expr(
             ExprKind::Block {
+                label: None,
                 statements,
                 tail: Some(tail),
             },

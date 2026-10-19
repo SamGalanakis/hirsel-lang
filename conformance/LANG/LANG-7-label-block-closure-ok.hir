@@ -1,0 +1,12 @@
+// rule: LANG-7
+// expect: accept
+fn f() -> u64 {
+  'value: {
+    let g = fn() -> u64 {
+      'inner: {
+        break 'inner 1
+      }
+    }
+    g()
+  }
+}

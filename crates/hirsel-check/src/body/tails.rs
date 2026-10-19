@@ -46,6 +46,9 @@ enum Visit {
     Fork(Vec<Branch>, usize),
     Join(Vec<usize>, usize),
     Terminate(usize),
+    /// A break leaving a labelled block: its state rejoins at the block's end.
+    BreakTo(ast::ExprId, usize),
+    BlockEnd(ast::ExprId, usize),
 }
 impl Checker<'_, '_> {
     pub(super) fn publish_tails(&mut self) -> Result<(), QueryError> {
@@ -80,6 +83,8 @@ impl Checker<'_, '_> {
             ..State::default()
         };
         let mut states = vec![initial];
+        let exits = self.input.tree.block_exits(*root);
+        let mut breaks: BTreeMap<ast::ExprId, Vec<State>> = BTreeMap::new();
         let mut todo = vec![Visit::Expression(*root, true, false, 0)];
         while let Some(visit) = todo.pop() {
             match visit {
@@ -90,6 +95,7 @@ impl Checker<'_, '_> {
                     use ast::ExprKind as E;
                     match self.input.tree.expressions[id.0 as usize].kind.clone() {
                         E::Block {
+                            label,
                             statements,
                             tail: value,
                         } => {
@@ -98,6 +104,12 @@ impl Checker<'_, '_> {
                                 states[state].temporaries.clone(),
                                 state,
                             ));
+                            // A labelled block's result joins its breaks: none
+                            // of its parts is a tail (LANG-11).
+                            let tail = tail && label.is_none();
+                            if label.is_some() {
+                                todo.push(Visit::BlockEnd(id, state));
+                            }
                             if let Some(value) = value {
                                 todo.push(Visit::Expression(value, tail, barrier, state));
                             }
@@ -206,7 +218,13 @@ impl Checker<'_, '_> {
                         | E::Result
                         | E::Todo(_)
                         | E::Error => (),
-                        E::Break(_) | E::Continue(_) => states[state].terminated = true,
+                        E::Break { value, .. } if exits.contains_key(&id) => {
+                            todo.push(Visit::BreakTo(exits[&id], state));
+                            if let Some(value) = value {
+                                todo.push(Visit::Expression(value, false, barrier, state));
+                            }
+                        }
+                        E::Break { .. } | E::Continue(_) => states[state].terminated = true,
                     }
                 }
                 Visit::Statement(id, barrier, state) => {
@@ -432,6 +450,22 @@ impl Checker<'_, '_> {
                     states[state] = joined;
                 }
                 Visit::Terminate(state) => states[state].terminated = true,
+                Visit::BreakTo(block, state) => {
+                    if !states[state].terminated {
+                        breaks.entry(block).or_default().push(states[state].clone());
+                        states[state].terminated = true;
+                    }
+                }
+                Visit::BlockEnd(block, state) => {
+                    for exit in breaks.remove(&block).unwrap_or_default() {
+                        if states[state].terminated {
+                            states[state] = exit;
+                        } else {
+                            states[state].live.extend(exit.live);
+                            states[state].temporaries.extend(exit.temporaries);
+                        }
+                    }
+                }
             }
         }
         self.body.tails.sort_by_key(|t| t.call);

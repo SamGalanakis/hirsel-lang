@@ -814,7 +814,7 @@ impl<'a> Printer<'a> {
         let precedence = match &e.kind {
             ExprKind::Binary { op, .. } => binary(*op).1,
             ExprKind::Unary { .. } | ExprKind::Comptime(_) => 11,
-            ExprKind::Return(_) => 0,
+            ExprKind::Return(_) | ExprKind::Break { value: Some(_), .. } => 0,
             ExprKind::Call { .. }
             | ExprKind::Index { .. }
             | ExprKind::Field { .. }
@@ -918,7 +918,12 @@ impl<'a> Printer<'a> {
                 }
                 cat(ds)
             }
-            ExprKind::Block { statements, tail } => {
+            ExprKind::Block {
+                label,
+                statements,
+                tail,
+            } => {
+                let label = self.loop_label(*label, true)?;
                 let mut body = Vec::new();
                 for (i, s) in statements.iter().enumerate() {
                     body.push(self.stmt(*s, tail.is_none() && i + 1 == statements.len())?);
@@ -927,9 +932,10 @@ impl<'a> Printer<'a> {
                     body.push(self.expr(*t, 0)?);
                 }
                 if body.is_empty() {
-                    cat([token("{"), token("}")])
+                    cat([label, token("{"), token("}")])
                 } else {
                     cat([
+                        label,
                         token("{"),
                         nest(cat([Line, join(body, Line)])),
                         Line,
@@ -1017,7 +1023,13 @@ impl<'a> Printer<'a> {
                 }
                 cat(ds)
             }
-            ExprKind::Break(label) => cat([token("break"), self.loop_label(*label, false)?]),
+            ExprKind::Break { label, value } => {
+                let mut ds = vec![token("break"), self.loop_label(*label, false)?];
+                if let Some(v) = value {
+                    ds.extend([Space, self.expr(*v, 0)?]);
+                }
+                cat(ds)
+            }
             ExprKind::Continue(label) => cat([token("continue"), self.loop_label(*label, false)?]),
             ExprKind::Shape(t) => cat([token("shape"), token("("), self.ty(*t)?, token(")")]),
             ExprKind::Before(v) => {

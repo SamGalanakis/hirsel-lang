@@ -760,6 +760,7 @@ fn contract_code_hashes_nested_blocks_patterns_and_bound_variables() {
         segments: vec![symbol],
     }));
     let body = f.expression(ast::ExprKind::Block {
+        label: None,
         statements: vec![ast::StmtId(0)],
         tail: Some(tail),
     });

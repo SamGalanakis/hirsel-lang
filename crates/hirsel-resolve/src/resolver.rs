@@ -166,6 +166,7 @@ pub fn resolve_view(
         callees: BTreeSet::new(),
         local_function_depth: 0,
         return_type: ExpectedType::Unknown,
+        block_labels: Vec::new(),
         contract_kind: None,
         exported: false,
         shaping: BTreeSet::new(),
@@ -205,6 +206,9 @@ struct Resolver<'a, P: ?Sized> {
     callees: BTreeSet<ExprId>,
     local_function_depth: usize,
     return_type: ExpectedType,
+    /// Each enclosing labelled block's expected type, for its break operands
+    /// (LANG-11); a closure or local function starts empty.
+    block_labels: Vec<(Symbol, ExpectedType)>,
     contract_kind: Option<ContractKind>,
     exported: bool,
     shaping: BTreeSet<DefPath>,
@@ -1583,8 +1587,21 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
             | ExprKind::Heap
             | ExprKind::Todo(_)
             | ExprKind::Error
-            | ExprKind::Break(_)
+            | ExprKind::Break { value: None, .. }
             | ExprKind::Continue(_) => expected,
+            ExprKind::Break {
+                label,
+                value: Some(value),
+            } => {
+                let target = self
+                    .block_labels
+                    .iter()
+                    .rev()
+                    .find(|(name, _)| Some(*name) == label)
+                    .map_or(ExpectedType::Unknown, |(_, ty)| ty.clone());
+                self.expr(value, target);
+                expected
+            }
             // The body checker selects a formatter's operation (SEM-3).
             ExprKind::Formatter(_) => ExpectedType::Unknown,
             ExprKind::Result => {
@@ -1704,7 +1721,14 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                 }
                 expected
             }
-            ExprKind::Block { statements, tail } => {
+            ExprKind::Block {
+                label,
+                statements,
+                tail,
+            } => {
+                if let Some(label) = label {
+                    self.block_labels.push((label, expected.clone()));
+                }
                 self.scopes.push(Scope::default());
                 let future = statements
                     .iter()
@@ -1718,6 +1742,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     .map(|tail| self.expr(tail, expected))
                     .unwrap_or_default();
                 self.scopes.pop();
+                if label.is_some() {
+                    self.block_labels.pop();
+                }
                 result
             }
             ExprKind::If {
@@ -1757,9 +1784,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     ExpectedType::Unknown
                 };
                 let old = std::mem::replace(&mut self.return_type, result.clone());
+                let labels = std::mem::take(&mut self.block_labels);
                 let enclosing_contract = self.contract_kind.take();
                 self.expr(body, result);
                 self.contract_kind = enclosing_contract;
+                self.block_labels = labels;
                 self.return_type = old;
                 self.local_function_depth -= 1;
                 self.scopes.pop();
@@ -2220,9 +2249,11 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     NameSite::Statement(id),
                 );
                 let old = std::mem::replace(&mut self.return_type, result.clone());
+                let labels = std::mem::take(&mut self.block_labels);
                 let enclosing_contract = self.contract_kind.take();
                 self.expr(body, result.clone());
                 self.contract_kind = enclosing_contract;
+                self.block_labels = labels;
                 self.return_type = old;
                 self.local_function_depth -= 1;
                 self.scopes.pop();

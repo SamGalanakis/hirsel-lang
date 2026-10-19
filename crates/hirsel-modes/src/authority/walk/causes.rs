@@ -292,7 +292,9 @@ impl Checker<'_> {
     fn placement_source(&self, mut e: ExprId, arena: &Origin) -> ExprId {
         loop {
             if let ExprKind::Block {
-                tail: Some(tail), ..
+                label: None,
+                tail: Some(tail),
+                ..
             } = self.tree.expressions[e.0 as usize].kind
             {
                 e = tail;

@@ -45,7 +45,9 @@ impl Heights {
             | ExprKind::Before(value)
             | ExprKind::Comptime(value) => self.expr(*value),
             ExprKind::Binary { left, right, .. } => self.expr(*left).max(self.expr(*right)),
-            ExprKind::Block { statements, tail } => statements
+            ExprKind::Block {
+                statements, tail, ..
+            } => statements
                 .iter()
                 .map(|id| self.statements[id.0 as usize])
                 .chain(tail.map(|id| self.expr(id)))
@@ -72,12 +74,13 @@ impl Heights {
             ExprKind::Closure { signature, body } => {
                 self.signature(signature).max(self.expr(*body))
             }
-            ExprKind::Return(value) => value.map_or(0, |id| self.expr(id)),
+            ExprKind::Return(value) | ExprKind::Break { value, .. } => {
+                value.map_or(0, |id| self.expr(id))
+            }
             ExprKind::Shape(id) => self.ty(*id),
             ExprKind::Literal(_)
             | ExprKind::Path(_)
             | ExprKind::Formatter(_)
-            | ExprKind::Break(_)
             | ExprKind::Continue(_)
             | ExprKind::Heap
             | ExprKind::Result

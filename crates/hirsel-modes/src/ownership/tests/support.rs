@@ -388,6 +388,7 @@ impl Fixture {
     pub fn check(&mut self) -> QueryOutput<OwnershipFacts> {
         let root = self.expr(
             ExprKind::Block {
+                label: None,
                 statements: self.statements.clone(),
                 tail: self.tail,
             },

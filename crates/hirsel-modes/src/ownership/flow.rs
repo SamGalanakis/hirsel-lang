@@ -2003,7 +2003,10 @@ impl Checker<'_> {
         let mut positions = vec![expression];
         while let Some(position) = positions.pop() {
             match &self.tree.expressions[position.0 as usize].kind {
-                ExprKind::Block { tail, .. } => positions.extend(tail),
+                ExprKind::Block { tail, .. } => {
+                    positions.extend(tail);
+                    positions.extend(self.graph.block_breaks.get(&position).into_iter().flatten());
+                }
                 ExprKind::If {
                     then_branch,
                     else_branch,
@@ -2051,7 +2054,10 @@ impl Checker<'_> {
         let mut positions = vec![expression];
         while let Some(position) = positions.pop() {
             match &self.tree.expressions[position.0 as usize].kind {
-                ExprKind::Block { tail, .. } => positions.extend(tail),
+                ExprKind::Block { tail, .. } => {
+                    positions.extend(tail);
+                    positions.extend(self.graph.block_breaks.get(&position).into_iter().flatten());
+                }
                 ExprKind::If {
                     then_branch,
                     else_branch,
@@ -2288,8 +2294,11 @@ impl Checker<'_> {
     /// projects from, so a tail place is the physical root.
     fn tail_root_modes(&self, state: &State, expression: ExprId) -> Option<Modes> {
         let mut tail = expression;
+        // A labelled block joins its breaks into its own storage (LANG-11).
         while let ExprKind::Block {
-            tail: Some(inner), ..
+            label: None,
+            tail: Some(inner),
+            ..
         } = self.tree.expressions[tail.0 as usize].kind
         {
             tail = inner;
@@ -7537,7 +7546,16 @@ impl Checker<'_> {
                 } => vec![*value],
                 ExprKind::Block {
                     tail: Some(tail), ..
-                } => vec![*tail],
+                } => std::iter::once(*tail)
+                    .chain(
+                        self.graph
+                            .block_breaks
+                            .get(&value)
+                            .into_iter()
+                            .flatten()
+                            .copied(),
+                    )
+                    .collect(),
                 ExprKind::Call { arguments, .. }
                     if self.body.calls.iter().any(|call| {
                         call.expression == value

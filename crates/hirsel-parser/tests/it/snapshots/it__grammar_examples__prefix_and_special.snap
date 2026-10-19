@@ -30,5 +30,5 @@ expr 19 Origin { span: Span { file: FileId(0), start: 91, end: 92 }, tokens: Tok
 expr 20 Origin { span: Span { file: FileId(0), start: 84, end: 93 }, tokens: TokenRange { start: 57, end: 61 } }: Before(ExprId(19))
 expr 21 Origin { span: Span { file: FileId(0), start: 95, end: 99 }, tokens: TokenRange { start: 63, end: 64 } }: Todo(None)
 expr 22 Origin { span: Span { file: FileId(0), start: 9, end: 100 }, tokens: TokenRange { start: 8, end: 65 } }: Tuple([ExprId(1), ExprId(3), ExprId(5), ExprId(7), ExprId(9), ExprId(11), ExprId(13), ExprId(15), ExprId(17), ExprId(18), ExprId(20), ExprId(21)])
-expr 23 Origin { span: Span { file: FileId(0), start: 7, end: 102 }, tokens: TokenRange { start: 6, end: 67 } }: Block { statements: [], tail: Some(ExprId(22)) }
+expr 23 Origin { span: Span { file: FileId(0), start: 7, end: 102 }, tokens: TokenRange { start: 6, end: 67 } }: Block { label: None, statements: [], tail: Some(ExprId(22)) }
 type 0 Origin { span: Span { file: FileId(0), start: 80, end: 81 }, tokens: TokenRange { start: 53, end: 54 } }: Named { path: Path { package: None, segments: [Symbol("T")] }, arguments: [] }
