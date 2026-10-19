@@ -689,23 +689,25 @@ fn unix_rules_name_canonical_socket_paths_with_service_zero() {
 }
 
 #[test]
-fn unix_script_peers_are_plain_port_zero_paths() {
+fn unix_script_peers_are_port_zero_paths() {
     let script = |peer: Value| json!({"provider": "net.script@2", "rules": [], "peers": [peer]});
     let peer = |port: u16, resolves_to: Value, tls: Value| {
         json!({"address": "/run/app.sock", "port": port, "resolves_to": resolves_to,
                "tls": tls, "connections": []})
     };
     validate(script(peer(0, json!([]), json!("plain")))).unwrap();
+    validate(script(peer(
+        0,
+        json!([]),
+        json!({"certificate": ["localhost"]}),
+    )))
+    .unwrap();
     invalid(
         script(peer(80, json!([]), json!("plain"))),
         "io.net.peers.address",
     );
     invalid(
         script(peer(0, json!(["127.0.0.1"]), json!("plain"))),
-        "io.net.peers.address",
-    );
-    invalid(
-        script(peer(0, json!([]), json!({"certificate": ["a"]}))),
         "io.net.peers.address",
     );
     let mut relative = peer(0, json!([]), json!("plain"));

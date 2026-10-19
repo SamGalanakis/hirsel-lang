@@ -352,15 +352,15 @@ pub fn canonical_unix_path(path: &str) -> bool {
     path.len() <= UNIX_PATH_MAX && crate::process::canonical_program(path)
 }
 
-/// A scripted peer names a host or IP literal, or a socket path: a Unix peer, which is
-/// plain, has port 0 and resolves to nothing. A peer's TLS is never a client's `Presents`.
+/// A scripted peer names a host or IP literal, or a socket path: a Unix peer, which has
+/// port 0 and resolves to nothing. A peer's TLS is never a client's `Presents`.
 pub fn check_peer_address(peer: &NetPeer) -> Result<(), String> {
     if matches!(peer.tls, PeerTls::Presents(..)) {
         return Err("presents is a scripted client's TLS, not a peer's".into());
     }
     if canonical_unix_path(&peer.address) {
-        if peer.port != 0 || !peer.resolves_to.is_empty() || peer.tls != PeerTls::Plain {
-            return Err("a Unix peer is plain, with port 0 and no resolves_to".into());
+        if peer.port != 0 || !peer.resolves_to.is_empty() {
+            return Err("a Unix peer has port 0 and no resolves_to".into());
         }
         return Ok(());
     }

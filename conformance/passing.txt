@@ -4264,6 +4264,7 @@ conformance/SEM/SEM-1-http-server-persistence-run.hir
 conformance/SEM/SEM-1-http-server-tls-run.hir
 conformance/SEM/SEM-1-http-server-wire-run.hir
 conformance/SEM/SEM-1-http-wire-run.hir
+conformance/SEM/SEM-1-https-client-unix-socket-run.hir
 conformance/SEM/SEM-1-left-bit-loss.hir
 conformance/SEM/SEM-1-min-remainder.hir
 conformance/SEM/SEM-1-mixed-width-add-bad.hir

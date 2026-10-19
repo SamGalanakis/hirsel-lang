@@ -51,7 +51,7 @@ without leading zeros, and operations are `connect`, `connect_tls`, `listen`, `u
 `udp_peer` or `listen_tls`.
 The Unix operations `unix_connect`, `unix_listen` and `unix_listen_remove_stale` name a
 canonical absolute socket path of at most 107 bytes with service `0`; scripted peers may
-name such a path (plain, port 0, no `resolves_to`).
+name such a path (port 0, no `resolves_to`).
 
 `snapshot_args` and `snapshot_env` convert only explicitly supplied OS strings;
 byte-invalid inputs refuse with the argument index, key index or selected Env key.

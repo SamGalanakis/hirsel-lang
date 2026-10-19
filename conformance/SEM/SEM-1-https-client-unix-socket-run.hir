@@ -1,0 +1,62 @@
+// rule: SEM-1
+// expect: run
+// entry: exercise
+// https over a configured Unix socket: the socket carries the connection, the URL's host
+// is the TLS server name, and the handshake checks it against the peer's names.
+fn unix_config() -> http.Config uses {} {
+  let mut config = http.default_config()
+  config.unix_socket = Some(path.of("/run/engine.sock"))
+  config.idle_timeout = None()
+  config
+}
+
+pub fn exercise(t: Test) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "/run/engine.sock",
+        port: 0u16,
+        resolves_to: [],
+        tls: Certificate(["localhost"]),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"GET /v1/info HTTP/1.1\r\nhost: localhost\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nv1"
+              ),
+              Close()
+            ]
+          ),
+          Open([])
+        ]
+      )
+    ],
+    []
+  )
+  let response = http.fetch(
+    n,
+    unix_config(),
+    Get(),
+    "https://localhost/v1/info",
+    [],
+    None()
+  )?
+  test.check(t, response.status == 200 && response.body == b"v1")
+  let mismatch = match http.fetch(
+    n,
+    unix_config(),
+    Get(),
+    "https://other/v1/info",
+    [],
+    None()
+  ) {
+    Error(Net(Tls(NameMismatch()))) => true,
+    _ => false,
+  }
+  test.check(t, mismatch)
+  Ok(())
+}

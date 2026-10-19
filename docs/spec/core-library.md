@@ -763,9 +763,10 @@ are invalid input. A `NetListener` with port 0 binds its clients to the first po
 listen on that IP; clients target that listener's assigned address. Later port-0
 listens on that IP have no scripted clients.
 
-- A peer whose address is a canonical socket path is a Unix peer: it must be `Plain()`,
-  with port 0 and no `resolves_to`, and `test.net` grants `(path, 0, UnixConnect())` for it
-  in place of `Connect` and `UdpPeer` rules. Each `net.unix_connect` to it takes its next
+- A peer whose address is a canonical socket path is a Unix peer, with port 0 and no
+  `resolves_to`; its `tls` is `Plain()`, `Certificate(names)` or `Fails(f)`, and `tls.connect`
+  on its stream behaves as for a TCP peer of that `tls`. `test.net` grants
+  `(path, 0, UnixConnect())` for it in place of `Connect`, `ConnectTls` and `UdpPeer` rules. Each `net.unix_connect` to it takes its next
   connection entry as a connect does; `Unanswered()` never completes. Its streams' `peer_addr`
   is `0.0.0.0` with port 0. A Unix peer is reached only by `net.unix_connect`.
 - A listener's `address` is a canonical IP literal or a canonical socket path. A listener
