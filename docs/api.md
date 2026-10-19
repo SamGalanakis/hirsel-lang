@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1341 exported definitions; 489 variants.
+1346 exported definitions; 491 variants.
 
 ## Types and roots
 
@@ -10591,6 +10591,12 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_
 
 ## yaml
 
+<a id="def-std_401_2fyaml_2fConfig"></a>
+
+- `@serializable pub type yaml.Config { merge_keys: bool, }`
+
+References: [`core@1/bool`](#def-core_401_2fbool)
+
 <a id="def-std_401_2fyaml_2fDocument"></a>
 
 - `pub opaque type yaml.Document: copyable + inert + noalloc_drop uses {}`
@@ -10637,7 +10643,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fyaml_2fValue"></a>
 
-- `@serializable pub type yaml.Value = Null | Bool(bool) | Integer(i64) | Float(f64) | Text(String) | Array( List[Value] ) | Object(Map[String, Value])`
+- `@serializable pub type yaml.Value = Null | Bool(bool) | Integer(i64) | Float(f64) | Text(String) | Array( List[Value] ) | Object(Map[String, Value]) | Tagged(tag: String, value: box Value)`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/f64`](#def-core_401_2ff64), [`core@1/i64`](#def-core_401_2fi64)
 
@@ -10687,6 +10693,14 @@ Variant of yaml.Value.
 
 References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString)
 
+<a id="def-std_401_2fyaml_2fValue_23Tagged"></a>
+
+- `Tagged(tag: String, value: box Value) -> yaml.Value`
+
+Variant of yaml.Value.
+
+References: [`core@1/String`](#def-core_401_2fString)
+
 <a id="def-std_401_2fyaml_2fValue_23Text"></a>
 
 - `Text(String) -> yaml.Value`
@@ -10697,7 +10711,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fyaml_2fYamlError"></a>
 
-- `@serializable pub type yaml.YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases( Position ) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue | NotFound | NotCollection`
+- `@serializable pub type yaml.YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases( Position ) | Tag(Position) | ComplexKey(Position) | Documents(Position) | Merge(Position) | InvalidValue | NotFound | NotCollection`
 
 References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
 
@@ -10739,6 +10753,14 @@ References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
 
 Variant of yaml.YamlError.
 
+<a id="def-std_401_2fyaml_2fYamlError_23Merge"></a>
+
+- `Merge(Position) -> yaml.YamlError`
+
+Variant of yaml.YamlError.
+
+References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
+
 <a id="def-std_401_2fyaml_2fYamlError_23Nesting"></a>
 
 - `Nesting(Position) -> yaml.YamlError`
@@ -10775,11 +10797,23 @@ Variant of yaml.YamlError.
 
 References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
 
+<a id="def-std_401_2fyaml_2fdefault_5fconfig"></a>
+
+- `pub fn yaml.default_config() -> Config uses {}`
+
+References: [`std@1/yaml/Config`](#def-std_401_2fyaml_2fConfig)
+
 <a id="def-std_401_2fyaml_2fdocument"></a>
 
 - `pub fn yaml.document(take text: String) -> Result[Document, YamlError] uses {}`
 
 References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+<a id="def-std_401_2fyaml_2fdocument_5fwith"></a>
+
+- `pub fn yaml.document_with(take text: String, config: Config) -> Result[Document, YamlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Config`](#def-std_401_2fyaml_2fConfig), [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
 
 <a id="def-std_401_2fyaml_2fget"></a>
 
@@ -10799,6 +10833,18 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
 
+<a id="def-std_401_2fyaml_2fparse_5fall_5fwith"></a>
+
+- `pub fn yaml.parse_all_with(take text: String, config: Config) -> Result[ List[Value], YamlError ] uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Config`](#def-std_401_2fyaml_2fConfig), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
+<a id="def-std_401_2fyaml_2fparse_5fwith"></a>
+
+- `pub fn yaml.parse_with(take text: String, config: Config) -> Result[Value, YamlError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-core_401_2fString), [`std@1/yaml/Config`](#def-std_401_2fyaml_2fConfig), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
+
 <a id="def-std_401_2fyaml_2fremove"></a>
 
 - `pub fn yaml.remove(mut doc: Document, path: List[Segment]) -> Result[(), YamlError] uses {}`
@@ -10813,7 +10859,7 @@ References: [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yam
 
 <a id="def-std_401_2fyaml_2fset"></a>
 
-- `pub fn yaml.set(mut doc: Document, path: List[Segment], value: Value) -> Result[(), YamlError] uses {}`
+- `pub fn yaml.set(mut doc: Document, path: List[Segment], value: Value) -> Result[ (), YamlError ] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`std@1/yaml/Document`](#def-std_401_2fyaml_2fDocument), [`std@1/yaml/Segment`](#def-std_401_2fyaml_2fSegment), [`std@1/yaml/Value`](#def-std_401_2fyaml_2fValue), [`std@1/yaml/YamlError`](#def-std_401_2fyaml_2fYamlError)
 
