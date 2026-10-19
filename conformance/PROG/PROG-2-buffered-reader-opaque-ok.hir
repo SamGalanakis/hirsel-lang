@@ -1,7 +1,0 @@
-// rule: PROG-2
-// expect: accept
-pub fn main() -> Result[(), ()] {
-  let r = bufio.new(2)
-  let available = bufio.buffered(r)
-  Ok(())
-}

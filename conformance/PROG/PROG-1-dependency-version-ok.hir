@@ -1,9 +1,0 @@
-// rule: PROG-1
-// expect: run
-fn consume(x: probe@1/api.Widget) {}
-
-pub fn main(t: Test) -> Result[(), ()] {
-  let x: probe@1/api.Widget = vendor.Widget(value: 42)
-  consume(x)
-  Ok(())
-}

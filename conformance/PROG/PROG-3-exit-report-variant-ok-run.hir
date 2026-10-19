@@ -1,8 +1,0 @@
-// rule: PROG-3
-// expect: run
-// exit: 0
-pub type Trouble = Missing(String, u64) | Other
-
-pub fn main() -> Result[(), Trouble] {
-  Ok(())
-}

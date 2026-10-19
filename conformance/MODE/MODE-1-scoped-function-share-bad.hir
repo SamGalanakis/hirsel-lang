@@ -1,6 +1,6 @@
 // rule: MODE-1
 // expect: reject MODE-1 at line 7
-// Twin of CLO-4-global-function-share-ok. A scoped function value borrows
+// Twin of MODE-1-borrow-capture-function-element-call-ok. A scoped function value borrows
 // its captures. Copying it out of a scoped
 // closure does not make it global, so it stays bounded by the borrow.
 fn keep(f: fn() -> u64 uses {}) -> fn() -> u64 uses {} {

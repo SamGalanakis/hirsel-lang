@@ -310,7 +310,7 @@ factory result ExprId, authority of each retained state/callback, and their
 canonical join, then preserve that summary through bindings, projections,
 branches and exported erased values. This is not inferable from `Iter[T]`'s
 output element T. No new shared field is added. The relevant corpus is
-`CLO/CLO-4-spec-lazy-map.hir`,
+`CLO/CLO-4-std-iter-run.hir`,
 `MODE/MODE-4-iterator-state-bad.hir`,
 `MODE/MODE-4-iterator-state-ok.hir`, and, for the ownership/state interface,
 `OWN/OWN-5-iterator-copy-bad.hir`, `OWN/OWN-5-iterator-copy-ok.hir`.

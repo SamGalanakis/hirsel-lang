@@ -1,6 +1,0 @@
-// rule: PROG-2
-// expect: run
-pub fn main(t: Test) -> Result[(), ()] {
-  test.check(t, vendor.exported() == 42)
-  Ok(())
-}

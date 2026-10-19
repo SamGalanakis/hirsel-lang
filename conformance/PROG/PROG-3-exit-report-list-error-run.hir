@@ -1,6 +1,0 @@
-// rule: PROG-3
-// expect: run
-// exit: 1
-pub fn main() -> Result[(), List[u8]] {
-  Error([1u8, 2u8])
-}

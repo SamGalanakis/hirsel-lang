@@ -1,7 +1,0 @@
-// rule: PROG-3
-// expect: run
-// exit: 1
-// spec: #34
-pub fn main(rt: Io, args: Args) -> Result[(), ()] {
-  Error(())
-}

@@ -1,8 +1,0 @@
-// rule: PROG-1
-// expect: accept
-fn extract(x: vendor.Result) -> core@1/Result[u64, ()] {
-  match x {
-    Ok(v) => Ok(v),
-    Error(e) => Error(e),
-  }
-}

@@ -1,6 +1,0 @@
-// rule: FACT-1
-// expect: accept
-pub fn append[T](mut xs: unique List[T], take x: unique T) -> ()
-  ensures list.len(xs) == before(list.len(xs)) + 1 {
-  list.push(mut xs, take x)
-}

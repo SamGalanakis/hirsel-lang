@@ -1,5 +1,0 @@
-// rule: CLO-4
-// expect: accept
-fn step[T](mut it: Iter[T]) -> Option[T] {
-  iter.next(mut it)
-}

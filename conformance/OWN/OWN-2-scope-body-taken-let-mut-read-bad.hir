@@ -1,7 +1,7 @@
 // rule: OWN-2
 // expect: reject OWN-2 at line 16
 // "Using a value after it has moved is a compile error."
-// The rejected twin of CLO-4-scope-body-takes-let-mut-reassigned-run: the caller
+// The rejected twin of CLO-4-scope-body-takes-let-mut-list-run: the caller
 // reads the `let mut` binding the scope body took without installing a new value.
 pub fn main(rt: Io) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?

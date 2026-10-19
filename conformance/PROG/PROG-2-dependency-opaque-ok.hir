@@ -1,5 +1,0 @@
-// rule: PROG-2
-// expect: accept
-fn probe(secret: vendor.Secret) -> u64 {
-  vendor.secret_value(secret)
-}

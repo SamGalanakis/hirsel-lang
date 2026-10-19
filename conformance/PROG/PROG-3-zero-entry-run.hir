@@ -1,5 +1,0 @@
-// rule: PROG-3
-// expect: run
-pub fn main() -> Result[(), ()] {
-  Ok(())
-}

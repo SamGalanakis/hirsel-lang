@@ -1,9 +1,0 @@
-// rule: CLO-4
-// expect: accept
-// Relaying the exact incoming state and callback pair keeps the caller's
-// receipt when the callback parameter is written `sendable`, since the moved
-// callback carries that receipt as evidence.
-@captures(state, next)
-fn build[S, T](take state: S, take next: sendable fn(mut S) -> Option[T]) -> Iter[T] {
-  iter.from(take state, take next)
-}

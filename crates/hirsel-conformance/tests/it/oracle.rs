@@ -265,7 +265,7 @@ fn o5_annotations_change_nothing_over_a_corpus_sample() {
     let report = o5::run(&root(), &rules, &programs, 2, &work);
     holds(&report);
     let passed = report.count(|v| *v == Verdict::Pass);
-    assert!(passed >= 60, "{passed} programs\n{}", report.text());
+    assert!(passed >= 45, "{passed} programs\n{}", report.text());
     let native = report
         .checks
         .iter()

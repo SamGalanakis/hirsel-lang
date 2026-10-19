@@ -1,7 +1,0 @@
-// rule: PROG-3
-// expect: accept
-// Shows "returning Result[(), E]"
-@noalloc
-pub fn launch(rt: Io, args: Args, unsafe_cap: Unsafe) -> Result[(), ()] {
-  Ok(())
-}

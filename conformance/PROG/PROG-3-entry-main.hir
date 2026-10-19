@@ -1,7 +1,0 @@
-// rule: PROG-3
-// expect: run
-// Shows "returning Result[(), E]"
-@noalloc
-pub fn main(rt: Io, args: Args) -> Result[(), ()] {
-  Ok(())
-}

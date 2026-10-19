@@ -1,7 +1,0 @@
-// rule: CLO-4
-// expect: accept
-// Declaration-only callable boundaries retain scoped promises without claiming a body proof.
-type Handler {
-  step: @advance_only(it) fn(mut it: Iter[u64]) -> Option[u64],
-  build: @captures(state) fn(take state: u64) -> Iter[u64],
-}

@@ -20,26 +20,16 @@ CLO/CLO-2-seal-raw-authority-bad.hir # outside ownership operative-rule scope
 CLO/CLO-2-std-option-and-then-run.hir # dependency-owned resolver: LANG-4 line 5
 CLO/CLO-2-std-option-filter-run.hir # dependency-owned resolver: LANG-4 line 10
 CLO/CLO-2-std-option-flatten-run.hir # dependency-owned resolver: LANG-4 line 8
-CLO/CLO-2-std-option-is-none-run.hir # dependency-owned resolver: LANG-4 line 7
 CLO/CLO-2-std-option-is-some-run.hir # dependency-owned resolver: LANG-4 line 7
-CLO/CLO-2-std-option-map-run.hir # dependency-owned resolver: LANG-4 line 10
 CLO/CLO-2-std-option-ok-or-else-run.hir # dependency-owned resolver: LANG-4 line 7
 CLO/CLO-2-std-option-ok-or-run.hir # dependency-owned resolver: LANG-4 line 6
 CLO/CLO-2-std-option-or-else-run.hir # dependency-owned resolver: LANG-4 line 15
 CLO/CLO-2-std-option-unwrap-or-else-run.hir # dependency-owned resolver: LANG-4 line 8
-CLO/CLO-2-std-option-unwrap-or-run.hir # dependency-owned resolver: LANG-4 line 6
 CLO/CLO-2-std-option-zip-run.hir # dependency-owned resolver: LANG-4 line 6
-CLO/CLO-2-std-result-and-then-file-run.hir # dependency-owned resolver: LANG-4 line 8
-CLO/CLO-2-std-result-and-then-run.hir # dependency-owned resolver: LANG-4 line 5
 CLO/CLO-2-std-result-error-run.hir # dependency-owned resolver: LANG-4 line 7
-CLO/CLO-2-std-result-flatten-run.hir # dependency-owned resolver: LANG-4 line 8
 CLO/CLO-2-std-result-is-error-run.hir # dependency-owned resolver: LANG-4 line 7
 CLO/CLO-2-std-result-is-ok-run.hir # dependency-owned resolver: LANG-4 line 7
-CLO/CLO-2-std-result-map-error-run.hir # dependency-owned body checker: SEM-3 line 5: f-strings format through std@1, which this program does not select (std@1/text/append is unavailable); add std@1 to its manifest's dependencies
-CLO/CLO-2-std-result-map-run.hir # dependency-owned resolver: LANG-4 line 6
 CLO/CLO-2-std-result-ok-run.hir # dependency-owned resolver: LANG-4 line 7
-CLO/CLO-2-std-result-or-else-run.hir # dependency-owned resolver: LANG-4 line 18
-CLO/CLO-2-std-result-unwrap-or-else-run.hir # dependency-owned resolver: LANG-4 line 11
 CLO/CLO-2-std-result-unwrap-or-run.hir # dependency-owned resolver: LANG-4 line 7
 CLO/CLO-2-unknown-authority-bad.hir # outside ownership operative-rule scope
 CLO/CLO-3-child-counted-capture-bad.hir # outside ownership operative-rule scope

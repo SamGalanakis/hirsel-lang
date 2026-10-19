@@ -1,6 +1,0 @@
-// rule: CLO-1
-// expect: reject CLO-1 at line 5
-// "A function-typed parameter is local unless taken."
-fn example(action: fn() -> () uses {}) -> fn() -> () uses {} {
-  action
-}

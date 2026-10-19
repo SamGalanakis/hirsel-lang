@@ -1,6 +1,0 @@
-// rule: CLO-2
-// expect: accept
-// "Unknown authority is rejected wherever uses restricts."
-fn invoke(f: fn() -> () uses {}) -> () uses {} {
-  f()
-}

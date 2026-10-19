@@ -2,8 +2,6 @@
 # partitions (PROG-5): every partition must observe what the reference does.
 conformance/CLO/CLO-2-bound-derived-capability-run.hir
 conformance/CLO/CLO-2-derived-capability-field-run.hir
-conformance/CLO/CLO-2-explicit-derived-capability-run.hir
-conformance/CLO/CLO-2-immediate-derived-capability-run.hir
 conformance/CLO/CLO-2-parameter-derived-capability-run.hir
 conformance/CT/CT-2-closed-frame-run.hir
 conformance/DROP/DROP-2-kept-temporary-closed-run.hir

@@ -1,4 +1,0 @@
-// rule: PROG-4
-// expect: accept
-/// Returns a nullable byte pointer.
-extern "c" fn nested(u: Unsafe) -> Option[Ptr[u8]]

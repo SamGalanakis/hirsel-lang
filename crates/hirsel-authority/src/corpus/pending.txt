@@ -74,7 +74,6 @@ CLO/CLO-1-nested-local-call-result-bad.hir # dependency-owned I/P: operative rul
 CLO/CLO-1-outer-mutation-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 CLO/CLO-1-return-borrowed-capture-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 CLO/CLO-1-return-local-capture-unique-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
-CLO/CLO-1-return-scoped-parameter-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 CLO/CLO-1-store-scoped-parameter-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 CLO/CLO-1-written-recursive-retention-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 CLO/CLO-2-allocation-join-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
@@ -84,23 +83,13 @@ CLO/CLO-4-borrowed-resource-global-bad.hir # not done J: missing CLO-4 line 15
 CLO/CLO-4-contract6-adapters-run.hir # dependency-owned D/fixture M: LANG-4 line 120
 CLO/CLO-4-contract6-callback-copy-bad.hir # not done J: missing CLO-4 line 9
 CLO/CLO-4-contract6-closure-creation-bad.hir # not done J: expected CLO-4 line 18; got MODE-4 line 21: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
-CLO/CLO-4-contract6-closure-creation-ok.hir # not done J: unexpected MODE-4 line 21: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
-CLO/CLO-4-contract6-closure-creation-run.hir # dependency-owned D/fixture M: LANG-4 line 30
 CLO/CLO-4-contract6-concrete-relay-bad.hir # not done J: missing CLO-4 line 10
 CLO/CLO-4-contract6-creation-run.hir # dependency-owned D/fixture M: LANG-4 line 26
 CLO/CLO-4-contract6-creation-third-bad.hir # not done J: missing CLO-4 line 16
 CLO/CLO-4-contract6-field-callee-bad.hir # not done J: missing CLO-4 line 16
-CLO/CLO-4-contract6-field-sibling-bad.hir # not done J: missing CLO-4 line 11
 CLO/CLO-4-contract6-fresh-callback-bad.hir # not done J: missing CLO-4 line 14
-CLO/CLO-4-contract6-preserve-error-bad.hir # not done J: missing CLO-4 line 7
-CLO/CLO-4-contract6-preserve-error-ok.hir # not done J: unexpected CLO-2 line 7: a `mut` argument's erased state's captured authority must be exactly the parameter's: `iter.next` may store in `mut it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one
-CLO/CLO-4-contract6-preserve-failure-bad.hir # dependency-owned D/fixture M: LANG-4 line 6
-CLO/CLO-4-contract6-preserve-failure-ok.hir # dependency-owned D/fixture M: LANG-4 line 6
-CLO/CLO-4-contract6-preserve-loop-bad.hir # not done J: missing CLO-4 line 6
-CLO/CLO-4-contract6-preserve-loop-ok.hir # not done J: unexpected CLO-2 line 6: a `mut` argument's erased state's captured authority must be exactly the parameter's: `iter.next` may store in `mut it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one
 CLO/CLO-4-contract6-preserve-normal-bad.hir # not done J: missing CLO-4 line 5
 CLO/CLO-4-contract6-preserve-normal-ok.hir # not done J: unexpected CLO-2 line 5: a `mut` argument's erased state's captured authority must be exactly the parameter's: `iter.next` may store in `mut it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one
-CLO/CLO-4-contract6-preserves_captures-pending.hir # not done J: unexpected CLO-2 line 5: a `mut` argument's erased state's captured authority must be exactly the parameter's: `iter.next` may store in `mut it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one
 CLO/CLO-4-outer-let-mut-capture-bad.hir # not done J: missing CLO-4 line 6
 CLO/CLO-4-stored-borrowed-capture-bad.hir # not done J: missing CLO-4 line 10
 CLO/CLO-4-taken-function-needs-global-bad.hir # not done J: missing CLO-4 line 10

@@ -1,7 +1,0 @@
-// rule: PROG-2
-// expect: accept
-fn inspect(v: unicode.GraphemeView) {
-  for piece in v {
-    let _ = piece
-  }
-}

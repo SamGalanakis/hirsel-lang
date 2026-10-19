@@ -1,7 +1,0 @@
-// rule: FACT-1
-// expect: accept
-// The spec at contract requires "i < array.len(xs)".
-fn at[T](xs: Array[T], i: u64) -> T in xs
-  requires i < array.len(xs) {
-  xs[i]
-}

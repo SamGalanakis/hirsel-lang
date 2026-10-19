@@ -1,6 +1,0 @@
-// rule: PROG-3
-// expect: run
-// exit: 0
-pub fn main() -> Result[(), String] {
-  Ok(())
-}

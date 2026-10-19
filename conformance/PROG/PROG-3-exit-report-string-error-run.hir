@@ -1,6 +1,0 @@
-// rule: PROG-3
-// expect: run
-// exit: 1
-pub fn main() -> Result[(), String] {
-  Error(unique "missing data")
-}

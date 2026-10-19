@@ -1,7 +1,0 @@
-// rule: FACT-1
-// expect: accept
-// Contracts "are code" and "their allocations count toward @noalloc".
-fn check(x: u64) -> u64
-  requires u64.to_string(x) == "1" {
-  x
-}

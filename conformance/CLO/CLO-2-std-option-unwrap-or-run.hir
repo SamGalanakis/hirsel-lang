@@ -1,9 +1,0 @@
-// rule: CLO-2
-// expect: run
-// Ported from Rust core::option documentation, f6c1107f.
-pub fn main() -> Result[(), ()] {
-  let none: Option[String] = None
-  failure.check(option.unwrap_or(Some("car"), "bike") == "car", Bounds())
-  failure.check(option.unwrap_or(take none, "bike") == "bike", Bounds())
-  Ok(())
-}

@@ -2,7 +2,7 @@
 // expect: reject CLO-3 at line 12
 // A task closure takes its Receivers, but the exception is for sendability.
 // A Receiver declared local is bounded by its caller and cannot cross into a
-// task. The accepted twin is CLO-3-receiver-capture-ok.
+// task. The accepted twin is CONC-6-receiver-child-capture.
 fn example(tasks: Tasks, take r: Receiver[u64] in r) -> () {
   task.scope(
     tasks,

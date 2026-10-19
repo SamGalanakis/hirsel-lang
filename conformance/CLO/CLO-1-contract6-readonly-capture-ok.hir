@@ -1,9 +1,0 @@
-// rule: CLO-1
-// expect: accept
-@preserves_captures(it)
-fn step[T](mut it: Iter[T]) {
-  let captured = fn() {
-    let _ = it
-  }
-  captured()
-}

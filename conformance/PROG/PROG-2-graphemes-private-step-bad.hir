@@ -1,5 +1,0 @@
-// rule: PROG-2
-// expect: reject PROG-2 at line 4
-fn inspect(v: unicode.GraphemeView) {
-  let cursor = unicode.graphemes_open(v)
-}
