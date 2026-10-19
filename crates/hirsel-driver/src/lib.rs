@@ -400,14 +400,9 @@ pub(crate) fn bind_launch(
             let requested = config
                 .read(&revision, kind)
                 .map_err(|e| ToolError::Runtime(e.to_string()))?;
-            let bound = hirsel_engine::bind_run(
-                &signature,
-                &revision,
-                kind,
-                Some(&requested),
-                code,
-            )
-            .map_err(ToolError::Launch)?;
+            let bound =
+                hirsel_engine::bind_run(&signature, &revision, kind, Some(&requested), code)
+                    .map_err(ToolError::Launch)?;
             Ok(BoundHostRun::Live(bound))
         }
         HostLaunch::Replay(tape) => {
