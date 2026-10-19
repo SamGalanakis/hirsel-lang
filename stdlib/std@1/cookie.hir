@@ -2,10 +2,12 @@
 // the RFC 6265 section 4.1.1 cookie-octet and path-value checks, golang/go
 // ebe2feefc400f813aefdc8a036e66d2619da6649 (BSD-3-Clause; third-party/NOTICES.md).
 // Invalid names, values and paths are errors; Go sanitizes or drops them.
+@serializable
 pub type SameSite = Strict | Lax | None
 
 /// One Set-Cookie header value: the RFC 6265 name, value, Path, Max-Age,
 /// HttpOnly and Secure attributes plus SameSite.
+@serializable
 pub type SetCookie {
   name: String,
   value: String,
@@ -18,6 +20,7 @@ pub type SetCookie {
 
 /// Offsets are byte positions in the parsed header, or in the offending field
 /// when formatting.
+@serializable
 pub type CookieError = Blank | MissingEquals(u64) | InvalidName(u64) | InvalidValue(u64) | InvalidPath(
   u64
 ) | InsecureSameSiteNone

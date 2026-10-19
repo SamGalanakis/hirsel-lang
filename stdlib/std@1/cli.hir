@@ -1,6 +1,8 @@
 // Go flag.FlagSet.parseOne token handling, with immutable explicit specs.
+@serializable
 pub type Kind = Switch | Value
 
+@serializable
 pub type Flag {
   name: String,
   short: Option[u8],
@@ -8,11 +10,13 @@ pub type Flag {
   help: String,
 }
 
+@serializable
 pub type Parsed {
   flags: Map[String, List[String]],
   positional: List[String],
 }
 
+@serializable
 pub type ParseError = UnknownFlag(u64) | MissingValue(u64) | UnexpectedValue(u64) | InvalidSpec
 
 @noalloc

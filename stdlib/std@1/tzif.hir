@@ -16,9 +16,11 @@ pub opaque type TimeZone: copyable + inert + noalloc_drop uses {} {
 
 // How time_zone.to_timestamp picks an instant for a civil datetime that a
 // transition skipped (a gap) or repeated (a fold), as jiff's Disambiguation does.
+@serializable
 pub type Disambiguation = Earlier | Later | Reject
 
 // time_zone.to_timestamp under Reject: the civil datetime fell in a gap or a fold.
+@serializable
 pub type ZoneError = Gap | Fold
 
 // A POSIX day: Jn (1-365, February 29 never counted), n (0-365, counted) or

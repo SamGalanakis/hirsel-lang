@@ -1,0 +1,33 @@
+// rule: SER-2
+// expect: run
+// std time's errors and plain calendar data round-trip through the canonical codec.
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: T = read()?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let time_error: time.TimeError = OutOfRange()
+  round(t, time_error)?
+  let sleep: time.SleepError = Wait(Canceled(Requested()))
+  round(t, sleep)?
+  let weekday: time.Weekday = Sunday()
+  round(t, weekday)?
+  round(t, time.IsoWeek(year: 2026, week: 53))?
+  let overflow: time.Overflow = Clamp()
+  round(t, overflow)?
+  let calendar: time.CalendarError = NoSuchDay()
+  round(t, calendar)?
+  let format: time.FormatError = Invalid(3)
+  round(t, format)?
+  let disambiguation: time.Disambiguation = Later()
+  round(t, disambiguation)?
+  let zone: time.ZoneError = Fold()
+  round(t, zone)?
+  Ok(())
+}

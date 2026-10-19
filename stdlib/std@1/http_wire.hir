@@ -1,6 +1,7 @@
 // Scalar response/header/chunk parsers ported from httparse src/lib.rs,
 // a0fa552e4e0fa9a5914a736ef3a556748fef709b (MIT; third-party/NOTICES.md).
 // Offset records replace borrowed slices; callers retain the input and Inline storage.
+@serializable
 pub type RawHeader {
   name_start: u64,
   name_end: u64,
@@ -8,8 +9,10 @@ pub type RawHeader {
   value_end: u64,
 }
 
+@serializable
 pub type ParseStatus = Complete(u64) | Partial
 
+@serializable
 pub type StatusLine {
   version: u8,
   code: u16,
@@ -17,12 +20,16 @@ pub type StatusLine {
   reason_end: u64,
 }
 
+@serializable
 pub type HeadError = HeaderName | HeaderValue | NewLine | Status | Token | TooManyHeaders | Version | ContentLength | TransferEncoding | Continuation
 
+@serializable
 pub type ChunkSize = Complete(u64, u64) | Partial
 
+@serializable
 pub type ChunkError = InvalidChunkSize()
 
+@serializable
 pub type Framing {
   content_length: Option[u64],
   chunked: bool,
@@ -409,6 +416,7 @@ pub fn framing[k: size](
 
 // Zig lib/std/http/HeaderIterator.zig init/next and test next, bff490a2.
 // Unlike Zig's prevalidated slices, arbitrary offsets/partial buffers stop safely.
+@serializable
 pub type HeaderIterator {
   index: u64,
   is_trailer: bool,
@@ -501,6 +509,7 @@ pub fn next_header(buf: Bytes, mut it: HeaderIterator) -> Option[RawHeader] uses
 }
 
 // httparse Request::parse / parse_method / parse_uri, strict delimiters.
+@serializable
 pub type RequestLine {
   method_start: u64,
   method_end: u64,

@@ -5481,6 +5481,12 @@ conformance/SER/SER-2-schema-mismatch-run.hir
 conformance/SER/SER-2-sequential-packed-run.hir
 conformance/SER/SER-2-set-order-run.hir
 conformance/SER/SER-2-soa-columns-run.hir
+conformance/SER/SER-2-std-archives-run.hir
+conformance/SER/SER-2-std-documents-run.hir
+conformance/SER/SER-2-std-http-run.hir
+conformance/SER/SER-2-std-text-run.hir
+conformance/SER/SER-2-std-time-run.hir
+conformance/SER/SER-2-std-values-run.hir
 conformance/SER/SER-2-trailing-envelope-run.hir
 conformance/SER/SER-2-trailing-payload-run.hir
 conformance/SER/SER-2-truncated-run.hir

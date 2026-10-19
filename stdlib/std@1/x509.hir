@@ -1,7 +1,9 @@
 // The identity fields of X.509 certificates (RFC 5280 section 4.1) and their RFC 4514
 // subject strings, read from the DER chains core tls.peer returns.
+@serializable
 pub type X509Error = Malformed(u64)
 
+@serializable
 pub type Certificate {
   subject: String,
   names: List[String],

@@ -8,6 +8,7 @@ pub type BrokenDownTime {
 }
 
 // Invalid carries the byte index of the pattern's offending `%`.
+@serializable
 pub type FormatError = Invalid(u64) | NoOffset | OutOfRange
 
 const MONTH_NAMES: Bytes = b"JanFebMarAprMayJunJulAugSepOctNovDec"

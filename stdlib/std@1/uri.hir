@@ -2,8 +2,10 @@
 // (MIT; third-party/NOTICES.md): parse[AfterScheme], resolveInPlace,
 // remove_dot_segments, Component.percentEncode/formatRaw and writeToStream.
 // Owned components replace borrowed Zig slices; builders replace mutable slices.
+@serializable
 pub type Component = Raw(String) | Encoded(String)
 
+@serializable
 pub type Uri {
   scheme: String,
   user: Option[Component],
@@ -15,8 +17,10 @@ pub type Uri {
   fragment: Option[Component],
 }
 
+@serializable
 pub type UriError = UnexpectedCharacter | InvalidFormat | InvalidPort | InvalidHostName
 
+@serializable
 pub type Part = Unreserved | User | Password | Host | Path | Query | Fragment
 
 fn piece(text: String, begin: u64, end: u64) -> unique String uses {} {
@@ -513,6 +517,7 @@ pub fn resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {} {
 
 // Go net/url parseQuery and QueryUnescape, adapted to ordered, owned pairs.
 // Errors are atomic (no partial map) and offsets refer to the original query.
+@serializable
 pub type QueryError = InvalidEscape(u64) | InvalidSeparator(u64) | InvalidUtf8(u64)
 
 fn query_piece(data: Bytes, start: u64, end: u64) -> Result[unique String, QueryError] uses {} {

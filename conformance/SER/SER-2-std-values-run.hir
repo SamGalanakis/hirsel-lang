@@ -1,0 +1,34 @@
+// rule: SER-2
+// expect: run
+// std scalar, net, path, decimal, fnv, prng and random data and errors round-trip through
+// the canonical codec.
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: T = read()?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let format: scalar.FormatError = BufferTooSmall()
+  round(t, format)?
+  let parse: scalar.ParseError = OutOfRange()
+  round(t, parse)?
+  let address: net.AddrParseError = Invalid()
+  round(t, address)?
+  let host: net.HostError = NameTooLong()
+  round(t, host)?
+  let path_error: path.PathError = Invalid(4)
+  round(t, path_error)?
+  let rounding: decimal.RoundingMode = HalfEven()
+  round(t, rounding)?
+  round(t, fnv.State(value: 14695981039346656037))?
+  let empty: prng.SampleError = EmptyRange()
+  round(t, empty)?
+  let source: random.SampleError = Source(Unavailable())
+  round(t, source)?
+  Ok(())
+}

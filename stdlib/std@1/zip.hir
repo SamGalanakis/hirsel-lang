@@ -4,6 +4,7 @@
 // prefix. Deflated data uses std@1/flate, so written bytes follow zlib rather
 // than Go's compressor.
 /// An entry's compression method (APPNOTE 4.4.5).
+@serializable
 pub type Method = Stored | Deflate | Other(u64)
 
 /// One central directory entry. `offset` is the entry's local header offset
@@ -12,6 +13,7 @@ pub type Method = Stored | Deflate | Other(u64)
 /// bits) and time (low 16 bits). `creator` and `external` are the version
 /// made by and external attributes (Unix modes in the high 16 bits when the
 /// creator's high byte is 3).
+@serializable
 pub type Entry {
   name: String,
   comment: String,
@@ -31,19 +33,23 @@ pub type Entry {
 /// comment that is not UTF-8 (`Encoding(n)`, the offset of its directory
 /// header), an unsupported method, data whose CRC-32 or size disagrees with
 /// its entry, or more data than `limit` allows.
+@serializable
 pub type ZipError = Format(u64) | Encoding(u64) | Algorithm(String) | Checksum(String) | TooLarge | Data(
   flate.FlateError
 )
 
 /// A file operation failed or the archive is malformed.
+@serializable
 pub type FileZipError = Storage(FileError) | Archive(ZipError)
 
 /// Writing errors: a name, comment or extra field too long for its 16-bit
 /// length, data written to a directory entry, or a write after `close`.
+@serializable
 pub type WriteError = Field | Directory | Closed
 
 /// Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),
 /// the archive is malformed, or a file operation failed.
+@serializable
 pub type ExtractError = Read(ZipError) | Insecure(String) | Unsupported(String) | File(
   FileError
 )

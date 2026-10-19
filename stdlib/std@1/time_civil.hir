@@ -26,17 +26,21 @@ pub type DateTime {
   time: TimeOfDay,
 }
 
+@serializable
 pub type Weekday = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday
 
 // The ISO 8601 week-numbering year and its week, 1 through 52 or 53.
+@serializable
 pub type IsoWeek {
   year: i32,
   week: u8,
 }
 
 // What month and year arithmetic does with a day past the target month's end.
+@serializable
 pub type Overflow = Clamp | Reject
 
+@serializable
 pub type CalendarError = OutOfRange | NoSuchDay
 
 const MIN_YEAR: i32 = -9999

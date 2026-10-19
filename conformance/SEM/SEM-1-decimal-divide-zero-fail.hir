@@ -1,5 +1,5 @@
 // rule: SEM-1
-// expect: fail SEM-1 at line 132
+// expect: fail SEM-1 at line 133
 // Decimal division by a zero divisor fails SEM-1 in std's div, as integer division does.
 pub fn main(args: Args) -> Result[(), ()] {
   let divisor = decimal.new(bigint.from_u64(arg.len(args)), 2)

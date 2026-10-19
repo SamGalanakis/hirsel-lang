@@ -1,8 +1,11 @@
 // Go encoding/base64 Encode/decodeQuantum, with strict RFC4648 input policy.
+@serializable
 pub type Alphabet = Standard | UrlSafe
 
+@serializable
 pub type Padding = Required | Omitted
 
+@serializable
 pub type DecodeError = InvalidByte(u64) | InvalidLength | InvalidPadding(u64) | NonCanonical(
   u64
 )

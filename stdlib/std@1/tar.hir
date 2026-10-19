@@ -4,12 +4,14 @@
 // Reading pulls blocks through a buffered source, optionally through a gzip or
 // zlib decoder; writing appends blocks to an output list.
 /// An entry's type flag (POSIX.1-2001 ustar typeflag).
+@serializable
 pub type Kind = Regular | Link | Symlink | Char | Block | Directory | Fifo | Global | Other(
   u8
 )
 
 /// One entry's metadata. `records` holds the PAX extended header records that
 /// applied to it, which `name`, `size` and the other fields already reflect.
+@serializable
 pub type Header {
   name: String,
   kind: Kind,
@@ -29,6 +31,7 @@ pub type Header {
 /// Malformed archive data. `Header(n)` names the byte offset of the header
 /// block that is invalid; `Encoding(n)` one whose name is not UTF-8;
 /// `Unsupported(n)` a GNU sparse entry.
+@serializable
 pub type TarError = Header(u64) | Encoding(u64) | Unsupported(u64) | Truncated
 
 /// A read from the buffered source failed, a compressed archive does not
@@ -39,6 +42,7 @@ pub type ReadError[E] = Input(bufio.ReadError[E]) | Data(flate.FlateError) | Arc
 
 /// A header that the writer cannot encode, data beyond or short of the
 /// declared size, or a write after `close`.
+@serializable
 pub type WriteError = Field | TooLong | Short | Closed
 
 /// Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),

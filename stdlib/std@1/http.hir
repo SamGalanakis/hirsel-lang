@@ -14,10 +14,13 @@
 //   })
 // Finished and Expired both retain the client and outcome; match to recover them.
 // A cancelled exchange drops its stream before returning the client.
+@serializable
 pub type Method = Get | Head | Post | Put | Delete | Patch | Options
 
+@serializable
 pub type Version = Http10 | Http11
 
+@serializable
 pub type Header {
   name: String,
   value: String,
@@ -41,6 +44,7 @@ pub type Config {
   unix_socket: Option[Path],
 }
 
+@serializable
 pub type ResponseHead {
   version: Version,
   status: u16,
@@ -53,6 +57,7 @@ pub type ResponseHead {
   content_type: Option[String],
 }
 
+@serializable
 pub type Response {
   status: u16,
   headers: List[Header],
@@ -60,6 +65,7 @@ pub type Response {
   url: String,
 }
 
+@serializable
 pub type HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status(
   u16
 ) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8 | Decode(
@@ -1300,6 +1306,7 @@ pub fn client_fetch(
 
 /// An encoded request body and its media type. client_send installs exactly one
 /// Content-Type, replacing any Content-Type supplied in its headers argument.
+@serializable
 pub type Body {
   bytes: Bytes,
   content_type: String,
@@ -1414,6 +1421,7 @@ fn http_server_keep_alive(headers: List[Header], version: Version) -> bool uses 
   keep && !closed
 }
 
+@serializable
 pub type ServerRequest {
   method: String,
   target: String,

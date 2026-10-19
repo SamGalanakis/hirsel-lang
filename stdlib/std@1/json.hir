@@ -1,8 +1,10 @@
 // JSON DOM contracts: STD-OP-json.* and TYPE-ROW-Value/JsonError.
+@serializable
 pub type Value = Null | Bool(bool) | Number(String) | Text(String) | Array(List[Value]) | Object(
   Map[String, Value]
 )
 
+@serializable
 pub type JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber
 
 // Policy counts open arrays/objects; scalars do not consume a level.

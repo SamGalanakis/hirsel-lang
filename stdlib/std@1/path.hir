@@ -1,4 +1,5 @@
 // Slash-only lexical policy. No host authority.
+@serializable
 pub type PathError = Invalid(u64)
 
 fn owned_piece(text: String, begin: u64, end: u64) -> unique String uses {} {

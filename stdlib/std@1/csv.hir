@@ -1,10 +1,12 @@
 // Go encoding/csv reader/writer state transitions, adapted to bounded chunks.
+@serializable
 pub type Config {
   delimiter: u8,
   fields_per_record: Option[u64],
   max_record_bytes: u64,
 }
 
+@serializable
 pub type CsvError = Syntax(u64) | UnequalFields(u64) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter
 
 pub type ReadError[E] = Source(E) | Csv(CsvError) | InvalidRead

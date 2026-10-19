@@ -1,8 +1,10 @@
 // Port of Rust library/core/src/net/parser.rs and Display in ip_addr.rs/socket_addr.rs,
 // f6c1107f8be13e48465e12c0fd26e6a39fe18e4f (MIT option; third-party/NOTICES.md).
 // Fixed octets and cursor bounds replace Rust slices; no host access or Unsafe.
+@serializable
 pub type AddrParseError = Invalid()
 
+@serializable
 pub type HostError = NameTooLong | InvalidHostName
 
 // Rust read_radix_max_digits/read_decimal: restore the cursor on failure.

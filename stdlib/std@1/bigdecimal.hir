@@ -7,6 +7,7 @@
 /// round to the nearest value, breaking ties to an even last digit and away from zero
 /// respectively; `Down` rounds toward zero, `Up` away from zero, `Floor` toward
 /// negative infinity and `Ceiling` toward positive infinity.
+@serializable
 pub type RoundingMode = HalfEven | HalfUp | Down | Up | Floor | Ceiling
 
 /// The exact value coefficient * 10^-scale. `==` compares representations, so 1.0 and

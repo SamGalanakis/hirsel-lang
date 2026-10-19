@@ -3,19 +3,23 @@
 // b8205d5f60ea44f757f7d075fe4f3704bbe5dccc (MIT/Apache-2.0), itself a port of libyaml,
 // as exercised by yaml/yaml-test-suite data-2022-01-17. Scalars resolve by the YAML
 // 1.2.2 core schema (section 10.3) only.
+@serializable
 pub type Value = Null | Bool(bool) | Integer(i64) | Float(f64) | Text(String) | Array(
   List[Value]
 ) | Object(Map[String, Value])
 
+@serializable
 pub type Position {
   line: u64,
   column: u64,
 }
 
+@serializable
 pub type YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases(
   Position
 ) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue | NotFound | NotCollection
 
+@serializable
 pub type Segment = Key(String) | Index(u64)
 
 // Policy counts open sequences and mappings; scalars do not consume a level.

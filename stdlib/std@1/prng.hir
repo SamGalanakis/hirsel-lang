@@ -2,6 +2,7 @@
 // lib/std/Random/SplitMix64.zig, commit bff490a23889750de7096d9057c0a432efc929a8;
 // copyright Zig contributors (third-party/NOTICES.md).
 // Deterministic and noncryptographic: never use it for secrets.
+@serializable
 pub type SampleError = EmptyRange()
 
 pub opaque type Generator: inert + noalloc_drop uses {} {

@@ -8,6 +8,7 @@
 // Codes longer than Go's chunk table use a canonical count/symbol walk (RFC 1951
 // section 3.2.2) instead of link tables. Unlike Go, bytes after the stream are
 // an error.
+@serializable
 pub type FlateError = Truncated | Corrupt(u64) | Header | Checksum | TooLarge | TrailingData(
   u64
 )
@@ -942,6 +943,7 @@ pub fn file_read(
 // are a map, so an encoder costs nothing before its input arrives.
 /// The container around a DEFLATE stream: none (RFC 1951), zlib (RFC 1950)
 /// or gzip (RFC 1952).
+@serializable
 pub type Format = Raw | Zlib | Gzip
 
 const WSIZE: u64 = 32768

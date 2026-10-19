@@ -3,17 +3,21 @@
 // exercised by toml-test ff49d109861c1ad25af53f687f2aef19ab650600; the document
 // model and edit placement adapt toml-rs/toml crates/toml_edit at
 // ceac6e4412420d5a5c19e4f7293ad005cf1a31b2 (MIT/Apache-2.0).
+@serializable
 pub type Value = Text(String) | Integer(i64) | Float(f64) | Bool(bool) | Datetime(
   String
 ) | Array(List[Value]) | Table(Map[String, Value])
 
+@serializable
 pub type Position {
   line: u64,
   column: u64,
 }
 
+@serializable
 pub type TomlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | InvalidValue | NotFound | NotTable
 
+@serializable
 pub type Segment = Key(String) | Index(u64)
 
 // A Datetime as std@1/time values; an offset is in seconds east of UTC.

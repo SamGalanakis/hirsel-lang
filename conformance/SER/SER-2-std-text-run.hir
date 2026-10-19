@@ -1,0 +1,102 @@
+// rule: SER-2
+// expect: run
+// std uri, cookie, cli, log, regex, glob, x509 and text codec data and errors round-trip
+// through the canonical codec.
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: T = read()?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let host: uri.Component = Raw("a.test")
+  round(
+    t,
+    uri.Uri(
+      scheme: "https",
+      user: None,
+      password: None,
+      host: Some(host),
+      port: Some(8443),
+      path: Encoded("/a%20b"),
+      query: Some(Raw("q=1")),
+      fragment: None
+    )
+  )?
+  let uri_error: uri.UriError = InvalidHostName()
+  round(t, uri_error)?
+  let part: uri.Part = Query()
+  round(t, part)?
+  let query: uri.QueryError = InvalidEscape(2)
+  round(t, query)?
+  let same_site: cookie.SameSite = Lax()
+  round(t, same_site)?
+  round(
+    t,
+    cookie.SetCookie(
+      name: "id",
+      value: "7",
+      path: Some("/"),
+      max_age: Some(60),
+      http_only: true,
+      secure: true,
+      same_site: Some(same_site)
+    )
+  )?
+  let cookie_error: cookie.CookieError = InsecureSameSiteNone()
+  round(t, cookie_error)?
+  let switch: cli.Kind = Switch()
+  round(t, switch)?
+  round(
+    t,
+    cli.Flag(name: "verbose", short: Some(118), kind: switch, help: "more output")
+  )?
+  let mut flags: Map[String, List[String]] = map.empty()
+  map.insert(mut flags, "verbose", [])
+  round(t, cli.Parsed(flags: flags, positional: ["in.txt"]))?
+  let cli_error: cli.ParseError = MissingValue(1)
+  round(t, cli_error)?
+  let level: log.Level = Warn()
+  round(t, level)?
+  round(
+    t,
+    log.Entry(
+      level: level,
+      message: "disk low",
+      fields: [log.Field(name: "free", value: "5%")],
+      timestamp: Some(time.Timestamp(unix_nanoseconds: 1700000000000000000))
+    )
+  )?
+  let compile: regex.CompileError = ProgramTooLarge()
+  round(t, compile)?
+  let work: regex.MatchError = WorkLimit()
+  round(t, work)?
+  round(t, regex.Span(start: 2, end: 5))?
+  let pattern: glob.PatternError = Syntax(3)
+  round(t, pattern)?
+  let expand: glob.ExpandError = Files(PermissionDenied())
+  round(t, expand)?
+  let x509_error: x509.X509Error = Malformed(12)
+  round(t, x509_error)?
+  round(
+    t,
+    x509.Certificate(
+      subject: "CN=a.test",
+      names: ["a.test", "b.test"],
+      uris: ["spiffe://a/b"]
+    )
+  )?
+  let alphabet: base64.Alphabet = UrlSafe()
+  round(t, alphabet)?
+  let padding: base64.Padding = Omitted()
+  round(t, padding)?
+  let base64_error: base64.DecodeError = NonCanonical(6)
+  round(t, base64_error)?
+  let hex_error: hex.DecodeError = InvalidDigit(1)
+  round(t, hex_error)?
+  Ok(())
+}

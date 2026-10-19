@@ -1,4 +1,6 @@
 // Shared ordinary std error types.
+@serializable
 pub type FormatError = BufferTooSmall()
 
+@serializable
 pub type ParseError = Invalid | OutOfRange

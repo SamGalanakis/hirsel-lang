@@ -1,0 +1,74 @@
+// rule: SER-2
+// expect: run
+// std flate, tar and zip data and errors round-trip through the canonical codec, with the
+// core FileError they carry.
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: T = read()?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let flate_error: flate.FlateError = TrailingData(3)
+  round(t, flate_error)?
+  let format: flate.Format = Gzip()
+  round(t, format)?
+  let kind: tar.Kind = Other(120)
+  round(t, kind)?
+  let mut records: Map[String, String] = map.empty()
+  map.insert(mut records, "path", "long/name.txt")
+  round(
+    t,
+    tar.Header(
+      name: "a.txt",
+      kind: Regular(),
+      linkname: "",
+      size: 5,
+      mode: 420,
+      uid: 1000,
+      gid: 1000,
+      uname: "u",
+      gname: "g",
+      modified: -1,
+      devmajor: 0,
+      devminor: 0,
+      records: records
+    )
+  )?
+  let tar_error: tar.TarError = Encoding(9)
+  round(t, tar_error)?
+  let tar_write: tar.WriteError = TooLong()
+  round(t, tar_write)?
+  let zip_method: zip.Method = Other(99)
+  round(t, zip_method)?
+  round(
+    t,
+    zip.Entry(
+      name: "dir/b.bin",
+      comment: "",
+      method: Deflate(),
+      flags: 8,
+      creator: 798,
+      external: 0,
+      modified: Some(1700000000),
+      dos_time: 0,
+      crc: 3735928559,
+      compressed: 10,
+      size: 20,
+      offset: 0
+    )
+  )?
+  let zip_error: zip.ZipError = Data(Corrupt(4))
+  round(t, zip_error)?
+  let storage: zip.FileZipError = Storage(NotFound())
+  round(t, storage)?
+  let zip_write: zip.WriteError = Directory()
+  round(t, zip_write)?
+  let extract: zip.ExtractError = Insecure("../x")
+  round(t, extract)?
+  Ok(())
+}

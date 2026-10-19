@@ -1,11 +1,14 @@
 // Go log/slog JSON records/levels, using Hirsel's existing JSON escaping.
+@serializable
 pub type Level = Debug | Info | Warn | Error
 
+@serializable
 pub type Field {
   name: String,
   value: String,
 }
 
+@serializable
 pub type Entry {
   level: Level,
   message: String,

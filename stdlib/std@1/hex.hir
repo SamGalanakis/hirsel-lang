@@ -1,4 +1,5 @@
 // Go encoding/hex Encode/Decode, adapted under BSD-3-Clause; see NOTICES.
+@serializable
 pub type DecodeError = InvalidDigit(u64) | OddLength
 
 pub fn encode(data: Bytes) -> unique String uses {} {

@@ -1,7 +1,9 @@
 // Slash grammar and class parsing adapted from Go path/match.go.
 // Copyright 2010 The Go Authors. BSD-3-Clause; see third-party/NOTICES.md.
+@serializable
 pub type PatternError = Syntax(u64)
 
+@serializable
 pub type ExpandError = InvalidPattern(PatternError) | Files(FileError)
 
 type Token {

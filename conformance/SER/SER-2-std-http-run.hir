@@ -1,0 +1,98 @@
+// rule: SER-2
+// expect: run
+// std http and http_wire data and errors round-trip through the canonical codec.
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: T = read()?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+fn header() -> http.Header {
+  http.Header(name: "Content-Type", value: "text/plain")
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let method: http.Method = Patch()
+  round(t, method)?
+  let version: http.Version = Http11()
+  round(t, version)?
+  round(t, header())?
+  round(
+    t,
+    http.ResponseHead(
+      version: version,
+      status: 200,
+      reason: "OK",
+      headers: [header()],
+      content_length: Some(5),
+      chunked: false,
+      keep_alive: true,
+      location: None,
+      content_type: Some("text/plain")
+    )
+  )?
+  round(
+    t,
+    http.Response(status: 404, headers: [], body: b"missing", url: "http://a.test/x")
+  )?
+  let net: http.HttpError = Net(Tls(NameMismatch()))
+  round(t, net)?
+  let url: http.HttpError = Url(InvalidPort())
+  round(t, url)?
+  let malformed: http.HttpError = Malformed(ContentLength())
+  round(t, malformed)?
+  let status: http.HttpError = Status(503)
+  round(t, status)?
+  let clock: http.HttpError = Clock(OutOfRange())
+  round(t, clock)?
+  let json: http.HttpError = Json(Syntax(4))
+  round(t, json)?
+  let decode: http.HttpError = Decode(Checksum())
+  round(t, decode)?
+  round(t, http.Body(bytes: b"{}", content_type: "application/json"))?
+  round(
+    t,
+    http.ServerRequest(
+      method: "POST",
+      target: "/submit",
+      version: Http10(),
+      headers: [header()],
+      body: b"x=1",
+      trailers: [],
+      keep_alive: false
+    )
+  )?
+  round(
+    t,
+    http_wire.RawHeader(name_start: 0, name_end: 4, value_start: 6, value_end: 9)
+  )?
+  let parsed: http_wire.ParseStatus = Complete(12)
+  round(t, parsed)?
+  round(
+    t,
+    http_wire.StatusLine(version: 1, code: 200, reason_start: 13, reason_end: 15)
+  )?
+  let head: http_wire.HeadError = TooManyHeaders()
+  round(t, head)?
+  let chunk: http_wire.ChunkSize = Complete(3, 5)
+  round(t, chunk)?
+  let chunk_error: http_wire.ChunkError = InvalidChunkSize()
+  round(t, chunk_error)?
+  round(t, http_wire.Framing(content_length: None, chunked: true, keep_alive: true))?
+  round(t, http_wire.HeaderIterator(index: 2, is_trailer: false, done: false))?
+  round(
+    t,
+    http_wire.RequestLine(
+      method_start: 0,
+      method_end: 3,
+      target_start: 4,
+      target_end: 5,
+      version: 1
+    )
+  )?
+  Ok(())
+}

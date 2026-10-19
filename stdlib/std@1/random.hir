@@ -1,6 +1,7 @@
 // Adapted from Zig lib/std/Random.zig int (little-endian draw) and uintLessThan,
 // commit bff490a23889750de7096d9057c0a432efc929a8; copyright Zig contributors
 // (third-party/NOTICES.md). Authority comes only from the explicit Random.
+@serializable
 pub type SampleError = EmptyRange | Source(RandomError)
 
 pub fn u64(r: Random) -> Result[u64, RandomError] {

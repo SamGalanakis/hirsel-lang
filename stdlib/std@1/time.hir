@@ -38,6 +38,7 @@ pub type Timestamp {
   unix_nanoseconds: i128,
 }
 
+@serializable
 pub type TimeError = OutOfRange()
 
 @noalloc
@@ -164,6 +165,7 @@ pub fn to_string(value: Timestamp) -> Result[unique String, TimeError] uses {} {
   Ok(text.finish_valid(take builder))
 }
 
+@serializable
 pub type SleepError = NegativeDuration | OutOfRange | Wait(WaitError)
 
 // Relative-to-absolute conversion adapted from Zig lib/std/Io.zig Timeout.toDeadline,
