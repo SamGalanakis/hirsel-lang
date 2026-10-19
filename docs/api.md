@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1271 exported definitions; 406 variants.
+1275 exported definitions; 406 variants.
 
 ## Types and roots
 
@@ -1029,6 +1029,10 @@ Variant of ProcessError.
 <a id="def-core_401_2fProcessOutput"></a>
 
 - `type ProcessOutput: serializable uses {} = { status: ExitStatus, stdout: Bytes, stderr: Bytes }`
+
+<a id="def-core_401_2fProcessRule"></a>
+
+- `type ProcessRule uses {} = { program: String, env: List[String] }`
 
 <a id="def-core_401_2fProcessScript"></a>
 
@@ -3422,6 +3426,10 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Inline`](#def-core
 
 - `fn dir.narrow(d: Dir, p: Path) -> Result[Dir, FileError]`
 
+<a id="def-core_401_2fdir_2fread_5fonly"></a>
+
+- `fn dir.read_only(d: Dir) -> Result[Dir, FileError]`
+
 <a id="def-core_401_2fdir_2fremove_5fall"></a>
 
 - `fn dir.remove_all(d: Dir, p: Path) -> Result[(), FileError]`
@@ -3453,6 +3461,10 @@ References: [`core@1/String`](#def-core_401_2fString), [`std@1/time/Duration`](#
 <a id="def-core_401_2fenv_2fget"></a>
 
 - `fn env.get(e: Env, name: String) -> Result[Option[String], EnvError]`
+
+<a id="def-core_401_2fenv_2fnarrow"></a>
+
+- `fn env.narrow(e: Env, names: List[String]) -> Result[Env, EnvError]`
 
 
 ## err
@@ -6628,6 +6640,10 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 
 ## proc
+
+<a id="def-core_401_2fproc_2fnarrow"></a>
+
+- `fn proc.narrow(p: Proc, rules: List[ProcessRule]) -> Result[Proc, ProcessError]`
 
 <a id="def-core_401_2fproc_2fpipeline"></a>
 
