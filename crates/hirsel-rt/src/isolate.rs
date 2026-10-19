@@ -175,6 +175,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_begin(
 ) -> u8 {
     // SAFETY: caller contract.
     unsafe {
+        #[cfg(feature = "measurement")]
+        let _segment = crate::tasks::profile::Operation::new(ctx, "isolate.begin");
         out.write((*ctx).failure.count() as u64);
         crate::tasks::yield_now(ctx);
     }

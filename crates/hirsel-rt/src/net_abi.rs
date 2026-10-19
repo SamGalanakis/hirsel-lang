@@ -606,6 +606,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_close(
 ) -> u8 {
     let _ = unsafe { n.read() };
     let handle = unsafe { s.read() };
+    #[cfg(feature = "measurement")]
+    let _segment = crate::tasks::profile::Operation::new(ctx, "net.close");
     // Erasing the transferred word makes accidental reuse fail closed.
     unsafe { s.write(0) };
     let completion = unsafe { call_recording(ctx, Request::Close { handle }) };

@@ -11,7 +11,7 @@ fn two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
             std::env::temp_dir().join(format!("hirsel-source-profile-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("known.hir");
-        std::fs::write(&source, "fn first(b: Bytes) -> () { let x = copy b }\nfn second(b: Bytes) -> () { let y = copy b }\npub fn main() -> Result[(), ()] {\n  for i in 0u64..3u64 { first(b\"a\") }\n  for j in 0u64..5u64 { second(b\"b\") }\n  Ok(())\n}\n").unwrap();
+        std::fs::write(&source, "fn first(b: Bytes) -> () { let x = copy b }\nfn second(b: Bytes) -> () { let y = copy b }\npub fn main(rt: Io) -> Result[(), GrantError] {\n  for i in 0u64..3u64 { first(b\"a\") }\n  for j in 0u64..5u64 { second(b\"b\") }\n  let tasks = io.tasks(rt)?\n  let stdout = io.stdout(rt)?\n  task.scope(tasks, fn(s: Scope) {\n    let mut set: TaskSet[u64] of s = task.set(s)\n    for i in 0u64..6u64 {\n      task.add(s, mut set, task.async(s, fn() -> u64 { i + 1u64 }))\n    }\n    let _ = task.all(s, take set)\n  })\n  let _ = out.print(stdout, \"done\\n\")\n  Ok(())\n}\n").unwrap();
         let mut loaded = hirsel_driver::load_program(&source).unwrap();
         loaded.check_for_execution().unwrap();
         let snapshot = loaded.engine.export_native_input().unwrap();
@@ -102,6 +102,51 @@ fn two_source_lines_have_three_and_five_count_pairs_and_dwarf() {
                 "line {line}: {text}"
             );
         }
+        // The same executable and fixture, with the segment profiler toggled. Keep
+        // tool destinations separate while asserting the program bytes and tape agree.
+        let mut observations = vec![];
+        for enabled in [false, true] {
+            let tape = dir.join(format!("tape-{enabled}"));
+            let measurement = dir.join(format!("segments-{enabled}"));
+            let mut command = std::process::Command::new(&exe);
+            command
+                .env_clear()
+                .env("HIRSEL_RT_TAPE", &tape)
+                .env("HIRSEL_RT_MEASUREMENT", &measurement);
+            if enabled {
+                command.env("HIRSEL_RT_MC_PROFILE", "1");
+            }
+            let result = command.output().unwrap();
+            assert!(result.status.success(), "{:?}", result);
+            assert_eq!(result.stdout, b"done\n");
+            observations.push((result.stdout, result.stderr, std::fs::read(tape).unwrap()));
+            let text = std::fs::read_to_string(measurement).unwrap();
+            assert_eq!(text.contains("mc-profile 1\n"), enabled);
+            if enabled {
+                let rows: Vec<Value> = text
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("mc "))
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect();
+                assert_eq!(
+                    rows.iter()
+                        .filter(|r| r["operation"] == "task_spawn")
+                        .count(),
+                    6
+                );
+                let tasks: std::collections::BTreeSet<_> =
+                    rows.iter().map(|r| r["task"].to_string()).collect();
+                assert_eq!(tasks.len(), 7);
+                for (i, row) in rows.iter().enumerate() {
+                    assert!(row["after"].as_u64().unwrap() <= i as u64);
+                    assert!(row["ns"].as_u64().is_some());
+                }
+            }
+        }
+        assert_eq!(
+            observations[0], observations[1],
+            "profiling changed stdout, stderr or tape"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     });
 }

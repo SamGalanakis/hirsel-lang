@@ -43,6 +43,9 @@
 //! Handles are run-local: a Scope or Task word is a table index with a generation, so a stale
 //! or foreign word is an invariant fault rather than another task's row.
 
+#[cfg(feature = "measurement")]
+pub(crate) mod profile;
+
 use std::collections::VecDeque;
 use std::ptr::NonNull;
 
@@ -738,6 +741,10 @@ unsafe fn poll_parked(ctx: *mut RunCtx) -> Stopped<()> {
         scheduler(ctx).task(task).woken = false;
         // SAFETY: the context is live and `task` is parked.
         if unsafe { poll(ctx, task, &ready) }? {
+            #[cfg(feature = "measurement")]
+            if let Some(profile) = unsafe { &mut (*ctx).mc_profile } {
+                profile.ready(scheduler(ctx).task(task).path.clone());
+            }
             scheduler(ctx).unpark(task);
         }
     }
@@ -1007,6 +1014,10 @@ unsafe fn hand_off(ctx: *mut RunCtx, child: u32) {
     let row = s.task(child);
     row.state = State::Ready;
     row.handoff = Some(current);
+    #[cfg(feature = "measurement")]
+    if let Some(profile) = unsafe { &mut (*ctx).mc_profile } {
+        profile.ready(row.path.clone());
+    }
     unsafe { switch_to(ctx, child) };
 }
 
@@ -1018,6 +1029,8 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     let Some((code, environment, operation_site)) = scheduler(ctx).task(index).code.take() else {
         fault("a task started without code");
     };
+    #[cfg(feature = "measurement")]
+    profile::resume(ctx);
     // SAFETY: compiled closure code and its owned environment, called once.
     let mut status = unsafe { code(ctx, environment, operation_site, operation_site) };
     // The caller of a closure releases its environment wholesale.
@@ -1050,6 +1063,8 @@ unsafe fn complete(ctx: *mut RunCtx, index: u32, status: u8) -> ! {
 /// # Safety
 /// `ctx` is live and `index` is the running child.
 unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> Stopped<u32> {
+    #[cfg(feature = "measurement")]
+    std::mem::forget(profile::Operation::new(ctx, "task.complete"));
     let s = scheduler(ctx);
     let path = s.task(index).path.clone();
     // SAFETY: the context is live.
@@ -1088,6 +1103,12 @@ unsafe fn completed(ctx: *mut RunCtx, index: u32, status: u8) -> Stopped<u32> {
     } else {
         s.retired = s.task(index).stack.take();
     }
+    #[cfg(feature = "measurement")]
+    if let Some(next) = handoff
+        && let Some(profile) = unsafe { &mut (*ctx).mc_profile }
+    {
+        profile.ready(s.task(next).path.clone());
+    }
     match handoff {
         // A join or a discard ran the rest of a holding child: no schedule point.
         Some(next) => Ok(next),
@@ -1122,6 +1143,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
     out: *mut u64,
     _tasks: *const u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_scope_enter");
     let (index, generation) = open_scope(ctx, None);
     // SAFETY: caller contract.
     unsafe {
@@ -1172,6 +1195,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
     _tasks: *const u64,
     deadline: *const [u64; 2],
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_scope_enter_until");
     // SAFETY: caller contract.
     let [clock, at] = unsafe { deadline.read() };
     let (index, generation) = open_scope(
@@ -1214,6 +1239,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     scope: *const u64,
     error: u8,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_scope_exit");
     // SAFETY: caller contract.
     unsafe { exit_scope(ctx, scope, error, caller_site) }.0
 }
@@ -1233,6 +1260,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
     scope: *const u64,
     error: u8,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_scope_exit_until");
     // SAFETY: caller contract.
     let (status, expired) = unsafe { exit_scope(ctx, scope, error, caller_site) };
     // SAFETY: caller contract.
@@ -1325,6 +1354,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     code: TaskCode,
     environment: *mut Header,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_spawn");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1353,6 +1384,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     s.tasks[index as usize] = Some(task);
     s.scope(scope).children.push(index);
     s.runnable.push_back(index);
+    #[cfg(feature = "measurement")]
+    if let Some(profile) = unsafe { &mut (*ctx).mc_profile } {
+        profile.ready(s.task(index).path.clone());
+    }
     // SAFETY: caller contract.
     unsafe {
         out.write(handle(index, generation));
@@ -1375,6 +1410,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     none: *const u8,
     size: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_finish");
     let s = scheduler(ctx);
     let current = s.current;
     let held = Slot {
@@ -1415,6 +1452,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_join(
     slot: *mut u8,
     size: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_join");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1480,6 +1519,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
     scope: *const u64,
     task: *const u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_cancel");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1501,6 +1542,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach(
     scope: *const u64,
     task: *mut u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_detach");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1547,6 +1590,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set(
     out: *mut u64,
     scope: *const u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_set");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1587,6 +1632,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_add(
     set: *mut u64,
     task: *mut u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_add");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let (scope, set, word) = unsafe { (s.scope_handle(scope.read()), set.read(), task.read()) };
@@ -1622,6 +1669,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_await_any(
     scope: *const u64,
     set: *const u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_await_any");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1663,6 +1712,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_has(
     set: *const u64,
     index: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_set_has");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1691,6 +1742,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_set_take(
     set: *mut u64,
     index: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_set_take");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let scope = s.scope_handle(unsafe { scope.read() });
@@ -1719,6 +1772,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel_all(
     scope: *const u64,
     set: *mut u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_cancel_all");
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, true) };
     let s = scheduler(ctx);
@@ -1742,6 +1797,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_detach_all(
     scope: *const u64,
     set: *mut u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_detach_all");
     // SAFETY: caller contract.
     let set = unsafe { release_members(ctx, scope, set, false) };
     scheduler(ctx).close_set(set);
@@ -1794,6 +1851,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_canceled(
     out: *mut u32,
     _scope: *const u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "task_canceled");
     // SAFETY: caller contract.
     unsafe {
         out.write(canceled(ctx).map_or(0, |cause| cause + 1));
@@ -1850,6 +1909,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_open(
     out: *mut u64,
     _tasks: *const u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "channel_open");
     let (sender, receiver) = scheduler(ctx).channels.open();
     // SAFETY: caller contract.
     unsafe {
@@ -1872,6 +1933,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
     _tasks: *const u64,
     sender: *const u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "sender_dup");
     // SAFETY: caller contract.
     let word = scheduler(ctx).channels.dup(unsafe { sender.read() });
     unsafe {
@@ -1894,6 +1957,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     sender: *mut u64,
     message: *mut *mut Header,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "channel_send");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let channel = s.channels.channel(unsafe { sender.read() }, true);
@@ -1927,6 +1992,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     receiver: *mut u64,
     message: *mut *mut Header,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "channel_receive");
     let s = scheduler(ctx);
     // SAFETY: caller contract.
     let channel = s.channels.channel(unsafe { receiver.read() }, false);
@@ -1971,6 +2038,8 @@ pub(crate) unsafe fn close_endpoint(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "endpoint.close");
     if word & TASK_SET != 0 {
         // A dropped task set: its members stay children of their scope, joined at its exit.
         let s = scheduler(ctx);
@@ -2025,6 +2094,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_create(
     out: *mut u64,
     payload: *mut *mut Header,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "mutex_create");
     // SAFETY: caller contract.
     unsafe {
         let block = carried(payload);
@@ -2046,6 +2117,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     m: *const u64,
     payload: *mut *mut Header,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "mutex_take");
     let sync = &mut scheduler(ctx).sync;
     // SAFETY: caller contract.
     let word = unsafe { m.read() };
@@ -2072,6 +2145,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     m: *const u64,
     payload: *mut *mut Header,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "mutex_put");
     // SAFETY: caller contract.
     unsafe {
         let block = carried(payload);
@@ -2104,6 +2179,8 @@ pub(crate) fn end_run(ctx: &mut RunCtx) {
 /// `ctx` is live, its failure active, and `m` a Mutex word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut RunCtx, m: *const u64) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "mutex_kill");
     let s = scheduler(ctx);
     let current = s.current;
     let path = s.task(current).path.clone();
@@ -2124,6 +2201,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut RunCtx, m: *const u64
 /// `ctx` is live and `m` a dead Mutex's word.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut RunCtx, m: *const u64) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "mutex_cause");
     // SAFETY: caller contract.
     let chain = scheduler(ctx)
         .sync
@@ -2147,6 +2226,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_create(
     value: *const u8,
     size: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "atomic_create");
     // SAFETY: caller contract.
     unsafe {
         out.write(scheduler(ctx).sync.create_image(value, size));
@@ -2166,6 +2247,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_load(
     slot: *mut u8,
     size: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "atomic_load");
     // SAFETY: caller contract.
     unsafe {
         scheduler(ctx).sync.read(a.read(), slot, size);
@@ -2185,6 +2268,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_atomic_store(
     value: *const u8,
     size: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = profile::Operation::new(ctx, "atomic_store");
     // SAFETY: caller contract.
     unsafe {
         scheduler(ctx).sync.write(a.read(), value, size);

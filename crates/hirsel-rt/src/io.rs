@@ -2059,6 +2059,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_io_close(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = crate::tasks::profile::Operation::new(ctx, "Close");
     let binding = unsafe { Binding::get(ctx) };
     match binding.adapter.call(Request::Close { handle }) {
         Ok(Completion::Unit(Ok(()))) => crate::STATUS_OK,
@@ -2214,6 +2216,9 @@ unsafe fn native_print(
     stderr: bool,
     bytes: &[u8],
 ) -> Completion {
+    #[cfg(feature = "measurement")]
+    let _segment =
+        crate::tasks::profile::Operation::new(ctx, if stderr { "PrintStderr" } else { "Print" });
     if unsafe { crate::tasks::canceled(ctx) }.is_some() {
         return unsafe {
             native_call(
@@ -2241,6 +2246,9 @@ unsafe fn native_print(
 }
 
 unsafe fn native_call(ctx: *mut crate::RunCtx, request: Request) -> Completion {
+    #[cfg(feature = "measurement")]
+    let _segment =
+        crate::tasks::profile::Operation::new(ctx, crate::tasks::profile::request_kind(&request));
     let operation = !matches!(request, Request::Close { .. });
     // SAFETY: the context is live; the request moved into the issue.
     let (completion, parked) = unsafe {
@@ -2265,6 +2273,9 @@ pub(crate) unsafe fn capability_call(
     ctx: *mut crate::RunCtx,
     request: Request,
 ) -> Result<Completion, ()> {
+    #[cfg(feature = "measurement")]
+    let _segment =
+        crate::tasks::profile::Operation::new(ctx, crate::tasks::profile::request_kind(&request));
     let operation = !matches!(request, Request::Close { .. });
     // SAFETY: the context is live; the request moved into the issue.
     let (completion, parked) = unsafe {
@@ -2755,6 +2766,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_path(
     args: *const u64,
     index: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = crate::tasks::profile::Operation::new(ctx, "hirsel_rt_v2_arg_path");
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
         return crate::STATUS_FAILURE;
     }
@@ -2784,6 +2797,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_len(
     out: *mut u64,
     args: *const u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = crate::tasks::profile::Operation::new(ctx, "hirsel_rt_v2_arg_len");
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
         return crate::STATUS_FAILURE;
     }
@@ -2802,6 +2817,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_arg_text(
     args: *const u64,
     index: u64,
 ) -> u8 {
+    #[cfg(feature = "measurement")]
+    let _segment = crate::tasks::profile::Operation::new(ctx, "hirsel_rt_v2_arg_text");
     if unsafe { args.read() } != crate::launch::ARGS_HANDLE {
         return crate::STATUS_FAILURE;
     }

@@ -1713,6 +1713,9 @@ pub(crate) unsafe fn execute(
     };
     let report_failures = observation.is_none();
     #[cfg(feature = "measurement")]
+    let measurement_segments = std::env::var_os("HIRSEL_RT_MC_PROFILE").is_some()
+        && std::env::var_os("HIRSEL_RT_MEASUREMENT").is_some();
+    #[cfg(feature = "measurement")]
     let measurement = match std::env::var_os("HIRSEL_RT_MEASUREMENT")
         .map(|path| prepare_tool_file(std::path::Path::new(&path)))
         .transpose()
@@ -1807,6 +1810,13 @@ pub(crate) unsafe fn execute(
     // the run's root fiber, so a stop anywhere in them returns here.
     let ran = unsafe {
         crate::stop::run_root(ctx, &mut || {
+            #[cfg(feature = "measurement")]
+            {
+                if measurement_segments {
+                    (*ctx).mc_profile = Some(Default::default());
+                    crate::tasks::profile::resume(ctx);
+                }
+            }
             let mut status = match entry {
                 Code::Zero(entry) => entry(ctx, std::ptr::null_mut(), result.as_mut_ptr().cast()),
                 Code::Main(entry) => entry(
@@ -1858,6 +1868,8 @@ pub(crate) unsafe fn execute(
             status
         })
     };
+    #[cfg(feature = "measurement")]
+    crate::tasks::profile::finish(unsafe { &mut *ctx });
     let bytes: Vec<u8> = result
         .iter()
         .flat_map(|w| w.to_le_bytes())

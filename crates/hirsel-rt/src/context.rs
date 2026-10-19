@@ -140,6 +140,8 @@ pub struct RunCtx {
     #[cfg(feature = "measurement")]
     pub(crate) measurement_output: Option<std::fs::File>,
     #[cfg(feature = "measurement")]
+    pub(crate) mc_profile: Option<crate::tasks::profile::Profile>,
+    #[cfg(feature = "measurement")]
     pub(crate) profile_output: Option<std::fs::File>,
 }
 
@@ -219,18 +221,25 @@ impl RunCtx {
         if !self.work.is_null() {
             fault("task exit with release work pending");
         }
+        #[cfg(feature = "measurement")]
+        crate::tasks::profile::finish(self);
         crate::tasks::end_run(self);
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         let audit = self.exit_audit();
         #[cfg(not(any(feature = "diagnostic", feature = "measurement")))]
         let audit = Audit::default();
         #[cfg(feature = "measurement")]
-        if let Some(output) = self.measurement_output.take() {
+        if let Some(mut output) = self.measurement_output.take() {
             // Snapshot before forced teardown, so leaks remain visible in the counters.
             self.heap
                 .measurement
-                .write(output)
+                .write(&mut output)
                 .unwrap_or_else(|_| crate::environmental("could not write the measurement report"));
+            if let Some(profile) = &self.mc_profile {
+                profile.write(output).unwrap_or_else(|_| {
+                    crate::environmental("could not write the segment profile")
+                });
+            }
         }
         #[cfg(feature = "measurement")]
         if let Some(output) = self.profile_output.take() {
@@ -359,6 +368,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         schedule: Default::default(),
         #[cfg(feature = "measurement")]
         measurement_output: None,
+        #[cfg(feature = "measurement")]
+        mc_profile: None,
         #[cfg(feature = "measurement")]
         profile_output: None,
     });

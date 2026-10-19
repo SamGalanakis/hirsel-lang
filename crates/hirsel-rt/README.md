@@ -1193,3 +1193,55 @@ names the requests in doubt. The issuer of each request comes from `Adapter::iss
 `host_waits::issue` and the interpreter's host library call only for a durable journal.
 The trailer preserves the shared run outcome, including parked waits, complete failure
 chains and interpreter diagnostics.
+
+### Cooperative parallelism profile
+
+In a `measurement` runtime archive, also set `HIRSEL_RT_MC_PROFILE=1` and
+`HIRSEL_RT_MEASUREMENT=/absolute/path/to/measurement`. The existing host-admitted
+measurement descriptor receives an additional section at exit:
+
+```text
+mc-profile 1
+mc {"task":[],"ns":1200,"operation":"task_spawn","after":0}
+mc {"task":[0],"ns":9000,"operation":"task_finish","after":1}
+```
+
+Rows are in observed commit order. Task paths are spawn paths, including `[]`
+for the root; `ns` is monotonic elapsed time in the preceding segment; `after`
+is the one-based commit that made that segment eligible (zero means entry).
+Admission, unblock, and direct cleanup handoffs record dependencies, so the
+simulator cannot start children before spawn or continuations before wakeup.
+Runtime entry stops the timer and return restarts it; suspended stacks and
+host waits are excluded. Mutex acquisition and other non-yielding task-table
+operations are boundaries too. Completion and implicit endpoint close are
+internal commit kinds. Nested runtime helpers share the outer operation.
+No tape event, scheduling decision, provider identity, or ABI changes. The
+module, fields, and all call sites are cfg-elided without `measurement`.
+The environment switch is off by default, including in measurement archives.
+
+```sh
+python3 tools/mc-profile.py /absolute/path/to/measurement
+python3 tools/mc-profile.py --json --commit-ns 200 /absolute/path/to/measurement
+python3 tools/tests/mc_profile.py
+```
+
+The offline model has N segment workers and one separate serial commit server,
+including at N=1. Eligible segments start in recorded commit order; workers
+become free on segment completion, even if that segment cannot commit yet.
+Each task's continuation waits for its previous commit and any recorded
+readiness dependency. Commit costs default to a stated fixed 200 ns, rather
+than charging cooperative scheduler or fiber switch costs to parallel work.
+The report gives makespan, speedup over the same model at N=1, all commit-server
+wait (`stall_share`), wait with a later result already ready (`hol_ready_share`),
+and commit busy share. Busy and stall partition the model's makespan.
+
+Work includes segment work and commit costs. Span is the longest path through
+segment dependencies and the serial commit chain (equivalently infinite
+workers); work/span is the Cilk average-parallelism bound. Per-N speedup bounds
+also use segment work/N, total work/(N+1), and span. A dedicated commit server
+is an optimistic extra execution resource, not a measured N-core runtime.
+Host input latency, cache transfers, deferred reference counts, and worker
+handoffs are unmodelled. Measurement allocator accounting and timer overhead
+also affect short segments. Use ten interleaved rounds on the same session,
+retain perf cycles/instructions and SMT sibling activity, and treat the result
+as conditional compute potential rather than measured multicore throughput.
