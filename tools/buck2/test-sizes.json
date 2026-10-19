@@ -733,7 +733,7 @@
     "cpu_class": "",
     "cpu_count": 2,
     "mean_wall_seconds": 49.3,
-    "memory_kb": 2883584,
+    "memory_kb": 5242880,
     "memory_kills": 0,
     "p95_cores": 4.35,
     "parallel_fraction": 1.0,

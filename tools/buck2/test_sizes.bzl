@@ -28,7 +28,7 @@ TEST_REQUESTS = {
     "hirsel-conformance-unittest": [2, 524288, ""],
     "hirsel-core-contract-unittest": [1, 524288, ""],
     "hirsel-diag-unittest": [1, 524288, ""],
-    "hirsel-driver-test-it": [2, 2883584, ""],
+    "hirsel-driver-test-it": [2, 5242880, ""],
     "hirsel-driver-test-it-precheck": [2, 5242880, ""],
     "hirsel-driver-test-it-scaling": [2, 524288, ""],
     "hirsel-driver-test-it-stdlib": [2, 2883584, ""],

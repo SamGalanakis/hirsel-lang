@@ -1,4 +1,12 @@
 {
+  "hirsel-driver-test-it": [
+    {
+      "cpu_count": 2,
+      "date": "2026-10-19",
+      "reserved_kb": 2883584,
+      "stop": "proof_export::a_sample_of_accepted_programs_round_trips reached the 5632M guard limit in hirsel-driver-test-it-shard-5 (resident peak 5117M) beside the shard's other tests; it passes alone. The binary's measured PSS peak is 4537 MiB"
+    }
+  ],
   "hirsel-driver-test-it-precheck": [
     {
       "cpu_count": 2,
