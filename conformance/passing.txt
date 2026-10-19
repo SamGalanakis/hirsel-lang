@@ -4486,6 +4486,10 @@ conformance/SEM/SEM-1-http-server-chunked-run.hir
 conformance/SEM/SEM-1-http-server-clock-authority-run.hir
 conformance/SEM/SEM-1-http-server-decode-run.hir
 conformance/SEM/SEM-1-http-server-persistence-run.hir
+conformance/SEM/SEM-1-http-server-respond-204-run.hir
+conformance/SEM/SEM-1-http-server-respond-304-run.hir
+conformance/SEM/SEM-1-http-server-respond-get-run.hir
+conformance/SEM/SEM-1-http-server-respond-head-run.hir
 conformance/SEM/SEM-1-http-server-stream-bodyless-run.hir
 conformance/SEM/SEM-1-http-server-stream-drop-run.hir
 conformance/SEM/SEM-1-http-server-stream-errors-run.hir

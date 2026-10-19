@@ -1,0 +1,48 @@
+// rule: SEM-1
+// expect: run
+fn http_net(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let addr = SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8080u16)
+  let n = test.net(
+    t,
+    [],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: addr.port,
+        clients: [
+          NetClient(
+            from: addr,
+            tls: Plain(),
+            steps: [
+              Send(
+                b"HEAD / HTTP/1.1\r\n\r\nGET /next HTTP/1.1\r\nConnection: close\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 5\r\nConnection: keep-alive\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+              ),
+              Close()
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  let mut listener = net.listen(n, addr) ? http_net
+  let (stream, _) = net.accept(n, mut listener) ? http_net
+  let mut c = http.server_connection(n, take stream, http.default_config())
+  let first = http.receive_request(mut c, None())?
+  test.check(t, first.method == "HEAD")
+  http.respond(mut c, 200u16, [], b"hello", false)?
+  let next = http.receive_request(mut c, None())?
+  test.check(t, next.method == "GET" && next.target == "/next")
+  http.respond(mut c, 200u16, [], b"ok", false)?
+  test.check(t, http.receive_request(mut c, None()) == Error(Closed()))
+  Ok(())
+}

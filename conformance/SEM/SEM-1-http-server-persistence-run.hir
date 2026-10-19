@@ -14,11 +14,18 @@ fn exercise(t: Test, first: String, keep: bool, pipelined: bool, status: u16) ->
   let second = "GET /two HTTP/1.1\r\nConnection: close\r\n\r\n"
   let response = string.concat(
     string.concat("HTTP/1.1 ", u16.to_string(status)),
-    if keep {
-      " \r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n"
-    } else {
-      " \r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    }
+    string.concat(
+      if status == 204 || status == 304 {
+        " \r\n"
+      } else {
+        " \r\nContent-Length: 0\r\n"
+      },
+      if keep {
+        "Connection: keep-alive\r\n\r\n"
+      } else {
+        "Connection: close\r\n\r\n"
+      }
+    )
   )
   let mut steps: List[NetStep] = []
   list.push(

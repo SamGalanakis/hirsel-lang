@@ -1977,6 +1977,11 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
   Error(Truncated())
 }
 
+// HEAD retains representation metadata; these statuses prohibit a body entirely.
+fn http_server_bodyless(head_request: bool, status: u16) -> bool uses {} {
+  head_request || status == 204 || status == 304
+}
+
 // The writer owns framing: callers cannot inject a second length or encoding.
 pub fn respond(
   mut c: ServerConnection,
@@ -1992,25 +1997,30 @@ pub fn respond(
   c.state = 2
   let n = c.net
   core@1/net.set_write_timeout(n, mut c.stream, http_timeout(c.config.write_timeout)?) ? http_net_error
-  if status < 200 || status > 599 || (status == 204 || status == 304) && core@1/bytes.len(
-    body
-  ) != 0 {
+  if status < 200 || status > 599 {
     return Error(Malformed(Status()))
   }
   let mut out = http_server_response_head(Http11(), status, headers)?
-  text.append(mut out, "Content-Length: ")
-  u64.format_into(core@1/bytes.len(body), mut out)
+  if !http_server_bodyless(false, status) {
+    text.append(mut out, "Content-Length: ")
+    u64.format_into(core@1/bytes.len(body), mut out)
+    text.append(mut out, "\r\n")
+  }
   text.append(
     mut out,
     if keep {
-      "\r\nConnection: keep-alive\r\n\r\n"
+      "Connection: keep-alive\r\n\r\n"
     } else {
-      "\r\nConnection: close\r\n\r\n"
+      "Connection: close\r\n\r\n"
     }
   )
   // One write carries the head and a small body, so they leave in one segment; a large
   // body follows the head in its own write rather than being copied.
-  let size = core@1/bytes.len(body)
+  let size: u64 = if http_server_bodyless(c.head_request, status) {
+    0
+  } else {
+    core@1/bytes.len(body)
+  }
   if size <= 65536 {
     core@1/list.reserve(mut out, core@1/list.len(out) + size)
     let mut i: u64 = 0
@@ -2077,7 +2087,7 @@ pub fn respond_head(mut c: ServerConnection, status: u16, headers: List[Header])
   if status < 200 || status > 599 {
     return Error(Malformed(Status()))
   }
-  let bodyless = c.head_request || status == 204 || status == 304
+  let bodyless = http_server_bodyless(c.head_request, status)
   let chunked = !bodyless && c.version == Http11()
   c.keep_alive = keep && (chunked || bodyless)
   let mut out = http_server_response_head(c.version, status, headers)?

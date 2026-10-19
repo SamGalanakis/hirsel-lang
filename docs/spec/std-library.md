@@ -1565,6 +1565,10 @@ Persistence follows RFC 9112 section 9: HTTP/1.1 persists by default; HTTP/1.0 r
 an explicit keep-alive token. Every Connection field contributes comma-separated,
 case-insensitive tokens; close takes precedence over keep-alive. `respond` validates
 status and headers and owns Content-Length, Transfer-Encoding and Connection framing.
+For HEAD, `respond` emits the Content-Length of the supplied body but no payload.
+For 204 and 304, it emits neither Content-Length nor payload, even when the supplied
+body is nonempty. Complete and streaming responses share this body suppression rule.
+Statuses below 200 remain unsupported and return `Malformed(Status())` before writing.
 Its `close` argument lets the handler end a connection even when the request permits
 reuse. It emits Connection: keep-alive or close accordingly. A failed request permits
 one final error response, always closing. Any failed response ends reuse. A closed
