@@ -45,14 +45,11 @@ fn evaluate_on_compiler_thread(
                 phase: "source indexing".into(),
                 ..Default::default()
             };
-            let status = match expect {
-                Expect::Reject {
-                    rule,
-                    line: expected,
-                } if rule == &d.rule && *expected == line => Status::Pass,
-                _ => Status::Fail(format!("expected {expect:?}; got {}", observation.actual)),
+            let actual = Actual::Rejected {
+                rule: d.rule.clone(),
+                line,
             };
-            return (status, observation);
+            return (verdict(expect, &actual, &observation.actual), observation);
         }
         Err(error) => {
             return (
@@ -161,14 +158,11 @@ fn evaluate_on_compiler_thread(
         if let Some(phase) = engine.diagnostic_phase(d) {
             observation.phase = phase;
         }
-        let status = match expect {
-            Expect::Reject {
-                rule,
-                line: expected,
-            } if *rule == d.rule && *expected == line as usize => Status::Pass,
-            _ => Status::Fail(format!("expected {expect:?}; got {}", observation.actual)),
+        let actual = Actual::Rejected {
+            rule: d.rule.clone(),
+            line: line as usize,
         };
-        return (status, observation);
+        return (verdict(expect, &actual, &observation.actual), observation);
     }
     if let hirsel_engine::CheckCompletion::Incomplete { phase } = output.completion {
         observation.actual = "not implemented".into();
@@ -176,12 +170,12 @@ fn evaluate_on_compiler_thread(
         return (Status::NotImplemented, observation);
     }
     observation.actual = "accept".into();
-    if matches!(expect, Expect::Accept) {
-        return (Status::Pass, observation);
-    }
-    if matches!(expect, Expect::Reject { .. }) {
+    if !matches!(
+        expect,
+        Expect::Run { .. } | Expect::Fail { .. } | Expect::Blocked { .. }
+    ) {
         return (
-            Status::Fail(format!("expected {expect:?}; got accept")),
+            verdict(expect, &Actual::Accepted, &observation.actual),
             observation,
         );
     }
@@ -273,46 +267,35 @@ fn evaluate_on_compiler_thread(
         }
     };
     observation.actual = format!("{outcome:?}; stdout {:?}", String::from_utf8_lossy(stdout));
-    let status = match (expect, execution.observation.as_ref()) {
-        (Expect::Blocked { stdout: expected }, Some(actual))
-            if matches!(outcome, RunOutcome::Blocked(_))
-                && actual.blocked.is_some()
-                && actual.exit_code.is_none()
-                && actual.failures.is_empty()
-                && expected.as_bytes() == actual.output =>
-        {
-            Status::Pass
-        }
-        (
-            Expect::Run {
-                stdout: expected,
-                exit,
+    let end = match execution.observation.as_ref() {
+        Some(actual) => match (actual.failures.first(), actual.exit_code) {
+            (Some(failure), _) => End::Failure {
+                rule: failure.rule.clone(),
+                line: failure.stable_site.line as usize,
             },
-            Some(actual),
-        ) if actual.exit_code == Some(*exit)
-            && actual.failures.is_empty()
-            && expected.as_bytes() == actual.output =>
-        {
-            Status::Pass
-        }
-        (
-            Expect::Fail {
-                rule,
-                line,
-                stdout: expected,
-            },
-            Some(actual),
-        ) if actual.failures.first().is_some_and(|failure| {
-            failure.rule == *rule && failure.stable_site.line as usize == *line
-        }) && expected
-            .as_ref()
-            .is_none_or(|expected| expected.as_bytes() == actual.output) =>
-        {
-            Status::Pass
-        }
-        _ => Status::Fail(format!("expected {expect:?}; got {}", observation.actual)),
+            (None, Some(code)) => End::Exit(code),
+            (None, None)
+                if actual.blocked.is_some() && matches!(outcome, RunOutcome::Blocked(_)) =>
+            {
+                End::Blocked
+            }
+            (None, None) => End::Other,
+        },
+        None => End::Other,
     };
-    (status, observation)
+    let actual = Actual::Ran {
+        end,
+        stdout: stdout.to_vec(),
+    };
+    (verdict(expect, &actual, &observation.actual), observation)
+}
+/// The status for what was observed, decided by the header's own matcher.
+fn verdict(expect: &Expect, actual: &Actual, observed: &str) -> Status {
+    if expect.matches(actual) {
+        Status::Pass
+    } else {
+        Status::Fail(format!("expected {expect:?}; got {observed}"))
+    }
 }
 /// Checked execution either reproduces the normal execution exactly or traps.
 pub(crate) fn checked_divergence(

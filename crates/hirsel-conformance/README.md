@@ -1,6 +1,6 @@
 # hirsel-conformance
 
-Validate rule-linked corpus headers, classify compiler results and enforce the additive passing ratchet.
+Validate rule-linked corpus headers, judge each file's result against its header and gate the corpus, with an additive passing ratchet.
 
 Allowed dependencies: hirsel-cli-args, hirsel-driver, hirsel-diag, hirsel-span, hirsel-syntax, hirsel-run-config, serde_json; no phase internals.
 
@@ -8,6 +8,8 @@ Invariants and boundary:
 
 - Consumes conformance files, spec rule IDs and the narrow Driver adapter; produces counts/statuses and optional JSON.
 - Every language diagnostic has a rule; rejection matches the first diagnostic and exact primary line resolved from its source snapshot.
+- One matcher, `Expect::matches`, decides every verdict: the compiler driver reduces what it observed to an `Actual` (the first error's rule and line, acceptance, or an execution's end and stdout) and the matcher compares it with the header. The runner tests exercise both that matcher and the production driver on real programs.
+- Every in-gate file must pass, whether or not `passing.txt` lists it, so a new or unlisted file that fails fails its shard. A listed file must pass too, in the gate or out; a file excluded from the gate (below) and not listed may fail.
 - NotImplemented is distinct from rejection and never added to passing.txt.
 - Header validation applies even while the compiler is unimplemented.
 - Updating the ratchet only adds passing cases, never removes regressions; corpus files are not rewritten.
@@ -42,6 +44,8 @@ gh issue list -R SamGalanakis/hirsel-lang --label spec --state open --limit 1000
 
 The runner intersects these numbers with each source's `// spec: #N` comments.
 The passing ratchet includes every listed test regardless of gate membership.
+`passing.txt` also names the native gate's baseline (`native::baseline`), and a
+listed path that disappears fails the shard that owns it.
 
 ## Deterministic run fixtures
 

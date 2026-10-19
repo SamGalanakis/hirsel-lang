@@ -1,14 +1,11 @@
 use hirsel_cli_args::Shard;
 use hirsel_conformance::{
-    Compiler, Driver, Expect, Status, TestResult, classify, extract_rules, parse_header, ratchet,
-    run_suite, run_suite_shard,
+    Actual, Compiler, Driver, End, Expect, Observation, Status, TestResult, extract_rules,
+    parse_header, ratchet, run_suite, run_suite_shard,
 };
-use hirsel_diag::{Diagnostic, RuleId, Severity};
-use hirsel_engine::{CheckOutput, NotImplemented, RunOutcome};
-use hirsel_span::{FileId, SourceMap, Span};
+use hirsel_diag::RuleId;
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicUsize, Ordering},
@@ -20,47 +17,290 @@ fn rules() -> hirsel_conformance::Rules {
 fn header(source: &str) -> Result<hirsel_conformance::Header, String> {
     parse_header(Path::new("conformance/OWN/test.hir"), source, &rules())
 }
-fn diagnostic(rule: Option<&str>, line: usize, severity: Severity) -> Diagnostic {
-    let mut diagnostic = Diagnostic::error(
-        RuleId::new(rule.unwrap_or("LANG-1")).unwrap(),
-        Span {
-            file: FileId(0),
-            start: (line - 1) as u32,
-            end: (line - 1) as u32,
-        },
-        "fixture",
-    );
-    diagnostic.severity = severity;
-    diagnostic
+/// Every file passes except those whose path ends with a listed name.
+struct Statuses(Vec<(&'static str, Status)>);
+impl Driver for Statuses {
+    fn evaluate(&self, path: &Path, _: &Expect) -> (Status, Observation) {
+        let status = self
+            .0
+            .iter()
+            .find(|(name, _)| path.ends_with(name))
+            .map_or(Status::Pass, |(_, status)| status.clone());
+        (status, Observation::default())
+    }
 }
-struct Fake {
-    diagnostics: Vec<Diagnostic>,
-    outcome: Result<RunOutcome, NotImplemented>,
-    stdout: &'static str,
+fn passing() -> Statuses {
+    Statuses(vec![])
 }
-impl Driver for Fake {
-    fn check(&self, _: &Path) -> Result<CheckOutput, NotImplemented> {
-        let mut sources = SourceMap::default();
-        sources.add("fixture.hir", "\n".repeat(100)).unwrap();
-        Ok(CheckOutput {
-            completion: Default::default(),
+fn failing(name: &'static str) -> Statuses {
+    Statuses(vec![(name, Status::Fail("fixture".into()))])
+}
+fn rule(id: &str) -> RuleId {
+    RuleId::new(id).unwrap()
+}
+fn ran(end: End, stdout: &str) -> Actual {
+    Actual::Ran {
+        end,
+        stdout: stdout.into(),
+    }
+}
+fn failure(id: &str, line: usize) -> End {
+    End::Failure {
+        rule: rule(id),
+        line,
+    }
+}
 
-            sources,
-            diagnostics: self.diagnostics.clone(),
-            unsafe_ffi: vec![],
-        })
+#[test]
+fn reject_verdict_needs_the_first_errors_rule_and_exact_line() {
+    let expect = header(include_str!("../fixtures/conformance/OWN/reject.hir"))
+        .unwrap()
+        .expect;
+    let at = |id: &str, line| Actual::Rejected {
+        rule: rule(id),
+        line,
+    };
+    assert!(expect.matches(&at("OWN-6", 3)));
+    for actual in [
+        at("OWN-6", 2),
+        at("OWN-7", 3),
+        Actual::Accepted,
+        ran(End::Exit(0), ""),
+    ] {
+        assert!(!expect.matches(&actual), "{actual:?}");
     }
-    fn run(&self, _: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented> {
-        stdout.write_all(self.stdout.as_bytes()).unwrap();
-        self.outcome.clone()
+    let accept = header(include_str!("../fixtures/conformance/OWN/accept.hir"))
+        .unwrap()
+        .expect;
+    assert!(accept.matches(&Actual::Accepted));
+    assert!(!accept.matches(&at("OWN-6", 3)));
+    assert!(!Expect::Test.matches(&Actual::Accepted));
+}
+#[test]
+fn run_verdict_needs_literal_stdout_and_exit() {
+    let expect = header(include_str!("../fixtures/conformance/OWN/nested/run.hir"))
+        .unwrap()
+        .expect;
+    assert_eq!(
+        expect,
+        Expect::Run {
+            stdout: "hello\n space stays \n\n".into(),
+            exit: 7
+        }
+    );
+    assert!(expect.matches(&ran(End::Exit(7), "hello\n space stays \n\n")));
+    for actual in [
+        ran(End::Exit(0), "hello\n space stays \n\n"),
+        ran(End::Exit(7), "hello"),
+        ran(failure("OWN-6", 3), "hello\n space stays \n\n"),
+        ran(End::Blocked, "hello\n space stays \n\n"),
+        ran(End::Other, "hello\n space stays \n\n"),
+        Actual::Accepted,
+    ] {
+        assert!(!expect.matches(&actual), "{actual:?}");
+    }
+    assert_eq!(
+        header("// rule: OWN-6\n// expect: run\nfn main() {}\n")
+            .unwrap()
+            .expect,
+        Expect::Run {
+            stdout: "".into(),
+            exit: 0
+        }
+    );
+}
+#[test]
+fn fail_verdict_matches_rule_line_and_stdout_only_when_present() {
+    let expect = header(include_str!("../fixtures/conformance/OWN/fail.hir"))
+        .unwrap()
+        .expect;
+    assert!(expect.matches(&ran(failure("OWN-7", 3), "unchecked output")));
+    for actual in [
+        ran(failure("OWN-6", 3), ""),
+        ran(failure("OWN-7", 2), ""),
+        ran(End::Exit(0), ""),
+        Actual::Rejected {
+            rule: rule("OWN-7"),
+            line: 3,
+        },
+    ] {
+        assert!(!expect.matches(&actual), "{actual:?}");
+    }
+    let source = "// rule: OWN-6\n// expect: fail OWN-6 at line 6\n// stdout: before\n// stdout: dropped\nfn main() {\n  fail()\n}\n";
+    let expect = header(source).unwrap().expect;
+    assert!(expect.matches(&ran(failure("OWN-6", 6), "before\ndropped\n")));
+    for output in ["before\n", "dropped\nbefore\n", "before\ndropped\nextra\n"] {
+        assert!(
+            !expect.matches(&ran(failure("OWN-6", 6), output)),
+            "{output}"
+        );
+    }
+    let unchecked = header("// rule: OWN-6\n// expect: fail OWN-6 at line 3\nfail()\n")
+        .unwrap()
+        .expect;
+    assert!(matches!(&unchecked, Expect::Fail { stdout: None, .. }));
+    assert!(
+        header("// rule: OWN-6\n// expect: fail OWN-6 at line 4\n// exit: 1\nfail()\n").is_err()
+    );
+}
+
+#[test]
+fn runtime_failure_header_can_name_a_dependency_line_beyond_the_fixture() {
+    let body = "fn f() {}\n";
+    let runtime = format!("// rule: OWN-6\n// expect: fail OWN-6 at line 99\n{body}");
+    let expect = header(&runtime).unwrap().expect;
+    assert!(expect.matches(&ran(failure("OWN-6", 99), "")));
+    assert!(!expect.matches(&ran(failure("OWN-6", 98), "")));
+    let static_twin = runtime.replace("expect: fail", "expect: reject");
+    assert!(header(&static_twin).unwrap_err().contains("outside file"));
+    let zero = runtime.replace("line 99", "line 0");
+    assert!(header(&zero).unwrap_err().contains("outside file"));
+}
+
+#[test]
+fn blocked_header_requires_noncompletion_and_the_exact_effect_prefix() {
+    let expect = header("// rule: OWN-6\n// expect: blocked\n// stdout: waiting\nfn main() {}\n")
+        .unwrap()
+        .expect;
+    assert_eq!(
+        expect,
+        Expect::Blocked {
+            stdout: "waiting\n".into()
+        }
+    );
+    assert!(expect.matches(&ran(End::Blocked, "waiting\n")));
+    for actual in [
+        ran(End::Blocked, ""),
+        ran(End::Blocked, "waiting\ndestroyed\n"),
+        ran(End::Exit(0), "waiting\n"),
+    ] {
+        assert!(!expect.matches(&actual), "{actual:?}");
+    }
+    assert!(header("// rule: OWN-6\n// expect: blocked\n// exit: 0\nfn main() {}\n").is_err());
+}
+
+/// One real program, judged by the production runner against each header.
+fn production(source: &str, cases: &[(Expect, bool)]) {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "hirsel-conformance-production-{}-{}.hir",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&path, source).unwrap();
+    for (expect, passes) in cases {
+        let (status, observation) = Compiler.evaluate(&path, expect);
+        assert_eq!(
+            status == Status::Pass,
+            *passes,
+            "{expect:?}: {status:?}, observed {}",
+            observation.actual
+        );
+        assert!(*passes || matches!(status, Status::Fail(_)), "{status:?}");
+    }
+    fs::remove_file(path).unwrap();
+}
+fn reject(id: &str, line: usize) -> Expect {
+    Expect::Reject {
+        rule: rule(id),
+        line,
     }
 }
-fn fake() -> Fake {
-    Fake {
-        diagnostics: vec![],
-        outcome: Ok(RunOutcome::Exit(0)),
-        stdout: "",
-    }
+
+#[test]
+fn production_rejection_needs_the_exact_rule_and_line_and_its_twin_is_accepted() {
+    let bad = "// rule: LANG-1\n// expect: reject LANG-1 at line 3\nfn f() { 'outer: { () } }\n";
+    production(
+        bad,
+        &[
+            (reject("LANG-1", 3), true),
+            (reject("LANG-1", 2), false),
+            (reject("LANG-1", 1), false),
+            (reject("LANG-7", 3), false),
+            (Expect::Accept, false),
+        ],
+    );
+    let twin = "// rule: LANG-1\n// expect: accept\nfn f() { { () } }\n";
+    production(
+        twin,
+        &[(Expect::Accept, true), (reject("LANG-1", 3), false)],
+    );
+}
+
+#[test]
+fn production_ignores_warnings_but_not_errors() {
+    // `read(copy xs)` draws the redundant-copy warning (OWN-4) at line 6.
+    let warned = "// rule: OWN-4\n// expect: accept\nfn read(xs: Bytes) -> u64 {\n  bytes.len(xs)\n}\nfn example(take xs: Bytes) -> u64 { read(copy xs) }\n";
+    production(
+        warned,
+        &[(Expect::Accept, true), (reject("OWN-4", 6), false)],
+    );
+}
+
+#[test]
+fn production_runs_compare_the_exit_code_and_stdout_exactly() {
+    let run = "// rule: PROG-3\n// expect: run\npub fn main(rt: Io, args: Args) -> Result[(), ()] {\n  let _ = out.print(io.stdout(rt) ? grant_error, \"launched\\n\")\n  Error(())\n}\n@noalloc\nfn grant_error(refusal: GrantError) -> () uses {} {\n  ()\n}\n";
+    let expect = |stdout: &str, exit| Expect::Run {
+        stdout: stdout.into(),
+        exit,
+    };
+    production(
+        run,
+        &[
+            (expect("launched\n", 1), true),
+            (expect("launched\n", 0), false),
+            (expect("launched\n", 7), false),
+            (expect("launched", 1), false),
+            (expect("", 1), false),
+        ],
+    );
+    let twin = run.replace("Error(())", "Ok(())");
+    production(
+        &twin,
+        &[
+            (expect("launched\n", 0), true),
+            (expect("launched\n", 1), false),
+        ],
+    );
+}
+
+#[test]
+fn production_failures_compare_the_rule_and_line() {
+    let fail = "// rule: SEM-1\n// expect: fail SEM-1 at line 4\npub fn main(rt: Io, args: Args) -> Result[(), CliError] {\n  let n: i32 = int.div_exact(7, 3)\n  Ok(())\n}\n";
+    let expect = |id: &str, line| Expect::Fail {
+        rule: rule(id),
+        line,
+        stdout: None,
+    };
+    production(
+        fail,
+        &[
+            (expect("SEM-1", 4), true),
+            (expect("SEM-1", 3), false),
+            (expect("SEM-2", 4), false),
+            (
+                Expect::Run {
+                    stdout: "".into(),
+                    exit: 0,
+                },
+                false,
+            ),
+        ],
+    );
+    let twin = fail.replace("div_exact(7, 3)", "div_exact(6, 3)");
+    production(
+        &twin,
+        &[
+            (expect("SEM-1", 4), false),
+            (
+                Expect::Run {
+                    stdout: "".into(),
+                    exit: 0,
+                },
+                true,
+            ),
+        ],
+    );
 }
 
 #[test]
@@ -75,165 +315,6 @@ fn only_known_comment_names_are_header_directives() {
     }
 }
 
-#[test]
-fn accepts_warnings_but_not_errors() {
-    let expect = header(include_str!("../fixtures/conformance/OWN/accept.hir"))
-        .unwrap()
-        .expect;
-    let mut driver = fake();
-    driver
-        .diagnostics
-        .push(diagnostic(Some("OWN-6"), 3, Severity::Warning));
-    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
-    driver
-        .diagnostics
-        .push(diagnostic(None, 3, Severity::Error));
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-}
-#[test]
-fn reject_matches_first_diagnostic_with_a_rule_and_exact_line() {
-    let expect = header(include_str!("../fixtures/conformance/OWN/reject.hir"))
-        .unwrap()
-        .expect;
-    let mut driver = fake();
-    driver.diagnostics = vec![diagnostic(Some("OWN-6"), 3, Severity::Warning)];
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-    driver.diagnostics = vec![diagnostic(Some("OWN-6"), 3, Severity::Error)];
-    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
-    driver
-        .diagnostics
-        .insert(0, diagnostic(Some("OWN-7"), 3, Severity::Warning));
-    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
-    driver
-        .diagnostics
-        .insert(0, diagnostic(Some("OWN-7"), 3, Severity::Error));
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-    driver.diagnostics = vec![diagnostic(Some("OWN-6"), 2, Severity::Error)];
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-}
-#[test]
-fn run_matches_literal_stdout_and_exit() {
-    let expect = header(include_str!("../fixtures/conformance/OWN/nested/run.hir"))
-        .unwrap()
-        .expect;
-    assert_eq!(
-        expect,
-        Expect::Run {
-            stdout: "hello\n space stays \n\n".into(),
-            exit: 7
-        }
-    );
-    let mut driver = fake();
-    driver.stdout = "hello\n space stays \n\n";
-    driver.outcome = Ok(RunOutcome::Exit(7));
-    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
-    driver.outcome = Ok(RunOutcome::Exit(0));
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-    driver.outcome = Ok(RunOutcome::Exit(7));
-    driver.stdout = "hello";
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-    assert_eq!(
-        header("// rule: OWN-6\n// expect: run\nfn main() {}\n")
-            .unwrap()
-            .expect,
-        Expect::Run {
-            stdout: "".into(),
-            exit: 0
-        }
-    );
-}
-#[test]
-fn fail_checks_before_running_and_matches_rule_and_line() {
-    let expect = header(include_str!("../fixtures/conformance/OWN/fail.hir"))
-        .unwrap()
-        .expect;
-    let mut driver = fake();
-    driver.outcome = Ok(RunOutcome::Failure {
-        operation: None,
-        rule: const { RuleId::of("OWN-7") },
-        site: hirsel_engine::FailureSite {
-            line: 3,
-            ..Default::default()
-        },
-    });
-    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
-    driver.outcome = Ok(RunOutcome::Failure {
-        operation: None,
-        rule: const { RuleId::of("OWN-6") },
-        site: hirsel_engine::FailureSite {
-            line: 3,
-            ..Default::default()
-        },
-    });
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-    driver.outcome = Ok(RunOutcome::Failure {
-        operation: None,
-        rule: const { RuleId::of("OWN-7") },
-        site: hirsel_engine::FailureSite {
-            line: 2,
-            ..Default::default()
-        },
-    });
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-    driver
-        .diagnostics
-        .push(diagnostic(Some("OWN-6"), 3, Severity::Error));
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-}
-#[test]
-fn unimplemented_check_or_run_is_classified() {
-    for text in [
-        include_str!("../fixtures/conformance/OWN/accept.hir"),
-        include_str!("../fixtures/conformance/OWN/reject.hir"),
-        include_str!("../fixtures/conformance/OWN/nested/run.hir"),
-        include_str!("../fixtures/conformance/OWN/fail.hir"),
-    ] {
-        assert_eq!(
-            classify(&Compiler, Path::new("test"), &header(text).unwrap().expect),
-            Status::NotImplemented
-        );
-    }
-    let mut driver = fake();
-    driver.outcome = Err(NotImplemented);
-    assert_eq!(
-        classify(
-            &driver,
-            Path::new("test"),
-            &Expect::Run {
-                stdout: "".into(),
-                exit: 0
-            }
-        ),
-        Status::NotImplemented
-    );
-}
 #[test]
 fn malformed_headers_name_the_file_and_problem() {
     for (source, message) in [
@@ -324,12 +405,20 @@ fn result(path: &str, status: Status) -> TestResult {
 fn ratchet_adds_passes_and_never_drops_regressions_or_missing_paths() {
     let a = "conformance/OWN/a.hir";
     let b = "conformance/OWN/b.hir";
-    let tests = [
-        result(b, Status::Pass),
-        result(a, Status::Pass),
-        result("conformance/OWN/c.hir", Status::NotImplemented),
-    ];
+    let tests = [result(b, Status::Pass), result(a, Status::Pass)];
     assert_eq!(ratchet("", &tests, true).unwrap(), format!("{a}\n{b}\n"));
+    // An unlisted in-gate file must pass as well, and is never added otherwise.
+    let c = "conformance/OWN/c.hir";
+    for status in [Status::NotImplemented, Status::Fail("new".into())] {
+        let tests = [result(a, Status::Pass), result(c, status)];
+        assert_eq!(
+            ratchet(&format!("{a}\n"), &tests, true).unwrap_err(),
+            [format!(
+                "{c}: an in-gate file must pass, got {:?}",
+                tests[1].status
+            )]
+        );
+    }
     assert_eq!(
         ratchet(&format!("{a}\n"), &tests, false).unwrap(),
         format!("{a}\n")
@@ -357,11 +446,11 @@ fn shards_partition_the_corpus_and_ratchet_only_their_own_paths() {
         assert_eq!(Shard::parse(invalid), None, "{invalid}");
     }
     let root = Fixture::new();
-    let whole = run_suite(&root.0, &fake(), false).unwrap();
+    let whole = run_suite(&root.0, &passing(), false).unwrap();
     for count in [1, 2, 3, 5] {
         let shards: Vec<_> = (1..=count)
             .map(|index| {
-                run_suite_shard(&root.0, &fake(), false, Some(Shard { index, count })).unwrap()
+                run_suite_shard(&root.0, &passing(), false, Some(Shard { index, count })).unwrap()
             })
             .collect();
         let mut paths: Vec<_> = shards
@@ -401,7 +490,8 @@ fn shards_partition_the_corpus_and_ratchet_only_their_own_paths() {
     let owners: Vec<_> = (1..=3)
         .filter(|&index| {
             missing(
-                &run_suite_shard(&root.0, &fake(), false, Some(Shard { index, count: 3 })).unwrap(),
+                &run_suite_shard(&root.0, &passing(), false, Some(Shard { index, count: 3 }))
+                    .unwrap(),
             )
         })
         .collect();
@@ -413,7 +503,15 @@ fn shards_partition_the_corpus_and_ratchet_only_their_own_paths() {
         }
         .holds("conformance/OWN/accept.hir")
     );
-    assert!(run_suite_shard(&root.0, &fake(), true, Some(Shard { index: 1, count: 3 })).is_err());
+    assert!(
+        run_suite_shard(
+            &root.0,
+            &passing(),
+            true,
+            Some(Shard { index: 1, count: 3 })
+        )
+        .is_err()
+    );
 }
 
 struct Fixture(PathBuf);
@@ -450,32 +548,49 @@ impl Drop for Fixture {
 }
 
 #[test]
-fn suite_discovers_nested_files_and_preserves_ratchet_on_validation_errors() {
+fn suite_discovers_nested_files_and_fails_every_unpassed_in_gate_file() {
     let root = Fixture::new();
     let report = run_suite(&root.0, &Compiler, false).unwrap();
-    assert!(report.success());
     assert_eq!(report.counts.validated, 4);
     assert_eq!(report.counts.not_implemented, 1);
     assert_eq!(report.counts.passing, 1);
     assert_eq!(report.counts.failing, 2);
-    let report = run_suite(&root.0, &fake(), true).unwrap();
-    assert!(report.success());
-    assert_eq!(report.counts.passing, 1);
-    let passing = root.0.join("conformance/passing.txt");
+    // Unlisted files gate too: each in-gate file that did not pass is an error.
+    let mut unpassed: Vec<_> = report
+        .errors
+        .iter()
+        .filter(|e| e.contains("an in-gate file must pass"))
+        .map(|e| e.split(':').next().unwrap())
+        .collect();
+    unpassed.sort();
     assert_eq!(
-        fs::read_to_string(&passing).unwrap(),
-        "conformance/OWN/accept.hir\n"
+        unpassed,
+        [
+            "conformance/OWN/fail.hir",
+            "conformance/OWN/nested/run.hir",
+            "conformance/OWN/reject.hir"
+        ],
+        "{:?}",
+        report.errors
     );
+    let passing_txt = root.0.join("conformance/passing.txt");
+    assert!(
+        !run_suite(&root.0, &failing("reject.hir"), true)
+            .unwrap()
+            .success()
+    );
+    assert_eq!(fs::read_to_string(&passing_txt).unwrap(), "");
+    let report = run_suite(&root.0, &passing(), true).unwrap();
+    assert!(report.success(), "{:?}", report.errors);
+    let listed = "conformance/OWN/accept.hir\nconformance/OWN/fail.hir\nconformance/OWN/nested/run.hir\nconformance/OWN/reject.hir\n";
+    assert_eq!(fs::read_to_string(&passing_txt).unwrap(), listed);
     fs::write(
         root.0.join("conformance/OWN/invalid.hir"),
         "// rule: OWN-99\n// expect: accept\n",
     )
     .unwrap();
-    assert!(!run_suite(&root.0, &fake(), true).unwrap().success());
-    assert_eq!(
-        fs::read_to_string(&passing).unwrap(),
-        "conformance/OWN/accept.hir\n"
-    );
+    assert!(!run_suite(&root.0, &passing(), true).unwrap().success());
+    assert_eq!(fs::read_to_string(&passing_txt).unwrap(), listed);
     fs::remove_file(root.0.join("conformance/OWN/accept.hir")).unwrap();
     assert!(
         run_suite(&root.0, &Compiler, false)
@@ -495,12 +610,19 @@ fn binary_json_and_exit_status_follow_validation_and_ratchet() {
             .output()
             .unwrap()
     };
+    // The fixtures the real compiler does not pass leave the gate.
+    let m2 = root.0.join("conformance/m2-runtime.txt");
+    fs::write(
+        &m2,
+        "conformance/OWN/fail.hir\tM2\nconformance/OWN/nested/run.hir\tM2\nconformance/OWN/reject.hir\tM2\n",
+    )
+    .unwrap();
     let output = run();
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["summary"]["validated"], 4);
     assert_eq!(json["summary"]["not_implemented"], 1);
-    assert_eq!(json["in_gate"]["validated"], 4);
+    assert_eq!(json["in_gate"]["validated"], 1);
     assert_eq!(json["unchecked"], 0);
     assert!(
         json["tests"]
@@ -508,6 +630,22 @@ fn binary_json_and_exit_status_follow_validation_and_ratchet() {
             .unwrap()
             .iter()
             .all(|t| t["unchecked"] == 0)
+    );
+    // Back in the gate, an unlisted file that does not pass fails the run.
+    fs::write(
+        &m2,
+        "conformance/OWN/fail.hir\tM2\nconformance/OWN/nested/run.hir\tM2\n",
+    )
+    .unwrap();
+    let output = run();
+    assert!(!output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["errors"].as_array().unwrap().len(), 1, "{json}");
+    assert!(
+        json["errors"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("conformance/OWN/reject.hir: an in-gate file must pass, got Fail(")
     );
     fs::write(
         root.0.join("conformance/passing.txt"),
@@ -539,60 +677,6 @@ fn binary_json_and_exit_status_follow_validation_and_ratchet() {
     }));
 }
 
-struct Incomplete(Fake);
-impl Driver for Incomplete {
-    fn complete(&self) -> bool {
-        false
-    }
-    fn check(&self, path: &Path) -> Result<CheckOutput, NotImplemented> {
-        self.0.check(path)
-    }
-    fn run(&self, path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented> {
-        self.0.run(path, stdout)
-    }
-}
-#[test]
-fn incomplete_pipeline_keeps_accept_run_fail_unavailable_and_checks_reject_exactly() {
-    let mut driver = Incomplete(fake());
-    driver
-        .0
-        .diagnostics
-        .push(diagnostic(Some("LANG-1"), 3, Severity::Error));
-    for expect in [
-        Expect::Accept,
-        Expect::Run {
-            stdout: "".into(),
-            exit: 0,
-        },
-        Expect::Fail {
-            rule: const { RuleId::of("FAIL-1") },
-            line: 3,
-            stdout: None,
-        },
-    ] {
-        assert_eq!(
-            classify(&driver, Path::new("test"), &expect),
-            Status::NotImplemented
-        );
-    }
-    let matching = Expect::Reject {
-        rule: const { RuleId::of("LANG-1") },
-        line: 3,
-    };
-    assert_eq!(
-        classify(&driver, Path::new("test"), &matching),
-        Status::Pass
-    );
-    let wrong = Expect::Reject {
-        rule: const { RuleId::of("LANG-7") },
-        line: 3,
-    };
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &wrong),
-        Status::Fail(_)
-    ));
-}
-
 #[test]
 fn gate_exclusions_are_offline_union_and_never_bypass_the_ratchet() {
     let root = Fixture::new();
@@ -614,7 +698,16 @@ fn gate_exclusions_are_offline_union_and_never_bypass_the_ratchet() {
         format!("// spec: #4\n// spec: #7\n// spec: #5\n{source}"),
     )
     .unwrap();
-    let report = run_suite(&root.0, &fake(), true).unwrap();
+    // Out of the gate, an unlisted file may fail; listed, it may not.
+    let report = run_suite(&root.0, &failing("accept.hir"), true).unwrap();
+    assert!(report.success(), "{:?}", report.errors);
+    assert_eq!(report.counts.failing, 1);
+    assert!(
+        !fs::read_to_string(root.0.join("conformance/passing.txt"))
+            .unwrap()
+            .contains("accept.hir")
+    );
+    let report = run_suite(&root.0, &passing(), true).unwrap();
     assert_eq!(report.counts.validated, 4);
     assert_eq!(report.in_gate.validated, 3);
     assert_eq!(report.exclusions["conformance/OWN/accept.hir"].len(), 3);
@@ -634,124 +727,13 @@ fn gate_exclusions_are_offline_union_and_never_bypass_the_ratchet() {
     assert_eq!(case["unchecked"], 0);
     assert_eq!(case["in_gate"], false);
     assert_eq!(case["exclusions"].as_array().unwrap().len(), 3);
-    let mut broken = fake();
-    broken
-        .diagnostics
-        .push(diagnostic(Some("OWN-6"), 3, Severity::Error));
     assert!(
-        run_suite(&root.0, &broken, true)
+        run_suite(&root.0, &failing("accept.hir"), true)
             .unwrap()
             .errors
             .iter()
             .any(|e| e.contains("ratchet requires pass"))
     );
-}
-
-#[test]
-fn fail_stdout_is_optional_and_exact_when_present() {
-    let source = "// rule: OWN-6\n// expect: fail OWN-6 at line 6\n// stdout: before\n// stdout: dropped\nfn main() {\n  fail()\n}\n";
-    let expect = header(source).unwrap().expect;
-    let mut driver = fake();
-    driver.outcome = Ok(RunOutcome::Failure {
-        operation: None,
-        rule: const { RuleId::of("OWN-6") },
-        site: hirsel_engine::FailureSite {
-            line: 6,
-            ..Default::default()
-        },
-    });
-    driver.stdout = "before\ndropped\n";
-    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
-    for output in ["before\n", "dropped\nbefore\n", "before\ndropped\nextra\n"] {
-        driver.stdout = output;
-        assert!(matches!(
-            classify(&driver, Path::new("test"), &expect),
-            Status::Fail(_)
-        ));
-    }
-    let unchecked = header("// rule: OWN-6\n// expect: fail OWN-6 at line 3\nfail()\n")
-        .unwrap()
-        .expect;
-    assert!(matches!(&unchecked, Expect::Fail { stdout: None, .. }));
-    driver.outcome = Ok(RunOutcome::Failure {
-        operation: None,
-        rule: const { RuleId::of("OWN-6") },
-        site: hirsel_engine::FailureSite {
-            line: 3,
-            ..Default::default()
-        },
-    });
-    assert_eq!(
-        classify(&driver, Path::new("test"), &unchecked),
-        Status::Pass
-    );
-    assert!(
-        header("// rule: OWN-6\n// expect: fail OWN-6 at line 4\n// exit: 1\nfail()\n").is_err()
-    );
-}
-
-#[test]
-fn runtime_failure_header_can_name_a_dependency_line_beyond_the_fixture() {
-    let body = "fn f() {}\n";
-    let runtime = format!("// rule: OWN-6\n// expect: fail OWN-6 at line 99\n{body}");
-    let expect = header(&runtime).unwrap().expect;
-    let mut driver = fake();
-    driver.outcome = Ok(RunOutcome::Failure {
-        operation: None,
-        rule: const { RuleId::of("OWN-6") },
-        site: hirsel_engine::FailureSite {
-            line: 99,
-            ..Default::default()
-        },
-    });
-    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
-    driver.outcome = Ok(RunOutcome::Failure {
-        operation: None,
-        rule: const { RuleId::of("OWN-6") },
-        site: hirsel_engine::FailureSite {
-            line: 98,
-            ..Default::default()
-        },
-    });
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-    let static_twin = runtime.replace("expect: fail", "expect: reject");
-    assert!(header(&static_twin).unwrap_err().contains("outside file"));
-    let zero = runtime.replace("line 99", "line 0");
-    assert!(header(&zero).unwrap_err().contains("outside file"));
-}
-
-#[test]
-fn blocked_header_requires_noncompletion_and_the_exact_effect_prefix() {
-    let expect = header("// rule: OWN-6\n// expect: blocked\n// stdout: waiting\nfn main() {}\n")
-        .unwrap()
-        .expect;
-    assert_eq!(
-        expect,
-        Expect::Blocked {
-            stdout: "waiting\n".into()
-        }
-    );
-    let mut driver = fake();
-    driver.stdout = "waiting\n";
-    driver.outcome = Ok(RunOutcome::Blocked(vec![]));
-    assert_eq!(classify(&driver, Path::new("test"), &expect), Status::Pass);
-    for output in ["", "waiting\ndestroyed\n"] {
-        driver.stdout = output;
-        assert!(matches!(
-            classify(&driver, Path::new("test"), &expect),
-            Status::Fail(_)
-        ));
-    }
-    driver.stdout = "waiting\n";
-    driver.outcome = Ok(RunOutcome::Exit(0));
-    assert!(matches!(
-        classify(&driver, Path::new("test"), &expect),
-        Status::Fail(_)
-    ));
-    assert!(header("// rule: OWN-6\n// expect: blocked\n// exit: 0\nfn main() {}\n").is_err());
 }
 
 #[test]
@@ -768,16 +750,16 @@ fn path_selection_runs_only_matches_and_keeps_the_selected_ratchet() {
         "conformance/OWN/accept.hir\nconformance/OWN/reject.hir\n",
     )
     .unwrap();
-    let report = run_suite_selected(&root.0, &fake(), false, selection).unwrap();
+    let report = run_suite_selected(&root.0, &passing(), false, selection).unwrap();
     assert!(report.success(), "{:?}", report.errors);
     assert_eq!(report.counts.validated, 1);
     assert_eq!(report.tests[0].path, paths[0]);
-    assert!(run_suite_selected(&root.0, &fake(), true, selection).is_err());
+    assert!(run_suite_selected(&root.0, &passing(), true, selection).is_err());
     let empty = ["conformance/absent".to_owned()];
     assert!(
         run_suite_selected(
             &root.0,
-            &fake(),
+            &passing(),
             false,
             Selection {
                 shard: None,
@@ -787,11 +769,7 @@ fn path_selection_runs_only_matches_and_keeps_the_selected_ratchet() {
         .unwrap_err()
         .contains("selected no corpus files")
     );
-    let mut failing = fake();
-    failing
-        .diagnostics
-        .push(diagnostic(Some("OWN-6"), 3, Severity::Error));
-    let report = run_suite_selected(&root.0, &failing, false, selection).unwrap();
+    let report = run_suite_selected(&root.0, &failing("accept.hir"), false, selection).unwrap();
     assert_eq!(report.counts.failing, 1);
     assert!(
         report
@@ -844,17 +822,13 @@ fn path_selection_requires_unratcheted_expected_outcomes() {
         shard: None,
         paths: &paths,
     };
-    let mut failing = fake();
-    failing
-        .diagnostics
-        .push(diagnostic(Some("OWN-6"), 3, Severity::Error));
-    let report = run_suite_selected(&root.0, &failing, false, selection).unwrap();
+    let report = run_suite_selected(&root.0, &failing("accept.hir"), false, selection).unwrap();
     assert_eq!(report.counts.failing, 1);
     assert!(
         !report.success(),
         "unlisted selected failures must fail the run"
     );
-    let passed = run_suite_selected(&root.0, &fake(), false, selection).unwrap();
+    let passed = run_suite_selected(&root.0, &passing(), false, selection).unwrap();
     assert!(passed.success());
     for (source, passes) in [
         (

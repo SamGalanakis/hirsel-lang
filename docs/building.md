@@ -382,6 +382,9 @@ output. It finds the repository from the current directory; `--root <repo>`
 selects another checkout. The whole corpus is a many-program run:
 `python3 tools/buck2/conformance.py` runs its shards on the pool. `--update-passing` (run on this host by `tools/bless.sh passing`) adds newly
 passing tests to `conformance/passing.txt` without removing existing entries.
+Every in-gate corpus file must pass whether or not that list names it; a listed
+file must pass even when excluded from the gate, and the list is the native
+gate's baseline, so add a new corpus file's path to it (the list is sorted).
 
 ## Run locally
 

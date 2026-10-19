@@ -1,7 +1,6 @@
-//! Corpus headers, driver classification and an additive passing ratchet.
+//! Corpus headers, the corpus verdict and the gate over it, with an additive passing ratchet.
 use hirsel_diag::{RuleId, Severity};
-use hirsel_engine::CheckOutput;
-use hirsel_engine::{NotImplemented, RunOutcome};
+use hirsel_engine::RunOutcome;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -106,6 +105,72 @@ pub enum Expect {
         line: usize,
         stdout: Option<String>,
     },
+}
+
+/// What a corpus file did, as far as a header can claim it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Actual {
+    /// The first error diagnostic's rule, at its primary line.
+    Rejected {
+        rule: RuleId,
+        line: usize,
+    },
+    Accepted,
+    /// Execution ended, having written `stdout`.
+    Ran {
+        end: End,
+        stdout: Vec<u8>,
+    },
+}
+
+/// How an execution ended, as a header can expect it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum End {
+    Exit(i32),
+    /// Every task waits and none can wake.
+    Blocked,
+    /// The first runtime failure's rule, at its stable site's line.
+    Failure {
+        rule: RuleId,
+        line: usize,
+    },
+    /// An end no header expects: a tooling limit, undefined behavior or a trap.
+    Other,
+}
+
+impl Expect {
+    /// The corpus verdict: whether `actual` is exactly what this header expects.
+    /// `Test` cases are judged by their `@test` functions instead.
+    pub fn matches(&self, actual: &Actual) -> bool {
+        match (self, actual) {
+            (Expect::Accept, Actual::Accepted) => true,
+            (Expect::Reject { rule, line }, Actual::Rejected { rule: r, line: l }) => {
+                rule == r && line == l
+            }
+            (
+                Expect::Run { stdout, exit },
+                Actual::Ran {
+                    end: End::Exit(code),
+                    stdout: out,
+                },
+            ) => exit == code && stdout.as_bytes() == out,
+            (
+                Expect::Blocked { stdout },
+                Actual::Ran {
+                    end: End::Blocked,
+                    stdout: out,
+                },
+            ) => stdout.as_bytes() == out,
+            (
+                Expect::Fail { rule, line, stdout },
+                Actual::Ran {
+                    end: End::Failure { rule: r, line: l },
+                    stdout: out,
+                },
+            ) => rule == r && line == l && stdout.as_ref().is_none_or(|s| s.as_bytes() == out),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -411,49 +476,21 @@ pub(crate) fn selected_entry(
     entry
 }
 
-/// Narrow adapter for the real driver and runner-owned fixtures.
+/// The runner's seam: a corpus file's verdict and what was observed.
 pub trait Driver {
-    fn evaluate(&self, path: &Path, expect: &Expect) -> (Status, Observation) {
-        (classify(self, path, expect), Observation::default())
-    }
-    fn complete(&self) -> bool {
-        true
-    }
-    fn check(&self, path: &Path) -> Result<CheckOutput, NotImplemented>;
-    fn run(&self, path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented>;
-    fn test(&self, _path: &Path) -> Status {
-        Status::NotImplemented
-    }
+    fn evaluate(&self, path: &Path, expect: &Expect) -> (Status, Observation);
 }
 /// A corpus driver varying only placement; capability inputs keep their seeds.
 pub struct SeededCompiler(pub u64);
 impl Driver for SeededCompiler {
-    fn test(&self, path: &Path) -> Status {
-        compiler::evaluate_with_hash_seed(path, &Expect::Test, self.0).0
-    }
     fn evaluate(&self, path: &Path, expect: &Expect) -> (Status, Observation) {
         compiler::evaluate_with_hash_seed(path, expect, self.0)
-    }
-    fn check(&self, path: &Path) -> Result<CheckOutput, NotImplemented> {
-        Compiler.check(path)
-    }
-    fn run(&self, path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented> {
-        Compiler.run(path, stdout)
     }
 }
 pub struct Compiler;
 impl Driver for Compiler {
-    fn test(&self, path: &Path) -> Status {
-        compiler::evaluate(path, &Expect::Test).0
-    }
     fn evaluate(&self, path: &Path, expect: &Expect) -> (Status, Observation) {
         compiler::evaluate(path, expect)
-    }
-    fn check(&self, path: &Path) -> Result<CheckOutput, NotImplemented> {
-        hirsel_driver::check_file(path)
-    }
-    fn run(&self, path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, NotImplemented> {
-        hirsel_driver::run_file(path, stdout)
     }
 }
 
@@ -462,90 +499,6 @@ pub enum Status {
     Pass,
     Fail(String),
     NotImplemented,
-}
-
-pub fn classify(driver: &(impl Driver + ?Sized), path: &Path, expect: &Expect) -> Status {
-    if !matches!(expect, Expect::Reject { .. }) && !driver.complete() {
-        return Status::NotImplemented;
-    }
-    let output = match driver.check(path) {
-        Ok(diagnostics) => diagnostics,
-        Err(NotImplemented) => return Status::NotImplemented,
-    };
-    let first_error = output
-        .diagnostics
-        .iter()
-        .find(|d| d.severity == Severity::Error);
-    if (!matches!(expect, Expect::Reject { .. }) || first_error.is_none())
-        && output.completion != hirsel_engine::CheckCompletion::Complete
-    {
-        return Status::NotImplemented;
-    }
-    let diagnostics = &output.diagnostics;
-    if let Expect::Reject { rule, line } = expect {
-        return if first_error.is_some_and(|d| {
-            &d.rule == rule
-                && output
-                    .sources
-                    .location(d.primary)
-                    .is_some_and(|p| p.line as usize == *line)
-        }) {
-            Status::Pass
-        } else {
-            Status::Fail(format!(
-                "expected first rule diagnostic {rule} at line {line}; got {diagnostics:?}"
-            ))
-        };
-    }
-    if diagnostics.iter().any(|d| d.severity == Severity::Error) {
-        return Status::Fail(format!("unexpected error diagnostics: {diagnostics:?}"));
-    }
-    if matches!(expect, Expect::Accept) {
-        return Status::Pass;
-    }
-    if matches!(expect, Expect::Test) {
-        return driver.test(path);
-    }
-    let mut stdout = Vec::new();
-    let outcome = match driver.run(path, &mut stdout) {
-        Ok(outcome) => outcome,
-        Err(NotImplemented) => return Status::NotImplemented,
-    };
-    match (expect, &outcome) {
-        (Expect::Blocked { stdout: expected }, RunOutcome::Blocked(_))
-            if expected.as_bytes() == stdout =>
-        {
-            Status::Pass
-        }
-        (
-            Expect::Run {
-                stdout: expected,
-                exit,
-            },
-            RunOutcome::Exit(actual),
-        ) if expected.as_bytes() == stdout && exit == actual => Status::Pass,
-        (
-            Expect::Fail {
-                rule,
-                line,
-                stdout: expected,
-            },
-            RunOutcome::Failure {
-                rule: actual, site, ..
-            },
-        ) if rule == actual
-            && *line == site.line
-            && expected
-                .as_ref()
-                .is_none_or(|expected| expected.as_bytes() == stdout) =>
-        {
-            Status::Pass
-        }
-        _ => Status::Fail(format!(
-            "expected {expect:?}; got {outcome:?}, stdout {:?}",
-            String::from_utf8_lossy(&stdout)
-        )),
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -637,9 +590,15 @@ fn discover(dir: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<(), Strin
     Ok(())
 }
 
-/// Only regressions in the listed set gate execution. Updates never forget old paths.
+/// The gate over the whole corpus with no exclusions; see `ratchet_selected`.
 pub fn ratchet(existing: &str, tests: &[TestResult], update: bool) -> Result<String, Vec<String>> {
-    ratchet_within(existing, tests, update, None)
+    ratchet_selected(
+        existing,
+        tests,
+        &BTreeMap::new(),
+        update,
+        Selection::default(),
+    )
 }
 
 use hirsel_cli_args::Shard;
@@ -676,20 +635,13 @@ impl Selection<'_> {
     }
 }
 
-/// The ratchet over one shard: every listed path is still validated, but only
-/// the shard's listed paths must be present and passing.
-pub fn ratchet_within(
-    existing: &str,
-    tests: &[TestResult],
-    update: bool,
-    shard: Option<Shard>,
-) -> Result<String, Vec<String>> {
-    ratchet_selected(existing, tests, update, Selection { shard, paths: &[] })
-}
-
+/// The gate over a selection: every in-gate file must pass, listed or not, and
+/// every listed path the selection holds must be present and passing, in the
+/// gate or out. Updates only add passing paths; they never forget old ones.
 fn ratchet_selected(
     existing: &str,
     tests: &[TestResult],
+    exclusions: &BTreeMap<String, Vec<String>>,
     update: bool,
     selection: Selection<'_>,
 ) -> Result<String, Vec<String>> {
@@ -721,6 +673,14 @@ fn ratchet_selected(
             Some(status) => errors.push(format!("{path}: ratchet requires pass, got {status:?}")),
             None => errors.push(format!("{path}: ratchet path missing or failed validation")),
         }
+    }
+    for test in tests.iter().filter(|t| {
+        t.status != Status::Pass && !listed.contains(&t.path) && !exclusions.contains_key(&t.path)
+    }) {
+        errors.push(format!(
+            "{}: an in-gate file must pass, got {:?}",
+            test.path, test.status
+        ));
     }
     if !errors.is_empty() {
         return Err(errors);
@@ -828,7 +788,13 @@ pub fn run_suite_selected(
     let passing = root.join("conformance/passing.txt");
     let existing =
         fs::read_to_string(&passing).map_err(|e| format!("{}: {e}", passing.display()))?;
-    match ratchet_selected(&existing, &report.tests, update, selection) {
+    match ratchet_selected(
+        &existing,
+        &report.tests,
+        &report.exclusions,
+        update,
+        selection,
+    ) {
         Ok(updated) if update && report.success() => {
             fs::write(&passing, updated).map_err(|e| format!("{}: {e}", passing.display()))?
         }
