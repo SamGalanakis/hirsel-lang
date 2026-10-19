@@ -661,6 +661,17 @@ fn host_errors_and_timeouts_are_recorded_outcomes() {
         }),
         Ok(Completion::NetBytes(Err(NetError::TimedOut)))
     );
+    // The timeout assertion is complete. Wait for the peer's data and FIN,
+    // whose delivery is an event rather than a 20 ms scheduling guarantee.
+    assert_eq!(
+        io.call(Request::SetTimeout {
+            net: n,
+            stream: s,
+            which: TimeoutKind::Read,
+            timeout: NetTimeout::Unbounded,
+        }),
+        Ok(Completion::NetUnit(Ok(())))
+    );
     peer.write_all(b"late").unwrap();
     assert_eq!(
         io.call(Request::NetRead {
