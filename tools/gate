@@ -106,7 +106,7 @@ def docs_check(base, documents, paths):
         path = ROOT / document
         if not path.is_file() or not document.endswith('.md'):
             continue
-        tracked = subprocess.run(['git', 'cat-file', '-e', f'{base}:{document}'], cwd=ROOT,
+        tracked = gating.run(['git', 'cat-file', '-e', f'{base}:{document}'], cwd=ROOT,
                                  capture_output=True).returncode == 0
         added = (gating.git('diff', '-U0', base, '--', document) if tracked else path.read_text())
         lines = [line[1:] for line in added.splitlines() if line.startswith('+') and not line.startswith('+++')] \
@@ -124,7 +124,7 @@ def docs_check(base, documents, paths):
                 target = link_target(document, link)
                 if target in deleted:
                     errors.append(f'{document}: link {link} names a deleted path')
-    whitespace = subprocess.run(['git', 'diff', '--check', base, '--', *documents], cwd=ROOT,
+    whitespace = gating.run(['git', 'diff', '--check', base, '--', *documents], cwd=ROOT,
                                 capture_output=True, text=True)
     if whitespace.returncode:
         errors.append(whitespace.stdout.strip())
@@ -214,7 +214,7 @@ def test_rows(report, results, tests):
 
 def prepare(report):
     started = time.monotonic()
-    result = subprocess.run([PY, str(ROOT / 'tools/buck2/prepare.py')], cwd=ROOT, capture_output=True, text=True)
+    result = gating.run([PY, str(ROOT / 'tools/buck2/prepare.py')], cwd=ROOT, capture_output=True, text=True)
     if result.returncode:
         report.add(False, 'Buck2 toolchains and pool configuration', [gating.last_lines(result.stdout + result.stderr)])
         return False
@@ -391,6 +391,7 @@ def push_gate(base_ref, tokens, why, extend):
         if prepare(report):
             pool = gating.Plan().slot_pool()
             say(f'gate: pool: {pool}')
+            gating.stop_daemons()
             with gating.gate_slot(pool=pool):
                 build_only(report, log)
         report.print(time.monotonic() - started)
@@ -450,6 +451,7 @@ def push_gate(base_ref, tokens, why, extend):
         # One slot for the build and the tests, so a gate never queues twice.
         pool = plan.slot_pool()
         say(f'gate: pool: {pool}')
+        gating.stop_daemons()
         with gating.gate_slot(pool=pool):
             if build_first(report, log):
                 run_plan(report, plan, log)
@@ -488,7 +490,7 @@ class Stages:
         started = time.monotonic()
         say(f'gate: {stage}')
         try:
-            status = subprocess.run(command, cwd=ROOT, **kwargs).returncode
+            status = gating.run(command, cwd=ROOT, **kwargs).returncode
         except OSError as error:
             print(f'gate: {stage}: {error}', file=sys.stderr, flush=True)
             status = 127
@@ -525,7 +527,7 @@ def full_gate():
     timeout, long = ['--timeout', '1800'], ['--timeout', '14400']
 
     def query(expression):
-        return subprocess.run([*buck2, 'uquery', *config, expression], cwd=ROOT, capture_output=True,
+        return gating.run([*buck2, 'uquery', *config, expression], cwd=ROOT, capture_output=True,
                               text=True).stdout.split()
 
     def full_crate_tests(*arguments):
@@ -599,6 +601,7 @@ def main():
     if args.full:
         if args.suggest or args.tests or args.extend or args.base != 'origin/main':
             parser.error('--full takes no other option')
+        gating.stop_daemons()
         with gating.gate_slot():
             return full_gate()
     if args.suggest:
@@ -612,4 +615,5 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    with gating.daemon_lifetime():
+        sys.exit(main())

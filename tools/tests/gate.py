@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import selectors
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1207,6 +1209,16 @@ class Summary(unittest.TestCase):
 
 
 FAKE_BUCK2 = '''#!/usr/bin/env bash
+isolation=${BUCK_ISOLATION_DIR:-v2}
+if [[ $1 == --isolation-dir ]]; then isolation=$2; shift 2; fi
+if [[ $1 == kill ]]; then
+  [[ -n ${DAEMON_TRACE:-} ]] && printf 'kill %s %s\\n' "$isolation" "$PWD" >> "$DAEMON_TRACE"
+  exit "${FAIL_KILL:-0}"
+fi
+[[ -n ${DAEMON_TRACE:-} ]] && printf '%s %s %s\\n' "$1" "$isolation" "$PWD" >> "$DAEMON_TRACE"
+if [[ $1 == build && -n ${READY_PIPE:-} ]]; then
+  bash -c 'echo "$BASHPID" > "$CHILD_PID"; printf "ready\\n" > "$READY_PIPE"; read -r < "$BLOCK_PIPE"'
+fi
 # Each test target passes with the counts a conformance shard prints, unless
 # FAIL_TESTS is set; `log show` replays the results of the run that wrote them.
 details='whole corpus: 1 validated / 1 passing / 0 failing / 0 not implemented\\nin-gate corpus: 1 validated / 1 passing / 0 failing / 0 not implemented\\ncorpus formatting: 0 intentional syntax rejections exempt'
@@ -1229,7 +1241,7 @@ fi
 case $1 in
   log) [[ -f $3.results ]] && cat "$3.results"; exit 0 ;;
   uquery) query=$*; last=${*: -1}; [[ $last == @* ]] && query=$(cat "${last#@}")
-    [[ $query == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit 0 ;;
+    [[ $query == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit "${FAIL_QUERY:-0}" ;;
   build)
     if [[ $* == *show-json-output* ]]; then
       echo '{"root//:hirsel-cli-bin-hirsel": ".buck2/bin/hirsel"}'
@@ -1330,8 +1342,12 @@ class Scripts(unittest.TestCase):
         git(self.root, 'commit', '-q', '-am', 'Executable tools')
         buck2 = self.root / '.buck2/bin/buck2'
         buck2.parent.mkdir(parents=True)
-        buck2.write_text(FAKE_BUCK2)
-        buck2.chmod(0o755)
+        fake_bin = top / 'bin'
+        fake_bin.mkdir()
+        fake_buck2 = fake_bin / 'buck2'
+        fake_buck2.write_text(FAKE_BUCK2)
+        fake_buck2.chmod(0o755)
+        buck2.symlink_to(fake_buck2)
         hirsel = buck2.with_name('hirsel')
         hirsel.write_text(FAKE_HIRSEL)
         hirsel.chmod(0o755)
@@ -1341,10 +1357,13 @@ class Scripts(unittest.TestCase):
         git(self.root, 'branch', '-q', '--set-upstream-to=origin/main')
         self.commands = top / 'commands'
         self.env = os.environ | {'COMMANDS': str(self.commands),
+                                 'PATH': str(fake_bin) + os.pathsep + os.environ['PATH'],
                                  'HIRSEL_LAND_LOCK_DIR': str(top / 'land-lock'),
                                  'HIRSEL_BUCK2_LOG_DIR': str(self.root / '.buck2/event-logs')}
         # Scratch gates must not acquire a slot held by the gate running this test.
         self.env.pop('HIRSEL_GATE_SLOTS', None)
+        self.env.pop('HIRSEL_KEEP_DAEMON', None)
+        self.env.pop('BUCK_ISOLATION_DIR', None)
         # A sibling's clone, to move main.
         self.sibling = top / 'sibling'
         subprocess.run(['git', 'clone', '-q', str(self.origin), str(self.sibling)], check=True)
@@ -1361,6 +1380,149 @@ class Scripts(unittest.TestCase):
     def sibling_pushes(self, files):
         commit(self.sibling, files, 'Sibling change')
         git(self.sibling, 'push', '-q', 'origin', 'HEAD:main')
+
+    def daemon_change(self, tool):
+        if tool == 'land':
+            commit(self.root, {'README.md': 'Daemon lifecycle fixture\n'}, 'Docs')
+            result, _ = self.run_tool('gate', '--why', 'docs only')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return ['land']
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        return ['gate', '--why', 'one test target']
+
+    def daemon_trace(self):
+        path = self.root.parent / 'daemon-trace'
+        return path.read_text().splitlines() if path.exists() else []
+
+    def daemon_env(self):
+        return {'DAEMON_TRACE': str(self.root.parent / 'daemon-trace')}
+
+    def assert_daemons_stopped(self):
+        self.assertEqual(self.daemon_trace()[-2:],
+                         [f'kill v2 {self.root}', f'kill buck2-bootstrap {self.root}'])
+
+    def test_daemons_stop_on_success(self):
+        for tool in ('gate', 'land'):
+            with self.subTest(tool=tool):
+                arguments = self.daemon_change(tool)
+                result, _ = self.run_tool(*arguments, env=self.daemon_env())
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assert_daemons_stopped()
+
+    def test_daemons_stop_on_failure(self):
+        for tool in ('gate', 'land'):
+            with self.subTest(tool=tool):
+                arguments = self.daemon_change(tool)
+                result, _ = self.run_tool(*arguments, env=self.daemon_env() | {'FAIL_BUILD': '1'})
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assert_daemons_stopped()
+
+    def test_cleanup_attempts_every_isolation_even_when_kill_fails(self):
+        result, _ = self.run_tool('gate', '--why', 'no change',
+                                  env=self.daemon_env() | {'FAIL_KILL': '1'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Buck2 daemon cleanup failed', result.stderr)
+        self.assert_daemons_stopped()
+
+    def test_suggestion_cleans_up_after_a_query_exception_and_honors_the_environment_isolation(self):
+        self.daemon_change('gate')
+        result, _ = self.run_tool('gate', '--suggest', env=self.daemon_env() | {
+            'FAIL_QUERY': '1', 'BUCK_ISOLATION_DIR': 'interactive-inspection',
+        })
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('buck2 uquery failed', result.stderr)
+        self.assertEqual(self.daemon_trace()[-2:],
+                         [f'kill interactive-inspection {self.root}', f'kill buck2-bootstrap {self.root}'])
+
+    def test_interactive_keep_daemon_is_an_explicit_opt_out(self):
+        for tool in ('gate', 'land'):
+            with self.subTest(tool=tool):
+                arguments = self.daemon_change(tool)
+                trace = self.root.parent / 'daemon-trace'
+                trace.unlink(missing_ok=True)
+                result, _ = self.run_tool(*arguments, env=self.daemon_env() | {'HIRSEL_KEEP_DAEMON': '1'})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(self.daemon_trace())
+                self.assertFalse(any(row.startswith('kill ') for row in self.daemon_trace()))
+
+    @contextlib.contextmanager
+    def daemon_process(self, arguments, env):
+        with subprocess.Popen([str(self.root / 'tools' / arguments[0]), *arguments[1:]],
+                              cwd=self.root, env=self.env | self.daemon_env() | env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+            try:
+                yield process
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=10)
+
+    def test_daemons_stop_on_interrupt_during_a_buck2_command(self):
+        for tool in ('gate', 'land'):
+            arguments = self.daemon_change(tool)
+            for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                with self.subTest(tool=tool, signal=sig):
+                    ready, block = [self.root.parent / name for name in ('ready', 'block')]
+                    for path in (ready, block):
+                        path.unlink(missing_ok=True)
+                        os.mkfifo(path)
+                    descriptor = os.open(ready, os.O_RDWR | os.O_NONBLOCK)
+                    try:
+                        with selectors.DefaultSelector() as selector:
+                            selector.register(descriptor, selectors.EVENT_READ)
+                            with self.daemon_process(arguments, {'READY_PIPE': str(ready),
+                                                                 'BLOCK_PIPE': str(block),
+                                                                 'CHILD_PID': str(self.root.parent / 'child-pid')}) as process:
+                                self.assertTrue(selector.select(timeout=10), 'Buck2 never reached the build')
+                                self.assertEqual(os.read(descriptor, 100), b'ready\n')
+                                child = os.pidfd_open(int((self.root.parent / 'child-pid').read_text()))
+                                try:
+                                    selector.unregister(descriptor)
+                                    selector.register(child, selectors.EVENT_READ)
+                                    process.send_signal(sig)
+                                    out, err = process.communicate(timeout=10)
+                                    self.assertEqual(process.returncode, 128 + sig, out + err)
+                                    self.assertTrue(selector.select(timeout=10), 'Buck2 helper descendant survived')
+                                    self.assert_daemons_stopped()
+                                finally:
+                                    os.close(child)
+                    finally:
+                        os.close(descriptor)
+
+    def test_queued_tools_hold_no_daemon_and_restart_after_acquisition(self):
+        for tool in ('gate', 'land'):
+            arguments = self.daemon_change(tool)
+            for interrupt in (False, True):
+                with self.subTest(tool=tool, interrupt=interrupt):
+                    directory = self.root.parent / ('slots' if tool == 'gate' else 'land-lock')
+                    env = {gating.GATE_SLOTS: f'{directory}:1'} if tool == 'gate' else {}
+                    pool = gating.EXPRESS_POOL if tool == 'gate' else gating.NORMAL_POOL
+                    with contextlib.ExitStack() as held:
+                        # Fill both express slots; land always has one exclusive slot.
+                        for _ in range(2 if tool == 'gate' else 1):
+                            held.enter_context(gating.fifo_slot(directory, 2 if tool == 'gate' else 1, pool=pool))
+                        with self.daemon_process(arguments, env) as process:
+                            with selectors.DefaultSelector() as selector:
+                                selector.register(process.stdout, selectors.EVENT_READ)
+                                # Read bytes directly: TextIO buffering would hide lines from select.
+                                output = b''
+                                while b'; held by:' not in output:
+                                    self.assertTrue(selector.select(timeout=10), output.decode())
+                                    chunk = os.read(process.stdout.fileno(), 4096)
+                                    self.assertTrue(chunk, output.decode())
+                                    output += chunk
+                            self.assert_daemons_stopped()
+                            before = len(self.daemon_trace())
+                            if interrupt:
+                                process.terminate()
+                            else:
+                                held.close()
+                            out, err = process.communicate(timeout=10)
+                            self.assertEqual(process.returncode, 143 if interrupt else 0, out + err)
+                            self.assert_daemons_stopped()
+                            if not interrupt:
+                                self.assertTrue(any(row.startswith('build ') for row in self.daemon_trace()[before:]))
+                    self.assertEqual(list((directory / (gating.POOL_PREFIX[pool] + 'queue')).iterdir()), [])
 
     def test_set_slots_updates_each_host_count_without_checks_or_a_slot(self):
         directory = self.root.parent / 'slots'

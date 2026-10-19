@@ -168,15 +168,16 @@ def commands(paths):
                            cpu=int(props.get('cpu_count', 1)), memory_kb=int(props.get('memory_kb', 0)))
 
 
-def run(arguments, *, buck2=None, **kwargs):
+def run(arguments, *, buck2=None, runner=None, **kwargs):
     """Run Buck2, retaining every build/test unless its caller owns the log."""
+    runner = runner or subprocess.run
     command = [str(buck2 or BUCK2), *arguments]
     options = list(arguments)
     options = options[:options.index('--')] if '--' in options else options
     if arguments and arguments[0] in ('build', 'test') and '--event-log' not in options:
         with recorded(arguments[0]) as path:
-            return subprocess.run([command[0], command[1], '--event-log', str(path), *command[2:]], **kwargs)
-    return subprocess.run(command, **kwargs)
+            return runner([command[0], command[1], '--event-log', str(path), *command[2:]], **kwargs)
+    return runner(command, **kwargs)
 
 
 if __name__ == '__main__':

@@ -501,6 +501,14 @@ cannot update that file.
 
 ## Gates
 
+Lanes run `.buck2/bin/buck2 kill` in their worktree when they finish and
+before any wait longer than a few minutes. Idle daemons retain substantial
+memory on the shared host. `tools/gate` and `tools/land` do this automatically
+on success, failure and interruption, for the normal and preparation isolation
+dirs. They also stop the daemon before joining the gate slot or land queue;
+the next Buck2 command starts it again after acquisition. `HIRSEL_KEEP_DAEMON=1`
+opts out for interactive use only; lanes leave it unset.
+
 `tools/gate` checks a finished change, once. It diffs the worktree against its
 merge base with `origin/main`. Every gate runs the *floor*; the lane chooses
 everything else and says why:

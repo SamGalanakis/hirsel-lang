@@ -28,7 +28,6 @@ conflict is resolved by regenerating the page and needs no new gate.
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 import time
 
@@ -47,7 +46,7 @@ LAND_LOCK_DIR = Path('/workspace/code/hirsel-briefs/locks/land')
 
 
 def run(*command, **kwargs):
-    return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, **kwargs)
+    return gating.run(command, cwd=ROOT, capture_output=True, text=True, **kwargs)
 
 
 def checks():
@@ -93,7 +92,7 @@ def regenerate_index(checked_head):
         say('land: CLI build did not report its executable')
         return False, None
     try:
-        rendered = subprocess.run([str(executable), 'doc', 'stdlib/std@1/hirsel.json'], cwd=ROOT, capture_output=True)
+        rendered = gating.run([str(executable), 'doc', 'stdlib/std@1/hirsel.json'], cwd=ROOT, capture_output=True)
     except OSError as error:
         say(f'land: cannot run the index generator: {error}')
         return False, None
@@ -182,6 +181,7 @@ def main():
         say('land: tools/buck2/prepare.py failed')
         return 1
     directory = Path(os.environ.get('HIRSEL_LAND_LOCK_DIR', str(LAND_LOCK_DIR)))
+    gating.stop_daemons()
     with gating.fifo_slot(directory, 1, label='land', exclusive=True) as timing:
         status, landing = land_rounds()
     if landing is not None:
@@ -247,4 +247,5 @@ def land_rounds():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    with gating.daemon_lifetime():
+        sys.exit(main())

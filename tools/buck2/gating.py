@@ -13,9 +13,11 @@ import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 
@@ -67,6 +69,105 @@ DRIVER_DEPENDENTS = {
 
 def say(message):
     print(message, flush=True)
+
+
+# ---------------------------------------------------------------- daemon lifetime
+
+
+# Helpers (prepare, formatting and full-gate scripts) can themselves start
+# Buck2. Reap their process groups before the final kill so no helper can
+# restart a daemon after the lane exits.
+COMMANDS = set()
+COMMAND_LOCK = threading.RLock()
+STOPPING = False
+
+
+def kill_command(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def run(command, *, capture_output=False, check=False, input=None, timeout=None, **kwargs):
+    """subprocess.run with ownership of helper descendants on interruption."""
+    if capture_output:
+        kwargs.update(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if input is not None:
+        kwargs['stdin'] = subprocess.PIPE
+    with COMMAND_LOCK:
+        if STOPPING:
+            raise SystemExit('lane is stopping')
+        process = subprocess.Popen(command, start_new_session=True, **kwargs)
+        COMMANDS.add(process)
+    try:
+        with process:
+            try:
+                stdout, stderr = process.communicate(input, timeout=timeout)
+            except BaseException:
+                kill_command(process)
+                process.wait()
+                raise
+            result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            if check:
+                result.check_returncode()
+            return result
+    finally:
+        with COMMAND_LOCK:
+            COMMANDS.discard(process)
+
+
+def stop_daemons():
+    """Release this worktree's daemon memory, including preparation's isolation dir.
+
+    Commands use the default isolation dir (or Buck2's environment override).
+    Prelude expansion uses buck2-bootstrap. Kill both even after a failed or
+    interrupted prepare; kill never starts a daemon.
+    """
+    if os.environ.get('HIRSEL_KEEP_DAEMON') == '1' or not BUCK2.exists():
+        return
+    errors = []
+    for isolation in (None, 'buck2-bootstrap'):
+        command = [str(BUCK2)]
+        if isolation is not None:
+            command += ['--isolation-dir', isolation]
+        result = subprocess.run([*command, 'kill'], cwd=ROOT, capture_output=True, text=True)
+        if result.returncode:
+            errors.append(result.stderr.strip())
+    if errors:
+        raise RuntimeError('Buck2 daemon cleanup failed: ' + '; '.join(errors))
+
+
+@contextlib.contextmanager
+def daemon_lifetime():
+    """Make normal exits, exceptions and catchable termination release daemons."""
+    global STOPPING
+    STOPPING = False
+    signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    previous = {sig: signal.getsignal(sig) for sig in signals}
+
+    def interrupted(signum, frame):
+        raise SystemExit(128 + signum)
+
+    try:
+        for sig in signals:
+            signal.signal(sig, interrupted)
+        yield
+    finally:
+        # A repeated interrupt must not interrupt the kill itself.
+        for sig in signals:
+            signal.signal(sig, signal.SIG_IGN)
+        try:
+            with COMMAND_LOCK:
+                STOPPING = True
+                for process in COMMANDS:
+                    kill_command(process)
+                for process in COMMANDS:
+                    process.wait()
+            stop_daemons()
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 # ---------------------------------------------------------------- gate slots
@@ -482,11 +583,11 @@ SESSION_CONFIG: list[str] = []
 
 def buck2(command, *arguments, **kwargs):
     if not SESSION_CONFIG:
-        return event_logs.run([command, *CONFIG, *arguments], buck2=BUCK2, cwd=ROOT, **kwargs)
+        return event_logs.run([command, *CONFIG, *arguments], buck2=BUCK2, runner=run, cwd=ROOT, **kwargs)
     with tempfile.NamedTemporaryFile('w', prefix='hirsel-config-', suffix='.args') as argfile:
         argfile.write('\n'.join(SESSION_CONFIG) + '\n')
         argfile.flush()
-        return event_logs.run([command, *CONFIG, f'@{argfile.name}', *arguments], buck2=BUCK2, cwd=ROOT, **kwargs)
+        return event_logs.run([command, *CONFIG, f'@{argfile.name}', *arguments], buck2=BUCK2, runner=run, cwd=ROOT, **kwargs)
 
 
 def uquery(expression) -> list[str]:
@@ -956,10 +1057,10 @@ class Local:
     def start(self, name, command, cwd=ROOT):
         started = time.monotonic()
 
-        def run():
-            result = subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+        def job():
+            result = run(command, cwd=cwd, capture_output=True, text=True)
             return result.returncode, result.stdout + result.stderr, time.monotonic() - started
-        self.jobs.append((name, command, self.pool.submit(run)))
+        self.jobs.append((name, command, self.pool.submit(job)))
 
     def finish(self):
         results = [(name, command, *future.result()) for name, command, future in self.jobs]
