@@ -10,7 +10,7 @@
   },
   "sources": [
     {
-      "path": "sha256-million-native.hir",
+      "path": "hash-large-native.hir",
       "module": []
     }
   ],

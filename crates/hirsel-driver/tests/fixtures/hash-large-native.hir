@@ -1,0 +1,79 @@
+// Native-only: the million-a published SHA-256 vector plus reference multi-megabyte streams.
+fn million_a() -> Result[(), ()] {
+  let mut state = std@1/sha256.new()
+  let chunk = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  for i in 0u64..1000u64 {
+    std@1/sha256.update(mut state, chunk)
+  }
+  failure.check(
+    std@1/hex.encode(std@1/bytes.from_inline(std@1/sha256.finish(take state))) == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+    Arithmetic()
+  )
+  Ok(())
+}
+
+// Python hashlib reference: bytes(range(256)) repeated 12,288 times, then
+// bytes(range(17)); 3,145,745 bytes total. update boundaries deliberately split
+// blocks, including the held-back final block of BLAKE2.
+// Reproduce: hashlib.<algorithm>(bytes(range(256)) * 12288 + bytes(range(17))).hexdigest()
+pub fn main() -> Result[(), ()] {
+  million_a()?
+  let mut chunk: List[u8] = []
+  for i in 0u64..256u64 {
+    list.push(mut chunk, core@1/int.truncate(i))
+  }
+  let input = core@1/bytes.from_list(take chunk)
+  {
+    let mut state = std@1/sha256.new()
+    for i in 0u64..12288u64 {
+      std@1/sha256.update(mut state, bytes.slice(input, 0, 127))
+      std@1/sha256.update(mut state, b"")
+      std@1/sha256.update(mut state, bytes.slice(input, 127, 256))
+    }
+    std@1/sha256.update(mut state, bytes.slice(input, 0, 17))
+    failure.check(
+      std@1/hex.encode(std@1/bytes.from_inline(std@1/sha256.finish(take state))) == "69112280f593fd44684d97d3fe42cdcb84da4ae495d8e1db649f06c3596a7ce6",
+      Arithmetic()
+    )
+  }
+  {
+    let mut state = std@1/sha512.new()
+    for i in 0u64..12288u64 {
+      std@1/sha512.update(mut state, bytes.slice(input, 0, 127))
+      std@1/sha512.update(mut state, b"")
+      std@1/sha512.update(mut state, bytes.slice(input, 127, 256))
+    }
+    std@1/sha512.update(mut state, bytes.slice(input, 0, 17))
+    failure.check(
+      std@1/hex.encode(std@1/bytes.from_inline(std@1/sha512.finish(take state))) == "688083de89e872bdae9478ba4b1eed03d1df8d9db307c566464510f472a46be1b6ec40d06984cdff94ca9376a433b6ee955ef30445f1276876f39c047a041b38",
+      Arithmetic()
+    )
+  }
+  {
+    let mut state = std@1/blake2b.new()
+    for i in 0u64..12288u64 {
+      std@1/blake2b.update(mut state, bytes.slice(input, 0, 127))
+      std@1/blake2b.update(mut state, b"")
+      std@1/blake2b.update(mut state, bytes.slice(input, 127, 256))
+    }
+    std@1/blake2b.update(mut state, bytes.slice(input, 0, 17))
+    failure.check(
+      std@1/hex.encode(std@1/bytes.from_inline(std@1/blake2b.finish(take state))) == "8870d9898f908b2d373446b41a49069502cf38bc94045ee16a8eb5509bd0be8a7252ba79c37ba354667fdc1ee7a0168cda26aa747fbca7f86b3ee2c3edae05e7",
+      Arithmetic()
+    )
+  }
+  {
+    let mut state = std@1/blake2s.new()
+    for i in 0u64..12288u64 {
+      std@1/blake2s.update(mut state, bytes.slice(input, 0, 127))
+      std@1/blake2s.update(mut state, b"")
+      std@1/blake2s.update(mut state, bytes.slice(input, 127, 256))
+    }
+    std@1/blake2s.update(mut state, bytes.slice(input, 0, 17))
+    failure.check(
+      std@1/hex.encode(std@1/bytes.from_inline(std@1/blake2s.finish(take state))) == "809fab678015c99139a7e8df2a6a617dcc4b8acae1266cee90ead15610fa2fd9",
+      Arithmetic()
+    )
+  }
+  Ok(())
+}

@@ -68,22 +68,40 @@ fn sha256_is_ordinary_source() {
     source_codec("sha256", "sha256", &["new", "update", "finish", "digest"]);
 }
 
-// The million-byte vector runs only as a built executable; bounded corpus
-// vectors exercise the same source kernel through the interpreter.
+// Multi-megabyte streams exceed the corpus interpreter budget. Both compiled
+// backends must match reference digests; bounded corpus cases cover interpretation.
 #[test]
-#[ignore = "full gate: native million-byte reference"]
-fn full_gate_sha256_million_a_native_reference() {
+#[ignore = "on demand: native multi-megabyte hash references"]
+fn full_gate_large_hash_native_references_on_both_backends() {
     with_compiler_stack(|| {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/sha256-million-native.hir");
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let outcome = native::run_path_native(&path, &mut stdout, &mut stderr)
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hash-large-native.hir");
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let outcome = native::run_path_native_backend(
+                &path,
+                HostLaunch::empty(),
+                None,
+                backend,
+                native::Output::Streams {
+                    stdout: &mut stdout,
+                    stderr: &mut stderr,
+                },
+            )
             .unwrap()
             .unwrap();
-        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
-        assert!(stdout.is_empty(), "{stdout:?}");
-        assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
+            assert!(
+                matches!(outcome, RunOutcome::Exit(0)),
+                "{backend:?}: {outcome:?}"
+            );
+            assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
+            assert!(
+                stderr.is_empty(),
+                "{backend:?}: {}",
+                String::from_utf8_lossy(&stderr)
+            );
+        }
     });
 }
 
