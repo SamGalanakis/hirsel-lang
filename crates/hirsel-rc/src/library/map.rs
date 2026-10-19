@@ -1101,7 +1101,6 @@ fn map_drop(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let cursor = b.parameters[0];
     let source = field(&mut b, cursor.address, 0)?;
     let source = field(&mut b, source, 0)?;
-    let position = field(&mut b, cursor.address, 1)?;
     let unique = field(&mut b, cursor.address, 2)?;
     let unique = b.read_bits(unique)?;
     let drain = b.block(BlockKind::Body, &[]);
@@ -1110,7 +1109,9 @@ fn map_drop(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.at(shared);
     unit(&mut b);
     b.at(drain);
-    let first = b.read_bits(position)?;
+    // Consumed entries and skipped removal tombstones are initialized None
+    // cells. Retire them too before publishing an empty sequence.
+    let first = b.u64(0)?;
     let (view, loan) = b.borrow(source, false)?;
     let len = b.seq_len(view)?;
     b.end_loan(loan);
