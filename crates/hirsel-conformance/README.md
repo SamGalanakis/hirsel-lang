@@ -131,8 +131,13 @@ after applying the limit. Catalogue counts remain those of the unsharded run;
 outcome and edit counts sum across shards. `python3 tools/buck2/agree.py` runs the gate's
 16 shards and rejects missing or inconsistent reports.
 `--path PREFIX` (repeatable) keeps only the corpus files whose root-relative
-path starts with a prefix, so `--path conformance/CLO/X.hir` checks exactly
-the variants of that file the whole campaign would.
+path starts with a prefix and samples their catalogue alone, so the limit
+applies to those files' variants. `--sample-path PREFIX` (repeatable) instead
+keeps the whole corpus's sample and checks only its variants of matching files:
+`--seed 1 --limit 5000 --sample-path conformance/CLO/X.hir` checks exactly the
+variants of that file the per-push campaign checks. `tools/gate` runs a
+change's chosen cases this way (`agreement:<path>`) and prints the same command
+to rerun a flagged cluster's case.
 `--hash-seed N` independently selects runtime placement in conformance, native
 and agree, including checked execution, exact-program replay and reductions.
 Native artifact names retain nonzero launch inputs as canonical suffixes; every
@@ -180,7 +185,7 @@ path and required behavior). Handwritten documentation never controls execution.
 
 ## Canonical corpus layout
 
-`tools/gate` passes `--check-format` to the runner. Every discovered `.hir` file,
+Every gate run of the runner passes `--check-format`. Every discovered `.hir` file,
 including unratcheted and runtime-excluded cases, must equal the output of the
 same driver formatter used by `hirsel fmt`. Archived `reports/` directories are
 not corpus inputs. An intentional syntax negative is exempt only when formatting

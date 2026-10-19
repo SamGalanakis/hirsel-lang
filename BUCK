@@ -4353,6 +4353,870 @@ hirsel_command_test(
 )
 
 hirsel_command_test(
+    name = "gate-conformance-selected-shard-1",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        1,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-2",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        2,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-3",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        3,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-4",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        4,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-5",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        5,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-6",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        6,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-7",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        7,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-8",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        8,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-9",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        9,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-10",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        10,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-11",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        11,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-12",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        12,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-13",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        13,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-14",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        14,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-15",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        15,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-conformance-selected-shard-16",
+    binary = "//:hirsel-conformance-bin-hirsel-conformance",
+    args = ["--check-format"],
+    selected = [
+        "conformance_paths",
+        "--path",
+        16,
+    ],
+    measured_as = "gate-conformance",
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-1",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        1,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-2",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        2,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-3",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        3,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-4",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        4,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-5",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        5,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-6",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        6,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-7",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        7,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-8",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        8,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-9",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        9,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-10",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        10,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-11",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        11,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-12",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        12,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-13",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        13,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-14",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        14,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-15",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        15,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
+    name = "gate-agree-selected-shard-16",
+    binary = "//:hirsel-conformance-bin-agree",
+    args = [
+        "--seed",
+        "1",
+        "--limit",
+        "5000",
+    ],
+    selected = [
+        "agree_paths",
+        "--sample-path",
+        16,
+    ],
+    measured_as = "gate-agree",
+    release = True,
+    cwd = "crates/hirsel-conformance",
+    precheck = "//:hirsel-std-precheck",
+    data = glob([
+        "bench/native/programs/**",
+        "conformance/**",
+        "crates/hirsel-conformance/Cargo.toml",
+        "native-tests/**",
+        "docs/spec/**",
+        "packages/**",
+        "stdlib/**",
+        "crates/hirsel-driver/tests/fixtures/text_opaque/**",
+    ]),
+)
+
+hirsel_command_test(
     name = "gate-native-smoke",
     binary = "//:hirsel-conformance-bin-native",
     args = ["--smoke"],

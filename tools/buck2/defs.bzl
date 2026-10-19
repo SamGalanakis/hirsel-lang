@@ -360,7 +360,16 @@ def _stage(name):
     stage, sep, shard = name.rpartition("-shard-")
     return stage if sep and shard.isdigit() else name
 
-def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, precheck = None, release = False, full = False, native_selection = None, changed_native = False):
+def selected_paths(key, index):
+    """Slice `index` (1-based) of the corpus paths a lane chose, from
+    `-c hirsel.<key>=<slice>;<slice>...`, each slice `<path>|<path>...`; None
+    past the last slice. tools/gate writes it (gating.selection_config)."""
+    slices = [part for part in read_root_config("hirsel", key, "").split(";") if part]
+    if index > len(slices):
+        return None
+    return slices[index - 1].split("|")
+
+def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, precheck = None, release = False, full = False, native_selection = None, changed_native = False, selected = None, measured_as = None):
     """A gate stage as a test: `binary args...` run from its package directory `cwd`.
 
     On the pool its result is cached by its inputs, so an unchanged corpus and
@@ -371,6 +380,14 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
     """
     if full and not FULL_GATE:
         return
+    if selected:
+        # A slice of the lane's chosen programs; the setting is part of the
+        # test command and therefore its cache key. No slice, no target.
+        key, flag, index = selected
+        paths = selected_paths(key, index)
+        if paths == None:
+            return
+        args = args + [arg for path in paths for arg in [flag, path]]
     if changed_native:
         # This setting is part of the test command and therefore its cache key.
         # No selection must never turn a per-push target into a whole campaign.
@@ -393,9 +410,9 @@ def hirsel_command_test(name, binary, args, data, cwd, runtime_archives = None, 
         runtime_archives = runtime_archives,
         precheck = precheck,
         labels = ["gate"],
-        exec_compatible_with = _test_platform(_stage(name)),
+        exec_compatible_with = _test_platform(measured_as or _stage(name)),
         pool = not TESTS_ON_HOST,
-        request = _request(_stage(name)),
+        request = _request(measured_as or _stage(name)),
         relocate = True,
         native_selection = native_selection,
         seed = TEST_SEED if full else "",

@@ -26,7 +26,8 @@ curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh 
 | `lake exe rc-trace <vector>` | prints the exact final (or stuck) model state of one vector |
 
 `tools/check-native.sh` runs `audit.sh` and `check-vectors.sh` as its Lean stage.
-The per-push `tools/gate` does not include them; `tools/gate --full` does.
+`tools/gate` runs both on this host when a change touches `proofs/`, and `check-vectors.sh`
+when it touches `native-tests/model/`; `tools/gate --full` always runs them.
 
 ## The model
 

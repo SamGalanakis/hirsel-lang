@@ -1,19 +1,41 @@
 #!/usr/bin/env python3
-"""The gate: run what a change can affect, once, all at once.
+"""The gate: the floor every change runs, plus the tests the lane chooses.
 
-    tools/gate                  # the change from the merge base with origin/main
-    tools/gate --base <commit>  # the change from <commit> (for example a replay)
-    tools/gate --full           # every stage, for main's scheduled run
+    tools/gate --suggest                          # what the change can affect, as a starting point
+    tools/gate --tests <test>... --why "<line>"   # the floor and the chosen tests
+    tools/gate --why "<line>"                     # the floor alone
+    tools/gate --extend [--tests ...] --why ...   # after an edit to a passed change
+    tools/gate --base <commit> ...                # the change from <commit> (for example a replay)
+    tools/gate --full                             # every stage, on demand at milestone cuts
 
-Per push, the changed paths select the work (tools/buck2/impact.py):
-documentation alone gets a link and whitespace check; the gate's own tooling
-its tests; everything else the Buck2 tests that read a changed file, directly
-or through a dependency, and the corpus campaigns (conformance, agreement,
-native smoke) the change can affect, and for a crate edit the check that
-every ignored test runs in a gate (tools/tests/ignored_tests.py). The
-workspace build, Clippy and every selected test and campaign run as one Buck2
-invocation, so the pool runs them concurrently, while formatting and the
-build-file check run beside it here.
+The floor runs on every gate: documentation links and whitespace, the gate
+tooling's tests when it changed (the Lean model's checks when it or its
+vectors changed), the build-file check, then formatting, Clippy and the
+workspace build, which stop the gate before any test when they fail; then the
+test targets of every crate whose source changed and of every changed test
+file, and every changed or added corpus case with its twins.
+
+`--tests` adds what the lane chooses, in one Buck2 invocation with the floor:
+
+    <test target>          a Buck2 test, `//:name` or `name`; a sharded binary's name runs every shard
+    conformance            the whole conformance campaign (16 shards)
+    agreement              the whole source/IR agreement sample (seed 1, 16 shards)
+    native-smoke           the native smoke and toolchain proof
+    conformance:<path>     the corpus cases under <path> (a case, or a directory prefix)
+    agreement:<path>       those cases' variants in the seed-1 sample
+    native:<program>       the LLVM smoke matrix and Cranelift parity for <program>
+    all-tests              every Buck2 test
+    suggested              what --suggest prints (tools/buck2/impact.py)
+
+`--why` says in one line why that selection suffices. The green record keeps
+the selection, the floor and the reason, and tools/land prints them, so a red
+main maps back to the push and to what it chose to skip. Nothing runs the full
+suite on a schedule: per-push selection and its floor are the routine net, and
+`tools/gate --full` runs on demand at milestone cuts.
+
+`--extend` adds an edit to a change that already passed: it runs the floor of
+the paths whose change differs from the last recorded pass, the test targets
+that own them and any `--tests`, and records the edited change's identity.
 
 `$HIRSEL_GATE_SLOTS` (`dir:N`) caps a host's concurrent gates: the Buck2 work
 waits for one of N lock files in dir, and says it is waiting. Unset, there is
@@ -21,9 +43,8 @@ no cap.
 
 A passing change is remembered by its identity (gating.change_identity: the
 patch-id of the lane's own diff without the generated docs/api.md, and the
-crates it touches). When main moves
-under an unchanged change and it rebases cleanly, the next run only builds the
-workspace and checks formatting.
+crates it touches). When main moves under an unchanged change and it rebases
+cleanly, the next run only builds the workspace and checks formatting.
 
 --full runs every stage, including the budgeted agreement and native campaigns, the release
 profile, the full_gate_ tests and tools/check-native.sh; it reports every stage
@@ -159,6 +180,11 @@ def agreement_summary(outputs):
     return [f'{total["checked"]} variants checked, {total["skipped"]} skipped, 0 flagged']
 
 
+def chosen_agreement_summary(outputs):
+    total = agree.summarize_within(outputs)
+    return [f'{total["checked"]} variants checked, {total["skipped"]} skipped, 0 flagged']
+
+
 def smoke_summary(outputs):
     return []
 
@@ -199,7 +225,140 @@ def build_only(report, log):
     local_rows(report, local.finish())
 
 
-def push_gate(base_ref):
+def show_plan(plan, indent='  '):
+    """A plan's parts, one line each."""
+    lines = []
+    if plan.tests:
+        names = sorted({re.sub(r'-shard-\d+$', '', gating.short(t)) for t in plan.tests})
+        lines.append(f'{len(plan.tests)} test targets: ' + ' '.join(names))
+    for name, campaign in gating.WHOLE.items():
+        if campaign in plan.campaigns:
+            lines.append(f'{name}: the whole campaign')
+    for label, cases in (('conformance', plan.conformance), ('agreement', plan.agreement)):
+        if cases:
+            shown = sorted(cases)
+            lines.append(f'{label}: {len(shown)} corpus cases: ' + ' '.join(shown[:8])
+                         + (f' and {len(shown) - 8} more' if len(shown) > 8 else ''))
+    if plan.native:
+        lines.append(f'native: {len(plan.native)} programs on both backends: ' + ' '.join(sorted(plan.native)[:8]))
+    for line in lines or ['nothing']:
+        say(indent + line)
+
+
+def suggest(base_ref):
+    """Print the floor and what the change can affect; run nothing."""
+    base = gating.merge_base(base_ref)
+    identity = gating.change_identity(base)
+    if not identity:
+        say(f'gate: the worktree does not differ from {base[:12]}; nothing to check')
+        return 0
+    if not prepare(Report()):
+        say('gate: tools/buck2/prepare.py failed; the suggestion needs Buck2 queries')
+        return 1
+    selection = gating.Selection(base)
+    say(f'gate: {len(selection.paths)} changed paths from {base[:12]} (change {identity[:12]})')
+    floor = selection.floor()
+    floor.settle()
+    say('gate: the floor (every gate runs it, after formatting, Clippy and the workspace build):')
+    show_plan(floor)
+    plan = selection.suggest()
+    plan.settle()
+    say('gate: suggested (tools/buck2/impact.py), beyond the floor:')
+    show_plan(plan)
+    for token, why in plan.reasons:
+        say(f'    {token}: {why}')
+    say('gate: run it all with: tools/gate --tests suggested --why "<one line>"; or name the parts you need')
+    return 0
+
+
+def local_checks(report, local, base, selection):
+    """The floor's checks on this host that need no Buck2."""
+    c = selection.classified
+    if c.docs:
+        status, output = docs_check(base, c.docs, selection.paths)
+        report.add(status == 0, f'documentation: links and whitespace in {len(c.docs)} files', [output])
+    if c.tools or c.everything:
+        for name, command in gating.tool_tests():
+            local.start(name, command)
+    elif c.owned:
+        # A crate edit can add an ignored test that no gate runs.
+        local.start('tools/tests/ignored_tests.py', [PY, str(ROOT / 'tools/tests/ignored_tests.py')])
+    for name, command in impact.proof_checks(selection.paths):
+        local.start(name, command)
+    if c.tools or c.needs_buck2:
+        local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
+
+
+def build_first(report, log):
+    """Formatting, Clippy and the workspace build: False stops the gate before any test."""
+    local = gating.Local()
+    local.start('formatting', [PY, str(ROOT / 'tools/buck2/fmt.py'), '--check'])
+    build = gating.uquery(gating.BUILD_SET)
+    clippy = gating.uquery(gating.CLIPPY_SET)
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory() as scratch:
+        build_report = Path(scratch) / 'build.json'
+        with open(log, 'w') as out:
+            status = gating.buck2('build', '--materializations', 'none', '--build-report', str(build_report),
+                                  *build, *[t + '[clippy.txt]' for t in clippy],
+                                  stdout=out, stderr=subprocess.STDOUT).returncode
+        failures = gating.build_failures(build_report)
+    for target, error in sorted(failures.items()):
+        report.add(False, f'build of {target} failed', [gating.last_lines(error, 30),
+                                                         f'.buck2/bin/buck2 build //:{target}'])
+    report.add(status == 0, f'workspace build and Clippy: {len(build)} targets and {len(clippy)} Clippy twins '
+               f'({time.monotonic() - started:.0f} s)',
+               [] if status == 0 or failures else [gating.last_lines(Path(log).read_text(errors='replace'), 30)])
+    if status == 0:
+        ok, text = gating.clippy_report(clippy)
+        report.add(ok, 'Clippy', [] if ok else [gating.last_lines(text, 40)])
+    local_rows(report, local.finish())
+    return report.passed
+
+
+def run_plan(report, plan, log):
+    """The floor's tests and the chosen ones, as one Buck2 invocation."""
+    tests = sorted(plan.tests)
+    campaigns = plan.campaign_targets()
+    if not tests and not campaigns:
+        return
+    say(f'gate: one Buck2 invocation: {len(tests)} test targets, {len(campaigns)} campaign targets')
+    say(f'gate: Buck2 output: {log}')
+    with tempfile.TemporaryDirectory() as scratch, gating.event_logs.recorded('gate') as event_log:
+        build_report = Path(scratch) / 'build.json'
+        with open(log, 'a') as out:
+            invoked = time.monotonic()
+            status = gating.buck2('test', '--event-log', str(event_log), '--build-report', str(build_report),
+                                  *tests, *campaigns, '--', '--timeout', str(gating.TIMEOUT),
+                                  stdout=out, stderr=subprocess.STDOUT).returncode
+        wall = time.monotonic() - invoked
+        results = gating.test_results(event_log) if event_log.exists() else {}
+        failures = gating.build_failures(build_report)
+    for target, error in sorted(failures.items()):
+        report.add(False, f'build of {target} failed', [gating.last_lines(error, 30),
+                                                         f'.buck2/bin/buck2 build //:{target}'])
+    say(f'gate: tests finished ({wall:.0f} s)')
+    for campaign, name, summarize in ((impact.CONFORMANCE, 'conformance', conformance_summary),
+                                      (impact.AGREEMENT, f'agreement ({agree.AGREE_LIMIT} variants)', agreement_summary),
+                                      (impact.NATIVE_SMOKE, 'native smoke', smoke_summary)):
+        if campaign in plan.campaigns:
+            campaign_row(report, name, results, gating.CAMPAIGN_TARGETS[campaign], summarize)
+    selected = [t for t in campaigns if '-selected-shard-' in t]
+    for kind, name, summarize in (('conformance', f'conformance of {len(plan.conformance)} chosen cases', conformance_summary),
+                                  ('agree', f'agreement: the seed-1 sample\'s variants of {len(plan.agreement)} chosen cases',
+                                   chosen_agreement_summary)):
+        targets = [t for t in selected if gating.short(t).startswith(f'gate-{kind}-selected-')]
+        if targets:
+            campaign_row(report, name, results, targets, summarize)
+    if plan.native:
+        campaign_row(report, f'LLVM smoke matrix and Cranelift parity of {len(plan.native)} programs', results,
+                     gating.NATIVE_TARGETS, smoke_summary)
+    test_rows(report, results, tests)
+    if status and report.passed:
+        report.add(False, f'buck2 test exited {status}', [gating.last_lines(Path(log).read_text(errors='replace'), 30)])
+
+
+def push_gate(base_ref, tokens, why, extend):
     started = time.monotonic()
     base = gating.merge_base(base_ref)
     identity = gating.change_identity(base)
@@ -207,7 +366,6 @@ def push_gate(base_ref):
         say(f'gate: the worktree does not differ from {base[:12]}; nothing to check')
         return 0
     selection = gating.Selection(base)
-    c = selection.classified
     say(f'gate: {len(selection.paths)} changed paths from {base[:12]} (change {identity[:12]})')
     errors = gating.policy_errors()
     report = Report()
@@ -217,7 +375,7 @@ def push_gate(base_ref):
         report.print(time.monotonic() - started)
         return 1
     log = gating.green_path().with_name('hirsel-gate.log')
-    if gating.is_green(identity, selection.crates):
+    if gating.is_green(identity, selection.crates) and not tokens:
         say('gate: this change already passed; main moved under it and it rebased cleanly, '
             'so only the workspace build and formatting run')
         if prepare(report):
@@ -225,6 +383,20 @@ def push_gate(base_ref):
                 build_only(report, log)
         report.print(time.monotonic() - started)
         return 0 if report.passed else 1
+    digests = gating.path_digests(base)
+    extended = None
+    if extend:
+        extended, record = gating.latest_green()
+        if record is None or 'digests' not in record:
+            say('gate: --extend needs a change this worktree passed; run tools/gate --tests ... --why ...')
+            return 1
+        delta = gating.changed_since(record, digests)
+        say(f'gate: extending change {extended[:12]} (passed {record["at"]}): {len(delta)} paths differ: '
+            + ', '.join(delta[:12]) + (f' and {len(delta) - 12} more' if len(delta) > 12 else ''))
+        scope = gating.Selection(base, paths=delta)
+    else:
+        scope = selection
+    c = scope.classified
     for kind, paths in (('documentation', c.docs), ('gate tooling', c.tools), ('build-wide', c.build_wide),
                         ('crates', sorted(c.crates)),
                         ('test code', [p for p in c.owned if p.startswith('crates/') and p.split('/')[1] not in c.crates]),
@@ -233,71 +405,55 @@ def push_gate(base_ref):
             say(f'gate: {kind}: ' + ', '.join(paths[:12]) + (f' and {len(paths) - 12} more' if len(paths) > 12 else ''))
     if isinstance(c.buck, set) and c.buck:
         say('gate: BUCK rules changed: ' + ', '.join(sorted(c.buck)))
+    say(f'gate: why: {why}')
     local = gating.Local()
-    if c.docs:
-        status, output = docs_check(base, c.docs, selection.paths)
-        report.add(status == 0, f'documentation: links and whitespace in {len(c.docs)} files', [output])
-    needs_buck2 = c.needs_buck2
-    if (c.tools or needs_buck2) and not prepare(report):
-        report.print(time.monotonic() - started)
-        return 1
-    if c.tools or c.everything:
-        for name, command in gating.tool_tests():
-            local.start(name, command)
-    elif c.owned:
-        # A crate edit can add an ignored test that no gate runs.
-        local.start('tools/tests/ignored_tests.py', [PY, str(ROOT / 'tools/tests/ignored_tests.py')])
-    if c.tools or needs_buck2:
-        local.start('Buck2 build files match Cargo', [PY, str(ROOT / 'tools/buck2/sync.py'), '--check'])
+    local_checks(report, local, base, scope)
+    needs_buck2 = c.needs_buck2 or bool(tokens) or c.everything
+    plan = floor = None
     if needs_buck2:
-        local.start('formatting', [PY, str(ROOT / 'tools/buck2/fmt.py'), '--check'])
-        selection.resolve()
-        build = gating.uquery(gating.BUILD_SET)
-        clippy = gating.uquery(gating.CLIPPY_SET)
-        campaigns = selection.campaign_targets()
-        native_programs = selection.native_programs()
-        native_config = ['-c', 'hirsel.native_filters=' + '|'.join(native_programs)] if native_programs else []
-        if native_programs:
-            say(f'gate: LLVM smoke matrix and Cranelift parity: {len(native_programs)} selected programs')
-        say(f'gate: one Buck2 invocation: build {len(build)} targets, Clippy {len(clippy)}, '
-            f'{len(selection.tests)} test targets, campaigns: '
-            + (', '.join(c for c in impact.CAMPAIGNS if c in selection.campaigns) or 'none'))
-        say(f'gate: Buck2 output: {log}')
-        with tempfile.TemporaryDirectory() as scratch, gating.event_logs.recorded('gate') as event_log:
-            build_report = Path(scratch) / 'build.json'
-            with gating.gate_slot(), open(log, 'w') as out:
-                invoked = time.monotonic()
-                status = gating.buck2('test', *native_config, '--event-log', str(event_log), '--build-report', str(build_report),
-                                      *build, *[t + '[clippy.txt]' for t in clippy], *selection.tests, *campaigns,
-                                      '--', '--timeout', str(gating.TIMEOUT), stdout=out, stderr=subprocess.STDOUT).returncode
-            wall = time.monotonic() - invoked
-            results = gating.test_results(event_log) if event_log.exists() else {}
-            failures = gating.build_failures(build_report)
-        for target, error in sorted(failures.items()):
-            report.add(False, f'build of {target} failed', [gating.last_lines(error, 30),
-                                                             f'.buck2/bin/buck2 build //:{target}'])
-        report.add(not failures, f'workspace build and Clippy: {len(build)} targets and {len(clippy)} Clippy twins '
-                   f'in one invocation with the tests ({wall:.0f} s)')
-        if not failures:
-            ok, text = gating.clippy_report(clippy)
-            report.add(ok, 'Clippy', [] if ok else [gating.last_lines(text, 40)])
-        for campaign, name, summarize in ((impact.CONFORMANCE, 'conformance', conformance_summary),
-                                          (impact.AGREEMENT, f'agreement ({agree.AGREE_LIMIT} variants)', agreement_summary),
-                                          (impact.NATIVE_SMOKE, 'native smoke', smoke_summary)):
-            if campaign in selection.campaigns:
-                campaign_row(report, name, results, gating.CAMPAIGN_TARGETS[campaign], summarize)
-        if selection.native_targets():
-            campaign_row(report, 'changed-program LLVM smoke matrix and Cranelift parity', results,
-                         selection.native_targets(), smoke_summary)
-        test_rows(report, results, selection.tests)
-        if status and report.passed:
-            report.add(False, f'buck2 test exited {status}', [gating.last_lines(Path(log).read_text(errors='replace'), 30)])
+        if not prepare(report):
+            local_rows(report, local.finish())
+            report.print(time.monotonic() - started)
+            return 1
+        floor = scope.floor()
+        if extend and c.owned:
+            # The test targets that own each differing file, beside the floor's.
+            files = gating.owned_paths(c.owned)
+            if files:
+                owners = ' + '.join(f'owner("{path}")' for path in files)
+                floor.tests |= set(gating.uquery(f'kind("_rust_test", {owners}) - attrfilter(labels, gate, //...)'))
+        chosen = scope.choose(tokens)
+        plan = gating.Plan()
+        plan.add(floor)
+        plan.add(chosen)
+        for part in (plan, floor, chosen):
+            part.settle()
+        say('gate: the floor:')
+        show_plan(floor)
+        if tokens:
+            say(f'gate: chosen ({" ".join(tokens)}):')
+            show_plan(chosen)
+        gating.SESSION_CONFIG[:] = plan.config()
+        # One slot for the build and the tests, so a gate never queues twice.
+        with gating.gate_slot():
+            if build_first(report, log):
+                run_plan(report, plan, log)
+            else:
+                say('gate: formatting, Clippy or the workspace build failed; no test ran')
     local_rows(report, local.finish())
     report.print(time.monotonic() - started)
     if not report.passed:
         return 1
     if gating.change_identity(base) == identity:
-        gating.record_green(identity, selection.crates)
+        ran = plan.summary() if plan else []
+        floored = floor.summary() if floor else []
+        if extend:
+            # The extended change keeps what its first pass ran.
+            ran = record.get('selection', []) + [part for part in ran if part not in record.get('selection', [])]
+            floored = record.get('floor', []) + [part for part in floored if part not in record.get('floor', [])]
+            why = f'{why} (extending: {record.get("why", "")})'
+        gating.record_green(identity, selection.crates, why=why, tokens=list(tokens), selection=ran, floor=floored,
+                            digests=digests, extends=extended)
     else:
         say('gate: the worktree changed while the gate ran; not recording it as passed')
     return 0
@@ -399,15 +555,27 @@ def full_gate():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('--full', action='store_true', help='every stage, for main\'s scheduled run')
-    group.add_argument('--base', default='origin/main', help='check the change from this commit\'s merge base')
+    parser.add_argument('--full', action='store_true', help='every stage, on demand at milestone cuts')
+    parser.add_argument('--base', default='origin/main', help='check the change from this commit\'s merge base')
+    parser.add_argument('--suggest', action='store_true', help='print the floor and what the change can affect; run nothing')
+    parser.add_argument('--tests', nargs='+', default=[], metavar='TEST', help='what to run beyond the floor (forms above)')
+    parser.add_argument('--why', help='one line: why this selection suffices')
+    parser.add_argument('--extend', action='store_true', help='add an edit to the last passed change')
     args = parser.parse_args()
     os.chdir(ROOT)
     if args.full:
+        if args.suggest or args.tests or args.extend or args.base != 'origin/main':
+            parser.error('--full takes no other option')
         with gating.gate_slot():
             return full_gate()
-    return push_gate(args.base)
+    if args.suggest:
+        if args.tests or args.extend:
+            parser.error('--suggest runs nothing; it takes only --base')
+        return suggest(args.base)
+    if not args.why or not args.why.strip() or '\n' in args.why:
+        parser.error('say in one line why the selection suffices: --why "<line>" '
+                     '(tools/gate --suggest prints what the change can affect)')
+    return push_gate(args.base, args.tests, args.why.strip(), args.extend)
 
 
 if __name__ == '__main__':

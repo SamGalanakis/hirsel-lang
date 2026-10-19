@@ -80,6 +80,30 @@ def summarize(outputs, shards=AGREE_SHARDS, limit=AGREE_LIMIT):
     return total
 
 
+def summarize_within(outputs, limit=AGREE_LIMIT):
+    """The summed reports of the slices of a gate's chosen cases (`--sample-path`):
+    each checks its cases' variants in the same seed-1 sample, so the sample
+    parameters agree and the counts add up; no slice may flag a discrepancy."""
+    reports = [report_from_output(output) for output in outputs.values()]
+    if not reports:
+        raise ValueError('no agreement slice reported')
+    total = {key: reports[0][key] for key in GLOBAL}
+    if total['seed'] != 1 or total['limit'] != limit or total['hash_seed'] != 0:
+        raise ValueError('agreement sample parameters differ from the gate')
+    total.update({key: 0 for key in COUNTS}, clusters=[])
+    for report in reports:
+        if any(report[key] != total[key] for key in GLOBAL):
+            raise ValueError('agreement slices disagree on the sample')
+        for key in COUNTS:
+            total[key] += report[key]
+        total['clusters'].extend(report['clusters'])
+    if total['clusters']:
+        raise ValueError('agreement slices flagged discrepancies: ' + json.dumps(total['clusters']))
+    if total['checked'] != total['rejected'] + total['valid'] + total['unavailable']:
+        raise ValueError('agreement classifications do not sum to checked')
+    return total
+
+
 def known_kinds(text):
     return {line for line in text.splitlines() if line and not line.startswith('#')}
 

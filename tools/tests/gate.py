@@ -288,59 +288,274 @@ class Workspace(unittest.TestCase):
 
 
 class Queries(unittest.TestCase):
-    """The Buck2 queries a selection asks, with uquery recorded."""
+    """The floor, the suggestion and a lane's choice, with uquery recorded."""
 
-    def resolve(self, paths, owners_with_gate=(), buck=False):
+    @staticmethod
+    def selection(paths, root=None, buck=False):
+        selection = gating.Selection.__new__(gating.Selection)
+        selection.base = 'HEAD'
+        selection.root = root or REPO
+        selection.paths = paths
+        selection.classified = impact.classify(paths, MEMBERS | {'hirsel-check', 'hirsel-driver'}, BUCK)
+        if buck:
+            selection.classified.buck = buck
+        return selection
+
+    @staticmethod
+    def run_query(method, selection, answers=None):
         asked = []
 
         def uquery(expression):
             asked.append(expression)
-            if expression.startswith('attrfilter(labels, gate,'):
-                return list(owners_with_gate)
+            for key, value in (answers or {}).items():
+                if key in expression:
+                    return list(value)
             return ['root//:t-unittest']
-        selection = gating.Selection.__new__(gating.Selection)
-        selection.paths = paths
-        selection.classified = impact.classify(paths, MEMBERS, BUCK)
-        if buck:
-            selection.classified.buck = buck
-        selection.tests, selection.campaigns = [], set()
-        original = gating.uquery
-        gating.uquery = uquery
-        try:
-            selection.resolve()
-        finally:
-            gating.uquery = original
-        return selection, asked
+        with patch.object(gating, 'uquery', uquery):
+            plan = method(selection)
+        return plan, asked
 
-    def test_an_input_selects_the_tests_reaching_it_and_the_campaigns_reading_it(self):
-        selection, asked = self.resolve(['conformance/passing.txt'], ['root//:gate-conformance-shard-3', 'root//:gate-native-smoke'])
-        self.assertEqual(selection.campaigns, {impact.CONFORMANCE, impact.NATIVE_SMOKE})
-        self.assertIn('(kind("_rust_test", rdeps(//..., owner("conformance/passing.txt"))) + attrfilter(labels, doctest, '
-                      'rdeps(//..., owner("conformance/passing.txt")))) - attrfilter(labels, gate, //...)', asked)
-        self.assertEqual(selection.tests, ['root//:t-unittest'])
+    def test_a_crates_source_floors_its_own_tests_and_suggests_its_campaigns(self):
+        selection = self.selection(['crates/hirsel-check/src/lib.rs'])
+        floor, asked = self.run_query(gating.Selection.floor, selection)
+        self.assertEqual(asked, [gating.crate_tests({'hirsel-check'})])
+        self.assertEqual((floor.campaigns, floor.conformance), (set(), set()))
+        plan, _ = self.run_query(gating.Selection.suggest, selection)
+        self.assertEqual(plan.campaigns, {impact.CONFORMANCE, impact.AGREEMENT})
+        self.assertEqual(len(plan.campaign_targets()), 32)
+        # A crate's tests, not a longer-named crate's.
+        query = gating.crate_tests({'hirsel-check'})
+        self.assertIn('"^(hirsel\\-check)-(unittest|test-.+|bin-.+-unittest)$"', query)
 
-    def test_a_library_edit_adds_its_crates_campaigns_and_a_buck_edit_its_targets(self):
-        selection, asked = self.resolve(['crates/hirsel-lexer/src/lib.rs'], buck={'hirsel-llvm-test-it'})
-        self.assertEqual(selection.campaigns, {impact.CONFORMANCE, impact.AGREEMENT})
-        self.assertIn(gating.macro_targets({'hirsel-llvm-test-it'}), asked[-1])
-        self.assertEqual(len(selection.campaign_targets()), 32)
+    def test_changed_test_code_floors_only_the_tests_that_own_it(self):
+        selection = self.selection(['crates/hirsel-lexer/tests/it/keywords.rs'])
+        with patch.object(gating, 'owned_paths', lambda paths, root=None: list(paths)):
+            floor, asked = self.run_query(gating.Selection.floor, selection)
+        self.assertEqual(asked, ['kind("_rust_test", owner("crates/hirsel-lexer/tests/it/keywords.rs"))'
+                                 ' - attrfilter(labels, gate, //...)'])
+        self.assertEqual(floor.tests, {'root//:t-unittest'})
 
-    def test_a_build_wide_edit_selects_every_test_and_campaign(self):
-        selection, asked = self.resolve(['.buckconfig'])
+    def test_a_build_wide_edit_suggests_every_test_and_campaign(self):
+        plan, asked = self.run_query(gating.Selection.suggest, self.selection(['.buckconfig']))
         self.assertEqual(asked, [gating.ALL_TESTS])
-        self.assertEqual(selection.campaigns, set(impact.CAMPAIGNS))
+        self.assertEqual(plan.campaigns, set(impact.CAMPAIGNS))
 
-    def test_resizing_selects_runs_without_rdeps_or_unrelated_campaigns(self):
-        selection = gating.Selection.__new__(gating.Selection)
+    def test_resizing_suggests_runs_without_rdeps_or_unrelated_campaigns(self):
+        selection = self.selection([])
         selection.classified = impact.Classified(test_requests={
             'hirsel-cli-test-cli', 'gate-conformance', 'gate-native-full'})
-        selection.tests, selection.campaigns = [], set()
-        with patch.object(gating, 'uquery', return_value=['root//:hirsel-cli-test-cli']) as query:
-            selection.resolve()
-        self.assertEqual(selection.tests, ['root//:hirsel-cli-test-cli'])
-        self.assertEqual(selection.campaigns, {impact.CONFORMANCE})
-        self.assertNotIn('rdeps', query.call_args.args[0])
-        self.assertTrue(selection.classified.needs_buck2)
+        plan, asked = self.run_query(gating.Selection.suggest, selection, {'kind': ['root//:hirsel-cli-test-cli']})
+        self.assertEqual(plan.tests, {'root//:hirsel-cli-test-cli'})
+        self.assertEqual(plan.campaigns, {impact.CONFORMANCE})
+        self.assertFalse(any('rdeps' in a for a in asked))
+
+    def test_the_examples_run_only_for_the_cli_the_driver_or_an_example(self):
+        examples = ['root//:hirsel-cli-test-examples-shard-1', 'root//:hirsel-cli-test-examples-shard-2']
+        answers = {'rdeps': examples + ['root//:hirsel-cli-test-cli']}
+        with patch.object(gating, 'owned_paths', lambda paths, root=None: list(paths)):
+            plan, _ = self.run_query(gating.Selection.suggest, self.selection(['crates/hirsel-check/src/lib.rs']), answers)
+            self.assertEqual(plan.tests & set(examples), set())
+            self.assertIn('root//:hirsel-cli-test-cli', plan.tests)
+            for path in ['crates/hirsel-driver/src/lib.rs', 'crates/hirsel-cli/src/main.rs', 'examples/todo/main.hir']:
+                with self.subTest(path=path):
+                    plan, _ = self.run_query(gating.Selection.suggest, self.selection([path]), answers)
+                    self.assertTrue(set(examples) <= plan.tests)
+
+    def test_a_lane_names_targets_campaigns_corpus_cases_and_programs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for case in ['conformance/MODE/MODE-1-a-ok.hir', 'conformance/MODE/MODE-1-a-bad.hir', 'conformance/SEM/x-run.hir']:
+                (root / case).parent.mkdir(parents=True, exist_ok=True)
+                (root / case).write_text('// expect: run\n')
+            selection = self.selection([], root=root)
+            answers = {gating.ALL_TESTS: ['root//:hirsel-driver-test-it-shard-1', 'root//:hirsel-driver-test-it-shard-2',
+                                          'root//:hirsel-lexer-unittest']}
+            plan, _ = self.run_query(lambda s: s.choose([
+                '//:hirsel-driver-test-it', 'hirsel-lexer-unittest', 'agreement', 'conformance:conformance/MODE/',
+                'agreement:conformance/SEM/x-run.hir', 'native:conformance/SEM/x-run.hir']), selection, answers)
+            self.assertEqual(plan.tests, {'root//:hirsel-driver-test-it-shard-1', 'root//:hirsel-driver-test-it-shard-2',
+                                          'root//:hirsel-lexer-unittest'})
+            self.assertEqual(plan.campaigns, {impact.AGREEMENT})
+            self.assertEqual(plan.conformance, {'conformance/MODE/MODE-1-a-ok.hir', 'conformance/MODE/MODE-1-a-bad.hir'})
+            self.assertEqual(plan.native, {'conformance/SEM/x-run.hir'})
+            for token in ['hirsel-nothing', 'conformance:conformance/NONE', 'native:conformance/none.hir']:
+                with self.subTest(token=token), self.assertRaises(SystemExit):
+                    self.run_query(lambda s: s.choose([token]), selection, answers)
+
+    def test_a_plan_settles_slices_and_names_its_targets(self):
+        import sync
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cases = [f'conformance/SEM/case-{i:04}-run.hir' for i in range(sync.CONFORMANCE_SLICE_PROGRAMS + 1)]
+            for case in cases + [f'conformance/OTHER/case-{i:04}-run.hir' for i in range(len(cases))]:
+                (root / case).parent.mkdir(parents=True, exist_ok=True)
+                (root / case).write_text('// rule: SEM-1\n// expect: run\n')
+            (root / 'conformance/SEM/rejected-bad.hir').write_text('// rule: SEM-1\n// expect: reject SEM-1 at line 3\n')
+            plan = gating.Plan(conformance=set(cases[:sync.CONFORMANCE_SLICE_PROGRAMS + 1]),
+                               agreement={cases[0], 'conformance/SEM/rejected-bad.hir'})
+            plan.settle(root)
+            # Agreement mutates no case expected to reject.
+            self.assertEqual(plan.agreement, {cases[0]})
+            config = plan.config()
+            self.assertEqual(config[0], '-c')
+            conformance = config[1].removeprefix('hirsel.conformance_paths=').split(';')
+            self.assertEqual(len(conformance), 2)
+            self.assertEqual(sorted(p for part in conformance for p in part.split('|')), sorted(cases))
+            self.assertEqual(config[3], f'hirsel.agree_paths={cases[0]}')
+            self.assertEqual([gating.short(t) for t in plan.campaign_targets()], [
+                'gate-conformance-selected-shard-1', 'gate-conformance-selected-shard-2', 'gate-agree-selected-shard-1'])
+            # Cases spread over up to 16 slices of at least the smallest slice's cases.
+            self.assertEqual([len(part) for part in gating.slices(list(range(1000)), 20)], [63] * 8 + [62] * 8)
+            self.assertEqual(gating.slices(list(range(5)), 20), [[0, 1, 2, 3, 4]])
+            # More than half the corpus is the whole campaign; a whole campaign absorbs its cases.
+            whole = gating.Plan(conformance=set(cases) | {'conformance/OTHER/case-0000-run.hir'},
+                                agreement={cases[0]}, campaigns={impact.AGREEMENT})
+            whole.settle(root)
+            self.assertEqual((whole.conformance, whole.agreement), (set(), set()))
+            self.assertEqual(whole.campaigns, {impact.CONFORMANCE, impact.AGREEMENT})
+
+
+class Corpus(unittest.TestCase):
+    """Which corpus cases a change selects: twins, the ratchet, std's import closure and packages."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+
+    def write(self, files):
+        for path, text in files.items():
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / path).write_text(text)
+
+    def sidecar(self, case, dependencies):
+        depth = '../' * case.count('/')
+        return json.dumps({'schema': 1, 'package': {'name': 'standalone', 'version': '0'},
+                           'sources': [{'path': case.rsplit('/', 1)[1], 'module': []}],
+                           'dependencies': [dict(manifest=depth + manifest, package=dict(name=name, version='1'),
+                                                 expose=expose) for manifest, name, expose in dependencies]})
+
+    def test_a_changed_case_selects_its_twins_and_a_deleted_one_its_survivors(self):
+        self.write({'conformance/MODE/MODE-1-x-ok.hir': '', 'conformance/MODE/MODE-1-x-bad.hir': '',
+                    'conformance/MODE/MODE-1-x-run.hir': '', 'conformance/MODE/MODE-1-xy-ok.hir': '',
+                    'conformance/MODE/MODE-1-plain.hir': ''})
+        self.assertEqual(impact.changed_programs(['conformance/MODE/MODE-1-x-bad.hir.json'], self.root), [
+            'conformance/MODE/MODE-1-x-bad.hir', 'conformance/MODE/MODE-1-x-ok.hir', 'conformance/MODE/MODE-1-x-run.hir'])
+        self.assertEqual(impact.changed_programs(['conformance/MODE/MODE-1-plain.hir'], self.root),
+                         ['conformance/MODE/MODE-1-plain.hir'])
+        self.assertEqual(impact.changed_programs(['conformance/MODE/MODE-1-xy-bad.hir'], self.root),
+                         ['conformance/MODE/MODE-1-xy-ok.hir'])
+        self.assertEqual(impact.changed_programs(['conformance/README.md', 'stdlib/std@1/a.hir'], self.root), [])
+
+    def test_a_ratchet_edit_selects_the_cases_its_lines_name(self):
+        self.write({'conformance/SEM/a-run.hir': '', 'conformance/SEM/b-run.hir': ''})
+        diff = ('--- a/conformance/passing.txt\n+++ b/conformance/passing.txt\n@@ -1 +1 @@\n'
+                '-conformance/SEM/a-run.hir\n+conformance/SEM/b-run.hir\n+# a comment\n')
+        self.assertEqual(impact.ratchet_programs(diff), {'conformance/SEM/a-run.hir', 'conformance/SEM/b-run.hir'})
+        self.assertEqual(impact.changed_programs([impact.PASSING], self.root, impact.ratchet_programs(diff)),
+                         ['conformance/SEM/a-run.hir', 'conformance/SEM/b-run.hir'])
+
+    def std(self):
+        std = {'schema': 1, 'package': {'name': 'std', 'version': '1'}, 'dependencies': [], 'sources': [
+            {'path': 'yaml.hir', 'module': ['yaml']}, {'path': 'toml.hir', 'module': ['toml']},
+            {'path': 'format.hir', 'module': ['internal', 'format']}, {'path': 'list.hir', 'module': ['list']},
+            {'path': 'identity.hir', 'module': ['probe']}]}
+        self.write({impact.STD_MANIFEST: json.dumps(std),
+                    'stdlib/std@1/yaml.hir': 'pub fn parse(s: String) -> u64 { internal.format.pad(s) }\n',
+                    'stdlib/std@1/toml.hir': 'pub fn parse(s: String) -> u64 { 0u64 }\n',
+                    'stdlib/std@1/format.hir': 'pub fn pad(s: String) -> u64 { 1u64 }\n',
+                    'stdlib/std@1/list.hir': 'pub fn sort[T](mut xs: List[T]) -> () { () }\n',
+                    'stdlib/std@1/identity.hir': 'pub fn identity(x: u64) -> u64 { x }\n',
+                    impact.CORE_SIGNATURES: 'fn list.push[T](mut xs: List[T], take x: T) -> ()\n'})
+        std_dep = (impact.STD_MANIFEST, 'std', [])
+        cases = {
+            'conformance/SEM/yaml-run.hir': ('fn main() -> u64 { yaml.parse("a") }', [std_dep]),
+            'conformance/SEM/toml-run.hir': ('fn main() -> u64 { toml . parse("a") }', [std_dep]),
+            'conformance/SEM/push-run.hir': ('fn main(mut xs: List[u64]) -> () { list.push(mut xs, 1u64) }', [std_dep]),
+            'conformance/SEM/sort-run.hir': ('fn main(mut xs: List[u64]) -> () { list.sort(mut xs) }', [std_dep]),
+            'conformance/SEM/alias-run.hir': ('fn main() -> u64 { std.identity(1u64) }',
+                                              [(impact.STD_MANIFEST, 'std', [{'head': 'std', 'module': ['probe']}])]),
+            'conformance/SEM/no-std-run.hir': ('fn main() -> u64 { yaml.parse("a") }', []),
+            'conformance/SEM/standalone-run.hir': ('fn main() -> u64 { yaml.parse("a") }', None),
+        }
+        for case, (source, dependencies) in cases.items():
+            self.write({case: source + '\n'})
+            if dependencies is not None:
+                self.write({case + '.json': self.sidecar(case, dependencies)})
+        return impact.Std(self.root)
+
+    def dependents(self, *modules):
+        std = self.std()
+        return [p.rsplit('/', 1)[1] for p in impact.std_dependents(
+            None if modules == (None,) else set(modules), self.root, std)]
+
+    def test_a_std_module_selects_the_cases_whose_import_closure_includes_it(self):
+        self.assertEqual(self.dependents(('yaml',)), ['yaml-run.hir'])
+        self.assertEqual(self.dependents(('toml',)), ['toml-run.hir'])
+        # Through another std module, and through an exposed alias.
+        self.assertEqual(self.dependents(('internal', 'format')), ['yaml-run.hir'])
+        self.assertEqual(self.dependents(('probe',)), ['alias-run.hir'])
+        # core and std share the head `list`: `list.push` is core's, `list.sort` std's (LANG-4).
+        self.assertEqual(self.dependents(('list',)), ['sort-run.hir'])
+        # Only a sidecar selects std, so the cases without std select nothing.
+        self.assertEqual(self.dependents(None), ['alias-run.hir', 'sort-run.hir', 'toml-run.hir', 'yaml-run.hir'])
+
+    def test_a_std_file_maps_to_its_module_and_any_other_std_file_to_all_of_std(self):
+        std = self.std()
+        self.assertEqual(impact.changed_std_modules(['stdlib/std@1/format.hir', 'README.md'], std), {('internal', 'format')})
+        self.assertIsNone(impact.changed_std_modules([impact.STD_MANIFEST], std))
+        self.assertIsNone(impact.changed_std_modules(['stdlib/std@1/new.hir'], std))
+        self.assertEqual(impact.changed_std_modules(['stdlib/unicode16/x.txt'], std), set())
+
+    def test_a_std_only_change_floors_its_closure_and_suggests_its_sample_but_no_whole_campaign(self):
+        self.std()
+        selection = Queries.selection(['stdlib/std@1/toml.hir'], root=self.root)
+        floor, asked = Queries.run_query(gating.Selection.floor, selection)
+        self.assertEqual(asked, [])
+        self.assertEqual(floor.conformance, {'conformance/SEM/toml-run.hir'})
+        with patch.object(gating, 'owned_paths', lambda paths, root=None: list(paths)):
+            plan, _ = Queries.run_query(gating.Selection.suggest, selection)
+        self.assertEqual(plan.campaigns, set())
+        self.assertEqual(plan.conformance, {'conformance/SEM/toml-run.hir'})
+        self.assertEqual(plan.agreement, {'conformance/SEM/toml-run.hir'})
+
+    def test_a_package_fixture_selects_the_cases_whose_packages_reach_it(self):
+        self.write({'packages/fixtures/vendor@1/hirsel.json': json.dumps(
+                        {'schema': 1, 'package': {'name': 'vendor', 'version': '1'}, 'dependencies': [],
+                         'sources': [{'path': 'api.hir', 'module': ['api']}]}),
+                    'packages/fixtures/vendor@1/api.hir': 'pub fn value() -> u64 { 1u64 }\n',
+                    'conformance/PROG/vendor-run.hir': 'fn main() -> u64 { api.value() }\n',
+                    'conformance/PROG/other-run.hir': 'fn main() -> u64 { 1u64 }\n'})
+        self.write({'conformance/PROG/vendor-run.hir.json': self.sidecar(
+            'conformance/PROG/vendor-run.hir', [('packages/fixtures/vendor@1/hirsel.json', 'vendor', [])])})
+        for path in ['packages/fixtures/vendor@1/api.hir', 'packages/fixtures/vendor@1/new.hir']:
+            with self.subTest(path=path):
+                self.assertEqual(impact.package_dependents([path], self.root), ['conformance/PROG/vendor-run.hir'])
+        self.assertEqual(impact.package_dependents(['packages/fixtures/other@1/api.hir'], self.root), [])
+
+    def test_data_every_case_reads_selects_its_whole_campaign(self):
+        self.assertEqual(impact.campaign_data('docs/spec/language.md'), impact.FRONT)
+        self.assertEqual(impact.campaign_data('conformance/m2-runtime.txt'), {impact.CONFORMANCE})
+        self.assertEqual(impact.campaign_data('native-tests/regressions/smoke.txt'), {impact.NATIVE_SMOKE})
+        for path in ['conformance/SEM/a-run.hir', impact.PASSING, 'conformance/README.md', 'stdlib/std@1/a.hir']:
+            with self.subTest(path=path):
+                self.assertEqual(impact.campaign_data(path), frozenset())
+
+
+class CampaignTable(unittest.TestCase):
+    def test_every_crate_a_campaign_runs_through_selects_it(self):
+        metadata = gating.workspace_metadata(REPO)
+        self.assertEqual(gating.campaign_table_errors(metadata), [])
+        # The control: a row dropping a campaign its crate's dependents run through fails.
+        for crate, campaign in [('hirsel-modes', impact.AGREEMENT), ('hirsel-rt', impact.NATIVE_SMOKE),
+                                ('hirsel-fmt', impact.CONFORMANCE), ('hirsel-codec', impact.AGREEMENT)]:
+            with self.subTest(crate=crate):
+                table = dict(impact.CRATE_CAMPAIGNS)
+                table[crate] = table[crate] - {campaign}
+                errors = gating.campaign_table_errors(metadata, table)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertTrue(errors[0].startswith(f'{crate} is in the closure of'), errors)
+                self.assertTrue(errors[0].endswith(f'its row needs {campaign}'), errors)
 
 
 class NativePrograms(unittest.TestCase):
@@ -373,15 +588,10 @@ class NativePrograms(unittest.TestCase):
                          {'hirsel-llvm'}, self.root), ['smoke-a.hir', 'smoke-b.hir'])
         self.assertEqual(impact.native_programs([], {'hirsel-parser'}, self.root), [])
 
-    def test_filtered_targets_share_the_command_and_cache_selection(self):
-        selection = gating.Selection.__new__(gating.Selection)
-        selection.paths = ['conformance/MEM/soa.hir']
-        selection.classified = impact.Classified(crates={'hirsel-llvm'})
-        selection.campaigns = set()
-        with patch.object(gating, 'ROOT', self.root):
-            self.assertEqual(selection.native_targets(),
-                             ['root//:gate-native-changed', 'root//:gate-native-cranelift-changed'])
-            self.assertEqual(selection.campaign_targets(), selection.native_targets())
+    def test_chosen_native_programs_run_both_backends_with_one_filter(self):
+        plan = gating.Plan(native={'conformance/MEM/soa.hir'})
+        self.assertEqual(plan.campaign_targets(), ['root//:gate-native-changed', 'root//:gate-native-cranelift-changed'])
+        self.assertEqual(plan.config(), ['-c', 'hirsel.native_filters=conformance/MEM/soa.hir'])
 
 
 class Identity(unittest.TestCase):
@@ -433,6 +643,22 @@ class Identity(unittest.TestCase):
     def test_no_change_has_no_identity(self):
         git(self.root, 'reset', '-q', '--hard', 'main')
         self.assertEqual(self.identity(), '')
+
+    def test_path_digests_survive_a_clean_rebase_and_name_the_edited_path(self):
+        before = gating.path_digests(gating.merge_base('main', self.root), self.root)
+        self.assertEqual(list(before), ['a.txt'])
+        git(self.root, 'switch', '-q', 'main')
+        commit(self.root, {'a.txt': '0\n' + ''.join(f'{n}\n' for n in range(1, 11)), 'b.txt': 'B\n'}, 'Sibling')
+        git(self.root, 'switch', '-q', 'lane')
+        git(self.root, 'rebase', '-q', 'main')
+        base = gating.merge_base('main', self.root)
+        self.assertEqual(gating.path_digests(base, self.root), before)
+        (self.root / 'b.txt').write_text('lane\n')
+        after = gating.path_digests(base, self.root)
+        self.assertEqual(gating.changed_since({'digests': before}, after), ['b.txt'])
+        (self.root / 'a.txt').write_text(self.lane.replace('three', 'THREE'))
+        self.assertEqual(gating.changed_since({'digests': before}, gating.path_digests(base, self.root)),
+                         ['a.txt', 'b.txt'])
 
     def test_a_green_record_names_the_identity_and_its_crates(self):
         identity = self.identity()
@@ -583,22 +809,43 @@ class Summary(unittest.TestCase):
                        'formatter-canonical; run corpus-fmt with the release hirsel\n')
         self.assertEqual(gating.rerun('gate-conformance-shard-6', conformance), [
             'conformance/MODE/MODE-7-run.hir: corpus source is not formatter-canonical; run corpus-fmt with the release hirsel',
+            '.buck2/bin/buck2 test -c hirsel.tests=focus //:gate-conformance-shard-1 -- --test-arg=--shard '
+            '--test-arg=1/1 --test-arg=--path --test-arg=conformance/MODE/MODE-7-run.hir',
             '.buck2/bin/buck2 test //:gate-conformance-shard-6'])
         agreement = json.dumps({'checked': 3, 'clusters': [{'kind': 'source accepts', 'path': 'conformance/x.hir'}]})
-        lines = gating.rerun('gate-agree-shard-2', agreement)
-        self.assertEqual(lines[0], 'source accepts: conformance/x.hir')
-        self.assertIn('--program conformance/x.hir', lines[1])
-        self.assertEqual(lines[-1], '.buck2/bin/buck2 test //:gate-agree-shard-2')
+        for target in ['gate-agree-shard-2', 'gate-agree-selected-shard-1']:
+            lines = gating.rerun(target, agreement)
+            self.assertEqual(lines[0], 'source accepts: conformance/x.hir')
+            # The gate's own sample within the case reproduces the variant; --program
+            # would replay the unmutated case.
+            self.assertTrue(lines[1].endswith('-- --root "$PWD" --seed 1 --limit 5000 --sample-path conformance/x.hir'),
+                            lines[1])
+            self.assertNotIn('--program', lines[1])
+            self.assertEqual(lines[-1], f'.buck2/bin/buck2 test //:{target}')
 
 
 FAKE_BUCK2 = '''#!/usr/bin/env bash
+# Each test target passes with the counts a conformance shard prints, unless
+# FAIL_TESTS is set; `log show` replays the results of the run that wrote them.
+details='whole corpus: 1 validated / 1 passing / 0 failing / 0 not implemented\\nin-gate corpus: 1 validated / 1 passing / 0 failing / 0 not implemented\\ncorpus formatting: 0 intentional syntax rejections exempt'
+log=
+arguments=("$@")
+for ((i = 0; i < $#; i++)); do [[ ${arguments[i]} == --event-log ]] && log=${arguments[i + 1]}; done
+[[ -n $log ]] && printf '{}' > "$log"
 if [[ ${2:-} == --event-log ]]; then
-  printf '{}' > "$3"
   printf '%s\\n' "$1 ${*:4}" >> "$COMMANDS"
 else
   printf '%s\\n' "$*" >> "$COMMANDS"
 fi
+if [[ $1 == test && -n $log ]]; then
+  for argument in "$@"; do
+    [[ $argument == -- ]] && break
+    [[ $argument == root//* ]] && printf '{"Event":{"data":{"Instant":{"data":{"TestResult":{"name":"%s","status":%s,"details":"%s","duration_us":1000}}}}}}\\n' \\
+      "$argument" "$( [[ -n ${FAIL_TESTS:-} ]] && echo 2 || echo 1 )" "$details" >> "$log.results"
+  done
+fi
 case $1 in
+  log) [[ -f $3.results ]] && cat "$3.results"; exit 0 ;;
   uquery) query=$*; last=${*: -1}; [[ $last == @* ]] && query=$(cat "${last#@}")
     [[ $query == *'kind("^rust_'* ]] && echo 'root//:a-clippy' || echo 'root//:a'; exit 0 ;;
   build)
@@ -622,6 +869,9 @@ AGREE_FULL_SHARDS = 96
 AGREE_FULL_TIMEOUT = 1800
 AGREE_NATIVE_FULL_SHARDS = 16
 AGREE_NATIVE_FULL_TIMEOUT = 3600
+CONFORMANCE_SLICE_PROGRAMS = 20
+AGREE_SLICE_PROGRAMS = 260
+SELECTED_SLICES = 16
 if __name__ == "__main__":
     with open(os.environ["COMMANDS"], "a") as log:
         print(" ".join(["{name}", *sys.argv[1:]]), file=log)
@@ -711,17 +961,17 @@ class Scripts(unittest.TestCase):
 
     def test_documentation_alone_runs_no_buck2_and_catches_broken_links(self):
         commit(self.root, {'docs/building.md': 'See [the grammar](grammar.md) and [x](gone.md).\n'}, 'Docs')
-        result, logged = self.run_tool('gate')
+        result, logged = self.run_tool('gate', '--why', 'scratch change')
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn('docs/building.md: link gone.md names nothing', result.stdout)
         self.assertEqual(logged, [])
         commit(self.root, {'docs/building.md': 'See [the grammar](grammar.md).\nMore.\n'}, 'Docs fixed')
-        result, logged = self.run_tool('gate')
+        result, logged = self.run_tool('gate', '--why', 'scratch change')
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(logged, [])
         # Moving a linked document without its links fails.
         commit(self.root, {'docs/grammar.md': None, 'docs/syntax.md': 'grammar\n'}, 'Move')
-        result, _ = self.run_tool('gate')
+        result, _ = self.run_tool('gate', '--why', 'scratch change')
         self.assertIn('docs/building.md: link grammar.md names a deleted path', result.stdout)
 
     def test_land_refuses_an_ungated_change_and_lands_a_gated_one_after_main_moves(self):
@@ -730,7 +980,7 @@ class Scripts(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn('tools/gate has not passed this change', result.stdout)
         self.assertFalse(any(c.startswith('build') for c in logged))
-        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.sibling_pushes({'LICENSE': 'MIT\n'})
         result, logged = self.run_tool('land')
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -748,7 +998,7 @@ class Scripts(unittest.TestCase):
 
     def test_land_commits_the_index_generated_from_the_rebased_sources(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.sibling_pushes({'docs/catalogue.md': 'a new export\n'})
         records = gating.green_records(self.root)
         result, logged = self.run_tool('land')
@@ -762,7 +1012,7 @@ class Scripts(unittest.TestCase):
 
     def test_land_does_not_push_or_replace_the_page_when_index_generation_fails(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         before = git(self.origin, 'rev-parse', 'main')
         result, _ = self.run_tool('land', env={'FAIL_INDEX': '1'})
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -773,7 +1023,7 @@ class Scripts(unittest.TestCase):
 
     def test_land_regenerates_after_a_push_race_without_regating_or_extra_index_commits(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         records = gating.green_records(self.root)
         commit(self.sibling, {'LICENSE': 'MIT\n'}, 'Main moves during generation')
         result, logged = self.run_tool('land', env={
@@ -791,7 +1041,7 @@ class Scripts(unittest.TestCase):
 
     def test_an_expired_clippy_output_is_fetched_again(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.env['EXPIRED_ONCE'] = str(self.root.parent / 'expired')
         result, logged = self.run_tool('land')
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -799,7 +1049,7 @@ class Scripts(unittest.TestCase):
 
     def test_land_refuses_a_red_tree_and_stops_on_a_conflict(self):
         commit(self.root, {'README.md': 'Hirsel, a language\n'}, 'Readme')
-        self.assertEqual(self.run_tool('gate')[0].returncode, 0)
+        self.assertEqual(self.run_tool('gate', '--why', 'scratch change')[0].returncode, 0)
         self.env['FAIL_FMT'] = '1'
         result, _ = self.run_tool('land')
         self.assertEqual(result.returncode, 1)
@@ -819,10 +1069,10 @@ class Scripts(unittest.TestCase):
 
     def test_a_crate_edit_checks_that_every_ignored_test_runs_in_a_gate(self):
         commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\n#[ignore]\nfn tool() {}\n'}, 'Test')
-        result, logged = self.run_tool('gate', env={'FAIL_IGNORED': '1'})
+        result, logged = self.run_tool('gate', '--why', 'scratch change', env={'FAIL_IGNORED': '1'})
         self.assertIn('ignored_tests.py', logged)
         self.assertIn('FAIL  tools/tests/ignored_tests.py', result.stdout)
-        self.assertIn('pass  tools/tests/ignored_tests.py', self.run_tool('gate')[0].stdout)
+        self.assertIn('pass  tools/tests/ignored_tests.py', self.run_tool('gate', '--why', 'scratch change')[0].stdout)
 
     def test_a_gated_change_rebased_cleanly_only_builds_and_checks_formatting(self):
         commit(self.root, {'docs/grammar.md': 'grammar, revised\n'}, 'Grammar')
@@ -831,13 +1081,78 @@ class Scripts(unittest.TestCase):
         gating.record_green(identity, set(), self.root)
         self.sibling_pushes({'LICENSE': 'MIT\n'})
         git(self.root, 'pull', '-q', '--rebase')
-        result, logged = self.run_tool('gate')
+        result, logged = self.run_tool('gate', '--why', 'scratch change')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('only the workspace build and formatting run', result.stdout)
         self.assertEqual([c for c in logged if c.startswith(('build', 'test'))],
                          ['build -c hirsel.clippy=true -c buck2.test_builds_targets=true --materializations none root//:a'])
         self.assertIn('fmt.py --check', logged)
 
+
+    def test_a_gate_says_why_its_selection_suffices(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        for arguments in [(), ('--why', ' '), ('--tests', 'conformance')]:
+            with self.subTest(arguments=arguments):
+                result, logged = self.run_tool('gate', *arguments)
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn('--why', result.stderr)
+                self.assertEqual(logged, [])
+
+    def test_formatting_clippy_or_the_build_failing_stops_the_gate_before_any_test(self):
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        for env in [{'FAIL_FMT': '1'}, {'FAIL_BUILD': '1'}]:
+            with self.subTest(env=env):
+                result, logged = self.run_tool('gate', '--why', 'scratch change', '--tests', 'conformance', env=env)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn('no test ran', result.stdout)
+                self.assertFalse(any(c.startswith('test') for c in logged), logged)
+        result, logged = self.run_tool('gate', '--why', 'scratch change', '--tests', 'conformance')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        [test] = [c for c in logged if c.startswith('test')]
+        self.assertIn('root//:gate-conformance-shard-16', test)
+
+    def test_suggest_runs_nothing_and_prints_the_floor_and_the_selection(self):
+        commit(self.root, {'crates/hirsel-lexer/src/lib.rs': 'pub fn f() {}\n'}, 'Lexer')
+        result, logged = self.run_tool('gate', '--suggest')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('the floor', result.stdout)
+        self.assertIn('conformance: the whole campaign', result.stdout)
+        self.assertIn('agreement: the whole campaign', result.stdout)
+        self.assertFalse(any(c.startswith(('build', 'test')) for c in logged), logged)
+
+    def test_extend_runs_the_edits_floor_and_land_accepts_the_new_identity(self):
+        result, _ = self.run_tool('gate', '--extend', '--why', 'scratch change')
+        self.assertEqual(result.returncode, 0)
+        commit(self.root, {'crates/hirsel-span/tests/it/main.rs': '#[test]\nfn t() {}\n'}, 'Test')
+        result, _ = self.run_tool('gate', '--extend', '--why', 'scratch change')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('--extend needs a change this worktree passed', result.stdout)
+        result, _ = self.run_tool('gate', '--why', 'the span test alone', '--tests', 'conformance')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        first = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
+        commit(self.root, {'crates/hirsel-lexer/tests/it/keywords.rs': '#[test]\nfn k() {}\n'}, 'Fix')
+        result, logged = self.run_tool('gate', '--extend', '--why', 'one more test file')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'extending change {first[:12]}', result.stdout)
+        self.assertIn('1 paths differ: crates/hirsel-lexer/tests/it/keywords.rs', result.stdout)
+        [test] = [c for c in logged if c.startswith('test')]
+        self.assertNotIn('gate-conformance-shard', test)
+        identity = gating.change_identity(gating.merge_base('origin/main', self.root), self.root)
+        record = gating.green_records(self.root)[identity]
+        self.assertEqual((record['extends'], record['why']),
+                         (first, 'one more test file (extending: the span test alone)'))
+        self.assertIn('conformance', record['selection'])
+        result, _ = self.run_tool('land')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('land: gated ', result.stdout)
+        self.assertIn('why: one more test file (extending: the span test alone)', result.stdout)
+        self.assertIn(f'extends change {first[:12]}', result.stdout)
+        [landing] = (Path(git(self.root, 'rev-parse', '--path-format=absolute', '--git-common-dir'))
+                     / 'hirsel-landings.jsonl').read_text().splitlines()
+        landing = json.loads(landing)
+        self.assertEqual((landing['pushed'], landing['identity'], landing['why'], landing['extends']),
+                         (git(self.origin, 'rev-parse', 'main'), identity,
+                          'one more test file (extending: the span test alone)', first))
 
 if __name__ == '__main__':
     unittest.main()

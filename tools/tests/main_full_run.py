@@ -258,6 +258,8 @@ class GateCommands(unittest.TestCase):
             (self.root / f'tools/buck2/{helper}.py').write_text(f'''import os, sys
 AGREE_LIMIT = {AGREE_LIMIT}
 AGREE_SHARDS = CONFORMANCE_SHARDS = 16
+AGREE_SLICE_PROGRAMS = CONFORMANCE_SLICE_PROGRAMS = 300
+SELECTED_SLICES = 16
 NATIVE_FULL_SHARDS = {NATIVE_FULL_SHARDS}
 summarize = None
 if __name__ == "__main__":
@@ -446,6 +448,19 @@ class AgreementShards(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'expected one'):
             self.agree.report_from_output(self.outputs()['shard-1'] + '\n' + self.outputs()['shard-2'])
 
+
+    def test_slices_of_chosen_cases_sum_and_refuse_a_flag_or_another_sample(self):
+        slices = {f'slice-{i}': json.dumps(self.report | dict(limit=self.agree.AGREE_LIMIT)) for i in (1, 2)}
+        result = self.agree.summarize_within(slices)
+        self.assertEqual((result['checked'], result['valid'], result['generated']), (4, 2, 9))
+        for changed in [{'seed': 2}, {'generated': 10}, {'clusters': [dict(kind='bug', path='x.hir')]},
+                        {'rejected': 2}]:
+            with self.subTest(changed=changed):
+                bad = dict(slices, **{'slice-2': json.dumps(self.report | dict(limit=self.agree.AGREE_LIMIT) | changed)})
+                with self.assertRaises(ValueError):
+                    self.agree.summarize_within(bad)
+        with self.assertRaisesRegex(ValueError, 'no agreement slice'):
+            self.agree.summarize_within({})
 
     def test_the_unrestricted_campaign_covers_the_whole_catalogue(self):
         self.report |= dict(limit=self.agree.UNLIMITED, generated=4, eligible=4)

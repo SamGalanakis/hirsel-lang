@@ -20,7 +20,7 @@ TEST_REQUESTS = {
     "hirsel-check-unittest": [1, 524288, ""],
     "hirsel-cli-bin-hirsel-unittest": [1, 524288, ""],
     "hirsel-cli-test-cli": [2, 2097152, ""],
-    "hirsel-cli-test-examples": [2, 2359296, ""],
+    "hirsel-cli-test-examples": [2, 1048576, ""],
     "hirsel-codec-unittest": [1, 524288, ""],
     "hirsel-conformance-bin-native-unittest": [1, 524288, ""],
     "hirsel-conformance-test-it": [2, 2097152, ""],

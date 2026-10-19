@@ -1729,10 +1729,14 @@ struct Program {
 }
 
 /// Independent bounds: a per-program rotating window, then a global rank limit.
+/// `within` then keeps only the sample's variants of the files whose
+/// root-relative path starts with one of its prefixes (all when empty): a
+/// change's part of the whole corpus's sample, which still ranks every file.
 #[derive(Clone, Copy)]
-pub struct Sample {
+pub struct Sample<'a> {
     pub limit: usize,
     pub per_program: Option<usize>,
+    pub within: &'a [String],
 }
 
 /// Full campaigns stay below 200,000 variants on the current corpus. The
@@ -1850,6 +1854,7 @@ pub fn run_native(
         Sample {
             limit,
             per_program: None,
+            within: &[],
         },
         native,
         0,
@@ -1866,7 +1871,7 @@ pub fn run_native(
 pub fn run_native_with_hash_seed(
     root: &Path,
     seed: u64,
-    sample: Sample,
+    sample: Sample<'_>,
     native: Option<&Native>,
     hash_seed: u64,
     only: &[String],
@@ -1967,7 +1972,14 @@ pub fn run_native_with_hash_seed(
     report.programs = programs.len();
     variants.sort();
     variants.truncate(sample.limit);
-    variants.retain(|(rank, _, _)| in_sample_shard(*rank, shard));
+    variants.retain(|(rank, program, _)| {
+        in_sample_shard(*rank, shard)
+            && (sample.within.is_empty()
+                || sample
+                    .within
+                    .iter()
+                    .any(|prefix| programs[*program].path.starts_with(prefix.as_str())))
+    });
     // Current acceptance decides the input set, not the expectation or ratchet.
     let sampled: Vec<usize> = variants
         .iter()
@@ -2210,6 +2222,7 @@ mod tests {
                 Sample {
                     limit: 32,
                     per_program: None,
+                    within: &[],
                 },
                 None,
                 0,
@@ -2239,6 +2252,69 @@ mod tests {
         }
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(summed, whole);
+    }
+    #[test]
+    fn a_sample_within_files_partitions_the_whole_corpus_sample() {
+        let root = std::env::temp_dir().join(format!(
+            "hirsel-agree-within-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("conformance/LANG")).unwrap();
+        std::fs::create_dir_all(root.join(crate::SPEC_DIR)).unwrap();
+        std::fs::write(
+            root.join(crate::SPEC_DIR).join("language.md"),
+            "### LANG-7: Types\n",
+        )
+        .unwrap();
+        for (name, body) in [
+            ("a", "fn probe(mut x: u64) -> u64 { let y = x; x = y; x }"),
+            (
+                "b",
+                "fn probe(x: u64, y: u64) -> u64 { let z = x + y; z * 2u64 }",
+            ),
+        ] {
+            std::fs::write(
+                root.join(format!("conformance/LANG/LANG-7-{name}.hir")),
+                format!("// rule: LANG-7\n// expect: accept\n{body}\n"),
+            )
+            .unwrap();
+        }
+        let sample = |within: &[String]| {
+            run_native_with_hash_seed(
+                &root,
+                1,
+                Sample {
+                    limit: 24,
+                    per_program: Some(DEFAULT_VARIANTS_PER_PROGRAM),
+                    within,
+                },
+                None,
+                0,
+                &[],
+                None,
+            )
+            .unwrap()
+            .json()
+        };
+        let whole = sample(&[]);
+        let selected = |report: &serde_json::Value| {
+            report["checked"].as_u64().unwrap() + report["skipped"].as_u64().unwrap()
+        };
+        assert_eq!(selected(&whole), 24);
+        let parts: Vec<_> = ["a", "b"]
+            .map(|name| sample(&[format!("conformance/LANG/LANG-7-{name}.hir")]))
+            .into();
+        // Each file keeps its own share of the 24, not 24 of its own.
+        assert!(parts.iter().all(|part| selected(part) < 24));
+        assert_eq!(parts.iter().map(selected).sum::<u64>(), 24);
+        for part in &parts {
+            assert_eq!(part["generated"], whole["generated"]);
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn catalogue_generates_last_use_shapes() {

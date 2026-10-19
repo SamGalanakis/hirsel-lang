@@ -48,7 +48,8 @@ python3 tools/buck2/agree.py                      # AGREE_LIMIT variants over AG
 python3 tools/buck2/agree.py --native-full        # the native campaign's shards, merged against agree-known.txt
 .buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-conformance-bin-native
 python3 tools/buck2/sync.py                       # after metadata or action-sizes.json changes
-tools/gate                                           # the per-push gate (tools/land lands)
+tools/gate --suggest                                 # what a change can affect
+tools/gate --tests suggested --why "<one line>"      # the per-push gate: its floor and the chosen tests (tools/land lands)
 ```
 
 `tools/land` rebuilds after its rebase, then runs the built `hirsel doc stdlib/std@1/hirsel.json`.
@@ -124,6 +125,8 @@ Target names follow Cargo's targets, all in the root package:
 | a corpus campaign of `tools/gate` | `//:gate-<stage>` (label `gate`) |
 | a conformance shard (`CONFORMANCE_SHARDS`) | `//:gate-conformance-shard-<i>` |
 | an agreement shard (`AGREE_SHARDS`) | `//:gate-agree-shard-<i>` |
+| a slice of the corpus cases a gate chose (`-c hirsel.conformance_paths`, up to `SELECTED_SLICES`) | `//:gate-conformance-selected-shard-<i>` |
+| a slice of the chosen cases' variants in the seed-1 sample (`-c hirsel.agree_paths`) | `//:gate-agree-selected-shard-<i>` |
 | a budgeted full agreement shard (`AGREE_FULL_SHARDS`, `--full` only) | `//:gate-agree-full-shard-<i>` |
 | a budgeted native agreement shard (`AGREE_NATIVE_FULL_SHARDS`, `--full` only; `agree.py --native-full` runs and merges them) | `//:gate-agree-native-full-shard-<i>` |
 | a full native matrix shard (`NATIVE_FULL_SHARDS`, `--full` only; `gate-native-full` stays whole for `--bless` and filtered runs) | `//:gate-native-full-shard-<i>` |

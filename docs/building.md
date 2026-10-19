@@ -423,7 +423,8 @@ python3 tools/buck2/prepare.py                  # once per checkout
 .buck2/bin/buck2 test //:hirsel-lir-unittest //:hirsel-lir-test-it \
   //:hirsel-lir
 .buck2/bin/buck2 test -c hirsel.tests=focus //:hirsel-lir-test-it -- --test-arg=layout::recursive_layouts_do_not_depend_on_request_order --test-arg=--exact
-tools/gate                                      # check the finished change
+tools/gate --suggest                            # what the finished change can affect
+tools/gate --tests suggested --why "<one line>"  # check it once
 tools/land                                      # land it on main
 ```
 
@@ -471,39 +472,102 @@ cannot update that file.
 
 ## Gates
 
-`tools/gate` checks a finished change, once. It diffs the worktree against
-its merge base with `origin/main` and runs what the changed paths can affect
-(the table is `tools/buck2/impact.py`):
+`tools/gate` checks a finished change, once. It diffs the worktree against its
+merge base with `origin/main`. Every gate runs the *floor*; the lane chooses
+everything else and says why:
+
+```sh
+tools/gate --suggest                                  # the floor and what the change can affect
+tools/gate --tests suggested --why "<one line>"       # the floor and the whole suggestion
+tools/gate --tests hirsel-driver-test-it-stdlib conformance:conformance/SEM/SEM-3-toml \
+  agreement:conformance/SEM/SEM-3-toml --why "toml decoder only; no checker code changed"
+tools/gate --why "<one line>"                         # the floor alone
+```
+
+The floor:
 
 - documentation no build reads (`*.md`, `LICENSE`, `docs/`): its added links
   resolve, links into deleted paths are gone, and no whitespace errors;
-- the gate's own tooling under `tools/`: its tests and the build-file check;
-- anything else: every Buck2 test with a changed input, directly or through
-  any dependency, plus the corpus campaigns the change can affect. A file a
-  campaign reads (the corpus, the stdlib, native fixtures) selects it, and so
-  does a crate's library source: front-end, validator and interpreter crates
-  select conformance and the source/IR checker agreement sample (seed 1),
-  backend, runtime and LLVM crates the native smoke, the shared contract
-  crates, the engine and the driver all three. Test code selects only its
-  tests. A build-wide input (`Cargo.toml`, `.buckconfig`, `tools/buck2/`,
-  `third-party/`) selects every test and campaign;
-- whenever Buck2 runs, the workspace build and Clippy too.
+- the gate's own tooling under `tools/`: its tests; the Lean model under
+  `proofs/` (and its vectors in `native-tests/model/`): its audit and vector
+  replay on this host;
+- the build-file check, formatting, Clippy and the workspace build, which
+  includes checking std once (the std precheck). They run first, and when one
+  fails the gate stops before any test;
+- every test target of a crate whose source changed (unit, integration in
+  all shards, binary unit tests and doctests), and of every changed test file;
+- every changed or added corpus case with its twins (the cases with the same
+  name up to its outcome word: `-ok`, `-bad`, `-run`, `-fail`, `-reject`,
+  `-accept`), the cases a `passing.txt` edit names, and every corpus case whose
+  import closure includes a changed std module. std is source too: those
+  cases are its tests.
 
-All of it is one Buck2 invocation, so the pool runs the build, Clippy, the
-tests and the campaigns concurrently, while formatting and the build-file
-check run beside it on this host. The summary lists every target; a failure
-names its failing cases and the command that reruns each alone. A passing
-change is recorded by its identity, the patch-id of the lane's own diff
-without context lines and the crates it touches: after main moves and the
-change rebases cleanly, `tools/gate` only builds and checks formatting.
-With `HIRSEL_GATE_SLOTS=dir:N` set, at most N gates on the host run their
-Buck2 work at once; a gate past that waits for a slot in dir and says so.
+`--tests` takes Buck2 test targets (`//:name` or `name`; a sharded binary's name
+runs every shard), the whole campaigns `conformance`, `agreement` and
+`native-smoke`, `conformance:<path>` (the corpus cases under a path),
+`agreement:<path>` (those cases' variants in the seed-1 sample: exactly the
+variants the whole campaign checks of them), `native:<program>` (the LLVM
+smoke matrix and Cranelift parity for one program), `all-tests`, and
+`suggested`. Chosen corpus cases run in slices of at most 340 (conformance) or
+260 (agreement) cases (`gate-conformance-selected-shard-<i>`,
+`gate-agree-selected-shard-<i>`); more than half the corpus runs the whole
+campaign.
+
+`--suggest` computes what the change can affect (`tools/buck2/impact.py`):
+
+- a crate's library source: every Buck2 test reading it, directly or through
+  a dependency, and its row of `CRATE_CAMPAIGNS`. Front-end, validator and
+  interpreter crates select the whole conformance campaign and agreement
+  sample, backend, runtime and LLVM crates the native smoke, the shared
+  contract crates, the engine and the driver all three. Every crate in the
+  dependency closure of a campaign's crates must select it; the gate refuses a
+  table that does not;
+- a std module (`stdlib/std@1/`): the tests reading std, and the agreement
+  sample's variants of the cases whose import closure includes it. Agreement
+  compares the source checker, the IR checker and checked interpretation on
+  mutated variants of a case's own source; a std edit changes no checker or
+  interpreter, only what the variants import, so only the variants of the
+  cases that import it can change. A case reaches std only through its
+  sidecar's dependency; core and std share some module heads, and
+  `list.push` names core where `list.sort` names std (LANG-4);
+- a corpus case: its twins and their variants in the sample, never the
+  sixteen whole-campaign shards; a package fixture under `packages/`: the
+  cases whose packages reach it;
+- data every case reads (the spec's rule table, a corpus list the runner
+  reads, native fixtures): its whole campaign;
+- `hirsel-cli-test-examples` only when `crates/hirsel-cli`,
+  `crates/hirsel-driver` or `examples/` change; for a std edit `--suggest`
+  names the examples that import it so the lane can add them;
+- a build-wide input (`Cargo.toml`, `.buckconfig`, `tools/buck2/`,
+  `third-party/`): every test and campaign.
+
+The floor and the chosen tests run as one Buck2 invocation after the build. The
+summary lists every target; a failure names its failing cases and the command
+that reruns each alone (for agreement, `agree --seed 1 --limit 5000
+--sample-path <case>`, the gate's own variants of that case). A passing change
+is recorded with its identity (the patch-id of the lane's own diff without
+context lines, and the crates it touches), its floor, its selection and its
+`--why`. After main moves and the change rebases cleanly, `tools/gate` only
+builds and checks formatting. After an edit to a passed change (a one-file
+fix, a hand-resolved conflict), `tools/gate --extend --why "<line>"` runs the
+floor of the paths whose change differs from the recorded pass and the test
+targets that own them, plus any `--tests`, and records the edited change. With
+`HIRSEL_GATE_SLOTS=dir:N` set, at most N gates on the host run their Buck2 work
+at once; a gate past that waits for a slot in dir and says so.
+
+Nothing runs the full suite on a schedule. Per-push selection and its floor
+are the only routine net, so choose what the change can break, and say in
+`--why` what you skipped and why that is safe. The full suite (`tools/gate
+--full`, below) runs on demand at milestone cuts.
 
 `tools/land` lands the committed change: fetch, rebase onto `origin/main`,
 then the workspace build, Clippy, formatting and the build-file check on the
 rebased tree, and push, repeating when main moved. It never runs tests: it
 refuses a change `tools/gate` has not passed, and stops on a rebase conflict
-(resolve it, gate the result, land again).
+(resolve it, run `tools/gate --extend` on the result, land again). It prints
+the gate's recorded floor, selection and `--why`, and appends each push with
+them to `hirsel-landings.jsonl` in the clone's common git directory, so a red
+main maps back to the push and to what it chose to skip.
 
 After those checks, land runs the built `hirsel doc stdlib/std@1/hirsel.json` and commits a
 changed `docs/api.md` separately as `Regenerate the API index.` before pushing.
@@ -522,9 +586,9 @@ they add or touch on the pool. Focus runs book one CPU at lane priority:
 
 A change to LLVM emission must carry the matching Cranelift change.
 
-Changes to `crates/hirsel-llvm`, `hirsel-cranelift`, `hirsel-lir`, `hirsel-rc`
-or the runtime run the same changed-program filters through the LLVM native
-smoke matrix and Cranelift parity in `tools/gate`. With no changed runnable fixtures,
+For changes to `crates/hirsel-llvm`, `hirsel-cranelift`, `hirsel-lir`, `hirsel-rc`
+or the runtime, `tools/gate --suggest` proposes the same changed-program filters
+through the LLVM native smoke matrix and Cranelift parity (`native:<program>`). With no changed runnable fixtures,
 both use the bounded native smoke list.
 
 Changes to `crates/hirsel-cranelift` also run the Cranelift parity gate for the
@@ -553,7 +617,8 @@ inputs and assertions intact; add a separate bounded smoke test when useful.
 Cases that call `full_matrix` only for discovery are skipped by name outside
 the full suite (`FULL_GATE_SKIPS` in `tools/buck2/sync.py`).
 
-`tools/gate --full` is the full suite, run on demand (nothing schedules it):
+`tools/gate --full` is the full suite, run on demand at milestone cuts (nothing
+schedules it):
 every test, budgeted source/IR and native agreement, release tests,
 the `full_gate_` tests in both debug and release, the derived native program and pairwise configuration covers and
 every `tools/check-native.sh` runtime, sanitizer, toolchain and Lean check. It

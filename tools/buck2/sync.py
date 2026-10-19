@@ -241,6 +241,17 @@ GATE = dict(cwd="crates/hirsel-conformance")
 CONFORMANCE_SHARDS = 16
 AGREE_SHARDS = 16
 AGREE_LIMIT = 5000
+# A lane's chosen corpus cases (`tools/gate --tests conformance:<path>` and
+# `agreement:<path>`) run in up to SELECTED_SLICES slices
+# (`-c hirsel.conformance_paths` and `hirsel.agree_paths`, defs.bzl
+# selected_paths), each of at least the smallest slice's cases. Conformance
+# spreads them wide: cases differ in cost by more than tenfold (on 2026-10-19
+# 120 toml cases ran 970 s in one slice, where a whole-campaign shard runs 340
+# mixed cases in about 200 s). An agreement slice first ranks the whole
+# corpus's catalogue, so it takes about as many cases as a sample shard.
+SELECTED_SLICES = 16
+CONFORMANCE_SLICE_PROGRAMS = 20
+AGREE_SLICE_PROGRAMS = 260
 # The unrestricted campaign (`tools/gate --full`) runs as shards of the whole
 # seed-1 catalogue by stable variant rank, each with its own timeout, so a slow
 # or non-terminating variant fails fast and names its shard.
@@ -275,6 +286,14 @@ GATE_TESTS = [
     *(dict(name=f"gate-agree-shard-{index}", binary="//:hirsel-conformance-bin-agree",
            args=["--seed", "1", "--limit", str(AGREE_LIMIT), "--shard", f"{index}/{AGREE_SHARDS}"],
            release=True, **GATE) for index in range(1, AGREE_SHARDS + 1)),
+    *(dict(name=f"gate-conformance-selected-shard-{index}", binary="//:hirsel-conformance-bin-hirsel-conformance",
+           args=["--check-format"], selected=["conformance_paths", "--path", index],
+           measured_as="gate-conformance", **GATE)
+      for index in range(1, SELECTED_SLICES + 1)),
+    *(dict(name=f"gate-agree-selected-shard-{index}", binary="//:hirsel-conformance-bin-agree",
+           args=["--seed", "1", "--limit", str(AGREE_LIMIT)], selected=["agree_paths", "--sample-path", index],
+           measured_as="gate-agree", release=True, **GATE)
+      for index in range(1, SELECTED_SLICES + 1)),
     dict(name="gate-native-smoke", binary="//:hirsel-conformance-bin-native", args=["--smoke"], release=True,
          runtime_archives=RUNTIME_ARCHIVES, **GATE),
     # Per-push matrix and parity share the changed-program filters from impact.py.

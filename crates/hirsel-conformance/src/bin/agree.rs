@@ -19,6 +19,7 @@ fn main_on_compiler_thread() -> ExitCode {
     let mut native = None;
     let mut program = None;
     let mut only = vec![];
+    let mut within = vec![];
     let mut common = CommonOptions::default();
     let help = parse_or_exit((|| {
         let mut args = Parser::from_env();
@@ -39,6 +40,7 @@ fn main_on_compiler_thread() -> ExitCode {
                 }
                 Long("program") => program = Some(PathBuf::from(args.value()?)),
                 Long("path") => only.push(args.value()?.string()?),
+                Long("sample-path") => within.push(args.value()?.string()?),
                 Long("native") => {
                     let mode = args.value()?.string()?;
                     if mode != "heap" && mode != "full" {
@@ -55,7 +57,7 @@ fn main_on_compiler_thread() -> ExitCode {
     })());
     if help {
         println!(
-            "usage: agree [--seed N] [--hash-seed N] [--limit M] [--root PATH] [--native heap|full] [--program PATH] [--path PREFIX]... [--shard I/N] [--variants-per-program N | --exhaustive]"
+            "usage: agree [--seed N] [--hash-seed N] [--limit M] [--root PATH] [--native heap|full] [--program PATH] [--path PREFIX]... [--sample-path PREFIX]... [--shard I/N] [--variants-per-program N | --exhaustive]"
         );
         return ExitCode::SUCCESS;
     }
@@ -155,6 +157,7 @@ fn main_on_compiler_thread() -> ExitCode {
         hirsel_conformance::agree::Sample {
             limit,
             per_program: if exhaustive { None } else { budget },
+            within: &within,
         },
         native.as_ref(),
         hash_seed,

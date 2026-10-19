@@ -10,6 +10,10 @@ commit, 'Regenerate the API index.', without another gate. A rejected push
 (main moved) repeats the loop. A rebase conflict stops it: resolve it, run
 tools/gate on the result, and land again.
 
+Land prints what the gate ran for the change and why (its green record), and
+appends the push with that record to `hirsel-landings.jsonl` in the clone's
+common git directory, so a red main maps back to the push and what it skipped.
+
 Land never runs tests. tools/gate runs them once, on the finished change, and
 records the change's identity when it passes (gating.change_identity: the
 patch-id of the lane's own diff without context lines or the generated
@@ -37,6 +41,7 @@ PY = sys.executable
 ATTEMPTS = 20
 REJECTED = ('[rejected]', 'fetch first', 'non-fast-forward', 'failed to update ref', 'cannot lock ref')
 CLI = 'root//:hirsel-cli-bin-hirsel'
+LANDINGS = 'hirsel-landings.jsonl'
 
 
 def run(*command, **kwargs):
@@ -133,6 +138,29 @@ def undo_index_commit(generated):
     return True
 
 
+def describe(record):
+    """What the gate ran for a change and why, as tools/gate recorded it."""
+    lines = [f'gated {record.get("at", "?")}: why: {record.get("why") or "(not recorded)"}']
+    if record.get('extends'):
+        lines.append(f'  extends change {record["extends"][:12]}')
+    lines += ['  floor: ' + part for part in record.get('floor', [])]
+    lines += ['  ran: ' + part for part in record.get('selection', []) if part not in record.get('floor', [])]
+    return lines
+
+
+def log_landing(pushed, base, identity, record):
+    """Append the push and its gate record to the landings log every worktree
+    of this clone shares (`<git common dir>/hirsel-landings.jsonl`), so a red
+    main maps back to the push and to what its gate chose to skip."""
+    common = Path(run('git', 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip())
+    entry = dict(pushed=pushed, base=base, identity=identity, branch=run('git', 'branch', '--show-current').stdout.strip(),
+                 at=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                 gated=record.get('at'),
+                 **{key: record.get(key) for key in ('why', 'tokens', 'floor', 'selection', 'extends')})
+    with open(common / LANDINGS, 'a') as log:
+        log.write(json.dumps(entry, sort_keys=True) + '\n')
+
+
 def main():
     if len(sys.argv) > 1:
         print(__doc__, file=sys.stderr)
@@ -166,6 +194,9 @@ def main():
             return 1
         say(f'land: attempt {attempt}: {run("git", "rev-list", "--count", f"{base}..HEAD").stdout.strip()} '
             f'commits on {base[:12]}, change {identity[:12]} passed tools/gate')
+        record = gating.green_records()[identity]
+        for line in describe(record):
+            say('land: ' + line)
         checked_head = run('git', 'rev-parse', 'HEAD').stdout.strip()
         if not checks():
             say('land: refusing to push a red tree')
@@ -175,7 +206,9 @@ def main():
             return 1
         push = run('git', 'push', 'origin', 'HEAD:main')
         if push.returncode == 0:
-            say(f'land: pushed {run("git", "rev-parse", "--short", "HEAD").stdout.strip()} to main')
+            pushed = run('git', 'rev-parse', 'HEAD').stdout.strip()
+            say(f'land: pushed {pushed[:12]} to main')
+            log_landing(pushed, base, identity, record)
             return 0
         if not undo_index_commit(generated):
             return 1

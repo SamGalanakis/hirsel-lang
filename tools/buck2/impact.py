@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""What a change can affect: the table tools/gate selects its work from.
+"""What a change can affect: the table tools/gate computes its floor and its
+suggestion from (gating.Selection). The lane chooses what runs beyond the
+floor; this is its starting point (`tools/gate --suggest`).
 
 A changed path is one of:
 
@@ -7,12 +8,15 @@ A changed path is one of:
   fast consistency check of its links and whitespace, nothing else;
 - the gate's own Python tooling and the native benchmark harness (TOOL_PATHS):
   the tooling tests, bench/native/tests among them, and `sync.py --check`;
+- the Lean RC model (PROOFS): its audit and vector replay on the host;
 - a build-wide input (BUILD_WIDE): every test and every campaign;
 - anything else: the Buck2 tests that read it, directly or through any
-  dependency (`rdeps(//..., owner(<paths>))`). A file a campaign reads as data
-  (the corpus, the stdlib, native fixtures) selects that campaign through its
-  owner, and a crate's library source selects the campaigns in
-  CRATE_CAMPAIGNS.
+  dependency (`rdeps(//..., owner(<paths>))`), and a crate's library source
+  the campaigns in CRATE_CAMPAIGNS. Campaign data selects by case: a corpus
+  case its twins (changed_programs), a std module the cases whose import
+  closure includes it (Std, std_dependents), a package fixture the cases that
+  reach it (package_dependents); data every case reads its whole campaign
+  (campaign_data).
 
 The generated root BUCK selects by target: the targets whose generated rule
 changed, and every test that depends on them. Its header changing is
@@ -23,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import ast
+import json
 import re
 
 CONFORMANCE = 'conformance'
@@ -65,7 +70,7 @@ CRATE_CAMPAIGNS = {
     # The rest of the pipeline the corpus runs through.
     'hirsel-fmt': frozenset({CONFORMANCE}),
     'hirsel-proof-export': frozenset({CONFORMANCE}),
-    'hirsel-codec': frozenset({CONFORMANCE, NATIVE_SMOKE}),
+    'hirsel-codec': ALL,
     'hirsel-engine': ALL,
     'hirsel-driver': ALL,
     'hirsel-conformance': ALL,
@@ -86,6 +91,18 @@ CRATE_CAMPAIGNS = {
     # Host providers no corpus program runs through: only their own tests.
     'hirsel-object-storage': frozenset(),
     'hirsel-code-store': frozenset(),
+}
+
+# The crates each campaign runs through: every crate in their normal
+# dependency closure must select it (gating.campaign_table_errors). Agreement
+# compares the front end and the IR validator, checked and normal
+# interpretation; conformance also formats and exports proofs.
+AGREEMENT_ROOTS = ('hirsel-lexer', 'hirsel-parser', 'hirsel-resolve', 'hirsel-signature', 'hirsel-check',
+                   'hirsel-modes', 'hirsel-lower', 'hirsel-validate', 'hirsel-interp')
+CAMPAIGN_ROOTS = {
+    CONFORMANCE: (*AGREEMENT_ROOTS, 'hirsel-fmt', 'hirsel-proof-export'),
+    AGREEMENT: AGREEMENT_ROOTS,
+    NATIVE_SMOKE: ('hirsel-llvm', 'hirsel-cranelift', 'hirsel-rt'),
 }
 
 # A command's implementation cannot change another command's campaign.
@@ -152,6 +169,11 @@ BUILD_WIDE = (
 # Under tools/ but read by particular tests: selected through their owners.
 TOOL_INPUTS = ('tools/buck2/test-costs/**', 'tools/native-toolchain/**')
 
+# The Lean RC model: no Buck2 target reads it; its own checks run on the host
+# (proof_checks), as do the protocol vectors it replays.
+PROOFS = ('proofs/**',)
+PROOF_VECTORS = 'native-tests/model/'
+
 # Documentation, and repository metadata no build reads.
 DOCS = ('**.md', 'LICENSE', 'docs/**', '.gitignore')
 
@@ -161,6 +183,7 @@ class Classified:
     """A change's paths by what they can affect."""
     docs: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
+    proofs: list[str] = field(default_factory=list)
     build_wide: list[str] = field(default_factory=list)
     # Paths whose Buck2 owners and their reverse dependencies are selected.
     owned: list[str] = field(default_factory=list)
@@ -221,6 +244,8 @@ def classify(paths, members, buck_text: str) -> Classified:
             result.docs.append(path)
         elif matches(path, TOOL_PATHS) and not code_read(path, buck_text):
             result.tools.append(path)
+        elif matches(path, PROOFS):
+            result.proofs.append(path)
         elif matches(path, TOOL_INPUTS):
             result.owned.append(path)
         elif matches(path, BUILD_WIDE):
@@ -294,3 +319,230 @@ def changed_test_requests(old: str, new: str) -> set[str]:
         return rows
     before, after = requests(old), requests(new)
     return {name for name in before.keys() | after.keys() if before.get(name) != after.get(name)}
+
+
+# ---------------------------------------------------------------- the corpus
+
+# The outcome word a corpus case's name ends with. Cases that differ only in it
+# are twins: a rejected case and the accepted case that isolates its rule
+# (conformance/README.md).
+OUTCOMES = ('ok', 'bad', 'run', 'fail', 'reject', 'accept')
+PASSING = 'conformance/passing.txt'
+
+
+def corpus_program(path: str) -> str | None:
+    """The corpus case a changed path is, a case or its sidecar manifest."""
+    path = path.removesuffix('.json') if path.endswith('.hir.json') else path
+    return path if path.startswith('conformance/') and path.endswith('.hir') else None
+
+
+def case_stem(path: str) -> str:
+    stem = path.removesuffix('.hir')
+    head, _, word = stem.rpartition('-')
+    return head if head and word in OUTCOMES else stem
+
+
+def twins(program: str, root) -> list[str]:
+    """The existing cases beside `program` with its stem, itself included."""
+    directory = root / program.rpartition('/')[0]
+    if not directory.is_dir():
+        return []
+    stem = case_stem(program)
+    return sorted(p.relative_to(root).as_posix() for p in directory.glob('*.hir')
+                  if case_stem(p.relative_to(root).as_posix()) == stem)
+
+
+def ratchet_programs(diff: str) -> set[str]:
+    """The cases whose `passing.txt` line a `git diff -U0` adds or removes."""
+    return {line[1:].strip() for line in diff.splitlines()
+            if line[:1] in '+-' and not line.startswith(('+++', '---'))
+            and corpus_program(line[1:].strip())}
+
+
+def changed_programs(paths, root, ratchet: set[str] = frozenset()) -> list[str]:
+    """Every changed or added corpus case that still exists, with its twins: the
+    cases the floor of every gate runs. A deleted case's twins run too."""
+    programs = {program for path in paths if (program := corpus_program(path))} | set(ratchet)
+    return sorted({twin for program in programs for twin in twins(program, root)})
+
+
+# ---------------------------------------------------------------- std's import closure
+
+STD = 'stdlib/std@1'
+STD_MANIFEST = f'{STD}/hirsel.json'
+# A module path as source spells it: segments joined by `.` (expressions) or
+# `/` (type context and versioned paths), whitespace allowed (LANG-4).
+CHAIN = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(?:\s*[./]\s*[A-Za-z_][A-Za-z0-9_]*)+')
+SEGMENT = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+
+
+# A top-level definition's name, after its attributes and modifiers.
+DEFINITION = re.compile(r'^(?:@[\w.]+(?:\([^)\n]*\))?\s+)*(?:pub\s+)?(?:[a-z_]+\s+)*?(?:fn|type|const)\s+([A-Za-z_]\w*)', re.M)
+# Core's signature table: a core function `fn list.push(...)` is core's member.
+CORE_SIGNATURES = 'crates/hirsel-engine/src/registry/section22.txt'
+CORE_MEMBER = re.compile(r'\bfn ([a-z_0-9]+)\.([A-Za-z_]\w*)')
+
+
+class Std:
+    """std's modules, each one's definitions, and core's members under the
+    module heads core and std share (`string.byte_len` is core's,
+    `string.find` std's: LANG-4)."""
+
+    def __init__(self, root):
+        manifest = json.loads((root / STD_MANIFEST).read_text())
+        self.files = {f'{STD}/{source["path"]}': tuple(source['module']) for source in manifest['sources']}
+        self.modules = set(self.files.values())
+        self.members: dict[tuple[str, ...], set[str]] = {module: set() for module in self.modules}
+        self.texts = {}
+        for path, module in self.files.items():
+            self.texts[path] = (root / path).read_text(errors='replace')
+            self.members[module] |= set(DEFINITION.findall(self.texts[path]))
+        self.core: dict[str, set[str]] = {}
+        for head, member in CORE_MEMBER.findall((root / CORE_SIGNATURES).read_text()):
+            self.core.setdefault(head, set()).add(member)
+
+    def mentioned(self, text: str, aliases=None) -> set[tuple[str, ...]]:
+        """The modules a source names: a path with one of them as a proper prefix
+        (`time.now`, `internal.format.pad`, `json/Value`) or through an exposed
+        alias head, unless what follows is core's member under a shared head.
+        It over-approximates: a local named like a module counts."""
+        found = set()
+        aliases = aliases or {}
+        for chain in CHAIN.findall(text):
+            segments = tuple(SEGMENT.findall(chain))
+            if segments[0] in aliases:
+                target = aliases[segments[0]]
+                found |= {m for m in self.modules if m[:len(target)] == target}
+            for length in range(1, len(segments)):
+                module, member = segments[:length], segments[length]
+                if module in self.modules and (member in self.members[module]
+                                               or (*module, member) in self.modules
+                                               or length > 1
+                                               or member not in self.core.get(module[0], ())):
+                    found.add(module)
+        return found
+
+    def reach(self) -> dict[tuple[str, ...], set[tuple[str, ...]]]:
+        """Each module's import closure within std, itself included."""
+        direct = {module: {module} for module in self.modules}
+        for path, module in self.files.items():
+            direct[module] |= self.mentioned(self.texts[path])
+        reach = {}
+        for module in self.modules:
+            seen, frontier = set(), [module]
+            while frontier:
+                current = frontier.pop()
+                if current not in seen:
+                    seen.add(current)
+                    frontier.extend(direct[current] - seen)
+            reach[module] = seen
+        return reach
+
+
+def changed_std_modules(paths, std: Std) -> set[tuple[str, ...]] | None:
+    """The std modules a change edits, or None when it changes std as a whole
+    (its manifest, or a file under std that is no module source)."""
+    changed = set()
+    for path in paths:
+        if path.startswith(f'{STD}/'):
+            if path not in std.files:
+                return None
+            changed.add(std.files[path])
+    return changed
+
+
+def package_std_reach(manifest, root, std: Std, reach, seen=None) -> set[tuple[str, ...]]:
+    """The std modules a package's sources reach, through its own std
+    dependency and through every package it depends on."""
+    seen = set() if seen is None else seen
+    manifest = manifest.resolve()
+    if manifest in seen:
+        return set()
+    seen.add(manifest)
+    data = json.loads(manifest.read_text())
+    std_manifest = (root / STD_MANIFEST).resolve()
+    found = set()
+    texts = [(manifest.parent / source['path']).read_text(errors='replace')
+             for source in data.get('sources', []) if (manifest.parent / source['path']).is_file()]
+    for dependency in data.get('dependencies', []):
+        target = (manifest.parent / dependency['manifest']).resolve()
+        if target == std_manifest:
+            aliases = {expose['head']: tuple(expose['module']) for expose in dependency.get('expose', [])}
+            for text in texts:
+                for module in std.mentioned(text, aliases):
+                    found |= reach[module]
+        elif target.is_file():
+            found |= package_std_reach(target, root, std, reach, seen)
+    return found
+
+
+def std_dependents(changed, root, std: Std | None = None) -> list[str]:
+    """The corpus cases whose import closure includes a changed std module
+    (`changed` None: every case that selects std). Only a case's sidecar
+    selects std (PROG-1), so a case without one depends on none."""
+    std = std or Std(root)
+    reach = std.reach()
+    programs = []
+    for manifest in sorted((root / 'conformance').rglob('*.hir.json')):
+        program = manifest.with_suffix('')
+        if not program.is_file():
+            continue
+        modules = package_std_reach(manifest, root, std, reach)
+        if modules and (changed is None or modules & changed):
+            programs.append(program.relative_to(root).as_posix())
+    return programs
+
+
+def package_files(manifest, root, seen=None) -> set:
+    """The sources and manifests a package selects, through every dependency
+    but std (std_dependents follows std by module)."""
+    seen = set() if seen is None else seen
+    manifest = manifest.resolve()
+    if manifest in seen or manifest == (root / STD_MANIFEST).resolve() or not manifest.is_file():
+        return set()
+    seen.add(manifest)
+    data = json.loads(manifest.read_text())
+    files = {manifest} | {(manifest.parent / source['path']).resolve() for source in data.get('sources', [])}
+    for dependency in data.get('dependencies', []):
+        files |= package_files(manifest.parent / dependency['manifest'], root, seen)
+    return files
+
+
+def package_dependents(paths, root) -> list[str]:
+    """The corpus cases whose sidecar's packages select a changed file outside
+    the corpus and std: a source or manifest of a package fixture, or a file
+    added beside one."""
+    changed = [(root / path).resolve() for path in paths
+               if not path.startswith(('conformance/', f'{STD}/'))]
+    if not changed:
+        return []
+    programs = []
+    for manifest in sorted((root / 'conformance').rglob('*.hir.json')):
+        files = package_files(manifest, root)
+        directories = {file.parent for file in files if file.name == 'hirsel.json'}
+        if any(path in files or path.parent in directories for path in changed):
+            programs.append(manifest.with_suffix('').relative_to(root).as_posix())
+    return programs
+
+
+def campaign_data(path: str) -> frozenset:
+    """The whole campaigns a changed data file outside the per-case rules can
+    affect: the spec's rule table every case header names, a corpus file that
+    is no case (such as a list the runner reads), and the native fixtures."""
+    if path.startswith('docs/spec/'):
+        return FRONT
+    if path.startswith(('native-tests/', 'bench/native/programs/')):
+        return frozenset({NATIVE_SMOKE})
+    if (path.startswith('conformance/') and not corpus_program(path)
+            and path != PASSING and not path.endswith('.md')):
+        return frozenset({CONFORMANCE})
+    return frozenset()
+
+
+def proof_checks(paths) -> list[tuple[str, list[str]]]:
+    """The Lean model's own checks a change selects: its audit when the model
+    changes, and its vector replay when the model or a vector changes."""
+    model = any(matches(path, PROOFS) for path in paths)
+    vectors = model or any(path.startswith(PROOF_VECTORS) for path in paths)
+    return ([('proofs/rc/audit.sh', ['proofs/rc/audit.sh'])] if model else []) + \
+        ([('proofs/rc/check-vectors.sh', ['proofs/rc/check-vectors.sh'])] if vectors else [])
