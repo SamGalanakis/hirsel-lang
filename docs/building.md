@@ -615,7 +615,8 @@ runs every shard), the whole campaigns `conformance`, `agreement` and
 `native-smoke`, `conformance:<path>` (the corpus cases under a path),
 `agreement:<path>` (those cases' variants in the seed-1 sample: exactly the
 variants the whole campaign checks of them), `native:<program>` (the LLVM
-smoke matrix and Cranelift parity for one program), `all-tests`, and
+smoke matrix and Cranelift parity for one program; a file or a canonical generated
+ID such as `native:generated/success-0`), `all-tests`, and
 `suggested`. Chosen corpus cases run in slices of at most 340 (conformance) or
 260 (agreement) cases (`gate-conformance-selected-shard-<i>`,
 `gate-agree-selected-shard-<i>`); more than half the corpus runs the whole

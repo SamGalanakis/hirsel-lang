@@ -639,6 +639,13 @@ def corpus_cases(prefix, root=ROOT) -> list[str]:
     return [case for case in cases if case.startswith(prefix)]
 
 
+def generated_program_id(program: str) -> bool:
+    """A canonical, reproducible native::generate::from_id witness."""
+    match = re.fullmatch(
+        r'generated/(?:success|overflow|underflow|dividebyzero|index|requires)-(0|[1-9][0-9]{0,19})', program)
+    return bool(match and int(match[1]) < 1 << 64)
+
+
 def accepted(case, root=ROOT) -> bool:
     """Whether agreement mutates this case: it skips cases expected to reject."""
     try:
@@ -930,8 +937,10 @@ class Selection:
                 plan.reasons.append((token, 'chosen'))
             elif token.startswith(NATIVE_PREFIX):
                 program = token.removeprefix(NATIVE_PREFIX)
-                if not (self.root / program).is_file():
-                    raise SystemExit(f'gate: --tests {token}: {program} is no file')
+                valid = (generated_program_id(program) if program.startswith('generated/')
+                         else (self.root / program).is_file())
+                if not valid:
+                    raise SystemExit(f'gate: --tests {token}: {program} is neither a file nor a generated program ID')
                 plan.native.add(program)
                 plan.reasons.append((token, 'chosen'))
             else:

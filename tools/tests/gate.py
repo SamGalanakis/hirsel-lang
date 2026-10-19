@@ -389,6 +389,21 @@ class Queries(unittest.TestCase):
                 with self.subTest(token=token), self.assertRaises(SystemExit):
                     self.run_query(lambda s: s.choose([token]), selection, answers)
 
+    def test_generated_program_ids_select_both_native_backends(self):
+        kinds = ['success', 'overflow', 'underflow', 'dividebyzero', 'index', 'requires']
+        programs = {f'generated/{kind}-{seed}' for kind in kinds for seed in [0, 2**64 - 1]}
+        selection = self.selection([])
+        plan, asked = self.run_query(lambda s: s.choose(['native:' + p for p in sorted(programs)]), selection)
+        self.assertEqual(asked, [])
+        self.assertEqual(plan.native, programs)
+        self.assertEqual(plan.campaign_targets(), gating.NATIVE_TARGETS)
+        self.assertEqual(plan.config(), ['-c', 'hirsel.native_filters=' + '|'.join(sorted(programs))])
+        for program in ['generated/unknown-0', 'generated/success--1', 'generated/success-01',
+                        'generated/success-18446744073709551616', 'generated/success-1/child',
+                        'generated/success-1.0', 'generated/success-١', 'generated/success-' + '9' * 5000]:
+            with self.subTest(program=program), self.assertRaises(SystemExit):
+                selection.choose(['native:' + program])
+
     def test_a_plan_settles_slices_and_names_its_targets(self):
         import sync
         with tempfile.TemporaryDirectory() as directory:
