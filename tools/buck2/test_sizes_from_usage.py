@@ -40,8 +40,9 @@ least the escalated reservation of any run of it killed for memory (1.75x
 unless a larger retry reservation was observed). A run the memory guard stopped
 (crates/hirsel-guard caps a test's data at its kill line, so the pool never sees
 it) counts as such a kill: `guard-stops.json` records each stop's binary and
-reservation, and a binary with stops but no runs gets a row at its floor, with
-the stop's `cpu_count` (default 1).
+reservation, or more when the stop records `needed_kb`, the data limit the run was
+measured to need (the limit is twice the request); a binary with stops but no runs
+gets a row at its floor, with the stop's `cpu_count` (default 1).
 """
 
 import argparse
@@ -137,7 +138,8 @@ def guard_stops(path=None):
     path = path or HERE / "guard-stops.json"
     if not path.exists():
         return {}
-    return {name: ([math.ceil(stop["reserved_kb"] * ESCALATION) for stop in stops],
+    return {name: ([max(math.ceil(stop["reserved_kb"] * ESCALATION),
+                        math.ceil(stop.get("needed_kb", 0) / KILL_FACTOR)) for stop in stops],
                    max(stop.get("cpu_count", 1) for stop in stops))
             for name, stops in json.loads(path.read_text()).items()}
 

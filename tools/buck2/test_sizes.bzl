@@ -40,7 +40,7 @@ TEST_REQUESTS = {
     "hirsel-fmt-unittest": [1, 524288, ""],
     "hirsel-heapcheck-test-it": [2, 524288, ""],
     "hirsel-heapcheck-unittest": [1, 524288, ""],
-    "hirsel-intern-unittest": [1, 524288, ""],
+    "hirsel-intern-unittest": [1, 2097152, ""],
     "hirsel-interp-test-it": [2, 524288, ""],
     "hirsel-interp-unittest": [1, 524288, ""],
     "hirsel-kernels-test-vectors": [1, 524288, ""],

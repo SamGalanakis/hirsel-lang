@@ -84,6 +84,7 @@ class NativeSizes(unittest.TestCase):
                 {'hirsel-cli-test-cli': {'cpu_count': 2, 'memory_kb': 1048576, 'cpu_class': ''}}))
             (root / 'guard-stops.json').write_text(json.dumps({
                 'hirsel-cli-test-cli': [{'reserved_kb': 1048576}],
+                'hirsel-intern-unittest': [{'reserved_kb': 524288, 'needed_kb': 4194304}],
                 'hirsel-driver-test-it-precheck': [{'reserved_kb': 2883584, 'cpu_count': 2}],
             }))
             usage = root / 'usage.log'
@@ -100,6 +101,8 @@ class NativeSizes(unittest.TestCase):
         self.assertEqual(rows['hirsel-driver-test-it-precheck'],
                          dict(cpu_count=2, memory_kb=5242880, cpu_class='', runs=0, pss_runs=0, memory_kills=1))
         self.assertEqual(rows['hirsel-lir-test-it']['memory_kb'], 524288)
+        # A measured need above 1.75x sets the floor: half the limit it needed.
+        self.assertEqual(rows['hirsel-intern-unittest']['memory_kb'], 2097152)
 
 
 if __name__ == '__main__':

@@ -6,5 +6,13 @@
       "reserved_kb": 2883584,
       "stop": "precheck::definition_hashes_are_the_same_with_and_without_the_std_precheck reached the 5632M guard limit in hirsel-driver-test-it-shard-5 beside proof_export's workers, before it moved to its own binary, where its prechecked and reference sides run on two threads"
     }
+  ],
+  "hirsel-intern-unittest": [
+    {
+      "date": "2026-10-19",
+      "needed_kb": 4194304,
+      "reserved_kb": 524288,
+      "stop": "jobs::tests run eight workers each on a 128 MiB compiler stack, which the data limit counts in full; with the pool's four test threads that is 4 GiB of stack (resident peak 34M). Measured: passes at a 4G limit, stops at 3584M"
+    }
   ]
 }
