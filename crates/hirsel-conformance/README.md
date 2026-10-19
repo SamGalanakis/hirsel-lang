@@ -292,6 +292,8 @@ size-class allocator whose client requests describe its slab blocks, region
 reservations and arena blocks, with regions;
 `--filter TEXT` runs the matching baseline cases instead. Under every mode
 `--filter` may repeat; a case is selected when its ID contains any given text.
+A run that selects no case fails, except a `--full` or `--cranelift` shard
+whose filter selects cases only other shards hold: it passes with zero cases.
 `native --full --shard I/N` runs the selected cases the conformance runner's
 path-hash shard I of N holds (topology and generated cases included), and judges the exclusion rows of exactly those cases; the scheduled
 full gate runs `NATIVE_FULL_SHARDS` of them, and `--bless` refuses a shard. `--replay DIR` and `--reduce DIR` act on one artifact.

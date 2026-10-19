@@ -35,8 +35,19 @@ struct Filter(Vec<String>, Option<Shard>);
 
 impl Filter {
     fn keeps(&self, id: &str) -> bool {
-        (self.0.is_empty() || self.0.iter().any(|text| id.contains(text.as_str())))
-            && self.1.as_ref().is_none_or(|shard| shard.holds(id))
+        self.matches(id) && self.1.as_ref().is_none_or(|shard| shard.holds(id))
+    }
+
+    /// Whether the text selects `id`, whichever shard holds it.
+    fn matches(&self, id: &str) -> bool {
+        self.0.is_empty() || self.0.iter().any(|text| id.contains(text.as_str()))
+    }
+
+    /// A run that selected no case fails unless it is a shard and the text
+    /// selects some of `ids` that other shards hold: then it passes with zero
+    /// cases.
+    fn empty_fails<'a>(&self, mut ids: impl Iterator<Item = &'a str>) -> bool {
+        self.1.is_none() || !ids.any(|id| self.matches(id))
     }
 
     /// No text selects: the run covers every case of its shard.
@@ -366,6 +377,7 @@ fn cranelift(
     let list = cranelift::parity_list(&target);
     let matrix = seeded(cranelift::matrix(target), hash_seed);
     let mut cases = cranelift::cases(root)?;
+    let empty_fails = filter.empty_fails(cases.iter().map(|c| c.id.as_str()));
     cases.retain(|c| filter.keeps(&c.id));
     if clif {
         for case in &cases {
@@ -427,7 +439,7 @@ fn cranelift(
         rendered.push_str(&format!("{id}\t{reason}\n"));
     }
     print!("{rendered}");
-    let ok = report.ok() && !results.is_empty();
+    let ok = report.ok() && !(results.is_empty() && empty_fails);
     println!(
         "cranelift parity: {} of {} cases LLVM passes agree as Cranelift executables ({} selected){}",
         report.passing,
@@ -565,6 +577,15 @@ fn full(
     let exclusions = native::read_exclusions(root)?;
     let mut cases = native::baseline(root)?;
     let baseline_before = cases.len();
+    let mut generated = native::generate::cases(64);
+    let mut partitioned = listed(root, "native-tests/topology/cases.txt")?;
+    let empty_fails = filter.empty_fails(
+        cases
+            .iter()
+            .chain(&generated)
+            .chain(&partitioned)
+            .map(|c| c.id.as_str()),
+    );
     let complete = filter.is_empty() && engine.is_none();
     // Only the whole run must find every campaign non-empty; a shard may hold
     // no topology or generated case.
@@ -702,7 +723,6 @@ fn full(
         .into_iter()
         .filter(|c| engine.is_none_or(|e| e.keeps(c)))
         .collect();
-    let mut partitioned = listed(root, "native-tests/topology/cases.txt")?;
     partitioned.retain(|c| filter.keeps(&c.id));
     let topology_results = native::run_cases(
         &partitioned,
@@ -720,7 +740,6 @@ fn full(
     }
     // Generated successes and directed failures agree under every
     // configuration of the matrix.
-    let mut generated = native::generate::cases(64);
     generated.retain(|c| filter.keeps(&c.id));
     let generated_results = native::run_cases_with(
         &generated,
@@ -750,7 +769,12 @@ fn full(
         eprintln!("native: the matrix selected no cases or no configurations");
         ok = false;
     }
-    if !complete && cases.is_empty() && partitioned.is_empty() && generated.is_empty() {
+    if !complete
+        && cases.is_empty()
+        && partitioned.is_empty()
+        && generated.is_empty()
+        && empty_fails
+    {
         eprintln!("native: --filter {:?} selected no cases", filter.0);
         ok = false;
     }
@@ -960,6 +984,32 @@ mod tests {
                 .filter(|id| narrowed.keeps(id))
                 .all(|id| id.contains("SEM-1"))
         );
+    }
+
+    #[test]
+    fn an_empty_shard_of_a_matching_filter_passes() {
+        let ids = ["conformance/SEM/SEM-1-a.hir", "conformance/OWN/OWN-7-c.hir"];
+        let one = |filter: Vec<&str>, shard: Option<&str>| {
+            Filter(
+                filter.into_iter().map(Into::into).collect(),
+                shard.and_then(Shard::parse),
+            )
+        };
+        let holder = (1..=8)
+            .find(|i| Shard::parse(&format!("{i}/8")).unwrap().holds(ids[0]))
+            .unwrap();
+        let other = format!("{}/8", holder % 8 + 1);
+        // A shard that holds none of the cases the filter selects elsewhere.
+        let empty = one(vec!["SEM-1"], Some(&other));
+        assert!(!ids.iter().any(|id| empty.keeps(id)));
+        assert!(!empty.empty_fails(ids.into_iter()));
+        // A filter that selects nothing in any shard still fails, sharded or not.
+        assert!(one(vec!["NOPE"], Some(&other)).empty_fails(ids.into_iter()));
+        assert!(one(vec!["NOPE"], None).empty_fails(ids.into_iter()));
+        // An unsharded run that selected nothing fails.
+        assert!(one(vec!["SEM-1"], None).empty_fails(ids.into_iter()));
+        // An unfiltered shard of a nonempty corpus may be empty.
+        assert!(!one(Vec::new(), Some(&other)).empty_fails(ids.into_iter()));
     }
 
     #[test]
