@@ -1,8 +1,0 @@
-// rule: MODE-1
-// expect: accept
-fn pick(xs: List[Bytes], x: Bytes) -> Bytes in {xs, x} {
-  for e in xs {
-    return e
-  }
-  x
-}

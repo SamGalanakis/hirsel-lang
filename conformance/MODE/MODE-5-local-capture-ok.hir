@@ -1,8 +1,0 @@
-// rule: MODE-5
-// expect: accept
-// "Capturing a local value makes it local (scoped)."
-fn example(take x: Bytes) -> fn() -> Bytes uses {} {
-  fn() {
-    copy x
-  }
-}

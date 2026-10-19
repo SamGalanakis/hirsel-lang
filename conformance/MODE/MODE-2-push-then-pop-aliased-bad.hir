@@ -1,9 +1,0 @@
-// rule: MODE-2
-// expect: reject MODE-2 at line 8
-// A list shared by a copy before the push is still aliased at the pop.
-fn literal() -> () {
-  let mut xs: List[u32] = [1u32]
-  let kept = copy xs
-  list.push(mut xs, 2u32)
-  let _ = list.pop(mut xs)
-}

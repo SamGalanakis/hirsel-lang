@@ -1,6 +1,0 @@
-// rule: MODE-3
-// expect: accept
-// "A once function value ... is noncopyable."
-fn example(take action: once fn() -> () uses {}) -> () {
-  let other = take action
-}

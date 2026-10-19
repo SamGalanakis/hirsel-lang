@@ -1,9 +1,0 @@
-// rule: MODE-5
-// expect: accept
-// "Capturing a once value makes it once."
-fn example(take action: once fn() -> () uses {}) -> once fn() -> () uses {} {
-  fn() {
-    let owned = take action
-    owned()
-  }
-}

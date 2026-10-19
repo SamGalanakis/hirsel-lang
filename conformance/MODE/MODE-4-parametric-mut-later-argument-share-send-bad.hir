@@ -2,7 +2,7 @@
 // expect: reject MODE-4 at line 20
 // The block argument shares `a` into `keep` before callee entry, so the old
 // list `replace` returns is aliased and cannot be sent. Twin is
-// MODE-4-parametric-mut-later-argument-share-send-ok.
+// MODE-4-parametric-result-send-run.
 fn send[T: sendable](take value: T) -> T {
   value
 }

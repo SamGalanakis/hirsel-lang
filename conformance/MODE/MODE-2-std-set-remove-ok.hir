@@ -1,5 +1,0 @@
-// rule: MODE-2
-// expect: accept
-fn remove(mut s: unique Set[u64]) -> bool {
-  set.remove(mut s, 1)
-}

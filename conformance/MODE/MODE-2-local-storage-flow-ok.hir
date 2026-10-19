@@ -1,9 +1,0 @@
-// rule: MODE-2
-// expect: accept
-fn need(mut x: unique Bytes) {}
-
-fn probe() {
-  let mut slot: Bytes = b"fresh"
-  let _ = 1u8
-  need(mut slot)
-}

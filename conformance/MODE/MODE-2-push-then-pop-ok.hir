@@ -2,7 +2,7 @@
 // expect: accept
 // A push keeps a unique list unique, so a later pop needs no copy: for a local
 // literal, an annotated binding, a list returned unique and a list built by
-// a loop of pushes. Twins are MODE-2-push-then-pop-aliased-bad and
+// a loop of pushes. Twins are MODE-2-push-after-copy-aliased-bad and
 // MODE-2-push-loop-aliased-bad.
 fn literal() -> () {
   let mut xs: List[u32] = [1u32]

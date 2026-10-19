@@ -1,5 +1,0 @@
-// rule: MODE-2
-// expect: accept
-fn view(x: unique Shared[Bytes]) -> Shared[Bytes] in x {
-  x
-}

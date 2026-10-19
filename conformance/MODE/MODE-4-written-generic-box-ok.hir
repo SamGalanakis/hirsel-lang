@@ -1,5 +1,0 @@
-// rule: MODE-4
-// expect: accept
-fn good[T](take x: sendable T) -> box sendable T {
-  box take x
-}

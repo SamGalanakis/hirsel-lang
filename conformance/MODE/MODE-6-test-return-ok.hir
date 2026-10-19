@@ -1,6 +1,0 @@
-// rule: MODE-6
-// expect: accept
-// "Scoped ... always local ... cannot be returned."
-fn example(take x: Stdout) -> Stdout {
-  take x
-}

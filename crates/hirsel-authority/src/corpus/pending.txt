@@ -133,7 +133,6 @@ CONC/CONC-7-sequence-payload-ok.hir # dependency-owned H: LANG-2 line 5: literal
 MODE/MODE-4-counted-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-counted-list-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-error-mapper-occurrence-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
-MODE/MODE-4-error-mapper-occurrence-ok.hir # dependency-owned D/fixture M: LANG-4 line 5
 MODE/MODE-4-iter-mut-handback-sendable-run.hir # not done J: unexpected MODE-4 line 9: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
 MODE/MODE-4-local-result-send-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-tx-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
@@ -148,7 +147,6 @@ MODE/MODE-4-written-counted-source-share-bad.hir # dependency-owned I/P: operati
 MODE/MODE-4-written-forwarded-capture-bad.hir # not done J: missing MODE-4 line 15
 MODE/MODE-4-written-generic-box-bad.hir # not done J: missing MODE-4 line 4
 MODE/MODE-4-written-inferred-capture-share-bad.hir # not done J: missing MODE-4 line 11
-MODE/MODE-4-written-iter-contract-ok.hir # not done J: unexpected MODE-4 line 8: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
 MODE/MODE-4-written-iter-parameter-ok.hir # not done J: unexpected MODE-4 line 9: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
 MODE/MODE-4-written-join-loss-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-written-later-argument-share-bad.hir # not done J: missing MODE-4 line 7
@@ -166,7 +164,6 @@ MODE/MODE-4-written-nested-capture-remap-bad.hir # not done J: missing MODE-4 li
 MODE/MODE-4-written-owned-field-share-bad.hir # not done J: missing MODE-4 line 11
 MODE/MODE-4-written-parent-share-bad.hir # not done J: missing MODE-4 line 11
 MODE/MODE-4-written-partial-refill-bad.hir # not done J: missing MODE-4 line 12
-MODE/MODE-4-written-plain-copy-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-4-written-qualified-capture-share-bad.hir # not done J: missing MODE-4 line 11
 MODE/MODE-4-written-returned-capture-bad.hir # not done J: missing MODE-4 line 16
 MODE/MODE-4-written-shared-list-insertion-bad.hir # not done J: missing MODE-4 line 6
@@ -174,7 +171,6 @@ MODE/MODE-4-written-slots-instantiated-result-bad.hir # dependency-owned H: LANG
 MODE/MODE-4-written-slots-instantiated-result-ok.hir # dependency-owned H: LANG-2 line 7: generic call arguments cannot be inferred from its prefix and expected type
 MODE/MODE-4-written-transport-growth-run.hir # not done J: unexpected MODE-4 line 61: a `mut` argument's crossing mode must be exactly the parameter's: `iter.next` may store in `it` any value of the parameter's type, which is then used as the argument's. Write the binding's type as the parameter states it, or take the value and return the new one: the storage is `sendable`, but the parameter of `iter.next` is not `sendable`
 MODE/MODE-5-local-capture-bad.hir # not done J: missing CLO-4 line 5
-MODE/MODE-5-once-capture-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J
 MODE/MODE-6-net-global-capture-ok.hir # dependency-owned E/v20 follow-up: NotImplemented
 MODE/MODE-6-net-test-capture-bad.hir # dependency-owned D/fixture M: LANG-4 line 5
 MODE/MODE-6-tx-return-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load

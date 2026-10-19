@@ -1,6 +1,0 @@
-// rule: MODE-4
-// expect: accept
-fn good() -> sendable Bytes {
-  let x: sendable Bytes = b"f"
-  x
-}

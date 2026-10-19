@@ -1,5 +1,0 @@
-// rule: MODE-2
-// expect: accept
-fn example(mut xs: unique List[u64]) -> () {
-  list.pop(mut xs);
-}

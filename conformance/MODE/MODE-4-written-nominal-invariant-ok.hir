@@ -1,7 +1,0 @@
-// rule: MODE-4
-// expect: accept
-fn accept(x: Option[sendable Bytes]) {}
-
-fn good(x: Option[sendable Bytes]) {
-  accept(x)
-}

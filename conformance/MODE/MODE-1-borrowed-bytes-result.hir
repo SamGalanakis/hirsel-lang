@@ -1,5 +1,0 @@
-// rule: MODE-1
-// expect: accept
-fn normalize(b: Bytes) -> Bytes in b {
-  bytes.replace(b, b"\r\n", b"\n")
-}

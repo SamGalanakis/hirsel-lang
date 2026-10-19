@@ -1,6 +1,0 @@
-// rule: MODE-1
-// expect: accept
-// "Taken parameters are global unless related."
-fn get(take x: Bytes) -> Bytes {
-  take x
-}

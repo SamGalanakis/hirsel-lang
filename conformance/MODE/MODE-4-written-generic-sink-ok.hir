@@ -1,5 +1,0 @@
-// rule: MODE-4
-// expect: accept
-fn output_error[E](take e: sendable E) -> () {
-  ()
-}

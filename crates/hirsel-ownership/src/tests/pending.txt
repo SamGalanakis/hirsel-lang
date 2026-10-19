@@ -92,9 +92,7 @@ MODE/MODE-1-environment-relation-on-binding-bad.hir # dependency-owned body chec
 MODE/MODE-1-environment-result-non-plain-parameter-bad.hir # dependency-owned signature: Diagnostics([Diagnostic { rule: RuleId("MODE-1"), severity: Error, message: "`in env` alone cannot cover the non-Plain parameter x: write `in {env, x}` or `in x`", primary: Span { file: FileId(0), start: 234, end: 240 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
 MODE/MODE-1-generic-callable-relation-bad.hir # dependency-owned J: MODE-1 line 8
 MODE/MODE-1-local-function-bare-local-result-bad.hir # dependency-owned body checker: MODE-1 line 5: a named function has no environment: its local result names its sources, `in x`
-MODE/MODE-1-mut-global-annotation-bad.hir # outside ownership operative-rule scope
 MODE/MODE-1-named-bare-local-result-bad.hir # dependency-owned signature: Diagnostics([Diagnostic { rule: RuleId("MODE-1"), severity: Error, message: "a named function has no environment: its local result names its sources, `in x`", primary: Span { file: FileId(0), start: 154, end: 166 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
-MODE/MODE-1-nested-borrow-global-bad.hir # outside ownership operative-rule scope
 MODE/MODE-1-trim-split-copy-bad.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-1-trim-split-unique-run.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-1-view-return-direct-bad.hir # dependency-owned body checker: LANG-7 line 15: opaque type cannot be constructed here
@@ -103,7 +101,6 @@ MODE/MODE-1-view-return-graphemes-bad.hir # dependency-owned resolver: LANG-4 li
 MODE/MODE-1-view-return-opaque-bad.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-1-view-return-source-bad.hir # dependency-owned body checker: LANG-7 line 15: opaque type cannot be constructed here
 MODE/MODE-1-wave1-map-output-bad.hir # dependency-owned resolver: LANG-4 line 8
-MODE/MODE-1-wave1-map-output-ok.hir # dependency-owned resolver: LANG-4 line 8
 MODE/MODE-1-wave2-trim-accept.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-1-wave2-trim-reject.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-2-callable-annotation-header-bad.hir # dependency-owned J: MODE-2 line 6
@@ -130,11 +127,8 @@ MODE/MODE-2-std-priority-queue-push-ok.hir # dependency-owned resolver: LANG-4 l
 MODE/MODE-2-std-result-unique-run.hir # dependency-owned resolver: LANG-4 line 11
 MODE/MODE-2-unique-field-push-pop-ok.hir # dependency-owned body checker: LANG-7 line 19: field is unavailable on this type
 MODE/MODE-2-wave1-reverse-bad.hir # dependency-owned resolver: LANG-4 line 4
-MODE/MODE-2-wave1-reverse-ok.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-2-wave1-rotate-bad.hir # dependency-owned resolver: LANG-4 line 4
-MODE/MODE-2-wave1-rotate-ok.hir # dependency-owned resolver: LANG-4 line 4
 MODE/MODE-2-wave1-sort-bad.hir # dependency-owned resolver: LANG-4 line 9
-MODE/MODE-2-wave1-sort-ok.hir # dependency-owned resolver: LANG-4 line 9
 MODE/MODE-3-generic-once-annotation-bad.hir # dependency-owned signature: Diagnostics([Diagnostic { rule: RuleId("MODE-3"), severity: Error, message: "once requires a function type", primary: Span { file: FileId(0), start: 74, end: 80 }, secondary: [], notes: [], fix: None, obligations: [], root_cause: None }])
 MODE/MODE-3-mut-callable-multiplicity-bad.hir # dependency-owned J: MODE-3 line 10
 MODE/MODE-3-nested-once-annotation-bad.hir # dependency-owned body checker: MODE-3 line 4: once requires a function type
@@ -205,7 +199,6 @@ MODE/MODE-4-written-implicit-result-read-bad.hir # outside ownership operative-r
 MODE/MODE-4-written-inferred-capture-share-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-input-variance-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-invariant-getter-bad.hir # outside ownership operative-rule scope
-MODE/MODE-4-written-iter-contract-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-iter-parameter-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-iterator-state-contract-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-join-loss-bad.hir # outside ownership operative-rule scope
@@ -228,7 +221,6 @@ MODE/MODE-4-written-owned-field-share-bad.hir # outside ownership operative-rule
 MODE/MODE-4-written-parent-share-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-partial-refill-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-partial-replacement-bad.hir # outside ownership operative-rule scope
-MODE/MODE-4-written-plain-copy-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-qualified-capture-share-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-qualified-copy-result-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-qualified-sharing-put-bad.hir # outside ownership operative-rule scope
@@ -238,14 +230,12 @@ MODE/MODE-4-written-repeated-occurrence-bad.hir # outside ownership operative-ru
 MODE/MODE-4-written-result-variance-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-returned-capture-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-sendable-let-mut-write-bad.hir # outside ownership operative-rule scope
-MODE/MODE-4-written-shared-copy-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-shared-list-insertion-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-sharing-put-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-slots-instantiated-result-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-variant-bad.hir # outside ownership operative-rule scope
 MODE/MODE-4-written-wrapped-jobs-bad.hir # outside ownership operative-rule scope
 MODE/MODE-5-authority-union-bad.hir # dependency-owned J: CLO-4 line 6
-MODE/MODE-5-sendability-capture-bad.hir # outside ownership operative-rule scope
 MODE/MODE-6-arena-return-bad.hir # outside ownership operative-rule scope
 MODE/MODE-6-escaping-capture-bad.hir # outside ownership operative-rule scope
 MODE/MODE-6-net-test-capture-bad.hir # outside ownership operative-rule scope

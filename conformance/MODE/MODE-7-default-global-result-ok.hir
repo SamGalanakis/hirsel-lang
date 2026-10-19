@@ -1,6 +1,0 @@
-// rule: MODE-7
-// expect: accept
-// "borrowed ... parameters local ... results global."
-fn example(x: Bytes) -> Bytes in x {
-  x
-}

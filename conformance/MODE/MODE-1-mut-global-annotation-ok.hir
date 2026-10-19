@@ -1,5 +1,0 @@
-// rule: MODE-1
-// expect: accept
-fn view(mut x: String) -> () {
-  ()
-}

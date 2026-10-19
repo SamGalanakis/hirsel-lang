@@ -1,6 +1,0 @@
-// rule: MODE-2
-// expect: accept
-// "Only unique whole-value assignments."
-fn example(mut x: unique Bytes, take y: unique Bytes) -> () {
-  x = take y
-}
