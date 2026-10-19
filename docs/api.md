@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1335 exported definitions; 456 variants.
+1341 exported definitions; 468 variants.
 
 ## Types and roots
 
@@ -10408,6 +10408,15 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/xxhash64/State`](#def-s
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/xxhash64/State`](#def-std_401_2fxxhash64_2fState)
 
+<a id="def-std_401_2fxxhash64_2fupdate_5flist"></a>
+
+- `@noalloc pub fn xxhash64.update_list(mut state: State, data: List[u8], start: u64) -> () uses {}`
+
+Absorb the byte-list suffix starting at start, without copying its storage.
+A start at or beyond the end is an empty update, as crc32.update_list.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8), [`std@1/xxhash64/State`](#def-std_401_2fxxhash64_2fState)
+
 
 ## yaml
 
@@ -10984,3 +10993,127 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_4
 - `pub fn zip.writer() -> unique Writer uses {}`
 
 References: [`std@1/zip/Writer`](#def-std_401_2fzip_2fWriter)
+
+
+## zstd
+
+<a id="def-std_401_2fzstd_2fDictionary"></a>
+
+- `pub opaque type zstd.Dictionary: copyable + inert + noalloc_drop uses {}`
+
+A validated RFC 8878 dictionary or raw-content prefix. Reusable across frames;
+decoding borrows it and resets its entropy tables and offsets at each frame.
+
+<a id="def-std_401_2fzstd_2fZstdError"></a>
+
+- `pub type zstd.ZstdError = Truncated | BadMagic | ReservedBit | Corrupt | BlockOversize | Checksum | ContentSize | WindowTooLarge( u64 ) | OutputTooLarge | DictionaryRequired(u64) | DictionaryMismatch | InvalidDictionary`
+
+Malformed data and caller-selected resource bounds are ordinary errors.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fzstd_2fZstdError_23BadMagic"></a>
+
+- `BadMagic -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23BlockOversize"></a>
+
+- `BlockOversize -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23Checksum"></a>
+
+- `Checksum -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23ContentSize"></a>
+
+- `ContentSize -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23Corrupt"></a>
+
+- `Corrupt -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23DictionaryMismatch"></a>
+
+- `DictionaryMismatch -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23DictionaryRequired"></a>
+
+- `DictionaryRequired(u64) -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fzstd_2fZstdError_23InvalidDictionary"></a>
+
+- `InvalidDictionary -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23OutputTooLarge"></a>
+
+- `OutputTooLarge -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23ReservedBit"></a>
+
+- `ReservedBit -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23Truncated"></a>
+
+- `Truncated -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+<a id="def-std_401_2fzstd_2fZstdError_23WindowTooLarge"></a>
+
+- `WindowTooLarge( u64 ) -> zstd.ZstdError`
+
+Variant of zstd.ZstdError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fzstd_2fdecode"></a>
+
+- `pub fn zstd.decode(data: Bytes, max_output: u64, max_window: u64) -> Result[ unique Bytes, ZstdError ] uses {}`
+
+Decode concatenated Zstandard and skippable frames. Checksums are always
+verified. max_output bounds the total returned bytes; max_window bounds each
+frame's declared history requirement, including single-segment content size.
+Rejects oversize headers before allocating output or entropy tables for them.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/zstd/ZstdError`](#def-std_401_2fzstd_2fZstdError)
+
+<a id="def-std_401_2fzstd_2fdecode_5fwith_5fdictionary"></a>
+
+- `pub fn zstd.decode_with_dictionary( data: Bytes, dict: Dictionary, max_output: u64, max_window: u64 ) -> Result[unique Bytes, ZstdError] uses {}`
+
+Decode using a dictionary, reset independently for every frame. A nonzero
+frame dictionary ID must match; ID zero permits caller-selected raw content.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/zstd/Dictionary`](#def-std_401_2fzstd_2fDictionary), [`std@1/zstd/ZstdError`](#def-std_401_2fzstd_2fZstdError)
+
+<a id="def-std_401_2fzstd_2fdictionary"></a>
+
+- `pub fn zstd.dictionary(data: Bytes) -> Result[Dictionary, ZstdError] in data uses {}`
+
+Parse a formatted dictionary (magic 0xec30a437), or use other bytes as a raw
+content prefix. Formatted dictionary tables and repeat offsets are validated.
+Dictionary input is borrowed; its content bytes remain shared with the input.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/zstd/Dictionary`](#def-std_401_2fzstd_2fDictionary), [`std@1/zstd/ZstdError`](#def-std_401_2fzstd_2fZstdError)
