@@ -2,14 +2,14 @@
 //! Cranelift executable, observing exactly what the reference does. A case runs
 //! once as an unoptimized LLVM executable and once as a Cranelift one, both
 //! linked with the diagnostic archive (poisoning, header checks and the exit
-//! leak audit). A case LLVM does not pass is outside the gate.
+//! leak audit). LLVM failures must match their native exclusion rows.
 //!
 //! The cases LLVM passes and Cranelift does not are rows of
 //! `native-tests/regressions/cranelift-parity.tsv`, each with its reason. A
 //! failure without a row, a row whose reason changed and a row whose case now
 //! passes all fail the gate, so parity only grows.
 
-use super::{Case, CaseResult, Class, exclusion};
+use super::{Case, CaseResult, Class, Exclusions, exclusion};
 use hirsel_driver::native::{
     Configuration, Engine, OptLevel, Options, Outcome, Partition, Runtime, TargetSpec,
 };
@@ -83,7 +83,7 @@ pub fn cases(root: &Path) -> Result<Vec<Case>, String> {
     Ok(cases)
 }
 
-/// Whether the case is in the gate (LLVM agrees), and if so Cranelift's
+/// Whether LLVM agrees, and if so Cranelift's
 /// failure reason, or `None` when it agrees too.
 pub fn verdict(result: &CaseResult) -> Option<Option<String>> {
     let outcome = |class| {
@@ -141,6 +141,8 @@ pub fn render(results: &[CaseResult]) -> String {
 /// What a parity run found against the list.
 #[derive(Debug, Default)]
 pub struct Report {
+    /// The LLVM control run, checked against the native exclusion rows.
+    pub llvm: super::Report,
     /// Cases LLVM passes, and how many of them Cranelift passes.
     pub gated: usize,
     pub passing: usize,
@@ -152,14 +154,37 @@ pub struct Report {
 
 impl Report {
     pub fn ok(&self) -> bool {
-        self.unlisted.is_empty() && self.stale.is_empty()
+        self.llvm.ok() && self.unlisted.is_empty() && self.stale.is_empty()
     }
 }
 
-/// Judge `results` against the `listed` rows of the cases they ran.
-pub fn judge(results: &[CaseResult], listed: &BTreeMap<String, String>) -> Report {
-    let mut report = Report::default();
+/// Judge LLVM controls against native exclusions and Cranelift against parity rows.
+pub fn judge(
+    results: &[CaseResult],
+    listed: &BTreeMap<String, String>,
+    llvm_exclusions: &Exclusions,
+) -> Report {
+    let mut report = Report {
+        llvm: super::judge_classes(results, llvm_exclusions, 1, false, &[Class::Llvm]),
+        ..Report::default()
+    };
     for result in results {
+        if result.snapshot.is_none()
+            && !result
+                .outcomes
+                .iter()
+                .any(|(_, class, _)| *class == Class::Llvm)
+        {
+            report
+                .llvm
+                .unlisted
+                .push(format!("{}: no LLVM run", result.id));
+            // The generic set rule judges only configurations that ran.
+            // Parity also requires its LLVM control to have run.
+            if let Some(passing) = report.llvm.pass.get_mut(&Class::Llvm) {
+                *passing -= 1;
+            }
+        }
         let Some(failure) = verdict(result) else {
             continue;
         };

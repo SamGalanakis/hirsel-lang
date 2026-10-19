@@ -257,8 +257,11 @@ as `//:gate-native-cranelift-shard-1` to `-8`, `--shard I/N` by path hash) is th
 Cranelift parity gate. The parity set is the executable cases of `conformance/passing.txt` and the
 programs of `native-tests/regressions` and `native-tests/library`; each runs as an
 unoptimized LLVM x86-64 executable and as a Cranelift one, both on the diagnostic
-archive. A case LLVM does not agree on is outside the gate (each is named on stderr
-with LLVM's reason). Every case LLVM agrees on and Cranelift does not is a row of
+archive. Each LLVM failure, including a compiler error, crash or failed snapshot,
+must match its case, configuration, class and reason in
+`native-tests/regressions/exclusions.tsv`; an unlisted failure, changed reason or
+stale row fails. A missing LLVM control also fails. Every case LLVM agrees on and
+Cranelift does not is a row of
 `native-tests/regressions/cranelift-parity.tsv` (`case`, then Cranelift's reason); a
 failure without its row, a changed reason and a row whose case agrees fail. The run
 prints the rows its results imply, keeping rows of cases it did not select.

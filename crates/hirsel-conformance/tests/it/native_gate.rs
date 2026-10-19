@@ -507,3 +507,86 @@ fn clock_fixture_recordings_replay_timer_and_script_waits() {
         }
     });
 }
+
+#[test]
+fn cranelift_does_not_hide_a_failed_llvm_control() {
+    for id in [
+        "native-tests/library/file-walk.hir",
+        "native-tests/regressions/compiler-error.hir",
+        "conformance/CAP/control.hir",
+    ] {
+        let mut failed = result(id, Outcome::Agree, unavailable("LLVM compiler error"));
+        failed
+            .outcomes
+            .push(("c".into(), Class::Cranelift, Outcome::Agree));
+        assert!(
+            !native::cranelift::judge(&[failed], &Default::default(), &Default::default()).ok(),
+            "an unlisted LLVM failure must fail: {id}"
+        );
+    }
+}
+
+#[test]
+fn cranelift_llvm_failures_require_exact_native_exclusion_rows() {
+    let parity = Default::default();
+    for failure in [
+        unavailable("LLVM compiler error"),
+        unavailable("native executable terminated by signal 11"),
+        wrong(b"wrong answer"),
+    ] {
+        let failed = result("a", Outcome::Agree, failure);
+        let listed =
+            native::parse_exclusions(&native::render_exclusions(&[failed.clone()])).unwrap();
+        assert!(native::cranelift::judge(&[failed.clone()], &parity, &listed).ok());
+        let mut changed = listed.clone();
+        changed
+            .values_mut()
+            .next()
+            .unwrap()
+            .reason
+            .push_str(" changed");
+        assert!(!native::cranelift::judge(&[failed.clone()], &parity, &changed).ok());
+        let wrong_config = [(
+            ("a".into(), "h".into()),
+            listed.values().next().unwrap().clone(),
+        )]
+        .into();
+        assert!(!native::cranelift::judge(&[failed], &parity, &wrong_config).ok());
+        let passing = result("a", Outcome::Agree, Outcome::Agree);
+        assert!(!native::cranelift::judge(&[passing], &parity, &listed).ok());
+    }
+    let mut snapshot = result("snapshot", Outcome::Agree, Outcome::Agree);
+    snapshot.snapshot = Some("a native stage panicked".into());
+    snapshot.outcomes.clear();
+    assert!(!native::cranelift::judge(&[snapshot.clone()], &parity, &Exclusions::new()).ok());
+    let listed = native::parse_exclusions(&native::render_exclusions(&[snapshot.clone()])).unwrap();
+    assert!(native::cranelift::judge(&[snapshot], &parity, &listed).ok());
+    // A missing control cannot authorize a parity result, even with no failure recorded.
+    let mut missing = result("missing", Outcome::Agree, Outcome::Agree);
+    missing
+        .outcomes
+        .retain(|(_, class, _)| *class != Class::Llvm);
+    let report = native::cranelift::judge(&[missing], &parity, &Exclusions::new());
+    assert!(!report.ok());
+    assert_eq!(report.llvm.pass[&Class::Llvm], 0);
+    assert!(report.llvm.unlisted[0].contains("no LLVM run"));
+}
+
+#[test]
+fn cranelift_keeps_the_parity_ratchet_when_the_llvm_control_agrees() {
+    let mut case = result("a", Outcome::Agree, Outcome::Agree);
+    case.outcomes
+        .push(("c".into(), Class::Cranelift, wrong(b"wrong answer")));
+    let llvm_exclusions = Exclusions::new();
+    assert!(!native::cranelift::judge(&[case.clone()], &Default::default(), &llvm_exclusions).ok());
+    let parity = native::cranelift::parse(&native::cranelift::render(&[case.clone()])).unwrap();
+    let report = native::cranelift::judge(&[case.clone()], &parity, &llvm_exclusions);
+    assert!(report.ok(), "{report:?}");
+    assert_eq!(report.gated, 1);
+    assert_eq!(report.passing, 0);
+    case.outcomes[2].2 = Outcome::Agree;
+    assert!(!native::cranelift::judge(&[case.clone()], &parity, &llvm_exclusions).ok());
+    let report = native::cranelift::judge(&[case], &Default::default(), &llvm_exclusions);
+    assert!(report.ok(), "{report:?}");
+    assert_eq!(report.passing, 1);
+}

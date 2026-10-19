@@ -432,6 +432,7 @@ fn cranelift(
     }
     let text = std::fs::read_to_string(root.join(list)).map_err(|e| format!("{list}: {e}"))?;
     let listed = cranelift::parse(&text)?;
+    let llvm_exclusions = native::read_exclusions(root)?;
     let results = native::run_cases(
         &cases,
         &matrix,
@@ -439,7 +440,16 @@ fn cranelift(
         &native::scratch("cranelift")?,
         jobs,
     );
-    let report = cranelift::judge(&results, &listed);
+    let report = cranelift::judge(&results, &listed, &llvm_exclusions);
+    for failure in &report.llvm.unlisted {
+        eprintln!(
+            "cranelift: LLVM control: {failure}; requires a matching reason in {}",
+            native::EXCLUSIONS
+        );
+    }
+    for stale in &report.llvm.stale {
+        eprintln!("cranelift: LLVM control: {stale} in {}", native::EXCLUSIONS);
+    }
     for (id, reason) in &report.unlisted {
         eprintln!("cranelift: {id}: {reason}");
         // The whole failure, for the lane that debugs it.
@@ -457,7 +467,7 @@ fn cranelift(
     for id in &report.stale {
         eprintln!("cranelift: {id} passes; remove its row from {list}");
     }
-    // Cases outside the gate, and why LLVM does not pass them.
+    // Name each failed LLVM control, including failures with matching exclusions.
     for result in results.iter().filter(|r| cranelift::verdict(r).is_none()) {
         let why = result.snapshot.clone().unwrap_or_else(|| {
             result
@@ -470,7 +480,7 @@ fn cranelift(
                     |e| format!("{}: {}", e.class, e.reason),
                 )
         });
-        eprintln!("cranelift: outside the gate: {}: {why}", result.id);
+        eprintln!("cranelift: LLVM control: {}: {why}", result.id);
     }
     // Rows of cases this run did not reach stay as they are.
     let ran: std::collections::BTreeSet<_> = results.iter().map(|r| r.id.as_str()).collect();
