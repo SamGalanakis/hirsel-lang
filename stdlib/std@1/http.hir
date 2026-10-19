@@ -586,7 +586,7 @@ fn http_begin_chunks(mut r: Request) -> Result[(), HttpError] {
   Ok(())
 }
 
-pub fn send_chunk(mut r: Request, data: Bytes) -> Result[(), HttpError] {
+pub fn write_request_body(mut r: Request, data: Bytes) -> Result[(), HttpError] {
   http_begin_chunks(mut r)?
   let len = core@1/bytes.len(data)
   if len == 0 {
@@ -616,7 +616,10 @@ pub fn send_chunk(mut r: Request, data: Bytes) -> Result[(), HttpError] {
   Ok(())
 }
 
-pub fn end_body(mut r: Request, request_trailers: List[Header]) -> Result[(), HttpError] {
+pub fn end_request_body(mut r: Request, request_trailers: List[Header]) -> Result[
+  (),
+  HttpError
+] {
   http_validate_headers(request_trailers)?
   for h in request_trailers {
     if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
@@ -1361,7 +1364,8 @@ pub fn client_send(
 
 // A sequential server connection owns its stream and unread bytes. A response
 // must finish before the next request can be received (RFC 9112 section 9).
-// state: ready=0, response pending=1, closed=2, request failed=3.
+// state: ready=0, response pending=1, closed=2, request failed=3,
+// chunked response=4, close-delimited response=5, bodyless response=6.
 pub opaque resource type ServerConnection: noalloc_drop uses {Net} {
   net: Net,
   stream: Stream of .net,
@@ -1370,6 +1374,8 @@ pub opaque resource type ServerConnection: noalloc_drop uses {Net} {
   state: u8,
   keep_alive: bool,
   served: bool,
+  version: Version,
+  head_request: bool,
 }
 @noalloc drop(self) {}
 
@@ -1381,7 +1387,9 @@ pub fn server_connection(n: Net, take stream: Stream of n, config: Config) -> Se
     input: bufio.new(4096),
     state: 0,
     keep_alive: false,
-    served: false
+    served: false,
+    version: Http11(),
+    head_request: false
   )
 }
 
@@ -1838,6 +1846,8 @@ pub fn receive_request(mut c: ServerConnection, clock: Option[MonotonicClock]) -
     let buf = bufio.contents(c.input)
     if let Some((parsed, frame, end)) = http_server_head(buf, c.config.max_head_bytes)? {
       let mut incoming = take parsed
+      c.version = incoming.version
+      c.head_request = incoming.method == "HEAD"
       bufio.consume(mut c.input, end)
       let mut body = http_server_body(frame, c.config.max_body_bytes)?
       while body.state != 5 {
@@ -1895,23 +1905,7 @@ pub fn respond(
   ) != 0 {
     return Error(Malformed(Status()))
   }
-  http_validate_headers(headers)?
-  let mut out: List[u8] = []
-  text.append(mut out, "HTTP/1.1 ")
-  u16.format_into(status, mut out)
-  text.append(mut out, " \r\n")
-  for h in headers {
-    if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
-      h.name,
-      "connection"
-    ) {
-      return Error(Malformed(ContentLength()))
-    }
-    text.append(mut out, h.name)
-    text.append(mut out, ": ")
-    text.append(mut out, h.value)
-    text.append(mut out, "\r\n")
-  }
+  let mut out = http_server_response_head(Http11(), status, headers)?
   text.append(mut out, "Content-Length: ")
   u64.format_into(core@1/bytes.len(body), mut out)
   text.append(
@@ -1942,4 +1936,181 @@ pub fn respond(
     c.state = 0
   }
   Ok(())
+}
+
+// Shared validation and head serialization for complete and streaming replies.
+fn http_server_response_head(version: Version, status: u16, headers: List[Header]) -> Result[
+  unique List[u8],
+  HttpError
+] uses {} {
+  http_validate_headers(headers)?
+  let mut out: List[u8] = []
+  text.append(
+    mut out,
+    if version == Http10() {
+      "HTTP/1.0 "
+    } else {
+      "HTTP/1.1 "
+    }
+  )
+  u16.format_into(status, mut out)
+  text.append(mut out, " \r\n")
+  for h in headers {
+    if http_same(h.name, "content-length") || http_same(h.name, "transfer-encoding") || http_same(
+      h.name,
+      "connection"
+    ) {
+      return Error(Malformed(ContentLength()))
+    }
+    text.append(mut out, h.name)
+    text.append(mut out, ": ")
+    text.append(mut out, h.value)
+    text.append(mut out, "\r\n")
+  }
+  Ok(take out)
+}
+
+/// Sends and flushes a response head without a known body length. HTTP/1.1
+/// uses chunked framing; HTTP/1.0 bodies end by closing the connection.
+/// The connection cannot receive another request until end_response_body succeeds.
+pub fn respond_head(mut c: ServerConnection, status: u16, headers: List[Header]) -> Result[
+  (),
+  HttpError
+] {
+  if c.state != 1 && c.state != 3 {
+    return Error(OutOfOrder())
+  }
+  let keep = c.state == 1 && c.keep_alive
+  c.state = 2
+  if status < 200 || status > 599 {
+    return Error(Malformed(Status()))
+  }
+  let bodyless = c.head_request || status == 204 || status == 304
+  let chunked = !bodyless && c.version == Http11()
+  c.keep_alive = keep && (chunked || bodyless)
+  let mut out = http_server_response_head(c.version, status, headers)?
+  if chunked {
+    text.append(mut out, "Transfer-Encoding: chunked\r\n")
+  }
+  text.append(
+    mut out,
+    if c.keep_alive {
+      "Connection: keep-alive\r\n\r\n"
+    } else {
+      "Connection: close\r\n\r\n"
+    }
+  )
+  let n = c.net
+  core@1/net.set_write_timeout(n, mut c.stream, http_timeout(c.config.write_timeout)?) ? http_net_error
+  core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take out)) ? http_net_error
+  c.state = if bodyless {
+    6
+  } else if chunked {
+    4
+  } else {
+    5
+  }
+  Ok(())
+}
+
+/// Writes and flushes one body fragment. An empty fragment never terminates
+/// the body. HEAD, 204 and 304 responses elide body bytes.
+// Go net/http/internal/chunked.go chunkedWriter.Write; no buffered writer
+// sits between write_all and the stream, so each call is already flushed.
+pub fn write_response_body(mut c: ServerConnection, bytes: Bytes) -> Result[
+  (),
+  HttpError
+] {
+  if c.state != 4 && c.state != 5 && c.state != 6 {
+    return Error(OutOfOrder())
+  }
+  if core@1/bytes.len(bytes) == 0 || c.state == 6 {
+    return Ok(())
+  }
+  let state = c.state
+  c.state = 2
+  let n = c.net
+  if state == 4 {
+    let mut head: List[u8] = []
+    text.append(mut head, f"{core@1/bytes.len(bytes):x}\r\n")
+    core@1/net.write_all(n, mut c.stream, core@1/bytes.from_list(take head)) ? http_net_error
+  }
+  core@1/net.write_all(n, mut c.stream, bytes) ? http_net_error
+  if state == 4 {
+    core@1/net.write_all(n, mut c.stream, b"\r\n") ? http_net_error
+  }
+  c.state = state
+  Ok(())
+}
+
+/// Finishes a streaming response. Chunked bodies emit the zero chunk and
+/// empty trailers; close-delimited bodies shut down the stream. Only a fully
+/// finished, persistent response permits another receive_request.
+pub fn end_response_body(mut c: ServerConnection) -> Result[(), HttpError] {
+  if c.state != 4 && c.state != 5 && c.state != 6 {
+    return Error(OutOfOrder())
+  }
+  let state = c.state
+  c.state = 2
+  let n = c.net
+  if state == 4 {
+    core@1/net.write_all(n, mut c.stream, b"0\r\n\r\n") ? http_net_error
+  }
+  c.served = true
+  if c.keep_alive {
+    c.state = 0
+  } else {
+    core@1/net.shutdown(n, mut c.stream, Both()) ? http_net_error
+  }
+  Ok(())
+}
+
+@serializable
+pub type SseError = EventLineBreak | IdLineBreak | IdNul
+
+/// Frames one WHATWG EventSource block as UTF-8. Optional fields are omitted
+/// for None and emitted even for Some(""). Retry is in milliseconds. Data
+/// items are lines; embedded CRLF, CR and LF each start another data field.
+/// Invalid event/id fields fail instead of allowing field injection.
+pub fn sse_event(
+  event: Option[String],
+  data: List[String],
+  id: Option[String],
+  retry: Option[u64]
+) -> Result[unique Bytes, SseError] uses {} {
+  let mut out: List[u8] = []
+  if let Some(value) = event {
+    if string.contains(value, "\r") || string.contains(value, "\n") {
+      return Error(EventLineBreak())
+    }
+    text.append(mut out, "event: ")
+    text.append(mut out, value)
+    text.append(mut out, "\n")
+  }
+  for item in data {
+    let normalized = string.replace(string.replace(item, "\r\n", "\n"), "\r", "\n")
+    for line in string.split(take normalized, "\n") {
+      text.append(mut out, "data: ")
+      text.append(mut out, line)
+      text.append(mut out, "\n")
+    }
+  }
+  if let Some(value) = id {
+    if string.contains(value, "\r") || string.contains(value, "\n") {
+      return Error(IdLineBreak())
+    }
+    if string.contains(value, "\u{0}") {
+      return Error(IdNul())
+    }
+    text.append(mut out, "id: ")
+    text.append(mut out, value)
+    text.append(mut out, "\n")
+  }
+  if let Some(value) = retry {
+    text.append(mut out, "retry: ")
+    u64.format_into(value, mut out)
+    text.append(mut out, "\n")
+  }
+  text.append(mut out, "\n")
+  Ok(core@1/bytes.from_list(take out))
 }

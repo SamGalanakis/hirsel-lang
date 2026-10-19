@@ -1,0 +1,129 @@
+// rule: SEM-1
+// expect: run
+// Go net/http/internal/chunked_test.go TestChunk and chunkedWriter.Write's
+// empty-write control, adapted to explicit response completion and reuse.
+fn http_net(error: NetError) -> http.HttpError uses {} {
+  Net(error)
+}
+
+fn exercise(t: Test, modern: bool, keep: bool) -> Result[(), http.HttpError] {
+  let request = if modern {
+    "GET / HTTP/1.1\r\n"
+  } else {
+    "GET / HTTP/1.0\r\n"
+  }
+  let connection = if keep {
+    "Connection: keep-alive\r\n\r\n"
+  } else {
+    "Connection: close\r\n\r\n"
+  }
+  let mut steps: List[NetStep] = [
+    Send(unique string.as_bytes(string.concat(request, connection)))
+  ]
+  list.push(
+    mut steps,
+    Expect(
+      unique string.as_bytes(
+        if modern {
+          if keep {
+            "HTTP/1.1 200 \r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n"
+          } else {
+            "HTTP/1.1 200 \r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+          }
+        } else {
+          "HTTP/1.0 200 \r\nConnection: close\r\n\r\n"
+        }
+      )
+    )
+  )
+  list.push(
+    mut steps,
+    Expect(
+      unique string.as_bytes(
+        if modern {
+          "7\r\nhello, \r\n17\r\nworld! 0123456789abcdef\r\n0\r\n\r\n"
+        } else {
+          "hello, world! 0123456789abcdef"
+        }
+      )
+    )
+  )
+  if modern && keep {
+    list.push(mut steps, Send(b"GET /next HTTP/1.1\r\nConnection: close\r\n\r\n"))
+    list.push(
+      mut steps,
+      Expect(b"HTTP/1.1 200 \r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+    )
+  }
+  list.push(mut steps, Close())
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [Open(take steps)]
+      )
+    ],
+    []
+  )
+  let stream = net.connect(n, "example.com", 80u16, Unbounded()) ? http_net
+  let mut c = http.server_connection(n, take stream, http.default_config())
+  match http.write_response_body(mut c, b"bad") {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  match http.end_response_body(mut c) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  let _ = http.receive_request(mut c, None())?
+  http.respond_head(mut c, 200u16, [])?
+  http.write_response_body(mut c, b"")?
+  http.write_response_body(mut c, b"hello, ")?
+  http.write_response_body(mut c, b"")?
+  match http.receive_request(mut c, None()) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  match http.respond_head(mut c, 200u16, []) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  match http.respond(mut c, 200u16, [], b"", false) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  http.write_response_body(mut c, b"world! 0123456789abcdef")?
+  http.write_response_body(mut c, b"")?
+  http.end_response_body(mut c)?
+  match http.write_response_body(mut c, b"bad") {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  match http.end_response_body(mut c) {
+    Error(OutOfOrder()) => (),
+    _ => test.check(t, false),
+  }
+  if modern && keep {
+    let next = http.receive_request(mut c, None())?
+    test.check(t, next.target == "/next")
+    http.respond(mut c, 200u16, [], b"ok", false)?
+  } else {
+    match http.receive_request(mut c, None()) {
+      Error(Closed()) => (),
+      _ => test.check(t, false),
+    }
+  }
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  exercise(t, true, true)?
+  exercise(t, true, false)?
+  exercise(t, false, false)?
+  exercise(t, false, true)?
+  Ok(())
+}

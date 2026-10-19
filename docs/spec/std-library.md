@@ -1302,8 +1302,8 @@ fn default_config() -> Config uses {}
 fn request(n: Net, config: Config, method: Method, url: String, headers: List[Header]) -> Result[Request, HttpError]
 fn send_bodiless(mut r: Request) -> Result[(), HttpError]
 fn send_body(mut r: Request, body: Bytes) -> Result[(), HttpError]
-fn send_chunk(mut r: Request, data: Bytes) -> Result[(), HttpError]
-fn end_body(mut r: Request, request_trailers: List[Header]) -> Result[(), HttpError]
+fn write_request_body(mut r: Request, data: Bytes) -> Result[(), HttpError]
+fn end_request_body(mut r: Request, request_trailers: List[Header]) -> Result[(), HttpError]
 fn receive_head(mut r: Request) -> Result[ResponseHead, HttpError]
 @preserves_unique(out) fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, HttpError]
 fn read_all(mut r: Request, limit: u64) -> Result[unique Bytes, HttpError]
@@ -1334,7 +1334,7 @@ it drops the stream.
   URL's origin as usual.
 - `send_bodiless` and `send_body` write the request head (`METHOD target HTTP/1.1`, `host`,
   `user-agent`, `connection: close`, the caller's headers, and `content-length` for a
-  body) and the body. `send_chunk` and `end_body` stream a `transfer-encoding: chunked`
+  body) and the body. `write_request_body` and `end_request_body` stream a `transfer-encoding: chunked`
   body with trailers. Calls out of order return `OutOfOrder()`.
 - `receive_head` reads at most `max_head_bytes` (`HeadTooLarge()` beyond), parses the head,
   skips `100 Continue` and follows redirects. A response to `HEAD`, a 1xx, 204 or 304 has no
@@ -1585,6 +1585,55 @@ timeout as above. A handshake or timeout failure is `Net(error)` and closes the 
 The connection then behaves exactly as a plaintext one; the handshake offers ALPN
 `http/1.1` only. A server that reads the client's certificate chain performs
 `tls.accept` and `tls.peer` itself and passes the secured stream to `server_connection`.
+
+#### Streaming HTTP responses and EventSource framing
+
+```text
+fn http.respond_head(mut c: ServerConnection, status: u16, headers: List[Header]) -> Result[(), HttpError]
+fn http.write_response_body(mut c: ServerConnection, bytes: Bytes) -> Result[(), HttpError]
+fn http.end_response_body(mut c: ServerConnection) -> Result[(), HttpError]
+SseError = EventLineBreak | IdLineBreak | IdNul
+fn http.sse_event(event: Option[String], data: List[String], id: Option[String], retry: Option[u64]) -> Result[unique Bytes, SseError] uses {}
+```
+
+`respond_head` starts a response without a known length, after `receive_request`
+(or as the final response to a failed request). It accepts final statuses 200–599,
+validates headers, and reserves Content-Length, Transfer-Encoding and Connection
+just as `respond` does. It emits the request's HTTP version and no Content-Length.
+Following [RFC 9112 sections 6.3 and 7.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3),
+HTTP/1.1 bodies use Transfer-Encoding: chunked; HTTP/1.0 bodies use close delimiting,
+with Connection: close even when the request asked for keep-alive. HEAD, 204 and 304
+responses have no body or Transfer-Encoding, and `write_response_body` elides their data.
+
+`write_response_body` sends each nonempty fragment as one hexadecimal-sized chunk on HTTP/1.1,
+or directly on HTTP/1.0. Writes go directly through the stream's `write_all`, so the
+head and every body fragment are flushed before returning, without accumulating the
+whole body. An empty fragment sends nothing and never terminates the body.
+`end_response_body` sends the terminating zero chunk with empty trailers for a chunked response.
+It restores request reception only when persistence is permitted. Otherwise it shuts
+down the stream, including for HTTP/1.0 close-delimited responses. The configured
+write timeout applies to head, fragment and completion writes. Receiving a request or
+starting another response while a body is open, or writing/ending without an open
+body, returns `OutOfOrder`. Any failed write prevents reuse. Dropping a connection
+mid-body closes its owned stream without synthesizing a terminating chunk.
+
+Clients already stream through `request`, `send_bodiless`/`send_body`, `receive_head`
+and repeated `read_body(mut r, mut out, max)`: a positive read returns up to `max`
+available body bytes without waiting for the whole response, and zero means the
+framed body is complete. Dropping an incomplete request closes its stream.
+
+`sse_event` produces a UTF-8 block for the
+[WHATWG EventSource format](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation).
+Each data item emits a `data: ` field; embedded CRLF, CR or LF splits it into further
+fields, preserving empty lines. Optional event, id and retry fields are omitted for
+`None`; `Some("")` emits an empty event or id field (an empty id resets Last-Event-ID).
+Retry is decimal milliseconds, including zero. A blank line completes the block;
+without any data fields it updates fields without dispatching a message.
+Event names containing CR or LF return `EventLineBreak`; ids containing CR or LF
+return `IdLineBreak`, and ids containing NUL return `IdNul`. No field is silently
+removed and no partial bytes escape on error. Data may contain NUL. Pass the bytes
+to `write_response_body` with a `Content-Type: text/event-stream` response header. Application
+protocols such as Datastar stay in their own packages.
 
 ## HPACK and explicit HTTP/2 connections
 

@@ -1,0 +1,60 @@
+// rule: SEM-1
+// expect: run
+// A bounded read returns available data before any later chunk or EOF exists.
+pub fn main(t: Test) -> Result[(), http.HttpError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "example.com",
+        port: 80u16,
+        resolves_to: [],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Send(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\nhello, "),
+              Stall()
+            ]
+          ),
+          Open(
+            [
+              Send(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4;ext=yes\r"),
+              Send(b"\nWi"),
+              Send(b"ki\r"),
+              Send(b"\n5\r\npedia\r\n0\r\nX-End: yes\r\n\r\n"),
+              Close()
+            ]
+          )
+        ]
+      )
+    ],
+    []
+  )
+  {
+    let mut r = http.request(n, http.default_config(), Get(), "http://example.com", [])?
+    http.send_bodiless(mut r)?
+    let head = http.receive_head(mut r)?
+    test.check(t, head.chunked)
+    let mut out: List[u8] = []
+    test.check(t, http.read_body(mut r, mut out, 100)? == 7)
+    test.check(t, bytes.from_list(take out) == b"hello, ")
+  }
+  let mut r = http.request(n, http.default_config(), Get(), "http://example.com", [])?
+  http.send_bodiless(mut r)?
+  let _ = http.receive_head(mut r)?
+  let mut out: List[u8] = []
+  let mut reads: u64 = 0
+  while true {
+    let count = http.read_body(mut r, mut out, 2)?
+    if count == 0 {
+      break
+    }
+    test.check(t, count <= 2)
+    reads += 1
+  }
+  test.check(t, reads >= 5 && bytes.from_list(copy out) == b"Wikipedia")
+  test.check(t, http.header(http.trailers(r), "x-end") == Some("yes"))
+  test.check(t, http.read_body(mut r, mut out, 2)? == 0)
+  Ok(())
+}

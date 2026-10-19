@@ -276,11 +276,11 @@ let n = test.net(t, [NetPeer(address: "example.com", port: 80, resolves_to: [], 
  Send(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")])])], [])
 let mut r = std@1/http.request(n, std@1/http.default_config(), Post(), "http://example.com", [])?
 match std@1/http.receive_head(mut r) { Error(OutOfOrder()) => (), _ => test.check(t, false) }
-std@1/http.send_chunk(mut r, b"ab")?
-std@1/http.send_chunk(mut r, b"")?
-std@1/http.send_chunk(mut r, b"c")?
-std@1/http.end_body(mut r, [std@1/http.Header(name: "x-check", value: "yes")])?
-match std@1/http.send_chunk(mut r, b"bad") { Error(OutOfOrder()) => (), _ => test.check(t, false) }
+std@1/http.write_request_body(mut r, b"ab")?
+std@1/http.write_request_body(mut r, b"")?
+std@1/http.write_request_body(mut r, b"c")?
+std@1/http.end_request_body(mut r, [std@1/http.Header(name: "x-check", value: "yes")])?
+match std@1/http.write_request_body(mut r, b"bad") { Error(OutOfOrder()) => (), _ => test.check(t, false) }
 let head = std@1/http.receive_head(mut r)?
 test.check(t, head.status == 200 && std@1/http.read_all(mut r, 0)? == b"")
 "#,
@@ -618,7 +618,6 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
 // provider exchanges and resource cleanup replay to the same observation.
 #[test]
 fn pooled_client_scripts_replay_without_network_authority() {
-    use hirsel_interp::observation::Effect;
     with_compiler_stack(|| {
         for relative in [
             "conformance/SEM/SEM-1-http-client-length-reuse-run.hir",
@@ -627,62 +626,88 @@ fn pooled_client_scripts_replay_without_network_authority() {
             "conformance/SEM/SEM-1-http-client-idle-expiry-run.hir",
             "conformance/CONC/CONC-3-http-client-deadline-run.hir",
         ] {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .join(relative);
-            let mut program =
-                load_program_source(&path, None).unwrap_or_else(|e| panic!("{}", details(&e)));
-            program
-                .check_for_execution()
-                .unwrap_or_else(|e| panic!("{}", details(&e)));
-            let config = RunConfiguration {
-                entry: program.entry.clone(),
-                hash_seed: 0,
-                inputs: vec![],
-            };
-            let source = std::fs::read_to_string(&path).unwrap();
-            let mut simulation = SimulationConfig::default();
-            if source.lines().any(|line| line == "// grant: clock") {
-                simulation.grants.insert("MonotonicClock".into());
-            }
-            if let Some(net) = source
-                .lines()
-                .find_map(|line| line.strip_prefix("// net: "))
-            {
-                simulation.net = Some(serde_json::from_str(net).unwrap());
-            }
-            let recorded =
-                run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
-            assert!(
-                matches!(recorded.outcome, Ok(RunOutcome::Exit(0))),
-                "{:?}",
-                recorded.outcome
-            );
-            let observation = recorded.observation.unwrap();
-            let events: Vec<_> = observation
-                .effects
-                .iter()
-                .filter_map(|effect| match &effect.effect {
-                    Effect::CapabilityConsumed(event) => Some(event.clone()),
-                    _ => None,
-                })
-                .collect();
-            assert!(events.iter().any(|e| e.operation == "net.connect"));
-            let replayed = run_observed_snapshot(
-                &mut program.engine,
-                &RunConfiguration {
-                    inputs: events,
-                    ..config
-                },
-                simulation,
-            )
-            .unwrap();
-            assert_eq!(replayed.observation.as_ref(), Some(&observation));
-            assert!(
-                matches!(replayed.outcome, Ok(RunOutcome::Exit(0))),
-                "{:?}",
-                replayed.outcome
-            );
+            assert_http_script_replay(relative);
+        }
+    });
+}
+
+fn assert_http_script_replay(relative: &str) {
+    use hirsel_interp::observation::Effect;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative);
+    let mut program =
+        load_program_source(&path, None).unwrap_or_else(|e| panic!("{}", details(&e)));
+    program
+        .check_for_execution()
+        .unwrap_or_else(|e| panic!("{}", details(&e)));
+    let config = RunConfiguration {
+        entry: program.entry.clone(),
+        hash_seed: 0,
+        inputs: vec![],
+    };
+    let source = std::fs::read_to_string(&path).unwrap();
+    let mut simulation = SimulationConfig::default();
+    if source.lines().any(|line| line == "// grant: clock") {
+        simulation.grants.insert("MonotonicClock".into());
+    }
+    if let Some(net) = source
+        .lines()
+        .find_map(|line| line.strip_prefix("// net: "))
+    {
+        simulation.net = Some(serde_json::from_str(net).unwrap());
+    }
+    let recorded = run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
+    assert!(
+        matches!(recorded.outcome, Ok(RunOutcome::Exit(0))),
+        "{:?}",
+        recorded.outcome
+    );
+    let observation = recorded.observation.unwrap();
+    let events: Vec<_> = observation
+        .effects
+        .iter()
+        .filter_map(|effect| match &effect.effect {
+            Effect::CapabilityConsumed(event) => Some(event.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(events.iter().any(|e| e.operation == "net.connect"));
+    assert!(events.iter().any(|e| e.operation == "net.close"));
+    if relative.ends_with("http-server-stream-drop-run.hir") {
+        assert_eq!(
+            events.iter().filter(|e| e.operation == "net.close").count(),
+            1
+        );
+        assert!(!events.iter().any(|e| e.operation == "net.shutdown"));
+        assert_eq!(events.last().unwrap().operation, "net.close");
+    }
+    let replayed = run_observed_snapshot(
+        &mut program.engine,
+        &RunConfiguration {
+            inputs: events,
+            ..config
+        },
+        simulation,
+    )
+    .unwrap();
+    assert_eq!(replayed.observation.as_ref(), Some(&observation));
+    assert!(
+        matches!(replayed.outcome, Ok(RunOutcome::Exit(0))),
+        "{:?}",
+        replayed.outcome
+    );
+}
+
+#[test]
+fn streaming_http_scripts_replay_writes_completion_and_drop() {
+    with_compiler_stack(|| {
+        for relative in [
+            "conformance/SEM/SEM-1-http-server-stream-run.hir",
+            "conformance/SEM/SEM-1-http-server-stream-drop-run.hir",
+            "conformance/SEM/SEM-1-http-client-stream-run.hir",
+        ] {
+            assert_http_script_replay(relative);
         }
     });
 }

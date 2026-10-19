@@ -1,0 +1,23 @@
+// rule: SEM-1
+// expect: run
+pub fn main(t: Test) -> Result[(), http.SseError] {
+  test.check(
+    t,
+    http.sse_event(Some("update"), ["first", "second"], Some("42"), Some(1500))? == b"event: update\ndata: first\ndata: second\nid: 42\nretry: 1500\n\n"
+  )
+  test.check(
+    t,
+    http.sse_event(None(), ["a\r\nb\rc\nd\n", "", " λ: value"], None(), None())? == b"data: a\ndata: b\ndata: c\ndata: d\ndata: \ndata: \ndata:  \xce\xbb: value\n\n"
+  )
+  test.check(
+    t,
+    http.sse_event(Some(""), [""], Some(""), Some(0))? == b"event: \ndata: \nid: \nretry: 0\n\n"
+  )
+  test.check(t, http.sse_event(None(), [], None(), None())? == b"\n")
+  test.check(t, http.sse_event(None(), [], Some("reset"), None())? == b"id: reset\n\n")
+  test.check(
+    t,
+    http.sse_event(None(), ["\u{0}"], None(), Some(18446744073709551615))? == b"data: \x00\nretry: 18446744073709551615\n\n"
+  )
+  Ok(())
+}
