@@ -139,6 +139,7 @@ conformance/CAP/CAP-2-file-errors-is-directory-run.hir
 conformance/CAP/CAP-2-file-errors-not-directory-run.hir
 conformance/CAP/CAP-2-file-errors-not-found-run.hir
 conformance/CAP/CAP-2-file-errors-permission-denied-run.hir
+conformance/CAP/CAP-2-file-lexical-parent-run.hir
 conformance/CAP/CAP-2-file-list-recursive-run.hir
 conformance/CAP/CAP-2-file-operation-authority-bad.hir
 conformance/CAP/CAP-2-file-operation-authority-ok.hir
