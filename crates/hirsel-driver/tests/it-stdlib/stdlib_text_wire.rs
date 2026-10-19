@@ -71,7 +71,7 @@ fn sha256_is_ordinary_source() {
 // Multi-megabyte streams exceed the corpus interpreter budget. Both compiled
 // backends must match reference digests; bounded corpus cases cover interpretation.
 #[test]
-#[ignore = "on demand: native multi-megabyte hash references"]
+#[ignore = "full gate: native multi-megabyte hash references"]
 fn full_gate_large_hash_native_references_on_both_backends() {
     with_compiler_stack(|| {
         let path =
