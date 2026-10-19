@@ -1,0 +1,50 @@
+// rule: LANG-9
+// expect: test
+fn ticks(c: MonotonicClock) -> u64 {
+  match clock.monotonic(c) {
+    Ok(now) => instant.ticks(now),
+    Error(_) => 999,
+  }
+}
+
+fn sleep(c: MonotonicClock) -> bool {
+  match clock.monotonic(c) {
+    Ok(start) => match instant.checked_add(c, start, 10000000000) {
+      Some(at) => match clock.sleep_until(c, at) {
+        Ok(()) => true,
+        Error(_) => false,
+      },
+      None() => false,
+    },
+    Error(_) => false,
+  }
+}
+
+@test
+fn clock_advances_only_when_idle(t: Test) {
+  let tasks = test.tasks(t)
+  let c = test.clock(t)
+  let other = test.clock(t)
+  test.check(t, ticks(c) == 0 && ticks(other) == 0)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let sleeper = task.async(
+        s,
+        fn() -> bool {
+          sleep(c)
+        }
+      )
+      test.check(t, ticks(c) == 0)
+      test.check(t, task.await(s, take sleeper))
+    }
+  )
+  test.check(t, ticks(c) == 10000000000 && ticks(other) == 10000000000)
+  let third = test.clock(t)
+  test.check(t, ticks(third) == 10000000000)
+}
+
+@test
+fn clock_is_fresh_for_each_test(t: Test) {
+  test.check(t, ticks(test.clock(t)) == 0)
+}

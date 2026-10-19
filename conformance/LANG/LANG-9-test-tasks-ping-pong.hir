@@ -1,0 +1,44 @@
+// rule: LANG-9
+// expect: test
+// Rust std mpsc smoke_threads, extended to a round trip.
+@test
+fn ping_pong(t: Test) {
+  let tasks = test.tasks(t)
+  let total = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let (ping, inbox): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let (pong, replies): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let worker = task.async(
+        s,
+        fn() {
+          let mut rx = take inbox
+          let mut tx = take pong
+          for _ in 0u64..3 {
+            match channel.receive(tasks, mut rx) {
+              Ok(v) => {
+                let _ = channel.send(tasks, mut tx, v + 1)
+              },
+              Error(_) => {},
+            }
+          }
+        }
+      )
+      let mut tx = take ping
+      let mut rx = take replies
+      let mut sum: u64 = 0
+      for n in 1u64..4 {
+        let _ = channel.send(tasks, mut tx, n)
+        match channel.receive(tasks, mut rx) {
+          Ok(v) => {
+            sum += v
+          },
+          Error(_) => {},
+        }
+      }
+      task.await(s, take worker)
+      sum
+    }
+  )
+  test.check(t, total == 9)
+}

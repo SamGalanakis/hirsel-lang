@@ -252,6 +252,7 @@ task.scope_until	3610954ed70fdba0cd5d5638ce3a438a27b8ddf359ce90e90954cd8e8fb0e40
 task.set	ad75d5df1e06d29042fed53b0205cec33b4cbb06106d4b5440da087cf1e252d4	0:b:n->n
 test.check	e018d5aa18ef1e13cde863a0d0d0269a03e6e2920765dec59f296fc15e962b9e	0:b:n;1:b:n->n
 test.check_case	9be1ff429c99fecda725999f5ba741ca3ab225badd3237ecaa12ff647b0ef4d9	0:b:n;1:b:n;2:b:n->n
+test.clock	ac1f3c185a9316c0fc42e6e0683b87ca29c116a026d5eb4f1d33e01da7014cd9	0:b:n->n
 test.crash	61c0fa6cb8d4d9b162acbe70c2fc3cc9c908d37d4f267ba96efed9c90c177e60	0:b:n;1:b:n;2:b:n->n
 test.dir	c9b080d958e72c8c2b5b1fd90b69c6c921ce756da50987b9ffc568e9ae330328	0:b:n;1:b:n->n
 test.expect_snapshot	47fc3930b4f70f0cb70467fb209dcd138b77a651516375a3c5e097bfe2c92895	0:b:n;1:b:n;2:b:n->n

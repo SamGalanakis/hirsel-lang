@@ -445,3 +445,78 @@ fn native_reports_snapshots_properties_and_benches_match_interpreted() {
         assert_eq!(bench["benches"][0]["status"], "measured", "{bench}");
     }
 }
+
+// Corpus checks language behavior; this checks runner failure isolation, filtering,
+// seed replay and interpreter/native report parity, which corpus headers cannot express.
+#[test]
+fn simulated_tasks_and_clock_replay_in_isolated_tests() {
+    let source = [
+        include_str!("../../../../conformance/LANG/LANG-9-test-tasks-mutex.hir"),
+        include_str!("../../../../conformance/LANG/LANG-9-test-tasks-ping-pong.hir"),
+        include_str!("../../../../conformance/LANG/LANG-9-test-clock.hir"),
+        include_str!("../../../../conformance/LANG/LANG-9-test-tasks-interleaving.hir"),
+        include_str!("../../../../conformance/LANG/LANG-9-test-tasks-deadlock.hir"),
+    ]
+    .join("\n");
+    let manifest = std_suite("simulated-tasks", &source);
+    let run = |backend: Option<&str>, seed: &str, filters: &[&str]| {
+        let scheduler = format!("random@1:{seed}");
+        let mut args = vec!["--json", "--seed", seed, "--scheduler", &scheduler];
+        if let Some(backend) = backend {
+            args.extend(["--native", "--backend", backend]);
+        }
+        args.extend(filters);
+        let output = hirsel_test(&manifest, &args);
+        assert_eq!(
+            output.status.code(),
+            Some(if filters.is_empty() { 1 } else { 0 }),
+            "{output:?}"
+        );
+        assert!(output.stderr.is_empty(), "{output:?}");
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
+    };
+    let expected = run(None, "731", &[]);
+    assert_eq!(expected["summary"]["total"], 6, "{expected}");
+    assert_eq!(expected["summary"]["passed"], 5, "{expected}");
+    let tests = expected["tests"].as_array().unwrap();
+    let deadlock = tests
+        .iter()
+        .find(|t| t["name"].as_str().unwrap().ends_with("/deadlock"))
+        .unwrap();
+    let failure = deadlock["failure"].as_str().unwrap();
+    assert!(failure.contains("blocked"), "{failure}");
+    assert!(failure.contains("task []: task.await"), "{failure}");
+    assert!(failure.contains("task [0]: channel.receive"), "{failure}");
+    let interleaving = tests
+        .iter()
+        .find(|t| t["name"].as_str().unwrap().ends_with("/interleaving"))
+        .unwrap();
+    assert_eq!(
+        run(None, "731", &["interleaving"])["tests"][0],
+        *interleaving
+    );
+    let different = run(None, "42", &["interleaving"]);
+    assert_ne!(
+        different["tests"][0]["report"], interleaving["report"],
+        "seeds should exercise distinct schedules"
+    );
+    for backend in ["llvm", "cranelift"] {
+        let mut native_expected = expected.clone();
+        for test in native_expected["tests"].as_array_mut().unwrap() {
+            if let Some(replay) = test["replay"].as_str() {
+                let suffix = if backend == "llvm" {
+                    " --native"
+                } else {
+                    " --native --backend cranelift"
+                };
+                test["replay"] = format!("{replay}{suffix}").into();
+            }
+        }
+        assert_eq!(run(Some(backend), "731", &[]), native_expected, "{backend}");
+        assert_eq!(
+            run(Some(backend), "42", &["interleaving"]),
+            different,
+            "{backend}"
+        );
+    }
+}

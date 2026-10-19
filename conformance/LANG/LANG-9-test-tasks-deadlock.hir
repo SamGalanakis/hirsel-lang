@@ -1,0 +1,24 @@
+// rule: LANG-9
+// expect: blocked
+// entry: deadlock
+@test
+pub fn deadlock(t: Test) -> Result[(), ()] {
+  let tasks = test.tasks(t)
+  task.scope(
+    tasks,
+    fn(s: Scope) {
+      let (tx, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let worker = task.async(
+        s,
+        fn() {
+          let mut rx = take receiver
+          let _ = channel.receive(tasks, mut rx)
+        }
+      )
+      task.await(s, take worker)
+      let mut sender = take tx
+      let _ = channel.send(tasks, mut sender, 1u64)
+    }
+  )
+  Ok(())
+}

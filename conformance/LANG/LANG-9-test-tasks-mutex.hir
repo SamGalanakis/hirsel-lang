@@ -1,0 +1,17 @@
+// rule: LANG-9
+// expect: test
+@test
+fn counter(t: Test) {
+  let tasks = test.tasks(t)
+  let m: Mutex[u64] = mutex.create(tasks, 1u64)
+  test.check(
+    t,
+    mutex.with(
+      tasks,
+      m,
+      fn(mut x: unique u64) -> u64 uses {} {
+        x
+      }
+    ) == 1
+  )
+}

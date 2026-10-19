@@ -627,7 +627,8 @@ impl RealIo {
             }
             Request::Monotonic { clock } if self.state.test_clocks.contains(clock) => {
                 let ticks = self.cooperative.as_ref().unwrap().0.test_time();
-                self.state.sample(&request, Completion::Monotonic(Ok(ticks)))
+                self.state
+                    .sample(&request, Completion::Monotonic(Ok(ticks)))
             }
             Request::Monotonic { .. } | Request::Wall { .. } => {
                 let input = match (&request, fault.as_ref(), &self.cooperative) {

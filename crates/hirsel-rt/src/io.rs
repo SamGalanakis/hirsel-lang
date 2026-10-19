@@ -1134,6 +1134,13 @@ impl State {
         }
         result
     }
+    fn monotonic_floor(&mut self, clock: u64) -> &mut Option<u64> {
+        if self.test_clocks.contains(&clock) {
+            &mut self.test_last_monotonic
+        } else {
+            &mut self.last_monotonic
+        }
+    }
     /// Validate provider inputs before publishing any replay or epoch state.
     pub(crate) fn sample(
         &mut self,
@@ -1161,11 +1168,7 @@ impl State {
             (Request::Monotonic { clock }, Completion::Monotonic(value)) => {
                 self.expect(*clock, Grant::MonotonicClock)?;
                 if let Ok(ticks) = value {
-                    let last = if self.test_clocks.contains(clock) {
-                        &mut self.test_last_monotonic
-                    } else {
-                        &mut self.last_monotonic
-                    };
+                    let last = self.monotonic_floor(*clock);
                     if last.is_some_and(|last| *ticks < last) {
                         return Err(AdapterError::InvalidCompletion);
                     }
@@ -1186,7 +1189,8 @@ impl State {
             (Request::SleepUntil { clock, deadline }, Completion::Wait(value)) => {
                 self.expect(*clock, Grant::MonotonicClock)?;
                 if value.is_ok() {
-                    self.last_monotonic = Some(self.last_monotonic.unwrap_or(0).max(*deadline));
+                    let last = self.monotonic_floor(*clock);
+                    *last = Some(last.unwrap_or(0).max(*deadline));
                 }
             }
             _ => return Err(AdapterError::InvalidCompletion),
@@ -3227,9 +3231,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_test_clock(
     out: *mut u64,
     test: *const u64,
 ) -> u8 {
-    let Ok(Completion::Handle(Ok(clock))) = (unsafe {
-        capability_call(ctx, Request::TestClock { test: test.read() })
-    }) else {
+    let Ok(Completion::Handle(Ok(clock))) =
+        (unsafe { capability_call(ctx, Request::TestClock { test: test.read() }) })
+    else {
         return crate::STATUS_FAILURE;
     };
     unsafe { out.write(clock) };

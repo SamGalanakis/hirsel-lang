@@ -147,6 +147,8 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         TestCheckCase { test: n.wrapping_add(29), condition: n.wrapping_add(4) % 2 == 0, case: n.wrapping_add(1) },
         TestFail { test: n.wrapping_add(29) },
         TestClock { test: n.wrapping_add(29) },
+        TestTasks { test: n.wrapping_add(29) },
+        Schedule { count: n.wrapping_add(1), choice: n },
         TestSeed { test: n.wrapping_add(29) },
         TestTasks { test: n.wrapping_add(29) },
         TestLog { test: n.wrapping_add(29), text: if n == 0 { String::new() } else { format!("{text}#text") } },

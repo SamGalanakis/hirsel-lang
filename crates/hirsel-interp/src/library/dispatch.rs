@@ -457,7 +457,8 @@ impl Library {
             }
             "test.clock" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;
-                self.simulation.handle("MonotonicClock", Grant::Root("MonotonicClock".into()))
+                self.simulation
+                    .handle("MonotonicClock", Grant::Root("MonotonicClock".into()))
             }
             "test.seed" => {
                 self.simulation.id(arg(a, 0)?, "Test")?;

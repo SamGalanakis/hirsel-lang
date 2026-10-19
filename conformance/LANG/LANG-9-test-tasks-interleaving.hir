@@ -1,0 +1,47 @@
+// rule: LANG-9
+// expect: test
+@test
+fn interleaving(t: Test) {
+  let tasks = test.tasks(t)
+  let total = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+      let duplicate = sender.dup(tasks, sender)
+      let first = task.async(
+        s,
+        fn() {
+          let mut tx = take sender
+          for _ in 0u64..4 {
+            let _ = channel.send(tasks, mut tx, 1u64)
+          }
+        }
+      )
+      let second = task.async(
+        s,
+        fn() {
+          let mut tx = take duplicate
+          for _ in 0u64..4 {
+            let _ = channel.send(tasks, mut tx, 2u64)
+          }
+        }
+      )
+      let mut rx = take receiver
+      let mut trace: u64 = 0
+      for _ in 0u64..8 {
+        match channel.receive(tasks, mut rx) {
+          Ok(v) => {
+            trace = trace * 10 + v
+          },
+          Error(_) => {},
+        }
+      }
+      task.await(s, take first)
+      task.await(s, take second)
+      trace
+    }
+  )
+  // Reports let the runner compare complete interleavings across seeds and engines.
+  test.log(t, u64.to_string(total))
+  test.check(t, total >= 11112222 && total <= 22221111)
+}

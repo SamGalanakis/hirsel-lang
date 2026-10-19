@@ -595,21 +595,28 @@ pub(crate) fn scheduler(ctx: *mut RunCtx) -> &'static mut Scheduler {
 /// Outstanding waits for the test runner. This is host reporting, outside program Io.
 pub(crate) fn test_waits(ctx: *mut RunCtx) -> String {
     let s = scheduler(ctx);
-    let mut waits: Vec<_> = s.parked.iter().map(|&task| {
-        let row = s.tasks[task as usize].as_ref().unwrap();
-        let kind = match row.wait {
-            Some(Wait::Join { .. }) => "task.await",
-            Some(Wait::Exit { .. }) => "task.scope",
-            Some(Wait::Receive { .. }) => "channel.receive",
-            Some(Wait::Host { token }) => unsafe { crate::host_waits::kind(ctx, token) },
-            Some(Wait::Any { .. }) => "task.await_any",
-            Some(Wait::Drain { .. }) => "task.cancel_all",
-            None => "task completion",
-        };
-        (row.path.clone(), kind)
-    }).collect();
+    let mut waits: Vec<_> = s
+        .parked
+        .iter()
+        .map(|&task| {
+            let row = s.tasks[task as usize].as_ref().unwrap();
+            let kind = match row.wait {
+                Some(Wait::Join { .. }) => "task.await",
+                Some(Wait::Exit { .. }) => "task.scope",
+                Some(Wait::Receive { .. }) => "channel.receive",
+                Some(Wait::Host { token }) => unsafe { crate::host_waits::kind(ctx, token) },
+                Some(Wait::Any { .. }) => "task.await_any",
+                Some(Wait::Drain { .. }) => "task.cancel_all",
+                None => "task completion",
+            };
+            (row.path.clone(), kind)
+        })
+        .collect();
     waits.sort_by(|a, b| a.0.cmp(&b.0));
-    waits.into_iter().map(|(path, kind)| format!("\n  task {path:?}: {kind}")).collect()
+    waits
+        .into_iter()
+        .map(|(path, kind)| format!("\n  task {path:?}: {kind}"))
+        .collect()
 }
 
 /// The running task's spawn path.

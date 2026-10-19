@@ -1941,7 +1941,10 @@ pub(crate) unsafe fn execute(
         // A stopped run's tasks still hold their storage: no exit audit (CONC-8).
         if entry.is_test() && matches!(outcome, hirsel_run_config::RunOutcome::Blocked) {
             let waits = crate::tasks::test_waits(ctx);
-            sinks.report.clone().write_all(waits.as_bytes())
+            sinks
+                .report
+                .clone()
+                .write_all(waits.as_bytes())
                 .map_err(|e| format!("test wait report: {e}"))?;
         }
         unsafe { (*ctx).abandon() };

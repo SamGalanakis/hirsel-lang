@@ -230,3 +230,56 @@ fn a_draw_or_wait_on_a_foreign_handle_is_refused_before_any_provider_effect() {
     };
     assert_eq!(draw(&mut real, 3, 8).unwrap(), fresh);
 }
+
+// A corpus test has no host clock grant: this checks that the fake stays independent
+// when an embedding also grants a host clock, and its suspension replays from tape.
+#[test]
+fn test_clock_is_independent_of_host_time_and_replays_its_idle_jump() {
+    let mut real = granted();
+    let Completion::ClockGrant(Ok(host)) = real.call(Request::MonotonicClock { io: 1 }).unwrap()
+    else {
+        panic!("host clock grant");
+    };
+    let before = ticks(&mut real, host);
+    let test = real.grant_test(42);
+    let request = Request::TestClock { test };
+    let Completion::Handle(Ok(fake)) = real.call(request.clone()).unwrap() else {
+        panic!("test clock grant");
+    };
+    assert_eq!(ticks(&mut real, fake), 0);
+    let sleep = Request::SleepUntil {
+        clock: fake,
+        deadline: u64::MAX,
+    };
+    real.enter(7);
+    assert_eq!(real.call(sleep.clone()), Err(AdapterError::Blocked));
+    assert_eq!(ticks(&mut real, fake), 0);
+    assert!(!real.ready(7).unwrap());
+    assert!(real.wait().unwrap());
+    assert!(real.ready(7).unwrap());
+    assert_eq!(real.call(sleep.clone()), Ok(Completion::Wait(Ok(()))));
+    real.finish(7);
+    assert_eq!(ticks(&mut real, fake), u64::MAX);
+    assert!(ticks(&mut real, host) >= before);
+    let tape = real.tape().to_vec();
+    let mut sim = replay(&tape);
+    assert_eq!(
+        sim.call(Request::MonotonicClock { io: 1 }).unwrap(),
+        Completion::ClockGrant(Ok(host))
+    );
+    assert_eq!(ticks(&mut sim, host), before);
+    assert_eq!(sim.grant_test(42), test);
+    assert_eq!(sim.call(request).unwrap(), Completion::Handle(Ok(fake)));
+    assert_eq!(ticks(&mut sim, fake), 0);
+    sim.enter(7);
+    assert_eq!(sim.call(sleep.clone()), Err(AdapterError::Blocked));
+    assert_eq!(ticks(&mut sim, fake), 0);
+    assert!(!sim.ready(7).unwrap());
+    assert!(sim.wait().unwrap());
+    assert!(sim.ready(7).unwrap());
+    assert_eq!(sim.call(sleep), Ok(Completion::Wait(Ok(()))));
+    Adapter::finish(&mut sim, 7);
+    assert_eq!(ticks(&mut sim, fake), u64::MAX);
+    assert!(ticks(&mut sim, host) >= before);
+    sim.finish().unwrap();
+}

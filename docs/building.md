@@ -219,6 +219,8 @@ report is not printed.
 
 A test's tasks (`test.tasks`) run under the run's scheduler (`inputs.scheduler` in
 [determinism.md](spec/determinism.md#run-configuration)), `fifo@1` by default.
+`test.clock(t)` supplies a fake clock starting at zero; it advances to the earliest
+live timer only when no task can run. Blocked tests fail with their outstanding waits.
 `--scheduler <name@1:seed>` runs every selected test once under that scheduler.
 `--explore <n>` runs each selected test under seeds 0 to n-1 of `random@1`, or of the policy
 `--scheduler <name@1>` names (`random@1` or `pct@1`, without a seed), and stops that test
