@@ -517,6 +517,9 @@ impl Adapter for RealIo {
                 // released first registers its interest here): Readiness reports it from now.
                 if log.rows_of(token).is_some_and(|row| row.parked) {
                     readiness.parked(token);
+                    if let Some(clock) = &self.test_clock {
+                        clock.parked(token);
+                    }
                 }
                 log.park(committed);
                 self.record(Event {
