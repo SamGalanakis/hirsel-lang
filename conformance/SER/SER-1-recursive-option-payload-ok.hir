@@ -1,0 +1,19 @@
+// rule: SER-1
+// expect: accept
+// A recursive type whose payloads are Option, Result or record schemas is
+// admitted when every field's schema is; the cycle through itself is admitted.
+@serializable
+type Pair {
+  key: u8,
+  value: u16,
+}
+
+@serializable
+type V = A(Option[u8]) | B(Result[Pair, u8]) | Seq(List[V])
+
+@serializable
+type W = End | Link(Option[Pair], box W)
+
+fn bytes(v: V, w: W) -> (Bytes, Bytes) {
+  (codec.encode(v), codec.encode(w))
+}

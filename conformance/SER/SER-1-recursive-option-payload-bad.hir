@@ -1,0 +1,13 @@
+// rule: SER-1
+// expect: reject SER-1 at line 12
+// A recursive type is refused when a field's schema is not admitted, even
+// inside an Option payload.
+resource type Token {
+  n: u64,
+}
+
+@serializable
+type V = A(Option[u8]) | Seq(List[V])
+
+@serializable
+type W = End | Link(Option[Token], box W)

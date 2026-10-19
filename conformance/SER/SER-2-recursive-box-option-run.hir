@@ -1,0 +1,18 @@
+// rule: SER-2
+// expect: run
+// A type recursive through box with an Option payload round-trips.
+@serializable
+type V = End | Link(Option[u8], box V)
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let v: V = Link(Some(3u8), box Link(None(), box End()))
+  let encoded = codec.encode(v)
+  let back: V = codec.decode(encoded)?
+  test.check(t, codec.encode(back) == encoded)
+  let same = match back {
+    Link(Some(3), Link(None(), End())) => true,
+    _ => false,
+  }
+  test.check(t, same)
+  Ok(())
+}

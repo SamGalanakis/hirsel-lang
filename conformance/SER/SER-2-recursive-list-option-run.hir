@@ -1,0 +1,18 @@
+// rule: SER-2
+// expect: run
+// A type recursive through List with an Option payload round-trips.
+@serializable
+type V = A(Option[u8]) | Seq(List[V])
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  let v: V = Seq([A(Some(3u8)), A(None())])
+  let encoded = codec.encode(v)
+  let back: V = codec.decode(encoded)?
+  test.check(t, codec.encode(back) == encoded)
+  let same = match back {
+    Seq(items) => list.len(items) == 2,
+    A(_) => false,
+  }
+  test.check(t, same)
+  Ok(())
+}
