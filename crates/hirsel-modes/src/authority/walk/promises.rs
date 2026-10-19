@@ -996,8 +996,11 @@ impl Checker<'_> {
             else {
                 continue;
             };
-            let differs = if !self.property(actual, Bound::Plain)
-                && crossing_requirement(&a) != crossing_requirement(&b)
+            // A plain value has no crossing contract to compare. The cheap row
+            // comparison runs first: a plain proof walks the whole subgraph,
+            // which would make this walk quadratic in nesting depth.
+            let differs = if crossing_requirement(&a) != crossing_requirement(&b)
+                && !self.property(actual, Bound::Plain)
             {
                 Some((
                     const { RuleId::of("MODE-4") },
