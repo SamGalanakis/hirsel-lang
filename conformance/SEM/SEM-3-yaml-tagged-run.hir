@@ -1,0 +1,108 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml keeps a tag outside the core schema as Tagged: its resolved tag (after
+// %TAG handles) and its content, text for a scalar whatever it spells, so
+// CloudFormation's `!Ref`, `!Sub` and `!If` and YAML 1.1's `!!binary` read. Core tags
+// still resolve, a core tag must match its content, and a key stays its text. Every rejected input sits beside an accepted twin.
+fn tagged_text(v: yaml.Value, tag: String, content: String) -> bool {
+  match v {
+    Tagged(tag: t, value: Text(s)) => t == tag && s == content,
+    _ => false,
+  }
+}
+
+fn field(v: yaml.Value, key: String) -> yaml.Value {
+  match v {
+    Object(entries) => match map.get(entries, key) {
+      Some(found) => unique found,
+      None() => Null(),
+    },
+    _ => Null(),
+  }
+}
+
+fn parsed(take input: String) -> yaml.Value {
+  match yaml.parse(take input) {
+    Ok(v) => v,
+    Error(_) => Null(),
+  }
+}
+
+fn tag_at(take input: String, line: u64, column: u64) -> bool {
+  match yaml.parse(take input) {
+    Error(Tag(p)) => p.line == line && p.column == column,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  failure.check(
+    tagged_text(field(parsed("a: !Ref b\n"), "a"), "!Ref", "b"),
+    TextInvariant()
+  )
+  failure.check(tagged_text(parsed("!local 1"), "!local", "1"), TextInvariant())
+  failure.check(
+    tagged_text(parsed("!!binary aGVsbG8="), "tag:yaml.org,2002:binary", "aGVsbG8="),
+    TextInvariant()
+  )
+  failure.check(
+    tagged_text(
+      parsed("%TAG !e! tag:example.com,2000:app/\n---\n!e!foo bar\n"),
+      "tag:example.com,2000:app/foo",
+      "bar"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    tagged_text(
+      parsed("!<tag:example.com,2000:x> \"q\""),
+      "tag:example.com,2000:x",
+      "q"
+    ),
+    TextInvariant()
+  )
+  // Collections keep their items' own resolution.
+  failure.check(
+    match field(parsed("c: !If [cond, 1, !Ref b]\n"), "c") {
+      Tagged(tag: t, value: Array(items)) => t == "!If" && list.len(items) == 3 && tagged_text(
+        items[2],
+        "!Ref",
+        "b"
+      ),
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match parsed("!thing\nname: x\nsize: 2\n") {
+      Tagged(tag: t, value: Object(entries)) => t == "!thing" && map.len(entries) == 2,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  // An alias copies the tag with its node.
+  let copied = parsed("a: &x !Ref b\nc: *x\n")
+  failure.check(tagged_text(field(copied, "c"), "!Ref", "b"), TextInvariant())
+  // A scalar key is its text, including a tagged one or an alias of one.
+  failure.check(field(parsed("!foo a: 1\n"), "a") == parsed("1"), TextInvariant())
+  failure.check(field(parsed("!!str a: 1\n"), "a") == parsed("1"), TextInvariant())
+  failure.check(
+    field(parsed("a: &k !foo x\n*k : 1\n"), "x") == parsed("1"),
+    TextInvariant()
+  )
+  failure.check(field(parsed("a: &k x\n*k : 1\n"), "x") == parsed("1"), TextInvariant())
+  failure.check(
+    match yaml.parse("!foo a: 1\na: 2\n") {
+      Error(DuplicateKey(p)) => p.line == 2 && p.column == 1,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(field(parsed("!foo a: 1\nb: 2\n"), "b") == parsed("2"), TextInvariant())
+  // An empty verbatim tag is Tag; `!<!>` is `!`.
+  failure.check(tag_at("!<> x", 1, 1), TextInvariant())
+  failure.check(parsed("!<!> 1") == parsed("'1'"), TextInvariant())
+  failure.check(tag_at("!!int x", 1, 1), TextInvariant())
+  failure.check(parsed("!!int 7") == parsed("7"), TextInvariant())
+  Ok(())
+}

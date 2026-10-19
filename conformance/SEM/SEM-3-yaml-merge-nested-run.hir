@@ -1,0 +1,59 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml merge keys: go-yaml v3 decode_test.go mergeTestsNested at
+// 944c86a7d293 (TestMergeNestedStruct, its map form): a merged value is taken whole,
+// never merged into an explicit one, and later sources only fill keys still
+// missing. Config turns merge keys off for strict YAML 1.2.
+fn field(v: yaml.Value, key: String) -> yaml.Value {
+  match v {
+    Object(entries) => match map.get(entries, key) {
+      Some(found) => unique found,
+      None() => Null(),
+    },
+    _ => Null(),
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let text = "mergeouter1: &mergeouter1\n    d: 40\n    e: 50\n\nmergeouter2: &mergeouter2\n    e: 5\n    f: 6\n    g: 70\n\nmergeinner1: &mergeinner1\n    <<: *mergeouter1\n    inner:\n        a: 1\n        b: 2\n\nmergeinner2: &mergeinner2\n    <<: *mergeouter2\n    inner:\n        a: -1\n        b: -2\n\nouter:\n    <<: [*mergeinner1, *mergeinner2]\n    f: 60\n    inner:\n        a: 10\n"
+  let Ok(doc) = yaml.parse(copy text) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    yaml.stringify(field(doc, "outer")) == Ok(
+      "d: 40\ne: 50\ng: 70\nf: 60\ninner:\n  a: 10\n"
+    ),
+    TextInvariant()
+  )
+  // Off, `<<` is an ordinary key holding what it says.
+  let strict = yaml.Config(merge_keys: false)
+  let Ok(plain) = yaml.parse_with(copy text, strict) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    match field(field(plain, "outer"), "<<") {
+      Array(items) => list.len(items) == 2,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  let Ok(docs) = yaml.parse_all_with("a: {<<: 1}\n---\nb: {<<: [x]}\n", strict) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let one: yaml.Value = Integer(1)
+  failure.check(
+    list.len(docs) == 2 && field(field(docs[0], "a"), "<<") == one && match field(
+      field(docs[1], "b"),
+      "<<"
+    ) {
+      Array(items) => list.len(items) == 1,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(yaml.default_config() == yaml.Config(merge_keys: true), TextInvariant())
+  Ok(())
+}

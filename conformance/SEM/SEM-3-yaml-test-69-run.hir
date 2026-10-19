@@ -6,35 +6,25 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.parses(
-    s,
-    "S3PD",
-    "plain key: in-line value\n: # Both empty\n\"quoted key\":\n- entry\n",
-    1
-  )
-  failed += harness.invalid(s, "S4GJ", "---\nfolded: > first line\n  second line\n")
   failed += harness.valid(
     s,
-    "S4JQ",
-    "# Assuming conventional resolution:\n- \"12\"\n- 12\n- ! 12\n",
-    ["[\"12\",12,\"12\"]"]
+    "Q8AD",
+    "---\n\"folded \nto a space,\n \nto a line feed, or \t\\\n \\ \tnon-content\"\n",
+    ["\"folded to a space,\\nto a line feed, or \\t \\tnon-content\""]
   )
-  failed += harness.valid(s, "S4T7", "aaa: bbb\n...\n", ["{\"aaa\":\"bbb\"}"])
-  failed += harness.valid(s, "S7BG", "---\n- :,\n", ["[\":,\"]"])
+  failed += harness.complex_key(
+    s,
+    "Q9WF",
+    "{ first: Sammy, last: Sosa }:\n# Statistics:\n  hr:  # Home runs\n     65\n  avg: # Average\n   0.278\n"
+  )
+  failed += harness.invalid(s, "QB6E", "---\nquoted: \"a\nb\nc\"\n")
+  failed += harness.valid(s, "QF4Y", "[\nfoo: bar\n]\n", ["[{\"foo\":\"bar\"}]"])
   failed += harness.invalid(
     s,
-    "S98Z",
-    "empty block scalar: >\n \n  \n   \n # comment\n"
+    "QLJ7",
+    "%TAG !prefix! tag:example.com,2011:\n--- !prefix!A\na: b\n--- !prefix!B\nc: d\n--- !prefix!C\ne: f\n"
   )
-  failed += harness.valid(
-    s,
-    "S9E8",
-    "sequence:\n- one\n- two\nmapping:\n  ? sky\n  : blue\n  sea : green\n",
-    [
-      "{\"sequence\":[\"one\",\"two\"],\"mapping\":{\"sky\":\"blue\",\"sea\":\"green\"}}"
-    ]
-  )
-  failed += harness.complex_key(s, "SBG9", "{a: [b, c], [d, e]: f}\n")
+  failed += harness.valid(s, "QT73", "# comment\n...\n", [])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

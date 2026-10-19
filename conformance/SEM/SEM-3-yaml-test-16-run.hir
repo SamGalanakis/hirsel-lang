@@ -6,12 +6,32 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.round_trips(
+  failed += harness.valid(
     s,
-    "6HB6",
-    "  # Leading comment line spaces are\n   # neither content nor indentation.\n    \nNot indented:\n By one space: |\n    By four\n      spaces\n Flow style: [    # Leading spaces\n   By two,        # in flow style\n  Also by two,    # are neither\n  \tStill by two   # content nor\n    ]             # indentation.\n",
-    0
+    "5WE3",
+    "? explicit key # Empty value\n? |\n  block key\n: - one # Explicit compact\n  - two # block value\n",
+    ["{\"explicit key\":null,\"block key\\n\":[\"one\",\"two\"]}"]
   )
+  failed += harness.invalid(s, "62EZ", "---\nx: { y: z }in: valid\n")
+  failed += harness.valid(
+    s,
+    "652Z",
+    "{ ?foo: bar,\nbar: 42\n}\n",
+    ["{\"?foo\":\"bar\",\"bar\":42}"]
+  )
+  failed += harness.valid(s, "65WH", "- foo\n", ["[\"foo\"]"])
+  failed += harness.valid(
+    s,
+    "6BCT",
+    "- foo:\t bar\n- - baz\n  -\tbaz\n",
+    ["[{\"foo\":\"bar\"},[\"baz\",\"baz\"]]"]
+  )
+  failed += harness.complex_key(
+    s,
+    "6BFJ",
+    "---\n&mapping\n&key [ &item a, b, c ]: value\n"
+  )
+  failed += harness.valid(s, "6CA3", "\t[\n\t]\n", ["[]"])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

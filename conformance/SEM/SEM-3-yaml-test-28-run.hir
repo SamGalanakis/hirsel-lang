@@ -8,11 +8,32 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "9J7A",
-    "foo:\n  bar: baz\n",
-    ["{\"foo\":{\"bar\":\"baz\"}}"]
+    "8KB6",
+    "---\n- { single line, a: b}\n- { multi\n  line, a: b}\n",
+    ["[{\"single line\":null,\"a\":\"b\"},{\"multi line\":null,\"a\":\"b\"}]"]
   )
-  failed += harness.invalid(s, "9JBA", "---\n[ a, b, c, ]#invalid\n")
+  failed += harness.valid(s, "8MK2", "! a\n", ["\"a\""])
+  failed += harness.valid(
+    s,
+    "8QBE",
+    "key:\n - item1\n - item2\n",
+    ["{\"key\":[\"item1\",\"item2\"]}"]
+  )
+  failed += harness.valid(
+    s,
+    "8UDB",
+    "[\n\"double\n quoted\", 'single\n           quoted',\nplain\n text, [ nested ],\nsingle: pair,\n]\n",
+    [
+      "[\"double quoted\",\"single quoted\",\"plain text\",[\"nested\"],{\"single\":\"pair\"}]"
+    ]
+  )
+  failed += harness.invalid(s, "8XDJ", "key: word1\n#  xxx\n  word2\n")
+  failed += harness.valid(
+    s,
+    "8XYN",
+    "---\n- &😁 unicode anchor\n",
+    ["[\"unicode anchor\"]"]
+  )
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

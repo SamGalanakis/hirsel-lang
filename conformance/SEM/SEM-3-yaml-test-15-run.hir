@@ -6,14 +6,33 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.decodes(
+  failed += harness.valid(
     s,
-    "6HB6",
-    "  # Leading comment line spaces are\n   # neither content nor indentation.\n    \nNot indented:\n By one space: |\n    By four\n      spaces\n Flow style: [    # Leading spaces\n   By two,        # in flow style\n  Also by two,    # are neither\n  \tStill by two   # content nor\n    ]             # indentation.\n",
+    "5T43",
+    "- { \"key\":value }\n- { \"key\"::value }\n",
+    ["[{\"key\":\"value\"},{\"key\":\":value\"}]"]
+  )
+  failed += harness.invalid(s, "5TRB", "---\n\"\n---\n\"\n")
+  failed += harness.values(
+    s,
+    "5TYM",
+    "%TAG !m! !my-\n--- # Bulb here\n!m!light fluorescent\n...\n%TAG !m! !my-\n--- # Color here\n!m!light green\n",
     [
-      "{\"Not indented\":{\"By one space\":\"By four\\n  spaces\\n\",\"Flow style\":[\"By two\",\"Also by two\",\"Still by two\"]}}"
+      Tagged(tag: "!my-light", value: box Text("fluorescent")),
+      Tagged(tag: "!my-light", value: box Text("green"))
     ]
   )
+  failed += harness.round_trip(
+    s,
+    "5TYM",
+    Tagged(tag: "!my-light", value: box Text("fluorescent"))
+  )
+  failed += harness.round_trip(
+    s,
+    "5TYM",
+    Tagged(tag: "!my-light", value: box Text("green"))
+  )
+  failed += harness.invalid(s, "5U3A", "key: - a\n     - b\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

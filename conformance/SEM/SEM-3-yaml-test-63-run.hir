@@ -6,26 +6,32 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(s, "QF4Y", "[\nfoo: bar\n]\n", ["[{\"foo\":\"bar\"}]"])
-  failed += harness.invalid(
-    s,
-    "QLJ7",
-    "%TAG !prefix! tag:example.com,2011:\n--- !prefix!A\na: b\n--- !prefix!B\nc: d\n--- !prefix!C\ne: f\n"
-  )
-  failed += harness.valid(s, "QT73", "# comment\n...\n", [])
   failed += harness.valid(
     s,
-    "R4YG",
-    "- |\n detected\n- >\n \n  \n  # detected\n- |1\n  explicit\n- >\n \t\n detected\n",
-    ["[\"detected\\n\",\"\\n\\n# detected\\n\",\" explicit\\n\",\"\\t\\ndetected\\n\"]"]
+    "M7NX",
+    "---\n{\n a: [\n  b, c, {\n   d: [e, f]\n  }\n ]\n}\n",
+    ["{\"a\":[\"b\",\"c\",{\"d\":[\"e\",\"f\"]}]}"]
   )
   failed += harness.valid(
     s,
-    "R52L",
-    "---\n{ top1: [item1, {key2: value2}, item3], top2: value2 }\n",
-    ["{\"top1\":[\"item1\",{\"key2\":\"value2\"},\"item3\"],\"top2\":\"value2\"}"]
+    "M9B4",
+    "|\n literal\n \ttext\n\n\n",
+    ["\"literal\\n\\ttext\\n\""]
   )
-  failed += harness.invalid(s, "RHX7", "---\nkey: value\n%YAML 1.2\n---\n")
+  failed += harness.valid(
+    s,
+    "MJS9",
+    ">\n  foo \n \n  \t bar\n\n  baz\n",
+    ["\"foo \\n\\n\\t bar\\n\\nbaz\\n\""]
+  )
+  failed += harness.invalid(s, "MUS6/00", "%YAML 1.1#...\n---\n")
+  failed += harness.invalid(s, "MUS6/01", "%YAML 1.2\n---\n%YAML 1.2\n---\n")
+  failed += harness.valid(s, "MUS6/02", "%YAML  1.1\n---\n", ["null"])
+  failed += harness.valid(s, "MUS6/03", "%YAML \t 1.1\n---\n", ["null"])
+  failed += harness.valid(s, "MUS6/04", "%YAML 1.1  # comment\n---\n", ["null"])
+  failed += harness.valid(s, "MUS6/05", "%YAM 1.1\n---\n", ["null"])
+  failed += harness.valid(s, "MUS6/06", "%YAMLL 1.1\n---\n", ["null"])
+  failed += harness.valid(s, "MXS3", "- {a: b}\n", ["[{\"a\":\"b\"}]"])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

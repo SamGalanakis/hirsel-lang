@@ -88,7 +88,7 @@ fn decoded(s: Stdout, name: String, take text: String, take expected: List[Strin
   Some(documents)
 }
 
-fn round_trip(s: Stdout, name: String, document: yaml.Value) -> u64 {
+pub fn round_trip(s: Stdout, name: String, document: yaml.Value) -> u64 {
   let Ok(written) = yaml.stringify(document) else {
     return report(s, "unwritable value ", name)
   }
@@ -146,12 +146,24 @@ pub fn invalid(s: Stdout, name: String, take text: String) -> u64 {
   }
 }
 
-// A valid case whose tree holds a tag outside the core schema.
-pub fn tagged(s: Stdout, name: String, take text: String) -> u64 {
+// Exact event-tree values for cases whose tags JSON cannot represent.
+pub fn values(s: Stdout, name: String, take text: String, expected: List[yaml.Value]) -> u64 {
   match yaml.parse_all(take text) {
-    Error(Tag(_)) => 0,
-    _ => report(s, "expected Tag ", name),
+    Ok(actual) => if actual == expected {
+      0
+    } else {
+      report(s, "wrong tagged tree ", name)
+    },
+    Error(_) => report(s, "rejected tagged tree ", name),
   }
+}
+
+pub fn object(pairs: List[(String, yaml.Value)]) -> yaml.Value {
+  let mut entries: Map[String, yaml.Value] = map.empty()
+  for (key, value) in pairs {
+    map.insert(mut entries, unique key, unique value)
+  }
+  Object(take entries)
 }
 
 // A valid case with a collection or alias of a collection as a mapping key.

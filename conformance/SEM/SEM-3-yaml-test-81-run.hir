@@ -8,13 +8,18 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "YD5X",
-    "- [name        , hr, avg  ]\n- [Mark McGwire, 65, 0.278]\n- [Sammy Sosa  , 63, 0.288]\n",
+    "U3XV",
+    "---\ntop1: &node1\n  &k1 key1: one\ntop2: &node2 # comment\n  key2: two\ntop3:\n  &k3 key3: three\ntop4:\n  &node4\n  &k4 key4: four\ntop5:\n  &node5\n  key5: five\ntop6: &val6\n  six\ntop7:\n  &val7 seven\n",
     [
-      "[[\"name\",\"hr\",\"avg\"],[\"Mark McGwire\",65,0.278],[\"Sammy Sosa\",63,0.288]]"
+      "{\"top1\":{\"key1\":\"one\"},\"top2\":{\"key2\":\"two\"},\"top3\":{\"key3\":\"three\"},\"top4\":{\"key4\":\"four\"},\"top5\":{\"key5\":\"five\"},\"top6\":\"six\",\"top7\":\"seven\"}"
     ]
   )
-  failed += harness.invalid(s, "YJV2", "[-]\n")
+  failed += harness.invalid(
+    s,
+    "U44R",
+    "map:\n  key1: \"quoted1\"\n   key2: \"bad indentation\"\n"
+  )
+  failed += harness.invalid(s, "U99R", "- !!str, xxx\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

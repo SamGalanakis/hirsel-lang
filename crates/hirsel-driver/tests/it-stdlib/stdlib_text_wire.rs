@@ -344,3 +344,36 @@ fn yaml_documents_are_ordinary_source() {
         &["document", "source", "remove"],
     );
 }
+
+// Full 1024-byte quoted and 1025-byte explicit keys exceed the corpus step budget.
+fn yaml_large_fixture(fixture: &str) {
+    with_compiler_stack(|| {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{fixture}.hir"));
+        let outcome = run_path_with_step_budget(
+            &path,
+            SimulationConfig::default(),
+            Some(5_000_000),
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, RunOutcome::Exit(0)), "{outcome:?}");
+    });
+}
+
+#[test]
+fn yaml_explicit_1025_byte_key_reads_back() {
+    yaml_large_fixture("yaml-key-explicit");
+}
+
+#[test]
+fn yaml_quoted_1024_byte_key_reads_back() {
+    yaml_large_fixture("yaml-key-quoted");
+}
+
+// The full tagged invoice includes four floats and exceeds the corpus step limit.
+#[test]
+fn yaml_tagged_invoice_round_trips_beyond_corpus_budget() {
+    yaml_large_fixture("yaml-tagged-invoice");
+}

@@ -1,0 +1,29 @@
+// rule: SEM-3
+// expect: run
+// A merge source and an ordinary quoted << key have distinct edit paths.
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(opened) = yaml.document("a: &b {x: 1}\nc: {<<: *b, \"<<\": 3}\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut doc = opened
+  failure.check(
+    yaml.set(mut doc, [Key("c"), Key("<<")], Integer(4)) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(
+    yaml.source(doc) == "a: &b {x: 1}\nc: {<<: *b, \"<<\": 4}\n",
+    TextInvariant()
+  )
+  failure.check(yaml.remove(mut doc, [Key("c"), Key("<<")]) == Ok(()), TextInvariant())
+  failure.check(yaml.source(doc) == "a: &b {x: 1}\nc: {<<: *b}\n", TextInvariant())
+  failure.check(
+    yaml.set(mut doc, [Key("c"), Key("<<")], Text("literal")) == Ok(()),
+    TextInvariant()
+  )
+  failure.check(
+    yaml.source(doc) == "a: &b {x: 1}\nc: {<<: *b, \"<<\": literal}\n",
+    TextInvariant()
+  )
+  Ok(())
+}

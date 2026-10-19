@@ -6,34 +6,30 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.valid(
+    s,
+    "4CQQ",
+    "plain:\n  This unquoted scalar\n  spans many lines.\n\nquoted: \"So does this\n  quoted scalar.\\n\"\n",
+    [
+      "{\"plain\":\"This unquoted scalar spans many lines.\",\"quoted\":\"So does this quoted scalar.\\n\"}"
+    ]
+  )
+  failed += harness.invalid(s, "4EJS", "---\na:\n\tb:\n\t\tc: value\n")
+  failed += harness.complex_key(s, "4FJ6", "---\n[\n  [ a, [ [[b,c]]: d, e]]: 23\n]\n")
+  failed += harness.valid(
+    s,
+    "4GC6",
+    "'here''s to \"quotes\"'\n",
+    ["\"here's to \\\"quotes\\\"\""]
+  )
+  failed += harness.invalid(s, "4H7K", "---\n[ a, b, c ] ]\n")
+  failed += harness.invalid(s, "4HVU", "key:\n   - ok\n   - also ok\n  - wrong\n")
+  failed += harness.invalid(
+    s,
+    "4JVG",
+    "top1: &node1\n  &k1 key1: val1\ntop2: &node2\n  &v2 val2\n"
+  )
   failed += harness.valid(s, "4MUZ/00", "{\"foo\"\n: \"bar\"}\n", ["{\"foo\":\"bar\"}"])
-  failed += harness.valid(s, "4MUZ/01", "{\"foo\"\n: bar}\n", ["{\"foo\":\"bar\"}"])
-  failed += harness.valid(s, "4MUZ/02", "{foo\n: bar}\n", ["{\"foo\":\"bar\"}"])
-  failed += harness.valid(
-    s,
-    "4Q9F",
-    "--- >\n ab\n cd\n \n ef\n\n\n gh\n",
-    ["\"ab cd\\nef\\n\\ngh\\n\""]
-  )
-  failed += harness.valid(
-    s,
-    "4QFQ",
-    "- |\n detected\n- >\n \n  \n  # detected\n- |1\n  explicit\n- >\n detected\n",
-    ["[\"detected\\n\",\"\\n\\n# detected\\n\",\" explicit\\n\",\"detected\\n\"]"]
-  )
-  failed += harness.valid(s, "4RWC", "  [1, 2, 3]  \n  ", ["[1,2,3]"])
-  failed += harness.valid(
-    s,
-    "4UYU",
-    "\"foo: bar\\\": baz\"\n",
-    ["\"foo: bar\\\": baz\""]
-  )
-  failed += harness.valid(
-    s,
-    "4V8U",
-    "---\nplain\\value\\with\\backslashes\n",
-    ["\"plain\\\\value\\\\with\\\\backslashes\""]
-  )
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

@@ -6,29 +6,11 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.tagged(
+  failed += harness.round_trips(
     s,
-    "6WLZ",
-    "# Private\n---\n!foo \"bar\"\n...\n# Global\n%TAG ! tag:example.com,2000:app/\n---\n!foo \"bar\"\n"
-  )
-  failed += harness.valid(
-    s,
-    "6WPF",
-    "---\n\"\n  foo \n \n    bar\n\n  baz\n\"\n",
-    ["\" foo\\nbar\\nbaz \""]
-  )
-  failed += harness.valid(s, "6XDY", "---\n---\n", ["null", "null"])
-  failed += harness.valid(
-    s,
-    "6ZKB",
-    "Document\n---\n# Empty\n...\n%YAML 1.2\n---\nmatches %: 20\n",
-    ["\"Document\"", "null", "{\"matches %\":20}"]
-  )
-  failed += harness.valid(
-    s,
-    "735Y",
-    "-\n  \"flow in block\"\n- >\n Block scalar\n- !!map # Block collection\n  foo : bar\n",
-    ["[\"flow in block\",\"Block scalar\\n\",{\"foo\":\"bar\"}]"]
+    "6HB6",
+    "  # Leading comment line spaces are\n   # neither content nor indentation.\n    \nNot indented:\n By one space: |\n    By four\n      spaces\n Flow style: [    # Leading spaces\n   By two,        # in flow style\n  Also by two,    # are neither\n  \tStill by two   # content nor\n    ]             # indentation.\n",
+    0
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

@@ -6,38 +6,29 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.invalid(s, "HRE5", "---\ndouble: \"quoted \\' scalar\"\n")
   failed += harness.valid(
     s,
-    "JTV5",
-    "? a\n  true\n: null\n  d\n? e\n  42\n",
-    ["{\"a true\":\"null d\",\"e 42\":null}"]
+    "HS5T",
+    "1st non-empty\n\n 2nd non-empty \n\t3rd non-empty\n",
+    ["\"1st non-empty\\n2nd non-empty 3rd non-empty\""]
   )
-  failed += harness.invalid(
+  failed += harness.invalid(s, "HU3P", "key:\n  word1 word2\n  no: key\n")
+  failed += harness.valid(s, "HWV9", "...\n", [])
+  failed += harness.valid(
     s,
-    "JY7Z",
-    "key1: \"quoted1\"\nkey2: \"quoted2\" no key: nor value\nkey3: \"quoted3\"\n"
+    "J3BT",
+    "# Tabs and spaces\nquoted: \"Quoted \t\"\nblock:\t|\n  void main() {\n  \tprintf(\"Hello, world!\\n\");\n  }\n",
+    [
+      "{\"quoted\":\"Quoted \\t\",\"block\":\"void main() {\\n\\tprintf(\\\"Hello, world!\\\\n\\\");\\n}\\n\"}"
+    ]
   )
   failed += harness.valid(
     s,
-    "K3WX",
-    "---\n{ \"foo\" # comment\n  :bar }\n",
-    ["{\"foo\":\"bar\"}"]
+    "J5UC",
+    "foo: blue\nbar: arrr\nbaz: jazz\n",
+    ["{\"foo\":\"blue\",\"bar\":\"arrr\",\"baz\":\"jazz\"}"]
   )
-  failed += harness.valid(s, "K4SU", "- foo\n- bar\n- 42\n", ["[\"foo\",\"bar\",42]"])
-  failed += harness.valid(
-    s,
-    "K527",
-    ">-\n  trimmed\n  \n \n\n  as\n  space\n",
-    ["\"trimmed\\n\\n\\nas space\""]
-  )
-  failed += harness.valid(s, "K54U", "---\tscalar\n", ["\"scalar\""])
-  failed += harness.valid(
-    s,
-    "K858",
-    "strip: >-\n\nclip: >\n\nkeep: |+\n\n",
-    ["{\"strip\":\"\",\"clip\":\"\",\"keep\":\"\\n\"}"]
-  )
-  failed += harness.valid(s, "KH5V/00", "\"1 inline\\ttab\"\n", ["\"1 inline\\ttab\""])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

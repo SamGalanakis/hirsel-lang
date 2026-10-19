@@ -6,20 +6,16 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.invalid(s, "CXX2", "--- &anchor a: b\n")
+  failed += harness.invalid(s, "D49Q", "'a\\nb': 1\n'c\n d': 1\n")
   failed += harness.valid(
     s,
-    "F3CP",
-    "---\n{ a: [b, c, { d: [e, f] } ] }\n",
-    ["{\"a\":[\"b\",\"c\",{\"d\":[\"e\",\"f\"]}]}"]
+    "D83L",
+    "- |2-\n  explicit indent and chomp\n- |-2\n  chomp and explicit indent\n",
+    ["[\"explicit indent and chomp\",\"chomp and explicit indent\"]"]
   )
-  failed += harness.valid(
-    s,
-    "F6MC",
-    "---\na: >2\n   more indented\n  regular\nb: >2\n\n\n   more indented\n  regular\n",
-    [
-      "{\"a\":\" more indented\\nregular\\n\",\"b\":\"\\n\\n more indented\\nregular\\n\"}"
-    ]
-  )
+  failed += harness.valid(s, "D88J", "a: [b, c]\n", ["{\"a\":[\"b\",\"c\"]}"])
+  failed += harness.valid(s, "D9TU", "foo: bar\n", ["{\"foo\":\"bar\"}"])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

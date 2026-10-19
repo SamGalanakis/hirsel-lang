@@ -6,12 +6,20 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.complex_key(s, "6PBE", "---\n?\n- a\n- b\n:\n- c\n- d\n")
+  failed += harness.invalid(s, "6S55", "key:\n - bar\n - baz\n invalid\n")
   failed += harness.valid(
     s,
-    "7BMT",
-    "---\ntop1: &node1\n  &k1 key1: one\ntop2: &node2 # comment\n  key2: two\ntop3:\n  &k3 key3: three\ntop4: &node4\n  &k4 key4: four\ntop5: &node5\n  key5: five\ntop6: &val6\n  six\ntop7:\n  &val7 seven\n",
+    "6SLA",
+    "\"foo\\nbar:baz\\tx \\\\$%^&*()x\": 23\n'x\\ny:z\\tx $%^&*()x': 24\n",
+    ["{\"foo\\nbar:baz\\tx \\\\$%^&*()x\":23,\"x\\\\ny:z\\\\tx $%^&*()x\":24}"]
+  )
+  failed += harness.valid(
+    s,
+    "6VJK",
+    ">\n Sammy Sosa completed another\n fine season with great stats.\n\n   63 Home Runs\n   0.288 Batting Average\n\n What a year!\n",
     [
-      "{\"top1\":{\"key1\":\"one\"},\"top2\":{\"key2\":\"two\"},\"top3\":{\"key3\":\"three\"},\"top4\":{\"key4\":\"four\"},\"top5\":{\"key5\":\"five\"},\"top6\":\"six\",\"top7\":\"seven\"}"
+      "\"Sammy Sosa completed another fine season with great stats.\\n\\n  63 Home Runs\\n  0.288 Batting Average\\n\\nWhat a year!\\n\""
     ]
   )
   failure.check(failed == 0, TextInvariant())

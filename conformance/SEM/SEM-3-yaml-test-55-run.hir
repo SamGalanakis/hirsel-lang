@@ -8,30 +8,15 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "LP6E",
-    "- [a, b , c ]\n- { \"a\"  : b\n   , c : 'd' ,\n   e   : \"f\"\n  }\n- [      ]\n",
-    ["[[\"a\",\"b\",\"c\"],{\"a\":\"b\",\"c\":\"d\",\"e\":\"f\"},[]]"]
+    "J9HZ",
+    "---\nhr: # 1998 hr ranking\n  - Mark McGwire\n  - Sammy Sosa\nrbi:\n  # 1998 rbi ranking\n  - Sammy Sosa\n  - Ken Griffey\n",
+    [
+      "{\"hr\":[\"Mark McGwire\",\"Sammy Sosa\"],\"rbi\":[\"Sammy Sosa\",\"Ken Griffey\"]}"
+    ]
   )
-  failed += harness.valid(
-    s,
-    "LQZ7",
-    "\"implicit block key\" : [\n  \"implicit flow key\" : value,\n ]\n",
-    ["{\"implicit block key\":[{\"implicit flow key\":\"value\"}]}"]
-  )
-  failed += harness.complex_key(s, "LX3P", "[flow]: block\n")
-  failed += harness.valid(
-    s,
-    "M29M",
-    "a: |\n ab\n \n cd\n ef\n \n\n...\n",
-    ["{\"a\":\"ab\\n\\ncd\\nef\\n\"}"]
-  )
-  failed += harness.complex_key(s, "M2N8/00", "- ? : x\n")
-  failed += harness.complex_key(s, "M2N8/01", "? []: x\n")
-  failed += harness.tagged(
-    s,
-    "M5C3",
-    "literal: |2\n  value\nfolded:\n   !foo\n  >1\n value\n"
-  )
+  failed += harness.valid(s, "JEF9/00", "- |+\n\n\n", ["[\"\\n\\n\"]"])
+  failed += harness.valid(s, "JEF9/01", "- |+\n   \n", ["[\"\\n\"]"])
+  failed += harness.valid(s, "JEF9/02", "- |+\n   ", ["[\"\\n\"]"])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

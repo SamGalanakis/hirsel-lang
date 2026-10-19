@@ -6,33 +6,23 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(s, "KH5V/01", "\"2 inline\\\ttab\"\n", ["\"2 inline\\ttab\""])
-  failed += harness.valid(s, "KH5V/02", "\"3 inline\ttab\"\n", ["\"3 inline\\ttab\""])
-  failed += harness.complex_key(
+  failed += harness.values(
     s,
-    "KK5P",
-    "complex1:\n  ? - a\ncomplex2:\n  ? - a\n  : b\ncomplex3:\n  ? - a\n  : >\n    b\ncomplex4:\n  ? >\n    a\n  :\ncomplex5:\n  ? - a\n  : - b\n"
+    "J7PZ",
+    "# The !!omap tag is one of the optional types\n# introduced for YAML 1.1. In 1.2, it is not\n# part of the standard tags and should not be\n# enabled by default.\n# Ordered maps are represented as\n# A sequence of mappings, with\n# each mapping having one key\n--- !!omap\n- Mark McGwire: 65\n- Sammy Sosa: 63\n- Ken Griffy: 58\n",
+    [
+      Tagged(
+        tag: "tag:yaml.org,2002:omap",
+        value: box Array(
+          [
+            harness.object([("Mark McGwire", Integer(65))]),
+            harness.object([("Sammy Sosa", Integer(63))]),
+            harness.object([("Ken Griffy", Integer(58))])
+          ]
+        )
+      )
+    ]
   )
-  failed += harness.valid(
-    s,
-    "KMK3",
-    "foo:\n  bar: 1\nbaz: 2\n",
-    ["{\"foo\":{\"bar\":1},\"baz\":2}"]
-  )
-  failed += harness.invalid(s, "KS4U", "---\n[\nsequence item\n]\ninvalid item\n")
-  failed += harness.valid(
-    s,
-    "KSS4",
-    "--- \"quoted\nstring\"\n--- &node foo\n",
-    ["\"quoted string\"", "\"foo\""]
-  )
-  failed += harness.valid(
-    s,
-    "L24T/00",
-    "foo: |\n  x\n   \n",
-    ["{\"foo\":\"x\\n \\n\"}"]
-  )
-  failed += harness.valid(s, "L24T/01", "foo: |\n  x\n   ", ["{\"foo\":\"x\\n \\n\"}"])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

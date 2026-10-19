@@ -6,25 +6,33 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.parses(s, "NHX8", ":\n\n\n", 1)
-  failed += harness.valid(
+  failed += harness.valid(s, "KH5V/01", "\"2 inline\\\ttab\"\n", ["\"2 inline\\ttab\""])
+  failed += harness.valid(s, "KH5V/02", "\"3 inline\ttab\"\n", ["\"3 inline\\ttab\""])
+  failed += harness.complex_key(
     s,
-    "NJ66",
-    "---\n- { single line: value}\n- { multi\n  line: value}\n",
-    ["[{\"single line\":\"value\"},{\"multi line\":\"value\"}]"]
-  )
-  failed += harness.parses(
-    s,
-    "NKF9",
-    "---\nkey: value\n: empty key\n---\n{\n key: value, : empty key\n}\n---\n# empty key and value\n:\n---\n# empty key and value\n{ : }\n",
-    4
+    "KK5P",
+    "complex1:\n  ? - a\ncomplex2:\n  ? - a\n  : b\ncomplex3:\n  ? - a\n  : >\n    b\ncomplex4:\n  ? >\n    a\n  :\ncomplex5:\n  ? - a\n  : - b\n"
   )
   failed += harness.valid(
     s,
-    "NP9H",
-    "\"folded \nto a space,\t\n \nto a line feed, or \t\\\n \\ \tnon-content\"\n",
-    ["\"folded to a space,\\nto a line feed, or \\t \\tnon-content\""]
+    "KMK3",
+    "foo:\n  bar: 1\nbaz: 2\n",
+    ["{\"foo\":{\"bar\":1},\"baz\":2}"]
   )
+  failed += harness.invalid(s, "KS4U", "---\n[\nsequence item\n]\ninvalid item\n")
+  failed += harness.valid(
+    s,
+    "KSS4",
+    "--- \"quoted\nstring\"\n--- &node foo\n",
+    ["\"quoted string\"", "\"foo\""]
+  )
+  failed += harness.valid(
+    s,
+    "L24T/00",
+    "foo: |\n  x\n   \n",
+    ["{\"foo\":\"x\\n \\n\"}"]
+  )
+  failed += harness.valid(s, "L24T/01", "foo: |\n  x\n   ", ["{\"foo\":\"x\\n \\n\"}"])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

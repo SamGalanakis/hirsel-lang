@@ -1,0 +1,74 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml applies YAML 1.1 merge keys by default: go-yaml v3 decode_test.go
+// mergeTests (yaml.org/type/merge.html) at 944c86a7d293, first half. Explicit keys
+// win, earlier merge sources win over later ones, and merged keys take the merge
+// key's place in document order.
+fn field(v: yaml.Value, key: String) -> yaml.Value {
+  match v {
+    Object(entries) => match map.get(entries, key) {
+      Some(found) => unique found,
+      None() => Null(),
+    },
+    _ => Null(),
+  }
+}
+
+// The keys of a mapping, in order, joined by spaces.
+fn keys(v: yaml.Value) -> String {
+  let mut out = ""
+  if let Object(entries) = v {
+    for (key, _) in entries {
+      if out != "" {
+        out = string.concat(out, " ")
+      }
+      out = string.concat(out, key)
+    }
+  }
+  out
+}
+
+fn want() -> yaml.Value {
+  match yaml.parse("{x: 1, y: 2, r: 10, label: center/big}") {
+    Ok(v) => v,
+    Error(_) => Null(),
+  }
+}
+
+// Mappings equal as sets of entries.
+fn same_entries(a: yaml.Value, b: yaml.Value) -> bool {
+  match (a, b) {
+    (Object(xs), Object(ys)) => {
+      if map.len(xs) != map.len(ys) {
+        return false
+      }
+      for (key, x) in xs {
+        let Some(y) = map.get(ys, key) else {
+          return false
+        }
+        if x != y {
+          return false
+        }
+      }
+      true
+    },
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.parse(
+    "anchors:\n  list:\n    - &CENTER { \"x\": 1, \"y\": 2 }\n    - &LEFT   { \"x\": 0, \"y\": 2 }\n    - &BIG    { \"r\": 10 }\n    - &SMALL  { \"r\": 1 }\n\n# All the following maps are equal:\n\nplain:\n  # Explicit keys\n  \"x\": 1\n  \"y\": 2\n  \"r\": 10\n  label: center/big\n\nmergeOne:\n  # Merge one map\n  << : *CENTER\n  \"r\": 10\n  label: center/big\n\nmergeMultiple:\n  # Merge multiple maps\n  << : [ *CENTER, *BIG ]\n  label: center/big\n\noverride:\n  # Override\n  << : [ *BIG, *LEFT, *SMALL ]\n  \"x\": 1\n  label: center/big\n"
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(same_entries(field(doc, "plain"), want()), TextInvariant())
+  failure.check(same_entries(field(doc, "mergeOne"), want()), TextInvariant())
+  failure.check(same_entries(field(doc, "mergeMultiple"), want()), TextInvariant())
+  failure.check(same_entries(field(doc, "override"), want()), TextInvariant())
+  // Merged keys stand where the merge key stood; an explicit key keeps its place.
+  failure.check(keys(field(doc, "mergeOne")) == "x y r label", TextInvariant())
+  failure.check(keys(field(doc, "override")) == "r y x label", TextInvariant())
+  Ok(())
+}

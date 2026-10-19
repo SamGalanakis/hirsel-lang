@@ -1,0 +1,67 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml merge keys: go-yaml v3 decode_test.go mergeTests at 944c86a7d293,
+// second half: an explicit `!!merge` tag makes even a quoted `<<` a merge key, and a
+// source may be an inline mapping. An untagged quoted `<<` is an ordinary key.
+fn field(v: yaml.Value, key: String) -> yaml.Value {
+  match v {
+    Object(entries) => match map.get(entries, key) {
+      Some(found) => unique found,
+      None() => Null(),
+    },
+    _ => Null(),
+  }
+}
+
+fn want() -> yaml.Value {
+  match yaml.parse("{x: 1, y: 2, r: 10, label: center/big}") {
+    Ok(v) => v,
+    Error(_) => Null(),
+  }
+}
+
+fn same_entries(a: yaml.Value, b: yaml.Value) -> bool {
+  match (a, b) {
+    (Object(xs), Object(ys)) => {
+      if map.len(xs) != map.len(ys) {
+        return false
+      }
+      for (key, x) in xs {
+        let Some(y) = map.get(ys, key) else {
+          return false
+        }
+        if x != y {
+          return false
+        }
+      }
+      true
+    },
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(doc) = yaml.parse(
+    "anchors:\n  list:\n    - &CENTER { \"x\": 1, \"y\": 2 }\n    - &LEFT   { \"x\": 0, \"y\": 2 }\n    - &BIG    { \"r\": 10 }\n    - &SMALL  { \"r\": 1 }\n\nshortTag:\n  # Explicit short merge tag\n  !!merge \"<<\" : [ *CENTER, *BIG ]\n  label: center/big\n\nlongTag:\n  # Explicit merge long tag\n  !<tag:yaml.org,2002:merge> \"<<\" : [ *CENTER, *BIG ]\n  label: center/big\n\ninlineMap:\n  # Inlined map \n  << : {\"x\": 1, \"y\": 2, \"r\": 10}\n  label: center/big\n\ninlineSequenceMap:\n  # Inlined map in sequence\n  << : [ *CENTER, {\"r\": 10} ]\n  label: center/big\n"
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(same_entries(field(doc, "shortTag"), want()), TextInvariant())
+  failure.check(same_entries(field(doc, "longTag"), want()), TextInvariant())
+  failure.check(same_entries(field(doc, "inlineMap"), want()), TextInvariant())
+  failure.check(same_entries(field(doc, "inlineSequenceMap"), want()), TextInvariant())
+  // Quoted, `<<` is a string key holding the alias's mapping.
+  let Ok(quoted) = yaml.parse("a: &a {x: 1}\nb: {\"<<\": *a}\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  failure.check(
+    match field(field(quoted, "b"), "<<") {
+      Object(m) => map.len(m) == 1,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

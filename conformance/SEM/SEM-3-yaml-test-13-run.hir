@@ -8,29 +8,22 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "5T43",
-    "- { \"key\":value }\n- { \"key\"::value }\n",
-    ["[{\"key\":\"value\"},{\"key\":\":value\"}]"]
+    "57H4",
+    "sequence: !!seq\n- entry\n- !!seq\n - nested\nmapping: !!map\n foo: bar\n",
+    ["{\"sequence\":[\"entry\",[\"nested\"]],\"mapping\":{\"foo\":\"bar\"}}"]
   )
-  failed += harness.invalid(s, "5TRB", "---\n\"\n---\n\"\n")
-  failed += harness.tagged(
-    s,
-    "5TYM",
-    "%TAG !m! !my-\n--- # Bulb here\n!m!light fluorescent\n...\n%TAG !m! !my-\n--- # Color here\n!m!light green\n"
-  )
-  failed += harness.invalid(s, "5U3A", "key: - a\n     - b\n")
+  failed += harness.valid(s, "58MP", "{x: :x}\n", ["{\"x\":\":x\"}"])
   failed += harness.valid(
     s,
-    "5WE3",
-    "? explicit key # Empty value\n? |\n  block key\n: - one # Explicit compact\n  - two # block value\n",
-    ["{\"explicit key\":null,\"block key\\n\":[\"one\",\"two\"]}"]
+    "5BVJ",
+    "literal: |\n  some\n  text\nfolded: >\n  some\n  text\n",
+    ["{\"literal\":\"some\\ntext\\n\",\"folded\":\"some text\\n\"}"]
   )
-  failed += harness.invalid(s, "62EZ", "---\nx: { y: z }in: valid\n")
   failed += harness.valid(
     s,
-    "652Z",
-    "{ ?foo: bar,\nbar: 42\n}\n",
-    ["{\"?foo\":\"bar\",\"bar\":42}"]
+    "5C5M",
+    "- { one : two , three: four , }\n- {five: six,seven : eight}\n",
+    ["[{\"one\":\"two\",\"three\":\"four\"},{\"five\":\"six\",\"seven\":\"eight\"}]"]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

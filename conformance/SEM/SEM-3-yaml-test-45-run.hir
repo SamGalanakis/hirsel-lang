@@ -6,26 +6,19 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.invalid(s, "G9HC", "---\nseq:\n&anchor\n- a\n- b\n")
-  failed += harness.invalid(s, "GDY7", "key: value\nthis is #not a: key\n")
   failed += harness.valid(
     s,
-    "GH63",
-    "? a\n: 1.3\nfifteen: d\n",
-    ["{\"a\":1.3,\"fifteen\":\"d\"}"]
-  )
-  failed += harness.invalid(s, "GT5M", "- item1\n&node\n- item2\n")
-  failed += harness.valid(
-    s,
-    "H2RW",
-    "foo: 1\n\nbar: 2\n    \ntext: |\n  a\n    \n  b\n\n  c\n \n  d\n",
-    ["{\"foo\":1,\"bar\":2,\"text\":\"a\\n  \\nb\\n\\nc\\n\\nd\\n\"}"]
+    "F3CP",
+    "---\n{ a: [b, c, { d: [e, f] } ] }\n",
+    ["{\"a\":[\"b\",\"c\",{\"d\":[\"e\",\"f\"]}]}"]
   )
   failed += harness.valid(
     s,
-    "H3Z8",
-    "---\nwanted: love ♥ and peace ☮\n",
-    ["{\"wanted\":\"love ♥ and peace ☮\"}"]
+    "F6MC",
+    "---\na: >2\n   more indented\n  regular\nb: >2\n\n\n   more indented\n  regular\n",
+    [
+      "{\"a\":\" more indented\\nregular\\n\",\"b\":\"\\n\\n more indented\\nregular\\n\"}"
+    ]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

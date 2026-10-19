@@ -6,30 +6,32 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(s, "65WH", "- foo\n", ["[\"foo\"]"])
   failed += harness.valid(
     s,
-    "6BCT",
-    "- foo:\t bar\n- - baz\n  -\tbaz\n",
-    ["[{\"foo\":\"bar\"},[\"baz\",\"baz\"]]"]
+    "5GBF",
+    "Folding:\n  \"Empty line\n   \t\n  as a line feed\"\nChomping: |\n  Clipped empty lines\n \n\n",
+    [
+      "{\"Folding\":\"Empty line\\nas a line feed\",\"Chomping\":\"Clipped empty lines\\n\"}"
+    ]
   )
-  failed += harness.complex_key(
-    s,
-    "6BFJ",
-    "---\n&mapping\n&key [ &item a, b, c ]: value\n"
-  )
-  failed += harness.valid(s, "6CA3", "\t[\n\t]\n", ["[]"])
-  failed += harness.tagged(
-    s,
-    "6CK3",
-    "%TAG !e! tag:example.com,2000:app/\n---\n- !local foo\n- !!str bar\n- !e!tag%21 baz\n"
-  )
-  failed += harness.valid(s, "6FWR", "--- |+\n ab\n \n  \n...\n", ["\"ab\\n\\n \\n\""])
   failed += harness.valid(
     s,
-    "6H3V",
-    "'foo: bar\\': baz'\n",
-    ["{\"foo: bar\\\\\":\"baz'\"}"]
+    "5KJE",
+    "- [ one, two, ]\n- [three ,four]\n",
+    ["[[\"one\",\"two\"],[\"three\",\"four\"]]"]
+  )
+  failed += harness.invalid(s, "5LLU", "block scalar: >\n \n  \n   \n invalid\n")
+  failed += harness.valid(
+    s,
+    "5MUD",
+    "---\n{ \"foo\"\n  :bar }\n",
+    ["{\"foo\":\"bar\"}"]
+  )
+  failed += harness.valid(
+    s,
+    "5NYZ",
+    "key:    # Comment\n  value\n",
+    ["{\"key\":\"value\"}"]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

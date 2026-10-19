@@ -6,32 +6,35 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(
+  failed += harness.round_trip(
     s,
-    "5GBF",
-    "Folding:\n  \"Empty line\n   \t\n  as a line feed\"\nChomping: |\n  Clipped empty lines\n \n\n",
-    [
-      "{\"Folding\":\"Empty line\\nas a line feed\",\"Chomping\":\"Clipped empty lines\\n\"}"
-    ]
-  )
-  failed += harness.valid(
-    s,
-    "5KJE",
-    "- [ one, two, ]\n- [three ,four]\n",
-    ["[[\"one\",\"two\"],[\"three\",\"four\"]]"]
-  )
-  failed += harness.invalid(s, "5LLU", "block scalar: >\n \n  \n   \n invalid\n")
-  failed += harness.valid(
-    s,
-    "5MUD",
-    "---\n{ \"foo\"\n  :bar }\n",
-    ["{\"foo\":\"bar\"}"]
-  )
-  failed += harness.valid(
-    s,
-    "5NYZ",
-    "key:    # Comment\n  value\n",
-    ["{\"key\":\"value\"}"]
+    "565N",
+    harness.object(
+      [
+        (
+          "canonical",
+          Tagged(
+            tag: "tag:yaml.org,2002:binary",
+            value: box Text(
+              "R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5OTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLCAgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs="
+            )
+          )
+        ),
+        (
+          "generic",
+          Tagged(
+            tag: "tag:yaml.org,2002:binary",
+            value: box Text(
+              "R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5\nOTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/+\n+f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLC\nAgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\n"
+            )
+          )
+        ),
+        (
+          "description",
+          Text("The binary value above is a tiny arrow encoded as a gif image.")
+        )
+      ]
+    )
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

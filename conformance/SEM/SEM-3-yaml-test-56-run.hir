@@ -6,28 +6,21 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.complex_key(
-    s,
-    "M5DY",
-    "? - Detroit Tigers\n  - Chicago cubs\n:\n  - 2001-07-23\n\n? [ New York Yankees,\n    Atlanta Braves ]\n: [ 2001-07-02, 2001-08-12,\n    2001-08-14 ]\n"
-  )
   failed += harness.valid(
     s,
-    "M6YH",
-    "- |\n x\n-\n foo: bar\n-\n - 42\n",
-    ["[\"x\\n\",{\"foo\":\"bar\"},[42]]"]
+    "JHB9",
+    "# Ranking of 1998 home runs\n---\n- Mark McGwire\n- Sammy Sosa\n- Ken Griffey\n\n# Team ranking\n---\n- Chicago Cubs\n- St Louis Cardinals\n",
+    [
+      "[\"Mark McGwire\",\"Sammy Sosa\",\"Ken Griffey\"]",
+      "[\"Chicago Cubs\",\"St Louis Cardinals\"]"
+    ]
   )
+  failed += harness.invalid(s, "JKF3", "- - \"bar\nbar\": x\n")
   failed += harness.valid(
     s,
-    "M7A3",
-    "Bare\ndocument\n...\n# No document\n...\n|\n%!PS-Adobe-2.0 # Not the first line\n",
-    ["\"Bare document\"", "\"%!PS-Adobe-2.0 # Not the first line\\n\""]
-  )
-  failed += harness.valid(
-    s,
-    "M7NX",
-    "---\n{\n a: [\n  b, c, {\n   d: [e, f]\n  }\n ]\n}\n",
-    ["{\"a\":[\"b\",\"c\",{\"d\":[\"e\",\"f\"]}]}"]
+    "JQ4R",
+    "block sequence:\n  - one\n  - two : three\n",
+    ["{\"block sequence\":[\"one\",{\"two\":\"three\"}]}"]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

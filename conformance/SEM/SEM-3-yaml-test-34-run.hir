@@ -6,23 +6,28 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.tagged(
-    s,
-    "C4HZ",
-    "%TAG ! tag:clarkevans.com,2002:\n--- !shape\n  # Use the ! handle for presenting\n  # tag:clarkevans.com,2002:circle\n- !circle\n  center: &ORIGIN {x: 73, y: 129}\n  radius: 7\n- !line\n  start: *ORIGIN\n  finish: { x: 89, y: 102 }\n- !label\n  start: *ORIGIN\n  color: 0xFFEEBB\n  text: Pretty vector drawing.\n"
-  )
-  failed += harness.tagged(
-    s,
-    "CC74",
-    "%TAG !e! tag:example.com,2000:app/\n---\n!e!foo \"bar\"\n"
-  )
-  failed += harness.parses(s, "CFD4", "- [ : empty key ]\n- [: another empty key]\n", 1)
-  failed += harness.invalid(s, "CML9", "key: [ word1\n#  xxx\n  word2 ]\n")
   failed += harness.valid(
     s,
-    "CN3R",
-    "&flowseq [\n a: b,\n &c c: d,\n { &e e: f },\n &g { g: h }\n]\n",
-    ["[{\"a\":\"b\"},{\"c\":\"d\"},{\"e\":\"f\"},{\"g\":\"h\"}]"]
+    "9U5K",
+    "---\n# Products purchased\n- item    : Super Hoop\n  quantity: 1\n- item    : Basketball\n  quantity: 4\n- item    : Big Shoes\n  quantity: 1\n",
+    [
+      "[{\"item\":\"Super Hoop\",\"quantity\":1},{\"item\":\"Basketball\",\"quantity\":4},{\"item\":\"Big Shoes\",\"quantity\":1}]"
+    ]
+  )
+  failed += harness.values(
+    s,
+    "9WXW",
+    "# Private\n!foo \"bar\"\n...\n# Global\n%TAG ! tag:example.com,2000:app/\n---\n!foo \"bar\"\n",
+    [
+      Tagged(tag: "!foo", value: box Text("bar")),
+      Tagged(tag: "tag:example.com,2000:app/foo", value: box Text("bar"))
+    ]
+  )
+  failed += harness.round_trip(s, "9WXW", Tagged(tag: "!foo", value: box Text("bar")))
+  failed += harness.round_trip(
+    s,
+    "9WXW",
+    Tagged(tag: "tag:example.com,2000:app/foo", value: box Text("bar"))
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

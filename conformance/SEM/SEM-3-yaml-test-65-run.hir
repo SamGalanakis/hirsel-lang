@@ -6,15 +6,30 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.decodes(
+  failed += harness.valid(
     s,
-    "RZT7",
-    "---\nTime: 2001-11-23 15:01:42 -5\nUser: ed\nWarning:\n  This is an error message\n  for the log file\n---\nTime: 2001-11-23 15:02:31 -5\nUser: ed\nWarning:\n  A slightly different error\n  message.\n---\nDate: 2001-11-23 15:03:17 -5\nUser: ed\nFatal:\n  Unknown variable \"bar\"\nStack:\n  - file: TopClass.py\n    line: 23\n    code: |\n      x = MoreObject(\"345\\n\")\n  - file: MoreClass.py\n    line: 58\n    code: |-\n      foo = bar\n",
-    [
-      "{\"Time\":\"2001-11-23 15:01:42 -5\",\"User\":\"ed\",\"Warning\":\"This is an error message for the log file\"}",
-      "{\"Time\":\"2001-11-23 15:02:31 -5\",\"User\":\"ed\",\"Warning\":\"A slightly different error message.\"}",
-      "{\"Date\":\"2001-11-23 15:03:17 -5\",\"User\":\"ed\",\"Fatal\":\"Unknown variable \\\"bar\\\"\",\"Stack\":[{\"file\":\"TopClass.py\",\"line\":23,\"code\":\"x = MoreObject(\\\"345\\\\n\\\")\\n\"},{\"file\":\"MoreClass.py\",\"line\":58,\"code\":\"foo = bar\"}]}"
-    ]
+    "NB6Z",
+    "key:\n  value\n  with\n  \t\n  tabs\n",
+    ["{\"key\":\"value with\\ntabs\"}"]
+  )
+  failed += harness.parses(s, "NHX8", ":\n\n\n", 1)
+  failed += harness.valid(
+    s,
+    "NJ66",
+    "---\n- { single line: value}\n- { multi\n  line: value}\n",
+    ["[{\"single line\":\"value\"},{\"multi line\":\"value\"}]"]
+  )
+  failed += harness.parses(
+    s,
+    "NKF9",
+    "---\nkey: value\n: empty key\n---\n{\n key: value, : empty key\n}\n---\n# empty key and value\n:\n---\n# empty key and value\n{ : }\n",
+    4
+  )
+  failed += harness.valid(
+    s,
+    "NP9H",
+    "\"folded \nto a space,\t\n \nto a line feed, or \t\\\n \\ \tnon-content\"\n",
+    ["\"folded to a space,\\nto a line feed, or \\t \\tnon-content\""]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

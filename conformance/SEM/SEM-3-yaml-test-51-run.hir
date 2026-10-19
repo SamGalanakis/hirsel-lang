@@ -6,19 +6,23 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.invalid(s, "H7J7", "key: &x\n!!map\n  a: b\n")
+  failed += harness.invalid(s, "H7TQ", "%YAML 1.2 foo\n---\n")
+  failed += harness.valid(s, "HM87/00", "[:x]\n", ["[\":x\"]"])
+  failed += harness.valid(s, "HM87/01", "[?x]\n", ["[\"?x\"]"])
   failed += harness.valid(
     s,
-    "JR7V",
-    "- a?string\n- another ? string\n- key: value?\n- [a?string]\n- [another ? string]\n- {key: value? }\n- {key: value?}\n- {key?: value }\n",
+    "HMK4",
+    "name: Mark McGwire\naccomplishment: >\n  Mark set a major league\n  home run record in 1998.\nstats: |\n  65 Home Runs\n  0.278 Batting Average\n",
     [
-      "[\"a?string\",\"another ? string\",{\"key\":\"value?\"},[\"a?string\"],[\"another ? string\"],{\"key\":\"value?\"},{\"key\":\"value?\"},{\"key?\":\"value\"}]"
+      "{\"name\":\"Mark McGwire\",\"accomplishment\":\"Mark set a major league home run record in 1998.\\n\",\"stats\":\"65 Home Runs\\n0.278 Batting Average\\n\"}"
     ]
   )
   failed += harness.valid(
     s,
-    "JS2J",
-    "First occurrence: &anchor Value\nSecond occurrence: *anchor\n",
-    ["{\"First occurrence\":\"Value\",\"Second occurrence\":\"Value\"}"]
+    "HMQ5",
+    "!!str &a1 \"foo\":\n  !!str bar\n&a2 baz : *a1\n",
+    ["{\"foo\":\"bar\",\"baz\":\"foo\"}"]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

@@ -6,33 +6,12 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.complex_key(
-    s,
-    "XW4D",
-    "a: \"double\n  quotes\" # lala\nb: plain\n value  # lala\nc  : #lala\n  d\n? # lala\n - seq1\n: # lala\n - #lala\n  seq2\ne:\n &node # lala\n - x: y\nblock: > # lala\n  abcde\n"
-  )
   failed += harness.valid(
     s,
-    "Y2GN",
-    "---\nkey: &an:chor value\n",
-    ["{\"key\":\"value\"}"]
+    "U3C3",
+    "%TAG !yaml! tag:yaml.org,2002:\n---\n!yaml!str \"foo\"\n",
+    ["\"foo\""]
   )
-  failed += harness.invalid(s, "Y79Y/000", "foo: |\n\t\nbar: 1\n")
-  failed += harness.valid(
-    s,
-    "Y79Y/001",
-    "foo: |\n \t\nbar: 1\n",
-    ["{\"foo\":\"\\t\\n\",\"bar\":1}"]
-  )
-  failed += harness.valid(s, "Y79Y/002", "- [\n\t\n foo\n ]\n", ["[[\"foo\"]]"])
-  failed += harness.invalid(s, "Y79Y/003", "- [\n\tfoo,\n foo\n ]\n")
-  failed += harness.invalid(s, "Y79Y/004", "-\t-\n")
-  failed += harness.invalid(s, "Y79Y/005", "- \t-\n")
-  failed += harness.invalid(s, "Y79Y/006", "?\t-\n")
-  failed += harness.invalid(s, "Y79Y/007", "? -\n:\t-\n")
-  failed += harness.invalid(s, "Y79Y/008", "?\tkey:\n")
-  failed += harness.invalid(s, "Y79Y/009", "? key:\n:\tkey:\n")
-  failed += harness.valid(s, "Y79Y/010", "-\t-1\n", ["[-1]"])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

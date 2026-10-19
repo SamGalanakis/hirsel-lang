@@ -123,7 +123,8 @@ the license named in its row; the license texts follow once each.
 | serde_json | `src/{de,read,ser}.rs`, `tests/test.rs` | std@1 JSON parsing, escaping and writing | serde-rs/json `20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8` | MIT |
 | JSONTestSuite | `test_parsing/` | std@1 JSON corpus vectors | nst/JSONTestSuite `1ef36fa01286573e846ac449e8683f8833c5b26a` | MIT |
 | saphyr | `parser/src/{scanner,parser,char_traits}.rs` (scanner, simple keys, indentation, block and flow scalars, event state machine); `saphyr/tests/basic.rs`, `parser/tests/{issues,basic}.rs` vectors | `stdlib/std@1/yaml.hir`, `conformance/SEM/SEM-3-yaml-*-run.hir` | saphyr-rs/saphyr `b8205d5f60ea44f757f7d075fe4f3704bbe5dccc` (v0.2.2) | MIT |
-| yaml-test-suite | every case of the data branch (`in.yaml`, `in.json`, `test.event`, `error`) | `tools/generate-yaml-test.py`, `conformance/SEM/SEM-3-yaml-test-*-run.hir`, `packages/fixtures/yaml_test@1/harness.hir` | yaml/yaml-test-suite `6e6c296ae9c9d2d5c4134b4b64d01b29ac19ff6f` (data-2022-01-17) | MIT |
+| go-yaml v3 | `decode_test.go` mergeTests, mergeTestsNested and merge rejection vectors | `conformance/SEM/SEM-3-yaml-merge-*-run.hir` | go-yaml/yaml `944c86a7d29391925ed6ac33bee98a0516f1287a` (v3.0.1) | Apache-2.0 |
+| yaml-test-suite | every case of the data branch (`in.yaml`, `in.json`, `test.event`, `error`) | `tools/generate-yaml-test.py`, `conformance/SEM/SEM-3-yaml-test-*-run.hir`, `packages/fixtures/yaml_test@1/harness.hir`, `crates/hirsel-driver/tests/fixtures/yaml-tagged-invoice.hir` | yaml/yaml-test-suite `6e6c296ae9c9d2d5c4134b4b64d01b29ac19ff6f` (data-2022-01-17) | MIT |
 | toml-test | `tests/files-toml-1.0.0` valid and invalid cases with their tagged JSON | `tools/generate-toml-test.py`, `conformance/SEM/SEM-3-toml-test-*-run.hir`, `packages/fixtures/toml_test@1/harness.hir` | toml-lang/toml-test `ff49d109861c1ad25af53f687f2aef19ab650600` | MIT |
 | toml_edit | `tests/testsuite/edit.rs` insertion, removal, array-of-tables and key representation cases; decor ownership and key/string representation choices | `stdlib/std@1/toml.hir`, `conformance/SEM/SEM-3-toml-edit-*-run.hir` | toml-rs/toml `ceac6e4412420d5a5c19e4f7293ad005cf1a31b2` | MIT |
 | mimalloc | `src/{alloc,free,page}.c`, `include/mimalloc/types.h`, `test/test-stress.c` | `crates/hirsel-rt/src/alloc.rs` | microsoft/mimalloc `31d034d94cdb8e22f7d7ed55967f581a2d6e831d` | MIT |
@@ -168,6 +169,7 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - serde_json: Copyright (c) Serde project contributors
 - JSONTestSuite: Copyright (c) 2016 Nicolas Seriot
 - saphyr: Copyright (c) 2015 Chen Yuheng; Copyright (c) 2023 Ethiraric
+- go-yaml v3: Copyright 2011-2016 Canonical Ltd.
 - yaml-test-suite: Copyright (c) 2016-2020 Ingy döt Net
 - toml-test: Copyright (c) 2018 TOML authors
 - toml_edit: Copyright (c) Individual contributors

@@ -6,31 +6,26 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(
+  failed += harness.round_trip(
     s,
-    "L383",
-    "--- foo  # comment\n--- foo  # comment\n",
-    ["\"foo\"", "\"foo\""]
+    "J7PZ",
+    Tagged(
+      tag: "tag:yaml.org,2002:omap",
+      value: box Array(
+        [
+          harness.object([("Mark McGwire", Integer(65))]),
+          harness.object([("Sammy Sosa", Integer(63))]),
+          harness.object([("Ken Griffy", Integer(58))])
+        ]
+      )
+    )
   )
   failed += harness.valid(
     s,
-    "L94M",
-    "? !!str a\n: !!int 47\n? c\n: !!str d\n",
-    ["{\"a\":47,\"c\":\"d\"}"]
+    "J7VC",
+    "one: 2\n\n\nthree: 4\n",
+    ["{\"one\":2,\"three\":4}"]
   )
-  failed += harness.valid(
-    s,
-    "L9U5",
-    "implicit block key : [\n  implicit flow key : value,\n ]\n",
-    ["{\"implicit block key\":[{\"implicit flow key\":\"value\"}]}"]
-  )
-  failed += harness.valid(
-    s,
-    "LE5A",
-    "- !!str \"a\"\n- 'b'\n- &anchor \"c\"\n- *anchor\n- !!str\n",
-    ["[\"a\",\"b\",\"c\",\"c\",\"\"]"]
-  )
-  failed += harness.invalid(s, "LHL4", "---\n!invalid{}tag scalar\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

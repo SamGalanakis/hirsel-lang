@@ -8,25 +8,18 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "M9B4",
-    "|\n literal\n \ttext\n\n\n",
-    ["\"literal\\n\\ttext\\n\""]
+    "JR7V",
+    "- a?string\n- another ? string\n- key: value?\n- [a?string]\n- [another ? string]\n- {key: value? }\n- {key: value?}\n- {key?: value }\n",
+    [
+      "[\"a?string\",\"another ? string\",{\"key\":\"value?\"},[\"a?string\"],[\"another ? string\"],{\"key\":\"value?\"},{\"key\":\"value?\"},{\"key?\":\"value\"}]"
+    ]
   )
   failed += harness.valid(
     s,
-    "MJS9",
-    ">\n  foo \n \n  \t bar\n\n  baz\n",
-    ["\"foo \\n\\n\\t bar\\n\\nbaz\\n\""]
+    "JS2J",
+    "First occurrence: &anchor Value\nSecond occurrence: *anchor\n",
+    ["{\"First occurrence\":\"Value\",\"Second occurrence\":\"Value\"}"]
   )
-  failed += harness.invalid(s, "MUS6/00", "%YAML 1.1#...\n---\n")
-  failed += harness.invalid(s, "MUS6/01", "%YAML 1.2\n---\n%YAML 1.2\n---\n")
-  failed += harness.valid(s, "MUS6/02", "%YAML  1.1\n---\n", ["null"])
-  failed += harness.valid(s, "MUS6/03", "%YAML \t 1.1\n---\n", ["null"])
-  failed += harness.valid(s, "MUS6/04", "%YAML 1.1  # comment\n---\n", ["null"])
-  failed += harness.valid(s, "MUS6/05", "%YAM 1.1\n---\n", ["null"])
-  failed += harness.valid(s, "MUS6/06", "%YAMLL 1.1\n---\n", ["null"])
-  failed += harness.valid(s, "MXS3", "- {a: b}\n", ["[{\"a\":\"b\"}]"])
-  failed += harness.valid(s, "MYW6", "|-\n ab\n \n \n...\n", ["\"ab\""])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

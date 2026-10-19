@@ -1,0 +1,121 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.set replaces a node from its first property on: its anchor stays and
+// the new value brings its own tag, if any. Paths look through tags, and removing
+// the last entry of a tagged collection keeps the tag.
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+fn tagged(tag: String, take inner: yaml.Value) -> yaml.Value {
+  Tagged(tag: unique tag, value: box take inner)
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(opened_a) = yaml.document("a: !Ref b # note\nc: &x !Ref d\ne: *x\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = opened_a
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("a")], Text("z")),
+      a,
+      "a: z # note\nc: &x !Ref d\ne: *x\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("c")], tagged("!Sub", Text("w"))),
+      a,
+      "a: z # note\nc: &x !Sub w\ne: *x\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    yaml.get(a, [Key("e")]) == Some(tagged("!Sub", Text("w"))),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("c")], tagged("!t", Array([Text("p")]))),
+      a,
+      "a: z # note\nc: &x !t\n  - p\ne: *x\n"
+    ),
+    TextInvariant()
+  )
+  let Ok(opened_b) = yaml.document("s: !If [x, y]\nl: !If\n  - x\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut b = opened_b
+  failure.check(
+    edits(
+      yaml.set(mut b, [Key("s"), Index(1)], Text("z")),
+      b,
+      "s: !If [x, z]\nl: !If\n  - x\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.set(mut b, [Key("l"), Index(1)], Text("w")),
+      b,
+      "s: !If [x, z]\nl: !If\n  - x\n  - w\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.set(mut b, [Key("s"), Index(0)], tagged("!Ref", Text("q"))),
+      b,
+      "s: !If [!Ref q, z]\nl: !If\n  - x\n  - w\n"
+    ),
+    TextInvariant()
+  )
+  let Ok(opened_c) = yaml.document("a: !t [x]\nb: !!seq [y]\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut c = opened_c
+  failure.check(
+    edits(yaml.remove(mut c, [Key("a"), Index(0)]), c, "a: !t []\nb: !!seq [y]\n"),
+    TextInvariant()
+  )
+  failure.check(
+    edits(yaml.remove(mut c, [Key("b"), Index(0)]), c, "a: !t []\nb: !!seq []\n"),
+    TextInvariant()
+  )
+  let Ok(core) = yaml.document("a: !!str x\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut kept = core
+  failure.check(
+    edits(yaml.set(mut kept, [Key("a")], Text("z")), kept, "a: !!str z\n"),
+    TextInvariant()
+  )
+  failure.check(
+    yaml.set(mut kept, [Key("a")], Integer(1)) == Error(InvalidValue()),
+    TextInvariant()
+  )
+  failure.check(yaml.source(kept) == "a: !!str z\n", TextInvariant())
+  let Ok(opened_d) = yaml.document("- &k x\n- y\n") else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut d = opened_d
+  failure.check(
+    edits(yaml.set(mut d, [Index(0)], Array([Text("p")])), d, "- &k\n  - p\n- y\n"),
+    TextInvariant()
+  )
+  failure.check(
+    match yaml.set(mut d, [Index(1)], tagged("!", Text("p"))) {
+      Error(InvalidValue()) => yaml.source(d) == "- &k\n  - p\n- y\n",
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

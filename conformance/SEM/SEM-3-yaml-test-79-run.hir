@@ -8,31 +8,35 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "WZ62",
-    "{\n  foo : !!str,\n  !!str : bar,\n}\n",
-    ["{\"foo\":\"\",\"\":\"bar\"}"]
-  )
-  failed += harness.complex_key(s, "X38W", "{ &a [a, &b b]: *b, *a : [c, *b, d]}\n")
-  failed += harness.invalid(s, "X4QW", "block: ># comment\n  scalar\n")
-  failed += harness.valid(
-    s,
-    "X8DW",
-    "---\n? key\n# comment\n: value\n",
-    ["{\"key\":\"value\"}"]
+    "T4YY",
+    "---\n' 1st non-empty\n\n 2nd non-empty \n 3rd non-empty '\n",
+    ["\" 1st non-empty\\n2nd non-empty 3rd non-empty \""]
   )
   failed += harness.valid(
     s,
-    "XLQ9",
-    "---\nscalar\n%YAML 1.2\n",
-    ["\"scalar %YAML 1.2\""]
+    "T5N4",
+    "--- |\n literal\n \ttext\n\n\n",
+    ["\"literal\\n\\ttext\\n\""]
+  )
+  failed += harness.invalid(s, "T833", "---\n{\n foo: 1\n bar: 2 }\n")
+  failed += harness.invalid(s, "TD5N", "- item1\n- item2\ninvalid\n")
+  failed += harness.valid(
+    s,
+    "TE2A",
+    "block mapping:\n key: value\n",
+    ["{\"block mapping\":{\"key\":\"value\"}}"]
   )
   failed += harness.valid(
     s,
-    "XV9V",
-    "Folding:\n  \"Empty line\n\n  as a line feed\"\nChomping: |\n  Clipped empty lines\n \n\n",
-    [
-      "{\"Folding\":\"Empty line\\nas a line feed\",\"Chomping\":\"Clipped empty lines\\n\"}"
-    ]
+    "TL85",
+    "\"\n  foo \n \n  \t bar\n\n  baz\n\"\n",
+    ["\" foo\\nbar\\nbaz \""]
+  )
+  failed += harness.valid(
+    s,
+    "TS54",
+    ">\n ab\n cd\n \n ef\n\n\n gh\n",
+    ["\"ab cd\\nef\\n\\ngh\\n\""]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

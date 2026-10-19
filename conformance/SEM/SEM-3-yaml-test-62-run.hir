@@ -6,36 +6,33 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.parses(
+  failed += harness.round_trip(
     s,
-    "PW8X",
-    "- &a\n- a\n-\n  &a : a\n  b: &b\n-\n  &c : &a\n-\n  ? &d\n-\n  ? &e\n  : &a\n",
-    1
-  )
-  failed += harness.invalid(
-    s,
-    "Q4CL",
-    "key1: \"quoted1\"\nkey2: \"quoted2\" trailing content\nkey3: \"quoted3\"\n"
-  )
-  failed += harness.valid(s, "Q5MG", "\t{}\n", ["{}"])
-  failed += harness.valid(
-    s,
-    "Q88A",
-    "- [ a, b ]\n- { a: b }\n- \"a\"\n- 'b'\n- c\n",
-    ["[[\"a\",\"b\"],{\"a\":\"b\"},\"a\",\"b\",\"c\"]"]
-  )
-  failed += harness.valid(
-    s,
-    "Q8AD",
-    "---\n\"folded \nto a space,\n \nto a line feed, or \t\\\n \\ \tnon-content\"\n",
-    ["\"folded to a space,\\nto a line feed, or \\t \\tnon-content\""]
+    "M5C3",
+    harness.object(
+      [
+        ("literal", Text("value\n")),
+        ("folded", Tagged(tag: "!foo", value: box Text("value\n")))
+      ]
+    )
   )
   failed += harness.complex_key(
     s,
-    "Q9WF",
-    "{ first: Sammy, last: Sosa }:\n# Statistics:\n  hr:  # Home runs\n     65\n  avg: # Average\n   0.278\n"
+    "M5DY",
+    "? - Detroit Tigers\n  - Chicago cubs\n:\n  - 2001-07-23\n\n? [ New York Yankees,\n    Atlanta Braves ]\n: [ 2001-07-02, 2001-08-12,\n    2001-08-14 ]\n"
   )
-  failed += harness.invalid(s, "QB6E", "---\nquoted: \"a\nb\nc\"\n")
+  failed += harness.valid(
+    s,
+    "M6YH",
+    "- |\n x\n-\n foo: bar\n-\n - 42\n",
+    ["[\"x\\n\",{\"foo\":\"bar\"},[42]]"]
+  )
+  failed += harness.valid(
+    s,
+    "M7A3",
+    "Bare\ndocument\n...\n# No document\n...\n|\n%!PS-Adobe-2.0 # Not the first line\n",
+    ["\"Bare document\"", "\"%!PS-Adobe-2.0 # Not the first line\\n\""]
+  )
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

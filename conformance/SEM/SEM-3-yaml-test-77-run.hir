@@ -6,34 +6,25 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.parses(s, "UKK6/00", "- :\n", 1)
-  failed += harness.valid(s, "UKK6/01", "::\n", ["{\":\":null}"])
-  failed += harness.parses(s, "UKK6/02", "!\n", 1)
+  failed += harness.invalid(s, "SF5V", "%YAML 1.2\n%YAML 1.2\n---\n")
   failed += harness.valid(
     s,
-    "UT92",
-    "---\n{ matches\n% : 20 }\n...\n---\n# Empty\n...\n",
-    ["{\"matches %\":20}", "null"]
+    "SKE5",
+    "---\nseq:\n &anchor\n- a\n- b\n",
+    ["{\"seq\":[\"a\",\"b\"]}"]
   )
-  failed += harness.valid(s, "UV7Q", "x:\n - x\n  \tx\n", ["{\"x\":[\"x x\"]}"])
+  failed += harness.valid(s, "SM9W/00", "-", ["[null]"])
+  failed += harness.parses(s, "SM9W/01", ":", 1)
+  failed += harness.invalid(s, "SR86", "key1: &a value\nkey2: &b *a\n")
   failed += harness.valid(
     s,
-    "V55R",
-    "- &a a\n- &b b\n- *a\n- *b\n",
-    ["[\"a\",\"b\",\"a\",\"b\"]"]
+    "SSW6",
+    "---\n'here''s to \"quotes\"'\n",
+    ["\"here's to \\\"quotes\\\"\""]
   )
-  failed += harness.complex_key(
-    s,
-    "V9D5",
-    "- sun: yellow\n- ? earth: blue\n  : moon: white\n"
-  )
-  failed += harness.invalid(s, "VJP3/00", "k: {\nk\n:\nv\n}\n")
-  failed += harness.valid(
-    s,
-    "VJP3/01",
-    "k: {\n k\n :\n v\n }\n",
-    ["{\"k\":{\"k\":\"v\"}}"]
-  )
+  failed += harness.invalid(s, "SU5Z", "key: \"value\"# invalid comment\n")
+  failed += harness.invalid(s, "SU74", "key1: &alias value1\n&b *alias : value2\n")
+  failed += harness.invalid(s, "SY6V", "&anchor - sequence entry\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

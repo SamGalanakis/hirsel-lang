@@ -8,29 +8,24 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "9BXH",
-    "---\n- { \"single line\", a: b}\n- { \"multi\n  line\", a: b}\n",
-    ["[{\"single line\":null,\"a\":\"b\"},{\"multi line\":null,\"a\":\"b\"}]"]
+    "7ZZ5",
+    "---\nnested sequences:\n- - - []\n- - - {}\nkey1: []\nkey2: {}\n",
+    ["{\"nested sequences\":[[[[]]],[[{}]]],\"key1\":[],\"key2\":{}}"]
   )
-  failed += harness.invalid(s, "9C9N", "---\nflow: [a,\nb,\nc]\n")
-  failed += harness.invalid(s, "9CWY", "key:\n - item1\n - item2\ninvalid\n")
+  failed += harness.valid(s, "82AN", "---word1\nword2\n", ["\"---word1 word2\""])
   failed += harness.valid(
     s,
-    "9DXL",
-    "Mapping: Document\n---\n# Empty\n...\n%YAML 1.2\n---\nmatches %: 20\n",
-    ["{\"Mapping\":\"Document\"}", "null", "{\"matches %\":20}"]
+    "87E4",
+    "'implicit block key' : [\n  'implicit flow key' : value,\n ]\n",
+    ["{\"implicit block key\":[{\"implicit flow key\":\"value\"}]}"]
   )
   failed += harness.valid(
     s,
-    "9FMG",
-    "a:\n  b:\n    c: d\n  e:\n    f: g\nh: i\n",
-    ["{\"a\":{\"b\":{\"c\":\"d\"},\"e\":{\"f\":\"g\"}},\"h\":\"i\"}"]
+    "8CWC",
+    "---\nkey ends with two colons::: value\n",
+    ["{\"key ends with two colons::\":\"value\"}"]
   )
-  failed += harness.invalid(
-    s,
-    "9HCY",
-    "!foo \"bar\"\n%TAG ! tag:example.com,2000:app/\n---\n!foo \"bar\"\n"
-  )
+  failed += harness.valid(s, "8G76", "  # Comment\n   \n\n\n", [])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

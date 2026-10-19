@@ -6,6 +6,15 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.valid(
+    s,
+    "3GZX",
+    "First occurrence: &anchor Foo\nSecond occurrence: *anchor\nOverride anchor: &anchor Bar\nReuse anchor: *anchor\n",
+    [
+      "{\"First occurrence\":\"Foo\",\"Second occurrence\":\"Foo\",\"Override anchor\":\"Bar\",\"Reuse anchor\":\"Bar\"}"
+    ]
+  )
+  failed += harness.invalid(s, "3HFZ", "---\nkey: value\n... invalid\n")
   failed += harness.valid(s, "3MYT", "---\nk:#foo\n &a !t s\n", ["\"k:#foo &a !t s\""])
   failed += harness.valid(s, "3R3P", "&sequence\n- a\n", ["[\"a\"]"])
   failed += harness.valid(
@@ -19,36 +28,6 @@ pub fn main(rt: Io) -> Result[(), ()] {
     "3RLN/01",
     "\"2 leading\n    \\\ttab\"\n",
     ["\"2 leading \\ttab\""]
-  )
-  failed += harness.valid(
-    s,
-    "3RLN/02",
-    "\"3 leading\n    \ttab\"\n",
-    ["\"3 leading tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "3RLN/03",
-    "\"4 leading\n    \\t  tab\"\n",
-    ["\"4 leading \\t  tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "3RLN/04",
-    "\"5 leading\n    \\\t  tab\"\n",
-    ["\"5 leading \\t  tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "3RLN/05",
-    "\"6 leading\n    \t  tab\"\n",
-    ["\"6 leading tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "3UYS",
-    "escaped slash: \"a\\/b\"\n",
-    ["{\"escaped slash\":\"a/b\"}"]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

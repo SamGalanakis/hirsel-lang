@@ -6,11 +6,28 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.tagged(
+  failed += harness.valid(
     s,
-    "565N",
-    "canonical: !!binary \"\\\n R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5\\\n OTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/+\\\n +f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLC\\\n AgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\"\ngeneric: !!binary |\n R0lGODlhDAAMAIQAAP//9/X17unp5WZmZgAAAOfn515eXvPz7Y6OjuDg4J+fn5\n OTk6enp56enmlpaWNjY6Ojo4SEhP/++f/++f/++f/++f/++f/++f/++f/++f/+\n +f/++f/++f/++f/++f/++SH+Dk1hZGUgd2l0aCBHSU1QACwAAAAADAAMAAAFLC\n AgjoEwnuNAFOhpEMTRiggcz4BNJHrv/zCFcLiwMWYNG84BwwEeECcgggoBADs=\ndescription:\n The binary value above is a tiny arrow encoded as a gif image.\n"
+    "4WA9",
+    "- aaa: |2\n    xxx\n  bbb: |\n    xxx\n",
+    ["[{\"aaa\":\"xxx\\n\",\"bbb\":\"xxx\\n\"}]"]
   )
+  failed += harness.valid(
+    s,
+    "4ZYM",
+    "plain: text\n  lines\nquoted: \"text\n  \tlines\"\nblock: |\n  text\n   \tlines\n",
+    [
+      "{\"plain\":\"text lines\",\"quoted\":\"text lines\",\"block\":\"text\\n \\tlines\\n\"}"
+    ]
+  )
+  failed += harness.valid(s, "52DL", "---\n! a\n", ["\"a\""])
+  failed += harness.valid(
+    s,
+    "54T7",
+    "{foo: you, bar: far}\n",
+    ["{\"foo\":\"you\",\"bar\":\"far\"}"]
+  )
+  failed += harness.invalid(s, "55WF", "---\n\"\\.\"\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

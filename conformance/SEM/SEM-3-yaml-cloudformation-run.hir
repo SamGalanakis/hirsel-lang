@@ -1,0 +1,51 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml reads a CloudFormation template written with short-form intrinsic
+// functions, and writes it back to a template that reads the same.
+fn field(v: yaml.Value, key: String) -> yaml.Value {
+  match v {
+    Object(entries) => match map.get(entries, key) {
+      Some(found) => unique found,
+      None() => Null(),
+    },
+    _ => Null(),
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let Ok(template) = yaml.parse(
+    "Resources:\n  Bucket:\n    Properties:\n      Name: !Sub '${Env}-logs'\n      Zone: !Select [0, !GetAZs '']\nOutputs:\n  Arn: !GetAtt Bucket.Arn\n"
+  ) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let properties = field(field(field(template, "Resources"), "Bucket"), "Properties")
+  failure.check(
+    match field(properties, "Name") {
+      Tagged(tag: "!Sub", value: Text(s)) => s == "${Env}-logs",
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match field(properties, "Zone") {
+      Tagged(tag: "!Select", value: Array(items)) => list.len(items) == 2 && match items[1] {
+        Tagged(tag: "!GetAZs", value: Text(s)) => s == "",
+        _ => false,
+      },
+      _ => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match field(field(template, "Outputs"), "Arn") {
+      Tagged(tag: "!GetAtt", value: Text(s)) => s == "Bucket.Arn",
+      _ => false,
+    },
+    TextInvariant()
+  )
+  let written = "Resources:\n  Bucket:\n    Properties:\n      Name: !Sub ${Env}-logs\n      Zone: !Select\n        - 0\n        - !GetAZs \"\"\nOutputs:\n  Arn: !GetAtt Bucket.Arn\n"
+  failure.check(yaml.stringify(template) == Ok(copy written), TextInvariant())
+  failure.check(yaml.parse(take written) == Ok(template), TextInvariant())
+  Ok(())
+}

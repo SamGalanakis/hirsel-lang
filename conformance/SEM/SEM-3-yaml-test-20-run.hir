@@ -8,17 +8,30 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "74H7",
-    "!!str a: b\nc: !!int 42\ne: !!str f\ng: h\n!!str 23: !!bool false\n",
-    ["{\"a\":\"b\",\"c\":42,\"e\":\"f\",\"g\":\"h\",\"23\":false}"]
+    "6JQW",
+    "# ASCII Art\n--- |\n  \\//||\\/||\n  // ||  ||__\n",
+    ["\"\\\\//||\\\\/||\\n// ||  ||__\\n\""]
   )
-  failed += harness.valid(s, "753E", "--- |-\n ab\n \n \n...\n", ["\"ab\""])
+  failed += harness.invalid(s, "6JTT", "---\n[ [ a, b, c ]\n")
   failed += harness.valid(
     s,
-    "7A4E",
-    "\" 1st non-empty\n\n 2nd non-empty \n\t3rd non-empty \"\n",
-    ["\" 1st non-empty\\n2nd non-empty 3rd non-empty \""]
+    "6JWB",
+    "foo: !!seq\n  - !!str a\n  - !!map\n    key: !!str value\n",
+    ["{\"foo\":[\"a\",{\"key\":\"value\"}]}"]
   )
+  failed += harness.valid(
+    s,
+    "6KGN",
+    "---\na: &anchor\nb: *anchor\n",
+    ["{\"a\":null,\"b\":null}"]
+  )
+  failed += harness.valid(
+    s,
+    "6LVF",
+    "%FOO  bar baz # Should be ignored\n              # with a warning.\n--- \"foo\"\n",
+    ["\"foo\""]
+  )
+  failed += harness.parses(s, "6M2F", "? &a a\n: &b b\n: *a\n", 1)
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

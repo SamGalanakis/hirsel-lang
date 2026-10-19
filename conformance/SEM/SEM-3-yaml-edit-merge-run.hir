@@ -1,0 +1,95 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml edits a document with merge keys by its text: setting a key that only
+// a merge gives adds it explicitly, holding the merged value with the rest of the
+// path set; a key that only a merge gives cannot be removed, nor can an explicit key
+// whose removal would let a merged one show through. The merge key itself is not in
+// the value. Documents opened with merge keys off edit `<<` as any key.
+fn edits(r: Result[(), yaml.YamlError], doc: yaml.Document, expected: String) -> bool {
+  r == Ok(()) && yaml.source(doc) == expected
+}
+
+fn refused(
+  r: Result[(), yaml.YamlError],
+  error: yaml.YamlError,
+  doc: yaml.Document,
+  text: String
+) -> bool {
+  r == Error(error) && yaml.source(doc) == text
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  let text = "base: &b\n  x: 1\n  env: {A: 1, B: 2}\nweb:\n  <<: *b\n  z: 3\n"
+  let Ok(doc) = yaml.document(copy text) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut a = copy doc
+  failure.check(
+    edits(
+      yaml.set(mut a, [Key("web"), Key("x")], Integer(9)),
+      a,
+      string.concat(copy text, "  x: 9\n")
+    ),
+    TextInvariant()
+  )
+  let mut b = copy doc
+  failure.check(
+    edits(
+      yaml.set(mut b, [Key("web"), Key("env"), Key("A")], Integer(5)),
+      b,
+      string.concat(copy text, "  env:\n    A: 5\n    B: 2\n")
+    ),
+    TextInvariant()
+  )
+  let two: yaml.Value = Integer(2)
+  failure.check(
+    yaml.get(b, [Key("web"), Key("env"), Key("B")]) == Some(two),
+    TextInvariant()
+  )
+  let mut c = copy doc
+  failure.check(
+    refused(yaml.remove(mut c, [Key("web"), Key("x")]), InvalidValue(), c, copy text),
+    TextInvariant()
+  )
+  failure.check(
+    refused(yaml.remove(mut c, [Key("web"), Key("<<")]), NotFound(), c, copy text),
+    TextInvariant()
+  )
+  failure.check(
+    edits(
+      yaml.remove(mut c, [Key("web"), Key("z")]),
+      c,
+      "base: &b\n  x: 1\n  env: {A: 1, B: 2}\nweb:\n  <<: *b\n"
+    ),
+    TextInvariant()
+  )
+  let over = "base: &b {x: 1}\nweb:\n  <<: *b\n  x: 2\n"
+  let Ok(overridden) = yaml.document(copy over) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut d = copy overridden
+  failure.check(
+    refused(yaml.remove(mut d, [Key("web"), Key("x")]), InvalidValue(), d, copy over),
+    TextInvariant()
+  )
+  let Ok(strict) = yaml.document_with(copy over, yaml.Config(merge_keys: false)) else {
+    failure.check(false, TextInvariant())
+    return Ok(())
+  }
+  let mut e = copy strict
+  failure.check(
+    edits(
+      yaml.remove(mut e, [Key("web"), Key("x")]),
+      e,
+      "base: &b {x: 1}\nweb:\n  <<: *b\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    edits(yaml.remove(mut e, [Key("web"), Key("<<")]), e, "base: &b {x: 1}\nweb: {}\n"),
+    TextInvariant()
+  )
+  Ok(())
+}

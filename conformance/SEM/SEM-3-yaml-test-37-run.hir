@@ -6,55 +6,49 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(
+  failed += harness.invalid(s, "C2SP", "[23\n]: 42\n")
+  failed += harness.values(
     s,
-    "DC7X",
-    "a: b\t\nseq:\t\n - a\t\nc: d\t#X\n",
-    ["{\"a\":\"b\",\"seq\":[\"a\"],\"c\":\"d\"}"]
+    "C4HZ",
+    "%TAG ! tag:clarkevans.com,2002:\n--- !shape\n  # Use the ! handle for presenting\n  # tag:clarkevans.com,2002:circle\n- !circle\n  center: &ORIGIN {x: 73, y: 129}\n  radius: 7\n- !line\n  start: *ORIGIN\n  finish: { x: 89, y: 102 }\n- !label\n  start: *ORIGIN\n  color: 0xFFEEBB\n  text: Pretty vector drawing.\n",
+    [
+      Tagged(
+        tag: "tag:clarkevans.com,2002:shape",
+        value: box Array(
+          [
+            Tagged(
+              tag: "tag:clarkevans.com,2002:circle",
+              value: box harness.object(
+                [
+                  ("center", harness.object([("x", Integer(73)), ("y", Integer(129))])),
+                  ("radius", Integer(7))
+                ]
+              )
+            ),
+            Tagged(
+              tag: "tag:clarkevans.com,2002:line",
+              value: box harness.object(
+                [
+                  ("start", harness.object([("x", Integer(73)), ("y", Integer(129))])),
+                  ("finish", harness.object([("x", Integer(89)), ("y", Integer(102))]))
+                ]
+              )
+            ),
+            Tagged(
+              tag: "tag:clarkevans.com,2002:label",
+              value: box harness.object(
+                [
+                  ("start", harness.object([("x", Integer(73)), ("y", Integer(129))])),
+                  ("color", Integer(16772795)),
+                  ("text", Text("Pretty vector drawing."))
+                ]
+              )
+            )
+          ]
+        )
+      )
+    ]
   )
-  failed += harness.valid(
-    s,
-    "DE56/00",
-    "\"1 trailing\\t\n    tab\"\n",
-    ["\"1 trailing\\t tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "DE56/01",
-    "\"2 trailing\\t  \n    tab\"\n",
-    ["\"2 trailing\\t tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "DE56/02",
-    "\"3 trailing\\\t\n    tab\"\n",
-    ["\"3 trailing\\t tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "DE56/03",
-    "\"4 trailing\\\t  \n    tab\"\n",
-    ["\"4 trailing\\t tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "DE56/04",
-    "\"5 trailing\t\n    tab\"\n",
-    ["\"5 trailing tab\""]
-  )
-  failed += harness.valid(
-    s,
-    "DE56/05",
-    "\"6 trailing\t  \n    tab\"\n",
-    ["\"6 trailing tab\""]
-  )
-  failed += harness.parses(
-    s,
-    "DFF7",
-    "{\n? explicit: entry,\nimplicit: entry,\n?\n}\n",
-    1
-  )
-  failed += harness.valid(s, "DHP8", "[foo, bar, 42]\n", ["[\"foo\",\"bar\",42]"])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

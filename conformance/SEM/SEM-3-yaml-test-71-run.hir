@@ -6,17 +6,18 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.valid(s, "RR7F", "a: 4.2\n? d\n: 23\n", ["{\"d\":23,\"a\":4.2}"])
   failed += harness.valid(
     s,
-    "SYW4",
-    "hr:  65    # Home runs\navg: 0.278 # Batting average\nrbi: 147   # Runs Batted In\n",
-    ["{\"hr\":65,\"avg\":0.278,\"rbi\":147}"]
+    "RTP8",
+    "%YAML 1.2\n---\nDocument\n... # Suffix\n",
+    ["\"Document\""]
   )
-  failed += harness.valid(
+  failed += harness.invalid(s, "RXY3", "---\n'\n...\n'\n")
+  failed += harness.complex_key(
     s,
-    "T26H",
-    "--- |\n \n  \n  literal\n   \n  \n  text\n\n # Comment\n",
-    ["\"\\n\\nliteral\\n \\n\\ntext\\n\""]
+    "RZP5",
+    "a: \"double\n  quotes\" # lala\nb: plain\n value  # lala\nc  : #lala\n  d\n? # lala\n - seq1\n: # lala\n - #lala\n  seq2\ne: &node # lala\n - x: y\nblock: > # lala\n  abcde\n"
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

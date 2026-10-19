@@ -1,7 +1,7 @@
 // rule: SEM-3
 // expect: run
 // std@1/yaml: quoted, block and `!` scalars are strings, core tags must match their
-// content and other tags are Tag; keys are their text. Cases port saphyr
+// content and other tags are preserved; keys are their text. Cases port saphyr
 // saphyr/tests/basic.rs test_empty_node_is_null and test_integer_key at b8205d5f60ea.
 fn same(take input: String, expected: yaml.Value) -> bool {
   match yaml.parse(take input) {
@@ -61,8 +61,17 @@ pub fn main(rt: Io) -> Result[(), ()] {
     integer("%TAG !e! tag:yaml.org,2002:\n---\n!e!int 7\n", 7),
     TextInvariant()
   )
-  failure.check(tag_error("!local 1"), TextInvariant())
-  failure.check(tag_error("!!binary aGVsbG8="), TextInvariant())
+  failure.check(
+    same("!local 1", Tagged(tag: "!local", value: box Text("1"))),
+    TextInvariant()
+  )
+  failure.check(
+    same(
+      "!!binary aGVsbG8=",
+      Tagged(tag: "tag:yaml.org,2002:binary", value: box Text("aGVsbG8="))
+    ),
+    TextInvariant()
+  )
   failure.check(tag_error("!!map [1]"), TextInvariant())
   failure.check(tag_error("!!str [1]"), TextInvariant())
   failure.check(

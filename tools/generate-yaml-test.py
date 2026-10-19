@@ -6,11 +6,10 @@ one call in conformance/SEM/SEM-3-yaml-test-<n>-run.hir
 (packages/fixtures/yaml_test@1/harness.hir):
 
 - a case with an `error` file must be rejected;
-- a case whose events hold a tag outside the YAML 1.2 core schema must fail with
-  Tag, and one with a collection (or an alias of one) as a mapping key must fail
-  with ComplexKey, and one whose mapping repeats a key's text must fail with
-  DuplicateKey, whichever the composer meets first: the Value model has no place
-  for any of them;
+- a collection (or an alias of one) as a mapping key must fail with ComplexKey,
+  and repeated key text with DuplicateKey;
+- non-core tags are retained as Tagged values, checked against the event tree
+  (including resolved handles and aliases), then round-tripped;
 - any other case with in.json must parse to its JSON documents, each of which
   must survive a stringify/parse round trip, and one without must parse to its
   number of documents.
@@ -25,6 +24,7 @@ formatted canonically with `hirsel fmt`.
 
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -32,6 +32,9 @@ COMMIT = '6e6c296ae9c9d2d5c4134b4b64d01b29ac19ff6f'
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'conformance/SEM'
 HARNESS = 'packages/fixtures/yaml_test@1/harness.hir'
+# The complete invoice round trip exceeds the corpus's 1M interpreter steps.
+# Its parse/tree check stays in the corpus; a Rust driver test runs this fixture.
+RUST_ROUND_TRIPS = {'UGM3': 'yaml-tagged-invoice'}
 
 # Estimated interpreter steps, measured with `hirsel run --max-steps` and rounded
 # up: a parse per YAML byte and per float; decoding adds a JSON parse per JSON byte
@@ -99,7 +102,7 @@ def floats_in(value):
 
 
 def outside_model(events):
-    """'tagged', 'complex_key' or 'duplicate_key' for the first node the composer
+    """'complex_key' or 'duplicate_key' for the first node the composer
     cannot represent, or None. Mirrors compose_node: a key position checks the node's
     kind before its tag, and keys compare by their text."""
     # Each open collection: [kind, children seen, key texts]; a mapping's even
@@ -118,7 +121,6 @@ def outside_model(events):
                 stack[-1][1] += 1
             continue
         key = bool(stack) and stack[-1][0] == 'map' and stack[-1][1] % 2 == 0
-        tag = next((p[1:-1] for p in parts[1:] if p.startswith('<')), None)
         anchor = next((p[1:] for p in parts[1:] if p.startswith('&')), None)
         if head == '=ALI':
             if key and parts[1][1:] in collections:
@@ -133,15 +135,11 @@ def outside_model(events):
         if head in ('+SEQ', '+MAP'):
             if key:
                 return 'complex_key'
-            if tag is not None and tag not in CORE:
-                return 'tagged'
             if anchor is not None:
                 collections.add(anchor)
             stack.append(['seq' if head == '+SEQ' else 'map', 0, set()])
             continue
         # =VAL
-        if tag is not None and tag not in CORE:
-            return 'tagged'
         # =VAL [&anchor] [<tag>] <style><content>
         content = line[len('=VAL '):]
         while content[0] in '&<':
@@ -159,6 +157,74 @@ def outside_model(events):
     return None
 
 
+def event_values(events):
+    """Expected Value constructors from the suite's resolved event tree.
+
+    Used for tagged cases, whose tags JSON cannot represent. Scalars here use the
+    1.2 core schema; the suite's YAML-1.1 integer-looking floats remain Float.
+    """
+    lines = iter(events.splitlines())
+    anchors = {}
+
+    def node(line, key=False):
+        head, _, rest = line.partition(' ')
+        if head == '=ALI':
+            value, text = anchors[rest[1:]]
+            return (string_literal(text) if key else value), text
+        anchor = None
+        tag = None
+        while rest.startswith(('&', '<', '{} ', '[] ')):
+            prop, _, rest = rest.partition(' ')
+            if prop.startswith('&'):
+                anchor = prop[1:]
+            elif prop.startswith('<'):
+                tag = prop[1:-1]
+        if head in ('+MAP', '+SEQ'):
+            children = []
+            while True:
+                child = next(lines)
+                if child == ('-MAP' if head == '+MAP' else '-SEQ'):
+                    break
+                value, _ = node(child, head == '+MAP' and len(children) % 2 == 0)
+                children.append(value)
+            if head == '+MAP':
+                pairs = [f'({k}, {v})' for k, v in zip(children[::2], children[1::2])]
+                value = 'harness.object([' + ', '.join(pairs) + '])'
+            else:
+                value = 'Array([' + ', '.join(children) + '])'
+            text = None
+        else:
+            style, text = rest[0], rest[1:]
+            text = re.sub(r'\\([nrt\\])', lambda m: {'n': '\n', 'r': '\r', 't': '\t', '\\': '\\'}[m[1]], text)
+            if key:
+                return string_literal(text), text
+            if tag not in (None, *CORE) or style != ':' or tag in ('!', 'tag:yaml.org,2002:str'):
+                value = 'Text(' + string_literal(text) + ')'
+            elif text in ('', '~', 'null', 'Null', 'NULL'):
+                value = 'Null()'
+            elif text in ('true', 'True', 'TRUE', 'false', 'False', 'FALSE'):
+                value = 'Bool(' + text.lower() + ')'
+            elif re.fullmatch(r'[-+]?[0-9]+|0x[0-9a-fA-F]+|0o[0-7]+', text):
+                base = 16 if text.startswith('0x') else 8 if text.startswith('0o') else 10
+                value = f'Integer({int(text, base)})'
+            elif re.fullmatch(r'[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?', text):
+                value = f'Float({float(text)!r})'
+            else:
+                value = 'Text(' + string_literal(text) + ')'
+        if tag is not None and tag not in CORE:
+            value = f'Tagged(tag: {string_literal(tag)}, value: box {value})'
+        if anchor is not None:
+            anchors[anchor] = value, text
+        return value, text
+
+    documents = []
+    for line in lines:
+        if line.startswith('+DOC'):
+            anchors.clear()
+            documents.append(node(next(lines))[0])
+    return documents
+
+
 def checks(case):
     """(estimated steps, call) for each check of one case directory."""
     name = case.parent.name + '/' + case.name if case.parent != SUITE else case.name
@@ -172,6 +238,19 @@ def checks(case):
     kind = outside_model(events)
     if kind is not None:
         return [(steps, f'  failed += harness.{kind}(s, {label}, {text})')]
+    if any(p.startswith('<') and p[1:-1] not in CORE
+           for line in events.splitlines() for p in line.split(' ')):
+        values = event_values(events)
+        # Decode and round-trip separately: binary and invoice examples are large.
+        # Round-trip the independent event value, avoiding a second input parse.
+        expected = ', '.join(values)
+        decoded = [(steps, f'  failed += harness.values(s, {label}, {text}, [{expected}])')]
+        if name in RUST_ROUND_TRIPS:
+            return decoded
+        return decoded + [
+            (CALL_STEPS + ROUND_TRIP_STEPS[0] * len(data) // len(values),
+             f'  failed += harness.round_trip(s, {label}, {value})')
+            for value in values]
     if (case / 'in.json').exists():
         docs = json_documents((case / 'in.json').read_text(encoding='utf-8'))
         size = sum(len(d.encode('utf-8')) for d in docs)
@@ -261,10 +340,22 @@ def main():
         path.write_text(program(lines), encoding='utf-8')
         (OUT / f'{stem}.hir.json').write_text(manifest(stem), encoding='utf-8')
         written.append(path)
+    corpus_files = len(written)
+    for name, stem in RUST_ROUND_TRIPS.items():
+        events = (SUITE / name / 'test.event').read_text(encoding='utf-8')
+        lines = [f'  failed += harness.round_trip(s, {string_literal(name)}, {value})'
+                 for value in event_values(events)]
+        fixture = ROOT / f'crates/hirsel-driver/tests/fixtures/{stem}.hir'
+        fixture.write_text(program(lines), encoding='utf-8')
+        launch = json.loads(manifest(stem))
+        launch['sources'][1]['path'] = '../../../../' + HARNESS
+        launch['dependencies'][0]['manifest'] = '../../../../stdlib/std@1/hirsel.json'
+        fixture.with_suffix('.hir.json').write_text(json.dumps(launch, indent=2) + '\n')
+        written.append(fixture)
     if args.hirsel:
         for path in written:
             subprocess.run([str(args.hirsel), 'fmt', str(path)], check=True)
-    print(f'{len(cases)} cases in {len(written)} files')
+    print(f'{len(cases)} cases in {corpus_files} corpus files and {len(RUST_ROUND_TRIPS)} Rust fixtures')
 
 
 if __name__ == '__main__':

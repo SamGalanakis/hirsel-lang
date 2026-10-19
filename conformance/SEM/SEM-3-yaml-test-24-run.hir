@@ -8,24 +8,12 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "7ZZ5",
-    "---\nnested sequences:\n- - - []\n- - - {}\nkey1: []\nkey2: {}\n",
-    ["{\"nested sequences\":[[[[]]],[[{}]]],\"key1\":[],\"key2\":{}}"]
+    "7BMT",
+    "---\ntop1: &node1\n  &k1 key1: one\ntop2: &node2 # comment\n  key2: two\ntop3:\n  &k3 key3: three\ntop4: &node4\n  &k4 key4: four\ntop5: &node5\n  key5: five\ntop6: &val6\n  six\ntop7:\n  &val7 seven\n",
+    [
+      "{\"top1\":{\"key1\":\"one\"},\"top2\":{\"key2\":\"two\"},\"top3\":{\"key3\":\"three\"},\"top4\":{\"key4\":\"four\"},\"top5\":{\"key5\":\"five\"},\"top6\":\"six\",\"top7\":\"seven\"}"
+    ]
   )
-  failed += harness.valid(s, "82AN", "---word1\nword2\n", ["\"---word1 word2\""])
-  failed += harness.valid(
-    s,
-    "87E4",
-    "'implicit block key' : [\n  'implicit flow key' : value,\n ]\n",
-    ["{\"implicit block key\":[{\"implicit flow key\":\"value\"}]}"]
-  )
-  failed += harness.valid(
-    s,
-    "8CWC",
-    "---\nkey ends with two colons::: value\n",
-    ["{\"key ends with two colons::\":\"value\"}"]
-  )
-  failed += harness.valid(s, "8G76", "  # Comment\n   \n\n\n", [])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

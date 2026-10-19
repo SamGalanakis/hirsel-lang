@@ -6,11 +6,35 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.tagged(
+  failed += harness.parses(
     s,
-    "UGM3",
-    "--- !<tag:clarkevans.com,2002:invoice>\ninvoice: 34843\ndate   : 2001-01-23\nbill-to: &id001\n    given  : Chris\n    family : Dumars\n    address:\n        lines: |\n            458 Walkman Dr.\n            Suite #292\n        city    : Royal Oak\n        state   : MI\n        postal  : 48046\nship-to: *id001\nproduct:\n    - sku         : BL394D\n      quantity    : 4\n      description : Basketball\n      price       : 450.00\n    - sku         : BL4438H\n      quantity    : 1\n      description : Super Hoop\n      price       : 2392.00\ntax  : 251.42\ntotal: 4443.52\ncomments:\n    Late afternoon is best.\n    Backup contact is Nancy\n    Billsmer @ 338-4338.\n"
+    "S3PD",
+    "plain key: in-line value\n: # Both empty\n\"quoted key\":\n- entry\n",
+    1
   )
+  failed += harness.invalid(s, "S4GJ", "---\nfolded: > first line\n  second line\n")
+  failed += harness.valid(
+    s,
+    "S4JQ",
+    "# Assuming conventional resolution:\n- \"12\"\n- 12\n- ! 12\n",
+    ["[\"12\",12,\"12\"]"]
+  )
+  failed += harness.valid(s, "S4T7", "aaa: bbb\n...\n", ["{\"aaa\":\"bbb\"}"])
+  failed += harness.valid(s, "S7BG", "---\n- :,\n", ["[\":,\"]"])
+  failed += harness.invalid(
+    s,
+    "S98Z",
+    "empty block scalar: >\n \n  \n   \n # comment\n"
+  )
+  failed += harness.valid(
+    s,
+    "S9E8",
+    "sequence:\n- one\n- two\nmapping:\n  ? sky\n  : blue\n  sea : green\n",
+    [
+      "{\"sequence\":[\"one\",\"two\"],\"mapping\":{\"sky\":\"blue\",\"sea\":\"green\"}}"
+    ]
+  )
+  failed += harness.complex_key(s, "SBG9", "{a: [b, c], [d, e]: f}\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

@@ -8,29 +8,22 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "7T8X",
-    ">\n\n folded\n line\n\n next\n line\n   * bullet\n\n   * list\n   * lines\n\n last\n line\n\n# Comment\n",
-    [
-      "\"\\nfolded line\\nnext line\\n  * bullet\\n\\n  * list\\n  * lines\\n\\nlast line\\n\""
-    ]
+    "735Y",
+    "-\n  \"flow in block\"\n- >\n Block scalar\n- !!map # Block collection\n  foo : bar\n",
+    ["[\"flow in block\",\"Block scalar\\n\",{\"foo\":\"bar\"}]"]
   )
   failed += harness.valid(
     s,
-    "7TMG",
-    "---\n[ word1\n# comment\n, word2]\n",
-    ["[\"word1\",\"word2\"]"]
+    "74H7",
+    "!!str a: b\nc: !!int 42\ne: !!str f\ng: h\n!!str 23: !!bool false\n",
+    ["{\"a\":\"b\",\"c\":42,\"e\":\"f\",\"g\":\"h\",\"23\":false}"]
   )
+  failed += harness.valid(s, "753E", "--- |-\n ab\n \n \n...\n", ["\"ab\""])
   failed += harness.valid(
     s,
-    "7W2P",
-    "? a\n? b\nc:\n",
-    ["{\"a\":null,\"b\":null,\"c\":null}"]
-  )
-  failed += harness.valid(
-    s,
-    "7Z25",
-    "---\nscalar1\n...\nkey: value\n",
-    ["\"scalar1\"", "{\"key\":\"value\"}"]
+    "7A4E",
+    "\" 1st non-empty\n\n 2nd non-empty \n\t3rd non-empty \"\n",
+    ["\" 1st non-empty\\n2nd non-empty 3rd non-empty \""]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

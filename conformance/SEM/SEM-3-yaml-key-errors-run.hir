@@ -40,7 +40,7 @@ pub fn main(rt: Io) -> Result[(), ()] {
   failure.check(parses("{a: 1, b: 2}"), TextInvariant())
   failure.check(at("a: 1\n? a\n: 2\n", "DuplicateKey", 2, 3), TextInvariant())
   // Tags and documents.
-  failure.check(at("!foo bar", "Tag", 1, 1), TextInvariant())
+  failure.check(parses("!foo bar"), TextInvariant())
   failure.check(at("x: !!int 1.5\n", "Tag", 1, 4), TextInvariant())
   failure.check(parses("x: !!float 1.5\n"), TextInvariant())
   failure.check(at("!e!x 1", "Syntax", 1, 1), TextInvariant())

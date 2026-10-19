@@ -1,0 +1,85 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml.stringify writes a Tagged value's tag before its content: `!!suffix`
+// under the core prefix, `!suffix` for a local tag and `!<tag>` otherwise, with `%`
+// and characters a tag cannot hold as %XX escapes; a tagged collection starts on the
+// next line. A Tagged value that cannot read back (an empty, `!` or core tag, or a
+// tag on anything but text or a collection) is InvalidValue, beside accepted twins.
+fn tagged(tag: String, take inner: yaml.Value) -> yaml.Value {
+  Tagged(tag: unique tag, value: box take inner)
+}
+
+fn text(s: String) -> yaml.Value {
+  Text(unique s)
+}
+
+// Writes `value`, expects `written` and reads it back to `value`.
+fn writes(value: yaml.Value, written: String) -> bool {
+  yaml.stringify(value) == Ok(unique written) && yaml.parse(unique written) == Ok(value)
+}
+
+fn invalid(value: yaml.Value) -> bool {
+  match yaml.stringify(value) {
+    Error(InvalidValue()) => true,
+    _ => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  failure.check(writes(tagged("!Ref", text("b")), "!Ref b\n"), TextInvariant())
+  failure.check(writes(tagged("!t", text("1")), "!t \"1\"\n"), TextInvariant())
+  failure.check(
+    writes(tagged("tag:yaml.org,2002:binary", text("aGk=")), "!!binary aGk=\n"),
+    TextInvariant()
+  )
+  failure.check(
+    writes(tagged("tag:x.com,2000:y", text("z")), "!<tag:x.com,2000:y> z\n"),
+    TextInvariant()
+  )
+  failure.check(
+    writes(tagged("!a b!c%é", text("z")), "!a%20b%21c%25%C3%A9 z\n"),
+    TextInvariant()
+  )
+  failure.check(writes(tagged("x{y}", text("z")), "!<x%7By%7D> z\n"), TextInvariant())
+  let mut literal: Map[String, yaml.Value] = map.empty()
+  map.insert(mut literal, "<<", text("ordinary"))
+  failure.check(writes(Object(take literal), "\"<<\": ordinary\n"), TextInvariant())
+  let mut entries: Map[String, yaml.Value] = map.empty()
+  map.insert(mut entries, "a", tagged("!t", text("x\ny\n")))
+  map.insert(
+    mut entries,
+    "b",
+    tagged("!s", Array([text("p"), tagged("!q", Object(map.empty()))]))
+  )
+  let mapping: yaml.Value = Object(copy entries)
+  failure.check(
+    writes(mapping, "a: !t |\n  x\n  y\nb: !s\n  - p\n  - !q {}\n"),
+    TextInvariant()
+  )
+  failure.check(
+    writes(
+      tagged("!m", Object(copy entries)),
+      "!m\n  a: !t |\n    x\n    y\n  b: !s\n    - p\n    - !q {}\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    writes(
+      Array([tagged("!m", Object(take entries))]),
+      "- !m\n  a: !t |\n    x\n    y\n  b: !s\n    - p\n    - !q {}\n"
+    ),
+    TextInvariant()
+  )
+  failure.check(invalid(tagged("", text("x"))), TextInvariant())
+  failure.check(invalid(tagged("!", text("x"))), TextInvariant())
+  failure.check(invalid(tagged("tag:yaml.org,2002:str", text("x"))), TextInvariant())
+  failure.check(
+    writes(tagged("tag:yaml.org,2002:str2", text("x")), "!!str2 x\n"),
+    TextInvariant()
+  )
+  failure.check(invalid(tagged("!t", Null())), TextInvariant())
+  failure.check(invalid(tagged("!t", Integer(1))), TextInvariant())
+  failure.check(invalid(tagged("!a", tagged("!b", text("x")))), TextInvariant())
+  failure.check(invalid(Array([tagged("!a", Bool(true))])), TextInvariant())
+  Ok(())
+}

@@ -6,28 +6,33 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.valid(s, "4MUZ/01", "{\"foo\"\n: bar}\n", ["{\"foo\":\"bar\"}"])
+  failed += harness.valid(s, "4MUZ/02", "{foo\n: bar}\n", ["{\"foo\":\"bar\"}"])
   failed += harness.valid(
     s,
-    "4WA9",
-    "- aaa: |2\n    xxx\n  bbb: |\n    xxx\n",
-    ["[{\"aaa\":\"xxx\\n\",\"bbb\":\"xxx\\n\"}]"]
+    "4Q9F",
+    "--- >\n ab\n cd\n \n ef\n\n\n gh\n",
+    ["\"ab cd\\nef\\n\\ngh\\n\""]
   )
   failed += harness.valid(
     s,
-    "4ZYM",
-    "plain: text\n  lines\nquoted: \"text\n  \tlines\"\nblock: |\n  text\n   \tlines\n",
-    [
-      "{\"plain\":\"text lines\",\"quoted\":\"text lines\",\"block\":\"text\\n \\tlines\\n\"}"
-    ]
+    "4QFQ",
+    "- |\n detected\n- >\n \n  \n  # detected\n- |1\n  explicit\n- >\n detected\n",
+    ["[\"detected\\n\",\"\\n\\n# detected\\n\",\" explicit\\n\",\"detected\\n\"]"]
   )
-  failed += harness.valid(s, "52DL", "---\n! a\n", ["\"a\""])
+  failed += harness.valid(s, "4RWC", "  [1, 2, 3]  \n  ", ["[1,2,3]"])
   failed += harness.valid(
     s,
-    "54T7",
-    "{foo: you, bar: far}\n",
-    ["{\"foo\":\"you\",\"bar\":\"far\"}"]
+    "4UYU",
+    "\"foo: bar\\\": baz\"\n",
+    ["\"foo: bar\\\": baz\""]
   )
-  failed += harness.invalid(s, "55WF", "---\n\"\\.\"\n")
+  failed += harness.valid(
+    s,
+    "4V8U",
+    "---\nplain\\value\\with\\backslashes\n",
+    ["\"plain\\\\value\\\\with\\\\backslashes\""]
+  )
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

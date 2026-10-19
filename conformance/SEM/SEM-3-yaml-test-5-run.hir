@@ -6,6 +6,22 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.round_trip(
+    s,
+    "2XXW",
+    Tagged(
+      tag: "tag:yaml.org,2002:set",
+      value: box harness.object(
+        [("Mark McGwire", Null()), ("Sammy Sosa", Null()), ("Ken Griff", Null())]
+      )
+    )
+  )
+  failed += harness.valid(
+    s,
+    "33X3",
+    "---\n- !!int 1\n- !!int -2\n- !!int 33\n",
+    ["[1,-2,33]"]
+  )
   failed += harness.valid(
     s,
     "35KP",
@@ -24,15 +40,6 @@ pub fn main(rt: Io) -> Result[(), ()] {
     "- - s1_i1\n  - s1_i2\n- s2\n",
     ["[[\"s1_i1\",\"s1_i2\"],\"s2\"]"]
   )
-  failed += harness.valid(
-    s,
-    "3GZX",
-    "First occurrence: &anchor Foo\nSecond occurrence: *anchor\nOverride anchor: &anchor Bar\nReuse anchor: *anchor\n",
-    [
-      "{\"First occurrence\":\"Foo\",\"Second occurrence\":\"Foo\",\"Override anchor\":\"Bar\",\"Reuse anchor\":\"Bar\"}"
-    ]
-  )
-  failed += harness.invalid(s, "3HFZ", "---\nkey: value\n... invalid\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

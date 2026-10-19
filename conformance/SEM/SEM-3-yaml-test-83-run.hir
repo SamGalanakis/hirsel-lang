@@ -6,19 +6,92 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(
+  failed += harness.values(
     s,
-    "ZF4X",
-    "Mark McGwire: {hr: 65, avg: 0.278}\nSammy Sosa: {\n    hr: 63,\n    avg: 0.288\n  }\n",
+    "UGM3",
+    "--- !<tag:clarkevans.com,2002:invoice>\ninvoice: 34843\ndate   : 2001-01-23\nbill-to: &id001\n    given  : Chris\n    family : Dumars\n    address:\n        lines: |\n            458 Walkman Dr.\n            Suite #292\n        city    : Royal Oak\n        state   : MI\n        postal  : 48046\nship-to: *id001\nproduct:\n    - sku         : BL394D\n      quantity    : 4\n      description : Basketball\n      price       : 450.00\n    - sku         : BL4438H\n      quantity    : 1\n      description : Super Hoop\n      price       : 2392.00\ntax  : 251.42\ntotal: 4443.52\ncomments:\n    Late afternoon is best.\n    Backup contact is Nancy\n    Billsmer @ 338-4338.\n",
     [
-      "{\"Mark McGwire\":{\"hr\":65,\"avg\":0.278},\"Sammy Sosa\":{\"hr\":63,\"avg\":0.288}}"
+      Tagged(
+        tag: "tag:clarkevans.com,2002:invoice",
+        value: box harness.object(
+          [
+            ("invoice", Integer(34843)),
+            ("date", Text("2001-01-23")),
+            (
+              "bill-to",
+              harness.object(
+                [
+                  ("given", Text("Chris")),
+                  ("family", Text("Dumars")),
+                  (
+                    "address",
+                    harness.object(
+                      [
+                        ("lines", Text("458 Walkman Dr.\nSuite #292\n")),
+                        ("city", Text("Royal Oak")),
+                        ("state", Text("MI")),
+                        ("postal", Integer(48046))
+                      ]
+                    )
+                  )
+                ]
+              )
+            ),
+            (
+              "ship-to",
+              harness.object(
+                [
+                  ("given", Text("Chris")),
+                  ("family", Text("Dumars")),
+                  (
+                    "address",
+                    harness.object(
+                      [
+                        ("lines", Text("458 Walkman Dr.\nSuite #292\n")),
+                        ("city", Text("Royal Oak")),
+                        ("state", Text("MI")),
+                        ("postal", Integer(48046))
+                      ]
+                    )
+                  )
+                ]
+              )
+            ),
+            (
+              "product",
+              Array(
+                [
+                  harness.object(
+                    [
+                      ("sku", Text("BL394D")),
+                      ("quantity", Integer(4)),
+                      ("description", Text("Basketball")),
+                      ("price", Float(450.0))
+                    ]
+                  ),
+                  harness.object(
+                    [
+                      ("sku", Text("BL4438H")),
+                      ("quantity", Integer(1)),
+                      ("description", Text("Super Hoop")),
+                      ("price", Float(2392.0))
+                    ]
+                  )
+                ]
+              )
+            ),
+            ("tax", Float(251.42)),
+            ("total", Float(4443.52)),
+            (
+              "comments",
+              Text(
+                "Late afternoon is best. Backup contact is Nancy Billsmer @ 338-4338."
+              )
+            )
+          ]
+        )
+      )
     ]
-  )
-  failed += harness.valid(
-    s,
-    "ZH7C",
-    "&a a: b\nc: &d d\n",
-    ["{\"a\":\"b\",\"c\":\"d\"}"]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

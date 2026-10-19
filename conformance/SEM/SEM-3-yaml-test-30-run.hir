@@ -6,32 +6,30 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.invalid(s, "9MAG", "---\n[ , a, b, c ]\n")
-  failed += harness.invalid(s, "9MMA", "%YAML 1.2\n")
-  failed += harness.complex_key(
-    s,
-    "9MMW",
-    "- [ YAML : separate ]\n- [ \"JSON like\":adjacent ]\n- [ {JSON: like}:adjacent ]\n"
-  )
-  failed += harness.valid(s, "9MQT/00", "--- \"a\n...x\nb\"\n", ["\"a ...x b\""])
-  failed += harness.invalid(s, "9MQT/01", "--- \"a\n... x\nb\"\n")
   failed += harness.valid(
     s,
-    "9SA2",
-    "---\n- { \"single line\": value}\n- { \"multi\n  line\": value}\n",
-    ["[{\"single line\":\"value\"},{\"multi line\":\"value\"}]"]
+    "9BXH",
+    "---\n- { \"single line\", a: b}\n- { \"multi\n  line\", a: b}\n",
+    ["[{\"single line\":null,\"a\":\"b\"},{\"multi line\":null,\"a\":\"b\"}]"]
   )
+  failed += harness.invalid(s, "9C9N", "---\nflow: [a,\nb,\nc]\n")
+  failed += harness.invalid(s, "9CWY", "key:\n - item1\n - item2\ninvalid\n")
   failed += harness.valid(
     s,
-    "9SHH",
-    "single: 'text'\ndouble: \"text\"\n",
-    ["{\"single\":\"text\",\"double\":\"text\"}"]
+    "9DXL",
+    "Mapping: Document\n---\n# Empty\n...\n%YAML 1.2\n---\nmatches %: 20\n",
+    ["{\"Mapping\":\"Document\"}", "null", "{\"matches %\":20}"]
   )
   failed += harness.valid(
     s,
-    "9TFX",
-    "---\n\" 1st non-empty\n\n 2nd non-empty \n 3rd non-empty \"\n",
-    ["\" 1st non-empty\\n2nd non-empty 3rd non-empty \""]
+    "9FMG",
+    "a:\n  b:\n    c: d\n  e:\n    f: g\nh: i\n",
+    ["{\"a\":{\"b\":{\"c\":\"d\"},\"e\":{\"f\":\"g\"}},\"h\":\"i\"}"]
+  )
+  failed += harness.invalid(
+    s,
+    "9HCY",
+    "!foo \"bar\"\n%TAG ! tag:example.com,2000:app/\n---\n!foo \"bar\"\n"
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

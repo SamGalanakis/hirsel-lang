@@ -8,22 +8,29 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "P2AD",
-    "- | # Empty header↓\n literal\n- >1 # Indentation indicator↓\n  folded\n- |+ # Chomping indicator↓\n keep\n\n- >1- # Both indicators↓\n  strip\n",
-    ["[\"literal\\n\",\" folded\\n\",\"keep\\n\\n\",\" strip\"]"]
-  )
-  failed += harness.invalid(s, "P2EQ", "---\n- { y: z }- invalid\n")
-  failed += harness.tagged(
-    s,
-    "P76L",
-    "%TAG !! tag:example.com,2000:app/\n---\n!!int 1 - 3 # Interval, not integer\n"
+    "L383",
+    "--- foo  # comment\n--- foo  # comment\n",
+    ["\"foo\"", "\"foo\""]
   )
   failed += harness.valid(
     s,
-    "P94K",
-    "key:    # Comment\n        # lines\n  value\n\n\n",
-    ["{\"key\":\"value\"}"]
+    "L94M",
+    "? !!str a\n: !!int 47\n? c\n: !!str d\n",
+    ["{\"a\":47,\"c\":\"d\"}"]
   )
+  failed += harness.valid(
+    s,
+    "L9U5",
+    "implicit block key : [\n  implicit flow key : value,\n ]\n",
+    ["{\"implicit block key\":[{\"implicit flow key\":\"value\"}]}"]
+  )
+  failed += harness.valid(
+    s,
+    "LE5A",
+    "- !!str \"a\"\n- 'b'\n- &anchor \"c\"\n- *anchor\n- !!str\n",
+    ["[\"a\",\"b\",\"c\",\"c\",\"\"]"]
+  )
+  failed += harness.invalid(s, "LHL4", "---\n!invalid{}tag scalar\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

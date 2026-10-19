@@ -6,38 +6,52 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.parses(s, "CFD4", "- [ : empty key ]\n- [: another empty key]\n", 1)
+  failed += harness.invalid(s, "CML9", "key: [ word1\n#  xxx\n  word2 ]\n")
   failed += harness.valid(
     s,
-    "DWX9",
-    "|\n \n  \n  literal\n   \n  \n  text\n\n # Comment\n",
-    ["\"\\n\\nliteral\\n \\n\\ntext\\n\""]
-  )
-  failed += harness.valid(
-    s,
-    "E76Z",
-    "&a a: &b b\n*b : *a\n",
-    ["{\"a\":\"b\",\"b\":\"a\"}"]
-  )
-  failed += harness.invalid(
-    s,
-    "EB22",
-    "---\nscalar1 # comment\n%YAML 1.2\n---\nscalar2\n"
+    "CN3R",
+    "&flowseq [\n a: b,\n &c c: d,\n { &e e: f },\n &g { g: h }\n]\n",
+    ["[{\"a\":\"b\"},{\"c\":\"d\"},{\"e\":\"f\"},{\"g\":\"h\"}]"]
   )
   failed += harness.valid(
     s,
-    "EHF6",
-    "!!map {\n  k: !!seq\n  [ a, !!str b]\n}\n",
-    ["{\"k\":[\"a\",\"b\"]}"]
+    "CPZ3",
+    "---\ntab: \"\\tstring\"\n",
+    ["{\"tab\":\"\\tstring\"}"]
   )
-  failed += harness.invalid(s, "EW3V", "k1: v1\n k2: v2\n")
-  failed += harness.valid(s, "EX5H", "---\na\nb  \n  c\nd\n\ne\n", ["\"a b c d\\ne\""])
-  failed += harness.valid(s, "EXG3", "---\n---word1\nword2\n", ["\"---word1 word2\""])
+  failed += harness.invalid(s, "CQ3W", "---\nkey: \"missing closing quote\n")
   failed += harness.valid(
     s,
-    "F2C7",
-    " - &a !!str a\n - !!int 2\n - !!int &c 4\n - &d d\n",
-    ["[\"a\",2,4,\"d\"]"]
+    "CT4Q",
+    "[\n? foo\n bar : baz\n]\n",
+    ["[{\"foo bar\":\"baz\"}]"]
   )
+  failed += harness.invalid(s, "CTN5", "---\n[ a, b, c, , ]\n")
+  failed += harness.values(
+    s,
+    "CUP7",
+    "anchored: !local &anchor value\nalias: *anchor\n",
+    [
+      harness.object(
+        [
+          ("anchored", Tagged(tag: "!local", value: box Text("value"))),
+          ("alias", Tagged(tag: "!local", value: box Text("value")))
+        ]
+      )
+    ]
+  )
+  failed += harness.round_trip(
+    s,
+    "CUP7",
+    harness.object(
+      [
+        ("anchored", Tagged(tag: "!local", value: box Text("value"))),
+        ("alias", Tagged(tag: "!local", value: box Text("value")))
+      ]
+    )
+  )
+  failed += harness.invalid(s, "CVW2", "---\n[ a, b, c,#invalid\n]\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

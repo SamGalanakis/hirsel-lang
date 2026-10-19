@@ -6,43 +6,56 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(
+  failed += harness.round_trip(
     s,
-    "DK3J",
-    "--- >\nline1\n# no comment\nline3\n",
-    ["\"line1 # no comment line3\\n\""]
+    "C4HZ",
+    Tagged(
+      tag: "tag:clarkevans.com,2002:shape",
+      value: box Array(
+        [
+          Tagged(
+            tag: "tag:clarkevans.com,2002:circle",
+            value: box harness.object(
+              [
+                ("center", harness.object([("x", Integer(73)), ("y", Integer(129))])),
+                ("radius", Integer(7))
+              ]
+            )
+          ),
+          Tagged(
+            tag: "tag:clarkevans.com,2002:line",
+            value: box harness.object(
+              [
+                ("start", harness.object([("x", Integer(73)), ("y", Integer(129))])),
+                ("finish", harness.object([("x", Integer(89)), ("y", Integer(102))]))
+              ]
+            )
+          ),
+          Tagged(
+            tag: "tag:clarkevans.com,2002:label",
+            value: box harness.object(
+              [
+                ("start", harness.object([("x", Integer(73)), ("y", Integer(129))])),
+                ("color", Integer(16772795)),
+                ("text", Text("Pretty vector drawing."))
+              ]
+            )
+          )
+        ]
+      )
+    )
   )
-  failed += harness.invalid(s, "DK4H", "---\n[ key\n  : value ]\n")
-  failed += harness.valid(s, "DK95/00", "foo:\n \tbar\n", ["{\"foo\":\"bar\"}"])
-  failed += harness.invalid(s, "DK95/01", "foo: \"bar\n\tbaz\"\n")
-  failed += harness.valid(
+  failed += harness.values(
     s,
-    "DK95/02",
-    "foo: \"bar\n  \tbaz\"\n",
-    ["{\"foo\":\"bar baz\"}"]
+    "CC74",
+    "%TAG !e! tag:example.com,2000:app/\n---\n!e!foo \"bar\"\n",
+    [Tagged(tag: "tag:example.com,2000:app/foo", value: box Text("bar"))]
   )
-  failed += harness.valid(s, "DK95/03", " \t\nfoo: 1\n", ["{\"foo\":1}"])
-  failed += harness.valid(
+  failed += harness.round_trip(
     s,
-    "DK95/04",
-    "foo: 1\n\t\nbar: 2\n",
-    ["{\"foo\":1,\"bar\":2}"]
+    "CC74",
+    Tagged(tag: "tag:example.com,2000:app/foo", value: box Text("bar"))
   )
-  failed += harness.valid(
-    s,
-    "DK95/05",
-    "foo: 1\n \t\nbar: 2\n",
-    ["{\"foo\":1,\"bar\":2}"]
-  )
-  failed += harness.invalid(s, "DK95/06", "foo:\n  a: 1\n  \tb: 2\n")
-  failed += harness.valid(s, "DK95/07", "%YAML 1.2\n\t\n---\n", ["null"])
-  failed += harness.valid(
-    s,
-    "DK95/08",
-    "foo: \"bar\n \t \t baz \t \t \"\n",
-    ["{\"foo\":\"bar baz \\t \\t \"}"]
-  )
-  failed += harness.invalid(s, "DMG6", "key:\n  ok: 1\n wrong: 2\n")
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

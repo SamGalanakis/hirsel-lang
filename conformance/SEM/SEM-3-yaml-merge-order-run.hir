@@ -1,0 +1,21 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml merge keys: an explicit key before the merge key wins as one after it
+// does, and an anchored mapping that merges holds its merged entries.
+pub fn main(rt: Io) -> Result[(), ()] {
+  // An explicit key before the merge key wins too.
+  failure.check(
+    yaml.parse("a: &a {x: 1, y: 2}\nb:\n  y: 9\n  <<: *a\n  z: 3\n") == yaml.parse(
+      "a: {x: 1, y: 2}\nb: {y: 9, x: 1, z: 3}\n"
+    ),
+    TextInvariant()
+  )
+  // A merge source may itself merge; the anchor holds the merged mapping.
+  failure.check(
+    yaml.parse("a: &a {x: 1}\nb: &b {<<: *a, y: 2}\nc: {<<: *b}\n") == yaml.parse(
+      "a: {x: 1}\nb: {x: 1, y: 2}\nc: {x: 1, y: 2}\n"
+    ),
+    TextInvariant()
+  )
+  Ok(())
+}

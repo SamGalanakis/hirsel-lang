@@ -6,28 +6,11 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.valid(
+  failed += harness.round_trips(
     s,
-    "U9NS",
-    "---\ntime: 20:03:20\nplayer: Sammy Sosa\naction: strike (miss)\n...\n---\ntime: 20:03:47\nplayer: Sammy Sosa\naction: grand slam\n...\n",
-    [
-      "{\"time\":\"20:03:20\",\"player\":\"Sammy Sosa\",\"action\":\"strike (miss)\"}",
-      "{\"time\":\"20:03:47\",\"player\":\"Sammy Sosa\",\"action\":\"grand slam\"}"
-    ]
-  )
-  failed += harness.valid(
-    s,
-    "UDM2",
-    "- { url: http://example.org }\n",
-    ["[{\"url\":\"http://example.org\"}]"]
-  )
-  failed += harness.valid(
-    s,
-    "UDR7",
-    "sequence: [ one, two, ]\nmapping: { sky: blue, sea: green }\n",
-    [
-      "{\"sequence\":[\"one\",\"two\"],\"mapping\":{\"sky\":\"blue\",\"sea\":\"green\"}}"
-    ]
+    "RZT7",
+    "---\nTime: 2001-11-23 15:01:42 -5\nUser: ed\nWarning:\n  This is an error message\n  for the log file\n---\nTime: 2001-11-23 15:02:31 -5\nUser: ed\nWarning:\n  A slightly different error\n  message.\n---\nDate: 2001-11-23 15:03:17 -5\nUser: ed\nFatal:\n  Unknown variable \"bar\"\nStack:\n  - file: TopClass.py\n    line: 23\n    code: |\n      x = MoreObject(\"345\\n\")\n  - file: MoreClass.py\n    line: 58\n    code: |-\n      foo = bar\n",
+    2
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

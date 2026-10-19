@@ -6,11 +6,30 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.round_trips(
+  failed += harness.valid(
     s,
-    "RZT7",
-    "---\nTime: 2001-11-23 15:01:42 -5\nUser: ed\nWarning:\n  This is an error message\n  for the log file\n---\nTime: 2001-11-23 15:02:31 -5\nUser: ed\nWarning:\n  A slightly different error\n  message.\n---\nDate: 2001-11-23 15:03:17 -5\nUser: ed\nFatal:\n  Unknown variable \"bar\"\nStack:\n  - file: TopClass.py\n    line: 23\n    code: |\n      x = MoreObject(\"345\\n\")\n  - file: MoreClass.py\n    line: 58\n    code: |-\n      foo = bar\n",
-    2
+    "PRH3",
+    "' 1st non-empty\n\n 2nd non-empty \n\t3rd non-empty '\n",
+    ["\" 1st non-empty\\n2nd non-empty 3rd non-empty \""]
+  )
+  failed += harness.valid(s, "PUW8", "---\na: b\n---\n", ["{\"a\":\"b\"}", "null"])
+  failed += harness.parses(
+    s,
+    "PW8X",
+    "- &a\n- a\n-\n  &a : a\n  b: &b\n-\n  &c : &a\n-\n  ? &d\n-\n  ? &e\n  : &a\n",
+    1
+  )
+  failed += harness.invalid(
+    s,
+    "Q4CL",
+    "key1: \"quoted1\"\nkey2: \"quoted2\" trailing content\nkey3: \"quoted3\"\n"
+  )
+  failed += harness.valid(s, "Q5MG", "\t{}\n", ["{}"])
+  failed += harness.valid(
+    s,
+    "Q88A",
+    "- [ a, b ]\n- { a: b }\n- \"a\"\n- 'b'\n- c\n",
+    ["[[\"a\",\"b\"],{\"a\":\"b\"},\"a\",\"b\",\"c\"]"]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

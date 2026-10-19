@@ -8,15 +8,15 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "J9HZ",
-    "---\nhr: # 1998 hr ranking\n  - Mark McGwire\n  - Sammy Sosa\nrbi:\n  # 1998 rbi ranking\n  - Sammy Sosa\n  - Ken Griffey\n",
+    "G4RS",
+    "unicode: \"Sosa did fine.\\u263A\"\ncontrol: \"\\b1998\\t1999\\t2000\\n\"\nhex esc: \"\\x0d\\x0a is \\r\\n\"\n\nsingle: '\"Howdy!\" he cried.'\nquoted: ' # Not a ''comment''.'\ntie-fighter: '|\\-*-/|'\n",
     [
-      "{\"hr\":[\"Mark McGwire\",\"Sammy Sosa\"],\"rbi\":[\"Sammy Sosa\",\"Ken Griffey\"]}"
+      "{\"unicode\":\"Sosa did fine.☺\",\"control\":\"\\b1998\\t1999\\t2000\\n\",\"hex esc\":\"\\r\\n is \\r\\n\",\"single\":\"\\\"Howdy!\\\" he cried.\",\"quoted\":\" # Not a 'comment'.\",\"tie-fighter\":\"|\\\\-*-/|\"}"
     ]
   )
-  failed += harness.valid(s, "JEF9/00", "- |+\n\n\n", ["[\"\\n\\n\"]"])
-  failed += harness.valid(s, "JEF9/01", "- |+\n   \n", ["[\"\\n\"]"])
-  failed += harness.valid(s, "JEF9/02", "- |+\n   ", ["[\"\\n\"]"])
+  failed += harness.invalid(s, "G5U8", "---\n- [-, -]\n")
+  failed += harness.invalid(s, "G7JE", "a\\nb: 1\nc\n d: 1\n")
+  failed += harness.valid(s, "G992", ">\n folded\n text\n\n\n", ["\"folded text\\n\""])
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

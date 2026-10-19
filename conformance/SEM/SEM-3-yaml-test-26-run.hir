@@ -8,25 +8,30 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "93JH",
-    " - key: value\n   key2: value2\n -\n   key3: value3\n",
-    ["[{\"key\":\"value\",\"key2\":\"value2\"},{\"key3\":\"value3\"}]"]
+    "7T8X",
+    ">\n\n folded\n line\n\n next\n line\n   * bullet\n\n   * list\n   * lines\n\n last\n line\n\n# Comment\n",
+    [
+      "\"\\nfolded line\\nnext line\\n  * bullet\\n\\n  * list\\n  * lines\\n\\nlast line\\n\""
+    ]
   )
   failed += harness.valid(
     s,
-    "93WF",
-    "--- >-\n  trimmed\n  \n \n\n  as\n  space\n",
-    ["\"trimmed\\n\\n\\nas space\""]
+    "7TMG",
+    "---\n[ word1\n# comment\n, word2]\n",
+    ["[\"word1\",\"word2\"]"]
   )
   failed += harness.valid(
     s,
-    "96L6",
-    "--- >\n  Mark McGwire's\n  year was crippled\n  by a knee injury.\n",
-    ["\"Mark McGwire's year was crippled by a knee injury.\\n\""]
+    "7W2P",
+    "? a\n? b\nc:\n",
+    ["{\"a\":null,\"b\":null,\"c\":null}"]
   )
-  failed += harness.valid(s, "96NN/00", "foo: |-\n \tbar\n", ["{\"foo\":\"\\tbar\"}"])
-  failed += harness.valid(s, "96NN/01", "foo: |-\n \tbar", ["{\"foo\":\"\\tbar\"}"])
-  failed += harness.valid(s, "98YD", "# Comment only.\n", [])
+  failed += harness.valid(
+    s,
+    "7Z25",
+    "---\nscalar1\n...\nkey: value\n",
+    ["\"scalar1\"", "{\"key\":\"value\"}"]
+  )
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

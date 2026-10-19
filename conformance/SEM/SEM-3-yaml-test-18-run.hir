@@ -6,20 +6,12 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.complex_key(s, "6PBE", "---\n?\n- a\n- b\n:\n- c\n- d\n")
-  failed += harness.invalid(s, "6S55", "key:\n - bar\n - baz\n invalid\n")
-  failed += harness.valid(
+  failed += harness.decodes(
     s,
-    "6SLA",
-    "\"foo\\nbar:baz\\tx \\\\$%^&*()x\": 23\n'x\\ny:z\\tx $%^&*()x': 24\n",
-    ["{\"foo\\nbar:baz\\tx \\\\$%^&*()x\":23,\"x\\\\ny:z\\\\tx $%^&*()x\":24}"]
-  )
-  failed += harness.valid(
-    s,
-    "6VJK",
-    ">\n Sammy Sosa completed another\n fine season with great stats.\n\n   63 Home Runs\n   0.288 Batting Average\n\n What a year!\n",
+    "6HB6",
+    "  # Leading comment line spaces are\n   # neither content nor indentation.\n    \nNot indented:\n By one space: |\n    By four\n      spaces\n Flow style: [    # Leading spaces\n   By two,        # in flow style\n  Also by two,    # are neither\n  \tStill by two   # content nor\n    ]             # indentation.\n",
     [
-      "\"Sammy Sosa completed another fine season with great stats.\\n\\n  63 Home Runs\\n  0.288 Batting Average\\n\\nWhat a year!\\n\""
+      "{\"Not indented\":{\"By one space\":\"By four\\n  spaces\\n\",\"Flow style\":[\"By two\",\"Also by two\",\"Still by two\"]}}"
     ]
   )
   failure.check(failed == 0, TextInvariant())

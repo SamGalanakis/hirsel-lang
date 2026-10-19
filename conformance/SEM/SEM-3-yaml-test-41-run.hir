@@ -8,9 +8,11 @@ pub fn main(rt: Io) -> Result[(), ()] {
   let mut failed: u64 = 0
   failed += harness.valid(
     s,
-    "F8F9",
-    " # Strip\n  # Comments:\nstrip: |-\n  # text\n  \n # Clip\n  # comments:\n\nclip: |\n  # text\n \n # Keep\n  # comments:\n\nkeep: |+\n  # text\n\n # Trail\n  # comments.\n",
-    ["{\"strip\":\"# text\",\"clip\":\"# text\\n\",\"keep\":\"# text\\n\\n\"}"]
+    "DBG4",
+    "# Outside flow collection:\n- ::vector\n- \": - ()\"\n- Up, up, and away!\n- -123\n- http://example.com/foo#bar\n# Inside flow collection:\n- [ ::vector,\n  \": - ()\",\n  \"Up, up and away!\",\n  -123,\n  http://example.com/foo#bar ]\n",
+    [
+      "[\"::vector\",\": - ()\",\"Up, up, and away!\",-123,\"http://example.com/foo#bar\",[\"::vector\",\": - ()\",\"Up, up and away!\",-123,\"http://example.com/foo#bar\"]]"
+    ]
   )
   failure.check(failed == 0, TextInvariant())
   Ok(())

@@ -6,32 +6,38 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.values(
+    s,
+    "6CK3",
+    "%TAG !e! tag:example.com,2000:app/\n---\n- !local foo\n- !!str bar\n- !e!tag%21 baz\n",
+    [
+      Array(
+        [
+          Tagged(tag: "!local", value: box Text("foo")),
+          Text("bar"),
+          Tagged(tag: "tag:example.com,2000:app/tag!", value: box Text("baz"))
+        ]
+      )
+    ]
+  )
+  failed += harness.round_trip(
+    s,
+    "6CK3",
+    Array(
+      [
+        Tagged(tag: "!local", value: box Text("foo")),
+        Text("bar"),
+        Tagged(tag: "tag:example.com,2000:app/tag!", value: box Text("baz"))
+      ]
+    )
+  )
+  failed += harness.valid(s, "6FWR", "--- |+\n ab\n \n  \n...\n", ["\"ab\\n\\n \\n\""])
   failed += harness.valid(
     s,
-    "6JQW",
-    "# ASCII Art\n--- |\n  \\//||\\/||\n  // ||  ||__\n",
-    ["\"\\\\//||\\\\/||\\n// ||  ||__\\n\""]
+    "6H3V",
+    "'foo: bar\\': baz'\n",
+    ["{\"foo: bar\\\\\":\"baz'\"}"]
   )
-  failed += harness.invalid(s, "6JTT", "---\n[ [ a, b, c ]\n")
-  failed += harness.valid(
-    s,
-    "6JWB",
-    "foo: !!seq\n  - !!str a\n  - !!map\n    key: !!str value\n",
-    ["{\"foo\":[\"a\",{\"key\":\"value\"}]}"]
-  )
-  failed += harness.valid(
-    s,
-    "6KGN",
-    "---\na: &anchor\nb: *anchor\n",
-    ["{\"a\":null,\"b\":null}"]
-  )
-  failed += harness.valid(
-    s,
-    "6LVF",
-    "%FOO  bar baz # Should be ignored\n              # with a warning.\n--- \"foo\"\n",
-    ["\"foo\""]
-  )
-  failed += harness.parses(s, "6M2F", "? &a a\n: &b b\n: *a\n", 1)
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

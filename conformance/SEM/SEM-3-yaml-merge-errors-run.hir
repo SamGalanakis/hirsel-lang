@@ -1,0 +1,64 @@
+// rule: SEM-3
+// expect: run
+// std@1/yaml merge keys need a mapping, or a sequence of mappings: anything else is Merge at the merge value, as go-yaml v3
+// fails "map merge requires map or sequence of maps as the value". A second merge
+// key repeats a key. Every rejected input sits beside an accepted twin.
+fn at(take input: String, kind: String, line: u64, column: u64) -> bool {
+  let Error(e) = yaml.parse(take input) else {
+    return false
+  }
+  let (name, p): (String, yaml.Position) = match e {
+    Merge(p) => ("Merge", p),
+    DuplicateKey(p) => ("DuplicateKey", p),
+    Tag(p) => ("Tag", p),
+    _ => return false,
+  }
+  name == kind && p.line == line && p.column == column
+}
+
+fn parses(take input: String) -> bool {
+  match yaml.parse(take input) {
+    Ok(_) => true,
+    Error(_) => false,
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), ()] {
+  failure.check(at("a: {<<: 1}\n", "Merge", 1, 9), TextInvariant())
+  failure.check(parses("a: {<<: {b: 1}}\n"), TextInvariant())
+  failure.check(at("a: {<<: null}\n", "Merge", 1, 9), TextInvariant())
+  failure.check(parses("a: {<<: {}}\n"), TextInvariant())
+  failure.check(at("a: &s x\nb:\n  <<: *s\n", "Merge", 3, 7), TextInvariant())
+  failure.check(parses("a: &s {x: 1}\nb:\n  <<: *s\n"), TextInvariant())
+  failure.check(at("a: &s [x]\nb:\n  <<: [*s]\n", "Merge", 3, 7), TextInvariant())
+  failure.check(parses("a: &s {x: 1}\nb:\n  <<: [*s]\n"), TextInvariant())
+  failure.check(at("b:\n  <<: [{x: 1}, 2]\n", "Merge", 2, 7), TextInvariant())
+  failure.check(parses("b:\n  <<: [{x: 1}, {y: 2}]\n"), TextInvariant())
+  failure.check(at("b: {<<: !foo x}\n", "Merge", 1, 9), TextInvariant())
+  failure.check(parses("b: {<<: !foo {x: 1}}\n"), TextInvariant())
+  failure.check(
+    at("b: {<<: {x: 1}, <<: {y: 2}}\n", "DuplicateKey", 1, 17),
+    TextInvariant()
+  )
+  failure.check(parses("b: {<<: {x: 1}, \"<<\": {y: 2}}\n"), TextInvariant())
+  // On a scalar key other than `<<`, `!!merge` is discarded like any custom tag.
+  failure.check(parses("b: {!!merge x: 1}\n"), TextInvariant())
+  failure.check(parses("b: {!!merge <<: {x: 1}}\n"), TextInvariant())
+  // Off, `<<` is an ordinary key whatever its value, and `!!merge` a tag on it.
+  let strict = yaml.Config(merge_keys: false)
+  failure.check(
+    match yaml.parse_with("a: {<<: 1}\n", strict) {
+      Ok(_) => true,
+      Error(_) => false,
+    },
+    TextInvariant()
+  )
+  failure.check(
+    match yaml.parse_with("b: {!!merge <<: {x: 1}}\n", strict) {
+      Ok(_) => true,
+      _ => false,
+    },
+    TextInvariant()
+  )
+  Ok(())
+}

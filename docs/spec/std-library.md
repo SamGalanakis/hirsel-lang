@@ -114,6 +114,10 @@ fn msgpack.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}
 fn msgpack.encode(value: json.Value) -> Result[unique Bytes, binary.DecodeError] uses {}
 fn cbor.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}
 fn cbor.encode(value: json.Value, deterministic: bool) -> Result[unique Bytes, binary.DecodeError] uses {}
+fn yaml.default_config() -> yaml.Config uses {}
+fn yaml.parse_with(take text: String, config: yaml.Config) -> Result[yaml.Value, yaml.YamlError] uses {}
+fn yaml.parse_all_with(take text: String, config: yaml.Config) -> Result[List[yaml.Value], yaml.YamlError] uses {}
+fn yaml.document_with(take text: String, config: yaml.Config) -> Result[yaml.Document, yaml.YamlError] uses {}
 fn yaml.parse(take text: String) -> Result[yaml.Value, yaml.YamlError] uses {}
 fn yaml.parse_all(take text: String) -> Result[List[yaml.Value], yaml.YamlError] uses {}
 fn yaml.stringify(value: yaml.Value) -> Result[unique String, yaml.YamlError] uses {}
@@ -458,10 +462,12 @@ the existing `derive.json_value` and `derive.from_json` functions; the canonical
 ```text
 Value     = Null() | Bool(bool) | Integer(i64) | Float(f64) | Text(String)
           | Array(List[Value]) | Object(Map[String, Value])
+          | Tagged(tag: String, value: box Value)
+Config    = { merge_keys: bool }
 Position  = { line: u64, column: u64 }
 YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position)
           | Aliases(Position) | Tag(Position) | ComplexKey(Position)
-          | Documents(Position) | InvalidValue() | NotFound() | NotCollection()
+          | Documents(Position) | Merge(Position) | InvalidValue() | NotFound() | NotCollection()
 Segment   = Key(String) | Index(u64)
 ```
 
@@ -475,7 +481,7 @@ order mark. Line breaks are LF, CR or CRLF and decode as LF. Text outside the pr
 set (YAML 1.2.2 5.1: a control other than tab, line feed and carriage return, DEL, a C1
 control other than NEL, U+FFFE or U+FFFF) is `Syntax`.
 
-Scalars resolve by the core schema (YAML 1.2.2 10.3) and nothing else. An untagged plain
+Untagged scalars resolve by the core schema (YAML 1.2.2 10.3). An untagged plain
 scalar is `Null` when it is empty, `~`, `null`, `Null` or `NULL`; `Bool` for `true`,
 `True`, `TRUE`, `false`, `False`, `FALSE`; `Integer` for `[-+]?[0-9]+`, `0o[0-7]+` or
 `0x[0-9a-fA-F]+`; `Float` for `[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?`,
@@ -483,15 +489,31 @@ scalar is `Null` when it is empty, `~`, `null`, `Null` or `NULL`; `Bool` for `tr
 and `Text` otherwise. YAML 1.1 spellings are text: `yes`, `no`, `on`, `off`, `y`, `n`,
 `0b101`, `1_000`, `012` (the decimal 12), `1:30` and dates stay as written, so a GitHub
 workflow's `on:` key is the string `on`. An integer outside `i64` is `Syntax` at the
-scalar. A quoted or block scalar is `Text`. Tags are limited to the core schema: `!` and
+scalar. A quoted or block scalar is `Text`. Core tags resolve as follows: `!` and
 `!!str` make a scalar `Text`; `!!null`, `!!bool`, `!!int` and `!!float` require a
 scalar of that type's spelling above; `!!seq` and `!!map` (or `!`) may tag a sequence
-or mapping; `%TAG` handles resolve before this check. Any other tag, or a core tag on
-content it does not match, is `Tag` at the node. Merge keys (`<<`, a YAML 1.1 type) are
-ordinary keys.
+or mapping; `%TAG` handles resolve before this check. A core tag on content it does
+not match, or an empty verbatim tag, is `Tag` at the node. Every other tag becomes
+`Tagged`, keeping the resolved tag and the node's content: `Text` for a scalar,
+regardless of its spelling, or `Array`/`Object` with normally resolved children for a
+collection. For example, `!Ref b` is `Tagged(tag: "!Ref", value: box Text("b"))`.
+
+Merge keys apply by default, following the YAML 1.1 merge type. A plain untagged `<<`,
+or a scalar `<<` explicitly tagged `!!merge`, inserts entries from its mapping value
+or sequence of mappings (including aliases). Explicit entries win wherever they
+appear; among merge sources, the earlier mapping wins. Values are taken whole, with
+no recursive mixing of mappings. Missing entries appear in source order at the merge
+key's position, while explicit entries keep their document order. A non-mapping
+source, or a non-mapping item in a source sequence, is `Merge` at the source; a second
+merge key is `DuplicateKey`. A quoted `<<` or one tagged `!!str` is an ordinary key.
+`yaml.default_config()` returns `Config(merge_keys: true)`. The `parse_with`,
+`parse_all_with` and `document_with` functions accept this record explicitly;
+`Config(merge_keys: false)` treats merge keys as ordinary string keys for strict
+YAML 1.2 behavior. Documents retain the selected config through edits.
 
 A mapping becomes an `Object` in document order. A key is a scalar, or an alias of one,
-and is its content text whatever its style or type, so `1`, `'1'` and `"1"` are the same
+and is its content text whatever its style, type or custom tag (a key's tag is
+discarded), so `!foo a` and `a` are the same key, and `1`, `'1'` and `"1"` are the same
 key and a repeat of any key is `DuplicateKey` at the repeated key. A sequence or mapping
 key (or an alias of one) is `ComplexKey`. Anchors are scoped to their document; a later
 anchor of the same name replaces the earlier one, and an alias with no anchor before it
@@ -509,8 +531,9 @@ it; end of input is past the last scalar. A node's position is that of its first
 property (anchor or tag) or, without one, of its content. These positions and the
 grammar follow saphyr's port of libyaml as checked by yaml-test-suite: every case of
 its 2022-01-17 data release runs in `conformance/SEM/SEM-3-yaml-test-*-run.hir`, and each
-case that a `Value` cannot hold (a tag outside the core schema, a complex key, or two
-empty keys) is held to the error above.
+case that a `Value` cannot hold (a complex key or repeated key text, including two
+empty keys) is held to the error above. Tagged cases are checked against their
+resolved event trees and round-tripped; merge vectors also adapt go-yaml v3's tests.
 
 `yaml.stringify` borrows a `Value` and writes one document in canonical block style,
 ending in a line break. Mapping entries are `key: value` and sequence entries `- value`;
@@ -522,7 +545,7 @@ module with `.0` appended to whole numbers, and `.inf`, `-.inf` and `.nan`. A st
 or value, is plain when it reads back as the same string: non-empty, not starting with
 an indicator (`-?:,[]{}#&*!|>'"%@` or backquote), a blank or `...`, not ending with a
 blank or `:`, without `: ` or ` #`, without the characters double quotes escape below,
-not a core-schema null, bool, int or float spelling, and not a YAML 1.1 boolean (`y`,
+not `<<`, not a core-schema null, bool, int or float spelling, and not a YAML 1.1 boolean (`y`,
 `n`, `yes`, `no`, `on`, `off` in lower, capitalized or upper case) or sexagesimal number
 (a digit, after an optional sign, then digits, `_`, `.` and at least one `:`), so YAML 1.1
 readers keep it a string. A non-key string with a line
@@ -533,12 +556,18 @@ double-quoted, escaping `"`, `\`, `\0 \a \b \t \n \v \f \r \e`, other C0 control
 DEL as `\xXX`, C1 controls as `\xXX` (NEL as `\N`), U+2028 and U+2029 as `\L` and
 `\P`, and U+FEFF, U+FFFE and U+FFFF as `\uXXXX`. A key longer than 1024 bytes as
 written (plain or quoted) becomes an explicit `? key` entry, with its `:` on the next
-line. A collection that would be level 129 is
-`InvalidValue`; nothing else fails. The output parses to an equal value, NaN to NaN.
+line. `Tagged` writes its tag before its content: `!!suffix` for a tag under
+`tag:yaml.org,2002:`, `!suffix` for a local tag and `!<tag>` otherwise. Percent signs
+and bytes outside the tag character set are `%XX` escaped. A tagged non-empty
+collection starts on the next line. A tag must be nonempty, non-core and different
+from `!`, and its content must be text or a collection; other constructed `Tagged`
+values cannot read back unchanged and are `InvalidValue`. A collection that would
+be level 129 is also `InvalidValue`. The output parses to an equal value, NaN to NaN.
 
 `yaml.document` parses a one-document stream like `yaml.parse` and keeps its text;
 `yaml.source` returns the current text, `yaml.root` the value and `yaml.get` the value
-at a path, if any. A path's `Key` selects a mapping member and `Index` a sequence item.
+at a path, if any. A path's `Key` selects a mapping member and `Index` a sequence item,
+looking through a collection's tag; the selected value keeps its own tag.
 Edits never re-render the document: each splices the text and reparses it, so every
 byte outside the edited span (comments, blank lines, key order, quoting, number
 spellings, anchors and tags on kept nodes) is unchanged, and added lines use the
@@ -549,7 +578,10 @@ uses, say), is `InvalidValue`; a failed edit leaves the document unchanged.
 `yaml.set(mut doc, path, value)` with an empty path, or on an empty document, replaces
 the text with `yaml.stringify(value)`. Otherwise:
 
-- an existing node is replaced from its content on, keeping its anchor and tag. In a
+- an existing node keeps its anchor and core tag. For example, setting `a: !!str x`
+  to `Text("z")` keeps `!!str`, while setting it to `Integer(1)` is `InvalidValue`.
+  A non-core tag comes from the replacement value: setting `a: !Ref b` to `Text("z")`
+  writes `a: z`; a `Tagged` value with tag `!Sub` writes `a: !Sub z`. In a
   flow collection the value is written in flow style (`[a, b]`, `{k: v}`, scalars plain
   when that is safe there, else double-quoted). In a block collection a scalar or empty
   collection is written on the node's line, keeping any comment after it, and a
@@ -562,7 +594,9 @@ the text with `yaml.stringify(value)`. Otherwise:
   adds `- value` the same way; in flow collections the entry is added after the last
   one (`, key: value`) or inside empty brackets; other missing indices are `NotFound`;
 - missing mappings along the path are created by adding their first key as a mapping
-  holding the rest of the path; a missing `Index` along the path is `NotFound`.
+  holding the rest of the path; a missing `Index` along the path is `NotFound`;
+- a key inherited only from a merge becomes an explicit entry, holding the inherited
+  value with the remaining path set. The anchor and merge source are unchanged.
 
 A path through a scalar or an alias, a `Key` on a sequence or an `Index` on a mapping is
 `NotCollection`. `yaml.remove(mut doc, path)` removes the value at `path`, or returns
@@ -570,7 +604,11 @@ A path through a scalar or an alias, a `Key` on a sequence or an `Index` on a ma
 first entry, the comment and blank lines back to the previous entry; the first entry
 takes the text up to the second, so a compact `- a: 1` entry keeps its dash. A flow
 entry takes the comma after it, or the last one the comma before it. Removing the only
-entry of a collection leaves it empty, written `{}` or `[]` in its place.
+entry of a collection leaves it empty, written `{}` or `[]` in its place, keeping
+its custom tag. A key inherited only from a merge cannot be removed without changing
+the merge source and returns `InvalidValue`. Removing an explicit override that would
+expose an inherited key is also `InvalidValue`; the merge key itself has no value at
+its text path and returns `NotFound`.
 
 ## TOML
 

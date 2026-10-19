@@ -6,31 +6,33 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
+  failed += harness.invalid(s, "9MAG", "---\n[ , a, b, c ]\n")
+  failed += harness.invalid(s, "9MMA", "%YAML 1.2\n")
+  failed += harness.complex_key(
+    s,
+    "9MMW",
+    "- [ YAML : separate ]\n- [ \"JSON like\":adjacent ]\n- [ {JSON: like}:adjacent ]\n"
+  )
+  failed += harness.valid(s, "9MQT/00", "--- \"a\n...x\nb\"\n", ["\"a ...x b\""])
+  failed += harness.invalid(s, "9MQT/01", "--- \"a\n... x\nb\"\n")
   failed += harness.valid(
     s,
-    "BEC7",
-    "%YAML 1.3 # Attempt parsing\n          # with a warning\n---\n\"foo\"\n",
-    ["\"foo\""]
-  )
-  failed += harness.invalid(
-    s,
-    "BF9H",
-    "---\nplain: a\n       b # end of scalar\n       c\n"
-  )
-  failed += harness.invalid(s, "BS4K", "word1  # comment\nword2\n")
-  failed += harness.valid(
-    s,
-    "BU8L",
-    "key: &anchor\n !!map\n  a: b\n",
-    ["{\"key\":{\"a\":\"b\"}}"]
+    "9SA2",
+    "---\n- { \"single line\": value}\n- { \"multi\n  line\": value}\n",
+    ["[{\"single line\":\"value\"},{\"multi line\":\"value\"}]"]
   )
   failed += harness.valid(
     s,
-    "C2DT",
-    "{\n\"adjacent\":value,\n\"readable\": value,\n\"empty\":\n}\n",
-    ["{\"adjacent\":\"value\",\"readable\":\"value\",\"empty\":null}"]
+    "9SHH",
+    "single: 'text'\ndouble: \"text\"\n",
+    ["{\"single\":\"text\",\"double\":\"text\"}"]
   )
-  failed += harness.invalid(s, "C2SP", "[23\n]: 42\n")
+  failed += harness.valid(
+    s,
+    "9TFX",
+    "---\n\" 1st non-empty\n\n 2nd non-empty \n 3rd non-empty \"\n",
+    ["\" 1st non-empty\\n2nd non-empty 3rd non-empty \""]
+  )
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }

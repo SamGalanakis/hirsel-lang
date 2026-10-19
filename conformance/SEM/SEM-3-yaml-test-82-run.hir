@@ -6,13 +6,29 @@ fn grant_error(take e: GrantError) -> () {}
 pub fn main(rt: Io) -> Result[(), ()] {
   let s = io.stdout(rt) ? grant_error
   let mut failed: u64 = 0
-  failed += harness.tagged(s, "Z67P", "literal: |2\n  value\nfolded: !foo >1\n value\n")
-  failed += harness.tagged(
+  failed += harness.valid(
     s,
-    "Z9M4",
-    "%TAG !e! tag:example.com,2000:app/\n---\n- !e!foo \"bar\"\n"
+    "U9NS",
+    "---\ntime: 20:03:20\nplayer: Sammy Sosa\naction: strike (miss)\n...\n---\ntime: 20:03:47\nplayer: Sammy Sosa\naction: grand slam\n...\n",
+    [
+      "{\"time\":\"20:03:20\",\"player\":\"Sammy Sosa\",\"action\":\"strike (miss)\"}",
+      "{\"time\":\"20:03:47\",\"player\":\"Sammy Sosa\",\"action\":\"grand slam\"}"
+    ]
   )
-  failed += harness.invalid(s, "ZCZ6", "a: b: c: d\n")
+  failed += harness.valid(
+    s,
+    "UDM2",
+    "- { url: http://example.org }\n",
+    ["[{\"url\":\"http://example.org\"}]"]
+  )
+  failed += harness.valid(
+    s,
+    "UDR7",
+    "sequence: [ one, two, ]\nmapping: { sky: blue, sea: green }\n",
+    [
+      "{\"sequence\":[\"one\",\"two\"],\"mapping\":{\"sky\":\"blue\",\"sea\":\"green\"}}"
+    ]
+  )
   failure.check(failed == 0, TextInvariant())
   Ok(())
 }
