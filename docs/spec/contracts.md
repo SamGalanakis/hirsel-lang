@@ -1,9 +1,8 @@
 # Contracts and facts
 
-Contracts are executable code in a signature: `requires` and `ensures` clauses on functions,
-and `where` facts on distinct types. They are checked at run time at every optimisation
-level. A prover may remove a check it proves cannot fail; proof never changes what compiles
-([the proof seam](proof-seam.md)).
+Contracts are executable signature code: `requires` and `ensures` clauses on functions
+([FACT-1](#fact-1-contracts)), and `where` facts on distinct types
+([FACT-2](#fact-2-type-facts)). Their checking policy is [FACT-3](#fact-3-checking).
 
 ```hirsel
 fn clamp(x: u32, hi: u32) -> u32
@@ -56,4 +55,4 @@ fn half(p: Percent) -> Percent {
 
 Every contract and fact is checked at run time at every optimisation level. An
 implementation may remove a check it proves cannot fail; that changes cost only, never what
-compiles or what a program means.
+compiles or what a program means ([the proof seam](proof-seam.md)).

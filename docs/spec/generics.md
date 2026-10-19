@@ -1,8 +1,8 @@
 # Generics
 
-Generic parameters are written `[T]`, `[T: bounds]` or `[n: size]`. Bounds are structural:
-computed from a type's representation, never declared by instances. Behaviour such as
-ordering or hashing is passed as explicit dictionary values.
+Generic parameters are written `[T]`, `[T: bounds]` or `[n: size]`. Bounds follow
+[GEN-1](#gen-1-bounds); behaviour such as ordering or hashing uses explicit
+[dictionaries](#gen-2-dictionaries).
 
 ```hirsel
 fn pair[T: copyable](take x: T) -> (T, T) { (copy x, x) }
@@ -44,12 +44,10 @@ inside aggregates; `Map` and `Set` have their specified structural equality
 depth or width cutoff for proving bounds; only strictly growing polymorphic expansion may
 stop, as an operational tooling limit, never as false evidence.
 
-**Serializable.** A type is serializable when its transparent data schema has a specified
-canonical encoding and a checked decoder. A user nominal type becomes serializable only
-through `@serializable`, validated structurally against its complete schema; transparent
-aliases keep their target's status. An attribute or written bound cannot certify an
-ineligible field. `serializable` implies `inert` but implies neither `flat` nor
-`sendable`, and no other bound implies `serializable`.
+**Serializable.** Schema eligibility and explicit `@serializable` opt-in follow
+[SER-1](serialization.md#ser-1-serializable-schemas); the canonical codec is
+[SER-2](serialization.md#ser-2-canonical-codec). `serializable` implies `inert` but implies
+neither `flat` nor `sendable`, and no other bound implies `serializable`.
 
 **Sendability through generics.** A generic type argument may keep a written sendability
 requirement supplied by a type-contract position. A function or callable type parameter
@@ -115,15 +113,8 @@ depends on a dictionary is `of` it; a top-level dictionary such as `u32.order` i
 identity everywhere.
 
 ```hirsel
-fn largest(xs: List[u32], by: Order[u32]) -> Option[u32] {
-  let mut best: Option[u32] = None
-  for x in xs {
-    best = match best {
-      None => Some(x),
-      Some(b) => if by.compare(x, b) > 0 { Some(x) } else { Some(b) },
-    }
-  }
-  best
+fn larger(a: u32, b: u32, by: Order[u32]) -> u32 {
+  if by.compare(a, b) > 0 { a } else { b }
 }
 ```
 
