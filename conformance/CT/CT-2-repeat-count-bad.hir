@@ -1,0 +1,5 @@
+// rule: CT-2
+// expect: reject CT-2 at line 4
+fn example(n: u64) {
+  let raw: Array[u8] = [0u8; n]
+}

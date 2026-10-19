@@ -1,0 +1,46 @@
+// rule: CT-5
+// expect: run
+// exit: 0
+@serializable
+pub type CreateSignals {
+  draft: model.Draft,
+}
+
+fn create_signals_to_json(v: CreateSignals) -> json.Value uses {} = comptime derive.json_value(
+  shape(CreateSignals)
+)
+
+fn create_signals_from_json(v: json.Value) -> Result[unique CreateSignals, String] uses {} = comptime derive.from_json(
+  shape(CreateSignals)
+)
+
+fn create_signals_format(v: CreateSignals, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(CreateSignals)
+)
+
+fn create_signals_hash(v: CreateSignals) -> u64 uses {} = comptime derive.hash(
+  shape(CreateSignals)
+)
+
+pub fn main() -> Result[(), String] {
+  let source = CreateSignals(draft: model.Draft(title: "hello"))
+  let encoded = create_signals_to_json(source)
+  let decoded = create_signals_from_json(encoded)?
+  failure.check(decoded == source, TextInvariant())
+  let rendered = match json.stringify(encoded) {
+    Ok(text) => take text,
+    Error(_) => return Error("JSON encoding failed"),
+  }
+  failure.check(rendered == "{\"draft\":{\"title\":\"hello\"}}", TextInvariant())
+  let mut out: List[u8] = []
+  create_signals_format(source, mut out)
+  failure.check(
+    text.finish_valid(take out) == "CreateSignals(draft: Draft(title: hello))",
+    TextInvariant()
+  )
+  failure.check(
+    create_signals_hash(source) == create_signals_hash(decoded),
+    TextInvariant()
+  )
+  Ok(())
+}

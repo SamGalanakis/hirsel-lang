@@ -855,6 +855,12 @@
       "module": [
         "markdown"
       ]
+    },
+    {
+      "path": "html.hir",
+      "module": [
+        "html"
+      ]
     }
   ],
   "dependencies": []

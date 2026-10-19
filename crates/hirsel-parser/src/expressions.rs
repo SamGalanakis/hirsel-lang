@@ -184,7 +184,7 @@ impl Parser<'_> {
                 return result;
             }
         } else if self.eat("[") {
-            ExprKind::Sequence(self.list("]", |p| p.expr(0))?)
+            return self.sequence_literal(start);
         } else if self.at("{") {
             return self.block_context();
         } else if self.eat("if") {
@@ -597,4 +597,79 @@ fn assignment(text: &str) -> Option<Option<BinaryOp>> {
         "^=" => Some(BinaryOp::BitXor),
         _ => return None,
     })
+}
+
+impl Parser<'_> {
+    fn sequence_literal(&mut self, start: usize) -> Parsed<ExprId> {
+        self.whitespace += 1;
+        let result = (|| {
+            if self.eat("]") {
+                return Ok(self.push_expr(start, ExprKind::Sequence(vec![])));
+            }
+            if self.eof() {
+                return self.fail(const { RuleId::of("LANG-1") }, "expected `]`");
+            }
+            let first = self.expr(0)?;
+            if !self.eat(";") {
+                let mut values = vec![first];
+                if !self.eat("]") {
+                    self.expect(",", const { RuleId::of("LANG-1") })?;
+                    values.extend(self.list("]", |p| p.expr(0))?);
+                }
+                return Ok(self.push_expr(start, ExprKind::Sequence(values)));
+            }
+            let count = self.expr(0)?;
+            self.expect("]", const { RuleId::of("LANG-1") })?;
+            let whole = self.origin(start);
+            let count_origin = self.tree.expressions[count.0 as usize].origin;
+            let evaluated_count = self.synthetic_expr(count_origin, ExprKind::Comptime(count));
+            let ty = self.synthetic_type(
+                count_origin,
+                TypeExprKind::Named {
+                    path: Path {
+                        package: None,
+                        segments: vec![Symbol::intern("u64")],
+                    },
+                    arguments: vec![],
+                },
+            );
+            let pattern = self.synthetic_pattern(count_origin, PatternKind::Wildcard);
+            let statement = self.synthetic_stmt(
+                count_origin,
+                StmtKind::Let {
+                    mutable: false,
+                    pattern,
+                    ty: Some(ty),
+                    value: evaluated_count,
+                    otherwise: None,
+                },
+            );
+            let copied = self.synthetic_expr(
+                self.tree.expressions[first.0 as usize].origin,
+                ExprKind::Unary {
+                    op: UnaryOp::Copy,
+                    value: first,
+                },
+            );
+            let sequence = self.synthetic_expr(whole, ExprKind::Sequence(vec![copied]));
+            let expression = self.synthetic_expr(
+                whole,
+                ExprKind::Block {
+                    label: None,
+                    statements: vec![statement],
+                    tail: Some(sequence),
+                },
+            );
+            self.tree.repeats.push(RepeatLiteral {
+                expression,
+                sequence,
+                value: first,
+                count,
+                evaluated_count,
+            });
+            Ok(expression)
+        })();
+        self.whitespace -= 1;
+        result
+    }
 }

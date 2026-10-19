@@ -1330,7 +1330,9 @@ impl Checker<'_, '_> {
                             Some(GenericArgument::Size(Size::Constant(n))) => Some(*n),
                             _ => None,
                         };
-                        if length != Some(cs.len() as u64) {
+                        if !self.input.tree.repeats.iter().any(|r| r.sequence == id)
+                            && length != Some(cs.len() as u64)
+                        {
                             self.report(
                                 const { RuleId::of("LANG-7") },
                                 self.span(id),

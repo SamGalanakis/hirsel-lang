@@ -74,3 +74,7 @@ whose options are only fill, alignment and width; `FormatString.specs` retains e
 written spec. `AttributeArgument::Format` carries an `@format(function)` path.
 
 Loop statements carry optional label Symbols; Break/Continue expressions carry optional target labels. StmtKind::loop_label exposes the written declaration without treating it as a value binding. A `Block` with a label is a labelled block expression (LANG-11), and `Break.value` is the operand of `break 'l value`, which only a labelled block accepts.
+
+`SyntaxTree.repeats` retains each repeat literal's written element/count and
+its desugared block, sequence and comptime-count IDs. All execution edges remain
+ordinary AST nodes; this row preserves surface formatting and multiplicity.

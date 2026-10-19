@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "package": {
+    "name": "application",
+    "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
+  },
+  "sources": [
+    {
+      "path": "CT-5-std-derive-modules-run.hir",
+      "module": []
+    },
+    {
+      "path": "../../packages/fixtures/derive-modules/model.hir",
+      "module": [
+        "model"
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "manifest": "../../stdlib/std@1/hirsel.json",
+      "package": {
+        "name": "std",
+        "version": "1"
+      },
+      "expose": []
+    }
+  ]
+}

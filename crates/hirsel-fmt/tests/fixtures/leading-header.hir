@@ -1,0 +1,7 @@
+// A file header.
+// A second header line.
+
+/// The first item.
+pub fn one() -> u64 uses {} {
+  1
+}

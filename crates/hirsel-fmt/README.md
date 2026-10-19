@@ -53,7 +53,8 @@ Canonical layout (LANG-1/11/12; newline/precedence details follow grammar #21/#2
   keep their own line, at the following syntax's indent. Nested/multiline comment
   contents are untouched. Top-level ownership follows `hirsel-syntax` exactly;
   unattached final trivia is printed after the final item. Extra source blank
-  lines are collapsed to the policies above.
+  lines are collapsed to the policies above. A blank line after a leading `//`
+  file header is retained, including before the first item's doc comments.
 - Package heads stay adjacent (`json@1/`); AST path segments use dots and numeric
   type-size arguments use decimal. Grouping,
   separators and statement discards are generated from the AST. A conservative
@@ -107,3 +108,5 @@ match or loop; a lazy boolean scrutinee keeps its parentheses. A let-else initia
 that ends in a block, ignoring parentheses, is printed parenthesized.
 
 Each hole prints its retained spec after the expression, preserving Unicode fill.
+
+Repeat literals print their retained `[e; N]` spelling rather than their source desugaring.

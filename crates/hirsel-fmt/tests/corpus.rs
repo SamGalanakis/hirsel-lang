@@ -217,3 +217,40 @@ fn outer_uses_survives_function_typed_results() {
         assert_eq!(first.source, second.source);
     }
 }
+
+#[test]
+fn leading_header_blank_line_matches_golden_and_is_idempotent() {
+    let source = include_str!("fixtures/leading-header-original.hir");
+    let expected = include_str!("fixtures/leading-header.hir");
+    let (file, sources, errors) = parse(source);
+    assert!(!errors);
+    let formatted = hirsel_fmt::format(&file, &sources);
+    assert!(!formatted.unchanged);
+    assert_eq!(formatted.source, expected);
+    let (file, sources, errors) = parse(expected);
+    assert!(!errors);
+    assert_eq!(hirsel_fmt::format(&file, &sources).source, expected);
+    for source in [
+        "// A file header.\n\npub fn one() -> u64 uses {} {\n  1\n}\n",
+        "// Attached comment.\npub fn one() -> u64 uses {} {\n  1\n}\n",
+        "/// Item documentation.\npub fn one() -> u64 uses {} {\n  1\n}\n",
+    ] {
+        let (file, sources, errors) = parse(source);
+        assert!(!errors);
+        assert_eq!(hirsel_fmt::format(&file, &sources).source, source);
+    }
+}
+
+#[test]
+fn repeat_literals_retain_written_form_and_comments() {
+    let source = "fn f(){let a: Inline[u8, 64]=[0u8 /* value */; /* count */ 64]}";
+    let expected = "fn f() {\n  let a: Inline[u8, 64] = [0u8 /* value */; /* count */ 64]\n}\n";
+    let (file, sources, errors) = parse(source);
+    assert!(!errors);
+    let formatted = hirsel_fmt::format(&file, &sources);
+    assert!(!formatted.unchanged);
+    assert_eq!(formatted.source, expected);
+    let (file, sources, errors) = parse(expected);
+    assert!(!errors);
+    assert_eq!(hirsel_fmt::format(&file, &sources).source, expected);
+}

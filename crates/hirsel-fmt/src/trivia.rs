@@ -44,6 +44,7 @@ struct Comment<'a> {
     text: &'a str,
     trailing: bool,
     line: bool,
+    header_gap: bool,
 }
 pub(crate) fn merge(
     file: &SyntaxFile,
@@ -120,6 +121,8 @@ pub(crate) fn merge(
     let mut previous_significant = None;
     let mut previous_comment = None;
     let mut last_boundary = 0;
+    let mut header_end = None;
+    let mut header_gap_after = false;
     for (index, t) in file.tokens.iter().enumerate() {
         match t.kind {
             TokenKind::Trivia(
@@ -148,13 +151,36 @@ pub(crate) fn merge(
                 comments[boundary].push(Comment {
                     text: sources.slice(t.span)?,
                     trailing,
+                    header_gap: previous_significant.is_none()
+                        && header_end.is_some_and(|end: u32| {
+                            sources.file(file.file).unwrap().text()
+                                [end as usize..t.span.start as usize]
+                                .bytes()
+                                .filter(|b| *b == b'\n')
+                                .count()
+                                >= 2
+                        }),
                     line: matches!(k, TriviaKind::LineComment | TriviaKind::DocLine),
                 });
                 previous_comment = Some(t.span.end);
+                header_end = if previous_significant.is_none() && k == TriviaKind::LineComment {
+                    Some(t.span.end)
+                } else {
+                    None
+                };
             }
             TokenKind::Trivia(_) => {}
             TokenKind::Eof => {}
             _ => {
+                if previous_significant.is_none() {
+                    header_gap_after = header_end.is_some_and(|end| {
+                        sources.file(file.file).unwrap().text()[end as usize..t.span.start as usize]
+                            .bytes()
+                            .filter(|b| *b == b'\n')
+                            .count()
+                            >= 2
+                    });
+                }
                 previous_significant = Some(t.span.end);
                 previous_comment = None;
             }
@@ -170,6 +196,9 @@ pub(crate) fn merge(
         };
         let mut gap = t.before.clone();
         for c in &comments[i] {
+            if c.header_gap {
+                out.push('\n');
+            }
             if c.trailing && !out.ends_with('\n') && !out.is_empty() {
                 trim_spaces(&mut out);
                 out.push(' ');
@@ -192,6 +221,9 @@ pub(crate) fn merge(
                     out.push(' ');
                 }
             }
+        }
+        if i == 0 && header_gap_after {
+            out.push('\n');
         }
         append_gap(&mut out, &gap);
         out.push_str(&t.text);

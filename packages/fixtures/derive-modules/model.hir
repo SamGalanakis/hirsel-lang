@@ -1,0 +1,18 @@
+@serializable
+pub type Draft {
+  title: String,
+}
+
+pub fn draft_to_json(v: Draft) -> json.Value uses {} = comptime derive.json_value(
+  shape(Draft)
+)
+
+pub fn draft_from_json(v: json.Value) -> Result[unique Draft, String] uses {} = comptime derive.from_json(
+  shape(Draft)
+)
+
+pub fn draft_format(v: Draft, mut out: List[u8]) -> () uses {} = comptime derive.format(
+  shape(Draft)
+)
+
+pub fn draft_hash(v: Draft) -> u64 uses {} = comptime derive.hash(shape(Draft))

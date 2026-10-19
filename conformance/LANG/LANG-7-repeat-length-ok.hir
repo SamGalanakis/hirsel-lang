@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn example() {
+  let raw: Inline[u8, 4] = [0u8; 4]
+}

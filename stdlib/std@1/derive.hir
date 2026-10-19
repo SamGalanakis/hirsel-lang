@@ -7,7 +7,7 @@
 // A field of another record or variant type uses that type's own deriver,
 // named from the type's declared name in snake case: `item_to_json`,
 // `item_from_json`, `item_format` and `item_hash` for `Item`, resolved in the
-// declaring module like a call written there. A recursive type's deriver calls
+// field type's own module, subject to ordinary visibility. A recursive type's deriver calls
 // itself.
 // The text of `text` from byte `start` to byte `end`, past leading spaces.
 fn part(text: String, start: u64, end: u64) -> unique String uses {} {
@@ -172,7 +172,14 @@ fn snake(name: String) -> unique String uses {} {
 
 // The deriver a generated body calls for a field of nominal type `ty`.
 fn deriver(ty: String, suffix: String) -> unique String uses {} {
-  f"{snake(short_name(ty))}_{suffix}"
+  let path = constructor(ty)
+  let name = short_name(path)
+  let prefix = part(
+    path,
+    0,
+    core@1/string.byte_len(path) - core@1/string.byte_len(name)
+  )
+  f"{prefix}{snake(name)}_{suffix}"
 }
 
 // Generated text under construction, with a counter that makes each binding

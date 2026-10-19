@@ -1,0 +1,12 @@
+// rule: OWN-5
+// expect: reject OWN-5 at line 11
+resource type Token {
+  n: u64,
+}
+drop(t) {
+  ()
+}
+
+fn example() {
+  let values: Array[Token] = [Token(n: 7); 2]
+}

@@ -9,6 +9,7 @@ pub(crate) struct Printer<'a> {
     file: &'a SyntaxFile,
     /// Written f-strings by the block each desugars to.
     formats: std::collections::BTreeMap<ExprId, &'a FormatString>,
+    repeats: std::collections::BTreeMap<ExprId, &'a RepeatLiteral>,
     /// Written `if let` by its match, and `while let` by its loop body block.
     conditions: std::collections::BTreeMap<ExprId, LetCondition>,
 }
@@ -19,6 +20,12 @@ impl<'a> Printer<'a> {
             .formats
             .iter()
             .map(|f| (f.expression, f))
+            .collect();
+        let repeats = file
+            .tree
+            .repeats
+            .iter()
+            .map(|r| (r.expression, r))
             .collect();
         let conditions = file
             .tree
@@ -32,6 +39,7 @@ impl<'a> Printer<'a> {
         Self {
             file,
             formats,
+            repeats,
             conditions,
         }
     }
@@ -797,6 +805,16 @@ impl<'a> Printer<'a> {
     fn expr_inner(&self, id: ExprId, minimum: u8) -> Printed {
         if let Some(format) = self.formats.get(&id) {
             return self.format_string(format);
+        }
+        if let Some(repeat) = self.repeats.get(&id) {
+            return Some(cat([
+                token("["),
+                self.expr(repeat.value, 0)?,
+                token(";"),
+                Space,
+                self.expr(repeat.count, 0)?,
+                token("]"),
+            ]));
         }
         let e = self.file.tree.expressions.get(id.0 as usize)?;
         if let Some(LetCondition::If { otherwise, .. }) = self.conditions.get(&id) {

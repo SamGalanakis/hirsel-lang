@@ -1,0 +1,43 @@
+// Escaping table adapted from Go x/net/html; see third-party/NOTICES.md.
+
+/// Text to escape when formatted.
+@format(escaped_format)
+pub type Escaped {
+  text: String,
+}
+
+/// Wrap text so an f-string hole escapes it as HTML.
+pub fn esc(value: String) -> Escaped uses {} {
+  Escaped(text: unique value)
+}
+
+fn escaped_format(value: Escaped, mut out: List[u8]) -> () uses {} {
+  escape_into(mut out, value.text)
+}
+
+/// Append HTML text/quoted-attribute escaping, retaining existing output bytes.
+@preserves_unique(out)
+pub fn escape_into(mut out: List[u8], value: String) -> () uses {} {
+  for b in string.as_bytes(value) {
+    if b == b'&' {
+      text.append(mut out, "&amp;")
+    } else if b == b'<' {
+      text.append(mut out, "&lt;")
+    } else if b == b'>' {
+      text.append(mut out, "&gt;")
+    } else if b == b'"' {
+      text.append(mut out, "&#34;")
+    } else if b == b'\'' {
+      text.append(mut out, "&#39;")
+    } else {
+      list.push(mut out, b)
+    }
+  }
+}
+
+/// Escape &, <, >, double quote and apostrophe as HTML character references.
+pub fn escape(value: String) -> unique String uses {} {
+  let mut out: List[u8] = []
+  escape_into(mut out, value)
+  text.finish_valid(take out)
+}

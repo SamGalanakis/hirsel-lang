@@ -76,3 +76,8 @@ as braces.
 Loop labels are retained on for/while statements and optional break/continue targets. A label followed by `:` and `{` is a labelled block expression (`Block.label`), and `break 'l` takes an optional same-line operand; only loops and blocks may be labelled. Lexical target validation belongs to body checking.
 
 `@test` is a zero-argument function-definition attribute; semantic LANG-9 signature validation belongs to signature normalization.
+
+Repeat literals retain their written operands in `SyntaxTree.repeats`. Their
+ordinary block binds a discarded `u64 = comptime N` and yields a one-element
+sequence containing `copy e`. H supplies the element context and checks copying;
+O checks the count and target, and K repeats the prepared value's operands.

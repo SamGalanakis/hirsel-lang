@@ -820,3 +820,8 @@ The cache retains its size actuals and executed implementation/signature reads,
 and budget changes retire it. Program checking selects instances after complete
 signatures and GEN-5; failures cite both the expression and its selecting call.
 Native snapshots retain the selected immutable values for ordinary static reads.
+
+Repeat-literal counts use the ordinary closed compile-time evaluator as u64.
+Before lowering, O checks Array/Inline target kind and exact Inline length.
+Counts depending on abstract size parameters report CT-2 at the count; this
+form currently requires a definition-time-known size.

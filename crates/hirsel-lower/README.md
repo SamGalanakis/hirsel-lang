@@ -414,3 +414,8 @@ instance expansion specializes the static body independently for each actual lis
 the interpreter binds those same actuals at the generated call. No TIR/LIR form or
 signature encoding is added. Callable comptime materialization stays CT-2: the
 materialized named-reference representation has no generic actuals.
+
+A repeat literal evaluates and transports its source element once, including
+for a zero count, then emits ordinary Sequence constructor fields copying that
+prepared value. O's materialized count supplies multiplicity; no TIR form is
+added, and normal temporary cleanup releases the prepared owner.

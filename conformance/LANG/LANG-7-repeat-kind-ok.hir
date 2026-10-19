@@ -1,0 +1,5 @@
+// rule: LANG-7
+// expect: accept
+fn example() {
+  let raw: Array[u8] = [0u8; 4]
+}

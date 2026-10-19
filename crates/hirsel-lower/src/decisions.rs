@@ -34,6 +34,7 @@ pub(super) struct Decisions<'a> {
     pub protocols: Table<'a, StmtId, (StmtId, hirsel_check_protocol::body::ForExecution)>,
     pub cursors: Table<'a, StmtId, hirsel_types::CursorPlan>,
 
+    pub repeats: Table<'a, ExprId, hirsel_syntax::RepeatLiteral>,
     pub expressions: Table<'a, ExprId, Elaboration>,
     pub patterns: Table<'a, PatternId, PatternDecision>,
     pub places: Table<'a, ExprId, SourcePlace>,
@@ -64,6 +65,7 @@ impl<'a> Decisions<'a> {
         let checked = input.checked;
         Self {
             cloned_scopes: Default::default(),
+            repeats: Table::new(&input.tree.repeats, |row| row.sequence),
             resource_patterns: Table::new(&input.plans.resource_patterns, |row| row.0),
             literals: Table::new(&input.plans.pattern_literals, |row| row.0),
             entries: Table::new(&input.plans.entry_checks, |row| row.0),

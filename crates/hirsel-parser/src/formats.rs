@@ -333,7 +333,7 @@ impl Parser<'_> {
         self.tree.statements.push(Stmt { origin, kind });
         id
     }
-    fn synthetic_type(&mut self, origin: Origin, kind: TypeExprKind) -> TypeExprId {
+    pub(super) fn synthetic_type(&mut self, origin: Origin, kind: TypeExprKind) -> TypeExprId {
         let id = TypeExprId(self.tree.types.len() as u32);
         let height = self.heights.type_expression(&kind);
         self.check_height(height);

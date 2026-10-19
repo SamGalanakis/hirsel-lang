@@ -451,6 +451,7 @@ primary      = literal | f-string | value-path | "heap" | "result"
              | "(", ")" | "(", expression, ")"
              | "(", expression, ",", list(expression), ")"
              | "[", list(expression), "]"
+             | "[", expression, ";", expression, "]"
              | block | loop-label, ":", block | if-expr | match-expr | closure
              | "shape", "(", type, ")"
              | "before", "(", expression, ")"
@@ -510,7 +511,11 @@ as an unlabelled exit to that loop; a continue retains the selected loop's
 iteration preparation. Only loops and blocks may be labelled. Constructors use ordinary call
 syntax; field and variant names are resolved against the expected type. `[a, b]` is a
 sequence literal whose kind (`Array`, `List`, `Inline`) comes from the expected type; an
-empty sequence literal also needs one. `box e` builds the block a `box T` needs. The
+empty sequence literal also needs one. `[e; N]` repeats a value in an expected
+`Array[T]` or `Inline[T, n]`: `N` is a definition-time-known `u64` expression,
+and for `Inline` it must equal `n`. The element is evaluated once, including
+when `N` is zero; a nonconstant element must be copyable
+([LANG-7](language.md#lang-7-types)). `box e` builds the block a `box T` needs. The
 `= comptime expression` function body takes a generated body
 ([CT-5](compile-time.md#ct-5-generation)); `shape(T)` reads a type's shape at
 compile time ([CT-3](compile-time.md#ct-3-shapes)). `comptime e` has prefix precedence; parenthesize a

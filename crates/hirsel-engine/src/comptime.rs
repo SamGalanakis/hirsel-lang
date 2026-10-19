@@ -310,6 +310,50 @@ impl QueryEngine {
                 self.evaluate_value(analyzed, signature, expression, child, ty, &constants)?;
             constants.push((expression, value));
         }
+        for repeat in &file.tree.repeats {
+            let Some(row) = checked
+                .expressions
+                .iter()
+                .find(|r| r.expression == repeat.sequence)
+            else {
+                continue;
+            };
+            let Some((_, value)) = constants
+                .iter()
+                .find(|(id, _)| *id == repeat.evaluated_count)
+            else {
+                return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("CT-2") },
+                    file.tree.expressions[repeat.count.0 as usize].origin.span,
+                    "repeat length must be known at definition time",
+                )]));
+            };
+            let ValueKind::Constant(Constant::Integer(length)) = value.root.kind else {
+                return Err(operational("repeat count is not an evaluated u64"));
+            };
+            let valid = match &checked.types.get(row.ty).unwrap().kind {
+                hirsel_types::TypeKind::Builtin {
+                    kind: hirsel_types::BuiltinType::Array,
+                    ..
+                } => true,
+                hirsel_types::TypeKind::Builtin {
+                    kind: hirsel_types::BuiltinType::Inline,
+                    arguments,
+                } => {
+                    matches!(arguments.get(1), Some(GenericArgument::Size(Size::Constant(n))) if u128::from(*n) == length)
+                }
+                _ => false,
+            };
+            if !valid {
+                return Err(QueryError::Diagnostics(vec![Diagnostic::error(
+                    const { hirsel_diag::RuleId::of("LANG-7") },
+                    file.tree.expressions[repeat.expression.0 as usize]
+                        .origin
+                        .span,
+                    "repeat literal requires Array or an Inline of the same length",
+                )]));
+            }
+        }
         Ok(constants)
     }
 

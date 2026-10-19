@@ -1,0 +1,28 @@
+// rule: SEM-3
+// expect: run
+// exit: 0
+pub fn main() -> Result[(), ()] {
+  failure.check(html.escape("") == "", TextInvariant())
+  failure.check(html.escape("abc def\t\n雪 🐑") == "abc def\t\n雪 🐑", TextInvariant())
+  failure.check(html.escape("<&>\"'") == "&lt;&amp;&gt;&#34;&#39;", TextInvariant())
+  failure.check(html.escape("a&amp;b") == "a&amp;amp;b", TextInvariant())
+  let mut out: List[u8] = [b'[']
+  html.escape_into(mut out, "<&>\"'")
+  html.escape_into(mut out, "雪")
+  failure.check(
+    text.finish_valid(take out) == "[&lt;&amp;&gt;&#34;&#39;雪",
+    TextInvariant()
+  )
+  let input = "\"'><script>&"
+  failure.check(
+    f"<p>{html.esc(input)}</p>" == "<p>&#34;&#39;&gt;&lt;script&gt;&amp;</p>",
+    TextInvariant()
+  )
+  failure.check(
+    f"<a title=\"{html.esc(input)}\">{html.esc("雪")}</a>" == "<a title=\"&#34;&#39;&gt;&lt;script&gt;&amp;\">雪</a>",
+    TextInvariant()
+  )
+  failure.check(f"{html.esc("<&>"):>15}" == "  &lt;&amp;&gt;", TextInvariant())
+  failure.check(f"{"<b>"}" == "<b>", TextInvariant())
+  Ok(())
+}

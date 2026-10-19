@@ -388,3 +388,8 @@ Missing context or an undetermined parameter reports LANG-2 naming the parameter
 Callable binding annotations keep the declared parameter/result header, including
 omitted mode defaults, separately from the initializer's actual callable. Receipt
 checks cannot silently inherit stronger uniqueness or locality promises.
+
+Repeat-literal elements receive the expected sequence element type through
+ordinary `copy` expressions. Their one-element desugaring defers Inline length
+agreement to O, which has the evaluated count; ordinary literal lengths remain
+checked by H.

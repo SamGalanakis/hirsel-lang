@@ -85,6 +85,36 @@ Expected:
 No stdout; exit 0 (all checks pass).
 <!-- /tour -->
 
+A labelled block computes a value: `break 'search value` exits the block
+with that value, while its tail supplies the result when no break is taken.
+This lets a nested search return an `Option` directly.
+
+<!-- tour: conformance/LANG/LANG-11-tour-labelled-block-run.hir -->
+[Runnable source](../conformance/LANG/LANG-11-tour-labelled-block-run.hir)
+
+```hirsel
+pub fn main() -> Result[(), ()] {
+  let rows: List[List[u64]] = [[1, 2], [3, 7], [8, 9]]
+  let found: Option[u64] = 'search: {
+    for i in 0u64..list.len(rows) {
+      for value in rows[i] {
+        if value == 7 {
+          break 'search Some(i)
+        }
+      }
+    }
+    None()
+  }
+  failure.check(found == Some(1u64), TextInvariant())
+  Ok(())
+}
+```
+
+Expected:
+
+No stdout; exit 0 (all checks pass).
+<!-- /tour -->
+
 To read one decimal number, pass the line returned by `input.read_line` to
 `u64.parse(string.trim(line))`. Matching the parse result handles invalid input;
 `?` propagates `scalar.ParseError`.

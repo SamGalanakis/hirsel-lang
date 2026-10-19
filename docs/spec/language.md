@@ -297,6 +297,22 @@ itself have type `Never`, so it ends in such a call; any other value is LANG-7. 
 call of a `Never` function is a loop like any other self tail call
 ([LANG-10](#lang-10-recursion)).
 
+A repeat literal `[e; N]` requires an expected `Array[T]` or `Inline[T, n]`.
+The context types `e` as `T` and `N` as `u64`. `N` is evaluated at definition
+time, through the ordinary compile-time evaluator; runtime values and abstract
+size parameters are CT-2. The resulting Array has length `N`; an Inline requires
+`N == n`, otherwise LANG-7. List is not a repeat-literal target (LANG-7).
+
+`e` is evaluated exactly once, even when `N == 0`, and its value is copied into
+each element. A nonconstant `e` must be copyable (OWN-5, or GEN-1 for an
+unbounded generic parameter); constant expressions are also admitted. The
+ordinary copy and cleanup rules apply. For example:
+
+```hirsel
+let raw: Inline[u8, 64] = [0u8; 64]
+let words: Array[String] = ["hello"; 3]
+```
+
 ### LANG-8: Errors
 
 Expected failures use `Result` and `?`. `e ? C` maps the error through `C`, a path naming

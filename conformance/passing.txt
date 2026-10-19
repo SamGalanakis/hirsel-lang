@@ -697,6 +697,10 @@ conformance/CT/CT-2-nested-closure-constant-bad.hir
 conformance/CT/CT-2-nested-closure-constant-ok.hir
 conformance/CT/CT-2-nested-resource-constant-bad.hir
 conformance/CT/CT-2-nested-resource-constant-ok.hir
+conformance/CT/CT-2-repeat-count-bad.hir
+conformance/CT/CT-2-repeat-count-ok.hir
+conformance/CT/CT-2-repeat-generic-bad.hir
+conformance/CT/CT-2-repeat-generic-ok.hir
 conformance/CT/CT-2-resource-constant-bad.hir
 conformance/CT/CT-2-resource-constant-ok.hir
 conformance/CT/CT-2-resource-map-constant-bad.hir
@@ -761,6 +765,7 @@ conformance/CT/CT-5-std-derive-box-ok.hir
 conformance/CT/CT-5-std-derive-float-hash-bad.hir
 conformance/CT/CT-5-std-derive-float-hash-ok.hir
 conformance/CT/CT-5-std-derive-generic-run.hir
+conformance/CT/CT-5-std-derive-modules-run.hir
 conformance/CT/CT-5-std-derive-nested-deriver-bad.hir
 conformance/CT/CT-5-std-derive-nested-deriver-ok.hir
 conformance/CT/CT-5-std-derive-nested-option-bad.hir
@@ -1310,6 +1315,7 @@ conformance/LANG/LANG-11-labelled-loops-run.hir
 conformance/LANG/LANG-11-nested-block-value.hir
 conformance/LANG/LANG-11-nested-return-runtime.hir
 conformance/LANG/LANG-11-static-branch-view-run.hir
+conformance/LANG/LANG-11-tour-labelled-block-run.hir
 conformance/LANG/LANG-11-tour-loop-labels-run.hir
 conformance/LANG/LANG-12-bare-construction-empty-alias-ok.hir
 conformance/LANG/LANG-12-bare-construction-empty-record-ok.hir
@@ -1823,6 +1829,11 @@ conformance/LANG/LANG-7-range-coverage-bad.hir
 conformance/LANG/LANG-7-range-coverage-ok.hir
 conformance/LANG/LANG-7-recursive-product-match-bad.hir
 conformance/LANG/LANG-7-recursive-product-match-run.hir
+conformance/LANG/LANG-7-repeat-kind-bad.hir
+conformance/LANG/LANG-7-repeat-kind-ok.hir
+conformance/LANG/LANG-7-repeat-length-bad.hir
+conformance/LANG/LANG-7-repeat-length-ok.hir
+conformance/LANG/LANG-7-repeat-run.hir
 conformance/LANG/LANG-7-size-equality-bad.hir
 conformance/LANG/LANG-7-size-equality-ok.hir
 conformance/LANG/LANG-7-type-name-alias-bad.hir
@@ -3768,6 +3779,8 @@ conformance/OWN/OWN-5-receiver-copy-bad.hir
 conformance/OWN/OWN-5-receiver-copy-ok.hir
 conformance/OWN/OWN-5-region-copy-bad.hir
 conformance/OWN/OWN-5-region-copy-ok.hir
+conformance/OWN/OWN-5-repeat-copy-bad.hir
+conformance/OWN/OWN-5-repeat-copy-ok.hir
 conformance/OWN/OWN-5-resource-copy-bad.hir
 conformance/OWN/OWN-5-resource-copy-ok.hir
 conformance/OWN/OWN-5-sender-copy-bad.hir
@@ -4874,6 +4887,7 @@ conformance/SEM/SEM-3-hmac-sha256-2-run.hir
 conformance/SEM/SEM-3-hmac-sha384-run.hir
 conformance/SEM/SEM-3-hmac-sha512-256-run.hir
 conformance/SEM/SEM-3-hmac-sha512-run.hir
+conformance/SEM/SEM-3-html-escape-run.hir
 conformance/SEM/SEM-3-invalid-utf8-returned.hir
 conformance/SEM/SEM-3-json-corpus-run.hir
 conformance/SEM/SEM-3-json-empty-run.hir

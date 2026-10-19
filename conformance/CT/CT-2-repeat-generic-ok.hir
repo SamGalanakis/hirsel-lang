@@ -1,0 +1,5 @@
+// rule: CT-2
+// expect: accept
+fn example[n: size]() -> Array[u8] {
+  [0u8; 4u64]
+}

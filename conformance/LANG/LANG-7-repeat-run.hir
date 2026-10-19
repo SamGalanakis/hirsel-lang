@@ -1,0 +1,31 @@
+// rule: LANG-7
+// expect: run
+// exit: 0
+const COUNT: u64 = 4
+
+fn next(mut calls: u64) -> u8 {
+  calls += 1
+  7
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut calls = 0u64
+  let raw: Inline[u8, 64] = [0u8; 64]
+  failure.check(raw[0] == 0 && raw[63] == 0, Arithmetic())
+  let a: Array[u8] = [next(mut calls); COUNT + 1]
+  failure.check(calls == 1 && array.len(a) == 5 && a[4] == 7, Arithmetic())
+  let empty: Inline[u8, 0] = [next(mut calls); 0]
+  let empty_array: Array[u8] = [next(mut calls); 0]
+  failure.check(calls == 3 && array.len(empty_array) == 0, Arithmetic())
+  let one: Inline[u8, 1] = [next(mut calls); 1]
+  failure.check(calls == 4 && one[0] == 7, Arithmetic())
+  let nested: Inline[Inline[u8, 2], 3] = [[1u8; 2]; 3]
+  failure.check(nested[2][1] == 1, Arithmetic())
+  let constants: Inline[u64, 2] = [comptime (2u64 + 3); 2]
+  failure.check(constants[0] == 5 && constants[1] == 5, Arithmetic())
+  let word = "hello"
+  let mut strings: Array[String] = [word; 3]
+  strings[0] = "changed"
+  failure.check(strings[1] == "hello" && strings[2] == "hello", TextInvariant())
+  Ok(())
+}

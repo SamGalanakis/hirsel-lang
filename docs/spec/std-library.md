@@ -2067,9 +2067,12 @@ A field of another record or variant type `Item` (any package, generic
 instances included) uses `Item`'s own deriver, named from its declared name in
 snake case: `item_to_json`, `item_from_json`, `item_format` and `item_hash`
 (`TodoItem` gives `todo_item_to_json`, `HTTPRequest` gives
-`http_request_to_json`). The generated call is resolved in the declaring module
-like a call written there, so the deriver may be derived or written by hand,
-and a missing one is LANG-4 in the generated text. A naming convention keeps
+`http_request_to_json`). Every generated nested call is qualified with the field
+type's canonical package and module, so a field `model.Draft` calls
+`model.draft_to_json`, `model.draft_from_json`, `model.draft_format` or
+`model.draft_hash`, without forwarding functions in the enclosing record's
+module. Ordinary visibility applies. The deriver may be derived or written by
+hand, and a missing one is LANG-4 in the generated text. A naming convention keeps
 headers exactly what their writers declare, where a dictionary argument would
 add a parameter to every derived function and its callers. A type that recurses
 through a `List`, `Set` or `Map` gets a deriver that calls itself. A `box T`
@@ -2920,3 +2923,19 @@ writes a decimal, and `decimal.parse` reads a JSON number lexeme that has no
 exponent. `Decimal` declares `@format(decimal.format_into)` with the same padding
 rules as `BigInt`. Scale rules and rounding modes follow rust_decimal, without its
 96-bit coefficient or 28-digit scale limits.
+
+## HTML escaping (`std@1/html`)
+
+`html.escape(text: String) -> unique String` escapes `&`, `<`, `>`, `"` and
+`'` as `&amp;`, `&lt;`, `&gt;`, `&#34;` and `&#39;`, respectively. Other
+UTF-8 bytes are preserved. Existing character references are escaped again.
+These are [HTML character references](https://html.spec.whatwg.org/multipage/syntax.html#character-references),
+for element text and single- or double-quoted attribute values.
+
+`html.escape_into(mut out: List[u8], text: String)` appends the same escaped
+bytes and preserves `out`'s uniqueness. `html.esc(text: String) -> html.Escaped`
+returns an owned wrapper with an `@format` association, so
+`f"<p>{html.esc(value)}</p>"` escapes the hole. Ordinary String holes keep
+their ordinary formatting. Escape each untrusted hole individually.
+This is HTML text/attribute escaping; URL, JavaScript, CSS and unquoted
+attribute contexts need their own validation or encoding.

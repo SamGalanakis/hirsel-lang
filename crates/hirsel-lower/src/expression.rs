@@ -372,13 +372,40 @@ impl Builder<'_, '_> {
                         return Ok(None);
                     };
                     let value = self.transport(value, Storage::Temporary, span);
-                    fields.push(ConstructField {
-                        field: field as u32,
-                        value: Operand {
-                            place: value.place,
-                            usage: value.usage,
-                        },
-                    });
+                    if let Some(repeat) = self.decisions.repeats.get(&id).iter().copied().next() {
+                        let length = self
+                            .decisions
+                            .constants
+                            .get(&repeat.evaluated_count)
+                            .iter()
+                            .copied()
+                            .next()
+                            .and_then(|(_, value)| match value {
+                                Constant::Integer(n) => usize::try_from(*n).ok(),
+                                _ => None,
+                            })
+                            .ok_or_else(|| LowerError {
+                                site: span,
+                                message: "missing checked repeat length".into(),
+                            })?;
+                        for field in 0..length {
+                            fields.push(ConstructField {
+                                field: field as u32,
+                                value: Operand {
+                                    place: value.place,
+                                    usage: UseKind::Copy,
+                                },
+                            });
+                        }
+                    } else {
+                        fields.push(ConstructField {
+                            field: field as u32,
+                            value: Operand {
+                                place: value.place,
+                                usage: value.usage,
+                            },
+                        });
+                    }
                 }
                 let rv = Rvalue::Construct {
                     constructor: if sequence {

@@ -968,6 +968,16 @@ pub enum Generated {
     /// They are run-time values of the generated function, which `e` cannot read.
     Generator(Vec<Symbol>),
 }
+/// Written repeat literal, represented by a typed count binding and a one-element
+/// sequence. Lowering repeats that element's prepared value, never its evaluation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RepeatLiteral {
+    pub expression: ExprId,
+    pub sequence: ExprId,
+    pub value: ExprId,
+    pub count: ExprId,
+    pub evaluated_count: ExprId,
+}
 /// Owning AST arenas. All IDs address these Vecs; no AST node borrows source storage (LANG-1).
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SyntaxTree {
@@ -977,6 +987,7 @@ pub struct SyntaxTree {
     pub patterns: Vec<Pattern>,
     pub types: Vec<TypeExpr>,
     pub formats: Vec<FormatString>,
+    pub repeats: Vec<RepeatLiteral>,
     pub conditions: Vec<LetCondition>,
     pub groups: Vec<Group>,
 }
