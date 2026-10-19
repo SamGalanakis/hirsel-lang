@@ -41,6 +41,7 @@
 //! - A Plain static (a `Const`, `ReadStatic` or `FunctionRef` result held
 //!   Plain: a literal slice) is backed by an immortal static block: consuming
 //!   it needs no credit, and it is never a reuse donor.
+mod aliasing;
 mod arena;
 pub use arena::check_calls as check_result_arena_calls;
 mod discharge;
@@ -197,6 +198,10 @@ pub enum ViolationKind {
     BorrowedStorage(SlotId),
     /// A caller `mut` parameter not fully initialized at an exit.
     MutExit(SlotId),
+    /// A call's `mut` argument at this address whose place the callee also reaches
+    /// through another `mut` argument, or through a loan held by another argument or
+    /// by the callee value (OWN-3).
+    CallAlias(AddressId),
     LoanState(LoanId),
     LoanMismatch(LoanId),
     /// A borrowed value used where its loan is not definitely active.
@@ -362,6 +367,7 @@ pub fn check<S: Stage>(unit: &LirUnit<S>, inputs: &Inputs<'_>) -> Vec<Violation>
     let facts = structure::check(&cx, &mut report);
     if let Some(facts) = facts.filter(|_| report.0.is_empty()) {
         ownership::check(&cx, &facts, &mut report);
+        aliasing::check(&cx, &facts, &mut report);
         arena::check(&cx, &facts, &mut report);
         if cx.stage == StageKind::Ready {
             ready::check(&cx, &mut report);

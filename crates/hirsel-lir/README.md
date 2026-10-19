@@ -658,3 +658,17 @@ closures need the uniform physical carrier while reporting their own failures.
 specialization. The independent validator requires carriers on callable ABIs and
 tracked bodies and excludes them from foreign ABIs. Hand-built controls in
 `abi.rs` and `invalid_ir.rs` each have guard-removal witnesses.
+
+Validator version 9 re-proves OWN-3 at call sites (`validate/aliasing.rs`,
+`CallAlias`): a callee reaches a `mut` argument's place only through that
+argument. No two `mut` arguments of one call overlap, and no other argument and
+no callee value holds a loan on an overlapping place. A value's loans are its
+own, the views it carries through borrowed record fields, and the loans of the
+borrowed captures of every closure it may be. The closure is followed through
+slot stores, reads, copies, recasts, weakenings, constructions and block
+parameters, and a loan through a value root views what that value views. The
+rule concerns what the call hands over, not loan activity: a loan the caller
+still holds but passes nowhere is not the callee's. The native backends'
+`noalias` on `mut` place addresses rests on it. `tests/it/ownership.rs` pairs a
+second `mut` argument, a borrowed view and a capturing closure, each against
+the same route to another place.

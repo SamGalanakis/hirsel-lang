@@ -3,6 +3,7 @@
 use crate::support;
 
 use hirsel_core_contract::Passing;
+use hirsel_lir::abi_types::CallableShape;
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::LayoutId;
 use hirsel_lir::stage::{Rc, Ready, Reuse, Value};
@@ -1804,4 +1805,142 @@ fn a_switch_empty_option_fact_is_killed_by_writes_and_intersected_at_joins() {
             empty_option_switch(mutant)
         );
     }
+}
+
+const MUT_BLK: (Passing, LayoutId) = (Passing::Mut, l::BLK);
+
+/// How a call hands the callee `mut p` a second time (OWN-3), or, in each twin,
+/// the same route to the other `mut` parameter `q`.
+#[derive(Clone, Copy)]
+enum Second {
+    /// A second `mut` argument.
+    Mut,
+    /// A borrowed view as an argument.
+    View,
+    /// A closure argument whose borrowed capture is the view.
+    Capture,
+}
+
+/// `f(mut p, <second>)` in a function of two `mut` parameters `p` and `q`: the
+/// second route reaches `p` in the mutant and `q` in the twin.
+fn call_alias(second: Second, mutant: bool) -> Vec<K> {
+    let mut t = Lir::<Rc>::new(&[MUT_BLK, MUT_BLK], None);
+    let p = t.slot(l::BLK, SlotKind::Parameter(0), ROOT);
+    let pv = t.version_of(p);
+    t.param(pv);
+    let q = t.slot(l::BLK, SlotKind::Parameter(1), ROOT);
+    let qv = t.version_of(q);
+    t.param(qv);
+    let (other, other_version) = if mutant { (p, pv) } else { (q, qv) };
+    let first = t.at(ENTRY, p, &[], &[]);
+    let written = t.version_of(p);
+    let first = ArgumentValue::Address {
+        address: first,
+        version: written,
+    };
+    let n = t.builder.block(BlockKind::Body, &[]);
+    match second {
+        Second::Mut => {
+            let at = t.at(ENTRY, other, &[], &[]);
+            let version = t.version_of(other);
+            let fail = t.builder.propagate();
+            t.call(
+                ENTRY,
+                &[MUT_BLK, MUT_BLK],
+                None,
+                &[
+                    first,
+                    ArgumentValue::Address {
+                        address: at,
+                        version,
+                    },
+                ],
+                (n, &[]),
+                fail,
+            );
+        }
+        Second::View | Second::Capture => {
+            let at = t.at(ENTRY, other, &[], &[]);
+            let loan = t.loan(at, false);
+            t.begin(ENTRY, loan);
+            let view = t.read(ENTRY, at, other_version, ReadMode::Borrow, Some(loan));
+            let (argument, layout, undo) = if let Second::Capture = second {
+                let abi = t.abi_shaped(CallableShape::Closure, &[], None);
+                let code = t.symbol(SymbolKind::Function);
+                let captures = PoolRange::push(
+                    &mut t.builder.unit.pools.captures,
+                    [CaptureValue {
+                        value: view,
+                        usage: CaptureUse::Borrow,
+                    }],
+                );
+                t.builder.unit.tables.closures.push(ClosureSite {
+                    code: Some(ClosureCode { symbol: code, abi }),
+                    environment: l::ENV_BLK,
+                    captures,
+                    destination: DestinationClass::Heap,
+                    placement: t.heap(),
+                    anchor: SourceAnchorId(0),
+                });
+                let closure = ClosureId(t.builder.unit.tables.closures.len() as u32 - 1);
+                let made = t.owned(l::CLOSURE_BLK);
+                let target = t.cleanup(&[Undo::End(loan)]);
+                let failure = t.failure(target);
+                t.builder.push(
+                    ENTRY,
+                    Inst::Closure {
+                        result: made,
+                        closure,
+                        failure,
+                    },
+                );
+                (
+                    made,
+                    l::CLOSURE_BLK,
+                    vec![Undo::Release(made), Undo::End(loan)],
+                )
+            } else {
+                (view, l::BLK, vec![Undo::End(loan)])
+            };
+            let fail = t.cleanup(&undo);
+            t.call(
+                ENTRY,
+                &[MUT_BLK, (Passing::Borrow, layout)],
+                None,
+                &[first, ArgumentValue::Value(argument)],
+                (n, &[]),
+                fail,
+            );
+            if let Second::Capture = second {
+                t.release_then(n, argument, &[Undo::End(loan)]);
+            }
+            t.end(n, loan);
+        }
+    }
+    t.builder.ret(n, None);
+    t.check()
+}
+
+#[test]
+fn a_call_hands_its_callee_a_mut_place_once() {
+    pair(
+        |mutant| call_alias(Second::Mut, mutant),
+        |k| matches!(k, K::CallAlias(_)),
+    );
+}
+
+#[test]
+fn a_call_hands_no_view_of_its_mut_place() {
+    pair(
+        |mutant| call_alias(Second::View, mutant),
+        |k| matches!(k, K::CallAlias(_)),
+    );
+}
+
+#[test]
+fn a_call_hands_no_closure_capturing_its_mut_place() {
+    pair(
+        |mutant| call_alias(Second::Capture, mutant),
+        |k| matches!(k, K::CallAlias(_)),
+    );
 }

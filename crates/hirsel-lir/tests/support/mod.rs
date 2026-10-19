@@ -124,6 +124,10 @@ pub mod l {
     /// A frozen `BLK` and the `Shared` root over it (LIR revision 27).
     pub const FROZEN: LayoutId = LayoutId(46);
     pub const SHARED: LayoutId = LayoutId(47);
+    /// A closure environment of one borrowed `BLK` capture, and the callable
+    /// specialized to it.
+    pub const ENV_BLK: LayoutId = LayoutId(48);
+    pub const CLOSURE_BLK: LayoutId = LayoutId(49);
 }
 
 fn record(table: &LayoutTable, kind: LayoutKind, size: u64, align: u32) -> LayoutRecord {
@@ -446,6 +450,12 @@ pub fn table() -> LayoutTable {
     let mut shared = block(&t, l::FROZEN);
     shared.kind = LayoutKind::Shared { payload: l::FROZEN };
     layouts.push(shared);
+    let mut env_blk = record(&t, LayoutKind::Aggregate, 8, 8);
+    env_blk.fields = vec![field(0, 0, l::BLK)];
+    // A view: scanned uncounted, never released.
+    env_blk.scan = vec![ScanStep::Uncounted { offset: 0 }];
+    layouts.push(env_blk);
+    layouts.push(callable(&t, Some(l::ENV_BLK), CopyRecipe::Dup));
     t.layouts = layouts;
     t
 }
@@ -476,7 +486,7 @@ pub fn repr_of(layout: LayoutId) -> ValueRepr {
         | l::SOURCE => ValueRepr::Block,
         l::HDR => ValueRepr::Token,
         l::ARENA => ValueRepr::Arena,
-        l::CLOSURE | l::ERASED | l::ERASED_ONCE => ValueRepr::Callable,
+        l::CLOSURE | l::CLOSURE_BLK | l::ERASED | l::ERASED_ONCE => ValueRepr::Callable,
         _ => ValueRepr::Aggregate,
     }
 }
