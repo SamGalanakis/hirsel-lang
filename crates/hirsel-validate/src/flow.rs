@@ -3106,6 +3106,34 @@ impl Checker<'_> {
         }
         content
     }
+    /// The content loans of a borrowed `Local` root whose value is related to
+    /// other places: it holds at least one loan, and every source it is
+    /// bounded by is the place of a loan it holds. An owned root, including a
+    /// copy, carries a source bound no loan covers (MODE-1).
+    fn related_local(
+        &self,
+        model: &Model,
+        state: &State,
+        operand: &Operand,
+    ) -> Option<BTreeSet<usize>> {
+        let root = self.body.places[operand.place.0 as usize].root.0 as usize;
+        if operand.usage != UseKind::Borrow || self.body.locals[root].storage != Storage::Local {
+            return None;
+        }
+        let loans = self.installed_loans(state, operand.place).held();
+        let lent: BTreeSet<usize> = loans
+            .iter()
+            .map(|loan| {
+                let source = model.loans[*loan].1;
+                self.body.places[source.0 as usize].root.0 as usize
+            })
+            .collect();
+        let sources = model
+            .parts(operand.place)
+            .flat_map(|part| state.sources[part].iter().copied());
+        (!loans.is_empty() && sources.into_iter().all(|source| lent.contains(&source)))
+            .then_some(loans)
+    }
     fn dependencies(&self, model: &Model, state: &State, operand: &Operand) -> BTreeSet<usize> {
         self.operand_loans(model, state, operand).held()
     }
@@ -5618,6 +5646,12 @@ impl Checker<'_> {
                             }
                         }
                     }
+                    let composed_result = self.bound(
+                        &self.definition.types,
+                        self.place_type(destination),
+                        hirsel_types::Bound::Data,
+                        &self.generic_declarations(),
+                    );
                     let result_dependencies = local_arguments
                         .iter()
                         .flat_map(|(o, environment)| {
@@ -5626,9 +5660,20 @@ impl Checker<'_> {
                                 // content depends on its environment, independently
                                 // of that short-lived access permission.
                                 self.installed_loans(state, o.place).held()
-                            } else {
+                            } else if let Some(field) =
                                 self.field_dependencies(model, state, callee, arguments, o)
-                                    .unwrap_or_else(|| self.dependencies(model, state, o))
+                            {
+                                field
+                            } else if composed_result
+                                && let Some(loans) = self.related_local(model, state, o)
+                            {
+                                // MODE-1: relations compose. A data result
+                                // related to a local view reaches what the
+                                // view reaches, never the local's own
+                                // storage: it holds the local's loans.
+                                loans
+                            } else {
+                                self.dependencies(model, state, o)
                             }
                         })
                         .collect();
@@ -6019,8 +6064,6 @@ impl Checker<'_> {
                 // Core library borrowed `for` protocols compose an owned yield back to its
                 // original source, without bounds on unnamed preparation/cursor
                 // storage. Data excludes borrowed callable/resource environments.
-                // Ordinary calls keep binding homes (MODE-1; spec issue #100):
-                // this does not implement transitive relation collapse.
                 let value_root = self.body.places[value.place.0 as usize].root.0 as usize;
                 let owned_share = named.is_some()
                     && value.usage == UseKind::Take

@@ -2998,6 +2998,28 @@ pub(crate) fn enter_checked(
     )
 }
 /// The home instance of a place's root slot, under checked execution.
+/// MODE-1: relations compose. A borrowed local that is not a semantic copy and
+/// whose content lives only in instances this frame does not own (its
+/// caller's, mapped through parameters and captures) is a view of that
+/// content: a result related to it reaches the content, not the local's own
+/// storage, so it lends no home. A copy is owned and lends only itself.
+fn composed_view(
+    frame: &mut Frame,
+    operand: &Operand,
+    lifetime: &crate::checked::Bound,
+) -> Result<bool, Error> {
+    let root = frame.place(operand.place)?.root;
+    let body = &frame.definition.bodies[frame.body_id.0 as usize];
+    if operand.usage != hirsel_types::UseKind::Borrow
+        || body.locals[root.0 as usize].storage != Storage::Local
+    {
+        return Ok(false);
+    }
+    Ok(frame
+        .check
+        .as_ref()
+        .is_some_and(|check| !check.copies.contains(&root.0) && check.caller_owned(lifetime)))
+}
 fn home(frame: &mut Frame, place: PlaceId) -> Result<Option<crate::checked::Bound>, Error> {
     let root = frame.place(place)?.root;
     let body = frame.body_id;
@@ -3125,6 +3147,22 @@ fn execute_instruction(
                 frame.body().rvalues.get(value.0 as usize),
                 Some(Rvalue::Construct { .. })
             );
+            let copied = frame.check.as_ref().is_some_and(|check| {
+                let body = frame.body();
+                let from = |operand: &Operand| {
+                    operand.usage == hirsel_types::UseKind::Copy
+                        || check
+                            .copies
+                            .contains(&body.places[operand.place.0 as usize].root.0)
+                };
+                match body.rvalues.get(value.0 as usize) {
+                    Some(Rvalue::Use(operand)) => from(operand),
+                    Some(Rvalue::Construct { fields, .. }) => {
+                        fields.iter().any(|field| from(&field.value))
+                    }
+                    _ => false,
+                }
+            });
             let (value, shadow) = rvalue(
                 frame,
                 value,
@@ -3153,6 +3191,13 @@ fn execute_instruction(
             arena_write(frame, destination, false, budgets)?;
             frame.write_access(destination)?;
             frame.assign_shadow(destination, value, shadow)?;
+            if copied {
+                let place = frame.place(destination)?;
+                if place.projection.is_empty() {
+                    let root = place.root.0;
+                    frame.check.as_mut().unwrap().copies.insert(root);
+                }
+            }
         }
         InstructionKind::Snapshot {
             destination,
@@ -3403,6 +3448,7 @@ fn execute_terminator(
                             argument.value.usage,
                             hirsel_types::UseKind::Borrow | hirsel_types::UseKind::Mut
                         )
+                        && !composed_view(frame, &operand, &lifetime)?
                     {
                         lifetime.extend(home(frame, operand.place)?.unwrap_or_default());
                         lifetime.sort_unstable();

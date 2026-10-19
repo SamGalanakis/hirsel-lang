@@ -62,6 +62,11 @@ A block whose value projects a counted part of a binding the block declares
 so a consumer that borrows the block's value would read storage the block has
 ended: MODE-1 at the part, naming the block's end and suggesting `copy`
 (LANG-11, #50). An owning consumer shares the part instead.
+Relations compose (MODE-1): a borrowed argument naming a local binding of the body
+whose value is related to other places (it reaches them through read loans and holds
+no source bound of its own, unlike an owned copy) lends a related `data` result those
+places, not its own scope or a read of itself. `OwnershipFacts.composed_arguments`
+lists those arguments; lowering lends the result the binding's content loans.
 
 Expression use decisions are published directly on `CheckedBody.expressions`.
 `OwnershipFacts.call_arguments` separately records `(call ExprId, argument ExprId,

@@ -1,0 +1,17 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 16
+// The accepted twin is MODE-1-composed-relation-run: here the intermediate
+// local is related to `other`, not to `data`, so the composed result is not
+// within the declared relation.
+fn skip(data: Bytes) -> Result[Bytes, u64] in data {
+  if bytes.len(data) == 0 {
+    return Error(0)
+  }
+  Ok(bytes.slice(data, 1, bytes.len(data)))
+}
+
+fn skip_other(data: Bytes, other: Bytes) -> Result[Bytes, u64] in data {
+  let first = skip(other)?
+  let _ = data
+  Ok(skip(first)?)
+}

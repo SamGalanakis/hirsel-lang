@@ -2574,6 +2574,8 @@ conformance/MODE/MODE-1-caller-local-field-reception-bad.hir
 conformance/MODE/MODE-1-caller-local-field-reception-ok.hir
 conformance/MODE/MODE-1-closure-header-enclosing-arena-ok.hir
 conformance/MODE/MODE-1-comparison-across-relations-ok.hir
+conformance/MODE/MODE-1-composed-relation-bad.hir
+conformance/MODE/MODE-1-composed-relation-run.hir
 conformance/MODE/MODE-1-computed-local-field-bad.hir
 conformance/MODE/MODE-1-computed-local-field-ok.hir
 conformance/MODE/MODE-1-consuming-loop-content-bad.hir

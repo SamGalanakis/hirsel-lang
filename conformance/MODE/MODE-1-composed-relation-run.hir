@@ -1,0 +1,51 @@
+// rule: MODE-1
+// expect: run
+// entry: test_composed_relation
+// Relations compose: a result related to a local that is itself related to a
+// parameter is within that parameter, through `?`, a match and plain calls.
+fn skip(data: Bytes) -> Result[Bytes, u64] in data {
+  if bytes.len(data) == 0 {
+    return Error(0)
+  }
+  Ok(bytes.slice(data, 1, bytes.len(data)))
+}
+
+fn tail(data: Bytes) -> Bytes in data {
+  bytes.slice(data, 1, bytes.len(data))
+}
+
+fn skip_twice(data: Bytes) -> Result[Bytes, u64] in data {
+  let first = skip(data)?
+  Ok(skip(first)?)
+}
+
+fn skip_twice_match(data: Bytes) -> Result[Bytes, u64] in data {
+  let first = match skip(data) {
+    Ok(rest) => rest,
+    Error(e) => return Error(e),
+  }
+  skip(first)
+}
+
+fn tail_three(data: Bytes) -> Bytes in data {
+  let first = tail(data)
+  let second = tail(first)
+  tail(second)
+}
+
+fn tail_rebound(data: Bytes) -> Bytes in data {
+  let mut first = tail(data)
+  let second = tail(first)
+  first = tail(second)
+  first
+}
+
+pub fn test_composed_relation(t: Test) -> Result[(), ()] {
+  test.check(t, skip_twice(b"abc") == Ok(b"c"))
+  test.check(t, skip_twice(b"a") == Error(0))
+  test.check(t, skip_twice_match(b"abcd") == Ok(b"cd"))
+  test.check(t, skip_twice_match(b"") == Error(0))
+  test.check(t, tail_three(b"abcde") == b"de")
+  test.check(t, tail_rebound(b"abcde") == b"de")
+  Ok(())
+}

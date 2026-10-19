@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 mod box_read_controls;
 #[path = "cleanup_nesting_controls.rs"]
 mod cleanup_nesting_controls;
+#[path = "composed_relation_controls.rs"]
+mod composed_relation_controls;
 #[path = "declaration_controls.rs"]
 mod declaration_controls;
 #[path = "defuse_controls.rs"]

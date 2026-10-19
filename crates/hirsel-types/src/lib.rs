@@ -803,6 +803,11 @@ pub struct OwnershipFacts {
     /// by `F` (#77). Lowering alone reads it, to loan that field place for
     /// the result instead of the whole argument.
     pub field_loans: Vec<(ExprId, TypeId)>,
+    /// Borrowed call arguments naming a local binding of the body whose
+    /// current content is local, related to a `data` result: relations
+    /// compose (MODE-1), so the result holds the binding's content loans and
+    /// no access loan on the binding. Lowering alone reads it.
+    pub composed_arguments: Vec<ExprId>,
     pub captures: Vec<CaptureMode>,
     /// Callee consumption, independent of evaluating the source operand.
     pub call_arguments: Vec<(ExprId, ExprId, UseKind)>,

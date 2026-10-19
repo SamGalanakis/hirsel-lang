@@ -736,11 +736,16 @@ representations retain conservative summaries; recursive path closure is absent.
 Borrowed `for` protocol returns independently compose owned Data yields through
 unnamed owned preparation and cursor holders back to their selected sources
 (docs/spec/core-library.md). The exact validated association receipt supplies the holder roles; source
-bounds, ownership, expiry and result-relation inclusion remain checked. Named
-binding homes and ordinary direct calls keep their bounds under MODE-1; spec
-[issue #100](https://github.com/SamGalanakis/hirsel-lang/issues/100) records the
-separate transitive-collapse proposal. Hand-built controls reject removal of the
-receipt, a different selected source and a borrowed return.
+bounds, ownership, expiry and result-relation inclusion remain checked. Hand-built
+controls reject removal of the receipt, a different selected source and a borrowed return.
+
+Relations compose (MODE-1): a `data` result of a call related to a borrowed `Local`
+root that is a view (it holds content loans, and every source bounding it is the place
+of one of them) holds those loans instead of an access loan on the root, so the root may
+end or be rewritten while the result lives; its sources still pass result-relation
+inclusion. An owned root, including a copy, carries a source bound no loan covers and
+keeps the access loan, as does a result that is not `data`. Hand-built controls are in
+`tests/it/composed_relation_controls.rs`.
 
 TIR schema 2 adds `Definition.protocol_associations`: exact source declaration
 fingerprint and open/next block identities. `src/protocol.rs` independently

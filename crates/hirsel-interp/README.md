@@ -455,7 +455,9 @@ Wave-1 list mutations, byte/position/path bridges and finite failure.check dispa
 Borrowed protocol receipts are checked against retained nominal and callable
 headers before lifetime transfer. Open/next compose source content bounds and
 exclude their temporary operand homes; nested captured/view bounds remain real.
-Ordinary local calls retain their existing argument-home policy. The single-yield
+Ordinary calls add a borrowed argument's home to its lifetime, except a borrowed
+`Local` whose bound names only its caller's instances (mapped through parameters and
+captures): relations compose through such a view (MODE-1). The single-yield
 and repeated-step regressions run through the driver's checked execution seam.
 
 `SimulationConfig.links` retains physical snapshot aliases independently of the host

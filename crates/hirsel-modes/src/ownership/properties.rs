@@ -68,6 +68,9 @@ pub(super) fn format_association(
 pub(super) struct Properties {
     pub plain: bool,
     pub flat: bool,
+    /// GEN-1 `data`: no callable, iterator, resource or capability part, so
+    /// a value of this type cannot reach a binding's own storage.
+    pub data: bool,
     pub sendable_aliased: bool,
     pub copyable: bool,
     pub valid: bool,
@@ -124,6 +127,7 @@ pub(super) fn classify(
         };
         let flat = structural_flat(&store, root, &generics, &mut lookup)?;
         let copy_detaches = copy_detaches(&store, root, &generics, &mut lookup)?;
+        let data = structural_equality(&store, root, Bound::Data, &generics, &mut lookup)?;
         // Flow can invalidate the root's uniqueness after J has proved a
         // generic bound. Cache the same structural proof without that root
         // evidence; locality is checked separately at the call.
@@ -148,6 +152,7 @@ pub(super) fn classify(
         result.push(Properties {
             plain,
             flat,
+            data,
             sendable_aliased,
             copyable,
             valid: semantic_equal(&store, root, &store, root).is_ok(),

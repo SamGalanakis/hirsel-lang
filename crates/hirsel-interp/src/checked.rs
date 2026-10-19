@@ -944,6 +944,9 @@ pub(crate) struct FrameCheck {
     pub returned: Option<Shadow>,
     pub noalloc: bool,
     pub closes_arena: Option<u32>,
+    /// Locals whose whole value is a semantic copy: owned, so a result related
+    /// to one lends only that local, never what its copy came from (MODE-1).
+    pub copies: BTreeSet<u32>,
 }
 /// What a caller knows about one argument.
 #[derive(Clone, Debug, Default)]
@@ -1056,7 +1059,17 @@ impl FrameCheck {
             returned: None,
             noalloc,
             closes_arena: None,
+            copies: BTreeSet::new(),
         }
+    }
+    /// Whether a bound names no scope, region or environment instance of
+    /// this frame: only its caller's, mapped through parameters and captures.
+    pub fn caller_owned(&self, bound: &[u32]) -> bool {
+        bound.iter().all(|instance| {
+            !self.owned.contains(instance)
+                || self.parameters.contains(instance)
+                || self.captures.contains(instance)
+        })
     }
     /// The instance bounding a slot's storage.
     pub fn home(&mut self, body: &Body, local: LocalId) -> Bound {

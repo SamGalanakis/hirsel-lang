@@ -1261,12 +1261,21 @@ impl Builder<'_, '_> {
                 }
                 _ => None,
             };
+            // MODE-1: a data result related to a local view holds the view's
+            // own loans, not an access loan on the binding.
+            let composed = field.is_none()
+                && value.usage == UseKind::Borrow
+                && self.input.ownership.composed_arguments.contains(&a.value);
             argument_dependencies.push((
                 ordinal,
-                self.operand_loans(&Operand {
-                    place: field.unwrap_or(value.place),
-                    usage: value.usage,
-                }),
+                if composed {
+                    self.content_loans(value.place)
+                } else {
+                    self.operand_loans(&Operand {
+                        place: field.unwrap_or(value.place),
+                        usage: value.usage,
+                    })
+                },
             ));
             if let Some(field) = field {
                 field_loans.insert(ordinal, field);

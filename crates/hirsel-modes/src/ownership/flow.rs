@@ -3854,6 +3854,25 @@ impl Checker<'_> {
             },
         );
     }
+    /// MODE-1: relations compose. A local binding of this body whose value is
+    /// related to other places (a call result related to its arguments, a
+    /// borrowed view, a field read through its owner) lends those places, and
+    /// neither its own scope nor a read of itself, to a `data` result related
+    /// to it: such a result holds no callable or iterator that could reach the
+    /// binding's own storage. An owned binding, including any copy, holds a
+    /// lasting source bound instead and lends only itself. Lowering lends the
+    /// result the binding's content loans.
+    fn related_view(&self, state: &State, binding: usize, result: ExprId) -> bool {
+        let declared = &self.body.bindings[binding];
+        let value = &state.slots[binding].value;
+        declared.owner == self.graph.owner
+            && !matches!(declared.binding, ResolvedName::Parameter(_))
+            && !self.taken_storage(state, binding)
+            && !self.arenas.global(&value.modes.relation)
+            && value.sources().next().is_none()
+            && value.reached().iter().any(|root| *root != binding)
+            && self.property(result).is_some_and(|p| p.data)
+    }
     fn retain_binding_scope(&mut self, value: &mut Value, binding: usize) {
         if let Some(&scope) = self
             .graph
@@ -6380,14 +6399,14 @@ impl Checker<'_> {
                             value.modes.relation = Relation::environment();
                             continue;
                         };
-                        if let Some(arg) = requirements
-                            .iter()
-                            .position(|r| {
-                                r.as_ref()
-                                    .is_some_and(|r| r.parameter == parameter.0 as usize)
-                            })
-                            .and_then(|i| arguments.get(i))
-                        {
+                        let position = requirements.iter().position(|r| {
+                            r.as_ref()
+                                .is_some_and(|r| r.parameter == parameter.0 as usize)
+                        });
+                        let requirement_passing = position
+                            .and_then(|i| requirements[i].as_ref())
+                            .map(|r| r.passing);
+                        if let Some(arg) = position.and_then(|i| arguments.get(i)) {
                             let part = self.value(state, arg.value);
                             let mut retained = part.clone();
                             if let Some(source) = place(self.body, arg.value, self.source_rows) {
@@ -6504,12 +6523,30 @@ impl Checker<'_> {
                                 if within.is_some() && part.aliased() == Some(p.binding) {
                                     part.set_alias(None);
                                 }
-                                value.read_within(
-                                    p.binding,
-                                    within.as_deref().unwrap_or(&[]),
-                                    Site::Expression(arg.value),
-                                );
-                                if !computed && !arena_only {
+                                // MODE-1: relations compose through a local view.
+                                let composed = !computed
+                                    && within.is_none()
+                                    && requirement_passing == Some(PassingMode::Borrow)
+                                    && self.related_view(state, p.binding, *expression);
+                                if composed {
+                                    // It reads what the binding reaches, not
+                                    // the binding itself.
+                                    if part.aliased() == Some(p.binding) {
+                                        part.set_alias(None);
+                                    }
+                                    if self.emit
+                                        && !self.facts.composed_arguments.contains(&arg.value)
+                                    {
+                                        self.facts.composed_arguments.push(arg.value);
+                                    }
+                                } else {
+                                    value.read_within(
+                                        p.binding,
+                                        within.as_deref().unwrap_or(&[]),
+                                        Site::Expression(arg.value),
+                                    );
+                                }
+                                if !computed && !arena_only && !composed {
                                     self.retain_binding_scope(&mut value, p.binding);
                                 }
                             }

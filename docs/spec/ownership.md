@@ -157,6 +157,31 @@ result local. Non-global borrowed and `mut` values lend their bounds plus their 
 home; copies of non-flat local content keep lasting source bounds after access loans end.
 Plain results are independent bits.
 
+**Relations compose.** A local binding of the calling body (not a parameter, capture or
+temporary) whose value is related to other places (a call result related to its
+arguments, a borrowed view, a field read through its owner) lends a related `data`
+result ([GEN-1](generics.md#gen-1-bounds)) those places' bounds, and neither its binding
+home nor a read loan on itself, unless the result is related to a field path of it. The
+result reaches only content the binding reaches, never the binding's storage. So a result
+in `first`, where `first` is in `data`, is in `data`, and may outlive `first`:
+
+```hirsel
+fn skip(data: Bytes) -> Result[Bytes, u64] in data {
+  if bytes.len(data) == 0 { return Error(0) }
+  Ok(bytes.slice(data, 1, bytes.len(data)))
+}
+
+fn skip_twice(data: Bytes) -> Result[Bytes, u64] in data {
+  let first = skip(data)?
+  Ok(skip(first)?)                        // within data; `first` may end or be reassigned
+}
+```
+
+An owned binding, including any copy (`let y = copy x`), lends only itself: a copy is
+semantically a fresh value, whether or not an implementation elides the deep copy, so a
+result related to `y` stays local to `y`. A result that is not `data` (a callable, an
+iterator or an opaque value) may reach the binding's storage and keeps its binding home.
+
 A `sendable` requirement checks the content lent by the caller and stays available as
 evidence through the resulting view; it does not remove the view's own root or any other
 bound loan. A view cannot escape or be transferred as owned content on the strength of
