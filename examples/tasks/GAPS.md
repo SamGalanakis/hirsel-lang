@@ -6,7 +6,6 @@ routed it to @agentlang-24. The workarounds are marked `// GAP:` in the source.
 - #513128: std http cannot stream a server response, so `httpd.hir` serves HTTP/1.1 itself over a raw `Stream` and `datastar.new_sse` writes the response head by hand.
 - #513667: std's server request parser takes at most 16 headers and browsers send more, so `httpd.parse` calls `http_wire.parse_request` with room for 64.
 - #513132: a program cannot observe SIGINT or SIGTERM, so the server stops gracefully when its granted stdin ends or reads `quit`.
-- #513157: native builds refuse `String` literal patterns, so the status, priority, sort, mode and namespace parsers compare in turn.
 - #513475: a `unique` copy of part of a mutex payload is not sendable, and a record holding a `Mutex` or `Shared` handle is not sendable. So `app.board_snapshot` rebuilds the board with its constructor, and handlers take `state` and `assets` as separate parameters instead of inside `Services`.
 - #513531: a resource taken as a parameter and branded by a parameter `Net` cannot move into a task, so `app.serve` listens itself instead of taking a listener.
 - #513641: listeners do not set SO_REUSEADDR, so a restarted server cannot bind the port it just closed while its connections linger in TIME_WAIT. The end-to-end test runs on two ports.

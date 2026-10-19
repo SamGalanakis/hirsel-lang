@@ -54,14 +54,13 @@ fn flags() -> List[cli.Flag] uses {} {
 }
 
 fn level_from(text: String) -> Option[log.Level] uses {} {
-  let all: List[log.Level] = [Debug(), Info(), Warn(), Error()]
-  let names: List[String] = ["debug", "info", "warn", "error"]
-  for i in 0u64..list.len(names) {
-    if names[i] == text {
-      return Some(all[i])
-    }
+  match text {
+    "debug" => Some(Debug()),
+    "info" => Some(Info()),
+    "warn" => Some(Warn()),
+    "error" => Some(Error()),
+    _ => None(),
   }
-  None()
 }
 
 // The last occurrence of a flag, else the environment value, else the default.

@@ -99,25 +99,22 @@ pub fn priority_text(priority: Priority) -> String uses {} {
   }
 }
 
-// GAP: native builds refuse String literal patterns, so these parsers compare in turn.
 pub fn parse_status(text: String) -> Option[Status] uses {} {
-  let all: List[Status] = [Todo(), Doing(), Done()]
-  for status in all {
-    if status_text(status) == text {
-      return Some(status)
-    }
+  match text {
+    "todo" => Some(Todo()),
+    "doing" => Some(Doing()),
+    "done" => Some(Done()),
+    _ => None(),
   }
-  None()
 }
 
 pub fn parse_priority(text: String) -> Option[Priority] uses {} {
-  let all: List[Priority] = [Low(), Medium(), High()]
-  for priority in all {
-    if priority_text(priority) == text {
-      return Some(priority)
-    }
+  match text {
+    "low" => Some(Low()),
+    "medium" => Some(Medium()),
+    "high" => Some(High()),
+    _ => None(),
   }
-  None()
 }
 
 pub fn sort_text(sort: Sort) -> String uses {} {
@@ -130,13 +127,12 @@ pub fn sort_text(sort: Sort) -> String uses {} {
 }
 
 pub fn parse_sort(text: String) -> Sort uses {} {
-  let all: List[Sort] = [Manual(), Due(), PriorityFirst(), Title()]
-  for sort in all {
-    if sort_text(sort) == text {
-      return sort
-    }
+  match text {
+    "due" => Due(),
+    "priority" => PriorityFirst(),
+    "title" => Title(),
+    _ => Manual(),
   }
-  Manual()
 }
 
 /// The status after `status` when a task's status is advanced: todo, doing, done, todo.

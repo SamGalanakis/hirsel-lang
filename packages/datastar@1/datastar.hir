@@ -111,23 +111,17 @@ pub fn mode_text(mode: ElementPatchMode) -> String uses {} {
 
 /// The patch mode a protocol name denotes.
 pub fn mode_from_text(text: String) -> Option[ElementPatchMode] uses {} {
-  // GAP: native builds refuse String literal patterns, so this compares in turn.
-  let modes: List[ElementPatchMode] = [
-    Outer(),
-    Inner(),
-    Remove(),
-    Replace(),
-    Prepend(),
-    Append(),
-    Before(),
-    After()
-  ]
-  for mode in modes {
-    if mode_text(mode) == text {
-      return Some(mode)
-    }
+  match text {
+    "outer" => Some(Outer()),
+    "inner" => Some(Inner()),
+    "remove" => Some(Remove()),
+    "replace" => Some(Replace()),
+    "prepend" => Some(Prepend()),
+    "append" => Some(Append()),
+    "before" => Some(Before()),
+    "after" => Some(After()),
+    _ => None(),
   }
-  None()
 }
 
 /// The protocol name of a namespace.
@@ -141,14 +135,12 @@ pub fn namespace_text(namespace: Namespace) -> String uses {} {
 
 /// The namespace a protocol name denotes.
 pub fn namespace_from_text(text: String) -> Option[Namespace] uses {} {
-  // GAP: native builds refuse String literal patterns, so this compares in turn.
-  let namespaces: List[Namespace] = [Html(), Svg(), MathMl()]
-  for namespace in namespaces {
-    if namespace_text(namespace) == text {
-      return Some(namespace)
-    }
+  match text {
+    "html" => Some(Html()),
+    "svg" => Some(Svg()),
+    "mathml" => Some(MathMl()),
+    _ => None(),
   }
-  None()
 }
 
 // ---- events ----
