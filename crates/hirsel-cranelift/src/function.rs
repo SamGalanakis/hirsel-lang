@@ -132,6 +132,9 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     /// Storage version names: never operands, so they have no value.
     versions: BTreeSet<ValueId>,
     pub(crate) slots: Vec<Option<Place>>,
+    /// Slots that always hold one static's pointer-free bytes, addressed in place in
+    /// read-only data (`hirsel_lir::statics::constant_slots`).
+    pub(crate) constant_slots: Vec<Option<hirsel_lir::statics::ConstantSlot<'a>>>,
     pub(crate) addresses: Vec<Option<Place>>,
     /// Per address of a variable flat element, where its sequence's elements begin.
     pub(crate) flat_contents: Vec<Option<Value>>,
@@ -198,6 +201,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let environment = sig
             .hidden_index(Hidden::Environment)
             .map(|index| entry_params[index]);
+        let constant_slots = hirsel_lir::statics::constant_slots(unit, em.inputs.statics);
         let fuel_points = if em.inputs.fuel {
             hirsel_lir::fuel::fuel_points(unit)
         } else {
@@ -214,6 +218,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             values: vec![None; unit.values.len()],
             versions: BTreeSet::new(),
             slots: vec![None; unit.slots.len()],
+            constant_slots,
             addresses: vec![None; unit.addresses.len()],
             flat_contents: vec![None; unit.addresses.len()],
             flat_content: None,
@@ -862,7 +867,22 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 | SlotKind::Displaced => {}
             }
             let layout = self.lir_type(slot.ty)?.layout;
-            self.slots[s] = Some(self.stack(layout)?);
+            self.slots[s] = Some(match self.constant_slots[s] {
+                // Its bytes in a private read-only global named by their content, which every
+                // read indexes in place and no store writes.
+                Some(constant) => {
+                    let align = self.layout(layout)?.align;
+                    let data = self.em.constant_data(align, constant.bytes)?;
+                    Place {
+                        columns: None,
+                        ptr: self.data_addr(data, 0),
+                        layout,
+                        align,
+                        block: None,
+                    }
+                }
+                None => self.stack(layout)?,
+            });
         }
         for _ in &unit.tables.regions {
             let (record, _) = self.stack_bytes(REGION_RECORD_BYTES, 8);

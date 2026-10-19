@@ -220,6 +220,9 @@ meaning, TIR or LIR, and each falls back to the general path when its condition 
   finalizer whose tag is an ordinal or a niche) reads one immortal static block, named by
   the content of its layout and ordinal: it allocates nothing, and its release is a count
   test. It is never written: the box is shared, so a write copies first.
+- An inline aggregate slot whose only write is one constant (a `Repeat` table such as a
+  decimal-digit table) and which is only read is the private read-only data itself, named by
+  its content (`hirsel.data.<hash>`), and is indexed in place, never copied to the stack.
 - The deep copy of a block whose layout has no counted children is one allocation and one
   byte copy, with no visited map; a copy of a larger graph keeps its first visited blocks
   in place before using a map.

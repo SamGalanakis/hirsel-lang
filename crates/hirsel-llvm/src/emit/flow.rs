@@ -199,6 +199,32 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(())
     }
 
+    /// The place of a constant slot: its bytes in a private read-only global named by their
+    /// content, which every read indexes in place and no store writes.
+    fn constant_data(&mut self, layout: LayoutId, bytes: &[u8]) -> Emitted<Place<'m>> {
+        let align = self.layout(layout)?.align;
+        let name = hirsel_lir::statics::constant_data_name(align, bytes);
+        let ptr = match self.module.named_global(&name) {
+            Some(global) => global,
+            None => {
+                let ty = self
+                    .module
+                    .array_type(self.module.int_type(8), bytes.len() as u64);
+                let global = self.module.private_constant(&name, ty, align);
+                self.module
+                    .set_initializer(global, self.module.const_bytes(bytes));
+                global
+            }
+        };
+        Ok(Place {
+            columns: None,
+            ptr,
+            layout,
+            align,
+            block: None,
+        })
+    }
+
     pub(super) fn allocate_slots(&mut self) -> Emitted {
         let unit = self.unit;
         for (s, slot) in unit.slots.iter().enumerate() {
@@ -212,7 +238,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 | SlotKind::Displaced => {}
             }
             let layout = self.lir_type(slot.ty)?.layout;
-            self.slots[s] = Some(self.stack(layout)?);
+            self.slots[s] = Some(match self.constant_slots[s] {
+                Some(constant) => self.constant_data(layout, constant.bytes)?,
+                None => self.stack(layout)?,
+            });
         }
         let record = self
             .module

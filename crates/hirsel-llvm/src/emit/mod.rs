@@ -785,6 +785,9 @@ struct FnEmitter<'m, 'a> {
     viewed: Vec<bool>,
     /// Slots of root parameters that hand their length back to the caller.
     companion_slots: Vec<bool>,
+    /// Slots that always hold one static's pointer-free bytes, addressed in place in
+    /// read-only data (`hirsel_lir::statics::constant_slots`).
+    constant_slots: Vec<Option<hirsel_lir::statics::ConstantSlot<'a>>>,
     /// A root parameter slot's `defer` companion: false when its caller keeps the
     /// count in the block, so a `SeqSetLen` stores it and the return flushes.
     defer_params: Vec<Option<Value<'m>>>,

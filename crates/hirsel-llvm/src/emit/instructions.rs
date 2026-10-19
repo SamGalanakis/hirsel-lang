@@ -341,6 +341,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 }
                 self.define(result, value)
             }
+            // A constant slot's place already holds the stored static's bytes.
+            Inst::Store { address, value, .. }
+                if self
+                    .whole_slot(address)
+                    .and_then(|slot| self.constant_slots[slot.index()])
+                    .is_some_and(|constant| constant.stored == value) =>
+            {
+                Ok(())
+            }
             Inst::Store { address, value, .. } => {
                 let place = self.place(address)?;
                 let stored = if self.whole_slot(address).is_some() {

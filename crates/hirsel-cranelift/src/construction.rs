@@ -221,8 +221,14 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             }
             _ if ty.layout == held => {
                 let place = self.payload_of(header, held)?;
-                let shape = self.layout_shape(held)?;
-                Ok(self.load(shape, place))
+                Ok(match self.layout_shape(held)? {
+                    // Read-only data is never written while the value is live: no copy.
+                    Shape::Bytes { .. } => V::Mem {
+                        addr: place.ptr,
+                        slot: None,
+                    },
+                    shape => self.load(shape, place),
+                })
             }
             _ => self.invalid("a static read at another layout than its data"),
         }

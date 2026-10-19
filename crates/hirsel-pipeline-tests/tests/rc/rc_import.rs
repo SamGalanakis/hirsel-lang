@@ -897,3 +897,38 @@ fn a_boxed_nullary_variant_reads_one_static_block() {
         assert!(block.references.is_empty());
     }
 }
+
+/// A slot holding a constant inline table that is only read is a constant slot: native code
+/// indexes the table's read-only data in place. The local a program writes after copying
+/// the table into it stays an ordinary slot; the table it copies from is still constant.
+#[test]
+fn a_constant_table_read_in_place_is_a_constant_slot() {
+    use hirsel_lir::ir::SlotKind;
+    let table = (1..=16)
+        .map(|n| format!("{n}u8"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (_, lowered) = lower_valid(&format!(
+        "const T: Inline[u8, 16] = [{table}]\nfn get(i: u64) -> u8 {{ T[i] }}\nfn set(i: u64) -> u8 {{\n  let mut t = T\n  t[0] = 9u8\n  t[i]\n}}\nfn main() -> u64 {{ int.widen(get(1u64)) + int.widen(set(0u64)) }}",
+    ));
+    let constant = |name: &str| {
+        let unit = unit_named(&lowered, name);
+        let slots = hirsel_lir::statics::constant_slots(unit, &lowered.statics);
+        let bytes: Vec<Vec<u8>> = slots
+            .iter()
+            .flatten()
+            .map(|slot| slot.bytes.to_vec())
+            .collect();
+        let locals: Vec<bool> = unit
+            .slots
+            .iter()
+            .zip(&slots)
+            .filter(|(slot, _)| slot.kind == SlotKind::Local)
+            .map(|(_, constant)| constant.is_some())
+            .collect();
+        (bytes, locals)
+    };
+    let table: Vec<u8> = (1..=16).collect();
+    assert_eq!(constant("get"), (vec![table.clone()], vec![]));
+    assert_eq!(constant("set"), (vec![table], vec![false]));
+}

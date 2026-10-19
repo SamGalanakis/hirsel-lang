@@ -37,6 +37,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             deferred: vec![false; unit.slots.len()],
             viewed: vec![false; unit.slots.len()],
             companion_slots: vec![false; unit.slots.len()],
+            constant_slots: hirsel_lir::statics::constant_slots(unit, inputs.statics),
             defer_params: vec![None; unit.slots.len()],
             fresh_detaches: BTreeSet::new(),
             detach_untracked: BTreeMap::new(),

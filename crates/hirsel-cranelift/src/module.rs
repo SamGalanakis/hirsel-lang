@@ -665,6 +665,20 @@ impl<'a> Emitter<'a> {
             })
     }
 
+    /// The private read-only constant of `bytes` aligned to `align`, named by its content
+    /// (`hirsel_lir::statics::constant_data_name`): one per distinct table.
+    pub(crate) fn constant_data(&mut self, align: u32, bytes: &[u8]) -> Emitted<DataId> {
+        let name = hirsel_lir::statics::constant_data_name(align, bytes);
+        let (id, fresh) = self.declare_data(&name, Linkage::Local)?;
+        if fresh {
+            let mut description = DataDescription::new();
+            description.define(bytes.to_vec().into_boxed_slice());
+            description.set_align(u64::from(align));
+            self.define_data(&name, id, &description)?;
+        }
+        Ok(id)
+    }
+
     /// A fresh private constant of `bytes`, aligned to `align`.
     pub(crate) fn constant(&mut self, prefix: &str, bytes: Vec<u8>, align: u64) -> Emitted<DataId> {
         self.anonymous += 1;
