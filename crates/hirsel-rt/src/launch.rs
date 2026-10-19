@@ -815,6 +815,9 @@ pub struct RecordedRun {
     pub canonical: Vec<u8>,
     pub admitted_at: i64,
     pub revocation: Option<hirsel_run_config::RevocationEvidence>,
+    /// The run instance fixed at admission (RUN-11), for a run that calls runners or
+    /// answers a call; its header line is absent otherwise, so other tapes keep their bytes.
+    pub instance: Option<[u8; 16]>,
 }
 impl Recording {
     /// The bound run, checked against this header and its recorded admission without
@@ -839,6 +842,12 @@ impl Recording {
                 revocation: binding.revocation.clone(),
             },
         )?;
+        let expected = run.instance()?;
+        if binding.instance.is_some() != (expected.is_some() || run.calls())
+            || expected.is_some_and(|instance| binding.instance != Some(instance))
+        {
+            return Err(invalid("the run instance disagrees with its run record"));
+        }
         let config = run.config();
         if (config.hash_seed(), config.random_seed(), config.test_seed())
             != (self.hash_seed, self.random_seed, self.test_seed)
@@ -864,6 +873,9 @@ pub fn render_recording(record: &Recording) -> Result<String, String> {
             hex(&binding.canonical),
             binding.admitted_at
         );
+    }
+    if let Some(instance) = record.binding.as_ref().and_then(|b| b.instance) {
+        let _ = writeln!(text, "run_instance {}", hex(&instance));
     }
     if let Some(proof) = record.binding.as_ref().and_then(|b| b.revocation.as_ref()) {
         let _ = writeln!(
@@ -949,6 +961,7 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
     let (mut hash_seed, mut random_seed, mut test_seed) = (None, None, None);
     let (mut run, mut admitted_at) = (None, None);
     let mut revocation = None;
+    let mut instance = None;
     let mut arguments = vec![];
     let mut files = std::collections::BTreeMap::new();
     let mut links = std::collections::BTreeMap::new();
@@ -988,6 +1001,13 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
                     return Err("bad recorded admission time".into());
                 }
                 admitted_at = Some(at);
+            }
+            ["run_instance", value] if instance.is_none() => {
+                instance = Some(
+                    bytes(value)?
+                        .try_into()
+                        .map_err(|_| "bad recorded run instance")?,
+                );
             }
             ["revocation", reference, revision, revoked @ ("0" | "1")] if revocation.is_none() => {
                 revocation = Some(hirsel_run_config::RevocationEvidence {
@@ -1109,8 +1129,9 @@ pub fn parse_recording_prefix(text: &str) -> Result<(Recording, bool), String> {
                     canonical,
                     admitted_at,
                     revocation,
+                    instance,
                 }),
-                (None, None) if revocation.is_none() => None,
+                (None, None) if revocation.is_none() && instance.is_none() => None,
                 _ => return Err("a run record without its admission time".into()),
             },
             tree,

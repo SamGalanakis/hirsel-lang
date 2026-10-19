@@ -137,6 +137,16 @@ recorded Args/Env snapshots use the ordinary Library. `run_path`, `run_path_with
 entry points for semantic fixtures. Production native runs pass the same validated record
 to linking and launch; explicit host runs have streaming stdout and no harness wall-time limit.
 
+Runner calls on the host (`network/runners.rs`): `HostLibrary` keeps the interpreter's runner
+state, issues each send as a `RunnerCall` request and parks the caller's task on it. At the
+caller's idle point `take_calls` starts each callee as its own admitted run: a call-launch
+record of the callee's entry with the call record, the derived seeds and instance, the
+call form's grants and the place's admission policy, sharing the execution's stdout and its
+`Readiness` under the callee's tag, and journaling to `<tape>.call-<ordinal>` when the
+caller records (`RunnerContext`). A callee's end records `call_return` on its own tape and
+delivers its outcome to the caller's wait. Replay returns the recorded completion and starts
+nothing; `check_tapes` loads a set for `hirsel tapes check`.
+
 
 `native::build_path_native` checks a source or manifest and writes a standalone
 executable. Its entry adapter forwards nominal roots in source parameter order,

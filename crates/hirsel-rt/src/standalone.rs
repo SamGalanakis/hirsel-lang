@@ -232,6 +232,7 @@ mod tests {
                 canonical: run.canonical().to_vec(),
                 admitted_at: 0,
                 revocation: None,
+                instance: None,
             }),
             tree: crate::io::Tree::new(Default::default()).unwrap(),
             events: vec![],

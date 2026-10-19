@@ -3,14 +3,23 @@
 **Status: partly shipped.** `core@1` declares `Runner`, `Entry`, the outcome and grant
 types and every operation of the [ledger](#ledger), and the checker forms entries
 (RUN-3). The interpreter runs `local.threads@1` and `sim@1` places as callee runs of the
-caller's execution (RUN-1 to RUN-7, RUN-9, RUN-10's isolation and derived seeds, RUN-12)
-when a simulation fixture names the runners; a host launch of a record that names runners
-is refused at bind (`Unsupported` at `io.runners`), and the native engines report the
-operations unavailable. Linked tapes (RUN-11), recording levels (RUN-14), the arrival
-checks a place in this process does not pass by construction (RUN-8: the requested grant
-set's claim, `admit.safe@1`), code stores, and the `local.process@1` and `remote.tls@1`
-providers are planned. Items marked **Reserved** are designed here but have no
-implementation owner yet.
+caller's execution (RUN-1 to RUN-7, RUN-9, RUN-10's isolation and derived seeds, RUN-12),
+both under a simulation fixture and in a host launch. A host launch records linked tapes
+(RUN-11): with `--record T` each callee run that starts journals its own tape to
+`T.call-<ordinal>`, every tape replays alone, and `hirsel tapes check` joins a set. The
+arrival check covers the definition allowlists and a runner entry's `admit.safe@1` code
+policy (RUN-8). The native engines report the operations unavailable. Durable callee
+recording (RUN-14), code stores, and the `local.process@1` and `remote.tls@1` providers
+are planned. Items marked **Reserved** are designed here but have no implementation owner
+yet.
+
+**Interim deviations** of the shipped interpreter, until the codec forms land: the request
+digest frames the requested grant set and the allowlist as their canonical run-record JSON
+rather than codec bytes; a callee's outcome bytes are recorded as its tape's last event,
+`call_return ok|err|failed <bytes>`, rather than in the trailer, so the trailer stays
+`complete N`; and `local.threads@1` interleaves its callee runs with the caller on the
+caller's thread, bounded to `threads` running at once, rather than on operating-system
+threads.
 
 A **runner** is a place functions can run. The run configuration decides what each place
 is (threads in this process, a child process, another host, a node of a deterministic
@@ -507,7 +516,10 @@ simulation and replay ([providers](determinism.md#run-configuration)). Runners a
 in the `io` record under `runners`, sorted and unique by `name`. Each entry has `name`,
 `provider`, the provider's settings, the seam members `recording` (absent: the host's
 level), `retry` (default `{"attempts": 0}`), `cache` (default `null`) and `code` (default
-`{"provider": "code.none@1"}`), and, where the provider runs Hirsel code with authority,
+`{"provider": "code.none@1"}`), `admission` (default `null`: the place admits any checked
+code; `{"code": "admit.safe@1"}` refuses at arrival a callee that reaches an extern or
+`Unsafe` operation, with `NotRun(Denied())`, as the run record's `admission.code` does for
+a launch), and, where the provider runs Hirsel code with authority,
 `grants` (the same closed schema as `io`, without `runners`) and `definitions` (`null`
 for every definition, or a sorted unique list of full versioned paths). Examples are shown
 as grants-template input; the canonical record spells every absent member as `null`,

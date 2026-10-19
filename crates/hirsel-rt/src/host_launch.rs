@@ -79,6 +79,7 @@ fn header(
             canonical: run.canonical().to_vec(),
             admitted_at: admitted.evidence().at,
             revocation: admitted.evidence().revocation.clone(),
+            instance: admitted.instance(),
         }),
         tree,
         events: vec![],
@@ -124,25 +125,11 @@ pub fn durable(
 /// re-deriving every grant decision from that record. It acquires no host resource.
 /// The caller checks the run against the program it launches.
 pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
-    let invalid = |detail: String| RunRefusal::Invalid {
-        field: "recording".into(),
-        detail,
-    };
-    let bytes = std::fs::read(path).map_err(|e| invalid(format!("{}: {e}", path.display())))?;
-    let recording = if crate::journal::is_journal(&bytes) {
-        // A durable journal replays only when complete; otherwise recovery names what is in doubt.
-        let recovered = crate::journal::recover(&bytes).map_err(|e| invalid(e.to_string()))?;
-        if !recovered.complete() {
-            return Err(invalid(crate::journal::incomplete(&recovered)));
-        }
-        recovered.recording
-    } else {
-        String::from_utf8(bytes)
-            .map_err(|_| invalid("bad recording UTF-8".into()))
-            .and_then(|text| crate::launch::parse_recording(&text).map_err(invalid))?
-    };
+    let recording = read_recording(path)?;
     let run = recording.bound_run()?;
+    let instance = recording.binding.as_ref().and_then(|b| b.instance);
     let mut io = SimIo::new(recording.tree, recording.events);
+    io.instance = instance;
     io.set_projections(run.io_projections());
     io.set_mounts(
         run.record()
@@ -169,6 +156,27 @@ pub fn replay(path: &Path) -> Result<(SimIo, ValidatedRun), RunRefusal> {
     Ok((io, run))
 }
 
+/// A complete recording at `path`: a tape, or a durable journal that recovers complete.
+pub fn read_recording(path: &Path) -> Result<Recording, RunRefusal> {
+    let invalid = |detail: String| RunRefusal::Invalid {
+        field: "recording".into(),
+        detail,
+    };
+    let bytes = std::fs::read(path).map_err(|e| invalid(format!("{}: {e}", path.display())))?;
+    if crate::journal::is_journal(&bytes) {
+        // A durable journal replays only when complete; otherwise recovery names what is in doubt.
+        let recovered = crate::journal::recover(&bytes).map_err(|e| invalid(e.to_string()))?;
+        if !recovered.complete() {
+            return Err(invalid(crate::journal::incomplete(&recovered)));
+        }
+        Ok(recovered.recording)
+    } else {
+        String::from_utf8(bytes)
+            .map_err(|_| invalid("bad recording UTF-8".into()))
+            .and_then(|text| crate::launch::parse_recording(&text).map_err(invalid))
+    }
+}
+
 /// The process's standard input, read by the run that holds it.
 struct HeldStdin {
     input: std::io::Stdin,
@@ -183,6 +191,8 @@ impl std::io::Read for HeldStdin {
 pub struct HostGrants {
     /// Admit cooperative providers even when the record grants no tasks (the interpreter).
     always_cooperative: bool,
+    /// The readiness the run's providers park on, when its execution shares one (RUN-12).
+    readiness: Option<Readiness>,
     revocations: Option<hirsel_run_config::Revocations>,
     io: Option<RealIo>,
     output: Option<Box<dyn std::io::Write>>,
@@ -195,6 +205,7 @@ impl HostGrants {
     pub fn new(output: impl std::io::Write + 'static) -> Self {
         Self {
             always_cooperative: false,
+            readiness: None,
             revocations: None,
             io: None,
             output: Some(Box::new(output)),
@@ -214,6 +225,14 @@ impl HostGrants {
             ..Self::new(output)
         }
     }
+    /// Interpreter admission of a callee run (RUN-12): cooperative providers that park on
+    /// `readiness`, its caller's, under the callee's own tag.
+    pub fn sharing(output: impl std::io::Write + 'static, readiness: Readiness) -> Self {
+        Self {
+            readiness: Some(readiness),
+            ..Self::cooperative(output)
+        }
+    }
     /// Read the explicit host evidence exactly once, before admission.
     pub fn read_revocations(&mut self, path: &Path) -> Result<(), RunRefusal> {
         self.revocations = Some(hirsel_run_config::Revocations::read_path(path)?);
@@ -227,9 +246,10 @@ impl HostAuthority for HostGrants {
     fn authorize(&mut self, run: &hirsel_run_config::ValidatedRun) -> Result<(), RunRefusal> {
         let record = run.record();
         // Cooperative providers share one readiness, which the RealIo polls and records.
-        let readiness = (self.always_cooperative
-            || record.io.as_ref().is_some_and(|io| io.tasks.is_some()))
-        .then(Readiness::default);
+        let readiness = self.readiness.clone().or_else(|| {
+            (self.always_cooperative || record.io.as_ref().is_some_and(|io| io.tasks.is_some()))
+                .then(Readiness::default)
+        });
         let mounts = record
             .io
             .as_ref()
@@ -303,6 +323,15 @@ impl HostAuthority for HostGrants {
         }
         self.io = Some(io);
         Ok(())
+    }
+    fn run_instance(&mut self) -> Result<[u8; 16], RunRefusal> {
+        crate::io::RandomSource::System
+            .draw(16)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| RunRefusal::Unauthorized {
+                field: "io.runners: the host's secure generator is unavailable".into(),
+            })
     }
     fn revocation(&mut self, reference: &str) -> Result<RevocationEvidence, RunRefusal> {
         self.revocations

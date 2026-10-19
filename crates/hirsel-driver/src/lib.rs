@@ -387,18 +387,39 @@ pub(crate) fn bind_launch(
     program: &mut LoadedProgram,
     launch: HostLaunch<'_>,
 ) -> Result<BoundHostRun, ToolError> {
-    if matches!(
-        launch,
-        HostLaunch::Replay(_)
-            | HostLaunch::Live {
+    let refused =
+        |e: hirsel_run_config::RunRefusal| ToolError::Runtime(format!("replay refused: {e}"));
+    // A callee run's tape replays its callee entry (RUN-10, RUN-11).
+    let replay = match launch {
+        HostLaunch::Replay(tape) => {
+            let (io, run) = hirsel_rt::host_launch::replay(tape).map_err(refused)?;
+            if run.record().launch == hirsel_run_config::LaunchKind::Call {
+                program.entry = def_path(&run.record().entry).ok_or_else(|| {
+                    ToolError::Runtime("replay refused: the callee entry's path".into())
+                })?;
+            }
+            Some((io, run))
+        }
+        HostLaunch::Live { .. } => None,
+    };
+    if replay.is_some()
+        || matches!(
+            launch,
+            HostLaunch::Live {
                 record: Some(_),
                 ..
             }
-    ) {
+        )
+    {
         program.refuse_unreplayable()?;
     }
     let signature = launch_signature(program)?;
-    let kind = hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?;
+    let kind = match &replay {
+        Some((_, run)) if run.record().launch == hirsel_run_config::LaunchKind::Call => {
+            hirsel_run_config::LaunchKind::Call
+        }
+        _ => hirsel_engine::entry_launch_kind(&signature).map_err(ToolError::Launch)?,
+    };
     let revision = program
         .engine
         .semantic_program_revision(&program.entry)
@@ -407,8 +428,8 @@ pub(crate) fn bind_launch(
         None => hirsel_run_config::CodeReach::Safe,
         Some(reach) => hirsel_run_config::CodeReach::Escapes(reach.spelled()),
     };
-    match launch {
-        HostLaunch::Live { config, .. } => {
+    match (launch, replay) {
+        (HostLaunch::Live { config, .. }, _) => {
             let requested = config
                 .read(&revision, kind)
                 .map_err(|e| ToolError::Runtime(e.to_string()))?;
@@ -417,11 +438,7 @@ pub(crate) fn bind_launch(
                     .map_err(ToolError::Launch)?;
             Ok(BoundHostRun::Live(bound))
         }
-        HostLaunch::Replay(tape) => {
-            let refused = |e: hirsel_run_config::RunRefusal| {
-                ToolError::Runtime(format!("replay refused: {e}"))
-            };
-            let (io, run) = hirsel_rt::host_launch::replay(tape).map_err(refused)?;
+        (HostLaunch::Replay(_), Some((io, run))) => {
             let roots = hirsel_engine::entry_roots(&signature, kind).map_err(refused)?;
             let run = run
                 .bind(&hirsel_run_config::ProgramFacts::of(
@@ -431,7 +448,26 @@ pub(crate) fn bind_launch(
                 .into_run();
             Ok(BoundHostRun::Replay { run, io })
         }
+        (HostLaunch::Replay(_), None) => unreachable!("a replay reads its tape first"),
     }
+}
+
+/// A definition's canonical spelling (`package@version/module/name`) as a path.
+fn def_path(spelled: &str) -> Option<hirsel_syntax::DefPath> {
+    let (package, rest) = spelled.split_once('@')?;
+    let mut parts = rest.split('/');
+    let version = parts.next()?;
+    let mut modules: Vec<String> = parts.map(str::to_owned).collect();
+    let name = modules.pop()?;
+    let path = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+        package: hirsel_syntax::PackageId {
+            name: package.into(),
+            version: version.into(),
+        },
+        modules,
+        name,
+    });
+    (path.to_string() == spelled).then_some(path)
 }
 
 /// Bind a launch as [`bind_launch`] does, then admit a live one once on `host`, whose Io
@@ -510,13 +546,26 @@ fn run_path_on_host_observed(
     let mut program = COMPILER.with_verify(verify).load_program(path)?;
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
-    let signature = launch_signature(&mut program)?;
     let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
-    let (run, io) = match bind_host_run(&mut program, launch, host)? {
-        HostRun::Live { admitted, io } => (admitted.run().clone(), network::HostIo::Live(io)),
-        // A replay parks where the recording parked (its `blocked` and `ready` events).
-        HostRun::Replay { run, io } => (run, network::HostIo::Replay(io)),
+    let tape = match launch {
+        HostLaunch::Live { record, .. } => record.map(Path::to_path_buf),
+        HostLaunch::Replay(_) => None,
     };
+    let (run, io, instance) = match bind_host_run(&mut program, launch, host)? {
+        HostRun::Live { admitted, io } => (
+            admitted.run().clone(),
+            network::HostIo::Live(io),
+            admitted.instance(),
+        ),
+        // A replay parks where the recording parked (its `blocked` and `ready` events).
+        HostRun::Replay { run, io } => {
+            let instance = io.instance();
+            (run, network::HostIo::Replay(io), instance)
+        }
+    };
+    // A callee run's replay entered its callee entry (`bind_launch`).
+    let signature = launch_signature(&mut program)?;
+    let call = run.record().call.clone();
     let tir_run = hirsel_tir::RunConfiguration {
         entry: program.entry.clone(),
         hash_seed: run.record().inputs.hash_seed,
@@ -536,10 +585,38 @@ fn run_path_on_host_observed(
     }
     let mut operations = network::HostLibrary::new(&tir_run, &run, io)
         .map_err(|e| ToolError::Runtime(format!("host launch: {e:?}")))?;
-    let args = operations
-        .library
-        .entry_arguments(&signature)
-        .map_err(|e| ToolError::Runtime(format!("launch: {e:?}")))?;
+    let call_schemas = match &call {
+        Some(_) => Some(call_schemas(&signature, &runtime)?),
+        None => None,
+    };
+    if run.calls() || call.is_some() {
+        let callees = hirsel_engine::callee_facts(&mut program.engine, &program.entry)
+            .map_err(|e| program.error(e))?;
+        operations.set_runners(network::RunnerContext {
+            instance,
+            callees: std::sync::Arc::new(callees),
+            tape,
+            role: call_schemas.as_ref().map(|(schemas, _)| schemas.clone()),
+        });
+    }
+    let args = match (&call, &call_schemas) {
+        // A callee run enters with its place's Io and the argument its call carries.
+        (Some(call), Some((_, argument))) => {
+            let bytes = call
+                .argument()
+                .map_err(|e| ToolError::Runtime(format!("launch: {e}")))?;
+            let value = hirsel_interp::library::runners::decode(argument, &bytes, &runtime)
+                .map_err(|e| ToolError::Runtime(format!("launch: the call's argument: {e:?}")))?;
+            match call.form() {
+                hirsel_run_config::CallForm::Call => vec![operations.library.root_io(), value],
+                hirsel_run_config::CallForm::Compute => vec![value],
+            }
+        }
+        _ => operations
+            .library
+            .entry_arguments(&signature)
+            .map_err(|e| ToolError::Runtime(format!("launch: {e:?}")))?,
+    };
     let sources = program.engine.sources.clone();
     let execution = hirsel_interp::run_with_runtime(
         &mut program.engine,
@@ -574,6 +651,33 @@ fn run_path_on_host_observed(
         },
         error => ToolError::Runtime(format!("interpret: {error:?}")),
     })?;
+    // A callee run records its own outcome as it ended (RUN-11); replay checks it.
+    let end = match (&call, &execution.outcome) {
+        (Some(_), hirsel_interp::Outcome::Returned { value, .. }) => {
+            Some(hirsel_interp::CalleeEnd::Returned(value.clone()))
+        }
+        (Some(_), hirsel_interp::Outcome::Failed(_)) => {
+            Some(hirsel_interp::CalleeEnd::Failed(execution.failures.clone()))
+        }
+        _ => None,
+    };
+    if let Some(end) = end {
+        let (mut stdout, mut trace) = (vec![], vec![]);
+        let mut cx = hirsel_interp::OperationContext {
+            configuration: &tir_run,
+            sources: &sources,
+            stdout: &mut stdout,
+            trace: &mut trace,
+            trace_mode: runtime.trace_mode,
+            anchor: None,
+        };
+        operations.callee_return(&end, &mut cx).map_err(|e| {
+            ToolError::Runtime(match operations.refused.take() {
+                Some(refusal) if replay => format!("replay refused: {refusal}"),
+                _ => format!("the callee's outcome: {e:?}"),
+            })
+        })?;
+    }
     if let network::HostIo::Replay(io) = &mut operations.io {
         io.finish()
             .map_err(|e| ToolError::Runtime(format!("replay refused: {e:?}")))?;
@@ -590,9 +694,72 @@ fn run_path_on_host_observed(
     Ok(outcome)
 }
 
+/// A callee entry's call schemas and its argument's schema, from its checked signature.
+fn call_schemas(
+    signature: &hirsel_types::Signature,
+    runtime: &hirsel_interp::aggregate::RuntimeTypes,
+) -> Result<
+    (
+        hirsel_interp::CallSchemas,
+        hirsel_types::serialization::SerializableSchema,
+    ),
+    ToolError,
+> {
+    let invalid = || ToolError::Runtime("launch: a callee entry's signature".into());
+    let hirsel_types::SignatureKind::Function(function) = &signature.kind else {
+        return Err(invalid());
+    };
+    let schema = |ty| {
+        hirsel_types::serialization::serializable_schema(
+            &signature.types,
+            ty,
+            &hirsel_types::GenericDeclarations::default(),
+            &mut |path| Ok(runtime.serialization.get(path).cloned()),
+        )
+        .ok()
+        .flatten()
+        .ok_or_else(invalid)
+    };
+    let Some(hirsel_types::TypeKind::Named { arguments, .. }) =
+        signature.types.get(function.result).map(|t| &t.kind)
+    else {
+        return Err(invalid());
+    };
+    let [
+        hirsel_types::GenericArgument::Type(ok),
+        hirsel_types::GenericArgument::Type(error),
+    ] = arguments.as_ref()
+    else {
+        return Err(invalid());
+    };
+    let argument = function.parameters.last().ok_or_else(invalid)?.ty;
+    Ok((
+        hirsel_interp::CallSchemas {
+            result: schema(*ok)?,
+            error: schema(*error)?,
+            failure: hirsel_interp::library::runners::failure_schema(runtime)
+                .map_err(|_| invalid())?,
+        },
+        schema(argument)?,
+    ))
+}
+
 pub(crate) fn admission_time() -> Result<i64, ToolError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| ToolError::Runtime(e.to_string()))?;
     i64::try_from(now.as_nanos()).map_err(|e| ToolError::Runtime(e.to_string()))
+}
+
+/// `hirsel tapes check`: the joined check over linked tapes (RUN-11).
+pub fn check_tapes(
+    paths: &[std::path::PathBuf],
+) -> Result<hirsel_rt::tape_links::Links, Vec<String>> {
+    let mut tapes = vec![];
+    for path in paths {
+        let recording = hirsel_rt::host_launch::read_recording(path)
+            .map_err(|e| vec![format!("{}: {e}", path.display())])?;
+        tapes.push((path.display().to_string(), recording));
+    }
+    hirsel_rt::tape_links::check(&tapes)
 }

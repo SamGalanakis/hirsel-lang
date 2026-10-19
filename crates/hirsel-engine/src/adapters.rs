@@ -287,23 +287,58 @@ fn launch_error(error: hirsel_interp::library::LaunchError) -> RuntimeError {
     }
 }
 
+fn locate(
+    sources: &hirsel_span::SourceMap,
+    definition: &hirsel_syntax::DefPath,
+    span: hirsel_span::Span,
+) -> Option<hirsel_run_config::Site> {
+    let location = sources.location(span)?;
+    Some(hirsel_run_config::Site {
+        definition: definition.to_string(),
+        file: sources.file(span.file)?.path.to_string_lossy().into_owned(),
+        line: location.line.into(),
+        column: location.column.into(),
+    })
+}
+
+/// A language failure's chain, primary first, as the host sees it: a run's ending, or a
+/// callee run's (RUN-10).
+pub fn project_failures(
+    failures: &[hirsel_interp::observation::FailureRecord],
+    sources: &hirsel_span::SourceMap,
+) -> Result<RunOutcome, RuntimeError> {
+    let mut failures = failures.iter().map(|failure| {
+        Ok(hirsel_run_config::Failure {
+            rule: failure.failure.rule.to_string(),
+            site: locate(sources, &failure.anchor.definition, failure.anchor.site)
+                .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,
+            operation: failure
+                .operation
+                .as_ref()
+                .map(|anchor| {
+                    locate(sources, &anchor.definition, anchor.site).ok_or_else(|| {
+                        RuntimeError::Tool("failure operation has no source site".into())
+                    })
+                })
+                .transpose()?,
+        })
+    });
+    Ok(RunOutcome::Failed {
+        primary: failures
+            .next()
+            .ok_or_else(|| RuntimeError::Tool("failure has no primary record".into()))??,
+        causes: failures.collect::<Result<_, RuntimeError>>()?,
+    })
+}
+
 /// Resolve an evaluator ending into the shared host outcome. Both simulation and live
 /// interpretation use this projection, retaining the complete failure chain and waits.
 pub fn project_outcome(
     execution: &hirsel_interp::Execution,
     sources: &hirsel_span::SourceMap,
 ) -> Result<RunOutcome, RuntimeError> {
-    use hirsel_run_config::{ExecutionDiagnostic, Failure, Returned, Site, ToolingLimit, Wait};
-    let locate = |definition: &hirsel_syntax::DefPath, span: hirsel_span::Span| {
-        sources.location(span).and_then(|location| {
-            Some(Site {
-                definition: definition.to_string(),
-                file: sources.file(span.file)?.path.to_string_lossy().into_owned(),
-                line: location.line.into(),
-                column: location.column.into(),
-            })
-        })
-    };
+    use hirsel_run_config::{ExecutionDiagnostic, Returned, Site, ToolingLimit, Wait};
+    let locate = |definition: &hirsel_syntax::DefPath, span| locate(sources, definition, span);
     Ok(match &execution.outcome {
         hirsel_interp::Outcome::Returned { exit_code, .. } => {
             RunOutcome::Returned(if *exit_code == 0 {
@@ -312,30 +347,7 @@ pub fn project_outcome(
                 Returned::Error
             })
         }
-        hirsel_interp::Outcome::Failed(_) => {
-            let mut failures = execution.failures.iter().map(|failure| {
-                Ok(Failure {
-                    rule: failure.failure.rule.to_string(),
-                    site: locate(&failure.anchor.definition, failure.anchor.site)
-                        .ok_or_else(|| RuntimeError::Tool("failure has no source site".into()))?,
-                    operation: failure
-                        .operation
-                        .as_ref()
-                        .map(|anchor| {
-                            locate(&anchor.definition, anchor.site).ok_or_else(|| {
-                                RuntimeError::Tool("failure operation has no source site".into())
-                            })
-                        })
-                        .transpose()?,
-                })
-            });
-            RunOutcome::Failed {
-                primary: failures
-                    .next()
-                    .ok_or_else(|| RuntimeError::Tool("failure has no primary record".into()))??,
-                causes: failures.collect::<Result<_, RuntimeError>>()?,
-            }
-        }
+        hirsel_interp::Outcome::Failed(_) => project_failures(&execution.failures, sources)?,
         hirsel_interp::Outcome::Blocked(waits) => {
             let mut waits = waits
                 .iter()

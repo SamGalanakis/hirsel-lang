@@ -38,7 +38,18 @@ Invariants and boundary:
   `ProcessStdin` token, held from admission by the run whose record grants `io.stdin` and
   returned when its Io drops; admission refuses a second holder. `Execution` groups the runs
   that decide CONC-8 together: each started run begins its own until callee runs (`Selection`
-  for calls, runner-core) join their caller's.
+  for calls, runner-core) join their caller's. In the interpreter's host launch the runs of an
+  execution share one `Readiness`: a callee's tokens carry its tag in bits 48..61
+  (`Readiness::tagged`), each run takes only its own (`ready`), `deliver` readies a caller's
+  runner wait when its callee ends, and `has_ready` lets the driver ask every run before any
+  waits.
+- Runner calls are tape events (RUN-11): `runner_call` (the runner, form, path, grants,
+  allowlist, call key, digest and argument bytes) completes with `runner <outcome> <bytes>
+  <callee instance|none>`; `runner_cancel` and a callee's last event `call_return
+  ok|err|failed <bytes>` complete `ready`. The header records the `run_instance`.
+  `tape_links::check` is the joined check over a set of tapes (`hirsel tapes check`): each link
+  with both ends present must agree on digest, argument, form, path, callee instance and
+  outcome bytes; a link with one end missing is unchecked.
 - A launcher that reads the observation record also reads how a run stopped (`stopped
   refused|diverged|environmental ...`) and, from the file named by `HIRSEL_RT_REFUSAL`, a launch
   refused before entry (`refused <reason>`, a `RunRefusal`'s JSON when the host refused it);

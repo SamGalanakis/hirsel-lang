@@ -73,7 +73,7 @@ pub fn operation_dispatch()
     result
 }
 
-mod runners;
+pub mod runners;
 mod tasks;
 mod timers;
 

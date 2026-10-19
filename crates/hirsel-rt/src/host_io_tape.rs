@@ -89,6 +89,28 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         }
         Request::Process { io } => format!("process {io}"),
         Request::Ready { wait, points } => format!("ready {wait} {points}"),
+        // Every member is one word, so the request needs no counts.
+        Request::RunnerCall(call) => format!(
+            "runner_call {} {} {} {} {} {} {} {}",
+            hex(call.runner.as_bytes()),
+            call.form.name(),
+            hex(call.path.as_bytes()),
+            hex(&call.grants),
+            hex(&call.definitions),
+            hex(&call.key),
+            hex(&call.digest),
+            hex(&call.argument)
+        ),
+        Request::RunnerCancel { key, cause } => format!("runner_cancel {} {cause}", hex(key)),
+        Request::CallReturn(outcome) => match outcome {
+            hirsel_run_config::CalleeOutcome::Ok(bytes) => format!("call_return ok {}", hex(bytes)),
+            hirsel_run_config::CalleeOutcome::Err(bytes) => {
+                format!("call_return err {}", hex(bytes))
+            }
+            hirsel_run_config::CalleeOutcome::Failed(bytes) => {
+                format!("call_return failed {}", hex(bytes))
+            }
+        },
         Request::Schedule { count, choice } => format!("schedule {count} {choice}"),
         Request::RandomBytes { random, count } => format!("random_bytes {random} {count}"),
         Request::SleepUntil { clock, deadline } => format!("sleep_until {clock} {deadline}"),
@@ -213,6 +235,19 @@ pub(crate) fn render_completion(completion: &Completion) -> Option<String> {
         Completion::Env(Ok(Some(value))) => format!("env some {}", hex(value.as_bytes())),
         Completion::Env(Ok(None)) => "env none".into(),
         Completion::Blocked { committed } => format!("blocked {}", u8::from(*committed)),
+        Completion::Runner(completion) => {
+            use hirsel_run_config::CallOutcome::*;
+            let outcome = match &completion.outcome {
+                Ok(bytes) => format!("ok {}", hex(bytes)),
+                Failed(bytes) => format!("failed {}", hex(bytes)),
+                Faulted(bytes) => format!("faulted {}", hex(bytes)),
+                NotRun(reason) => format!("not_run {reason}"),
+                InDoubt(reason) => format!("in_doubt {reason}"),
+                Canceled(cause) => format!("canceled {cause}"),
+            };
+            let callee = completion.callee.map_or_else(|| "none".into(), |c| hex(&c));
+            format!("runner {outcome} {callee}")
+        }
         Completion::Ready => "ready".into(),
         Completion::Env(Err(EnvError::NotGranted)) => "env not_granted".into(),
         Completion::Env(Err(EnvError::InvalidUtf8)) => "env invalid_utf8".into(),
@@ -316,6 +351,12 @@ fn bytes(word: &str) -> Result<Vec<u8>, String> {
         return Err("noncanonical host input tape bytes".into());
     }
     Ok(bytes)
+}
+/// Exactly `N` bytes in lowercase hex.
+fn fixed<const N: usize>(word: &str) -> Result<[u8; N], String> {
+    bytes(word)?
+        .try_into()
+        .map_err(|_| "bad host input tape digest".into())
 }
 fn text(word: &str) -> Result<String, String> {
     String::from_utf8(bytes(word)?).map_err(|_| "bad host input tape UTF-8".into())
@@ -431,6 +472,36 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
             wait: number(wait)?,
             points: number(points)?,
         },
+        [
+            "runner_call",
+            runner,
+            form,
+            path,
+            grants,
+            definitions,
+            key,
+            digest,
+            argument,
+        ] => Request::RunnerCall(Box::new(hirsel_run_config::RunnerRequest {
+            runner: text(runner)?,
+            form: hirsel_run_config::CallForm::parse(form).ok_or("bad runner call form")?,
+            path: text(path)?,
+            grants: bytes(grants)?,
+            definitions: bytes(definitions)?,
+            key: fixed(key)?,
+            digest: fixed(digest)?,
+            argument: bytes(argument)?,
+        })),
+        ["runner_cancel", key, cause] => Request::RunnerCancel {
+            key: fixed(key)?,
+            cause: number(cause)?,
+        },
+        ["call_return", kind, value] => Request::CallReturn(match *kind {
+            "ok" => hirsel_run_config::CalleeOutcome::Ok(bytes(value)?),
+            "err" => hirsel_run_config::CalleeOutcome::Err(bytes(value)?),
+            "failed" => hirsel_run_config::CalleeOutcome::Failed(bytes(value)?),
+            _ => return Err("bad call return".into()),
+        }),
         ["schedule", count, choice] => Request::Schedule {
             count: number(count)?,
             choice: number(choice)?,
@@ -588,6 +659,24 @@ pub(crate) fn parse_completion(words: &[&str]) -> Result<Option<Completion>, Str
         ["blocked", "0"] => Completion::Blocked { committed: false },
         ["blocked", "1"] => Completion::Blocked { committed: true },
         ["ready"] => Completion::Ready,
+        ["runner", kind, value, callee] => {
+            use hirsel_run_config::CallOutcome::*;
+            Completion::Runner(hirsel_run_config::RunnerCompletion {
+                outcome: match *kind {
+                    "ok" => Ok(bytes(value)?),
+                    "failed" => Failed(bytes(value)?),
+                    "faulted" => Faulted(bytes(value)?),
+                    "not_run" => NotRun(number(value)?),
+                    "in_doubt" => InDoubt(number(value)?),
+                    "canceled" => Canceled(number(value)?),
+                    _ => return Err("bad runner outcome".into()),
+                },
+                callee: match *callee {
+                    "none" => None,
+                    callee => Some(fixed(callee)?),
+                },
+            })
+        }
         ["env", "not_granted"] => Completion::Env(Err(EnvError::NotGranted)),
         ["env", "invalid_utf8"] => Completion::Env(Err(EnvError::InvalidUtf8)),
         ["random", "ok", b] => Completion::Random(Ok(bytes(b)?)),

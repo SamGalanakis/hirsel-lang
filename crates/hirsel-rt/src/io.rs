@@ -495,6 +495,18 @@ pub enum Request {
         net: u64,
         path: String,
     },
+    /// A runner call (RUN-11): parked until its callee ends, then completed with its
+    /// outcome.
+    RunnerCall(Box<hirsel_run_config::RunnerRequest>),
+    /// A cancellation forwarded to the call with key `key` (RUN-9), acknowledged with
+    /// `Ready`.
+    RunnerCancel {
+        key: [u8; 32],
+        cause: u32,
+    },
+    /// A callee run's own outcome as it ended (RUN-11), acknowledged with `Ready`: replay
+    /// checks it, and a joined tape check compares it with its caller's completion.
+    CallReturn(hirsel_run_config::CalleeOutcome),
     /// A scheduling input of cooperative runs, never a capability request: the parked
     /// request of wait `wait` (creation ordinal) was ready at the scheduling point after the
     /// `points` it waited through since it parked or was last ready, and was re-issued there.
@@ -625,8 +637,11 @@ pub enum Completion {
     Blocked {
         committed: bool,
     },
-    /// The completion of a scheduling input, `Request::Ready` or `Request::Schedule`.
+    /// The completion of a scheduling input, `Request::Ready` or `Request::Schedule`, and
+    /// a forwarded cancellation's acknowledgement.
     Ready,
+    /// A runner call's outcome.
+    Runner(hirsel_run_config::RunnerCompletion),
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Fault {
@@ -1960,6 +1975,11 @@ pub trait Adapter {
     /// default (a scripted world) re-issues every parked request.
     fn ready(&mut self) -> Result<Ready, AdapterError> {
         Ok(Ready::Every)
+    }
+    /// Whether a parked request of this run is ready now, without taking it and without
+    /// waiting: an execution's idle runs ask before any of them waits (RUN-12).
+    fn has_ready(&mut self) -> Result<bool, AdapterError> {
+        Ok(false)
     }
     /// With no runnable task, wait until some parked request may be ready. False when no
     /// source can make one ready.

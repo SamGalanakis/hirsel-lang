@@ -34,6 +34,8 @@ pub struct RealIo {
     /// The host process provider, once a process entry handed its constructor over
     /// (`Adapter::process`); without it a host process call is a tool refusal.
     children: Option<Box<dyn crate::process::ProcessHost>>,
+    /// Runner call outcomes delivered and not yet taken, by wait token (RUN-11).
+    delivered: BTreeMap<u64, hirsel_run_config::RunnerCompletion>,
 }
 enum Input {
     Blocking(Box<dyn Read>),
@@ -171,6 +173,7 @@ impl RealIo {
             cooperative_net: false,
             test_clock: None,
             children: None,
+            delivered: BTreeMap::new(),
         })
     }
     /// Borrow the original admitted pins for every recorder check, without reopening paths.
@@ -219,6 +222,20 @@ impl RealIo {
     /// Streams ordinary completions; this tape has an unknown suffix after termination.
     pub fn record_to(&mut self, writer: crate::launch::RecordingWriter<File>) {
         self.journal_to(Box::new(crate::journal::TapeJournal(writer)));
+    }
+    /// The cooperative readiness this run parks on, which its callee runs share (RUN-12).
+    pub fn readiness(&self) -> Option<crate::readiness::Readiness> {
+        self.cooperative
+            .as_ref()
+            .map(|(readiness, _)| readiness.clone())
+    }
+    /// The outcome of the runner call parked under `token`: re-issuing the call completes
+    /// it, and the wait is ready at the next scheduling point.
+    pub fn deliver(&mut self, token: u64, completion: hirsel_run_config::RunnerCompletion) {
+        self.delivered.insert(token, completion);
+        if let Some((readiness, _)) = &self.cooperative {
+            readiness.deliver(token);
+        }
     }
     /// Record through `journal`, the recording level the run selected.
     pub fn journal_to(&mut self, journal: Box<dyn crate::journal::Journal>) {
@@ -636,6 +653,12 @@ impl Adapter for RealIo {
         }
         Ok(Ready::Tokens(tokens))
     }
+    fn has_ready(&mut self) -> Result<bool, AdapterError> {
+        match &self.cooperative {
+            Some((readiness, _)) => readiness.has_ready(),
+            None => Ok(false),
+        }
+    }
     fn wait(&mut self) -> Result<bool, AdapterError> {
         // The run would wait for the host: first close the journal's batch.
         if self.journal.idle().map_err(recording_failed)? {
@@ -657,6 +680,36 @@ fn recording_failed(error: std::io::Error) -> AdapterError {
 }
 impl RealIo {
     fn perform(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        match &request {
+            // A runner call completes with its delivered outcome, else waits for it.
+            Request::RunnerCall(_) => {
+                let (readiness, log) = self.cooperative.as_ref().ok_or_else(|| {
+                    AdapterError::Unsupported("a runner call without cooperative tasks".into())
+                })?;
+                let Some(completion) = self.delivered.remove(&log.current()) else {
+                    readiness.await_delivery();
+                    return Err(AdapterError::Blocked);
+                };
+                let completion = Completion::Runner(completion);
+                self.record(Event {
+                    request,
+                    completion: completion.clone(),
+                    fault: None,
+                })?;
+                return Ok(completion);
+            }
+            // The in-process place acknowledges a forwarded cancellation at once; a
+            // callee's outcome is recorded as it ended.
+            Request::RunnerCancel { .. } | Request::CallReturn(_) => {
+                self.record(Event {
+                    request,
+                    completion: Completion::Ready,
+                    fault: None,
+                })?;
+                return Ok(Completion::Ready);
+            }
+            _ => {}
+        }
         if matches!(request, Request::TestClock { .. }) {
             if self.cooperative.is_none() {
                 self.set_cooperative(Default::default());

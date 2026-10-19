@@ -13,6 +13,8 @@ pub struct SimIo {
     mount_pins: MountPins,
     /// The requests the tape records as `blocked`, parked again in replay.
     waits: crate::readiness::WaitLog,
+    /// The recorded run instance (RUN-11).
+    pub(crate) instance: Option<[u8; 16]>,
 }
 impl SimIo {
     pub fn set_env(&mut self, env: std::collections::BTreeMap<String, Option<String>>) {
@@ -49,7 +51,12 @@ impl SimIo {
             position: 0,
             roots: Default::default(),
             waits: Default::default(),
+            instance: None,
         }
+    }
+    /// The run instance the recording's header names, for a run that calls runners.
+    pub fn instance(&self) -> Option<[u8; 16]> {
+        self.instance
     }
     /// Configure only the virtual selectors and rights; replay acquires no host authority.
     pub fn set_mounts(
@@ -254,6 +261,21 @@ impl Adapter for SimIo {
             self.position += 1;
             self.waits.park(committed);
             return Err(AdapterError::Blocked);
+        }
+        // A runner call's recorded outcome stands in for its place; no callee runs.
+        match (&request, &event.completion) {
+            (Request::RunnerCall(_), Completion::Runner(_))
+            | (Request::RunnerCancel { .. } | Request::CallReturn(_), Completion::Ready)
+                if event.fault.is_none() =>
+            {
+                let completion = event.completion.clone();
+                self.position += 1;
+                return Ok(completion);
+            }
+            (Request::RunnerCall(_) | Request::RunnerCancel { .. } | Request::CallReturn(_), _) => {
+                return Err(AdapterError::InvalidCompletion);
+            }
+            _ => {}
         }
         let mut state = self.state.clone();
         let mut tree = self.tree.clone();

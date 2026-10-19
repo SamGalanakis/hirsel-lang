@@ -86,7 +86,10 @@ code objects.
 root definition and returns the shortest path to the first extern or
 `UnsafeOperation`-role core operation it reaches (CAP-6), or none. It is the
 checker query behind `hirsel check --safe` and the `admit.safe@1` admission
-policy; it adds nothing to TIR or LIR.
+policy; it adds nothing to TIR or LIR. `callee_facts(engine, entry)` lists, for each
+definition the entry's closure references as a value (a runner call's possible callee), its
+signature fingerprint, code hash and `unsafe_reach`, so a run's runner arrival checks the
+callee's identity and `admit.safe@1` without the engine (`SimulationConfig.callees`).
 
 Successful native import retains that same semantic graph privately in
 `ValidatedNativeInput`. Its `semantic_program_revision(entry)` works after the

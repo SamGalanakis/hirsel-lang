@@ -51,6 +51,10 @@ Commands (arguments use the shared lexopt parser):
 - `hirsel precheck <package manifest.json> -o <file>` checks the package as the only
   dependency of an empty program and writes its precheck (docs/building.md, "The std
   precheck"); a package with any diagnostic is refused.
+- `hirsel tapes check <tape>...` joins a set of linked runner tapes (docs/spec/runners.md,
+  RUN-11) without a program: it prints a `checked:` line per link whose ends are both in
+  the set, an `unchecked:` line per link with one end missing, and a count (exit 0), or
+  refuses the set on the first set of mismatches (`hirsel: tapes check: ...`, exit 1).
 - `--timings`, `--timings=json` and `--mem-usage`, anywhere before `--` on
   check, build, run and test, print the compile timings and heap report on
   stderr after the command (docs/building.md, "Compile timings"). Heap bytes
@@ -168,6 +172,9 @@ Blocked with its parked waits (exit 4), and `hirsel: environmental failure: ...`
 codec's operational budget. `--replay` takes no `--run`,
 `--grants` or `--record`, and neither option combines with `--simulation`. Executables
 spell them `--hirsel-record <tape>` (before their launch input) and `--hirsel-replay <tape>`.
+A recorded interpreter run whose record names runners also journals each callee run it
+starts to `<tape>.call-<ordinal>` (unless the runner's `recording` is `none`); each such
+tape is a call launch of the callee's entry and replays alone against the same program.
 
 Simulation writes stdout and stderr to distinct tool sinks. Live Stdin/Stderr and
 Env operations use the admitted runtime providers through HostLibrary; only exact

@@ -214,6 +214,26 @@ pub struct CalleeStart {
     pub budgets: RunBudgets,
     /// `sim@1`'s `crash` fault: the callee's place stops it after this many suspensions.
     pub crash_after: Option<u32>,
+    /// The call as a host provider admits its callee run.
+    pub call: CallStart,
+}
+/// A sent call as its callee run's record states it (RUN-10).
+pub struct CallStart {
+    /// The place: the runner entry the call went through.
+    pub runner: hirsel_run_config::RunnerEntry,
+    /// The grant set the request selected.
+    pub grants: hirsel_run_config::IoGrants,
+    pub form: hirsel_run_config::CallForm,
+    pub cause: hirsel_run_config::Cause,
+    pub argument: Vec<u8>,
+    pub schemas: CallSchemas,
+}
+/// The codec schemas of a call's result and error, and of a run's `Failure`.
+#[derive(Clone, Debug)]
+pub struct CallSchemas {
+    pub result: hirsel_types::serialization::SerializableSchema,
+    pub error: hirsel_types::serialization::SerializableSchema,
+    pub failure: hirsel_types::serialization::SerializableSchema,
 }
 /// How a callee run ended, as its caller's provider learns it.
 #[derive(Debug)]
@@ -385,6 +405,9 @@ operation_boundary! {
     /// Wait for external readiness only after runnable work is exhausted.
     /// False means no external source can make progress (CONC-8).
     fn wait(&mut self) -> Result<bool, Error> { Ok(false) }
+    /// Whether a parked operation is ready now, asked of every idle run of an execution
+    /// before any of them waits (RUN-12); never blocks.
+    fn ready_now(&mut self) -> Result<bool, Error> { Ok(false) }
     /// The callee runs this run's runner calls sent since the last take (RUN-10).
     fn take_calls(&mut self) -> Vec<CalleeStart> {
         vec![]
@@ -403,6 +426,13 @@ operation_boundary! {
     }
     /// A forwarded cancellation: cancel this callee run's root scope with cause `Parent`.
     fn cancel_run(&mut self) {}
+    /// This run, a callee, ended: its provider records its outcome (RUN-11).
+    fn callee_ended(&mut self,
+        _end: &CalleeEnd,
+        _runtime: &aggregate::RuntimeTypes,
+        _context: &mut OperationContext<'_>) -> Result<(), Error> {
+        Ok(())
+    }
     }
     required {
     fn call(&mut self,

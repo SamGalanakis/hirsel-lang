@@ -1621,6 +1621,10 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::LocalAddr { .. } => false,
             Request::UnixConnect { .. } => true,
             Request::UnixListen { .. } => false,
+            // A runner call is committed once sent; RUN-9 forwards its cancellation.
+            Request::RunnerCall(_) => false,
+            Request::RunnerCancel { .. } => false,
+            Request::CallReturn(_) => false,
             Request::Ready { .. } => false,
             Request::Schedule { .. } => false,
         };

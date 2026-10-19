@@ -226,11 +226,12 @@ fn callee_grants_are_an_io_record_without_stdin_or_runners() {
 }
 
 #[test]
-fn a_fixture_list_validates_alone_and_host_launches_refuse_runners() {
+fn a_fixture_list_validates_alone_and_host_launches_bind_runners() {
     let list = validate_runners(&serde_json::to_vec(&json!([node(), pool()])).unwrap()).unwrap();
     assert_eq!(list.len(), 2);
     assert!(validate_runners(b"[{\"name\": \"pool\"}]").is_err());
     let run = validate(&record(json!([pool()]))).unwrap();
+    assert!(run.calls());
     let facts = ProgramFacts {
         program: run.program(),
         entry: run.record().entry.clone(),
@@ -239,11 +240,81 @@ fn a_fixture_list_validates_alone_and_host_launches_refuse_runners() {
         code: CodeReach::Safe,
         fueled: true,
     };
+    run.clone().bind(&facts).unwrap();
+    let plain = validate(&record(json!([]))).unwrap();
+    assert!(!plain.calls());
+    plain.bind(&facts).unwrap();
+}
+
+#[test]
+fn a_place_admission_policy_is_admit_safe_or_absent() {
+    let safe = with(pool(), "admission", json!({"code": "admit.safe@1"}));
+    let list = validate_runners(&serde_json::to_vec(&json!([safe.clone()])).unwrap()).unwrap();
+    assert!(list[0].admits_only_safe());
+    let any = with(pool(), "admission", json!({"code": "admit.any@1"}));
+    let any = validate(&record(json!([any]))).unwrap();
     assert_eq!(
-        run.clone().bind(&facts).map(|_| ()),
-        Err(RunRefusal::Unsupported {
-            field: "io.runners".into()
-        })
+        any.canonical(),
+        validate(&record(json!([pool()]))).unwrap().canonical()
     );
-    validate(&record(json!([]))).unwrap().bind(&facts).unwrap();
+    let safe = validate(&record(json!([safe]))).unwrap();
+    assert!(canonical(&safe).contains(r#""admission":{"code":"admit.safe@1"}"#));
+    assert_ne!(safe.identity(), any.identity());
+    refused(
+        with(pool(), "admission", json!({"code": "admit.other@1"})),
+        "io.runners.admission.code",
+    );
+}
+
+fn call_record(launch: &str, call: Option<Value>) -> Value {
+    let mut record = record(json!([]));
+    record["launch"] = json!(launch);
+    if let Some(call) = call {
+        record["call"] = call;
+    }
+    record
+}
+
+fn call(form: &str, instance: &str) -> Value {
+    json!({"form": form, "cause": {"instance": instance, "ordinal": 3, "digest": "ab".repeat(32)}, "argument": "0102"})
+}
+
+#[test]
+fn a_call_member_is_present_exactly_for_a_call_launch() {
+    let instance = "0f".repeat(16);
+    let run = validate(&call_record("call", Some(call("compute", &instance)))).unwrap();
+    let cause = run.record().call.as_ref().unwrap().cause().unwrap();
+    assert_eq!(cause.ordinal, 3);
+    assert_eq!(
+        run.instance().unwrap(),
+        Some(callee_instance(&call_key(&[0x0f; 16], 3)))
+    );
+    assert_eq!(
+        run.record().call.as_ref().unwrap().argument().unwrap(),
+        vec![1, 2]
+    );
+    assert_eq!(
+        validate(&call_record("main", None))
+            .unwrap()
+            .instance()
+            .unwrap(),
+        None
+    );
+    for (record, field) in [
+        (call_record("call", None), "call"),
+        (call_record("main", Some(call("call", &instance))), "call"),
+        (
+            call_record("call", Some(call("transact", &instance))),
+            "call.form",
+        ),
+        (
+            call_record("call", Some(call("call", "0F"))),
+            "call.cause.instance",
+        ),
+    ] {
+        match validate(&record) {
+            Err(RunRefusal::Invalid { field: f, .. }) if f == field => {}
+            other => panic!("expected a refusal at {field}, got {other:?}"),
+        }
+    }
 }

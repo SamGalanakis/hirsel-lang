@@ -3,7 +3,9 @@
 //! they share nothing but the program. A run executes until none of its tasks can
 //! proceed, then the next ready run takes over, in the order they became ready. CONC-8
 //! is decided across the execution: it is Blocked only when no run has a ready task and
-//! none of their providers can make external progress.
+//! none of their providers can make external progress. Runs whose providers share one
+//! readiness (host runs) are asked whether a wait is ready before any of them sleeps, so a
+//! wakeup reaches the run it belongs to.
 use crate::eval::{Scheduler, Step, enter_checked, execute_frames};
 use crate::frame::Frame;
 use crate::*;
@@ -132,8 +134,33 @@ pub(crate) fn execute(
     let mut ready: VecDeque<usize> = VecDeque::from([0]);
     let result = 'run: loop {
         let Some(index) = ready.pop_front() else {
-            // Nothing is ready: let each idle run's provider make external progress,
-            // in run order (virtual time, host readiness).
+            // Nothing is ready: first the runs whose provider already has a ready wait,
+            // then let each idle run's provider make external progress, in run order
+            // (virtual time, host readiness).
+            let ready_now = |root: &mut dyn Operations, callees: &mut [Option<Callee>]| {
+                let mut now = vec![];
+                for index in 0..=callees.len() {
+                    let operations = match index {
+                        0 => &mut *root,
+                        i => match &mut callees[i - 1] {
+                            Some(callee) => callee.operations.as_mut(),
+                            None => continue,
+                        },
+                    };
+                    if operations.ready_now()? {
+                        now.push(index);
+                    }
+                }
+                Ok::<_, Error>(now)
+            };
+            match ready_now(root_operations, &mut callees) {
+                Ok(now) if !now.is_empty() => {
+                    ready.extend(now);
+                    continue;
+                }
+                Ok(_) => (),
+                Err(error) => break 'run Err(error),
+            }
             let mut progressed = None;
             for index in 0..=callees.len() {
                 let operations = match index {
@@ -153,7 +180,12 @@ pub(crate) fn execute(
                 }
             }
             match progressed {
-                Some(index) => ready.push_back(index),
+                // A shared readiness may have woken another run's wait.
+                Some(index) => match ready_now(root_operations, &mut callees) {
+                    Ok(now) if !now.is_empty() => ready.extend(now),
+                    Ok(_) => ready.push_back(index),
+                    Err(error) => break 'run Err(error),
+                },
                 None => {
                     let mut waits = root.waits();
                     for callee in callees.iter().flatten() {
@@ -231,8 +263,15 @@ pub(crate) fn execute(
                             ready.push_back(slot + 1);
                         }
                     } else {
-                        callees[slot] = None;
+                        let mut callee = callees[slot].take().unwrap();
                         ready.retain(|r| *r != slot + 1);
+                        if let Err(error) = callee.operations.callee_ended(
+                            &CalleeEnd::Canceled,
+                            runtime,
+                            &mut callee.run.context(sources, runtime),
+                        ) {
+                            break 'run Err(error);
+                        }
                         if let Err(error) = ended(
                             sources,
                             runtime,
@@ -296,8 +335,15 @@ pub(crate) fn execute(
             Err(error) => break Err(error),
         };
         if let Some(end) = end {
-            let callee = callees[index - 1].take().unwrap();
+            let mut callee = callees[index - 1].take().unwrap();
             ready.retain(|r| *r != index);
+            if let Err(error) = callee.operations.callee_ended(
+                &end,
+                runtime,
+                &mut callee.run.context(sources, runtime),
+            ) {
+                break Err(error);
+            }
             if let Err(error) = ended(
                 sources,
                 runtime,

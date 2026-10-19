@@ -11,15 +11,20 @@ ordered event replay. No host file, network, clock or entropy access occurs.
 `SimulationConfig.runners` names (`NotGranted()` otherwise); `test.runner` mints a
 `sim@1` runner modeling `local.threads@1` with empty grants; `runner.narrow` and
 `runner.only` mint narrower runners over the same place (RUN-2 coverage; an unsorted
-list refuses). A call encodes its argument through the canonical codec (a budget
-refusal is `NotRun(Rejected())`), checks the allowlist (`NotRun(Denied())`), then
+list refuses). Each call takes the next request ordinal. A call encodes its argument
+through the canonical codec (a budget refusal is `NotRun(Rejected())`), checks the
+allowlist and, for a runner entry admitting only safe code, that the callee reaches no
+extern or `Unsafe` operation (`SimulationConfig.callees`; both `NotRun(Denied())`), then
 cancellation (`Canceled(cause)`, nothing sent), then the place: capacity (`threads`
 plus `queue`, `NotRun(Overloaded())`) and a `sim@1` node's fault sites, each enabled
 once per run and fired per call from `SimulationConfig.fault_seed` by domain-separated
 hashes, re-sending a `NotRun` attempt up to the runner's `retry`. A sent call's callee
 world is the runner's grant set as root grants, with seeds and run instance derived
 from the call key (RUN-10), and its arguments are decoded fresh from the request bytes;
-the outcome crosses back the same way. `runner.entry_path` spells a FunctionReference's
+the outcome crosses back the same way. The host adapter reuses the same state: it takes the
+sends (`take_runner_sends`), starts each callee as its own admitted run, and completes the
+caller's wait with `runner_completed`; `callee_outcome` encodes a callee's end as the bytes its
+tape records. `runner.entry_path` spells a FunctionReference's
 definition.
 
 `launch` validates a pub monomorphic complete root-capability function returning

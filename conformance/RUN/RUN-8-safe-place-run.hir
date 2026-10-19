@@ -1,0 +1,29 @@
+// rule: RUN-8
+// expect: run
+// A place under admit.safe@1 refuses a callee that reaches an Unsafe operation with
+// NotRun(Denied()) before it runs, and runs one that reaches none.
+// runners: [{"name":"guarded","provider":"local.threads@1","admission":{"code":"admit.safe@1"},"grants":null,"definitions":null},{"name":"open","provider":"local.threads@1","grants":null,"definitions":null}]
+fn bump(permit: Unsafe, a: u64) -> u64 {
+  int.unchecked_add(permit, a, 1u64)
+}
+
+fn risky(a: u64) -> Result[u64, String] {
+  let _ = bump
+  Ok(a)
+}
+
+fn plain(a: u64) -> Result[u64, String] {
+  Ok(a + 1u64)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let guarded = io.runner(rt, "guarded")?
+  failure.check(
+    runner.compute(guarded, risky, 1u64) == Error(NotRun(Denied())),
+    Arithmetic()
+  )
+  failure.check(runner.compute(guarded, plain, 1u64) == Ok(2u64), Arithmetic())
+  let open = io.runner(rt, "open")?
+  failure.check(runner.compute(open, risky, 1u64) == Ok(1u64), Arithmetic())
+  Ok(())
+}

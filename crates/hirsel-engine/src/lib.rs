@@ -38,7 +38,9 @@ mod admission;
 mod proof_export;
 mod queries;
 mod tools;
-pub use admission::{admit_run, bind_run, entry_launch_kind, entry_roots, read_run_record};
+pub use admission::{
+    admit_run, bind_run, callee_facts, entry_launch_kind, entry_roots, read_run_record,
+};
 use hirsel_diag::{Diagnostic, RuleId};
 use hirsel_intern::Symbol;
 pub use hirsel_interp::library::SimulationConfig;

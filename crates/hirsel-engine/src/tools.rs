@@ -534,7 +534,7 @@ pub fn run_observed_checked(
 fn run_observed(
     engine: &mut QueryEngine,
     config: &RunConfiguration,
-    simulation: SimulationConfig,
+    mut simulation: SimulationConfig,
     checked: bool,
 ) -> Result<ObservedExecution, ToolError> {
     let error_sources = engine.sources.clone();
@@ -543,6 +543,10 @@ fn run_observed(
         phase: Some(QueryKind::Signature),
         sources: error_sources.clone(),
     };
+    if !simulation.runners.is_empty() {
+        simulation.callees =
+            std::sync::Arc::new(crate::callee_facts(engine, &config.entry).map_err(query_error)?);
+    }
     let signature = engine
         .item_signature(&config.entry)
         .map_err(query_error)?

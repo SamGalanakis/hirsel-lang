@@ -1,10 +1,12 @@
 //! Production entry selection and admission, before any evaluator starts.
+use crate::DefinitionQueries;
 use hirsel_run_config::{
-    AdmittedRun, BoundRun, CodeReach, HostAuthority, LaunchKind, ProgramFacts, ProgramRevision,
-    Root, RunConfig, RunRefusal, ValidatedRun,
+    AdmittedRun, BoundRun, CalleeFacts, CodeReach, HostAuthority, LaunchKind, ProgramFacts,
+    ProgramRevision, Root, RunConfig, RunRefusal, ValidatedRun,
 };
 use hirsel_syntax::Visibility;
 use hirsel_types::{GenericArgument, Signature, SignatureKind, TypeKind};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Read one explicit absolute record. Neither argv nor environment supplies grants.
@@ -14,6 +16,9 @@ pub fn read_run_record(path: &Path) -> Result<ValidatedRun, RunRefusal> {
 
 /// The exact nominal roots, in parameter order, of an eligible entry.
 pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root>, RunRefusal> {
+    if launch == LaunchKind::Call {
+        return callee_roots(signature);
+    }
     let invalid = |detail: &str| RunRefusal::Invalid {
         field: "entry".into(),
         detail: detail.into(),
@@ -88,6 +93,77 @@ pub fn entry_roots(signature: &Signature, launch: LaunchKind) -> Result<Vec<Root
         return Err(invalid("parameters do not match the launch kind"));
     }
     Ok(roots)
+}
+
+/// The roots of a callee run's entry (RUN-3, RUN-10): a complete, monomorphic Hirsel
+/// function of any visibility taking its argument, after the place's `Io` for the call
+/// form, and returning a `Result`.
+fn callee_roots(signature: &Signature) -> Result<Vec<Root>, RunRefusal> {
+    let invalid = || RunRefusal::Invalid {
+        field: "entry".into(),
+        detail: "expected a runner entry: fn(a: A) or fn(rt: Io, a: A), returning a Result".into(),
+    };
+    let SignatureKind::Function(function) = &signature.kind else {
+        return Err(invalid());
+    };
+    if !function.generics.is_empty() || function.incomplete || function.foreign.is_some() {
+        return Err(invalid());
+    }
+    let named = |ty, name: &str| {
+        matches!(
+            signature.types.get(ty).map(|t| &t.kind),
+            Some(TypeKind::Named { definition, .. })
+                if definition.package_is("core", "1")
+                    && definition.0.modules.is_empty()
+                    && definition.0.name == name
+        )
+    };
+    if !named(function.result, "Result") {
+        return Err(invalid());
+    }
+    match &function.parameters[..] {
+        [_] => Ok(vec![]),
+        [io, _] if named(io.ty, "Io") => Ok(vec![Root::Io]),
+        _ => Err(invalid()),
+    }
+}
+
+/// What a runner call carries for each callee entry `entry`'s closure names (RUN-8,
+/// RUN-11): every function reference to a definition a callee run can enter, with its
+/// own program revision, definition hash, signature fingerprint and reach (CAP-6).
+pub fn callee_facts(
+    engine: &mut crate::QueryEngine,
+    entry: &hirsel_syntax::DefPath,
+) -> Result<BTreeMap<String, CalleeFacts>, hirsel_types::QueryError> {
+    let hashes = engine.definition_hashes([entry.clone()])?;
+    let mut facts = BTreeMap::new();
+    for site in hashes.call_sites.values().flatten() {
+        let path = site.callee.to_string();
+        if !matches!(site.kind, hirsel_proof_export::CallSiteKind::Reference(_))
+            || facts.contains_key(&path)
+        {
+            continue;
+        }
+        let signature = engine.item_signature(&site.callee)?.value;
+        if callee_roots(&signature).is_err() {
+            continue;
+        }
+        let program = engine.semantic_program_revision(&site.callee)?.digest();
+        let reach = match engine.unsafe_reach(&site.callee)? {
+            None => CodeReach::Safe,
+            Some(reach) => CodeReach::Escapes(reach.spelled()),
+        };
+        facts.insert(
+            path,
+            CalleeFacts {
+                program,
+                code: site.hash.0,
+                fingerprint: signature.fingerprint.0,
+                reach,
+            },
+        );
+    }
+    Ok(facts)
 }
 
 /// Select the admission kind from the entry's checked nominal signature.

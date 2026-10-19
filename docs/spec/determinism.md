@@ -355,7 +355,7 @@ or continuation is refused.
 
 ### Runner and store recording
 
-Runner calls (planned) are recorded as [RUN-11](runners.md#run-11-linked-tapes) specifies:
+Runner calls are recorded as [RUN-11](runners.md#run-11-linked-tapes) specifies:
 one request and one completion at the caller, parked and readied under
 `tasks.cooperative@1` as network requests are, and replayed without contacting a place.
 Stores (planned) are Hirsel code over a `Dir`, so their effects are recorded as file

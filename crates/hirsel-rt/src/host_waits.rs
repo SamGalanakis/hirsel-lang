@@ -89,8 +89,8 @@ pub(crate) unsafe fn kind(ctx: *mut TaskCtx, token: u64) -> &'static str {
 }
 
 /// Whether `request` can wait for the host and so park its task: a stdin read, a timer
-/// wait, a process run or pipeline, a child or group write, read or wait, or a network
-/// request.
+/// wait, a process run or pipeline, a child or group write, read or wait, a runner call, or a
+/// network request.
 pub(crate) fn may_park(request: &Request) -> bool {
     matches!(
         request,
@@ -102,6 +102,7 @@ pub(crate) fn may_park(request: &Request) -> bool {
             | Request::ChildRead { .. }
             | Request::ChildWait { .. }
             | Request::GroupWait { .. }
+            | Request::RunnerCall(_)
     ) || crate::net::is_net_request(request)
 }
 

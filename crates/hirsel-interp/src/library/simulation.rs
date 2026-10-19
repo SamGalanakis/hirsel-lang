@@ -120,6 +120,8 @@ pub struct SimulationConfig {
     pub fault_seed: u64,
     /// This run's instance (RUN-11): call keys and callee seeds derive from it.
     pub instance: [u8; 16],
+    /// The callee entries the program names, by full versioned path (RUN-8, RUN-11).
+    pub callees: std::sync::Arc<BTreeMap<String, hirsel_run_config::CalleeFacts>>,
 }
 impl Default for SimulationConfig {
     fn default() -> Self {
@@ -156,6 +158,7 @@ impl Default for SimulationConfig {
             runners: vec![],
             fault_seed: 0,
             instance: [0; 16],
+            callees: Default::default(),
         }
     }
 }

@@ -191,8 +191,19 @@ default. `grants` is the callee's grant set, the `io` schema without `stdin` or
 `runners`, validated like `io`; `grants` and `definitions` (sorted, unique full
 versioned paths) are authority, spelled null when absent. `inputs.fault_seed` seeds
 `sim@1` fault decisions and is omitted when absent. `validate_runners` validates one
-list on its own, as a corpus fixture names it. `ValidatedRun::bind` refuses a record that
-names runners (`Unsupported` at `io.runners`): host launches do not yet run callees.
+list on its own, as a corpus fixture names it. A runner entry's `admission` (`{"code":
+"admit.safe@1"}`; `admit.any@1` normalizes to absence) is the place's code policy at arrival
+(`admits_only_safe`).
+
+A callee run's record (RUN-10) has `launch: call` and a `call` member, required exactly
+then: a `CallRecord` with the form (`compute` or `call`), the cause (the caller's 128-bit run
+instance, the request ordinal and the request digest, in lowercase hex) and the exact
+argument bytes. `calls.rs` holds the RUN-11 derivations both engines and the tape check
+share: `request_digest`, `call_key`, `callee_seed` and `callee_instance`, with the
+`RunnerRequest` and `RunnerCompletion` a caller records and the `CalleeOutcome` a callee
+records as it ends (`CallOutcome::carries` compares them). `ValidatedRun::instance` is the
+derived instance of a call launch; admission (`AdmittedRun::instance`) fixes it, or draws
+one from `HostAuthority::run_instance` for a run that names runners.
 
 `RunOutcome` is the host result of either engine. It retains the returned Result
 tag, the complete FAIL-1 chain, Blocked waits, budget/environmental stops,

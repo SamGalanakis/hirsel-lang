@@ -70,6 +70,7 @@ pub mod release;
 pub mod shared;
 pub mod stop;
 mod sync;
+pub mod tape_links;
 pub mod tasks;
 
 pub use alloc::{

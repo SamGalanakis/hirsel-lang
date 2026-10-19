@@ -176,6 +176,9 @@ pub fn replay_interpreter_with_fixture(
                 Request::Ready { .. } | Request::Schedule { .. } => {
                     panic!("the interpreter oracle runs no cooperative host scheduler")
                 }
+                Request::RunnerCall(_) | Request::RunnerCancel { .. } | Request::CallReturn(_) => {
+                    panic!("runner tapes replay through hirsel-cli's runner tests")
+                }
                 Request::RandomBytes { .. } | Request::SleepUntil { .. } => {
                     panic!("random and wait tapes replay through tests/it/waits.rs")
                 }

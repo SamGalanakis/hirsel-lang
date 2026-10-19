@@ -3,15 +3,17 @@ use hirsel_rt::io::*;
 use hirsel_rt::launch::{parse_tape, render_tape};
 use hirsel_rt::net::{NetOperation, NetRule, NetTimeout, RootsDigest, ShutdownHow, TimeoutKind};
 use hirsel_run_config::{
-    ChildStream, Command, ExitStatus, GroupOutput, PipelineOutcome, ProcessFailure, ProcessOutcome,
-    ProcessRule, Signal,
+    CallForm, CallOutcome, CalleeOutcome, ChildStream, Command, ExitStatus, GroupOutput,
+    PipelineOutcome, ProcessFailure, ProcessOutcome, ProcessRule, RunnerCompletion, Signal,
 };
 
 // The match is exhaustive: adding a Request variant requires a generated specimen here.
 macro_rules! requests {
-    ($($name:ident { $($field:ident: $value:expr),* }),* $(,)?) => {{
-        fn covered(request: &Request) { match request { $(Request::$name { .. } => (),)* } }
-        let values = vec![$(Request::$name { $($field: $value),* }),*];
+    ($($name:ident { $($field:ident: $value:expr),* }),*; $($tuple:ident($inner:expr)),* $(,)?) => {{
+        fn covered(request: &Request) {
+            match request { $(Request::$name { .. } => (),)* $(Request::$tuple(..) => (),)* }
+        }
+        let values = vec![$(Request::$name { $($field: $value),* },)* $(Request::$tuple($inner),)*];
         for request in &values { covered(request); }
         values
     }};
@@ -206,8 +208,20 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         LocalAddr { net: n.wrapping_add(17), listener: n.wrapping_add(13) },
         UnixConnect { net: n.wrapping_add(17), path: if n == 0 { String::new() } else { format!("{text}#path") } },
         UnixListen { net: n.wrapping_add(17), path: if n == 0 { String::new() } else { format!("{text}#path") } },
+        RunnerCancel { key: digest, cause: n as u32 },
         Ready { wait: n.wrapping_add(30), points: n.wrapping_add(20) },
-        Schedule { count: n.wrapping_add(2), choice: n % 2 }
+        Schedule { count: n.wrapping_add(2), choice: n % 2 };
+        RunnerCall(Box::new(hirsel_run_config::RunnerRequest {
+            runner: if n == 0 { String::new() } else { format!("{text}#runner") },
+            form: if n % 2 == 0 { CallForm::Compute } else { CallForm::Call },
+            path: format!("{text}#path"),
+            grants: bytes.clone(),
+            definitions: vec![b'n', n as u8],
+            key: digest,
+            digest: std::array::from_fn(|i| digest[31 - i]),
+            argument: bytes.clone(),
+        })),
+        CallReturn([CalleeOutcome::Ok(bytes.clone()), CalleeOutcome::Err(vec![]), CalleeOutcome::Failed(bytes.clone())][n as usize % 3].clone())
     }
 }
 
@@ -305,7 +319,7 @@ fn completions(n: u64) -> Vec<Completion> {
         }),
         Completion::Spawned(result!(n, process_error)),
         Completion::ChildUnit(result!((), process_error)),
-        Completion::ChildBytes(result!(bytes, process_error)),
+        Completion::ChildBytes(result!(bytes.clone(), process_error)),
         Completion::ChildExit(result!(ExitStatus::Signaled(n as i32), process_error)),
         Completion::GroupExit(result!(
             GroupOutput {
@@ -314,6 +328,18 @@ fn completions(n: u64) -> Vec<Completion> {
             },
             process_error
         )),
+        Completion::Runner(RunnerCompletion {
+            outcome: [
+                CallOutcome::Ok(bytes.clone()),
+                CallOutcome::Failed(vec![]),
+                CallOutcome::Faulted(vec![255]),
+                CallOutcome::NotRun(n as u32),
+                CallOutcome::InDoubt(n as u32),
+                CallOutcome::Canceled(n as u32),
+            ][n as usize % 6]
+                .clone(),
+            callee: (n % 2 == 0).then(|| [n as u8; 16]),
+        }),
         Completion::Blocked {
             committed: n % 2 == 0,
         },
@@ -356,6 +382,7 @@ fn completions(n: u64) -> Vec<Completion> {
             Completion::ChildBytes(_) => (),
             Completion::ChildExit(_) => (),
             Completion::GroupExit(_) => (),
+            Completion::Runner(_) => (),
             Completion::Blocked { .. } => (),
             Completion::Ready => (),
         }

@@ -12,13 +12,19 @@ use std::fmt;
 mod path;
 pub use path::confined_relative;
 
+mod calls;
 mod grants;
 mod runners;
+pub use calls::{
+    CallCause, CallForm, CallOutcome, CallRecord, CalleeFacts, CalleeOutcome, Cause,
+    RunnerCompletion, RunnerRequest, call_key, callee_instance, callee_seed, request_definitions,
+    request_digest, request_grants,
+};
 pub use grants::{
     grants_within, mount_within, net_operation_within, net_rule_within, process_rule_within,
 };
 pub use runners::{
-    DEFAULT_QUEUE, DEFAULT_THREADS, FaultRate, Retry, RunnerEntry, SIM_FAULT_SITES,
+    DEFAULT_QUEUE, DEFAULT_THREADS, FaultRate, PlaceAdmission, Retry, RunnerEntry, SIM_FAULT_SITES,
     sim_model_sites, validate_runners,
 };
 mod outcome;
@@ -175,6 +181,8 @@ impl ProviderContract {
 pub enum LaunchKind {
     Main,
     Test,
+    /// A callee run answering a runner call (RUN-10); its record has a `call` member.
+    Call,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -325,6 +333,10 @@ pub struct RunConfig {
     pub program: String,
     pub entry: String,
     pub launch: LaunchKind,
+    /// A callee run's call (RUN-10): present exactly when `launch` is `call`, and absent
+    /// from every other record's canonical bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub call: Option<CallRecord>,
     pub inputs: Inputs,
     pub io: Option<IoGrants>,
     pub args: Option<Vec<String>>,
@@ -599,6 +611,7 @@ impl RunConfig {
             program: hex(&program),
             entry,
             launch,
+            call: None,
             inputs: Inputs::default(),
             io: None,
             args: None,
@@ -625,6 +638,11 @@ impl RunConfig {
                 "entry",
                 "expected a full versioned definition path",
             ));
+        }
+        match (&record.call, record.launch) {
+            (Some(call), LaunchKind::Call) => call.validate()?,
+            (None, LaunchKind::Main | LaunchKind::Test) => {}
+            _ => return Err(invalid("call", "a call member exactly for a call launch")),
         }
         if let Some(scheduler) = &record.inputs.scheduler {
             provider("inputs.scheduler.algorithm", &scheduler.algorithm)?;
@@ -756,6 +774,24 @@ impl ValidatedRun {
     pub fn record(&self) -> &RunConfig {
         &self.record
     }
+    /// Whether the run calls runners, and so has a run instance.
+    pub fn calls(&self) -> bool {
+        self.record
+            .io
+            .as_ref()
+            .is_some_and(|io| !io.runners.is_empty())
+    }
+    /// A callee run's instance, derived from its call's key as its seeds are.
+    pub fn instance(&self) -> Result<Option<[u8; 16]>, RunRefusal> {
+        let Some(call) = &self.record.call else {
+            return Ok(None);
+        };
+        let cause = call.cause()?;
+        Ok(Some(callee_instance(&call_key(
+            &cause.instance,
+            cause.ordinal,
+        ))))
+    }
     pub fn canonical(&self) -> &[u8] {
         &self.canonical
     }
@@ -836,18 +872,6 @@ impl ValidatedRun {
         if self.budgets().is_some_and(|b| b.fuel.is_some()) && !facts.fueled {
             return Err(RunRefusal::Unsupported {
                 field: "budgets.fuel".into(),
-            });
-        }
-        // Host launches give callee runs neither host worlds nor linked tapes yet; a
-        // record naming runners runs only under a simulation fixture.
-        if self
-            .record
-            .io
-            .as_ref()
-            .is_some_and(|io| !io.runners.is_empty())
-        {
-            return Err(RunRefusal::Unsupported {
-                field: "io.runners".into(),
             });
         }
         Ok(BoundRun { run: self })
@@ -1000,6 +1024,11 @@ impl BoundRun {
                 at: now,
                 revocation,
             },
+            instance: match self.run.instance()? {
+                Some(instance) => Some(instance),
+                None if self.run.calls() => Some(host.run_instance()?),
+                None => None,
+            },
         })
     }
 }
@@ -1017,6 +1046,13 @@ pub trait HostAuthority {
     /// Pin the host authority the validated run's grants name.
     fn authorize(&mut self, run: &ValidatedRun) -> Result<(), RunRefusal>;
     fn revocation(&mut self, reference: &str) -> Result<RevocationEvidence, RunRefusal>;
+    /// A fresh run instance from the host's secure generator (RUN-11), for a run that calls
+    /// runners. A host without one cannot admit such a run.
+    fn run_instance(&mut self) -> Result<[u8; 16], RunRefusal> {
+        Err(RunRefusal::Unsupported {
+            field: "io.runners".into(),
+        })
+    }
 }
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1035,6 +1071,7 @@ pub struct AdmissionEvidence {
 pub struct AdmittedRun {
     run: ValidatedRun,
     evidence: AdmissionEvidence,
+    instance: Option<[u8; 16]>,
 }
 impl AdmittedRun {
     pub fn run(&self) -> &ValidatedRun {
@@ -1042,6 +1079,11 @@ impl AdmittedRun {
     }
     pub fn evidence(&self) -> &AdmissionEvidence {
         &self.evidence
+    }
+    /// The run instance fixed at admission (RUN-11): a callee run's derived one, or the
+    /// host's fresh one for a run that calls runners; none for any other run.
+    pub fn instance(&self) -> Option<[u8; 16]> {
+        self.instance
     }
 }
 

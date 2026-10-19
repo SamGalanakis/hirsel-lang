@@ -14,6 +14,8 @@ use hirsel_rt::{
 use hirsel_syntax::DefPath;
 use hirsel_types::{BuiltinType, Primitive};
 use std::collections::BTreeMap;
+mod runners;
+pub(crate) use runners::RunnerContext;
 
 fn invalid() -> Error {
     Error::InvalidTir("host network operation schema".into())
@@ -286,6 +288,7 @@ pub(crate) struct HostLibrary {
     /// The library's cancellation count at the last scheduling point.
     cancellations: u64,
     yield_now: bool,
+    runners: runners::HostRunners,
 }
 struct HostWait {
     name: String,
@@ -324,6 +327,12 @@ impl HostLibrary {
             random_seed: record.inputs.random_seed,
             test_seed: record.inputs.test_seed,
             scheduler: record.inputs.scheduler.clone(),
+            runners: record
+                .io
+                .as_ref()
+                .map(|io| io.runners.clone())
+                .unwrap_or_default(),
+            fault_seed: record.inputs.fault_seed.unwrap_or(0),
             ..Default::default()
         };
         let mut library = Library::new(run, config)?;
@@ -335,6 +344,7 @@ impl HostLibrary {
             ready: Ready::Tokens(Vec::new()),
             cancellations: 0,
             yield_now: false,
+            runners: Default::default(),
             library,
             io,
             refused: None,
@@ -1807,7 +1817,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             }
             live
         });
-        self.ready = if self.waits.is_empty() && armed.is_empty() {
+        self.ready = if self.waits.is_empty() && armed.is_empty() && !self.runner_waits() {
             Ready::Tokens(Vec::new())
         } else {
             self.io
@@ -1838,7 +1848,7 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         }
         // Keep entry order for the next poll's ties.
         self.armed.sort_by_key(|(token, _, _)| *token);
-        Ok(())
+        self.runner_children(cx)
     }
     fn wait(&mut self) -> Result<bool, Error> {
         self.io
@@ -1846,8 +1856,36 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             .wait()
             .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))
     }
+    fn ready_now(&mut self) -> Result<bool, Error> {
+        self.io
+            .adapter()
+            .has_ready()
+            .map_err(|e| Error::Unavailable(format!("host readiness: {e:?}")))
+    }
+    fn take_calls(&mut self) -> Vec<hirsel_interp::CalleeStart> {
+        self.runner_calls()
+    }
+    fn take_cancels(&mut self) -> Vec<u64> {
+        self.runner_cancels()
+    }
+    fn call_ended(
+        &mut self,
+        token: u64,
+        end: hirsel_interp::CalleeEnd,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        self.runner_ended(token, end, cx)
+    }
+    fn callee_ended(
+        &mut self,
+        end: &hirsel_interp::CalleeEnd,
+        _runtime: &hirsel_interp::aggregate::RuntimeTypes,
+        cx: &mut OperationContext<'_>,
+    ) -> Result<(), Error> {
+        self.callee_finished(end, cx)
+    }
     fn parked(&mut self, token: u64) {
-        if self.waits.contains_key(&token) {
+        if self.waits.contains_key(&token) || self.waits_on_runner(token) {
             self.io.adapter().parked(token);
         } else {
             self.library.parked(token);
@@ -1858,6 +1896,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         token: u64,
         cx: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
+        if self.waits_on_runner(token) {
+            return self.runner_poll(token, cx);
+        }
         let Some(wait) = self.waits.get(&token) else {
             return self.library.poll(token, cx);
         };
@@ -1970,6 +2011,14 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             }
             if name == "random.bytes" {
                 return self.host_random(call, cx);
+            }
+            if matches!(
+                name.as_str(),
+                "runner.compute" | "runner.call" | "runner.spawn"
+            ) {
+                let result = self.library.call(call, cx)?;
+                self.runner_sends(cx)?;
+                return Ok(result);
             }
             if name == "clock.sleep_until"
                 && call.arguments.first().is_some_and(|v| self.id(v).is_ok())

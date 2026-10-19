@@ -41,12 +41,21 @@ pub struct RunnerEntry {
     /// `code.none@1`, the place's own revision only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<serde_json::Value>,
+    /// The place's code policy (RUN-8 check 4): `admit.safe@1` refuses a callee that
+    /// reaches an escape (CAP-6). Its default, `admit.any@1`, is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<PlaceAdmission>,
     /// The grant set callees run under: the closed `io` schema without runners.
     #[serde(default)]
     pub grants: Option<IoGrants>,
     /// The definitions the runner runs, as full versioned paths; null runs any.
     #[serde(default)]
     pub definitions: Option<Vec<String>>,
+}
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlaceAdmission {
+    pub code: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -206,6 +215,21 @@ pub(crate) fn validate(
                 runner.code = None;
             }
         }
+        if let Some(admission) = &runner.admission {
+            match admission
+                .code
+                .as_deref()
+                .map(crate::ProviderContract::parse)
+            {
+                None | Some(Some(crate::ProviderContract::AdmitAny)) => runner.admission = None,
+                Some(Some(crate::ProviderContract::AdmitSafe)) => {}
+                Some(_) => {
+                    return Err(RunRefusal::Unsupported {
+                        field: "io.runners.admission.code".into(),
+                    });
+                }
+            }
+        }
         if let Some(io) = &mut runner.grants {
             if io.stdin.is_some() {
                 return Err(invalid(
@@ -263,6 +287,10 @@ impl RunnerEntry {
     }
     pub fn attempts(&self) -> u32 {
         self.retry.map_or(0, |r| r.attempts)
+    }
+    /// Whether the place admits only callees that reach no escape (CAP-6).
+    pub fn admits_only_safe(&self) -> bool {
+        self.admission.as_ref().is_some_and(|a| a.code.is_some())
     }
     /// The contract whose outcomes the runner produces: its own, or a node's model.
     pub fn contract(&self) -> &str {

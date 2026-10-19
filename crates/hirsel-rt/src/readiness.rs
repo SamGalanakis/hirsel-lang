@@ -5,7 +5,12 @@
 //! scheduling point asks [`Readiness::ready`] for exactly the tokens that are ready, at a cost
 //! independent of how many operations are parked, and with no runnable task
 //! [`Readiness::wait`] sleeps in one `epoll_wait` until a descriptor is ready or the earliest
-//! deadline passes. A timer wait is a deadline with no descriptor interest.
+//! deadline passes. A timer wait is a deadline with no descriptor interest. A runner call
+//! waits for a delivery: its callee's end makes it ready ([`Readiness::deliver`]).
+//!
+//! The runs of one execution (RUN-12) share one Readiness, so an idle execution sleeps on
+//! every run's interests at once. Each run's handle is [`tagged`](Readiness::tagged): its
+//! tokens carry the run's tag in bits 48 to 61, and it reports only its own tokens.
 use crate::id_map::{IdMap, IdSet};
 use crate::io::AdapterError;
 use crate::net::{NetError, SocketAddr};
@@ -19,7 +24,11 @@ use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 #[derive(Clone, Default)]
-pub struct Readiness(Rc<RefCell<ReadyState>>);
+pub struct Readiness(Rc<RefCell<ReadyState>>, u64);
+/// The token bits a run's tag occupies: above every interpreter and host wait token's
+/// counter, below the host's own token ranges (bits 62 and 63).
+const TAG_SHIFT: u32 = 48;
+const TAG_MASK: u64 = ((1 << 14) - 1) << TAG_SHIFT;
 #[derive(Default)]
 struct ReadyState {
     current: u64,
@@ -60,12 +69,45 @@ pub(crate) struct Pending {
     pub(crate) process: Option<crate::process::HostJob>,
     /// Its task parked ([`Readiness::parked`]): only then is it reported ready.
     parked: bool,
+    /// It waits for a delivery, not for a descriptor or deadline.
+    delivery: bool,
     /// What the epoll set and the timer heaps hold for this token.
     registered: Option<(libc::c_int, libc::c_short)>,
     timer: Option<Instant>,
     virtual_timer: Option<u64>,
 }
 impl Readiness {
+    /// The handle of run `tag` of this execution (the root is 0) on the same readiness.
+    pub fn tagged(&self, tag: u64) -> Self {
+        assert!(
+            tag << TAG_SHIFT & !TAG_MASK == 0,
+            "a run tag within 14 bits"
+        );
+        Self(self.0.clone(), tag << TAG_SHIFT)
+    }
+    /// `token` under this run's tag. Idempotent, so a tagged token passes through.
+    fn tag(&self, token: u64) -> u64 {
+        debug_assert!(
+            token & TAG_MASK & !self.1 == 0,
+            "a wait token within its tag bits"
+        );
+        token | self.1
+    }
+    fn own(&self, token: u64) -> bool {
+        token & TAG_MASK == self.1
+    }
+    /// The entered request waits for a delivery ([`deliver`](Self::deliver)).
+    pub(crate) fn await_delivery(&self) {
+        self.pending().delivery = true;
+    }
+    /// The delivery `token` waits for arrived: it is ready at the next scheduling point.
+    pub fn deliver(&self, token: u64) {
+        let token = self.tag(token);
+        let mut state = self.0.borrow_mut();
+        if state.pending.get(&token).is_some_and(|p| p.delivery) {
+            state.woken.insert(token);
+        }
+    }
     /// Harness-only virtual time: samples are stable while runnable work remains.
     pub(crate) fn virtual_clock(ticks: u64) -> Self {
         let readiness = Self::default();
@@ -85,9 +127,10 @@ impl Readiness {
 
     /// Select the opaque operation token before asking RealIo to execute a request.
     pub fn enter(&self, token: u64) {
-        self.0.borrow_mut().current = token;
+        self.0.borrow_mut().current = self.tag(token);
     }
     pub fn finish(&self, token: u64) {
+        let token = self.tag(token);
         let mut state = self.0.borrow_mut();
         state.touched.remove(&token);
         state.always.remove(&token);
@@ -101,6 +144,7 @@ impl Readiness {
     /// The task of the request blocked under `token` parked: from the next scheduling point
     /// on, [`ready`](Self::ready) reports the token when its interest is ready.
     pub fn parked(&self, token: u64) {
+        let token = self.tag(token);
         let mut state = self.0.borrow_mut();
         let virtual_time = state.virtual_time;
         let Some(pending) = state.pending.get_mut(&token) else {
@@ -122,7 +166,7 @@ impl Readiness {
         self.0
             .borrow()
             .pending
-            .get(&token)
+            .get(&self.tag(token))
             .is_none_or(|p| !p.committed)
     }
     /// A scheduling point: the parked tokens that are ready now (a watched descriptor is
@@ -130,29 +174,54 @@ impl Readiness {
     /// order. Never blocks; each ready token's operation is re-issued by the caller.
     pub fn ready(&self) -> Result<Vec<u64>, AdapterError> {
         let mut state = self.0.borrow_mut();
-        state.sync()?;
-        let mut ready = std::mem::take(&mut state.woken);
-        for token in state.always.members_unordered().collect::<Vec<_>>() {
-            ready.insert(token);
-        }
-        if !state.fds.is_empty() {
-            state.epoll_events(0, &mut ready)?;
-        }
-        state.due(&mut ready);
+        let woken = Self::poll(&mut state)?;
+        let others: Vec<u64> = woken
+            .members_unordered()
+            .filter(|t| !self.own(*t))
+            .collect();
+        let mut ready: Vec<u64> = woken.members_unordered().filter(|t| self.own(*t)).collect();
+        ready.extend(state.always.members_unordered().filter(|t| self.own(*t)));
+        ready.sort_unstable();
+        ready.dedup();
         let (mut parked, waiting): (Vec<u64>, Vec<u64>) = ready
-            .drain_unordered()
+            .into_iter()
             .filter(|token| state.pending.contains_key(token))
             .partition(|token| state.pending[token].parked);
-        // The idle wait's findings for a request whose task has not parked yet stay.
+        // The idle wait's findings for a request whose task has not parked yet stay, and so
+        // do the other runs' findings.
         let waiting: Vec<u64> = waiting
             .into_iter()
             .filter(|t| !state.always.contains(t))
             .collect();
-        for token in waiting {
+        for token in waiting.into_iter().chain(others) {
             state.woken.insert(token);
         }
         parked.sort_unstable();
-        Ok(parked)
+        Ok(parked.into_iter().map(|t| t & !TAG_MASK).collect())
+    }
+    /// Whether [`ready`](Self::ready) would report a token of this run now, without taking
+    /// any: what epoll and the timers found waits for that scheduling point.
+    pub fn has_ready(&self) -> Result<bool, AdapterError> {
+        let mut state = self.0.borrow_mut();
+        let woken = Self::poll(&mut state)?;
+        state.woken = woken;
+        let state = &*state;
+        Ok(state
+            .woken
+            .members_unordered()
+            .chain(state.always.members_unordered())
+            .any(|t| self.own(t) && state.pending.get(&t).is_some_and(|p| p.parked)))
+    }
+    /// Every token found ready so far: the idle wait's findings, the descriptors epoll
+    /// reports ready now, and the passed deadlines.
+    fn poll(state: &mut ReadyState) -> Result<IdSet, AdapterError> {
+        state.sync()?;
+        let mut ready = std::mem::take(&mut state.woken);
+        if !state.fds.is_empty() {
+            state.epoll_events(0, &mut ready)?;
+        }
+        state.due(&mut ready);
+        Ok(ready)
     }
     /// A timer wait for CLOCK_MONOTONIC `deadline` nanoseconds under the entered token:
     /// true once it has passed (the token's interest is then finished), otherwise the
@@ -238,7 +307,8 @@ impl ReadyState {
             let Some(pending) = self.pending.get_mut(&token) else {
                 continue;
             };
-            let (interest, registered) = (pending.interest, pending.registered);
+            let (interest, registered, delivery) =
+                (pending.interest, pending.registered, pending.delivery);
             let mut timers = Vec::new();
             if let Some(deadline) = pending.deadline
                 && pending.timer != Some(deadline)
@@ -266,7 +336,7 @@ impl ReadyState {
             {
                 self.unregister(token, fd);
             }
-            let mut always = !watched && !timed;
+            let mut always = !watched && !timed && !delivery;
             if let Some((fd, events)) = interest {
                 // Re-registered on every park, even unchanged: a descriptor closed and
                 // reopened under the same number left the epoll set when it closed.
