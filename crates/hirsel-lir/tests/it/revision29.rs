@@ -4,7 +4,7 @@
 use crate::support;
 
 use hirsel_core_contract::Passing;
-use hirsel_lir::codec::{CodecNode, CodecNodeId, CodecPlan, DECODE_ERRORS};
+use hirsel_lir::codec::{CodecCheck, CodecNode, CodecNodeId, CodecPlan, DECODE_ERRORS};
 use hirsel_lir::ir::*;
 use hirsel_lir::layout_types::*;
 use hirsel_lir::stage::Value;
@@ -33,6 +33,29 @@ enum Mutant {
     Path,
     /// A scalar node at a Path layout: the run-context identity is not data.
     PathScalar,
+    /// A checked node over a scalar rather than a record or variant.
+    CheckedValue,
+    /// A check whose FnAbi returns a u64 rather than a bool.
+    CheckedResult,
+    /// A checked node naming a check outside the plan's.
+    CheckedIndex,
+    /// A second check no checked node calls.
+    CheckedUnused,
+    /// An encode plan carrying the checks.
+    CheckedEncode,
+}
+
+impl Mutant {
+    fn checked(self) -> bool {
+        matches!(
+            self,
+            Mutant::CheckedValue
+                | Mutant::CheckedResult
+                | Mutant::CheckedIndex
+                | Mutant::CheckedUnused
+                | Mutant::CheckedEncode
+        )
+    }
 }
 
 /// Push `record` onto the fixture table.
@@ -72,8 +95,10 @@ fn at(offset: u64, layout: LayoutId) -> FieldLayout {
 }
 
 /// The plan of a u64 root: its scalar, the Bytes slice over a u8 sequence and,
-/// decoding, `Result[u64, DecodeError]`. Returns the plan and the result layout.
-fn plan(t: &mut Lir<Value>, decode: bool, m: Mutant) -> (CodecPlan, LayoutId) {
+/// decoding, `Result[u64, DecodeError]`. With `checked`, also a checked node over
+/// DecodeError's variant and its check (LIR schema revision 39). Returns the plan and
+/// the result layout.
+fn plan(t: &mut Lir<Value>, decode: bool, checked: bool, m: Mutant) -> (CodecPlan, LayoutId) {
     let mut storage = t.table.layouts[l::SEQ.0 as usize].clone();
     storage.kind = LayoutKind::Sequence { element: l::U8 };
     storage.size = SizeSpec::Dynamic(vec![
@@ -256,12 +281,47 @@ fn plan(t: &mut Lir<Value>, decode: bool, m: Mutant) -> (CodecPlan, LayoutId) {
         key: CodecNodeId(0),
         value: CodecNodeId(0),
     });
+    let mut checks = vec![];
+    if checked {
+        // DecodeError's variant: node 2 when decoding, else a node of its own.
+        let target = if decoding {
+            CodecNodeId(2)
+        } else {
+            nodes.push(CodecNode::Variant {
+                layout: error,
+                arms: vec![Vec::new(); classes],
+            });
+            CodecNodeId(nodes.len() as u32 - 1)
+        };
+        let (layout, value) = if m == Mutant::CheckedValue {
+            (l::U64, CodecNodeId(0))
+        } else {
+            (error, target)
+        };
+        nodes.push(CodecNode::Checked {
+            layout,
+            check: u32::from(m == Mutant::CheckedIndex),
+            value,
+        });
+        let returns = if m == Mutant::CheckedResult {
+            l::U64
+        } else {
+            l::BOOL
+        };
+        let abi = t.abi(&[(Passing::Borrow, layout)], Some(returns));
+        let symbol = t.symbol(SymbolKind::Function);
+        checks.push(CodecCheck { symbol, abi });
+        if m == Mutant::CheckedUnused {
+            checks.push(CodecCheck { symbol, abi });
+        }
+    }
     let plan = CodecPlan {
         descriptor: vec![4],
         nodes,
         root: CodecNodeId(0),
         bytes: CodecNodeId(1),
         result: decoding.then_some(CodecNodeId(3)),
+        checks,
     };
     (plan, result)
 }
@@ -277,7 +337,7 @@ fn encode(m: Mutant) -> Vec<K> {
     let mut t = Lir::<Value>::new(&[(Passing::Borrow, operand)], Some(produced));
     let x = t.plain(operand);
     t.param(x);
-    let (plan, _) = plan(&mut t, false, m);
+    let (plan, _) = plan(&mut t, false, m == Mutant::CheckedEncode, m);
     t.builder.unit.tables.codecs.push(plan);
     let r = t.owned(produced);
     t.builder.push(
@@ -302,7 +362,12 @@ fn decode(m: Mutant) -> Vec<K> {
     let mut t = Lir::<Value>::new(&[(Passing::Borrow, operand)], None);
     let x = t.plain(operand);
     t.param(x);
-    let (plan, result) = plan(&mut t, true, m);
+    let (plan, result) = plan(
+        &mut t,
+        true,
+        m.checked() || m == Mutant::None && CHECKED.get(),
+        m,
+    );
     t.builder.unit.tables.codecs.push(plan);
     let produced = if m == Mutant::Result { l::OPT } else { result };
     let abi = t.abi(&[(Passing::Borrow, operand)], Some(produced));
@@ -322,6 +387,39 @@ fn decode(m: Mutant) -> Vec<K> {
 
 fn either(case: fn(Mutant) -> Vec<K>, mutant: Mutant) -> impl Fn(bool) -> Vec<K> {
     move |m| case(if m { mutant } else { Mutant::None })
+}
+
+thread_local! {
+    /// Whether a mutant's valid decode twin carries a valid checked node.
+    static CHECKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A decode plan with a valid checked node, or the mutant that breaks it.
+fn checked_decode(m: Mutant) -> Vec<K> {
+    CHECKED.set(true);
+    let out = decode(m);
+    CHECKED.set(false);
+    out
+}
+
+/// Each mutant is accepted with its rule removed from `CodecPlan::check`: the value
+/// shape, `check_abi`, the check index, the called-check coverage and the encode rule.
+#[test]
+fn a_checked_node_checks_a_record_or_variant_with_its_bool_check() {
+    for mutant in [
+        Mutant::CheckedValue,
+        Mutant::CheckedResult,
+        Mutant::CheckedIndex,
+        Mutant::CheckedUnused,
+    ] {
+        pair(either(checked_decode, mutant), |k| {
+            *k == K::Type("codec plan")
+        });
+    }
+    // Encoding never calls a check, so an encode plan carries none.
+    pair(either(encode, Mutant::CheckedEncode), |k| {
+        *k == K::Type("codec plan")
+    });
 }
 
 #[test]

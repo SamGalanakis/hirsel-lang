@@ -672,6 +672,9 @@ pub struct TypeDefinition {
     pub implementation_authority: Option<AuthoritySummary>,
     /// Written public schema opt-in. Eligibility is independently checked (SER-1).
     pub serializable: bool,
+    /// `@serializable(check = function)` on an opaque type: its public schema
+    /// representation and the function that admits a decoded one (SER-1).
+    pub serializable_check: Option<SerializableCheck>,
     pub layout: Layout,
     pub distinct: bool,
     pub resource: bool,
@@ -682,6 +685,15 @@ pub struct TypeDefinition {
     /// The selected representation field ordinals (a distinct type's field is
     /// 0); empty in a public opaque export, which has no representation.
     pub captures: Option<SharedSlice<u32>>,
+}
+/// A checked opaque type's serialized form: its own representation, published as its
+/// wire contract, and `fn(value: T) -> bool uses {}` in its module, called on every
+/// decoded occurrence before the value is exposed (SER-1).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SerializableCheck {
+    pub function: DefPath,
+    /// The opaque's representation, indexing the signature's types.
+    pub representation: TypeId,
 }
 /// Every definition exposes one signature category (LANG-6).
 #[derive(Clone, Debug, Eq, PartialEq)]

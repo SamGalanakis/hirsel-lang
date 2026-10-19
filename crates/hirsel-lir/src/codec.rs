@@ -7,11 +7,14 @@
 //! holds no type, name or TypeId. `check` is the plan's independent agreement
 //! with a layout table; `program` lowers it to the runtime's codec program,
 //! the static data `hirsel_rt_v2_codec_encode` and `_decode` walk.
+use crate::abi_types::{AbiParameter, FnAbiId, ParameterPassing};
+use crate::ir::SymbolId;
 use crate::layout::{sequence_elements_offset, sequential_elements_offset, soa_data_offset};
 use crate::layout_types::{
     FieldLayout, LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScalarKind, SizeSpec, TagForm,
 };
 use hirsel_codec::{snapshot_enum, snapshot_struct};
+use hirsel_core_contract::Passing;
 
 /// Index into `CodecPlan::nodes`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -99,6 +102,24 @@ pub enum CodecNode {
     /// A core `Path`: a run-context path identity, encoded as its text (a
     /// `String`); decoding admits any UTF-8 text and interns it as `path.of`.
     Path(LayoutId),
+    /// A checked opaque type (SER-1, LIR schema revision 39): `value`, its
+    /// representation at the same layout, is the whole encoding. Decoding then
+    /// calls `CodecPlan::checks[check]` on every reconstructed occurrence, inner
+    /// occurrences first; the first `false` releases the value and decodes to
+    /// `DecodeError.Invalid`.
+    Checked {
+        layout: LayoutId,
+        check: u32,
+        value: CodecNodeId,
+    },
+}
+
+/// A checked opaque type's check: `fn(value: T) -> bool` (`symbol`, a unit
+/// function symbol, at `abi`), which borrows the value at the node's layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct CodecCheck {
+    pub symbol: SymbolId,
+    pub abi: FnAbiId,
 }
 
 impl CodecNode {
@@ -116,7 +137,8 @@ impl CodecNode {
             | Self::Sequence { layout, .. }
             | Self::Repeat { layout, .. }
             | Self::Map { layout, .. }
-            | Self::Set { layout, .. } => *layout,
+            | Self::Set { layout, .. }
+            | Self::Checked { layout, .. } => *layout,
         }
     }
 
@@ -128,7 +150,7 @@ impl CodecNode {
             | Self::Path(_)
             | Self::Text { .. }
             | Self::FlatText { .. } => vec![],
-            Self::Framed { value, .. } => vec![*value],
+            Self::Framed { value, .. } | Self::Checked { value, .. } => vec![*value],
             Self::Fields { fields, .. } => fields.clone(),
             Self::Variant { arms, .. } => arms.iter().flatten().copied().collect(),
             Self::Box { payload, .. } => vec![*payload],
@@ -154,10 +176,13 @@ pub struct CodecPlan {
     /// arm 0 holds `root` and whose arm 1 holds a `Variant` of exactly
     /// `DECODE_ERRORS` fieldless arms. None for an `Encode`.
     pub result: Option<CodecNodeId>,
+    /// The checks `Checked` nodes name (LIR schema revision 39); empty for a
+    /// plan that reaches no checked type, and for every `Encode`.
+    pub checks: Vec<CodecCheck>,
 }
 
 /// The `DecodeError` arms, in ordinal order (core-library.md).
-pub const DECODE_ERRORS: [&str; 10] = [
+pub const DECODE_ERRORS: [&str; 11] = [
     "Version",
     "SchemaMismatch",
     "Truncated",
@@ -168,6 +193,7 @@ pub const DECODE_ERRORS: [&str; 10] = [
     "Length",
     "Duplicate",
     "Order",
+    "Invalid",
 ];
 
 /// `ENTRIES` and `INDEX`: the fields of a Map or Set container payload.
@@ -215,6 +241,41 @@ fn prefixed(r: &LayoutRecord) -> Result<(u64, LayoutId), String> {
         }
         _ => Err("a codec node without flat length framing".into()),
     }
+}
+
+/// A check's `FnAbi`: a definition taking only the context and one borrowed
+/// value at `layout`, returning a `bool` with no caller site or destination.
+fn check_abi(table: &LayoutTable, abi: FnAbiId, layout: LayoutId) -> Result<(), String> {
+    let a = table
+        .fn_abis
+        .get(abi.0 as usize)
+        .ok_or("a check outside the FnAbi table")?;
+    let borrowed = |p: &AbiParameter| {
+        p.layout == layout
+            && p.convention == Passing::Borrow
+            && matches!(
+                p.passing,
+                ParameterPassing::ByValue | ParameterPassing::ReadOnlyAddress
+            )
+    };
+    let boolean = a
+        .result
+        .as_ref()
+        .and_then(|r| table.layout(r.layout))
+        .is_some_and(|r| r.kind == LayoutKind::Scalar(ScalarKind::Bool));
+    if a.shape != crate::abi_types::CallableShape::Definition
+        || !a.context
+        || a.environment
+        || a.caller_site
+        || a.destination
+        || a.diverges
+        || a.result_arena.is_some()
+        || !boolean
+        || !matches!(a.parameters.as_slice(), [p] if borrowed(p))
+    {
+        return Err("a check whose FnAbi is not fn(value: T) -> bool".into());
+    }
+    Ok(())
 }
 
 /// The payload of a block layout.
@@ -501,9 +562,58 @@ impl CodecPlan {
                     let (_, _, e, _) = container(table, *layout, "Set")?;
                     child(*element, e)?;
                 }
+                CodecNode::Checked {
+                    layout,
+                    check,
+                    value,
+                } => {
+                    if !matches!(
+                        self.node(*value)?,
+                        CodecNode::Fields { .. } | CodecNode::Variant { .. }
+                    ) {
+                        return Err(
+                            "a checked node over a value that is not a record or variant".into(),
+                        );
+                    }
+                    child(*value, *layout)?;
+                    let c = self
+                        .checks
+                        .get(*check as usize)
+                        .ok_or("a checked node without its check")?;
+                    check_abi(table, c.abi, *layout)?;
+                }
+            }
+        }
+        if self.result.is_none() && !self.checks.is_empty() {
+            return Err("an encode plan with checks".into());
+        }
+        // Each check borrows one layout: every node calling it is at that layout.
+        let layouts = self.check_layouts();
+        if layouts.contains(&None) {
+            return Err("a codec check no checked node calls".into());
+        }
+        for node in &self.nodes {
+            if let CodecNode::Checked { layout, check, .. } = node
+                && layouts.get(*check as usize).copied().flatten() != Some(*layout)
+            {
+                return Err("a codec check called at two layouts".into());
             }
         }
         Ok(())
+    }
+
+    /// Per check, the layout of the CHECKED node calling it: what the check borrows.
+    /// None for a check no node calls (which [`CodecPlan::check`] rejects).
+    pub fn check_layouts(&self) -> Vec<Option<LayoutId>> {
+        let mut out = vec![None; self.checks.len()];
+        for node in &self.nodes {
+            if let CodecNode::Checked { layout, check, .. } = node
+                && let Some(slot) = out.get_mut(*check as usize)
+            {
+                *slot = Some(*layout);
+            }
+        }
+        out
     }
 
     /// The layouts whose descriptor indices the program names: the blocks a
@@ -511,6 +621,12 @@ impl CodecPlan {
     /// `program` reports them.
     pub fn allocated(&self, table: &LayoutTable) -> Vec<LayoutId> {
         let mut out = vec![];
+        // A decode with checks releases a rejected value through its root's descriptor.
+        if !self.checks.is_empty()
+            && let Ok(root) = self.node(self.root)
+        {
+            out.push(root.layout());
+        }
         for node in &self.nodes {
             match node {
                 CodecNode::Text { storage, .. } => out.push(*storage),
@@ -534,7 +650,8 @@ impl CodecPlan {
                 | CodecNode::Framed { .. }
                 | CodecNode::Fields { .. }
                 | CodecNode::Variant { .. }
-                | CodecNode::Repeat { .. } => {}
+                | CodecNode::Repeat { .. }
+                | CodecNode::Checked { .. } => {}
             }
         }
         out.sort_unstable();
@@ -563,6 +680,11 @@ impl CodecPlan {
             u64::from(self.root.0),
             u64::from(top.0),
             u64::from(self.bytes.0),
+            if self.checks.is_empty() {
+                NO_NODE
+            } else {
+                descriptor(self.node(self.root)?.layout())?
+            },
         ];
         let table_at = words.len();
         words.resize(table_at + self.nodes.len(), 0);
@@ -587,6 +709,9 @@ impl CodecPlan {
                 }
                 CodecNode::Char(_) => body.extend([NODE_SCALAR, SCALAR_CHAR]),
                 CodecNode::Path(_) => body.push(NODE_PATH),
+                CodecNode::Checked { check, value, .. } => {
+                    body.extend([NODE_CHECKED, u64::from(*check), u64::from(value.0)])
+                }
                 CodecNode::Text { storage, utf8, .. } => {
                     body.extend([
                         NODE_TEXT,
@@ -851,7 +976,7 @@ fn scalar_code(kind: ScalarKind) -> Result<u64, String> {
 }
 
 /// The codec program's version and node kinds (`HIRSEL_RT_V2_CODEC_*`).
-pub const PROGRAM_VERSION: u64 = 3;
+pub const PROGRAM_VERSION: u64 = 4;
 pub const NODE_SCALAR: u64 = 0;
 pub const NODE_TEXT: u64 = 1;
 pub const NODE_FIELDS: u64 = 2;
@@ -869,6 +994,7 @@ pub const NODE_FLAT_SEQUENCE: u64 = 13;
 pub const NODE_SEQUENTIAL: u64 = 14;
 pub const NODE_COLUMNS: u64 = 15;
 pub const NODE_PATH: u64 = 16;
+pub const NODE_CHECKED: u64 = 17;
 /// A `NODE_SCALAR` code past the layout scalars: 4 bytes holding a Unicode
 /// scalar value.
 pub const SCALAR_CHAR: u64 = 13;
@@ -893,11 +1019,18 @@ snapshot_enum!(CodecNode {
     Framed { layout, value },
     Char(layout),
     Path(layout),
+    Checked {
+        layout,
+        check,
+        value
+    },
 });
+snapshot_struct!(CodecCheck { symbol, abi });
 snapshot_struct!(CodecPlan {
     descriptor,
     nodes,
     root,
     bytes,
-    result
+    result,
+    checks
 });

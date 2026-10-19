@@ -235,6 +235,7 @@ impl Fixture {
                 capability,
                 implementation_authority: None,
                 serializable: false,
+                serializable_check: None,
                 layout: Default::default(),
                 distinct: false,
                 resource: false,
@@ -945,7 +946,7 @@ fn golden_vectors() {
         std::fs::write(
             concat!(env!("CARGO_MANIFEST_DIR"), "/src/golden.txt"),
             format!(
-                "# Canonical signature encoding v15 and SHA-256 vectors\n{}\n",
+                "# Canonical signature encoding v16 and SHA-256 vectors\n{}\n",
                 rows.join("\n")
             ),
         )
@@ -1195,7 +1196,7 @@ fn hash_changes_with_noalloc_drop_bound() {
         canonical_encoding(&signature, &[])
             .unwrap()
             .windows(29)
-            .any(|w| w == b"hirsel.signature.encoding.v15")
+            .any(|w| w == b"hirsel.signature.encoding.v16")
     );
 }
 

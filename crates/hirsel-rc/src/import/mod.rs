@@ -820,6 +820,8 @@ trait Inline {
         abi: FnAbiId,
         arguments: Vec<CallArgument>,
     ) -> R<Option<ValueId>>;
+    /// The direct-call symbol and `FnAbi` of the nongeneric function `path`.
+    fn function(&mut self, path: &DefPath) -> R<(SymbolId, FnAbiId)>;
 }
 
 impl ImportCx<'_> {
@@ -921,6 +923,10 @@ impl ImportCx<'_> {
         self.im.layout_table()
     }
     /// Add a codec plan to the unit's codec table.
+    /// The direct-call symbol and `FnAbi` of the nongeneric function `path`.
+    pub fn function(&mut self, path: &DefPath) -> R<(SymbolId, FnAbiId)> {
+        self.im.function(path)
+    }
     pub fn codec(&mut self, plan: hirsel_lir::codec::CodecPlan) -> hirsel_lir::ir::CodecId {
         self.im.add_codec(plan)
     }

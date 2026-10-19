@@ -649,7 +649,7 @@ Completed detached children leave neither task rows nor scope child entries. Per
 spawn counters and empty active-scope stacks are retired at completion too. Scopes keep
 detached failure chains separately, sorted by spawn path, until their ordered join.
 
-Concrete generic type arguments travel with interpreter frames and captured closures, alongside lexical sizes. Named callable values close their actuals before escaping a frame. Type-directed codec operations use these declared type snapshots; ordinary parametric evaluation still uses the same TIR bodies.
+Concrete generic type arguments travel with interpreter frames and captured closures, alongside lexical sizes. Named callable values close their actuals before escaping a frame. Type-directed codec operations use these declared type snapshots; ordinary parametric evaluation still uses the same TIR bodies. A decode whose schema reaches checked opaque types (SER-1) reconstructs the whole value, then calls each check as a library callback, inner occurrences first: the first `false` returns `Error(Invalid)`, and a failing check is `Error::Ended`, which the run entry reports as `Outcome::Failed` without unwinding (FAIL-3).
 
 The scheduler reports CONC-8 Blocked after polling every parked operation when
 no task is runnable and `Operations::wait` finds no external wakeup source. This

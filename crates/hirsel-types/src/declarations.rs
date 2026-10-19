@@ -319,6 +319,7 @@ pub(crate) mod tests {
                 capability: None,
                 implementation_authority: None,
                 serializable: false,
+                serializable_check: None,
                 layout: Layout::default(),
                 resource: false,
                 distinct: false,

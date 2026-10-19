@@ -30,6 +30,7 @@ fn declaration(
             capability: None,
             implementation_authority: None,
             serializable: false,
+            serializable_check: None,
             layout: Layout {
                 flat,
                 ..Default::default()
@@ -61,8 +62,16 @@ fn capability() -> Signature {
     s
 }
 fn verdict(s: Signature, accepted: bool) {
+    verdict_with(s, vec![], accepted)
+}
+
+/// [`verdict`] with `extras` (a check's function) beside the declaration.
+fn verdict_with(s: Signature, extras: Vec<Signature>, accepted: bool) {
     let mut f = Fixture::unit();
     f.signatures.insert(path("Gate"), capability());
+    for extra in extras {
+        f.signatures.insert(extra.definition.clone(), extra);
+    }
     let mut base = f.signatures.clone();
     f.signatures.insert(s.definition.clone(), s.clone());
     let expected = if accepted {
@@ -902,6 +911,98 @@ fn unbounded_ir_parameters_are_conditional_never_a_published_bound() {
         d.bounds = vec![Bound::Serializable];
         verdict(s, false);
     }
+}
+
+#[test]
+fn a_checked_opaque_opt_in_names_an_exact_check_of_its_module() {
+    // An opaque type opts in through a check (SER-1): `@noalloc fn(value: T) -> bool
+    // uses {}` in T's own module. Without serialization::check_function the missing
+    // check, the other module's and every bad header below are accepted; without the
+    // rest of serialization::checked so are the transparent and bounded twins.
+    let named = |name: &str| TypeKind::Named {
+        definition: path(name),
+        arguments: vec![].into(),
+    };
+    let mut s = serializable_declaration(TypeKind::Primitive(Primitive::U8));
+    s.metadata.visibility = hirsel_syntax::Visibility::PublicOpaque;
+    let SignatureKind::Type(d) = &mut s.kind else {
+        unreachable!()
+    };
+    d.bounds.clear();
+    let number = d.representation.take().unwrap();
+    let representation = s.types.push(ty(TypeKind::Record(
+        vec![Field {
+            name: "number".into(),
+            ty: number,
+            growable: false,
+        }]
+        .into(),
+    )));
+    let SignatureKind::Type(d) = &mut s.kind else {
+        unreachable!()
+    };
+    d.serializable_check = Some(SerializableCheck {
+        function: path("valid"),
+        representation,
+    });
+    let good = || {
+        function_signature(
+            "valid",
+            vec![(PassingMode::Borrow, named("Data"))],
+            TypeKind::Primitive(Primitive::Bool),
+        )
+    };
+    verdict_with(s.clone(), vec![good()], true);
+    // A missing check, or one of another module.
+    verdict(s.clone(), false);
+    let mut elsewhere = good();
+    elsewhere.definition.0.modules = vec!["other".into()];
+    let mut moved = s.clone();
+    let SignatureKind::Type(d) = &mut moved.kind else {
+        unreachable!()
+    };
+    d.serializable_check.as_mut().unwrap().function = elsewhere.definition.clone();
+    verdict_with(moved, vec![elsewhere], false);
+    // Headers that are no check: allocating, with authority, a non-bool result, a
+    // mut value, another type's value.
+    let mut allocating = good();
+    let mut authorized = good();
+    if let SignatureKind::Function(f) = &mut allocating.kind {
+        f.allocation = Allocation::MayAllocate;
+    }
+    if let SignatureKind::Function(f) = &mut authorized.kind {
+        f.uses = Uses::Only(AuthoritySummary::Known(
+            vec![AuthorityTerm::Capability(path("Gate"))].into(),
+        ));
+    }
+    let wide = function_signature(
+        "valid",
+        vec![(PassingMode::Borrow, named("Data"))],
+        TypeKind::Primitive(Primitive::U8),
+    );
+    let mutating = function_signature(
+        "valid",
+        vec![(PassingMode::Mut, named("Data"))],
+        TypeKind::Primitive(Primitive::Bool),
+    );
+    let other = function_signature(
+        "valid",
+        vec![(PassingMode::Borrow, named("Gate"))],
+        TypeKind::Primitive(Primitive::Bool),
+    );
+    for bad in [allocating, authorized, wide, mutating, other] {
+        verdict_with(s.clone(), vec![bad], false);
+    }
+    // A checked declaration must be opaque and publish no structural bound.
+    let mut transparent = s.clone();
+    transparent.metadata.visibility = hirsel_syntax::Visibility::Private;
+    verdict_with(transparent, vec![good()], false);
+    let mut bounded = s;
+    let SignatureKind::Type(d) = &mut bounded.kind else {
+        unreachable!()
+    };
+    d.bounds = vec![Bound::Serializable];
+    verdict_with(bounded, vec![good()], false);
 }
 
 #[test]

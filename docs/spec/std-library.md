@@ -361,6 +361,12 @@ fraction digits. `date_time.to_string` joins them with `T`, and `date_time.parse
 `T` or `t` there and no offset. All three types format through `@format`, so f-string holes
 render the same text. Any other text is `Invalid`.
 
+`Date` and `TimeOfDay` are serializable through their checks
+([SER-1](serialization.md#ser-1-serializable-schemas)): each encodes as its fields
+(`year: i32, month: u8, day: u8` and `hour: u8, minute: u8, second: u8, nanosecond: u32`),
+and decoding admits exactly the fields `date.new` and `time_of_day.new` admit, otherwise
+`DecodeError.Invalid`. So `DateTime`, `BrokenDownTime` and `toml.Moment` are serializable.
+
 A fixed offset is `i32` seconds east of UTC, valid strictly inside ±26 hours (jiff's
 ±25:59:59); any other offset is `TimeError.OutOfRange`. `date_time.from_timestamp(ts, offset)`
 is the civil datetime of `ts` at `offset`, `OutOfRange` when that lies outside the date

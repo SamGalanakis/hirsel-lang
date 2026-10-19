@@ -164,6 +164,13 @@ impl<'a> Printer<'a> {
                                 self.path(&s.next)?,
                             ]),
                             AttributeArgument::Format(s) => self.path(&s.function)?,
+                            AttributeArgument::SerializableCheck(s) => cat([
+                                token("check"),
+                                Space,
+                                token("="),
+                                Space,
+                                self.path(&s.function)?,
+                            ]),
                             AttributeArgument::StatePromise(s) => join(
                                 s.selectors
                                     .iter()

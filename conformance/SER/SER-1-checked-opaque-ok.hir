@@ -1,0 +1,17 @@
+// rule: SER-1
+// expect: accept
+// An opaque type opts in by naming a check of its own module with the exact header
+// `@noalloc fn(value: T) -> bool uses {}`; the opt-in makes it serializable.
+@serializable(check = valid)
+pub opaque type Month: plain + key + sendable + inert + noalloc_drop uses {} {
+  number: u8,
+}
+
+@noalloc
+fn valid(value: Month) -> bool uses {} {
+  value.number >= 1 && value.number <= 12
+}
+
+fn read(bytes: Bytes) -> Result[List[Month], DecodeError] {
+  codec.decode(bytes)
+}

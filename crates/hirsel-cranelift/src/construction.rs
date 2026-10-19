@@ -301,7 +301,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
     }
 
     /// A codec plan as the runtime reads it: `{descriptor, descriptor length, program,
-    /// program length}`, private to the object, with every layout its program allocates
+    /// program length, check thunks, check count}`, private to the object, with every layout its program allocates
     /// described.
     pub(crate) fn codec(&mut self, codec: CodecId) -> Emitted<Value> {
         let unit = self.unit;
@@ -323,16 +323,21 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             .constant("hirsel.codec.descriptor", plan.descriptor.clone(), 1)?;
         let bytes = words.iter().flat_map(|w| w.to_le_bytes()).collect();
         let program = self.em.constant("hirsel.codec.program", bytes, 8)?;
-        let mut image = vec![0u8; 32];
+        let checks = self.codec_checks(plan)?;
+        let mut image = vec![0u8; 48];
         image[8..16].copy_from_slice(&(plan.descriptor.len() as u64).to_le_bytes());
         image[24..32].copy_from_slice(&(words.len() as u64).to_le_bytes());
+        image[40..48].copy_from_slice(&(plan.checks.len() as u64).to_le_bytes());
         self.em.anonymous += 1;
         let name = format!("hirsel.codec.{}", self.em.anonymous);
         let (id, _) = self.em.declare_data(&name, Linkage::Local)?;
         let mut description = DataDescription::new();
         description.define(image.into_boxed_slice());
         description.set_align(8);
-        for (offset, target) in [(0, descriptor), (16, program)] {
+        for (offset, target) in [(0, descriptor), (16, program)]
+            .into_iter()
+            .chain(checks.map(|table| (32, table)))
+        {
             let gv = self
                 .em
                 .module
@@ -341,6 +346,87 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         }
         self.em.define_data(&name, id, &description)?;
         Ok(self.data_addr(id, 0))
+    }
+
+    /// The table of a decode plan's check thunks (SER-1), or None without checks.
+    fn codec_checks(
+        &mut self,
+        plan: &hirsel_lir::codec::CodecPlan,
+    ) -> Emitted<Option<cranelift_module::DataId>> {
+        if plan.checks.is_empty() {
+            return Ok(None);
+        }
+        let mut thunks = Vec::with_capacity(plan.checks.len());
+        for (check, layout) in plan.checks.iter().zip(plan.check_layouts()) {
+            let Some(layout) = layout else {
+                return self.invalid("a codec check no CHECKED node calls");
+            };
+            let Some(symbol) = self.unit.tables.symbols.get(check.symbol.index()) else {
+                return self.invalid("a codec check outside the symbol table");
+            };
+            let definition = symbol.definition.clone();
+            let abi = self.em.fn_abi(check.abi, &definition)?;
+            let name = self.named_function(check.symbol, abi)?;
+            let signature = self.em.entry_signature(abi, &definition)?;
+            if signature
+                .hidden
+                .iter()
+                .any(|h| !matches!(h, Hidden::Context | Hidden::Result))
+            {
+                return self.invalid("a codec check with a hidden slot besides its result");
+            }
+            let body = self.em.import_function(&name, &signature.ir)?;
+            let [parameter] = abi.parameters.as_slice() else {
+                return self.invalid("a codec check without exactly one parameter");
+            };
+            let slots = match parameter.passing {
+                hirsel_lir::abi_types::ParameterPassing::ReadOnlyAddress => None,
+                hirsel_lir::abi_types::ParameterPassing::ByValue => {
+                    let scalars = &self.layout(layout)?.abi.scalars;
+                    if scalars.len() != parameter.slots.len() {
+                        return self.invalid("a codec check's slots differ from its layout's");
+                    }
+                    Some(
+                        scalars
+                            .iter()
+                            .zip(&parameter.slots)
+                            .map(|(&(offset, _), slot)| (offset, crate::module::physical(slot.ty)))
+                            .collect(),
+                    )
+                }
+                _ => return self.invalid("a codec check's value passed other than by borrow"),
+            };
+            let register = signature.value.is_some();
+            let mut sig = cranelift_codegen::ir::Signature::new(self.em.call_conv);
+            sig.params.extend([
+                cranelift_codegen::ir::AbiParam::new(PTR),
+                cranelift_codegen::ir::AbiParam::new(PTR),
+                cranelift_codegen::ir::AbiParam::new(PTR),
+            ]);
+            sig.returns
+                .push(cranelift_codegen::ir::AbiParam::new(types::I8).uext());
+            let thunk = self.em.helper(&format!("hirsel.check.{name}"), &sig, |_| {
+                crate::module::Helper::Check(crate::module::CheckThunk {
+                    body,
+                    slots,
+                    register,
+                })
+            })?;
+            thunks.push(thunk);
+        }
+        let word = u64::from(self.em.inputs.target.pointer_bytes) as usize;
+        self.em.anonymous += 1;
+        let name = format!("hirsel.codec.checks.{}", self.em.anonymous);
+        let (id, _) = self.em.declare_data(&name, Linkage::Local)?;
+        let mut description = DataDescription::new();
+        description.define(vec![0u8; word * thunks.len()].into_boxed_slice());
+        description.set_align(8);
+        for (i, thunk) in thunks.into_iter().enumerate() {
+            let f = self.em.module.declare_func_in_data(thunk, &mut description);
+            description.write_function_addr((i * word) as u32, f);
+        }
+        self.em.define_data(&name, id, &description)?;
+        Ok(Some(id))
     }
 
     /// `Closure`: a counted heap environment holding the captures, or the static empty

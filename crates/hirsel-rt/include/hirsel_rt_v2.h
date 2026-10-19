@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 22
+#define HIRSEL_RT_V2_ABI_VERSION 23
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_BYTES 16
 #define HIRSEL_RT_V2_FOREIGN_SCOPE_ALIGN 8
 #define HIRSEL_RT_V2_STATUS_OK 0
@@ -430,7 +430,8 @@ uint64_t hirsel_rt_v2_hash_finish(uint64_t state);
  * static data: the schema's descriptor bytes, which an envelope must match exactly, and a program
  * of uint64_t words that pairs each schema node with the native layout of its values
  * (hirsel_lir::codec::CodecPlan::program). Program words: CODEC_VERSION, the node count, the byte
- * size of `out`, the root node, the out node and the Bytes node, then one word per node giving
+ * size of `out`, the root node, the out node, the Bytes node and the root layout's descriptor
+ * index (CODEC_NO_NODE without CHECKED nodes), then one word per node giving
  * the word offset of its body. A body is a CODEC_NODE_* kind, then:
  *   SCALAR    scalar code (bool, u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, f32, f64,
  *             char: 4 bytes that decode only as a Unicode scalar value)
@@ -459,13 +460,18 @@ uint64_t hirsel_rt_v2_hash_finish(uint64_t state);
  *             column count, then (capacity multiplier, stride, field node) per column
  *   PATH      no operands; native storage is a u64 run-context Path identity, the wire its text
  *             as a String; decoding admits any UTF-8 text and interns it as path_of
+ *   CHECKED   check index into the codec's checks, value node at the same address: a checked
+ *             opaque type (SER-1). After materializing, decode calls each check on its value,
+ *             inner occurrences first; at the first verdict 0 it releases the value through the
+ *             root descriptor and writes Error(Invalid). A check's failure status ends the run
+ *             with its recorded failure and no cleanup (FAIL-3).
  * Every walk is iterative: no native stack depth follows the data. codec_encode reads the value at
  * `value` (the root node's layout) and writes a fresh Bytes slice of the envelope at `out`.
  * codec_decode reads the Bytes slice at `bytes`, validates the envelope and the whole payload
  * first, then writes Result[T, DecodeError] at `out`: Ok of fresh owned data, or Error of the
  * first malformation in reading order. Neither fails; operational budgets (the reference's
  * limits) terminate environmentally. */
-#define HIRSEL_RT_V2_CODEC_VERSION 3
+#define HIRSEL_RT_V2_CODEC_VERSION 4
 #define HIRSEL_RT_V2_CODEC_NODE_SCALAR 0
 #define HIRSEL_RT_V2_CODEC_NODE_TEXT 1
 #define HIRSEL_RT_V2_CODEC_NODE_FIELDS 2
@@ -483,12 +489,18 @@ uint64_t hirsel_rt_v2_hash_finish(uint64_t state);
 #define HIRSEL_RT_V2_CODEC_NODE_SEQUENTIAL 14
 #define HIRSEL_RT_V2_CODEC_NODE_COLUMNS 15
 #define HIRSEL_RT_V2_CODEC_NODE_PATH 16
+#define HIRSEL_RT_V2_CODEC_NODE_CHECKED 17
 #define HIRSEL_RT_V2_CODEC_NO_NODE UINT64_MAX
+/* A checked opaque type's check on the borrowed value at `value`: writes its verdict (0 or 1)
+ * at `verdict`; returns 0, or 1 with the check's failure recorded. */
+typedef uint8_t (*hirsel_rt_v2_check_thunk)(hirsel_rt_v2_ctx *ctx, const void *value, uint8_t *verdict);
 typedef struct hirsel_rt_v2_codec {
     const uint8_t *descriptor;
     uint64_t descriptor_length;
     const uint64_t *program;
     uint64_t program_length;
+    const hirsel_rt_v2_check_thunk *checks;
+    uint64_t check_count;
 } hirsel_rt_v2_codec;
 void hirsel_rt_v2_codec_encode(hirsel_rt_v2_ctx *ctx, const hirsel_rt_v2_codec *codec, const void *value, void *out);
 void hirsel_rt_v2_codec_decode(hirsel_rt_v2_ctx *ctx, const hirsel_rt_v2_codec *codec, const void *bytes, void *out);

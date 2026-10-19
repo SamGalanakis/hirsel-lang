@@ -35,6 +35,7 @@ fn resource_signature() -> Signature {
             capability: None,
             implementation_authority: None,
             serializable: false,
+            serializable_check: None,
             layout: Default::default(),
             distinct: false,
             resource: true,

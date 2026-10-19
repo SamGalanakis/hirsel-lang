@@ -356,6 +356,7 @@ fn finalizer(order: &[u32]) -> Fixture {
         capability: None,
         implementation_authority: None,
         serializable: false,
+        serializable_check: None,
         layout: Layout::default(),
         distinct: false,
         resource: true,

@@ -1,0 +1,16 @@
+// rule: SER-1
+// expect: reject SER-1 at line 5
+// A check must be `@noalloc fn(value: T) -> bool uses {}`; one that allocates is no
+// check.
+@serializable(check = valid)
+pub opaque type Month: plain + key + sendable + inert + noalloc_drop uses {} {
+  number: u8,
+}
+
+fn valid(value: Month) -> bool uses {} {
+  value.number >= 1 && value.number <= 12
+}
+
+fn read(bytes: Bytes) -> Result[List[Month], DecodeError] {
+  codec.decode(bytes)
+}

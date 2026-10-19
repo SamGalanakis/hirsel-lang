@@ -296,8 +296,22 @@ fn normalize_inner(
                     "opaque bounds and authority must be stated",
                 ));
             }
+            let check = n.serializable_check(&item.attributes)?;
+            // A checked opt-in is an opaque record or variant whose decoded
+            // representations its check admits; an unchecked one is transparent data.
+            if check.is_some()
+                && (item.visibility != ast::Visibility::PublicOpaque
+                    || !generics.is_empty()
+                    || !matches!(body, ast::TypeBody::Record(_) | ast::TypeBody::Variants(_)))
+            {
+                return Err(diagnostic(
+                    const { RuleId::of("SER-1") },
+                    item.origin.span,
+                    "a serializable check applies to a nongeneric opaque record or variant",
+                ));
+            }
             if (attrs.serializable || bounds.iter().flatten().any(|b| *b == Bound::Serializable))
-                && (item.visibility == ast::Visibility::PublicOpaque
+                && (item.visibility == ast::Visibility::PublicOpaque && check.is_none()
                     || *flavor == ast::TypeFlavor::Resource
                     || attrs.capability.is_some()
                     || matches!(body, ast::TypeBody::Distinct { fact: Some(_), .. }))
@@ -335,7 +349,8 @@ fn normalize_inner(
             n.settle_group_authority();
             n.settle_group_drop();
             let opaque = item.visibility == ast::Visibility::PublicOpaque;
-            if opaque {
+            // A checked opaque publishes its representation as its wire contract.
+            if opaque && check.is_none() {
                 n.dependencies = public_deps.clone();
             }
             if let ast::TypeBody::Distinct { field, .. } = body {
@@ -484,10 +499,11 @@ fn normalize_inner(
                 matches!(body, ast::TypeBody::Alias(_)) && *flavor != ast::TypeFlavor::Distinct;
             // An opaque declaration publishes its declared bounds, so its private
             // representation's declarations stay out of its public hash inputs.
-            if (attrs.serializable || alias) && !opaque {
-                if let Some(root) = repr {
-                    n.load_schema_nominals(root)?;
-                }
+            if (attrs.serializable || alias)
+                && (!opaque || check.is_some())
+                && let Some(root) = repr
+            {
+                n.load_schema_nominals(root)?;
             }
             let serializable = (attrs.serializable || alias)
                 && authority == AuthoritySummary::inert()
@@ -508,7 +524,10 @@ fn normalize_inner(
                     "every serialized field needs an admitted schema; opaque or validated types require a data DTO",
                 ));
             }
-            if serializable {
+            // A checked opaque's representation qualifies, but only its check admits a
+            // decoded value (protocol::validate_serializable_check), so it publishes no
+            // structural bound.
+            if serializable && check.is_none() {
                 inferred.push(Bound::Serializable);
             }
             for bound in bounds.iter().flatten() {
@@ -555,6 +574,10 @@ fn normalize_inner(
                 capability: attrs.capability,
                 implementation_authority: None,
                 serializable: attrs.serializable,
+                serializable_check: check.map(|function| SerializableCheck {
+                    function,
+                    representation: repr.expect("a checked opt-in has a representation"),
+                }),
                 layout: Layout {
                     flat: *flavor == ast::TypeFlavor::Flat,
                     ..attrs.layout
@@ -594,6 +617,7 @@ fn normalize_inner(
         }),
         _ => None,
     };
+    let checked = matches!(&kind, SignatureKind::Type(t) if t.serializable_check.is_some());
     let mut signature = Signature {
         metadata: SignatureMetadata {
             track_caller: attrs.track_caller,
@@ -627,8 +651,10 @@ fn normalize_inner(
         definition: item.definition.clone(),
         // An opaque public declaration has no TypeId roots. Its defining
         // graph belongs only to owner above; even unreachable private rows
-        // would expose field/variant names through the public store.
-        types: if item.visibility == ast::Visibility::PublicOpaque {
+        // would expose field/variant names through the public store. A
+        // checked serializable one publishes its representation as its wire
+        // contract (SER-1), so its graph is the check's root.
+        types: if item.visibility == ast::Visibility::PublicOpaque && !checked {
             TypeStore::default()
         } else {
             n.types
@@ -706,6 +732,7 @@ fn provisional(
                     capability: attrs.capability,
                     implementation_authority: None,
                     serializable: attrs.serializable,
+                    serializable_check: None,
                     layout: Layout {
                         flat: flavor == ast::TypeFlavor::Flat,
                         ..attrs.layout
@@ -893,8 +920,21 @@ impl Normalizer<'_, '_> {
                         ));
                     }
                 }
+                "serializable" => {
+                    if !matches!(
+                        a.arguments.as_slice(),
+                        [] | [ast::AttributeArgument::SerializableCheck(_)]
+                    ) {
+                        return Err(diagnostic(
+                            const { RuleId::of("LANG-6") },
+                            a.origin.span,
+                            "@serializable takes no arguments or one check function",
+                        ));
+                    }
+                    result.serializable = true;
+                }
                 "test" | "bench" | "track_caller" | "noalloc" | "incomplete" | "blocking"
-                | "packed" | "soa" | "serializable" => {
+                | "packed" | "soa" => {
                     if !a.arguments.is_empty() {
                         return Err(diagnostic(
                             const { RuleId::of("LANG-6") },
@@ -909,7 +949,6 @@ impl Normalizer<'_, '_> {
                         "incomplete" => result.incomplete = true,
                         "blocking" => result.blocking = true,
                         "packed" => result.layout.packed = true,
-                        "serializable" => result.serializable = true,
                         _ => result.layout.soa = true,
                     }
                 }
@@ -1018,6 +1057,24 @@ impl Normalizer<'_, '_> {
             ));
         };
         Ok(Some(self.definition(&s.function, None)?))
+    }
+    fn serializable_check(
+        &mut self,
+        attributes: &[ast::Attribute],
+    ) -> Result<Option<ast::DefPath>, QueryError> {
+        let check = attributes
+            .iter()
+            .find_map(|a| match a.arguments.as_slice() {
+                [ast::AttributeArgument::SerializableCheck(s)]
+                    if a.name.as_str() == "serializable" =>
+                {
+                    Some(s)
+                }
+                _ => None,
+            });
+        check
+            .map(|s| self.definition(&s.function, None))
+            .transpose()
     }
     fn generic(&self, name: &str) -> Option<(u32, u32, &GenericParameter)> {
         std::iter::once(&self.generics)
@@ -2621,6 +2678,7 @@ impl Normalizer<'_, '_> {
                 capability: None,
                 implementation_authority: None,
                 serializable: false,
+                serializable_check: None,
                 layout: Layout::default(),
                 distinct: false,
                 resource: false,
@@ -2873,6 +2931,7 @@ impl Normalizer<'_, '_> {
                     capability: None,
                     implementation_authority: None,
                     serializable: opted,
+                    serializable_check: None,
                     layout: Layout::default(),
                     distinct: *flavor == ast::TypeFlavor::Distinct,
                     resource: *flavor == ast::TypeFlavor::Resource,

@@ -91,7 +91,13 @@ parameters' bounds, and whose authority is only those parameters, is conditional
 serializable: its representation is proved with every type parameter admitted, it
 publishes no Serializable bound, and each use proves its arguments after
 substitution. Uses at a parameter require exact lexical Serializable evidence. Transparent aliases preserve their target's decision;
-opaque/refined domain types use ordinary DTO conversion and validating factories.
+refined domain types use ordinary DTO conversion and validating factories. A nongeneric
+opaque record or variant opts in with `@serializable(check = f)`: its representation is
+proved as an ordinary schema, published (with its type graph) as
+`TypeDefinition::serializable_check` beside the check's path, and given no structural
+bound; `protocol::validate_serializable_check` requires `f` to be a function of the
+type's own module with exactly `@noalloc fn(value: T) -> bool uses {}`. An opaque type
+without a check stays out of serialization.
 Ineligible declarations and generic schema uses report SER-1 before dependent uses.
 Before a SER-1 proof the normalizer loads, and depends on, every declaration whose
 representation the schema reaches, not only those the item names.

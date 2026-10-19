@@ -190,6 +190,57 @@ pub fn validate_format(
     }
     Ok(())
 }
+/// Validate a `@serializable(check = function)` association even when nothing decodes
+/// the type (SER-1). The function is declared in the type's own module with exactly the
+/// header `fn(value: T) -> bool uses {}`: one unlabelled borrowed receiver of the type,
+/// no generics, no error result, `@noalloc` and no foreign contract.
+pub fn validate_serializable_check(
+    signature: &Signature,
+    span: Span,
+    provider: &mut dyn SignatureProvider,
+) -> Result<(), QueryError> {
+    let SignatureKind::Type(nominal) = &signature.kind else {
+        return Ok(());
+    };
+    let Some(check) = &nominal.serializable_check else {
+        return Ok(());
+    };
+    let error = || {
+        diagnostic(
+            const { RuleId::of("SER-1") },
+            span,
+            "a serializable check is `@noalloc fn(value: T) -> bool uses {}` in T's own module",
+        )
+    };
+    let path = &check.function;
+    if path.0.package != signature.definition.0.package
+        || path.0.modules != signature.definition.0.modules
+    {
+        return Err(error());
+    }
+    let function = provider.signature(path)?;
+    let SignatureKind::Function(f) = &function.kind else {
+        return Err(error());
+    };
+    let kind = |ty: TypeId| function.types.get(ty).map(|r| &r.kind);
+    let receiver = match f.parameters.as_slice() {
+        [p] if p.passing == PassingMode::Borrow && p.label.is_none() => kind(p.ty),
+        _ => None,
+    };
+    if !f.generics.is_empty()
+        || !matches!(receiver, Some(TypeKind::Named { definition, arguments })
+            if *definition == signature.definition && arguments.is_empty())
+        || !matches!(kind(f.result), Some(TypeKind::Primitive(Primitive::Bool)))
+        || f.error.is_some()
+        || f.allocation != Allocation::NoAlloc
+        || f.uses != Uses::Only(AuthoritySummary::inert())
+        || f.foreign.is_some()
+        || f.incomplete
+    {
+        return Err(error());
+    }
+    Ok(())
+}
 /// The declaring type applied to its own generic parameters, as the
 /// association's operations must accept it.
 fn symbolic_receiver(

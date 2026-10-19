@@ -44,7 +44,8 @@ impl QueryEngine {
     /// Select the same semantic program for interpreter, checked heap and native
     /// launches. No native export, instance graph, compiler options or artifact
     /// identity participates. All checked reads include private implementations;
-    /// compile-time reads, implicit type/finalizer dependencies and type facts also close.
+    /// compile-time reads, implicit type/finalizer dependencies, type facts and serializable
+    /// checks also close.
     pub fn semantic_program_revision(
         &mut self,
         entry: &DefPath,
@@ -212,6 +213,10 @@ impl QueryEngine {
             // what its predicate calls.
             if declaration.fact.is_some() {
                 dependencies.insert(hirsel_check_protocol::fact::fact_path(path));
+            }
+            // SER-1: decoding a checked opaque type calls its check.
+            if let Some(check) = &declaration.serializable_check {
+                dependencies.insert(check.function.clone());
             }
         }
         Ok((content, dependencies))

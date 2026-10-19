@@ -1648,7 +1648,9 @@ macro_rules! primary_operations {
 }
 
 primary_operations! { self, call, context, name, a, value;
-    Primitive: "codec.encode" | "codec.decode" => super::codec::call(name, &call)?,
+    Primitive: "codec.encode" | "codec.decode" => {
+        return super::codec::call(self, name, &call).map(Some);
+    },
     Primitive: "type_shape.info" => super::shape::info(&call)?,
     // Typed generation: a generated body is its text; only the compiler reads it.
     Primitive: "codegen.body" => Value::String(text(arg(a, 0)?)?.to_owned()),

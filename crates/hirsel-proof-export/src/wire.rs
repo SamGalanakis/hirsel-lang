@@ -25,10 +25,10 @@ use hirsel_types::{
     ForeignContract, ForeignWrapper, FunctionType, GenericArgument, GenericParameter, HeapRole,
     Layout, LoopSourceDeclaration, Modes, Multiplicity, NameSite, NominalRoles, Origin, OriginRoot,
     ParamId, Parameter, ProtocolAssociation, Reach, RegionId, Relation, RelationPlace,
-    ScalarDomain, SchemaConstraint, Sendability, SendabilityRequirement, SharedPath, SharedSlice,
-    Signature, SignatureDependency, SignatureKind, SignatureMetadata, Size, SizeParamId,
-    StatePromise, Type, TypeDefinition, TypeId, TypeKind, TypeParamId, TypeStore, Uniqueness,
-    UseKind, Uses, Variant, VariantId, WrapperKind,
+    ScalarDomain, SchemaConstraint, Sendability, SendabilityRequirement, SerializableCheck,
+    SharedPath, SharedSlice, Signature, SignatureDependency, SignatureKind, SignatureMetadata,
+    Size, SizeParamId, StatePromise, Type, TypeDefinition, TypeId, TypeKind, TypeParamId,
+    TypeStore, Uniqueness, UseKind, Uses, Variant, VariantId, WrapperKind,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -618,12 +618,17 @@ snapshot_struct!(TypeDefinition {
     capability,
     implementation_authority,
     serializable,
+    serializable_check,
     layout,
     distinct,
     resource,
     drop,
     fact,
     captures
+} in Cx);
+snapshot_struct!(SerializableCheck {
+    function,
+    representation
 } in Cx);
 snapshot_enum!(SignatureKind {
     Function(f),

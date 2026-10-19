@@ -68,7 +68,7 @@ pub(super) struct Signature<'m, 'a> {
     pub(super) returns: Type<'m>,
 }
 
-fn physical<'m>(module: &'m Module<'m>, ty: PhysicalType) -> Type<'m> {
+pub(super) fn physical<'m>(module: &'m Module<'m>, ty: PhysicalType) -> Type<'m> {
     match ty {
         PhysicalType::I8 => module.int_type(8),
         PhysicalType::I16 => module.int_type(16),

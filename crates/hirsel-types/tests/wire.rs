@@ -54,6 +54,7 @@ fn nominal(name: &str, representation: u32) -> N {
             name: name.into(),
         }),
         representation: S(representation),
+        check: None,
     }
 }
 fn cases() -> Vec<Case> {

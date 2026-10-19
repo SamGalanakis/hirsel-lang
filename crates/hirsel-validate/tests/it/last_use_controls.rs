@@ -43,6 +43,7 @@ fn holder(resource: bool) -> Holder {
             capability: None,
             implementation_authority: None,
             serializable: false,
+            serializable_check: None,
             layout: Layout::default(),
             distinct: false,
             resource: true,

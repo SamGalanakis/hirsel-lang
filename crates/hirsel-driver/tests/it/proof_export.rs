@@ -284,6 +284,40 @@ fn an_owner_view_that_does_not_seal_to_its_public_signature_is_refused() {
     });
 }
 
+const CHECKED: &str = "@serializable(check = valid)\npub opaque type Month: plain + inert + noalloc_drop uses {} {\n  number: u8,\n}\n@noalloc\nfn valid(value: Month) -> bool uses {} {\n  value.number >= 1u8 && value.number <= 12u8\n}\nfn month(number: u8) -> Month {\n  Month(number: number)\n}\npub fn main() -> Result[(), ()] {\n  let m = month(1u8)\n  Ok(())\n}\n";
+
+/// A checked serializable opt-in publishes its representation graph (SER-1), so
+/// its owner view keeps the graph in its own rows: the view imports, but one whose
+/// public part or check differs from the public signature's is refused.
+#[test]
+fn a_checked_opt_in_owner_view_seals_to_its_published_graph() {
+    with_compiler_stack(|| {
+        let (_, export) = exported(CHECKED);
+        let month = signature(&export, "Month");
+        assert!(month.owner_view.is_some(), "an owner view");
+        let refused = |edit: &dyn Fn(&mut hirsel_types::Signature)| {
+            let mut forged = export.clone();
+            let month = forged
+                .signatures
+                .iter_mut()
+                .find(|s| s.path == named("Month"))
+                .unwrap();
+            edit(month.owner_view.as_mut().unwrap());
+            import(&hirsel_proof_export::export(&forged.to_input())).unwrap_err()
+        };
+        let error = refused(&|view| {
+            view.metadata.visibility = hirsel_syntax::Visibility::Public;
+        });
+        assert_eq!(error.at, "standalone@0/Month.owner_view", "{error}");
+        let error = refused(&|view| {
+            if let hirsel_types::SignatureKind::Type(t) = &mut view.kind {
+                t.serializable_check.as_mut().unwrap().function = named("month");
+            }
+        });
+        assert_eq!(error.at, "standalone@0/Month.owner_view", "{error}");
+    });
+}
+
 const CALLER: &str = "fn caller(a: u64) -> u64 {\n  let _ = callee(a)\n  a + 1u64\n}\npub fn main() -> Result[(), ()] {\n  let n = caller(1u64)\n  Ok(())\n}\n";
 
 fn with_callee(callee: &str) -> Export {

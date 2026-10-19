@@ -6,10 +6,12 @@ use super::{CallShape, InlineLowering, R};
 use crate::PassError;
 use crate::import::ImportCx;
 use hirsel_lir::codec::{
-    CONTAINER_ENTRIES, CONTAINER_INDEX, CodecNode, CodecNodeId, CodecPlan, DECODE_ERRORS,
+    CONTAINER_ENTRIES, CONTAINER_INDEX, CodecCheck, CodecNode, CodecNodeId, CodecPlan,
+    DECODE_ERRORS,
 };
 use hirsel_lir::ir::Inst;
 use hirsel_lir::layout_types::{CopyRecipe, LayoutId, LayoutKind, LayoutRecord, LayoutTable};
+use hirsel_syntax::DefPath;
 use hirsel_types::serialization::{SchemaArgument, SchemaId, SchemaNode, SerializableSchema};
 use hirsel_types::{BuiltinType, GenericArgument, Primitive, UseKind};
 use std::collections::BTreeMap;
@@ -34,7 +36,7 @@ fn encode(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
     }
     let bytes = cx.place_layout(call.destination)?;
     let schema = schema(cx, *ty)?;
-    let plan = Plan::new(cx.layout_table(), &schema).build(root, bytes, None)?;
+    let plan = Plan::new(cx.layout_table(), &schema, None).build(root, bytes, None)?;
     let value = cx.operand(&argument.value)?;
     let codec = cx.codec(plan);
     let result = cx.fresh(bytes);
@@ -58,6 +60,7 @@ fn decode(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
     }
     let result_layout = cx.place_layout(call.destination)?;
     let schema = schema(cx, *ty)?;
+    let checks = checks(cx, &schema)?;
     let table = cx.layout_table();
     // `Result[T, DecodeError]`: `Ok(T)` at 0, `Error(DecodeError)` at 1.
     let arm = |ordinal: u32| -> R<LayoutId> {
@@ -73,7 +76,8 @@ fn decode(cx: &mut ImportCx<'_>, call: &CallShape<'_>) -> R<bool> {
             .ok_or_else(|| PassError::Malformed("a decode result arm without its field".into()))
     };
     let (root, error) = (arm(0)?, arm(1)?);
-    let plan = Plan::new(table, &schema).build(root, bytes, Some((result_layout, error)))?;
+    let plan =
+        Plan::new(table, &schema, Some(checks)).build(root, bytes, Some((result_layout, error)))?;
     let value = cx.operand(&argument.value)?;
     let codec = cx.codec(plan);
     let result = cx.fresh(result_layout);
@@ -102,6 +106,23 @@ fn schema(cx: &mut ImportCx<'_>, ty: hirsel_types::TypeId) -> R<SerializableSche
     })
 }
 
+/// Every distinct check the schema's checked opaque types name, in node order, as the
+/// direct-call symbol and `FnAbi` a decode calls.
+fn checks(cx: &mut ImportCx<'_>, schema: &SerializableSchema) -> R<Vec<(DefPath, CodecCheck)>> {
+    let mut out: Vec<(DefPath, CodecCheck)> = vec![];
+    for node in &schema.nodes {
+        if let SchemaNode::Nominal {
+            check: Some(path), ..
+        } = node
+            && !out.iter().any(|(p, _)| p == path)
+        {
+            let (symbol, abi) = cx.function(path)?;
+            out.push((path.clone(), CodecCheck { symbol, abi }));
+        }
+    }
+    Ok(out)
+}
+
 fn unsupported<T>(what: impl Into<String>) -> R<T> {
     Err(PassError::Unsupported(format!(
         "SER-2 codec: {}",
@@ -113,16 +134,24 @@ fn unsupported<T>(what: impl Into<String>) -> R<T> {
 struct Plan<'a> {
     table: &'a LayoutTable,
     schema: &'a SerializableSchema,
+    /// A decode's checks; None for an encode, which treats a checked type as its
+    /// representation.
+    checks: Option<Vec<(DefPath, CodecCheck)>>,
     nodes: Vec<CodecNode>,
     memo: BTreeMap<(u32, LayoutId), CodecNodeId>,
     pending: Vec<(CodecNodeId, SchemaId, LayoutId)>,
 }
 
 impl<'a> Plan<'a> {
-    fn new(table: &'a LayoutTable, schema: &'a SerializableSchema) -> Self {
+    fn new(
+        table: &'a LayoutTable,
+        schema: &'a SerializableSchema,
+        checks: Option<Vec<(DefPath, CodecCheck)>>,
+    ) -> Self {
         Self {
             table,
             schema,
+            checks,
             nodes: vec![],
             memo: BTreeMap::new(),
             pending: vec![],
@@ -143,7 +172,16 @@ impl<'a> Plan<'a> {
     /// A nominal over a record, tuple or variant has its representation's layout: the
     /// wrapper is the schema's alone.
     fn transparent(&self, mut s: SchemaId) -> SchemaId {
-        while let SchemaNode::Nominal { representation, .. } = &self.schema.nodes[s.0 as usize] {
+        while let SchemaNode::Nominal {
+            representation,
+            check,
+            ..
+        } = &self.schema.nodes[s.0 as usize]
+        {
+            // A decoded checked type keeps its node: it calls the check.
+            if check.is_some() && self.checks.is_some() {
+                break;
+            }
             match &self.schema.nodes[representation.0 as usize] {
                 SchemaNode::Record(_) | SchemaNode::Variant(_) => s = *representation,
                 SchemaNode::Tuple(items) if !items.is_empty() => s = *representation,
@@ -202,6 +240,12 @@ impl<'a> Plan<'a> {
             root,
             bytes,
             result,
+            checks: self
+                .checks
+                .into_iter()
+                .flatten()
+                .map(|(_, check)| check)
+                .collect(),
         };
         if let Err(error) = plan.check(self.table) {
             return unsupported(error);
@@ -362,6 +406,27 @@ impl<'a> Plan<'a> {
                     return unsupported("a Path off its layout");
                 }
                 CodecNode::Path(layout)
+            }
+            // A decoded checked opaque type is its representation, then its check.
+            SchemaNode::Nominal {
+                definition,
+                representation,
+                check: Some(check),
+            } if self.checks.is_some() => {
+                let representation = *representation;
+                let index = self
+                    .checks
+                    .iter()
+                    .flatten()
+                    .position(|(path, _)| path == check)
+                    .ok_or_else(|| {
+                        PassError::Malformed(format!("{definition:?}'s check was not resolved"))
+                    })?;
+                CodecNode::Checked {
+                    layout,
+                    check: index as u32,
+                    value: self.node(representation, layout),
+                }
             }
             // A nominal over a scalar, box or sequence holds it as its one field.
             SchemaNode::Nominal { representation, .. } => {

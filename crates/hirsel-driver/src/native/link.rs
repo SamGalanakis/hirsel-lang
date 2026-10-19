@@ -2380,6 +2380,7 @@ pub fn observe_run(
     let mut audit = None;
     let mut blocked = false;
     let mut waits = None;
+    let mut ended = false;
     let mut budget = None;
     let mut stopped = None;
     for line in lines {
@@ -2421,6 +2422,7 @@ pub fn observe_run(
                 }
                 waits = Some(hirsel_run_config::Wait::decode(&rest(1)).map_err(bad)?);
             }
+            ["ended"] => ended = true,
             ["budget_exceeded", kind] => {
                 budget = Some(
                     hirsel_run_config::BudgetKind::parse(kind)
@@ -2522,7 +2524,11 @@ pub fn observe_run(
             waits.ok_or_else(|| bad("Blocked run has no wait report".into()))?,
         );
     }
-    if audit != Some(("0", "0", "0")) && (launched.audit_required || !unaudited) {
+    // A failure that ended the run where it stood (FAIL-3) is abandoned unaudited.
+    if ended && (!unaudited || status != Some(1) || failures.is_empty()) {
+        return Err(bad("an inconsistent ended observation record".into()));
+    }
+    if !ended && audit != Some(("0", "0", "0")) && (launched.audit_required || !unaudited) {
         return Err(bad(format!(
             "the runtime's exit audit is not clean: (live blocks, regions, retained) = {audit:?}"
         )));

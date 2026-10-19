@@ -405,6 +405,7 @@ fn source_links(
         .flat_map(|a| &a.arguments)
         .filter_map(|a| match a {
             ast::AttributeArgument::Format(f) => Some(&f.function),
+            ast::AttributeArgument::SerializableCheck(f) => Some(&f.function),
             _ => None,
         });
     let uses = match &item.kind {

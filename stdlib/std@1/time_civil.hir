@@ -2,8 +2,9 @@
 // Day counts adapt Howard Hinnant's days_from_civil and civil_from_days
 // ("chrono-Compatible Low-Level Date Algorithms", public domain), as jiff's
 // civil::Date does (third-party/NOTICES.md). Years span -9999..=9999, jiff's range.
-// A proleptic Gregorian date. date.new validates every field.
+// A proleptic Gregorian date. date.new validates every field, and so does decoding.
 @format(date.format_into)
+@serializable(check = decoded_date)
 pub opaque type Date: plain + key + sendable + inert + noalloc_drop uses {} {
   year: i32,
   month: u8,
@@ -12,6 +13,7 @@ pub opaque type Date: plain + key + sendable + inert + noalloc_drop uses {} {
 
 // A wall-clock time of day with nanosecond precision and no leap second.
 @format(time_of_day.format_into)
+@serializable(check = decoded_time)
 pub opaque type TimeOfDay: plain + key + sendable + inert + noalloc_drop uses {} {
   hour: u8,
   minute: u8,
@@ -21,6 +23,7 @@ pub opaque type TimeOfDay: plain + key + sendable + inert + noalloc_drop uses {}
 
 // A date and a time of day with no time zone or offset.
 @format(date_time.format_into)
+@serializable
 pub type DateTime {
   date: Date,
   time: TimeOfDay,
@@ -94,6 +97,18 @@ fn valid_date(year: i32, month: u8, day: u8) -> bool uses {} {
     year,
     month
   )
+}
+
+// A decoded Date's fields are those date.new admits.
+@noalloc
+fn decoded_date(value: Date) -> bool uses {} {
+  valid_date(value.year, value.month, value.day)
+}
+
+// A decoded TimeOfDay's fields are those time_of_day.new admits.
+@noalloc
+fn decoded_time(value: TimeOfDay) -> bool uses {} {
+  value.hour <= 23 && value.minute <= 59 && value.second <= 59 && value.nanosecond <= 999999999
 }
 
 // Hinnant days_from_civil: days since 1970-01-01 of a valid date.

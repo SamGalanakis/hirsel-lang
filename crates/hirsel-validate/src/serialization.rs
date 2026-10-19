@@ -16,6 +16,9 @@ pub(super) fn declaration(
     if s.definition.is_core("Path") {
         return Ok(text_path(d, &[]));
     }
+    if let Some(check) = &d.serializable_check {
+        return checked(s, d, check, signatures);
+    }
     let parametric = matches!(&d.authority, AuthoritySummary::Known(terms)
         if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
     if !d.serializable && !s.metadata.alias
@@ -65,6 +68,66 @@ pub(super) fn declaration(
         &GenericDeclarations::signature(&generics),
         signatures,
     )
+}
+
+/// An opaque type serializable through its check: a nongeneric, inert, opted-in opaque
+/// declaration with no structural Serializable bound, whose published representation
+/// qualifies, and whose check is `@noalloc fn(value: T) -> bool uses {}` in its module.
+fn checked(
+    s: &Signature,
+    d: &TypeDefinition,
+    check: &SerializableCheck,
+    signatures: &dyn SignatureLookup,
+) -> Result<bool, QueryError> {
+    if !d.serializable
+        || s.metadata.visibility != hirsel_syntax::Visibility::PublicOpaque
+        || !d.generics.is_empty()
+        || d.bounds.contains(&Bound::Serializable)
+        || d.authority != AuthoritySummary::inert()
+        || d.capability.is_some()
+        || d.resource
+        || d.drop.is_some()
+        || d.fact.is_some()
+        || !check_function(&s.definition, &check.function, signatures)
+    {
+        return Ok(false);
+    }
+    eligible(
+        &s.types,
+        check.representation,
+        &GenericDeclarations::default(),
+        signatures,
+    )
+}
+
+/// The exact check header for the opaque `owner`, declared in `owner`'s module.
+fn check_function(owner: &DefPath, function: &DefPath, signatures: &dyn SignatureLookup) -> bool {
+    if function.0.package != owner.0.package || function.0.modules != owner.0.modules {
+        return false;
+    }
+    let Some(f) = signatures.get(function) else {
+        return false;
+    };
+    let SignatureKind::Function(header) = &f.kind else {
+        return false;
+    };
+    let [value] = header.parameters.as_slice() else {
+        return false;
+    };
+    header.generics.is_empty()
+        && value.passing == hirsel_syntax::PassingMode::Borrow
+        && value.label.is_none()
+        && matches!(f.types.get(value.ty).map(|t| &t.kind),
+            Some(TypeKind::Named { definition, arguments }) if definition == owner && arguments.is_empty())
+        && matches!(
+            f.types.get(header.result).map(|t| &t.kind),
+            Some(TypeKind::Primitive(Primitive::Bool))
+        )
+        && header.error.is_none()
+        && header.allocation == Allocation::NoAlloc
+        && header.uses == Uses::Only(AuthoritySummary::inert())
+        && header.foreign.is_none()
+        && !header.incomplete
 }
 
 /// A core Path is data, not authority: an inert, nongeneric opaque handle whose schema is
@@ -138,11 +201,20 @@ pub(super) fn eligible(
                     && matches!(&d.authority, AuthoritySummary::Known(terms)
                         if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
                 let data_authority = d.authority == AuthoritySummary::inert() || conditional;
+                // An opaque type qualifies only through its check, proved with its
+                // declaration; its use opens the representation it publishes for it.
+                let check = d.serializable_check.as_ref();
                 if d.capability.is_some()
                     || d.resource
                     || d.drop.is_some()
                     || d.fact.is_some()
-                    || s.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
+                    || (s.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque)
+                        != check.is_some()
+                    || check.is_some_and(|c| {
+                        !d.generics.is_empty()
+                            || d.authority != AuthoritySummary::inert()
+                            || !check_function(&definition, &c.function, signatures)
+                    })
                     || !data_authority
                     || (!s.metadata.alias && !d.serializable)
                     || d.generics.len() != arguments.len()
@@ -160,7 +232,7 @@ pub(super) fn eligible(
                     continue;
                 }
                 pending.push((id, true));
-                let Some(root) = d.representation else {
+                let Some(root) = check.map(|c| c.representation).or(d.representation) else {
                     return Ok(false);
                 };
                 let Ok(root) = substitute_type(

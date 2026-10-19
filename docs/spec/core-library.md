@@ -1461,5 +1461,5 @@ run-time implementation.
 
 `codec.encode` and `codec.decode` use the [canonical codec](serialization.md#ser-2-canonical-codec).
 `DecodeError` is the nullary variant `Version | SchemaMismatch | Truncated |
-Trailing | Scalar | Utf8 | Tag | Length | Duplicate | Order`, itself `serializable`; these are expected
+Trailing | Scalar | Utf8 | Tag | Length | Duplicate | Order | Invalid`, itself `serializable`; these are expected
 validation failures with no partially decoded value. Operational refusal is separate.

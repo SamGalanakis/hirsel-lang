@@ -1692,7 +1692,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     }
 
     /// The link name of function `symbol`, imported at `abi`.
-    fn named_function(&mut self, symbol: SymbolId, abi: &FnAbi) -> Emitted<String> {
+    pub(crate) fn named_function(&mut self, symbol: SymbolId, abi: &FnAbi) -> Emitted<String> {
         let Some(symbol) = self.unit.tables.symbols.get(symbol.index()) else {
             return self.invalid("a callee outside the symbol table");
         };

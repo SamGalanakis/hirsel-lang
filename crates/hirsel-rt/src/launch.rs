@@ -50,7 +50,7 @@ use std::io::Write as _;
 use std::rc::Rc;
 
 /// The observation record's format version (`hirsel-observation <n>` on its first line).
-pub const OBSERVATION_VERSION: u32 = 4;
+pub const OBSERVATION_VERSION: u32 = 5;
 
 /// The logical identity of the `Io` root (`Handles::default`).
 pub const IO_HANDLE: u64 = 1;
@@ -2015,6 +2015,10 @@ pub(crate) unsafe fn execute(
         .take(result_size as usize)
         .collect();
     let mut record = format!("hirsel-observation {OBSERVATION_VERSION}\n");
+    // FAIL-3: a run a failure ended where it stood reports that failure as a failed entry,
+    // but its tasks still hold their storage, so it is abandoned like a stopped run.
+    let ended = matches!(ran, Err(crate::stop::Stop::Failed));
+    let ran = if ended { Ok(STATUS_FAILURE) } else { ran };
     let outcome = match ran {
         Ok(STATUS_OK) => {
             let _ = writeln!(record, "status {STATUS_OK}");
@@ -2068,10 +2072,12 @@ pub(crate) unsafe fn execute(
         Ok(_) => crate::fault("an entry returned a status other than 0 or 1"),
         Err(stop) => stop.outcome(),
     };
-    let returned = matches!(
-        outcome,
-        hirsel_run_config::RunOutcome::Returned(_) | hirsel_run_config::RunOutcome::Failed { .. }
-    );
+    let returned = !ended
+        && matches!(
+            outcome,
+            hirsel_run_config::RunOutcome::Returned(_)
+                | hirsel_run_config::RunOutcome::Failed { .. }
+        );
     if returned {
         let mut audit = Audit {
             live_blocks: 0,
@@ -2104,6 +2110,9 @@ pub(crate) unsafe fn execute(
                 .map_err(|e| format!("test wait report: {e}"))?;
         }
         unsafe { (*ctx).abandon() };
+        if ended {
+            record.push_str("ended\n");
+        }
         match &outcome {
             hirsel_run_config::RunOutcome::Blocked(waits) => {
                 record.push_str("blocked\n");

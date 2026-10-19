@@ -269,6 +269,7 @@ fn descriptor(schema: &SerializableSchema) -> Result<Vec<u8>, Error> {
             SchemaNode::Nominal {
                 definition,
                 representation,
+                ..
             } => {
                 out.push(6);
                 text(&mut out, &definition.0.package.name);

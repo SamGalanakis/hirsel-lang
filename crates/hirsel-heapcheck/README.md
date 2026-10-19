@@ -289,6 +289,13 @@ producer that differs changes this crate or the producer):
   value budget the run is `Unsupported`. A Path node reads and interns its text
   through `Operations::path_text` and `intern_path`; a model without them is
   `Unsupported`.
+  A Checked node (LIR schema revision 39) decodes its value at the same place;
+  after the build the decode holds its result in a temporary and calls each check's
+  unit, inner occurrences first, on a copy of the occurrence's bytes (a checked value
+  holding references is `Unsupported`). The first `false` drains the temporary and
+  yields `Error(Invalid)`. A failing check ends the run where it stands (FAIL-3): the
+  stacks are dropped, the observation is the failure, and no terminal audit runs,
+  since the runtime discards an ended run's context whole.
 - `ReadStatic` allocates its constant's static blocks once (`Owner::Static`,
   immortal, published, each a named exemption) and installs every reference
   cell as an uncounted handle to its target block. A result that refers to

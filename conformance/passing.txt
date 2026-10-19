@@ -1097,6 +1097,7 @@ conformance/FAIL/FAIL-3-iterator-callback-mut-state-ok.hir
 conformance/FAIL/FAIL-3-map-displaced-finalizer.hir
 conformance/FAIL/FAIL-3-mapped-iterator-callback-mut-state-bad.hir
 conformance/FAIL/FAIL-3-mapped-iterator-callback-mut-state-ok.hir
+conformance/FAIL/FAIL-3-serializable-check-fail.hir
 conformance/FAIL/FAIL-3-sorted-insert-taken-callback.hir
 conformance/FAIL/FAIL-3-std-priority-queue-fail.hir
 conformance/FAIL/FAIL-3-std-priority-queue-pop-fail.hir
@@ -6169,6 +6170,9 @@ conformance/SER/SER-1-brand-use-bad.hir
 conformance/SER/SER-1-brand-use-ok.hir
 conformance/SER/SER-1-capability-crossing-ok.hir
 conformance/SER/SER-1-capability-use-bad.hir
+conformance/SER/SER-1-checked-opaque-header-bad.hir
+conformance/SER/SER-1-checked-opaque-ok.hir
+conformance/SER/SER-1-checked-transparent-bad.hir
 conformance/SER/SER-1-closure-field-bad.hir
 conformance/SER/SER-1-closure-field-ok.hir
 conformance/SER/SER-1-codec-authority-decode-bad.hir
@@ -6196,6 +6200,7 @@ conformance/SER/SER-1-generic-callable-bound-bad.hir
 conformance/SER/SER-1-generic-callable-bound-ok.hir
 conformance/SER/SER-1-generic-schema-bad.hir
 conformance/SER/SER-1-generic-schema-ok.hir
+conformance/SER/SER-1-generic-schema-use-ok.hir
 conformance/SER/SER-1-instant-bad.hir
 conformance/SER/SER-1-instant-ok.hir
 conformance/SER/SER-1-lexical-generic-bound-bad.hir
@@ -6211,14 +6216,18 @@ conformance/SER/SER-1-recursive-option-payload-bad.hir
 conformance/SER/SER-1-recursive-option-payload-ok.hir
 conformance/SER/SER-1-recursive-schema-bad.hir
 conformance/SER/SER-1-recursive-schema-ok.hir
+conformance/SER/SER-1-recursive-schema-use-ok.hir
 conformance/SER/SER-1-refinement-opt-in-bad.hir
 conformance/SER/SER-1-resource-field-bad.hir
 conformance/SER/SER-1-resource-field-ok.hir
 conformance/SER/SER-1-shared-nominal-ok.hir
+conformance/SER/SER-1-std-generic-error-bad.hir
+conformance/SER/SER-1-std-generic-error-ok.hir
 conformance/SER/SER-2-bad-magic-run.hir
 conformance/SER/SER-2-bad-tag-run.hir
 conformance/SER/SER-2-bad-version-run.hir
 conformance/SER/SER-2-char-run.hir
+conformance/SER/SER-2-checked-run.hir
 conformance/SER/SER-2-core-error-vectors-run.hir
 conformance/SER/SER-2-core-errors-run.hir
 conformance/SER/SER-2-duplicate-map-run.hir
@@ -6238,6 +6247,7 @@ conformance/SER/SER-2-sequential-packed-run.hir
 conformance/SER/SER-2-set-order-run.hir
 conformance/SER/SER-2-soa-columns-run.hir
 conformance/SER/SER-2-std-archives-run.hir
+conformance/SER/SER-2-std-conditional-run.hir
 conformance/SER/SER-2-std-documents-run.hir
 conformance/SER/SER-2-std-http-run.hir
 conformance/SER/SER-2-std-store-errors-run.hir

@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 22;
+pub const ABI_VERSION: u32 = 23;
 /// Caller-owned streaming SipHash state (six u64 words).
 pub const HASH_STATE_BYTES: u64 = 48;
 pub const HASH_STATE_ALIGN: u32 = 8;

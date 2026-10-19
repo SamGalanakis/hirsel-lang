@@ -9,7 +9,19 @@ impl Parser<'_> {
         let mut arguments = vec![];
         match spelling.as_str() {
             "test" | "bench" | "track_caller" | "noalloc" | "soa" | "packed" | "blocking"
-            | "incomplete" | "serializable" => {}
+            | "incomplete" => {}
+            "serializable" => {
+                if self.eat("(") {
+                    self.expect("check", const { RuleId::of("LANG-1") })?;
+                    self.expect("=", const { RuleId::of("LANG-1") })?;
+                    let function = self.path(false)?;
+                    self.expect(")", const { RuleId::of("LANG-1") })?;
+                    arguments.push(AttributeArgument::SerializableCheck(CheckAssociation {
+                        function,
+                        origin: self.origin(start),
+                    }));
+                }
+            }
             "format" => {
                 self.expect("(", const { RuleId::of("LANG-1") })?;
                 let function = self.path(false)?;

@@ -400,6 +400,7 @@ impl World {
                     },
                     implementation_authority: None,
                     serializable: false,
+                    serializable_check: None,
                     layout: Layout {
                         flat: matches!(declared, Declared::FlatLayout),
                         ..Layout::default()

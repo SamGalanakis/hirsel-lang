@@ -166,6 +166,18 @@ pub(crate) enum Helper {
     Hash { layout: LayoutId },
     /// `hirsel.drop.<layout>`, calling the drop body `body`.
     Drop { body: FuncId, caller_site: bool },
+    /// `hirsel.check.<symbol>`, a codec check's `hirsel_rt_v2_check_thunk` (SER-1).
+    Check(CheckThunk),
+}
+
+/// How a check thunk calls its check: the check `body`, how it takes the borrowed value
+/// and how it returns the verdict.
+pub(crate) struct CheckThunk {
+    pub(crate) body: FuncId,
+    /// Each by-value slot's offset in the value and type; None passes the value's address.
+    pub(crate) slots: Option<Vec<(u64, ir::Type)>>,
+    /// The verdict is the register value word, not a result pointer's byte.
+    pub(crate) register: bool,
 }
 
 /// The object being emitted: its Cranelift module, the declarations made so far and the
@@ -639,6 +651,7 @@ impl<'a> Emitter<'a> {
                 Helper::Drop { body, caller_site } => {
                     self.define_drop_wrapper(b, body, caller_site)
                 }
+                Helper::Check(thunk) => self.define_check_wrapper(b, thunk),
             }
         }
         self.define(&name, id, context)

@@ -131,6 +131,14 @@ enum Resume {
         after: After,
         failure: Option<FailureId>,
     },
+    /// A decode's checks (SER-1): the decoded `result`, held in the temporary `held` of
+    /// its layout while each `pending` check (its unit and the occurrence it borrows,
+    /// next last) runs.
+    Checks {
+        result: ValueId,
+        held: Ptr,
+        pending: Vec<(usize, Extent)>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,6 +274,9 @@ pub(crate) struct Machine<'p, S> {
     roots: BTreeMap<u64, Held>,
     forgotten: Snapshot<Held>,
     finished: Option<Finished>,
+    /// A failure ended the run where it stood (FAIL-3: a serializable check's failure):
+    /// nothing is cleaned up, so the terminal audit does not run.
+    ended: bool,
     terminal: Option<Observation>,
     word: u64,
     /// Nesting of loan re-resolution: a loan whose address reads a value
@@ -391,6 +402,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             roots: BTreeMap::new(),
             forgotten: Default::default(),
             finished: None,
+            ended: false,
             terminal: None,
             word: u64::from(program.target.pointer_bytes),
             resolving: 0,
@@ -4528,12 +4540,47 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .get(codec.index())
                     .ok_or_else(|| err(V::Malformed, "unknown codec"))?;
                 let val = self.read_use(f, value)?;
-                let produced = if matches!(inst, Inst::Encode { .. }) {
-                    self.codec_encode(plan, &val)?
+                let (produced, checks) = if matches!(inst, Inst::Encode { .. }) {
+                    (self.codec_encode(plan, &val)?, vec![])
                 } else {
                     self.codec_decode(plan, &val)?
                 };
-                self.define_fresh(f, result, produced)?;
+                if checks.is_empty() {
+                    self.define_fresh(f, result, produced)?;
+                } else {
+                    let mut pending = checks
+                        .into_iter()
+                        .map(|(check, occurrence)| {
+                            let check = plan.checks.get(check as usize).ok_or_else(|| {
+                                err(V::Malformed, "a codec check outside its plan")
+                            })?;
+                            Ok((
+                                self.program.function(self.symbol(f.unit, check.symbol)?)?,
+                                occurrence,
+                            ))
+                        })
+                        .collect::<Checked<Vec<_>>>()?;
+                    pending.reverse();
+                    let layout = self.value_type(f.unit, result)?.layout;
+                    let held = self.temporary(layout)?;
+                    self.write_value(
+                        held,
+                        layout,
+                        Moved {
+                            val: produced,
+                            credited: true,
+                            borrow: None,
+                        },
+                    )?;
+                    let (unit, occurrence) = pending.pop().expect("a check");
+                    let frame = self.check_frame(unit, occurrence)?;
+                    f.resume = Resume::Checks {
+                        result,
+                        held,
+                        pending,
+                    };
+                    return Ok(Control::Push(Activity::Frame(Box::new(frame))));
+                }
             }
             Inst::Recast { result, value } => {
                 let held = self.get(f, value)?.clone();
@@ -8453,6 +8500,120 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     // ---- Frame exit ------------------------------------------------------
 
+    /// A frame calling a decode's check (SER-1) on a copy of the occurrence it borrows.
+    fn check_frame(&mut self, unit: usize, occurrence: Extent) -> Checked<Frame> {
+        let [p] = self.unit(unit).parameters.as_slice() else {
+            return fail(
+                V::Malformed,
+                "a codec check takes exactly its borrowed value",
+            );
+        };
+        let p = *p;
+        let mut frame = self.frame(unit, Role::Callee, None);
+        self.define(
+            &mut frame,
+            p,
+            Held {
+                val: Val::Image(occurrence),
+                credits: 0,
+                borrow: Some(Borrow::Caller),
+            },
+        )?;
+        self.bind_parameter_slots(&mut frame, &[None])?;
+        Ok(frame)
+    }
+
+    /// A decode's check returned to `caller`, or failed.
+    fn check_returned(&mut self, mut caller: Box<Frame>, exit: Exit) -> Checked<()> {
+        let Resume::Checks {
+            result,
+            held,
+            mut pending,
+        } = std::mem::replace(&mut caller.resume, Resume::Running)
+        else {
+            unreachable!("checked by the caller")
+        };
+        let verdict = match exit {
+            // FAIL-3: the codec cannot unwind, so the check's failure ends the run.
+            Exit::Fail => {
+                self.stack.clear();
+                self.tasks = None;
+                self.finished = Some(Finished::Failed);
+                self.ended = true;
+                return Ok(());
+            }
+            Exit::Return(Some((
+                Held {
+                    val:
+                        Val::Bits {
+                            scalar: ScalarKind::Bool,
+                            bits,
+                        },
+                    ..
+                },
+                _,
+            ))) => bits != 0,
+            Exit::Return(_) => return fail(V::Malformed, "a codec check that returns no bool"),
+        };
+        let ty = self.value_type(caller.unit, result)?;
+        if verdict && let Some((unit, occurrence)) = pending.pop() {
+            let frame = self.check_frame(unit, occurrence)?;
+            caller.resume = Resume::Checks {
+                result,
+                held,
+                pending,
+            };
+            self.stack.push(Activity::Frame(caller));
+            self.stack.push(Activity::Frame(Box::new(frame)));
+        } else if verdict {
+            let size = self.size(ty.layout)?;
+            let owned = self.resources_of(ty.layout)?;
+            let e = self.take_part(held, size, &owned);
+            let (val, _, _) = self.val_from(e, ty.repr, ty.layout)?;
+            self.ledger.free(held.alloc)?;
+            self.define_fresh(&mut caller, result, val)?;
+            caller.statement += 1;
+            self.stack.push(Activity::Frame(caller));
+        } else {
+            // The first rejection releases the decoded value: Error(Invalid).
+            let unit = self.unit(caller.unit);
+            let Some(Inst::Decode { codec, .. }) = self
+                .pool(
+                    unit.blocks[caller.block.index()].instructions,
+                    &unit.instructions,
+                )?
+                .get(caller.statement as usize)
+            else {
+                return fail(V::Malformed, "codec checks resumed off their decode");
+            };
+            let plan = &unit.tables.codecs[codec.index()];
+            let (invalid, _, _) = self.codec_invalid(plan)?;
+            self.define_fresh(&mut caller, result, invalid)?;
+            caller.resume = Resume::Drain {
+                after: After::Next,
+                failure: None,
+            };
+            self.stack.push(Activity::Frame(caller));
+            self.stack.push(Activity::Drain(Drain {
+                caller: None,
+                operation: None,
+                work: vec![
+                    Work::Death {
+                        alloc: held.alloc,
+                        raw: None,
+                    },
+                    Work::DropAt {
+                        at: held,
+                        layout: ty.layout,
+                        mask: None,
+                    },
+                ],
+                failed: false,
+            }));
+        }
+        Ok(())
+    }
+
     fn exit_frame(&mut self, f: Frame, exit: Exit) -> Checked<()> {
         if !matches!(f.resume, Resume::Running) {
             return fail(V::Malformed, "frame exits while waiting");
@@ -8500,6 +8661,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             self.check_val(&held.val)?;
         }
         match self.stack.pop() {
+            Some(Activity::Frame(caller)) if matches!(caller.resume, Resume::Checks { .. }) => {
+                self.check_returned(caller, exit)?;
+            }
             Some(Activity::Frame(mut caller)) => {
                 let Resume::Call {
                     call,
@@ -9377,6 +9541,9 @@ impl<'p, S: Stage> Machine<'p, S> {
             blocked: false,
         };
         self.terminal = Some(observation);
+        if self.ended {
+            return Ok(());
+        }
         // The run's end releases what the mutexes still hold (`exec/sync.rs`), after the
         // returned value's drain below.
         let mutexes = self.end_mutexes()?;
@@ -9431,7 +9598,10 @@ impl<'p, S: Stage> Machine<'p, S> {
         // Returned-value finalizers may fail during the harness drain.
         observation.failures = self.failures.clone();
         observation.output = self.output.clone();
-        self.audit()?;
+        // A run that ended where it stood is discarded whole, as its runtime context is.
+        if !self.ended {
+            self.audit()?;
+        }
         Ok((observation, self.ledger.exemptions.clone()))
     }
 

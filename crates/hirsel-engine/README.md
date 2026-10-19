@@ -56,7 +56,8 @@ runs or is skipped. Sessions without V use their own shared package cache, and
 
 `QueryEngine::semantic_program_revision(entry)` produces the shared run-config
 `ProgramRevision` for interpreter, heap and native launch. It follows checked
-signature/resolver reads, private representations, implicit finalizers, type fact helpers and
+signature/resolver reads, private representations, implicit finalizers, type fact helpers,
+serializable checks and
 compile-time execution reads; every reached source declaration contributes its
 signature and complete token content, including private bodies and constants.
 Comments/spaces, source positions, file order, compiler provenance and native

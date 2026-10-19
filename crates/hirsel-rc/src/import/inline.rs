@@ -354,6 +354,9 @@ impl Inline for Importer<'_, '_> {
         self.finish(call.destination, call.next, result)
     }
 
+    fn function(&mut self, path: &DefPath) -> R<(SymbolId, FnAbiId)> {
+        self.direct(path, &[])
+    }
     fn direct_call(
         &mut self,
         symbol: SymbolId,

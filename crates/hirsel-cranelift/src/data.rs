@@ -16,7 +16,7 @@ use hirsel_lir::stage::ObjectSymbolKind;
 use hirsel_syntax::{ContentHash, DefPath};
 
 use crate::CodegenError;
-use crate::module::{Emitted, Emitter, Helper, PTR};
+use crate::module::{CheckThunk, Emitted, Emitter, Helper, PTR};
 
 /// Bytes of `hirsel_rt_v2_layout`.
 const DESCRIPTOR_BYTES: usize = 72;
@@ -461,6 +461,52 @@ impl Emitter<'_> {
         let call = b.ins().call(callee, &args);
         let status = b.inst_results(call)[0];
         b.ins().return_(&[status]);
+        b.seal_all_blocks();
+        b.finalize(self.module.target_config());
+    }
+
+    /// `hirsel.check.<symbol>(ctx, value, verdict) -> i8`: the check's status, with its bool
+    /// verdict stored as a byte at `verdict`.
+    pub(crate) fn define_check_wrapper(&mut self, mut b: FunctionBuilder<'_>, thunk: CheckThunk) {
+        let entry = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        b.switch_to_block(entry);
+        let params = b.block_params(entry).to_vec();
+        let (ctx, value, verdict) = (params[0], params[1], params[2]);
+        let callee = self.module.declare_func_in_func(thunk.body, b.func);
+        let flags = ir::MemFlagsData::new();
+        let mut args = vec![ctx];
+        let result = (!thunk.register).then(|| {
+            let slot = b.create_sized_stack_slot(ir::StackSlotData::new(
+                ir::StackSlotKind::ExplicitSlot,
+                1,
+                0,
+            ));
+            let address = b.ins().stack_addr(PTR, slot, 0);
+            args.push(address);
+            address
+        });
+        match &thunk.slots {
+            None => args.push(value),
+            Some(slots) => {
+                for &(offset, ty) in slots {
+                    args.push(b.ins().load(ty, flags, value, offset as i32));
+                }
+            }
+        }
+        let call = b.ins().call(callee, &args);
+        let results = b.inst_results(call).to_vec();
+        let byte = match result {
+            Some(address) => b.ins().load(types::I8, flags, address, 0),
+            // A Bool is one byte, as in memory: any nonzero byte is true.
+            None => {
+                let low = b.ins().ireduce(types::I8, results[1]);
+                b.ins()
+                    .icmp_imm_u(cranelift_codegen::ir::condcodes::IntCC::NotEqual, low, 0)
+            }
+        };
+        b.ins().store(flags, byte, verdict, 0);
+        b.ins().return_(&[results[0]]);
         b.seal_all_blocks();
         b.finalize(self.module.target_config());
     }

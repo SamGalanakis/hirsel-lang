@@ -640,6 +640,9 @@ impl<P: SignatureProvider + ?Sized> Resolver<'_, P> {
                     let (paths, span) = match argument {
                         AttributeArgument::LoopSource(s) => (vec![&s.open, &s.next], s.origin.span),
                         AttributeArgument::Format(s) => (vec![&s.function], s.origin.span),
+                        AttributeArgument::SerializableCheck(s) => {
+                            (vec![&s.function], s.origin.span)
+                        }
                         _ => continue,
                     };
                     for path in paths {

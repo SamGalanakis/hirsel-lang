@@ -43,6 +43,13 @@ pub(super) enum Pending {
         mapping: u64,
         input: Vec<u8>,
     },
+    /// `codec.decode` of a schema reaching checked opaque types (SER-1): `value` is
+    /// the decoded value and `remaining` each check still to call, as a callable
+    /// value, with the occurrence it reads.
+    Check {
+        value: Value,
+        remaining: std::collections::VecDeque<(Value, Value)>,
+    },
 }
 fn record(name: &str, fields: Vec<Value>) -> Value {
     Value::Record {
@@ -119,6 +126,24 @@ impl Library {
             consumed: vec![],
             continuation,
         }
+    }
+    /// Call each check on its decoded occurrence in turn: `Ok(value)` once every one
+    /// admits it, `Error(Invalid)` at the first `false` (SER-1).
+    pub(super) fn check_decoded(
+        &mut self,
+        value: Value,
+        mut remaining: std::collections::VecDeque<(Value, Value)>,
+    ) -> Result<OperationResult, Error> {
+        let Some((callee, occurrence)) = remaining.pop_front() else {
+            return Ok(OperationResult::returned(super::ok(value)));
+        };
+        Ok(self.schedule(
+            Pending::Check { value, remaining },
+            callee,
+            vec![occurrence],
+            vec![],
+            vec![],
+        ))
     }
     /// `shared.with(s, body)`: call `body` with a borrowed view of the frozen value.
     pub(super) fn shared_with(&mut self, args: &[Value]) -> Result<OperationResult, Error> {
@@ -479,10 +504,27 @@ impl Library {
             .callbacks
             .remove(&token)
             .ok_or_else(|| invalid("unknown library continuation"))?;
+        // FAIL-3: a failing check ends the run where it stands; the codec cannot unwind.
+        if let (Pending::Check { .. }, OperationResult::Failed(failure)) = (&pending, &result) {
+            return Err(Error::Ended(failure.clone()));
+        }
         if let OperationResult::Failed(failure) = result {
             return Ok(OperationResult::Failed(failure));
         }
         match pending {
+            Pending::Check { value, remaining } => match result {
+                OperationResult::Complete {
+                    value: Value::Bool(true),
+                    ..
+                } => self.check_decoded(value, remaining),
+                OperationResult::Complete {
+                    value: Value::Bool(false),
+                    ..
+                } => Ok(OperationResult::returned(super::codec::decode_error(
+                    super::codec::INVALID,
+                ))),
+                _ => Err(invalid("a codec check must return bool")),
+            },
             Pending::Pull { next, maps } => {
                 let OperationResult::Complete {
                     value, arguments, ..

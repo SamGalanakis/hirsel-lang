@@ -66,6 +66,7 @@ fn nominal(f: &mut Fixture, name: &str, arity: usize, representation: Option<Typ
             capability: None,
             implementation_authority: None,
             serializable: false,
+            serializable_check: None,
             layout: Layout::default(),
             distinct: false,
             resource: false,

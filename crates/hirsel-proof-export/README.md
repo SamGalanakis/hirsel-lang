@@ -10,7 +10,8 @@ The prover-neutral proof seam (rules PS-1..PS-16):
   type-graph and signature type under the export context, including a recursive
   type group member's `recursive_group` key) and its importer,
   which re-derives every signature fingerprint (one derivation for every
-  signature; an owner view must seal to its public signature), recomputes every
+  signature; an owner view must seal to its public signature; a checked serializable opt-in's
+  published representation graph compares by canonical encoding), recomputes every
   digest, table and checksum, requires canonical form, and re-validates each
   definition with V.
 

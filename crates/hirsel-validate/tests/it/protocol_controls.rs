@@ -24,6 +24,7 @@ fn nominal(name: &str) -> Signature {
         capability: None,
         implementation_authority: None,
         serializable: false,
+        serializable_check: None,
         layout: Layout::default(),
         distinct: false,
         resource: false,

@@ -8,7 +8,8 @@ independent of the native ABI.
 ### SER-1: Serializable schemas
 
 Capabilities, resources, handles, functions, raw pointers, owner brands, scoped identity,
-opaque types and refinement-constrained types cannot occur in a serializable schema. The
+opaque types without a check and refinement-constrained types cannot occur in a
+serializable schema. The
 supported schemas are those the canonical codec enumerates: `bool`, the fixed-width
 integers and floats, `char`, `String`, `Bytes`, unit, tuples, records, variants, `box`,
 `Array`, `List`, `Inline`, `Simd`, `Packed`, `Map`, `Set`, and exactly the serializable
@@ -26,8 +27,9 @@ parameters' bounds already prove its schema is serializable at every instantiati
 symbolic schema describes a generic template and is concretely specialized before
 encoding or decoding. Encoding
 borrows valid data; decoding produces fresh owned data and reconstructs no loans, owner
-identities, capability authority or allocation sharing. An opaque or validated domain type
-converts explicitly to a serializable data type and validates again on reconstruction.
+identities, capability authority or allocation sharing. A refined domain type, and an
+opaque one without a check, converts explicitly to a serializable data type and validates
+again on reconstruction.
 
 A function value never occurs in a serializable schema. A runner call (planned) carries
 the callee's identity (its definition path, signature fingerprint and code hash) beside
@@ -38,6 +40,31 @@ decoded into a function or closure value and confers no authority.
 ```hirsel
 @serializable
 type Point { x: i32, y: i32 }
+```
+
+A nongeneric opaque record or variant opts in with `@serializable(check = f)`. Its
+schema is a nominal node over its own representation, which must qualify as an ordinary
+schema and hold no authority; the opt-in publishes those fields as the type's wire
+contract. `f` is a function of the type's own module, possibly private, with exactly the
+header `@noalloc fn(value: T) -> bool uses {}`; it decides which decoded representations
+are values of `T`. Encoding never calls it. Decoding reconstructs the whole value, then
+calls `f` once for every occurrence of `T` in it, an inner occurrence before the one that
+holds it and otherwise in the order of their encodings. The first `false` releases the
+reconstructed value and returns `Error(Invalid)`, so no unchecked value is ever exposed.
+`f` should be total: a failure inside it ends the run
+([FAIL-3](failure.md#fail-3-what-runs)). A checked opaque type has no structural
+`serializable` bound of its own, and a same-named type without the opt-in gets no codec.
+
+```hirsel
+@serializable(check = valid)
+pub opaque type Month: plain + key + sendable + inert + noalloc_drop uses {} {
+  number: u8,
+}
+
+@noalloc
+fn valid(value: Month) -> bool uses {} {
+  value.number >= 1 && value.number <= 12
+}
 ```
 
 The serializable core types are the errors and outcomes that can cross a call or be
@@ -54,8 +81,8 @@ used with stays in the `Dir`, which is never serializable. Its schema is a nomin
 over `String`, its lexical spelling as `path.text` returns it, so a decoded path equals
 the encoded one; decoding admits exactly the text `path.of` admits and constructs the
 path as `path.of` does. No other core type is serializable: those that hold a capability
-(`Deadline`, `Command`), resources, other opaque types (`Instant`, `Sku`, and so
-`StockError`), scripted-provider inputs and compile-time shapes convert through a data
+(`Deadline`, `Command`), resources, other opaque types such as
+`Instant`, scripted-provider inputs and compile-time shapes convert through a data
 type. The exact core identity matters: a same-spelled user type
 gets no exemption.
 
@@ -86,7 +113,8 @@ whole SER-1 schema, including explicit opt-in for user nominal types.
 (noncanonical bool or NaN, or a `char` that is not a Unicode scalar value),
 `Utf8` (invalid String encoding), `Tag` (invalid variant ordinal), `Length`
 (invalid or overflowing extent), `Duplicate` (repeated Map key or Set element),
-and `Order` (descending Set encodings). Schema or valid source-value
+`Order` (descending Set encodings), and `Invalid` (a checked opaque type's check
+rejected a decoded representation). Schema or valid source-value
 inconsistencies are compiler errors; operational budget exhaustion is separate
 from `DecodeError`.
 

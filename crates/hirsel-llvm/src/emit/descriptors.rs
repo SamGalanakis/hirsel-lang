@@ -1,4 +1,5 @@
 use super::*;
+use hirsel_lir::codec::CodecCheck;
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
     /// The `const uint64_t *live_mask` of a release: null when every field is live, else
@@ -100,9 +101,29 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             .collect();
         self.module
             .set_initializer(program, self.module.const_array(i64_ty, &items));
+        let checks = if plan.checks.is_empty() {
+            self.module.const_zero(ptr)
+        } else {
+            let mut thunks = Vec::with_capacity(plan.checks.len());
+            for (check, value) in plan.checks.iter().zip(plan.check_layouts()) {
+                let Some(layout) = value else {
+                    return self.invalid("a codec check no CHECKED node calls");
+                };
+                thunks.push(self.check_wrapper(check, layout)?);
+            }
+            let table = self.module.private_constant(
+                "hirsel.codec.checks",
+                self.module.array_type(ptr, thunks.len() as u64),
+                8,
+            );
+            self.module
+                .set_initializer(table, self.module.const_array(ptr, &thunks));
+            table
+        };
         let global = self.module.private_constant(
             "hirsel.codec",
-            self.module.struct_type(&[ptr, i64_ty, ptr, i64_ty]),
+            self.module
+                .struct_type(&[ptr, i64_ty, ptr, i64_ty, ptr, i64_ty]),
             8,
         );
         let initializer = self.module.const_struct(&[
@@ -110,6 +131,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             self.const_u64(plan.descriptor.len() as u64),
             program,
             self.const_u64(words.len() as u64),
+            checks,
+            self.const_u64(plan.checks.len() as u64),
         ]);
         self.module.set_initializer(global, initializer);
         Ok(global)
@@ -394,6 +417,93 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         arguments.push(self.module.parameter(wrapper, 1));
         let status = builder.call(body, &arguments);
+        builder.ret(status);
+        Ok(wrapper.value)
+    }
+
+    /// The `hirsel_rt_v2_check_thunk` of a codec check (SER-1): `(ctx, value, verdict) ->
+    /// status` calling the check on the borrowed value at `value`, of `layout`, and storing
+    /// its bool verdict as a byte.
+    fn check_wrapper(&mut self, check: &CodecCheck, layout: LayoutId) -> Emitted<Value<'m>> {
+        let Some(symbol) = self.unit.tables.symbols.get(check.symbol.index()) else {
+            return self.invalid("a codec check outside the symbol table");
+        };
+        let definition = symbol.definition.clone();
+        let abi = fn_abi(self.inputs.layouts, check.abi, &definition)?;
+        let name = self.named_function(check.symbol, abi)?;
+        let wrapper_name = format!("hirsel.check.{name}");
+        let (ptr, i8_ty) = (self.module.ptr_type(), self.module.int_type(8));
+        let ty = self.module.function_type(i8_ty, &[ptr, ptr, ptr]);
+        let wrapper = match self.module.function(&wrapper_name, ty) {
+            Ok(wrapper) => wrapper,
+            Err(what) => return self.invalid(what),
+        };
+        if self.module.defines(&wrapper_name) {
+            return Ok(wrapper.value);
+        }
+        self.module.make_private(wrapper);
+        let signature = Signature::of(self.module, self.inputs.layouts, abi, &definition)?;
+        let callee = signature.declare(
+            self.module,
+            self.inputs.layouts,
+            &name,
+            &definition,
+            false,
+            Aliasing::of(self.inputs),
+        )?;
+        let builder = Builder::new(self.module);
+        builder.position(self.module.append_block(wrapper));
+        let value = self.module.parameter(wrapper, 1);
+        let mut arguments = Vec::new();
+        let mut result = None;
+        for hidden in &signature.hidden {
+            match hidden {
+                Hidden::Context => arguments.push(self.module.parameter(wrapper, 0)),
+                Hidden::Result => {
+                    let place = builder.alloca(i8_ty, 1);
+                    arguments.push(place);
+                    result = Some(place);
+                }
+                _ => return self.invalid("a codec check with a hidden slot besides its result"),
+            }
+        }
+        let [parameter] = abi.parameters.as_slice() else {
+            return self.invalid("a codec check without exactly one parameter");
+        };
+        match parameter.passing {
+            ParameterPassing::ReadOnlyAddress => arguments.push(value),
+            ParameterPassing::ByValue => {
+                let scalars = &self.layout(layout)?.abi.scalars;
+                if scalars.len() != parameter.slots.len() {
+                    return self.invalid("a codec check's slots differ from its layout's");
+                }
+                // Each slot is its scalar's bytes in memory (a Bool's byte is 0 or 1).
+                for (&(offset, _), slot) in scalars.iter().zip(&parameter.slots) {
+                    let at = builder.offset(value, self.const_u64(offset));
+                    let of = signature::physical(self.module, slot.ty);
+                    arguments.push(builder.load(of, at, 1));
+                }
+            }
+            _ => return self.invalid("a codec check's value passed other than by borrow"),
+        }
+        let returned = builder.call(callee, &arguments);
+        signature.attribute_call(self.module, returned);
+        let verdict = match (signature.value, result) {
+            (Some((kind, field)), None) => {
+                let word = builder.extract(returned, field);
+                let ty = value_word(self.module, kind);
+                let bit = decode_word(&builder, kind, word, ty);
+                builder.cast(Cast::ZExt, bit, i8_ty)
+            }
+            (None, Some(place)) => builder.load(i8_ty, place, 1),
+            _ => return self.invalid("a codec check without its bool result"),
+        };
+        let status = if signature.value.is_some() {
+            builder.extract(returned, signature.status_field)
+        } else {
+            returned
+        };
+        builder.store(verdict, self.module.parameter(wrapper, 2), 1);
         builder.ret(status);
         Ok(wrapper.value)
     }

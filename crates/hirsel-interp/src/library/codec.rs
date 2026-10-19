@@ -1,5 +1,5 @@
 //! Source values cross SER-2 through the shared, schema-directed Rust codec.
-use crate::{Error, Integer, OperationCall, Value, invalid};
+use crate::{Error, Integer, OperationCall, OperationResult, Value, invalid};
 use hirsel_types::serialization::{
     SchemaArgument, SchemaId, SchemaNode, SerializableSchema, serializable_schema,
 };
@@ -8,7 +8,14 @@ use hirsel_types::{BuiltinType, GenericArgument, GenericDeclarations, Primitive}
 
 type R<T> = Result<T, Error>;
 
-pub(super) fn call(name: &str, call: &OperationCall<'_>) -> R<Value> {
+/// A decoded checked opaque value awaiting its check (SER-1): the check and the value.
+type Checked = (hirsel_syntax::DefPath, Value);
+
+pub(super) fn call(
+    library: &mut super::Library,
+    name: &str,
+    call: &OperationCall<'_>,
+) -> R<OperationResult> {
     let [GenericArgument::Type(ty)] = call.generics else {
         return Err(invalid("codec type actual"));
     };
@@ -28,21 +35,27 @@ pub(super) fn call(name: &str, call: &OperationCall<'_>) -> R<Value> {
         let value = to_wire(&schema, value)?;
         return codec
             .encode(&value, wire::Limits::default())
-            .map(Value::Bytes)
+            .map(|bytes| OperationResult::returned(Value::Bytes(bytes)))
             .map_err(codec_error);
     }
     let Value::Bytes(bytes) = value else {
         return Err(invalid("codec.decode expects Bytes"));
     };
     match codec.decode(bytes, wire::Limits::default()) {
-        Ok(value) => Ok(super::ok(from_wire(&schema, value, call.runtime)?)),
+        Ok(value) => {
+            let (value, checks) = from_wire(&schema, value, call.runtime)?;
+            let checks = checks
+                .into_iter()
+                .map(|(check, occurrence)| Ok((check_function(&check, call.runtime)?, occurrence)))
+                .collect::<R<_>>()?;
+            library.check_decoded(value, checks)
+        }
         Err(error @ (wire::Error::Schema | wire::Error::Value | wire::Error::Limit)) => {
             Err(codec_error(error))
         }
-        Err(error) => Ok(super::error(Value::Variant {
-            variant: error_ordinal(error)?,
-            fields: vec![],
-        })),
+        Err(error) => Ok(OperationResult::returned(decode_error(error_ordinal(
+            error,
+        )?))),
     }
 }
 
@@ -79,7 +92,44 @@ pub(super) fn decode(
     let value = codec
         .decode(bytes, wire::Limits::default())
         .map_err(codec_error)?;
-    from_wire(schema, value, runtime)
+    // A runner call's bytes encode a live value of this run, not outside input, so
+    // they hold no occurrence a check (SER-1) has not already seen constructed.
+    Ok(from_wire(schema, value, runtime)?.0)
+}
+/// `Error(e)` of a decode, for the `DecodeError` ordinal `e`.
+pub(super) fn decode_error(ordinal: u32) -> Value {
+    super::error(Value::Variant {
+        variant: ordinal,
+        fields: vec![],
+    })
+}
+/// `DecodeError.Invalid`: a check rejected a decoded representation.
+pub(super) const INVALID: u32 = 10;
+
+/// The check `path` as a callable value, from its declared header.
+fn check_function(
+    path: &hirsel_syntax::DefPath,
+    runtime: &crate::aggregate::RuntimeTypes,
+) -> R<Value> {
+    let signature = runtime
+        .serialization
+        .get(path)
+        .ok_or_else(|| invalid("codec check without its signature"))?;
+    let hirsel_types::SignatureKind::Function(f) = &signature.kind else {
+        return Err(invalid("codec check that is not a function"));
+    };
+    let mut types = signature.types.clone();
+    let ty = types.push(hirsel_types::Type::with_kind(
+        hirsel_types::TypeKind::Function(f.clone()),
+    ));
+    Ok(Value::FunctionReference(Box::new(
+        crate::value::NamedFunction {
+            definition: path.clone(),
+            arguments: vec![],
+            types: std::sync::Arc::new(types),
+            ty,
+        },
+    )))
 }
 
 fn codec_error(error: wire::Error) -> Error {
@@ -176,6 +226,7 @@ fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
                 SchemaNode::Nominal {
                     definition,
                     representation,
+                    ..
                 },
                 _,
             ) if definition.is_core("Path") => {
@@ -299,17 +350,20 @@ fn to_wire(schema: &SerializableSchema, root: &Value) -> R<wire::Value> {
     })
 }
 
+/// The decoded value and every checked occurrence in it, an inner occurrence before the
+/// one holding it and otherwise in encoding order.
 fn from_wire(
     schema: &SerializableSchema,
     value: wire::Value,
     runtime: &crate::aggregate::RuntimeTypes,
-) -> R<Value> {
+) -> R<(Value, Vec<Checked>)> {
     enum Job {
         Visit(SchemaId, ValueId),
         Finish(SchemaId, usize, Option<u32>),
     }
     let mut pending = vec![Job::Visit(schema.root, value.root)];
     let mut values: Vec<Value> = vec![];
+    let mut checks = vec![];
     while let Some(job) = pending.pop() {
         match job {
             Job::Finish(ty, n, ordinal) => {
@@ -334,12 +388,13 @@ fn from_wire(
                     SchemaNode::Nominal {
                         definition,
                         representation,
+                        check,
                     } => {
                         let child = fs
                             .pop()
                             .flatten()
                             .ok_or_else(|| invalid("codec nominal payload"))?;
-                        if definition.is_core("Path") {
+                        let value = if definition.is_core("Path") {
                             let Value::String(text) = child else {
                                 return Err(invalid("codec Path text"));
                             };
@@ -373,7 +428,11 @@ fn from_wire(
                                 },
                                 other => other,
                             }
+                        };
+                        if let Some(check) = check {
+                            checks.push((check.clone(), value.clone()));
                         }
+                        value
                     }
                     SchemaNode::Builtin {
                         kind: BuiltinType::Packed,
@@ -495,5 +554,6 @@ fn from_wire(
             }
         }
     }
-    values.pop().ok_or_else(|| invalid("codec empty value"))
+    let value = values.pop().ok_or_else(|| invalid("codec empty value"))?;
+    Ok((value, checks))
 }

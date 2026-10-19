@@ -275,6 +275,9 @@ fn core_error(error: hirsel_interp::Error) -> RuntimeError {
         }
         hirsel_interp::Error::Trapped(trap) => RuntimeError::Tool(trap.to_string()),
         hirsel_interp::Error::Environmental(cause) => RuntimeError::Tool(cause.to_string()),
+        hirsel_interp::Error::Ended(failure) => {
+            RuntimeError::Tool(format!("unhandled run end: {failure:?}"))
+        }
     }
 }
 fn launch_error(error: hirsel_interp::library::LaunchError) -> RuntimeError {

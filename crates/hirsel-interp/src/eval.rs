@@ -78,6 +78,10 @@ pub fn run_with_runtime(
             execution.outcome = Outcome::Environmental(cause);
             Ok(())
         }
+        (Err(Error::Ended(failure)), _) => {
+            execution.outcome = Outcome::Failed(failure);
+            Ok(())
+        }
         (Err(Error::Trapped(trap)), Some(_)) => {
             execution.outcome = Outcome::Trapped(*trap);
             Ok(())

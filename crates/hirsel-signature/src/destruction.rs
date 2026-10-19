@@ -219,6 +219,9 @@ impl Normalizer<'_, '_> {
                     if let Some(r) = &mut t.representation {
                         map(r);
                     }
+                    if let Some(check) = &mut t.serializable_check {
+                        map(&mut check.representation);
+                    }
                 }
                 SignatureKind::Const { ty: t, .. } => map(t),
             }

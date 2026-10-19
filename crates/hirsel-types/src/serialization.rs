@@ -26,6 +26,9 @@ pub enum SchemaNode {
     Nominal {
         definition: DefPath,
         representation: SchemaId,
+        /// A checked opaque's check function, called on every decoded occurrence
+        /// (SER-1). Descriptor bytes do not carry it.
+        check: Option<DefPath>,
     },
     Parameter(TypeParameterRef),
     /// Transparent alias or regular recursive application of an earlier schema.
@@ -191,6 +194,7 @@ fn schema_inner(
                     schema.nodes[memo[&id].0 as usize] = SchemaNode::Nominal {
                         definition,
                         representation: text,
+                        check: None,
                     };
                     continue;
                 }
@@ -202,11 +206,17 @@ fn schema_inner(
                     && matches!(&d.authority, AuthoritySummary::Known(terms)
                         if terms.iter().all(|t| matches!(t, AuthorityTerm::TypeParameter(_))));
                 let data_authority = d.authority == AuthoritySummary::inert() || conditional;
+                // An opaque type is serializable only through its check, over the
+                // nongeneric, inert representation it publishes for it.
+                let check = d.serializable_check.as_ref();
                 if d.capability.is_some()
                     || d.resource
                     || d.drop.is_some()
                     || d.fact.is_some()
-                    || signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque
+                    || (signature.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque)
+                        != check.is_some()
+                    || check.is_some()
+                        && (!d.generics.is_empty() || d.authority != AuthoritySummary::inert())
                     || !data_authority
                     || (!signature.metadata.alias && !d.serializable)
                     || d.generics.len() != arguments.len()
@@ -220,9 +230,10 @@ fn schema_inner(
                 {
                     return Ok(None);
                 }
-                let Some(root) = d.representation else {
+                let Some(root) = check.map(|c| c.representation).or(d.representation) else {
                     return Ok(None);
                 };
+                let check = check.map(|c| c.function.clone());
                 if let Some(previous) = entered
                     .iter()
                     .copied()
@@ -249,6 +260,7 @@ fn schema_inner(
                         SchemaNode::Nominal {
                             definition,
                             representation: root,
+                            check,
                         }
                     }
                 }
@@ -285,9 +297,11 @@ impl Hash for SchemaNode {
             Self::Nominal {
                 definition,
                 representation,
+                check,
             } => {
                 definition.hash(state);
-                representation.hash(state)
+                representation.hash(state);
+                check.hash(state)
             }
             Self::Parameter(p) => p.hash(state),
         }
@@ -336,9 +350,11 @@ fn parts(node: &SchemaNode, mut map: impl FnMut(SchemaId) -> SchemaId) -> Schema
         SchemaNode::Nominal {
             definition,
             representation,
+            check,
         } => SchemaNode::Nominal {
             definition: definition.clone(),
             representation: map(*representation),
+            check: check.clone(),
         },
         SchemaNode::Builtin { kind, arguments } => SchemaNode::Builtin {
             kind: *kind,
@@ -457,6 +473,7 @@ mod tests {
                 capability: None,
                 implementation_authority: None,
                 serializable: true,
+                serializable_check: None,
                 layout: Layout::default(),
                 distinct: false,
                 resource: false,

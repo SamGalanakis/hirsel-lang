@@ -115,6 +115,7 @@ fn type_signature(
             capability: cap,
             implementation_authority: None,
             serializable: false,
+            serializable_check: None,
             layout: Layout::default(),
             distinct: false,
             resource: false,

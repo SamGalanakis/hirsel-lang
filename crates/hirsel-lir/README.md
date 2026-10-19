@@ -470,6 +470,16 @@ nearest, ties to even, with every NaN read as the result kind's one observable
 NaN (SEM-2). C admits exactly those two kind pairs and no flag;
 `tests/it/revision6.rs` retains the hand-built twins.
 
+LIR revision 39 adds `CodecNode::Checked { layout, check, value }` and
+`CodecPlan::checks` (codec program version 4, node 17): a checked opaque type
+(SER-1) encodes as `value`, its record or variant representation at the same layout,
+and decoding calls `checks[check]`, a unit function symbol at a `fn(value: T) -> bool`
+FnAbi borrowing that layout, on every reconstructed occurrence, inner ones first. The
+first `false` releases the value and decodes to `DecodeError.Invalid`, the eleventh
+`DECODE_ERRORS` arm; a failing check ends the run (FAIL-3). C holds the node to a
+record or variant child at its own layout and the check to that exact FnAbi, and an
+encode plan to no checks; `tests/it/revision29.rs` retains the hand-built twins.
+
 LIR revision 19 adds diverging calls: `Terminator::Call.normal` is
 None exactly when the callee's `FnAbi.diverges`, the ABI of a Never result, which
 has no result or result destination. C rejects a returning call of a diverging

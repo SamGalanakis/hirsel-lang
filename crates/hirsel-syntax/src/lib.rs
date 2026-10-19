@@ -792,6 +792,7 @@ pub enum AttributeArgument {
     Name(Symbol),
     LoopSource(LoopSourceSyntax),
     Format(FormatAssociation),
+    SerializableCheck(CheckAssociation),
     StatePromise(StatePromiseSyntax),
     Keyword(Keyword),
     Integer(String),
@@ -806,6 +807,13 @@ pub struct LoopSourceSyntax {
 /// `@format(function)`: the function an f-string hole of this type calls (SEM-3).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FormatAssociation {
+    pub function: Path,
+    pub origin: Origin,
+}
+/// `@serializable(check = function)`: the function that admits a decoded opaque
+/// representation (SER-1).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CheckAssociation {
     pub function: Path,
     pub origin: Origin,
 }

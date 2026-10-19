@@ -28,6 +28,8 @@ enum Malformed {
     Length = 7,
     Duplicate = 8,
     Order = 9,
+    /// A check rejected a decoded representation (SER-1).
+    Invalid = 10,
 }
 
 struct Input<'a> {
@@ -185,17 +187,58 @@ impl<S: Stage> Machine<'_, S> {
     pub(super) fn codec_encode(&mut self, plan: &CodecPlan, val: &Val) -> Checked<Val> {
         let root_layout = self.plan_node(plan, plan.root)?.layout();
         let image = self.codec_image(val, root_layout)?;
+        let out = self.codec_payload(plan, At::Image(&image, 0), None)?;
+        let mut envelope = MAGIC.to_vec();
+        envelope.extend_from_slice(&VERSION.to_le_bytes());
+        envelope.extend_from_slice(&(plan.descriptor.len() as u64).to_le_bytes());
+        envelope.extend_from_slice(&plan.descriptor);
+        envelope.extend_from_slice(&(out.len() as u64).to_le_bytes());
+        envelope.extend_from_slice(&out);
+        let bytes = self.plan_node(plan, plan.bytes)?;
+        let mut image = Extent::new(self.size(bytes.layout())?);
+        image.write_bytes(0, &vec![0; image.len() as usize]);
+        self.codec_text(&mut image, Dest::Image(0), bytes, &envelope)?;
+        Ok(Val::Image(image))
+    }
+
+    /// The SER-2 payload of the root value at `root`. With `checks`, also each checked
+    /// occurrence (SER-1) as its check's index and a copy of its bytes, an inner occurrence
+    /// before the one holding it and otherwise in encoding order.
+    fn codec_payload(
+        &mut self,
+        plan: &CodecPlan,
+        root: At<'_>,
+        mut checks: Option<&mut Vec<(u32, Extent)>>,
+    ) -> Checked<Vec<u8>> {
         let mut out = vec![];
         enum Job<'e> {
             Visit(CodecNodeId, At<'e>),
+            Check(u32, LayoutId, At<'e>),
             Mark,
             SetEnd,
         }
-        let mut work = vec![Job::Visit(plan.root, At::Image(&image, 0))];
+        let mut work = vec![Job::Visit(plan.root, root)];
         let mut sets: Vec<(usize, Vec<usize>)> = vec![];
         while let Some(job) = work.pop() {
             let (id, at) = match job {
                 Job::Visit(id, at) => (id, at),
+                Job::Check(check, layout, at) => {
+                    let size = self.size(layout)?;
+                    let (e, offset) = self.extent_at(at)?;
+                    e.check_range(offset, size)?;
+                    if !e.all_init(offset, size) {
+                        return fail(V::UninitializedRead, "a checked codec value");
+                    }
+                    if e.cells.range(offset..offset + size).next().is_some() {
+                        return fail(V::Unsupported, "a checked codec value holding references");
+                    }
+                    let mut copy = Extent::new(size);
+                    copy.write_bytes(0, e.read_bytes(offset, size));
+                    if let Some(checks) = checks.as_deref_mut() {
+                        checks.push((check, copy));
+                    }
+                    continue;
+                }
                 Job::Mark => {
                     let top = sets
                         .last_mut()
@@ -263,6 +306,12 @@ impl<S: Stage> Machine<'_, S> {
                     out.extend_from_slice(e.read_bytes(offset, length));
                 }
                 CodecNode::Framed { value, .. } => work.push(Job::Visit(*value, at.at(8))),
+                CodecNode::Checked { check, value, .. } => {
+                    if checks.is_some() {
+                        work.push(Job::Check(*check, layout, at));
+                    }
+                    work.push(Job::Visit(*value, at));
+                }
                 CodecNode::Fields { fields, .. } => {
                     let layout_fields: Vec<_> = (0..fields.len())
                         .map(|i| self.field_at(layout, i as u32))
@@ -439,17 +488,7 @@ impl<S: Stage> Machine<'_, S> {
                 }
             }
         }
-        let mut envelope = MAGIC.to_vec();
-        envelope.extend_from_slice(&VERSION.to_le_bytes());
-        envelope.extend_from_slice(&(plan.descriptor.len() as u64).to_le_bytes());
-        envelope.extend_from_slice(&plan.descriptor);
-        envelope.extend_from_slice(&(out.len() as u64).to_le_bytes());
-        envelope.extend_from_slice(&out);
-        let bytes = self.plan_node(plan, plan.bytes)?;
-        let mut image = Extent::new(self.size(bytes.layout())?);
-        image.write_bytes(0, &vec![0; image.len() as usize]);
-        self.codec_text(&mut image, Dest::Image(0), bytes, &envelope)?;
-        Ok(Val::Image(image))
+        Ok(out)
     }
 
     /// A fresh byte sequence of `bytes` as the slice of `node` at `dest`.
@@ -721,7 +760,9 @@ impl<S: Stage> Machine<'_, S> {
                     };
                     work.extend(arm.iter().rev().map(|f| Job::Visit(*f)));
                 }
-                CodecNode::Framed { value, .. } => work.push(Job::Visit(*value)),
+                CodecNode::Framed { value, .. } | CodecNode::Checked { value, .. } => {
+                    work.push(Job::Visit(*value))
+                }
                 CodecNode::Box { payload, .. } => work.push(Job::Visit(*payload)),
                 CodecNode::Sequence { element, .. } => {
                     let count = check!(input.number(8)) as u64;
@@ -776,7 +817,13 @@ impl<S: Stage> Machine<'_, S> {
     }
 
     /// `Inst::Decode`: `Ok` of fresh owned data or `Error` of the first malformation.
-    pub(super) fn codec_decode(&mut self, plan: &CodecPlan, val: &Val) -> Checked<Val> {
+    /// The decoded `Result[T, DecodeError]` and, for an `Ok`, each checked occurrence in it
+    /// still to check (SER-1), in the order the checks run.
+    pub(super) fn codec_decode(
+        &mut self,
+        plan: &CodecPlan,
+        val: &Val,
+    ) -> Checked<(Val, Vec<(u32, Extent)>)> {
         let bytes_layout = self.plan_node(plan, plan.bytes)?.layout();
         let bytes = self.slice_bytes(val, bytes_layout)?;
         let result = plan
@@ -802,10 +849,39 @@ impl<S: Stage> Machine<'_, S> {
         };
         let (tag, offsets) = self.arm_fields(result_layout, ordinal)?;
         self.codec_tag(&mut image, Dest::Image(0), &tag, ordinal);
+        let mut checks = vec![];
         if let Some(payload) = payload {
             self.codec_build(plan, &mut image, Dest::Image(offsets[0]), field, &payload)?;
+            if !plan.checks.is_empty() {
+                self.codec_payload(plan, At::Image(&image, offsets[0]), Some(&mut checks))?;
+            }
         }
-        Ok(Val::Image(image))
+        Ok((Val::Image(image), checks))
+    }
+
+    /// `Error(Invalid)` of a decode plan's result, and the `Ok` payload's layout and offset
+    /// in the rejected image, which the caller releases.
+    pub(super) fn codec_invalid(&mut self, plan: &CodecPlan) -> Checked<(Val, LayoutId, u64)> {
+        let result = plan
+            .result
+            .ok_or_else(|| err(V::Malformed, "a decode plan without a result"))?;
+        let result_node = self.plan_node(plan, result)?;
+        let result_layout = result_node.layout();
+        let CodecNode::Variant { arms, .. } = result_node else {
+            return fail(V::Malformed, "a decode result that is not a variant");
+        };
+        let ok_layout = self.plan_node(plan, arms[0][0])?.layout();
+        let (_, ok_offsets) = self.arm_fields(result_layout, 0)?;
+        let mut image = Extent::new(self.size(result_layout)?);
+        image.write_bytes(0, &vec![0; image.len() as usize]);
+        let error_layout = self.plan_node(plan, arms[1][0])?.layout();
+        let (_, offsets) = self.arm_fields(result_layout, 1)?;
+        let invalid = Malformed::Invalid as u32;
+        let (tag, _) = self.arm_fields(error_layout, invalid)?;
+        self.codec_tag(&mut image, Dest::Image(offsets[0]), &tag, invalid);
+        let (tag, _) = self.arm_fields(result_layout, 1)?;
+        self.codec_tag(&mut image, Dest::Image(0), &tag, 1);
+        Ok((Val::Image(image), ok_layout, ok_offsets[0]))
     }
 
     /// Write `ordinal`'s tag; a niche's nullary arm is the zero word already there.
@@ -857,6 +933,7 @@ impl<S: Stage> Machine<'_, S> {
                         work.push((*child, at + offset as usize));
                     }
                 }
+                CodecNode::Checked { value, .. } => work.push((*value, at)),
                 CodecNode::Repeat { element, .. } => {
                     let LayoutKind::Inline { count, element: e } = self.record(layout)?.kind else {
                         return fail(V::Malformed, "Packed inline codec");
@@ -924,6 +1001,7 @@ impl<S: Stage> Machine<'_, S> {
                 CodecNode::Fields { fields, .. } => {
                     work.extend(fields.iter().rev().map(|&id| Job::Visit(id)))
                 }
+                CodecNode::Checked { value, .. } => work.push(Job::Visit(*value)),
                 CodecNode::Variant { arms, .. } => {
                     let ordinal = input.number(4).map_err(reread)? as u32;
                     bytes.extend_from_slice(&ordinal.to_le_bytes());
@@ -1017,6 +1095,7 @@ impl<S: Stage> Machine<'_, S> {
                         work.push((*child, dest.at(f.offset)));
                     }
                 }
+                CodecNode::Checked { value, .. } => work.push((*value, dest)),
                 CodecNode::Variant { arms, .. } => {
                     let ordinal = input.number(4).map_err(reread)? as u32;
                     let (tag, offsets) = self.arm_fields(layout, ordinal)?;

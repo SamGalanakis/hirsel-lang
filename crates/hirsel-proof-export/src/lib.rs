@@ -30,7 +30,7 @@ use hirsel_codec::{DecodeError, Observe, Reader, Snapshot, Writer, line_column, 
 use hirsel_diag::RuleId;
 use hirsel_syntax::{ContentHash, DefPath, PackageId};
 use hirsel_tir::{Definition, DefinitionRef, Materialized, TIR_VERSION};
-use hirsel_types::encoding::{fingerprint, sealed};
+use hirsel_types::encoding::{canonical_encoding, fingerprint, sealed};
 use hirsel_types::{Signature, SignatureDependency};
 use hirsel_validate::{Signatures, ValidatedSignatures};
 use std::collections::{BTreeMap, BTreeSet};
@@ -659,6 +659,29 @@ pub fn import(text: &str, expected: &Environment) -> Result<Export, ImportError>
     Ok(export)
 }
 
+/// Whether the owner `view` seals to `section`'s public signature. A checked
+/// serializable opt-in publishes its representation graph (SER-1); the owner's copy
+/// of that graph has its own row provenance, so the two compare by their canonical
+/// encoding, the identity the fingerprint covers.
+fn seals_to(view: &Signature, section: &SignatureSection) -> bool {
+    let sealed = sealed(view);
+    let public = &section.public;
+    if sealed == *public {
+        return true;
+    }
+    let checked = matches!(&sealed.kind,
+        hirsel_types::SignatureKind::Type(t) if t.serializable_check.is_some());
+    checked
+        && sealed.definition == public.definition
+        && sealed.metadata == public.metadata
+        && sealed.fingerprint == public.fingerprint
+        && canonical_encoding(&sealed, &section.dependencies)
+            .ok()
+            .is_some_and(|bytes| {
+                canonical_encoding(public, &section.dependencies).ok() == Some(bytes)
+            })
+}
+
 /// Every signature fingerprint (declaration, fact helper, registry row) has
 /// one derivation, its encoding over the dependency list it covers, so the
 /// importer re-derives each one; an owner view is consistent exactly when it
@@ -693,7 +716,7 @@ fn verify_signatures(export: &Export) -> Result<(), ImportError> {
             }
         }
         if let Some(view) = &section.owner_view
-            && (view == &section.public || sealed(view) != section.public)
+            && (view == &section.public || !seals_to(view, section))
         {
             return Err(refuse(
                 format!("{at}.owner_view"),

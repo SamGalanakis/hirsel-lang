@@ -33,6 +33,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             roots: self.roots.clone(),
             forgotten: self.forgotten.clone(),
             finished: self.finished.clone(),
+            ended: self.ended,
             terminal: self.terminal.clone(),
             word: self.word,
             resolving: self.resolving,

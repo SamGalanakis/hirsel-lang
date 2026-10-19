@@ -218,7 +218,12 @@ pub(crate) fn association_diagnostics(
         let source = &parsed.value.tree.items[item.0 as usize];
         for attribute in &source.attributes {
             let name = attribute.name.as_str();
-            if !matches!(name, "loop_source" | "format") {
+            if !matches!(name, "loop_source" | "format")
+                && !matches!(
+                    attribute.arguments.as_slice(),
+                    [hirsel_syntax::AttributeArgument::SerializableCheck(_)]
+                )
+            {
                 continue;
             }
             let phases = engine
@@ -232,6 +237,8 @@ pub(crate) fn association_diagnostics(
                 .and_then(|signature| {
                     if name == "format" {
                         phases.validate_format(&signature.value, span, engine)
+                    } else if name == "serializable" {
+                        phases.validate_serializable_check(&signature.value, span, engine)
                     } else {
                         phases.validate_loop_source(&signature.value, span, engine)
                     }

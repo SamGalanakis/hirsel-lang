@@ -50,7 +50,7 @@ pub fn canonical_encoding(
         heap,
     } = roles;
     let mut e = Encoder::default();
-    e.atom(b"hirsel.signature.encoding.v15");
+    e.atom(b"hirsel.signature.encoding.v16");
     e.path(definition);
     e.tag(match visibility {
         hirsel_syntax::Visibility::Private => "private",
@@ -172,6 +172,7 @@ pub fn canonical_encoding(
             capability,
             implementation_authority,
             serializable,
+            serializable_check,
             layout,
             distinct,
             resource,
@@ -201,6 +202,15 @@ pub fn canonical_encoding(
             e.optional_type(*representation, types)?;
             e.bounds(bounds);
             e.boolean(*serializable);
+            e.boolean(serializable_check.is_some());
+            if let Some(SerializableCheck {
+                function,
+                representation,
+            }) = serializable_check
+            {
+                e.path(function);
+                e.ty(*representation, types)?;
+            }
             // CAP-5 ceilings are excluded from public exports but bind private revisions.
             if *visibility == hirsel_syntax::Visibility::Private {
                 e.option(implementation_authority.as_ref(), |e, ceiling| {
@@ -283,13 +293,16 @@ pub fn owner_view(public: &Signature, types: TypeStore, declaration: TypeDefinit
     }
 }
 
-/// The public signature an owner view seals to: no representation graph, no
-/// representation and no CAP-5 implementation ceiling. A view is consistent
-/// exactly when it seals to its public signature.
+/// The public signature an owner view seals to: no representation graph (but a
+/// checked serializable opt-in's, its published wire contract), no representation
+/// and no CAP-5 implementation ceiling. A view is consistent exactly when it seals
+/// to its public signature.
 pub fn sealed(view: &Signature) -> Signature {
     let mut public = view.clone();
     if let SignatureKind::Type(declaration) = &mut public.kind {
-        public.types = TypeStore::default();
+        if declaration.serializable_check.is_none() {
+            public.types = TypeStore::default();
+        }
         declaration.representation = None;
         declaration.implementation_authority = None;
     }

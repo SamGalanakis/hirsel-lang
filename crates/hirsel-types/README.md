@@ -512,3 +512,7 @@ Signature encoding v15 (hash domain v12) includes size parameters on constant
 signatures. Written constants remain monomorphic; inline generic comptime staging
 publishes private size-generic declarations after the enclosing signature. Type
 parameters are excluded from constant signatures.
+
+Signature encoding v16 adds `TypeDefinition.serializable_check`: an opaque type's
+`@serializable(check = f)` publishes its check function and its representation, the
+wire contract its schema is a nominal node over (SER-1).

@@ -21,6 +21,7 @@ pub type TomlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Positio
 pub type Segment = Key(String) | Index(u64)
 
 // A Datetime as std@1/time values; an offset is in seconds east of UTC.
+@serializable
 pub type Moment = OffsetDateTime(time.DateTime, i32) | LocalDateTime(time.DateTime) | LocalDate(
   time.Date
 ) | LocalTime(time.TimeOfDay)

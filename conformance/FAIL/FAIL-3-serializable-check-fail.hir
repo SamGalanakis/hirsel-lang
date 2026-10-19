@@ -1,0 +1,23 @@
+// rule: FAIL-3
+// expect: fail SEM-1 at line 13
+// stdout: decoding
+// A check's failure ends the run where it stands, with the check's own failure and site:
+// the decode neither returns nor unwinds, so main's later output never appears.
+@serializable(check = valid)
+pub opaque type Month: plain + key + sendable + inert + noalloc_drop uses {} {
+  number: u8,
+}
+
+@noalloc
+fn valid(value: Month) -> bool uses {} {
+  value.number + 250 > 0
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let encoded = codec.encode(Month(number: 10))
+  let _ = out.print(stdout, "decoding\n")
+  let decoded: Result[Month, DecodeError] = codec.decode(encoded)
+  let _ = out.print(stdout, "decoded\n")
+  Ok(())
+}

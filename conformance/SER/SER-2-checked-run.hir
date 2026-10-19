@@ -1,0 +1,70 @@
+// rule: SER-2
+// expect: run
+// A checked opaque type round-trips through its representation, alone, nested and in
+// containers, as std's Date, TimeOfDay, DateTime, BrokenDownTime and toml.Moment do.
+// Decoding a representation its check rejects returns Error(Invalid), wherever it sits.
+@serializable(check = valid)
+pub opaque type Month: plain + key + sendable + inert + noalloc_drop uses {} {
+  number: u8,
+}
+
+@noalloc
+fn valid(value: Month) -> bool uses {} {
+  value.number >= 1 && value.number <= 12
+}
+
+@serializable
+type Season {
+  months: List[Month],
+  peak: Option[Month],
+}
+
+fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  let decoded: T = read()?
+  test.check(t, codec.encode(decoded) == encoded)
+  Ok(())
+}
+
+fn rejected[T: serializable](t: Test, x: T) {
+  let encoded = codec.encode(x)
+  let read = fn() -> Result[T, DecodeError] {
+    codec.decode(encoded)
+  }
+  match read() {
+    Error(Invalid()) => test.check(t, true),
+    _ => test.check(t, false),
+  }
+}
+
+pub fn main(t: Test) -> Result[(), DecodeError] {
+  round(t, Month(number: 3))?
+  let summer = Season(
+    months: [Month(number: 6), Month(number: 7), Month(number: 8)],
+    peak: Some(Month(number: 7))
+  )
+  round(t, summer)?
+  let Some(day) = date.new(2000, 2, 29) else {
+    return Error(Invalid())
+  }
+  let Some(noon) = time_of_day.new(12, 0, 0, 999999999) else {
+    return Error(Invalid())
+  }
+  round(t, day)?
+  round(t, noon)?
+  let moment = time.DateTime(date: day, time: noon)
+  round(t, moment)?
+  round(t, time.BrokenDownTime(datetime: moment, offset: Some(3600)))?
+  let offset: toml.Moment = OffsetDateTime(moment, -3600)
+  round(t, offset)?
+  let only_date: toml.Moment = LocalDate(day)
+  round(t, only_date)?
+  rejected(t, Month(number: 13))
+  let months: List[Month] = [Month(number: 1), Month(number: 0)]
+  rejected(t, months)
+  rejected(t, Season(months: [Month(number: 6)], peak: Some(Month(number: 99))))
+  Ok(())
+}

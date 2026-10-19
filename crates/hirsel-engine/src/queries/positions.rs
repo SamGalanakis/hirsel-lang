@@ -52,6 +52,9 @@ impl Rebaser<'_> {
                         self.span(&mut s.origin.span)
                     }
                     hirsel_syntax::AttributeArgument::Format(s) => self.span(&mut s.origin.span),
+                    hirsel_syntax::AttributeArgument::SerializableCheck(s) => {
+                        self.span(&mut s.origin.span)
+                    }
                     _ => (),
                 }
             }

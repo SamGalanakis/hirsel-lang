@@ -24,10 +24,12 @@ Invariants and boundary:
   a launched executable's bound run configuration) to `hirsel_rt_v2_main`, which loads it into
   a `Program`; a run's context reaches its own program's failure table, so runs of several
   programs share a process. A run's root task runs on a fiber, and Blocked, an adapter refusal,
-  a replay divergence and a codec limit are `Stop`s: the runtime's internal functions return
+  a replay divergence, a codec limit and a failed serializable check are `Stop`s: the runtime's internal functions return
   `Result<_, Stop>` up to the entry compiled code called, which switches back to the launcher's
   stack; the launcher abandons the run's fibers, destroys its context and receives a
-  `RunOutcome`. Only the standalone launcher turns an outcome into a process exit status
+  `RunOutcome`; a failed check's `Stop::Failed` ends the run as a failed entry with the
+  check's recorded failure and no cleanup (FAIL-3); like a stopped run it is
+  abandoned, with no exit audit. Only the standalone launcher turns an outcome into a process exit status
   (`RunOutcome::exit_code`). Invariant faults, host exhaustion, PROG-4 violations, stack
   overflow and a stop inside a foreign call still end the process.
 - A `host::Host` admits a bound run once (`Host::admit`: grants, mounts, revocations, clock and
@@ -242,7 +244,11 @@ Invariants and boundary:
   identity's text and decodes by validating UTF-8 and interning it as `path.of` does.
   Program version 3 also derives private Map tag, cached-hash and live-count
   offsets; it skips tombstones and preserves the unchanged wire format. It walks
-  private flat framing, active Packed extents and SoA columns in row order.
+  private flat framing, active Packed extents and SoA columns in row order. Program
+  version 4 (runtime ABI 23) adds the root layout's descriptor index and CHECKED nodes,
+  whose checks are the codec's `hirsel_rt_v2_check_thunk`s: after materializing, decode
+  re-walks the value as encoding does and calls each check after its value's inner
+  occurrences; the first verdict 0 releases the value and writes `Error(Invalid)`.
   Flat reconstruction patches native byte extents separately from wire element
   counts; sequential blocks retain exact used bytes and SoA blocks retain rounded
   column capacity. Both walks are iterative. Past
@@ -728,9 +734,10 @@ compiled with fuel checks decrements it at each fuel point and calls
 `Stop::BudgetExceeded` on the running context. The descriptor flag `FUELED` marks such code;
 an executable without it refuses a fuel budget when binding its run (`ProgramFacts::fueled`;
 `budgets.fuel`), and a memory budget needs no compiled checks. With `HIRSEL_RT_OBSERVATION` it
-writes the observation record (`hirsel-observation 4`, the status, the result
+writes the observation record (`hirsel-observation 5`, the status, the result
 bytes or the failure chain as kind, rule and site codes, and the task-exit
-audit in a diagnostic or measurement archive, or `audit unavailable` in production). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape
+audit in a diagnostic or measurement archive, or `audit unavailable` in production;
+version 5 adds `ended` for a failure that ended the run unaudited, FAIL-3). For harness launches without a run record, `HIRSEL_RT_TAPE` receives the real Io completion tape
 (`hirsel-io-tape 7`, which also reads version 6: run identity digest, independent hash/Random/Test seeds, for production recordings the canonical run record and its admission time, launch arguments, initial tree, typed completions and a complete-count trailer); `HIRSEL_RT_REPLAY` runs on simulated
 Io that accepts exactly a recorded tape and refuses a mismatch, a missing event
 and an unconsumed one. Each completion is appended and flushed before delivery; an abort preserves its confirmed prefix. A missing trailer marks an unknown suffix and refuses complete replay or any resumability claim. Native stdout uses raw OS writes, so EPIPE and EBADF become recorded OutputError outcomes; generated main ignores SIGPIPE before entry. Replay divergence exits 3 with confirmed stdout, including during handle cleanup.

@@ -394,6 +394,9 @@ use explicit block, length framing and text nodes;
 flat lists distinguish byte extents from element counts. Sequences retain their
 ordinary, sequential Packed or SoA storage kind in the checked plan. The runtime
 and H walk fields and active extents rather than copying native storage to wire.
+A decode plan wraps a checked opaque nominal's representation in a `Checked` node
+(LIR schema revision 39) naming one of `CodecPlan::checks`, each the check's
+function symbol and FnAbi, imported like a direct callee; an encode plan has none.
 
 A variant pattern reads its tag through a synthetic loan only when the
 variant's type owns counted storage; an uncounted variant that is not plain

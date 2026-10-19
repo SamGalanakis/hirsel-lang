@@ -2,6 +2,7 @@
 // jiff fmt::strtime (third-party/NOTICES.md): %Y %m %d %H %M %S %f %z %a %b %j %%.
 // A civil datetime and, when known, its offset in seconds east of UTC: what
 // time.format renders and time.parse_with produces.
+@serializable
 pub type BrokenDownTime {
   datetime: DateTime,
   offset: Option[i32],

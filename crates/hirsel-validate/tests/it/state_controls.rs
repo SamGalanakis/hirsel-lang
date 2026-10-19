@@ -468,6 +468,7 @@ fn creation_relay(hidden: bool) -> Fixture {
                 capability: None,
                 implementation_authority: None,
                 serializable: false,
+                serializable_check: None,
                 layout: Default::default(),
                 distinct: false,
                 resource: false,

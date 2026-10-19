@@ -22,9 +22,18 @@ pub struct Codec {
     pub descriptor_length: u64,
     pub program: *const u64,
     pub program_length: u64,
+    /// The checks a decode's `CHECKED` nodes call (runtime ABI 23), `check_count` of them.
+    pub checks: *const CheckThunk,
+    pub check_count: u64,
 }
 
-pub const CODEC_VERSION: u64 = 3;
+/// `hirsel_rt_v2_check_thunk`: a checked opaque type's check (SER-1) on the borrowed value
+/// at `value`, writing its verdict, 0 or 1, at `verdict`. Returns 0, or 1 with the check's
+/// failure recorded.
+pub type CheckThunk =
+    unsafe extern "C" fn(ctx: *mut TaskCtx, value: *const u8, verdict: *mut u8) -> u8;
+
+pub const CODEC_VERSION: u64 = 4;
 pub const NODE_SCALAR: u64 = 0;
 pub const NODE_TEXT: u64 = 1;
 pub const NODE_FIELDS: u64 = 2;
@@ -42,6 +51,7 @@ pub const NODE_FLAT_SEQUENCE: u64 = 13;
 pub const NODE_SEQUENTIAL: u64 = 14;
 pub const NODE_COLUMNS: u64 = 15;
 pub const NODE_PATH: u64 = 16;
+pub const NODE_CHECKED: u64 = 17;
 pub const NO_NODE: u64 = u64::MAX;
 
 const MAGIC: &[u8; 4] = b"HSC1";
@@ -64,6 +74,8 @@ pub enum DecodeError {
     Length = 7,
     Duplicate = 8,
     Order = 9,
+    /// A checked opaque's check rejected a decoded representation (SER-1).
+    Invalid = 10,
 }
 
 #[derive(Clone, Copy)]
@@ -189,6 +201,12 @@ enum Node {
     },
     /// A core Path's run-context identity, on the wire as its text.
     Path,
+    /// A checked opaque type: its representation `value` at the same address, and the
+    /// check a decode calls on it afterwards.
+    Checked {
+        check: usize,
+        value: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -207,6 +225,9 @@ struct Program {
     root: usize,
     out: usize,
     bytes: usize,
+    /// The root layout's descriptor index, which a decode releases a value at when a
+    /// check rejects it; None for a program without checked nodes.
+    root_descriptor: Option<u32>,
 }
 
 /// A cursor over program words; a malformed program is an invariant fault.
@@ -257,6 +278,13 @@ impl Program {
         let count = usize::try_from(w.next()).unwrap_or_else(|_| fault("codec node count"));
         let out_size = w.next();
         let (root, out, bytes) = (w.node(count), w.node(count), w.node(count));
+        let root_descriptor = match w.next() {
+            NO_NODE => None,
+            index => Some(
+                u32::try_from(index)
+                    .unwrap_or_else(|_| fault("a codec descriptor index overflows")),
+            ),
+        };
         let starts: Vec<u64> = (0..count).map(|_| w.next()).collect();
         let mut nodes = Vec::with_capacity(count);
         for start in starts {
@@ -411,9 +439,18 @@ impl Program {
                     }
                 }
                 NODE_PATH => Node::Path,
+                NODE_CHECKED => Node::Checked {
+                    check: usize::try_from(w.next())
+                        .unwrap_or_else(|_| fault("a codec check index overflows")),
+                    value: w.node(count),
+                },
                 _ => fault("an unknown codec node kind"),
             };
             nodes.push(node);
+        }
+        let checked = nodes.iter().any(|n| matches!(n, Node::Checked { .. }));
+        if checked != root_descriptor.is_some() {
+            fault("a codec program whose checks and root descriptor disagree");
         }
         let program = Program {
             nodes,
@@ -421,6 +458,7 @@ impl Program {
             root,
             out,
             bytes,
+            root_descriptor,
         };
         if !matches!(
             program.nodes[program.bytes],
@@ -457,13 +495,18 @@ impl Program {
     }
 }
 
-unsafe fn program<'a>(codec: *const Codec) -> (Program, &'a [u8]) {
+unsafe fn program<'a>(codec: *const Codec) -> (Program, &'a [u8], &'a [CheckThunk]) {
     unsafe {
         let codec = &*codec;
         let words = std::slice::from_raw_parts(codec.program, codec.program_length as usize);
         let descriptor =
             std::slice::from_raw_parts(codec.descriptor, codec.descriptor_length as usize);
-        (Program::parse(words), descriptor)
+        let checks = if codec.check_count == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(codec.checks, codec.check_count as usize)
+        };
+        (Program::parse(words), descriptor, checks)
     }
 }
 
@@ -584,6 +627,10 @@ unsafe fn flat_extent(program: &Program, node: usize, at: *const u8) -> u64 {
                 Node::Repeat { count, stride, .. } => count
                     .checked_mul(*stride)
                     .unwrap_or_else(|| fault("flat repeat extent")),
+                Node::Checked { value, .. } => {
+                    work.push(*value);
+                    0
+                }
                 _ => fault("a non-flat codec node in a flat extent"),
             }
         };
@@ -629,6 +676,7 @@ fn inline_decode(program: &Program, root: usize, input: &mut Input<'_>) -> Vec<u
                     .rev()
                     .map(|&(offset, child)| (child, at + offset as usize)),
             ),
+            Node::Checked { value, .. } => work.push((*value, at)),
             Node::Variant {
                 niche,
                 tag,
@@ -726,6 +774,7 @@ fn flat_decode(program: &Program, root: usize, input: &mut Input<'_>) -> Vec<u8>
             // Zero-size elements keep their ordinary layout identity: their
             // fields have no packing offsets or bytes to reconstruct.
             Node::Fields(fields) => work.extend(fields.iter().rev().map(|&(_, f)| Job::Visit(f))),
+            Node::Checked { value, .. } => work.push(Job::Visit(*value)),
             Node::FlatVariant(arms) => {
                 let ordinal = checked(input.number(4)) as u32;
                 out.extend_from_slice(&ordinal.to_le_bytes());
@@ -786,14 +835,20 @@ enum Put {
     Mark,
     /// The end of the innermost set: sort its elements' encodings.
     SetEnd,
+    /// A decode's check pass: call check `check` on the checked value at `at`, after
+    /// the value's own inner occurrences.
+    Check(usize, *const u8),
 }
 
-/// The SER-2 payload of the value at `value`.
+/// The SER-2 payload of the value at `value`. With `checks`, a decode's check pass over
+/// the value it reconstructed: it also calls each checked node's check, inner occurrences
+/// first and otherwise in encoding order, and is None at the first rejection (SER-1).
 unsafe fn encode_payload(
     ctx: *mut TaskCtx,
     program: &Program,
     value: *const u8,
-) -> Stopped<Vec<u8>> {
+    checks: Option<&[CheckThunk]>,
+) -> Stopped<Option<Vec<u8>>> {
     let mut out = Vec::new();
     let mut work = vec![Put::Visit(program.root, value)];
     // Open sets: where the elements begin, and each element's start.
@@ -804,6 +859,21 @@ unsafe fn encode_payload(
             return Err(budget());
         }
         match job {
+            Put::Check(check, at) => {
+                let thunk = checks
+                    .and_then(|checks| checks.get(check))
+                    .unwrap_or_else(|| fault("a codec check outside the codec's checks"));
+                let mut verdict = 0u8;
+                // SAFETY: the check borrows the reconstructed value at `at`, of its layout.
+                let status = unsafe { thunk(ctx, at, &mut verdict) };
+                match (status, verdict) {
+                    (crate::STATUS_OK, 1) => (),
+                    (crate::STATUS_OK, 0) => return Ok(None),
+                    (crate::STATUS_OK, _) => fault("a codec check verdict that is not a bool"),
+                    // FAIL-3: the codec cannot unwind, so the check's failure ends the run.
+                    _ => return Err(Stop::Failed),
+                }
+            }
             Put::Mark => sets
                 .last_mut()
                 .unwrap_or_else(|| fault("a codec set mark outside a set"))
@@ -910,14 +980,25 @@ unsafe fn encode_payload(
                 if values > LIMIT_VALUES {
                     return Err(budget());
                 }
-                unsafe { encode_node(ctx, program, node, at, &mut out, &mut work, &mut sets) };
+                unsafe {
+                    encode_node(
+                        ctx,
+                        program,
+                        node,
+                        at,
+                        &mut out,
+                        &mut work,
+                        &mut sets,
+                        checks.is_some(),
+                    )
+                };
             }
         }
     }
     if out.len() as u64 > LIMIT_BYTES {
         return Err(budget());
     }
-    Ok(out)
+    Ok(Some(out))
 }
 
 unsafe fn encode_node(
@@ -928,9 +1009,16 @@ unsafe fn encode_node(
     out: &mut Vec<u8>,
     work: &mut Vec<Put>,
     sets: &mut Vec<(usize, Vec<usize>)>,
+    checking: bool,
 ) {
     unsafe {
         match &program.nodes[node] {
+            Node::Checked { check, value } => {
+                if checking {
+                    work.push(Put::Check(*check, at));
+                }
+                work.push(Put::Visit(*value, at));
+            }
             Node::Scalar(Scalar::Bool) => out.push(u8::from(*at != 0)),
             Node::Scalar(Scalar::Integer(width)) => out.extend_from_slice(read(at, *width)),
             Node::Scalar(Scalar::Char) => out.extend_from_slice(read(at, 4)),
@@ -1136,8 +1224,9 @@ unsafe fn encode(
     out: *mut c_void,
 ) -> Stopped<()> {
     unsafe {
-        let (program, descriptor) = program(codec);
-        let payload = encode_payload(ctx, &program, value.cast())?;
+        let (program, descriptor, _) = program(codec);
+        let payload = encode_payload(ctx, &program, value.cast(), None)?
+            .unwrap_or_else(|| fault("an encoding rejected by a check"));
         let mut envelope = Vec::with_capacity(24 + descriptor.len() + payload.len());
         envelope.extend_from_slice(MAGIC);
         envelope.extend_from_slice(&WIRE_VERSION.to_le_bytes());
@@ -1354,7 +1443,9 @@ fn validate(program: &Program, bytes: &[u8]) -> Result<(), Invalid> {
                         let arm = arms.get(tag as usize).ok_or(DecodeError::Tag)?;
                         work.extend(arm.iter().rev().map(|&(_, f)| Check::Visit(f)));
                     }
-                    Node::Framed(child) => work.push(Check::Visit(*child)),
+                    Node::Framed(child) | Node::Checked { value: child, .. } => {
+                        work.push(Check::Visit(*child))
+                    }
                     Node::FlatFields(fields) => {
                         work.extend(fields.iter().rev().map(|&f| Check::Visit(f)))
                     }
@@ -1534,6 +1625,7 @@ unsafe fn materialize(ctx: *mut TaskCtx, program: &Program, bytes: &[u8], out: *
                         work.push(Build::Visit(child, at.add(offset as usize)));
                     }
                 }
+                Node::Checked { value, .. } => work.push(Build::Visit(*value, at)),
                 Node::Variant { .. } => {
                     let ordinal = checked(input.number(4)) as u32;
                     for &(offset, child) in program.write_arm(node, at, ordinal).iter().rev() {
@@ -1716,7 +1808,7 @@ unsafe fn decode(
     out: *mut c_void,
 ) -> Stopped<()> {
     unsafe {
-        let (program, descriptor) = program(codec);
+        let (program, descriptor, checks) = program(codec);
         let Node::Text(text) = &program.nodes[program.bytes] else {
             unreachable!("checked at parse")
         };
@@ -1730,13 +1822,43 @@ unsafe fn decode(
             Ok(payload) => validate(&program, payload).map(|()| payload),
             Err(invalid) => Err(invalid),
         };
-        match checked {
+        let checked = match checked {
             Ok(payload) => {
                 let &[(offset, _)] = program.write_arm(program.out, out, 0) else {
                     fault("a codec result whose Ok arm is not one field");
                 };
-                materialize(ctx, &program, payload, out.add(offset as usize));
+                let value = out.add(offset as usize);
+                materialize(ctx, &program, payload, value);
+                match program.root_descriptor {
+                    None => Ok(()),
+                    // SER-1: every check admits its occurrence, or the value is released.
+                    Some(index) => match encode_payload(ctx, &program, value, Some(checks))? {
+                        Some(_) => Ok(()),
+                        None => {
+                            let mut cleanup =
+                                std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
+                            let status = crate::finalize::hirsel_rt_v2_finalize(
+                                ctx,
+                                index,
+                                value,
+                                std::ptr::null(),
+                                cleanup.as_mut_ptr(),
+                                0,
+                                0,
+                            );
+                            if status != crate::STATUS_OK {
+                                fault("a decoded value's release failed");
+                            }
+                            std::ptr::write_bytes(out, 0, program.out_size as usize);
+                            Err(Invalid::Decode(DecodeError::Invalid))
+                        }
+                    },
+                }
             }
+            Err(invalid) => Err(invalid),
+        };
+        match checked {
+            Ok(()) => (),
             Err(Invalid::Budget) => return Err(budget()),
             Err(Invalid::Decode(error)) => {
                 let &[(offset, error_node)] = program.write_arm(program.out, out, 1) else {

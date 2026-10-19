@@ -198,6 +198,10 @@ pub enum Error {
     /// Checked execution's stop signal. The run entry points turn it into
     /// `Outcome::Trapped`; it never leaves them as an error.
     Trapped(Box<checked::Trap>),
+    /// A failure that ends the run where it stands, without unwinding (FAIL-3: a
+    /// serializable check's failure). The run entry points report it as
+    /// `Outcome::Failed`.
+    Ended(Failure),
 }
 pub(crate) fn invalid(message: impl Into<String>) -> Error {
     Error::InvalidTir(message.into())

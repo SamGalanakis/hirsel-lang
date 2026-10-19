@@ -822,7 +822,11 @@ the admitted constructor list without consuming Source schema descriptors.
 Regular recursion uses declaration applications; nonregular expansion exhaustion
 remains operational. A declaration marked serializable whose authority is only its
 type parameters may leave them unbounded; its representation is proved with them
-admitted. A published Serializable bound is proved with only the declared bounds. The root core
+admitted. A published Serializable bound is proved with only the declared bounds. A
+checked opaque opt-in (`serializable_check`) must be nongeneric, inert, without a
+published bound, capability, resource, drop or fact; its check is independently the
+exact `@noalloc fn(value: T) -> bool uses {}` of the type's own module, and its schema
+node carries that check. The root core
 `Path`, nongeneric, inert and without a representation, is admitted as its text. Hand-built unused signature and generic controls accompany
 Source accept/reject twins.
 

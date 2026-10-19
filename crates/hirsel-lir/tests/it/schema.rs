@@ -685,6 +685,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         root: CodecNodeId(0),
         bytes: CodecNodeId(1),
         result: Some(CodecNodeId(2)),
+        checks: vec![],
     }];
     let arms = PoolRange::push(
         &mut u.pools.switch_arms,

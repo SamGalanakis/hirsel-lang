@@ -271,7 +271,8 @@ file         = { NL | item, END }, EOF ;                 (* LANG-6, PROG-1 *)
 visibility   = "pub", [ "opaque" ] ;                     (* PROG-2 *)
 item         = { attribute | analysis }, [ visibility ],
                ( function | const-def | type-def ) ;     (* LANG-6, PROG-2 *)
-attribute    = "@", ( "test" | "noalloc" | "soa" | "packed" | "blocking" | "incomplete" | "serializable"
+attribute    = "@", ( "test" | "noalloc" | "soa" | "packed" | "blocking" | "incomplete"
+             | "serializable", [ "(", "check", "=", value-path, ")" ]
              | "layout", "(", "c", ")"
              | "align", "(", integer, ")"
              | "capability", "(", ("global" | "local"), ")"
@@ -342,9 +343,10 @@ types.
 
 `@capability` applies to opaque ordinary or resource declarations with a record, variant
 or alias representation, or to a bodyless signature fragment, and states global or
-scoped ([CAP-5](capabilities.md#cap-5-capability-sealing)). `@serializable` is a
-zero-argument attribute on transparent records, variants, unconstrained distinct types and
-flat types; `[T: serializable]` is a generic schema bound
+scoped ([CAP-5](capabilities.md#cap-5-capability-sealing)). `@serializable` is an
+attribute on transparent records, variants, unconstrained distinct types and flat types,
+and, as `@serializable(check = f)`, on an opaque record or variant whose decoded
+representations `f` admits; `[T: serializable]` is a generic schema bound
 ([SER-1](serialization.md#ser-1-serializable-schemas)). Neither is a prefix value
 modifier. Attributes have placement restrictions: layout attributes on types; `noalloc`
 on functions, function types and `drop`; `test` only on ordinary function definitions

@@ -1433,6 +1433,7 @@ mod flat_tests {
                 capability: None,
                 implementation_authority: None,
                 serializable: false,
+                serializable_check: None,
                 layout: Layout {
                     flat: true,
                     ..Layout::default()
@@ -1737,6 +1738,7 @@ mod seal_cleanup_tests {
             capability: Some(CapabilityKind::Global),
             implementation_authority: Some(AuthoritySummary::inert()),
             serializable: false,
+            serializable_check: None,
             layout: Layout::default(),
             distinct: false,
             resource: false,

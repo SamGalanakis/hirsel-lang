@@ -108,7 +108,7 @@ pub(super) fn registry() -> BTreeMap<DefPath, SignatureRef> {
         (
             "DecodeError",
             "",
-            "Version()|SchemaMismatch()|Truncated()|Trailing()|Scalar()|Utf8()|Tag()|Length()|Duplicate()|Order()",
+            "Version()|SchemaMismatch()|Truncated()|Trailing()|Scalar()|Utf8()|Tag()|Length()|Duplicate()|Order()|Invalid()",
         ),
         ("Option", "T", "None()|Some(T)"),
         ("CheckRule", "", "Arithmetic()|TextInvariant()|Bounds()"),
@@ -1049,6 +1049,7 @@ fn type_definition(
         capability: None,
         implementation_authority: None,
         serializable: false,
+        serializable_check: None,
         layout: Layout::default(),
         distinct: false,
         resource: false,
