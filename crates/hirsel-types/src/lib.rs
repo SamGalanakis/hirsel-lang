@@ -1129,6 +1129,8 @@ pub trait SignatureProvider {
 }
 
 #[cfg(test)]
+mod parametric_tests;
+#[cfg(test)]
 mod property_tests;
 #[cfg(test)]
 mod revision_tests;

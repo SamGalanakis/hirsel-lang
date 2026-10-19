@@ -105,6 +105,13 @@ names are unchanged; semantic equality removes names only in its private row com
   `ClosureInfo.result_evidence` records the complete checked body result
   independently of its contextual callable result promise.
 
+`property_tests.rs` and `parametric_tests.rs` check `prove` (Plain, Copyable,
+NeedsRelease, Sendable in its structural, content and after-sharing forms, Flat),
+`structural_equality`, `parametric_inputs` and `unique_rows` against naive references
+written from GEN-1, MODE-2, MODE-4 and MEM-12, over random graphs with modes, handles,
+nominal declarations behind a stub lookup and every bound set. J, I and V all read
+these kernels, so their agreement cannot see a fault in one; the references can.
+
 Structural properties have one declaration-based implementation:
 `structural_property` proves Plain, Copyable, Sendable and NeedsRelease;
 `structural_sendability` derives conditional generic summaries. Transparent
