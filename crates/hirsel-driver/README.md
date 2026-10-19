@@ -118,8 +118,9 @@ Production native import uses `hirsel-layout` for type-to-layout and ABI derivat
 
 `run_path_on_host` is the production interpreter launch. `bind_host_run` either validates
 a record or template, checks the semantic revision and required roots with `admit_run` and,
-with `HostLaunch::Live { record: Some(tape) }`, streams the runtime tape
-(`hirsel_rt::host_launch::record`); or binds a `HostLaunch::Replay` tape's own run to the
+opens the journal at the level the run record's `recording` member selects
+(`hirsel_rt::host_launch::journal`: a streamed tape, or a durable journal, at the
+`HostLaunch::Live { record: Some(tape) }` destination); or binds a `HostLaunch::Replay` tape's own run to the
 checked revision, entry and roots and runs on `hirsel_rt::host_launch::replay`'s SimIo. It
 then executes TIR with `network::HostLibrary`. This adapter translates every Io
 projection, stdout and stderr writes, stdin and Env reads, and filesystem, clock and

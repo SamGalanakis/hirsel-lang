@@ -1007,9 +1007,10 @@ executable's embedded program and entry, then follows the same validation,
 argv snapshot and host admission path as `--hirsel-run`.
 
 Production record and replay are explicit launch inputs, never environment variables.
-`--hirsel-record <tape>` before either launch input streams the admitted run's tape
-(`host_launch::record`): the header binds the canonical record, its admission time and
-the mounts' initial tree before entry, and each completion is flushed before delivery.
+`--hirsel-record <tape>` before either launch input journals the admitted run at its
+record's recording level (`host_launch::journal`): the header binds the canonical record,
+its admission time and the mounts' initial tree before entry, and each completion is
+flushed (`record`) or synced after its prepared request (`durable`) before delivery.
 The tape must lie outside every granted mount and inherited output file.
 `--hirsel-replay <tape>` alone replays it (`host_launch::replay`): it parses the tape,
 checks its run record against the header and recorded admission (`Recording::bound_run`),
