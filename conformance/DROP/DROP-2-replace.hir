@@ -1,6 +1,7 @@
 // rule: DROP-2
 // expect: run
 // stdout: old
+// stdout: marker
 // stdout: new
 // "dropped when its owner replaces it".
 resource type Trace {
@@ -15,5 +16,6 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let stdout = io.stdout(rt)?
   let mut a = Trace(stdout: stdout, text: "old\n")
   a = Trace(stdout: stdout, text: "new\n")
+  let _ = out.print(stdout, "marker\n")
   Ok(())
 }

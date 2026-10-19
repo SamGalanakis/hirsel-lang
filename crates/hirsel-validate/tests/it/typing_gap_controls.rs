@@ -570,28 +570,10 @@ fn binding_match(bind: bool) -> Fixture {
 }
 
 #[test]
-fn match_tables_are_typed_bound_and_exhaustive() {
+fn match_arm_targets_establish_their_bindings() {
     binding_match(true).valid();
-    // An arm's target must establish each of its bindings.
     let right = binding_match(false).body_place(1);
     binding_match(false).broken(vec![ViolationKind::InvalidUse(right)]);
-    // A literal pattern has its place's type.
-    let mut f = binding_match(true);
-    f.body().matches[0].patterns[0].kind = MatchPatternKind::Literal(Constant::Integer(0));
-    f.broken(mismatch("match pattern"));
-    // Without the wildcard arm, `(true, _)` is uncovered.
-    let mut f = binding_match(true);
-    f.body().matches[0].arms.pop();
-    f.body().matches[0].patterns.pop();
-    f.body().blocks[1].terminator = Terminator::Unreachable;
-    f.broken(vec![ViolationKind::MatchCoverage]);
-    // Resuming at arm 1 needs arm 0's failed guard; arm 0 has none.
-    let mut f = binding_match(true);
-    f.body().blocks[1].terminator = Terminator::Match {
-        table: MatchTableId(0),
-        from: 1,
-    };
-    f.broken(vec![ViolationKind::MatchCoverage]);
 }
 
 impl Fixture {

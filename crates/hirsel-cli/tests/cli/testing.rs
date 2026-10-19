@@ -286,7 +286,7 @@ fn snapshots_compare_with_committed_files_and_bless_rewrites_them() {
 fn property_failures_report_the_shrunk_counterexample_and_the_seed_replays_it() {
     let manifest = std_suite(
         "property",
-        "fn small(mut s: test.Source) -> u64 {\n  test.range_u64(mut s, 0, 1000)\n}\n\nfn below(n: u64) -> bool uses {} {\n  n < 500\n}\n\n@test\nfn bounded(t: Test) {\n  test.property(t, small, below, u64.to_string)\n}\n\n@test\nfn equal(t: Test) {\n  test.assert_eq(t, 2u64 + 2, 5, u64.to_string)\n}\n",
+        "fn small(mut s: test.Source) -> u64 {\n  test.range_u64(mut s, 0, 1000)\n}\n\nfn below(n: u64) -> bool uses {} {\n  n < 500\n}\n\n@test\nfn bounded(t: Test) {\n  test.property(t, small, below, u64.to_string)\n}\n\n@test\nfn equal(t: Test) {\n  test.assert_eq(t, 2u64 + 2, 5, u64.to_string)\n}\n\nfn pair(mut s: test.Source) -> (u64, u64) {\n  let a = test.range_u64(mut s, 0, 1000)\n  let b = test.range_u64(mut s, 0, 1000)\n  (a, b)\n}\n\nfn sum_below(p: (u64, u64)) -> bool uses {} {\n  let (a, b) = p\n  a + b < 500\n}\n\nfn show_pair(p: (u64, u64)) -> String {\n  let (a, b) = p\n  f\"({a}, {b})\"\n}\n\n@test\nfn pairs(t: Test) {\n  test.property(t, pair, sum_below, show_pair)\n}\n",
     );
     let output = hirsel_test(&manifest, &["--json"]);
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -302,6 +302,13 @@ fn property_failures_report_the_shrunk_counterexample_and_the_seed_replays_it() 
     assert_eq!(
         json["tests"][1]["report"],
         "assertion failed: actual == expected\n  actual: 4\nexpected: 5\n"
+    );
+    // Two choices: shrinking ends at the least failing choice sequence,
+    // the first choice 0 and the second the least that breaks the law.
+    let pairs = json["tests"][2]["report"].as_str().unwrap();
+    assert!(
+        pairs.starts_with("counterexample: (0, 500)\ntest failure: seed="),
+        "{pairs}"
     );
     let replay = hirsel_test(
         &manifest,

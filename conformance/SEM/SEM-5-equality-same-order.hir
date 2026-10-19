@@ -8,7 +8,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   let mut m: Map[u8, u8] = map.empty()
   map.insert(mut m, 2, 20)
   map.insert(mut m, 1, 10)
-  let n = copy m
+  let mut n: Map[u8, u8] = map.empty()
+  map.insert(mut n, 2, 20)
+  map.insert(mut n, 1, 10)
   out.print(
     io.stdout(rt) ? grant_error,
     if m == n {

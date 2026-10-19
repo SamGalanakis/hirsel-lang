@@ -10,6 +10,7 @@ fn pick[U](take a: U, seen: List[U]) -> U uses {} {
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let seen: List[Bytes] = []
+  let alias = copy seen
   let fresh: unique Bytes = core@1/bytes.from_list([1u8])
   let b: unique Bytes = pick(take fresh, seen)
   Ok(())

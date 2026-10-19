@@ -1,14 +1,19 @@
 // rule: OWN-7
 // expect: run
+// stdout: old
+// stdout: new
 resource type Trace {
   stdout: Stdout,
   text: String,
 }
-drop(x) {}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let o = io.stdout(rt)?
   let mut m: Map[u8, Trace] = map.empty()
+  map.insert(mut m, 1u8, Trace(stdout: o, text: "old\n"))
   for (k, v) in mut m {
     v = Trace(
       stdout: fn() {

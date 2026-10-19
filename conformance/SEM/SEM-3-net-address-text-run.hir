@@ -5,6 +5,11 @@ pub fn main(rt: Io, args: Args) -> Result[(), net.AddrParseError] {
   failure.check(v4 == [192, 168, 0, 1], TextInvariant())
   let v6 = net.parse_ipv6("2001:db8::192.168.0.1")?
   failure.check(net.ip_to_string(V6(v6)) == "2001:db8::c0a8:1", TextInvariant())
+  // RFC 5952 4.2.2: a single zero group is not shortened to `::`.
+  failure.check(
+    net.ip_to_string(V6(net.parse_ipv6("2001:db8:0:1:1:1:1:1")?)) == "2001:db8:0:1:1:1:1:1",
+    TextInvariant()
+  )
   let ip = net.parse_ip("::ffff:192.0.2.128")?
   failure.check(net.ip_to_string(ip) == "::ffff:192.0.2.128", TextInvariant())
   let addr = net.parse_socket_addr("[2001:db8::1]:443")?

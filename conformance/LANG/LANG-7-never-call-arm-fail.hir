@@ -1,12 +1,21 @@
 // rule: LANG-7
-// expect: fail SEM-1 at line 6
+// expect: fail SEM-1 at line 15
+// stdout: dropped
 // The diverging arm drops its owned value, then fails inside the Never callee.
+resource type Label {
+  stdout: Stdout,
+  text: String,
+}
+drop(x) {
+  let _ = out.print(x.stdout, x.text)
+}
+
 fn stop(step: u8) -> Never {
   // Overflows on the first call: the only exit is the failure edge.
   stop(step + 255u8)
 }
 
-fn probe(flag: bool, take label: String) -> u64 {
+fn probe(flag: bool, take label: Label) -> u64 {
   match flag {
     true => 7u64,
     false => {
@@ -19,6 +28,9 @@ fn probe(flag: bool, take label: String) -> u64 {
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
-  let _ = out.print(io.stdout(rt)?, u64.to_string(probe(false, "dropped")))
+  let _ = out.print(
+    io.stdout(rt)?,
+    u64.to_string(probe(false, Label(stdout: io.stdout(rt)?, text: "dropped\n")))
+  )
   Ok(())
 }

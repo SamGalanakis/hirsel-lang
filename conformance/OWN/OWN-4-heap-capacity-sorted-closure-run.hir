@@ -1,6 +1,10 @@
 // rule: OWN-4
 // expect: run
-pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+// stdout: 1
+// stdout: 20
+// The closure call's result shares `m` (CLO-1), so the `mut` argument is a
+// temporary: inserting into it detaches it and leaves `m` with its one entry.
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let by = u32.order
   let mut m: SortedMap[u32, u8] of by = sorted_map.empty(by)
   sorted_map.insert(by, mut m, 2, 20)
@@ -13,5 +17,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
     10
   )
   for (k, v) in mut m {}
+  let stdout = io.stdout(rt)?
+  let _ = out.print(stdout, u64.to_string(sorted_map.len(by, m)))
+  let _ = out.print(stdout, "\n")
+  for (k, v) in m {
+    let _ = out.print(stdout, u8.to_string(v))
+    let _ = out.print(stdout, "\n")
+  }
   Ok(())
 }

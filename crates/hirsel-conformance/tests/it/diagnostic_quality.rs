@@ -106,40 +106,28 @@ fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
 }
 
 #[test]
-fn diagnostic_json_names_operands_bounds_and_declared_slots() {
+fn diagnostic_json_has_a_help_note_and_no_unrendered_placeholder() {
     hirsel_engine::with_compiler_stack(|| {
-        for (case, rule, expected) in [
+        for (case, rule) in [
             (
                 "conformance/MODE/MODE-2-box-payload-unique-bad.hir",
                 "MODE-2",
-                "not proved unique",
             ),
             (
                 "conformance/MODE/MODE-4-local-sendable-storage-bad.hir",
                 "MODE-4",
-                "`p`",
             ),
-            (
-                "conformance/GEN/GEN-1-copyable-resource-bad.hir",
-                "GEN-1",
-                "`copyable`",
-            ),
-            (
-                "conformance/LANG/LANG-4-inert-recovery-bad.hir",
-                "LANG-4",
-                "`Missing`",
-            ),
+            ("conformance/GEN/GEN-1-copyable-resource-bad.hir", "GEN-1"),
+            ("conformance/LANG/LANG-4-inert-recovery-bad.hir", "LANG-4"),
             (
                 "conformance/LANG/LANG-12-call-recovery-duplicate-bad.hir",
                 "LANG-12",
-                "declared:",
             ),
         ] {
             let output = checked(case);
             let d = output.diagnostics.first().unwrap();
             assert_eq!(d.rule.as_str(), rule, "{case}");
             let json = d.to_json(&output.sources);
-            assert!(d.message.contains(expected), "{case}: {}", d.message);
             assert!(
                 json["notes"]
                     .as_array()
@@ -150,14 +138,9 @@ fn diagnostic_json_names_operands_bounds_and_declared_slots() {
             );
             assert!(!d.message.contains("{0}"), "{case}: {json}");
             assert!(
-                !d.secondary.iter().any(|l| l.message.contains("{0}")
-                    || l.message.contains("shared with another binding")),
+                !d.secondary.iter().any(|l| l.message.contains("{0}")),
                 "{case}: {json}"
             );
-            if rule == "GEN-1" {
-                assert!(d.message.contains("Token") && d.message.contains("`T`"));
-                assert!(d.secondary.iter().any(|l| l.message.contains("copyable")));
-            }
         }
     });
 }

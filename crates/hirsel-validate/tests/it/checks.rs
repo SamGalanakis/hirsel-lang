@@ -3484,9 +3484,17 @@ fn comparison_nested_qualifiers_but_uniqueness_and_arithmetic_operands_remain_ex
     let (allocating, _, _) = nested_comparison(|t| t.drop_allocation = DropAllocation::MayAllocate);
     // The forged cleanup also fails the tuple's construction; only the
     // comparison is under test.
-    assert!(allocating.kinds().contains(&ViolationKind::TypeMismatch {
-        entity: "binary operands"
-    }));
+    assert_eq!(
+        allocating.kinds(),
+        vec![
+            ViolationKind::TypeMismatch {
+                entity: "constructor field"
+            },
+            ViolationKind::TypeMismatch {
+                entity: "binary operands"
+            }
+        ]
+    );
     revise_comparison_place(&mut f, result, |t| {
         t.kind = TypeKind::Primitive(Primitive::U8)
     });

@@ -2,6 +2,9 @@
 // expect: run
 // cespare/xxhash TestAll vectors, seeded and unseeded, in chunks of 1, 4, 16 and
 // 64 bytes; the 63-byte input reaches every lane, word, half-word and byte path.
+// The 8-, 16-, 24- and 40-byte prefixes leave a tail of whole 8-byte words, so
+// the word loop runs exactly to its bound; their seed-0 digests are from the
+// reference XXH64 (python-xxhash 4.0.2 over libxxhash 0.8.3).
 fn check(input: String, seed: u64, expected: u64) -> () {
   let data = string.as_bytes(input)
   if seed == 0 {
@@ -34,6 +37,10 @@ pub fn main() -> Result[(), ()] {
   check("as", 0u64, 0x1c330fb2d66be179u64)
   check("asd", 0u64, 0x631c37ce72a97393u64)
   check("asdf", 0u64, 0x415872f599cea71eu64)
+  check("Call me ", 0u64, 0x61b25793fa1f1b73u64)
+  check("Call me Ishmael.", 0u64, 0x6d04390fc9d61a90u64)
+  check("Call me Ishmael. Some ye", 0u64, 0xeb89ea1384fe2b63u64)
+  check("Call me Ishmael. Some years ago--never m", 0u64, 0x0960f1368e3d18ceu64)
   check(
     "Call me Ishmael. Some years ago--never mind how long precisely-",
     0u64,

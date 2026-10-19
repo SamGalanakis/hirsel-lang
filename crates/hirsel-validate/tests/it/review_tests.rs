@@ -10195,22 +10195,20 @@ fn constant_size_actuals_are_complete_and_lexically_declared() {
         };
         match variant {
             0 => f.valid(),
-            1 => assert!(
-                f.kinds().contains(&ViolationKind::Arity {
+            1 => assert_eq!(
+                f.kinds(),
+                vec![ViolationKind::Arity {
                     entity: "constant size arguments",
                     expected: 1,
                     actual: 0
-                }),
-                "{:?}",
-                f.kinds()
+                }]
             ),
-            _ => assert!(
-                f.kinds().contains(&ViolationKind::InvalidId {
+            _ => assert_eq!(
+                f.kinds(),
+                vec![ViolationKind::InvalidId {
                     arena: "size parameter",
                     index: 0
-                }),
-                "{:?}",
-                f.kinds()
+                }]
             ),
         }
     }

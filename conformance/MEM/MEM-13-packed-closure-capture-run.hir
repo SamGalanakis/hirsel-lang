@@ -1,11 +1,16 @@
 // rule: MEM-13
 // expect: run
+// stdout: 1
 type Choice = Small(value: u64) | Large(value: u64, extra: u64)
 
-pub fn main(rt: Io, args: Args) -> Result[(), CliError] {
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let mut x: Packed[Choice] = Small(value: 1)
   let last_use_view = fn() {
     copy x
   }
+  let chosen = last_use_view()
+  let out = io.stdout(rt)?
+  let _ = out.print(out, u64.to_string(chosen.Small.value))
+  let _ = out.print(out, "\n")
   Ok(())
 }

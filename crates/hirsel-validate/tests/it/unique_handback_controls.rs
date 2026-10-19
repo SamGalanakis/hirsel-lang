@@ -43,22 +43,19 @@ fn promise(f: &mut Fixture) {
     }]
     .into();
 }
-/// Every exit that observes the lost proof reports it, the call's failure edge included.
-fn handback_error(f: &Fixture, entity: &'static str) {
-    let kinds = f.kinds();
-    assert!(!kinds.is_empty());
-    assert!(
-        kinds
-            .iter()
-            .all(|k| *k == ViolationKind::TypeMismatch { entity }),
-        "{kinds:?}"
+/// Every exit that observes the lost proof reports it, the call's failure edge
+/// included: `exits` reports, each naming the hand-back.
+fn handback_error(f: &Fixture, entity: &'static str, exits: usize) {
+    assert_eq!(
+        f.kinds(),
+        vec![ViolationKind::TypeMismatch { entity }; exits]
     );
 }
 
 #[test]
 fn a_unique_mut_parameter_must_be_handed_back_unique() {
     sharing(false).valid(); // The same body, for a plain `mut` parameter.
-    handback_error(&sharing(true), "mutable unique hand-back");
+    handback_error(&sharing(true), "mutable unique hand-back", 1);
     let (mut f, _) = handback(true);
     finish(&mut f);
     f.valid();
@@ -69,7 +66,7 @@ fn a_preserves_unique_body_is_proved_with_its_selection_entering_unique() {
     let mut f = sharing(false);
     f.valid(); // Without the promise.
     promise(&mut f);
-    handback_error(&f, "preserved unique hand-back");
+    handback_error(&f, "preserved unique hand-back", 1);
     let (mut f, _) = handback(false);
     finish(&mut f);
     promise(&mut f);
@@ -140,8 +137,16 @@ fn preserving_call(preserves: bool, aliased: bool) -> Fixture {
 #[test]
 fn a_preserving_call_with_unique_inputs_keeps_the_argument_unique() {
     preserving_call(true, false).valid();
-    handback_error(&preserving_call(false, false), "preserved unique hand-back");
-    handback_error(&preserving_call(true, true), "preserved unique hand-back");
+    handback_error(
+        &preserving_call(false, false),
+        "preserved unique hand-back",
+        2,
+    );
+    handback_error(
+        &preserving_call(true, true),
+        "preserved unique hand-back",
+        2,
+    );
 }
 
 /// `fn main() -> unique String { callee(take "fresh") }`, through a callee
@@ -200,7 +205,12 @@ fn preserving_result(preserves: bool) -> Fixture {
 #[test]
 fn a_preserving_taken_input_makes_the_result_unique() {
     preserving_result(true).valid();
-    assert!(!preserving_result(false).kinds().is_empty());
+    assert_eq!(
+        preserving_result(false).kinds(),
+        vec![ViolationKind::TypeMismatch {
+            entity: "value modes"
+        }]
+    );
 }
 
 #[test]
@@ -242,7 +252,7 @@ fn an_indirect_call_does_not_use_the_promise() {
         value: operand(place, UseKind::Borrow),
         arguments: vec![],
     };
-    handback_error(&f, "preserved unique hand-back");
+    handback_error(&f, "preserved unique hand-back", 2);
 }
 
 /// `@preserves_unique(x) fn main(mut x: String, y: String)` calling a
@@ -313,14 +323,14 @@ fn borrowing_call(core: bool, unretained: &[u32]) -> Fixture {
 #[test]
 fn a_bodyless_core_promise_needs_plain_borrowed_arguments() {
     borrowing_call(false, &[]).valid(); // A proved body only shares out of `y`.
-    handback_error(&borrowing_call(true, &[]), "preserved unique hand-back");
+    handback_error(&borrowing_call(true, &[]), "preserved unique hand-back", 2);
 }
 
 #[test]
 fn an_unretained_borrowed_argument_is_exempt_from_the_core_clause() {
     borrowing_call(true, &[1]).valid(); // The ledger says `y` is only read.
     // Marking another parameter leaves `y` under the clause.
-    handback_error(&borrowing_call(true, &[0]), "preserved unique hand-back");
+    handback_error(&borrowing_call(true, &[0]), "preserved unique hand-back", 2);
 }
 
 /// `fn main(mut x: unique String)` calling `view(x) -> String in x`, whose
@@ -405,12 +415,11 @@ fn a_related_result_share_ends_with_the_result() {
     // The result's share of `x` dies before the return: `x` leaves unique.
     viewing_call(false).valid();
     // The returned result keeps it, so `x` cannot be handed back unique.
-    let kinds = viewing_call(true).kinds();
-    assert!(
-        kinds.contains(&ViolationKind::TypeMismatch {
+    assert_eq!(
+        viewing_call(true).kinds(),
+        vec![ViolationKind::TypeMismatch {
             entity: "mutable unique hand-back"
-        }),
-        "{kinds:?}"
+        }]
     );
 }
 
@@ -427,7 +436,7 @@ fn a_foreign_promise_is_not_used() {
         blocking: false,
         aliasing_contract: "Retains nothing.".into(),
     });
-    handback_error(&f, "preserved unique hand-back");
+    handback_error(&f, "preserved unique hand-back", 2);
 }
 
 /// Where the share `view(x)` returns is when the body next needs `x` unique.
@@ -594,8 +603,18 @@ fn a_dead_related_share_leaves_its_storage_unique_mid_body() {
     // The share died before the body needs `x` unique again.
     viewed_then_needed(Share::Dropped).valid();
     // Its temporary, or the local it moved to, still holds it.
-    assert!(!viewed_then_needed(Share::Held).kinds().is_empty());
-    assert!(!viewed_then_needed(Share::Moved).kinds().is_empty());
+    assert_eq!(
+        viewed_then_needed(Share::Held).kinds(),
+        vec![ViolationKind::TypeMismatch {
+            entity: "call argument"
+        }]
+    );
+    assert_eq!(
+        viewed_then_needed(Share::Moved).kinds(),
+        vec![ViolationKind::TypeMismatch {
+            entity: "call argument"
+        }]
+    );
 }
 
 #[test]
@@ -805,7 +824,7 @@ fn format_body(aliases: bool, associated: bool) -> Fixture {
 fn a_format_association_implies_the_builder_body_proof() {
     format_body(true, false).valid();
     format_body(false, true).valid();
-    handback_error(&format_body(true, true), "preserved unique hand-back");
+    handback_error(&format_body(true, true), "preserved unique hand-back", 1);
 }
 
 /// `fn main(mut x: String, mut z: String)` calling `callee(mut x, mut z)`,
@@ -876,13 +895,13 @@ fn a_plain_mut_sibling_does_not_block_a_proved_promise() {
     // The callee's proof took `z` aliased, so `x` comes back unique.
     sibling_call(false, false).valid();
     // A bodyless core promise has no proof covering `z`.
-    handback_error(&sibling_call(true, false), "mutable unique hand-back");
+    handback_error(&sibling_call(true, false), "mutable unique hand-back", 2);
 }
 
 #[test]
 fn a_preserves_unique_proof_enters_a_plain_mut_sibling_aliased() {
     // `z` enters as declared, so the core callee cannot keep `x` unique.
-    handback_error(&sibling_call(true, true), "preserved unique hand-back");
+    handback_error(&sibling_call(true, true), "preserved unique hand-back", 2);
     sibling_call(false, true).valid();
 }
 
@@ -1056,7 +1075,12 @@ fn a_parametric_result_is_unique_only_from_unique_inputs() {
     // `first` can only move a `T` out of its unique list.
     parametric_call(true).valid();
     // An aliased list may share its elements: the unique result is forged.
-    assert!(!parametric_call(false).kinds().is_empty());
+    assert_eq!(
+        parametric_call(false).kinds(),
+        vec![ViolationKind::TypeMismatch {
+            entity: "value modes"
+        }]
+    );
 }
 
 /// A resource whose finalizer may fail (DROP-2).
@@ -1177,7 +1201,7 @@ fn released_resource(weakened: bool) -> Fixture {
 fn a_failing_finalizer_is_a_hand_back_failure_site() {
     released_resource(false).valid();
     // The finalizer may fail while `kept` shares `x`.
-    handback_error(&released_resource(true), "mutable unique hand-back");
+    handback_error(&released_resource(true), "mutable unique hand-back", 1);
 }
 
 /// What a `parametric_call` variant passes `first` beside `xs`.
@@ -1390,10 +1414,11 @@ fn a_borrowed_input_supplies_nothing_to_a_checked_parametric_body() {
     // A checked `first` cannot move a `T` out of `seen` or return a share of it.
     parametric_variant(Extra::Borrowed { core: false }).valid();
     // A bodyless core `first` might hand back a share of `seen`.
-    assert!(
-        !parametric_variant(Extra::Borrowed { core: true })
-            .kinds()
-            .is_empty()
+    assert_eq!(
+        parametric_variant(Extra::Borrowed { core: true }).kinds(),
+        vec![ViolationKind::TypeMismatch {
+            entity: "value modes"
+        }]
     );
 }
 
@@ -1402,10 +1427,11 @@ fn a_nominal_part_naming_no_held_parameter_is_ignored() {
     // `label: Shared[String]` cannot hold or hand over a `T`.
     parametric_variant(Extra::Named { thunk: false }).valid();
     // `label: fn() -> T` can hand over a `T` the caller still holds.
-    assert!(
-        !parametric_variant(Extra::Named { thunk: true })
-            .kinds()
-            .is_empty()
+    assert_eq!(
+        parametric_variant(Extra::Named { thunk: true }).kinds(),
+        vec![ViolationKind::TypeMismatch {
+            entity: "value modes"
+        }]
     );
 }
 
@@ -1414,10 +1440,11 @@ fn a_lent_callback_without_authority_or_counted_outputs_supplies_nothing() {
     // `fn(view: T) -> u64 uses {}` has nowhere to keep a copy of the `T`.
     parametric_variant(Extra::Lent { pure: true }).valid();
     // With authority it might keep one beyond the call.
-    assert!(
-        !parametric_variant(Extra::Lent { pure: false })
-            .kinds()
-            .is_empty()
+    assert_eq!(
+        parametric_variant(Extra::Lent { pure: false }).kinds(),
+        vec![ViolationKind::TypeMismatch {
+            entity: "value modes"
+        }]
     );
 }
 
@@ -1549,5 +1576,10 @@ fn a_callback_tuple_of_unique_parts_is_a_unique_result() {
     // A tuple owns no block of its own, so unique parts make it unique.
     tuple_result(true).valid();
     // An aliased part leaves the result aliased: the unique return is forged.
-    assert!(!tuple_result(false).kinds().is_empty());
+    assert_eq!(
+        tuple_result(false).kinds(),
+        vec![ViolationKind::TypeMismatch {
+            entity: "value modes"
+        }]
+    );
 }

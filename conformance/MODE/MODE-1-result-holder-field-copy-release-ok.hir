@@ -29,5 +29,5 @@ fn probe(mut x: Bytes, mut y: Bytes, c: bool) {
   slot.left = b"fresh"
   kept = b"new"
   bump(mut x)
-  ()
+  let read = kept
 }

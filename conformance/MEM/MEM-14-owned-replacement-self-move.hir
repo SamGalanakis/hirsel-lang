@@ -1,5 +1,6 @@
 // rule: MEM-14
-// expect: accept
+// expect: run
+// stdout: ok
 // "insertion and removal keep [identity]". The self-assignment moves the
 // value out and back without a written take; the binding still receives a
 // fresh identity and new slot ids name it (issue #75).

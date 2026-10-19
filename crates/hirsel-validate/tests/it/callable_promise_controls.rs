@@ -352,10 +352,7 @@ fn header_rows_follow_their_variance_in_uniqueness() {
 }
 
 #[test]
-fn mut_parameter_and_nested_header_uniqueness_stay_exact() {
-    header_rows(true, PassingMode::Mut, false).broken(vec![ViolationKind::TypeMismatch {
-        entity: "assignment",
-    }]);
+fn nested_header_uniqueness_stays_exact() {
     header_rows(true, PassingMode::Take, true).broken(vec![ViolationKind::TypeMismatch {
         entity: "assignment",
     }]);

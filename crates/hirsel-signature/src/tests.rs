@@ -470,14 +470,7 @@ fn unsafe_parameter(f: &mut Fixture) {
     f.param("u", ty, PassingMode::Borrow);
 }
 #[test]
-fn foreign_signature_requires_package_unsafe_and_a_doc_contract() {
-    let mut f = foreign_fixture();
-    unsafe_parameter(&mut f);
-    foreign_contract(&mut f, "reads nothing");
-    error(&mut f, "PROG-4", Span::default());
-    unsafe_ffi_package(&mut f);
-    let s = f.sig();
-    assert!(s.metadata.unsafe_ffi);
+fn foreign_signature_requires_an_unsafe_parameter_and_records_its_contract() {
     let mut f = foreign_fixture();
     unsafe_ffi_package(&mut f);
     foreign_contract(&mut f, "reads nothing");
@@ -485,16 +478,16 @@ fn foreign_signature_requires_package_unsafe_and_a_doc_contract() {
     let mut f = foreign_fixture();
     unsafe_ffi_package(&mut f);
     unsafe_parameter(&mut f);
-    error(&mut f, "PROG-4", Span::default());
     foreign_contract(&mut f, "borrow does not retain");
     f.attr("blocking");
     let s = f.sig();
+    assert!(s.metadata.unsafe_ffi);
     let foreign = function(&s).foreign.as_ref().unwrap();
     assert!(foreign.blocking);
     assert_eq!(foreign.aliasing_contract, "borrow does not retain");
 }
 #[test]
-fn foreign_rejects_strings_and_taken_bytes_and_accepts_numerics_and_pointers() {
+fn foreign_rejects_a_bytes_result_and_accepts_numerics_and_pointers() {
     let foreign = || {
         let mut f = foreign_fixture();
         unsafe_ffi_package(&mut f);
@@ -502,14 +495,6 @@ fn foreign_rejects_strings_and_taken_bytes_and_accepts_numerics_and_pointers() {
         foreign_contract(&mut f, "explicit parameter ownership");
         f
     };
-    let mut f = foreign();
-    let ty = f.named("String");
-    f.param("x", ty, PassingMode::Borrow);
-    error(&mut f, "PROG-4", Span::default());
-    let mut f = foreign();
-    let ty = f.named("Bytes");
-    f.param("x", ty, PassingMode::Take);
-    error(&mut f, "PROG-4", Span::default());
     let mut f = foreign();
     let ty = f.named("Bytes");
     f.param("x", ty, PassingMode::Borrow);

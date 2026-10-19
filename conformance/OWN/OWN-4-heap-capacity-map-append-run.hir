@@ -1,6 +1,6 @@
 // rule: OWN-4
 // expect: run
-// stdout: bad
+// stdout: ok
 fn output_error[E](take e: E) -> () {}
 
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {
@@ -11,9 +11,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {
   out.print(
     io.stdout(rt) ? grant_error,
     if m == n {
-      "ok\n"
-    } else {
       "bad\n"
+    } else {
+      "ok\n"
     }
   ) ? output_error
   Ok(())

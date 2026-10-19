@@ -13,7 +13,7 @@ fn probe(mut x: Bytes) {
   let mut slot = view(x)
   slot = b"fresh"
   bump(mut x)
-  ()
+  let read = slot
 }
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {

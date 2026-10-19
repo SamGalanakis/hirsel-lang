@@ -1011,20 +1011,11 @@ fn structural_handle_payload(receiver: bool, local: bool) -> Fixture {
 #[test]
 fn projected_handle_sendability_is_structural_and_requires_global_content() {
     structural_handle_payload(false, false).valid();
-    for f in [
-        structural_handle_payload(true, false),
-        structural_handle_payload(false, true),
+    // A Receiver payload is not sendable; local content cannot become global.
+    for (f, entity) in [
+        (structural_handle_payload(true, false), "sendable receipt"),
+        (structural_handle_payload(false, true), "assignment"),
     ] {
-        assert!(
-            f.kinds().contains(&ViolationKind::TypeMismatch {
-                entity: "value modes"
-            }) || f.kinds().contains(&ViolationKind::TypeMismatch {
-                entity: "sendable receipt"
-            }) || f.kinds().contains(&ViolationKind::TypeMismatch {
-                entity: "assignment"
-            }),
-            "{:?}",
-            f.kinds()
-        );
+        assert_eq!(f.kinds(), vec![ViolationKind::TypeMismatch { entity }]);
     }
 }

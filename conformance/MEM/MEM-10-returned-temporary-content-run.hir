@@ -1,5 +1,7 @@
 // rule: MEM-10
 // expect: run
+// stdout: tail
+// stdout: head
 fn pick(xs: List[Bytes], x: Bytes) -> Bytes in {xs, x} {
   for e in xs {
     return e
@@ -10,6 +12,14 @@ fn pick(xs: List[Bytes], x: Bytes) -> Bytes in {xs, x} {
   }
 }
 
-pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let empty: List[Bytes] = []
+  if pick(empty, b"tail") == b"tail" {
+    let _ = out.print(stdout, "tail\n")
+  }
+  if pick([b"head"], b"tail") == b"head" {
+    let _ = out.print(stdout, "head\n")
+  }
   Ok(())
 }

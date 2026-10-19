@@ -31,5 +31,5 @@ fn probe(mut x: Bytes, mut y: Bytes, c: bool) {
     slot.left = b"b"
   }
   bump(mut x)
-  ()
+  let read = slot
 }

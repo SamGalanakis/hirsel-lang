@@ -16,5 +16,5 @@ fn bump(mut x: Bytes) {
 fn probe(mut x: Bytes, mut y: Bytes) {
   let kept = Pair(left: view(x), right: view(y)).left
   bump(mut y)
-  ()
+  let read = kept
 }
