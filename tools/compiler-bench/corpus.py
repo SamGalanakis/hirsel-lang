@@ -197,7 +197,7 @@ def stress_nest(d):
 
 def stress_instances(n):
     h = ['type Cell[T] {\n  value: T,\n  count: u64,\n}\n',
-         'fn cell[T](v: T) -> Cell[T] {\n  Cell(value: v, count: 1)\n}\n']
+         'fn cell[T](take v: T) -> Cell[T] {\n  Cell(value: v, count: 1)\n}\n']
     r = ['#[allow(dead_code)]\nstruct Cell<T> {\n    value: T,\n    count: u64,\n}\n',
          'fn cell<T>(v: T) -> Cell<T> {\n    Cell { value: v, count: 1 }\n}\n']
     for k in range(n):

@@ -26,6 +26,9 @@ A command the kernel kills at the cap is recorded as a `cap` cell, which is a
 finding and not something to retry. A scale series stops at the first size that
 reaches the cap or the timeout. Native build modes first build the pinned native
 toolchains on the Buck2 pool, as `bench/native/suite.py` does.
+The runtime archives come from the tree `run` is in, and the toolchain bundle
+has none. So build `--toolchain` from that same commit, or a native link can
+fail on runtime symbols the two disagree on.
 
 ## Per-phase timings
 
