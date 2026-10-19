@@ -220,6 +220,8 @@ changes the strict comparator used for published types.
 actual arguments. It is independent of field storage compatibility and fixed-size
 layout. String/Bytes roots fail; explicit flat layouts and opaque Flat exports
 qualify, and ordinary nominal values require pointer-free Plain representation.
+Tuples, records, variants and `Inline`/`Simd` arrays opt into nothing, so they need
+the same Plain proof: an inline array of a `flat type` owning a String is not flat.
 Transparent aliases preserve the represented value's proof.
 
 Plain alone cannot prove Flat because it permits raw pointers and SlotId handles.

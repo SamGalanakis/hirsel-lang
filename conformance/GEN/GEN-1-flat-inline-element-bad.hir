@@ -1,0 +1,14 @@
+// rule: GEN-1
+// expect: reject GEN-1 at line 13
+// MEM-12: an inline array does not opt into flat, so it qualifies only through a
+// plain, pointer-free representation, as a tuple does; a flat element owning a
+// String is not plain.
+flat type Item {
+  sku: String,
+}
+
+fn use_flat[T: flat](x: T) {}
+
+fn example(x: Inline[Item, 2]) {
+  use_flat(x)
+}

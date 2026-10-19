@@ -375,11 +375,19 @@ fn prove(
         {
             return Ok(Sendability::NotSendable);
         }
+        // MEM-12: an aggregate that does not opt in, inline arrays included,
+        // is flat only through a plain, pointer-free representation.
         if bound == Bound::Flat
             && !plain_known
             && matches!(
                 row.kind,
-                TypeKind::Tuple(_) | TypeKind::Record(_) | TypeKind::Variant(_)
+                TypeKind::Tuple(_)
+                    | TypeKind::Record(_)
+                    | TypeKind::Variant(_)
+                    | TypeKind::Builtin {
+                        kind: BuiltinType::Inline | BuiltinType::Simd,
+                        ..
+                    }
             )
         {
             if prove(

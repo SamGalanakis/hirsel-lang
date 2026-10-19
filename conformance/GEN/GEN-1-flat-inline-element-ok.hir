@@ -1,0 +1,14 @@
+// rule: GEN-1
+// expect: accept
+// Accepted twin: an inline array of plain, pointer-free elements is flat.
+type Point {
+  x: u32,
+  y: u32,
+}
+
+fn use_flat[T: flat](x: T) {}
+
+fn example(x: Inline[Point, 2], y: Inline[u32, 2]) {
+  use_flat(x)
+  use_flat(y)
+}
