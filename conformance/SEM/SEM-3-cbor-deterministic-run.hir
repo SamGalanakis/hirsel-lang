@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// RFC 8949 section 4.2.1: shortest exact floats and encoded text-key order.
+pub fn main() -> Result[(), OutputError] {
+  let mut entries: Map[String, json.Value] = map.empty()
+  map.insert(mut entries, "aa", Number("2"))
+  map.insert(mut entries, "z", Number("1"))
+  let value: json.Value = Object(take entries)
+  match cbor.encode(value, true) {
+    Ok(data) => failure.check(
+      data == b"\xa2\x61\x7a\x01\x62\x61\x61\x02",
+      TextInvariant()
+    ),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(value, false) {
+    Ok(data) => failure.check(
+      data == b"\xa2\x62\x61\x61\x02\x61\x7a\x01",
+      TextInvariant()
+    ),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  let mut reversed: Map[String, json.Value] = map.empty()
+  map.insert(mut reversed, "z", Number("1"))
+  map.insert(mut reversed, "aa", Number("2"))
+  let reordered: json.Value = Object(take reversed)
+  match cbor.encode(reordered, true) {
+    Ok(data) => failure.check(data == b"\xa2\x61z\x01\x62aa\x02", TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number("1.5"), false) {
+    Ok(data) => failure.check(
+      data == b"\xfb\x3f\xf8\x00\x00\x00\x00\x00\x00",
+      TextInvariant()
+    ),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

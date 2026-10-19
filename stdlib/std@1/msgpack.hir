@@ -1,0 +1,276 @@
+// Port of rmp marker dispatch and integer/string/collection encoding, and
+// rmpv read_value/write_value, cf880019f72e35a884659a9b29d9eb89b862670b (MIT).
+// The JSON domain excludes binary/ext, non-string map keys and nonfinite floats.
+fn node(data: Bytes, mut pos: u64, depth: u64) -> Result[json.Value, binary.DecodeError] uses {} {
+  let start = pos
+  let marker = internal.binary_json.read(data, mut pos, 1)?
+  if marker < 128 {
+    return Ok(Number(u64.to_string(marker)))
+  }
+  if marker >= 224 {
+    return Ok(Number(internal.binary_json.negative(255 - marker)))
+  }
+  if marker == 192 {
+    return Ok(Null())
+  }
+  if marker == 194 || marker == 195 {
+    return Ok(Bool(marker == 195))
+  }
+  if marker >= 204 && marker <= 211 {
+    let signed = marker >= 208
+    let width = 1u64 << (marker - 204) % 4
+    let value = internal.binary_json.read(data, mut pos, width)?
+    if signed && value >> width * 8 - 1 != 0 {
+      let mask = if width == 8 {
+        18446744073709551615u64
+      } else {
+        (1u64 << width * 8) - 1
+      }
+      return Ok(Number(internal.binary_json.negative(value ^ mask)))
+    }
+    return Ok(Number(u64.to_string(value)))
+  }
+  if marker == 202 {
+    let bits: u32 = core@1/int.narrow(internal.binary_json.read(data, mut pos, 4)?)
+    return internal.binary_json.finite(
+      core@1/f64.from_f32(core@1/f32.from_bits(bits)),
+      start
+    )
+  }
+  if marker == 203 {
+    return internal.binary_json.finite(
+      core@1/f64.from_bits(internal.binary_json.read(data, mut pos, 8)?),
+      start
+    )
+  }
+  if marker >= 160 && marker <= 191 || marker >= 217 && marker <= 219 {
+    let length = if marker < 192 {
+      marker - 160
+    } else {
+      internal.binary_json.read(data, mut pos, 1u64 << marker - 217)?
+    }
+    return Ok(Text(internal.binary_json.string(data, mut pos, length)?))
+  }
+  let array = marker >= 144 && marker <= 159 || marker == 220 || marker == 221
+  let object = marker >= 128 && marker <= 143 || marker == 222 || marker == 223
+  if !array && !object {
+    return if marker == 193 {
+      Error(Syntax(start))
+    } else {
+      Error(Unsupported(start))
+    }
+  }
+  if depth == internal.binary_json.MAX_NESTING {
+    return Error(Nesting(start))
+  }
+  let count = if marker < 160 {
+    marker & 15u64
+  } else {
+    internal.binary_json.read(
+      data,
+      mut pos,
+      if marker % 2 == 0 {
+        2
+      } else {
+        4
+      }
+    )?
+  }
+  // Every child consumes at least one byte. Check counts before allocating.
+  let remaining = core@1/bytes.len(data) - pos
+  if count > remaining / if array {
+    1u64
+  } else {
+    2u64
+  } {
+    return Error(Truncated(pos))
+  }
+  let mut i: u64 = 0
+  if array {
+    let mut items: List[json.Value] = []
+    while i < count {
+      let child = node(data, mut pos, depth + 1)?
+      core@1/list.push(mut items, take child)
+      i += 1
+    }
+    return Ok(Array(take items))
+  }
+  let mut entries: Map[String, json.Value] = core@1/map.empty()
+  while i < count {
+    let key_pos = pos
+    let key_value = node(data, mut pos, depth + 1)?
+    let key = match take key_value {
+      Text(s) => take s,
+      _ => return Error(Unsupported(key_pos)),
+    }
+    if let Some(_) = core@1/map.get(entries, key) {
+      return Error(DuplicateKey(key_pos))
+    }
+    let child = node(data, mut pos, depth + 1)?
+    core@1/map.insert(mut entries, take key, take child)
+    i += 1
+  }
+  Ok(Object(take entries))
+}
+
+/// Decode exactly one MessagePack value in the JSON domain. Decimal lexemes
+/// represent wire integers exactly; finite floats use shortest binary64 text.
+pub fn decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {} {
+  let mut pos: u64 = 0
+  let value = node(data, mut pos, 0)?
+  if pos != core@1/bytes.len(data) {
+    return Error(Trailing(pos))
+  }
+  Ok(take value)
+}
+
+@preserves_unique(out)
+fn header(count: u64, fixed: u64, limit: u64, marker: u64, mut out: List[u8]) -> Result[
+  (),
+  binary.DecodeError
+] uses {} {
+  if count < limit {
+    internal.binary_json.write(fixed + count, 1, mut out)
+  } else if count <= 65535 {
+    internal.binary_json.write(marker, 1, mut out)
+    internal.binary_json.write(count, 2, mut out)
+  } else if count <= 4294967295 {
+    internal.binary_json.write(marker + 1, 1, mut out)
+    internal.binary_json.write(count, 4, mut out)
+  } else {
+    return Error(Unsupported(count))
+  }
+  Ok(())
+}
+
+@preserves_unique(out)
+fn string(value: String, mut out: List[u8]) -> Result[(), binary.DecodeError] uses {} {
+  let data = core@1/string.as_bytes(value)
+  let count = core@1/bytes.len(data)
+  if count < 32 {
+    internal.binary_json.write(160 + count, 1, mut out)
+  } else if count <= 255 {
+    internal.binary_json.write(217, 1, mut out)
+    internal.binary_json.write(count, 1, mut out)
+  } else {
+    header(count, 160, 32, 218, mut out)?
+  }
+  text.append(mut out, value)
+  Ok(())
+}
+
+@preserves_unique(out)
+fn number(value: String, mut out: List[u8]) -> Result[(), binary.DecodeError] uses {} {
+  match internal.binary_json.numeric(value)? {
+    Unsigned(n) => {
+      if n < 128 {
+        internal.binary_json.write(n, 1, mut out)
+      } else {
+        let width: u64 = if n <= 255 {
+          1
+        } else if n <= 65535 {
+          2
+        } else if n <= 4294967295 {
+          4
+        } else {
+          8
+        }
+        let marker: u64 = if width == 1 {
+          204
+        } else if width == 2 {
+          205
+        } else if width == 4 {
+          206
+        } else {
+          207
+        }
+        internal.binary_json.write(marker, 1, mut out)
+        internal.binary_json.write(n, width, mut out)
+      }
+    },
+    Negative(n) => {
+      if n > 9223372036854775807u64 {
+        return Error(InvalidNumber())
+      }
+      if n < 32 {
+        internal.binary_json.write(255 - n, 1, mut out)
+      } else {
+        let width: u64 = if n <= 127 {
+          1
+        } else if n <= 32767 {
+          2
+        } else if n <= 2147483647 {
+          4
+        } else {
+          8
+        }
+        let marker: u64 = if width == 1 {
+          208
+        } else if width == 2 {
+          209
+        } else if width == 4 {
+          210
+        } else {
+          211
+        }
+        internal.binary_json.write(marker, 1, mut out)
+        internal.binary_json.write(~n, width, mut out)
+      }
+    },
+    Float(n) => {
+      internal.binary_json.write(203, 1, mut out)
+      internal.binary_json.write(core@1/f64.bits(n), 8, mut out)
+    },
+  }
+  Ok(())
+}
+
+@preserves_unique(out)
+fn write(value: json.Value, mut out: List[u8], depth: u64) -> Result[
+  (),
+  binary.DecodeError
+] uses {} {
+  match value {
+    Null() => internal.binary_json.write(192, 1, mut out),
+    Bool(b) => internal.binary_json.write(
+      if b {
+        195
+      } else {
+        194
+      },
+      1,
+      mut out
+    ),
+    Number(n) => number(n, mut out)?,
+    Text(s) => string(s, mut out)?,
+    Array(items) => {
+      if depth == internal.binary_json.MAX_NESTING {
+        return Error(Nesting(depth))
+      }
+      header(core@1/list.len(items), 144, 16, 220, mut out)?
+      for child in items {
+        write(child, mut out, depth + 1)?
+      }
+    },
+    Object(entries) => {
+      if depth == internal.binary_json.MAX_NESTING {
+        return Error(Nesting(depth))
+      }
+      header(core@1/map.len(entries), 128, 16, 222, mut out)?
+      for (key, child) in entries {
+        string(key, mut out)?
+        write(child, mut out, depth + 1)?
+      }
+    },
+  }
+  Ok(())
+}
+
+/// Encode the JSON domain with shortest integer/length headers, binary64
+/// decimal/exponent numbers, and insertion-ordered objects. Invalid Number
+/// lexemes, nonfinite conversions and integers outside the wire range fail.
+pub fn encode(value: json.Value) -> Result[unique Bytes, binary.DecodeError] uses {} {
+  let mut out: List[u8] = []
+  write(value, mut out, 0)?
+  Ok(core@1/bytes.from_list(take out))
+}

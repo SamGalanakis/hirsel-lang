@@ -1,0 +1,63 @@
+// rule: SEM-3
+// expect: run
+// Nonpreferred widths and definite/indefinite container controls.
+fn check(data: Bytes, expected: String) {
+  match cbor.decode(data) {
+    Ok(v) => {
+      match json.stringify(v) {
+        Ok(s) => failure.check(s == expected, TextInvariant()),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  check(b"\x1b\x00\x00\x00\x00\x00\x00\x00\x01", "1")
+  check(b"\x3b\x00\x00\x00\x00\x00\x00\x00\x00", "-1")
+  check(b"\x9f\x01\x82\x02\x03\x9f\x04\x05\xff\xff", "[1,[2,3],[4,5]]")
+  check(b"\xbf\x61\x61\x01\x61\x62\x9f\x02\x03\xff\xff", "{\"a\":1,\"b\":[2,3]}")
+  check(b"\x7f\x65\x73\x74\x72\x65\x61\x64\x6d\x69\x6e\x67\xff", "\"streaming\"")
+  check(b"\x7f\xff", "\"\"")
+  check(b"\x9f\xff", "[]")
+  check(b"\xbf\xff", "{}")
+  check(b"\xfb\x3f\xf8\x00\x00\x00\x00\x00\x00", "1.5")
+  let mut text_data: List[u8] = []
+  let mut i: u64 = 0
+  while i < 256 {
+    list.push(mut text_data, 97u8)
+    i += 1
+  }
+  let text_value: json.Value = Text(text.finish_valid(take text_data))
+  let encoded = match cbor.encode(text_value, true) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      b""
+    },
+  }
+  failure.check(bytes.len(encoded) == 259, TextInvariant())
+  match cbor.decode(encoded) {
+    Ok(Text(s)) => failure.check(string.byte_len(s) == 256, TextInvariant()),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let mut items: List[json.Value] = []
+  i = 0
+  while i < 16 {
+    list.push(mut items, Null())
+    i += 1
+  }
+  let value: json.Value = Array(take items)
+  match cbor.encode(value, true) {
+    Ok(v) => {
+      failure.check(bytes.len(v) == 17, TextInvariant())
+      match cbor.decode(v) {
+        Ok(Array(xs)) => failure.check(list.len(xs) == 16, TextInvariant()),
+        _ => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

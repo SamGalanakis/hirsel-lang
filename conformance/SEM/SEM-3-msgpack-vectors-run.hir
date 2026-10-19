@@ -1,0 +1,70 @@
+// rule: SEM-3
+// expect: run
+// rmp tests/func/{encode,decode} integer, float, string and collection vectors.
+fn vector(source: String, expected: Bytes, decoded_json: String) {
+  let value = match json.parse(unique source) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+  match msgpack.encode(value) {
+    Ok(encoded) => failure.check(encoded == expected, TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match msgpack.decode(expected) {
+    Ok(decoded) => {
+      match json.stringify(decoded) {
+        Ok(s) => failure.check(s == decoded_json, TextInvariant()),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  vector("null", b"\xc0", "null")
+  vector("false", b"\xc2", "false")
+  vector("true", b"\xc3", "true")
+  vector("0", b"\x00", "0")
+  vector("127", b"\x7f", "127")
+  vector("128", b"\xcc\x80", "128")
+  vector("255", b"\xcc\xff", "255")
+  vector("256", b"\xcd\x01\x00", "256")
+  vector("65535", b"\xcd\xff\xff", "65535")
+  vector("65536", b"\xce\x00\x01\x00\x00", "65536")
+  vector("4294967295", b"\xce\xff\xff\xff\xff", "4294967295")
+  vector("4294967296", b"\xcf\x00\x00\x00\x01\x00\x00\x00\x00", "4294967296")
+  vector(
+    "18446744073709551615",
+    b"\xcf\xff\xff\xff\xff\xff\xff\xff\xff",
+    "18446744073709551615"
+  )
+  vector("-1", b"\xff", "-1")
+  vector("-32", b"\xe0", "-32")
+  vector("-33", b"\xd0\xdf", "-33")
+  vector("-128", b"\xd0\x80", "-128")
+  vector("-129", b"\xd1\xff\x7f", "-129")
+  vector("-32768", b"\xd1\x80\x00", "-32768")
+  vector("-32769", b"\xd2\xff\xff\x7f\xff", "-32769")
+  vector("-2147483648", b"\xd2\x80\x00\x00\x00", "-2147483648")
+  vector("-2147483649", b"\xd3\xff\xff\xff\xff\x7f\xff\xff\xff", "-2147483649")
+  vector(
+    "-9223372036854775808",
+    b"\xd3\x80\x00\x00\x00\x00\x00\x00\x00",
+    "-9223372036854775808"
+  )
+  vector("\"\"", b"\xa0", "\"\"")
+  vector("\"a\"", b"\xa1\x61", "\"a\"")
+  vector("\"é😀\"", b"\xa6\xc3\xa9\xf0\x9f\x98\x80", "\"é😀\"")
+  vector("[]", b"\x90", "[]")
+  vector("[1,2,3]", b"\x93\x01\x02\x03", "[1,2,3]")
+  vector(
+    "{\"a\":1,\"b\":[2,3]}",
+    b"\x82\xa1\x61\x01\xa1\x62\x92\x02\x03",
+    "{\"a\":1,\"b\":[2,3]}"
+  )
+  Ok(())
+}

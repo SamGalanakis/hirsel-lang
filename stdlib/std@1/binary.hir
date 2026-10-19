@@ -1,0 +1,5 @@
+/// Errors shared by MessagePack and CBOR JSON-domain codecs. Decode payloads
+/// are byte offsets; encoding Nesting carries the attempted container depth.
+pub type DecodeError = Truncated(u64) | Syntax(u64) | Unsupported(u64) | Utf8(u64) | DuplicateKey(
+  u64
+) | Nesting(u64) | Trailing(u64) | InvalidNumber

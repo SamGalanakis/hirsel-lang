@@ -1,0 +1,30 @@
+// rule: SEM-3
+// expect: run
+// RFC 8949 Appendix A, ported from ciborium/tests/codec.rs (Apache-2.0).
+fn vector(source: String, expected: Bytes, decoded_json: String) {
+  let value = match json.parse(unique source) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+  match cbor.encode(value, true) {
+    Ok(encoded) => failure.check(encoded == expected, TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match cbor.decode(expected) {
+    Ok(decoded) => {
+      match json.stringify(decoded) {
+        Ok(s) => failure.check(s == decoded_json, TextInvariant()),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  vector("-0", b"\xf9\x80\x00", "-0")
+  Ok(())
+}

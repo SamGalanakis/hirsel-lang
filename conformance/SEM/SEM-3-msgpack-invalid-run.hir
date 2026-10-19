@@ -1,0 +1,40 @@
+// rule: SEM-3
+// expect: run
+// Truncation, malformed/unsupported scalars, duplicates, UTF-8 and trailing data.
+fn bad(data: Bytes) {
+  match msgpack.decode(data) {
+    Error(_) => (),
+    Ok(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  bad(b"")
+  bad(b"\xc1")
+  bad(b"\xcc")
+  bad(b"\xcd\x00")
+  bad(b"\xce\x00\x00\x00")
+  bad(b"\xcf\x00\x00\x00\x00\x00\x00\x00")
+  bad(b"\xd0")
+  bad(b"\xd1\x00")
+  bad(b"\xd2\x00\x00\x00")
+  bad(b"\xd3\x00\x00\x00\x00\x00\x00\x00")
+  bad(b"\xca\x00\x00\x00")
+  bad(b"\xcb\x00\x00\x00\x00\x00\x00\x00")
+  bad(b"\xa2\xff\x00")
+  bad(b"\xd9\x20")
+  bad(b"\xda\xff\xff")
+  bad(b"\xdb\xff\xff\xff\xff")
+  bad(b"\x91")
+  bad(b"\xdc\x00\x01")
+  bad(b"\xdd\xff\xff\xff\xff")
+  bad(b"\x81\xa1\x61")
+  bad(b"\x82\xa1\x61\x00\xa1\x61\x01")
+  bad(b"\x81\x00\x00")
+  bad(b"\xc0\xc0")
+  bad(b"\xc4\x00")
+  bad(b"\xd4\x00\x00")
+  bad(b"\xcb\x7f\xf0\x00\x00\x00\x00\x00\x00")
+  bad(b"\xca\x7f\xc0\x00\x00")
+  Ok(())
+}

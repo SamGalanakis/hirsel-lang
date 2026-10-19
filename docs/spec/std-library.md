@@ -78,6 +78,10 @@ N fn unicode.graphemes(s: String) -> GraphemeView in s
 fn json.parse(take text: String) -> Result[Value, JsonError] uses {}
 fn json.stringify(value: Value) -> Result[unique String, JsonError] uses {}
 @preserves_unique(out) fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}
+fn msgpack.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}
+fn msgpack.encode(value: json.Value) -> Result[unique Bytes, binary.DecodeError] uses {}
+fn cbor.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}
+fn cbor.encode(value: json.Value, deterministic: bool) -> Result[unique Bytes, binary.DecodeError] uses {}
 fn yaml.parse(take text: String) -> Result[yaml.Value, yaml.YamlError] uses {}
 fn yaml.parse_all(take text: String) -> Result[List[yaml.Value], yaml.YamlError] uses {}
 fn yaml.stringify(value: yaml.Value) -> Result[unique String, yaml.YamlError] uses {}
@@ -372,6 +376,50 @@ controls, quotes and backslashes, and leave other scalars unescaped. Writing use
 nesting bound, returning `Nesting(128)` at the attempted container depth. This is library
 policy, independent of the depth limits of [MEM-3](memory.md#mem-3-freeing), with no
 reflection, automatic record conversion or authority.
+
+## MessagePack and CBOR
+
+`msgpack` implements the MessagePack JSON domain; `cbor` implements the corresponding
+RFC 8949 domain. Both decode exactly one item into `json.Value`, reject trailing bytes,
+validate UTF-8, reject duplicate text map keys, and preserve insertion order. Integers
+become exact decimal `Number` lexemes, including MessagePack's unsigned 64-bit maximum
+and CBOR's negative minimum, -18446744073709551616. Finite binary16/32/64 floats become
+shortest binary64 decimal text, with signed zero preserved. A subsequent encode chooses
+integer or floating representation from that text; original wire widths are not retained.
+
+There is no lossless JSON mapping for binary strings, MessagePack extensions, CBOR tags,
+nonfinite floats, non-text keys or CBOR simple values other than bool/null. These return
+`Unsupported`; they are never silently converted to strings, arrays or null. CBOR accepts
+definite and indefinite text, arrays and maps, and nonpreferred integer/float widths.
+Every indefinite text chunk must independently be valid UTF-8; nested indefinite text
+chunks and breaks outside indefinite containers are malformed.
+
+Both encoders validate public `Number` strings with JSON's grammar. Integer lexemes must
+fit the format's integer range; decimal/exponent lexemes convert to finite binary64.
+Out-of-range integers, nonfinite conversions and invalid lexemes return `InvalidNumber`.
+Negative zero is encoded as a float. Other float spellings can change on decode; JSON's
+arbitrary decimal precision and spelling are not a wire-format guarantee.
+
+MessagePack writes shortest integer and length headers and binary64 floats. String, array
+or map extents above 4294967295 return `Unsupported(extent)` on encoding. CBOR always
+writes definite lengths and shortest integer/length headers. With `deterministic = false`,
+it retains object insertion order and uses binary64 floats. With `true`, it uses the
+shortest exactly preserving float width, including signed zero, and orders text keys by
+unsigned lexicographic comparison of their complete preferred CBOR encodings (RFC 8949
+section 4.2.1). For this text-key domain, that is UTF-8 byte length followed by byte order.
+Deterministic output is stable across input map insertion order and run hash seeds.
+
+`binary.DecodeError` has these cases:
+`Truncated(u64)`, `Syntax(u64)`, `Unsupported(u64)`, `Utf8(u64)`, `DuplicateKey(u64)`,
+`Nesting(u64)`, `Trailing(u64)` and `InvalidNumber`. Decode offsets are zero-based byte
+positions; UTF-8 errors identify the offending string or chunk payload start. Duplicate
+errors identify the repeated key header. Both enforce the same library nesting policy as
+JSON: at most 128 open arrays/maps, with scalar leaves consuming no level. Encoder nesting
+errors identify the attempted depth, 128. Partial results are released on error.
+
+These are ordinary source codecs over explicit values. Record/variant conversion can use
+the existing `derive.json_value` and `derive.from_json` functions; the canonical
+`codec.encode/decode[T: serializable]` envelope remains a separate wire format.
 
 ## YAML
 

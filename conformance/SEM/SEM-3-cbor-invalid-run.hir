@@ -1,0 +1,43 @@
+// rule: SEM-3
+// expect: run
+// Truncation, malformed/unsupported scalars, duplicates, UTF-8 and trailing data.
+fn bad(data: Bytes) {
+  match cbor.decode(data) {
+    Error(_) => (),
+    Ok(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  bad(b"")
+  bad(b"\x18")
+  bad(b"\x19\x00")
+  bad(b"\x1a\x00\x00\x00")
+  bad(b"\x1b\x00\x00\x00\x00\x00\x00\x00")
+  bad(b"\x1c")
+  bad(b"\x1f")
+  bad(b"\x3f")
+  bad(b"\x61\xff")
+  bad(b"\x7f\x61\xc3\x61\xa9\xff")
+  bad(b"\x7f\x7f\xff\xff")
+  bad(b"\x7f\x41\x61\xff")
+  bad(b"\xff")
+  bad(b"\x9f")
+  bad(b"\x81")
+  bad(b"\x9f\xff\xff")
+  bad(b"\xbf\x61\x61\xff")
+  bad(b"\xa2\x61\x61\x00\x61\x61\x01")
+  bad(b"\xa1\x00\x00")
+  bad(b"\xf6\xf6")
+  bad(b"\xf8\x00")
+  bad(b"\xfc")
+  bad(b"\xf9\x7c\x00")
+  bad(b"\xfa\x7f\xc0\x00\x00")
+  bad(b"\xfb\xff\xf0\x00\x00\x00\x00\x00\x00")
+  bad(b"\x40")
+  bad(b"\xc0\x00")
+  bad(b"\xf7")
+  bad(b"\x7b\xff\xff\xff\xff\xff\xff\xff\xff")
+  bad(b"\x9b\xff\xff\xff\xff\xff\xff\xff\xff")
+  Ok(())
+}

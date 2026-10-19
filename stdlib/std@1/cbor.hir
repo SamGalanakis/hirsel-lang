@@ -1,0 +1,323 @@
+// Adapted from ciborium-ll dec.rs/hdr.rs/enc.rs/seg.rs at
+// 00279e48e75ecf9546aae36f6d004447c676065b (Apache-2.0). Modified for Hirsel's
+// JSON domain and explicit deterministic encoding (RFC 8949 section 4.2.1).
+// None is the indefinite-length sentinel; reserved additional information fails.
+fn argument(data: Bytes, mut pos: u64, info: u64) -> Result[
+  Option[u64],
+  binary.DecodeError
+] uses {} {
+  if info < 24 {
+    return Ok(Some(info))
+  }
+  if info == 31 {
+    return Ok(None())
+  }
+  if info > 27 {
+    return Error(Syntax(pos - 1))
+  }
+  Ok(Some(internal.binary_json.read(data, mut pos, 1u64 << info - 24)?))
+}
+
+fn text_value(data: Bytes, mut pos: u64, count: Option[u64]) -> Result[
+  unique String,
+  binary.DecodeError
+] uses {} {
+  if let Some(n) = count {
+    return internal.binary_json.string(data, mut pos, n)
+  }
+  let mut out: List[u8] = []
+  while true {
+    let start = pos
+    let marker = internal.binary_json.read(data, mut pos, 1)?
+    if marker == 255 {
+      break
+    }
+    if marker >> 5 != 3 || marker & 31u64 == 31 {
+      return Error(Syntax(start))
+    }
+    let Some(n) = argument(data, mut pos, marker & 31u64)? else {
+      return Error(Syntax(start))
+    }
+    // Each chunk must independently be valid UTF-8, including split scalars.
+    let chunk = internal.binary_json.string(data, mut pos, n)?
+    text.append(mut out, chunk)
+  }
+  Ok(text.finish_valid(take out))
+}
+
+fn ended(data: Bytes, mut pos: u64, count: Option[u64], i: u64) -> Result[
+  bool,
+  binary.DecodeError
+] uses {} {
+  if let Some(n) = count {
+    return Ok(i == n)
+  }
+  if pos == core@1/bytes.len(data) {
+    return Error(Truncated(pos))
+  }
+  if data[pos] == 255 {
+    pos += 1
+    return Ok(true)
+  }
+  Ok(false)
+}
+
+fn node(data: Bytes, mut pos: u64, depth: u64) -> Result[json.Value, binary.DecodeError] uses {} {
+  let start = pos
+  let marker = internal.binary_json.read(data, mut pos, 1)?
+  let major = marker >> 5
+  let info = marker & 31u64
+  if major == 7 {
+    if info == 20 || info == 21 {
+      return Ok(Bool(info == 21))
+    }
+    if info == 22 {
+      return Ok(Null())
+    }
+    if info == 25 {
+      return internal.binary_json.finite(
+        internal.binary_json.half(internal.binary_json.read(data, mut pos, 2)?),
+        start
+      )
+    }
+    if info == 26 {
+      let bits: u32 = core@1/int.narrow(internal.binary_json.read(data, mut pos, 4)?)
+      return internal.binary_json.finite(
+        core@1/f64.from_f32(core@1/f32.from_bits(bits)),
+        start
+      )
+    }
+    if info == 27 {
+      return internal.binary_json.finite(
+        core@1/f64.from_bits(internal.binary_json.read(data, mut pos, 8)?),
+        start
+      )
+    }
+    if info == 31 || info >= 28 {
+      return Error(Syntax(start))
+    }
+    if info == 24 {
+      let simple = internal.binary_json.read(data, mut pos, 1)?
+      if simple < 32 {
+        return Error(Syntax(start))
+      }
+    }
+    return Error(Unsupported(start))
+  }
+  let count = argument(data, mut pos, info)?
+  if major == 0 || major == 1 {
+    let Some(n) = count else {
+      return Error(Syntax(start))
+    }
+    return Ok(
+      Number(
+        if major == 0 {
+          u64.to_string(n)
+        } else {
+          internal.binary_json.negative(n)
+        }
+      )
+    )
+  }
+  if major == 3 {
+    return Ok(Text(text_value(data, mut pos, count)?))
+  }
+  if major == 2 || major == 6 {
+    return Error(Unsupported(start))
+  }
+  if major != 4 && major != 5 {
+    return Error(Syntax(start))
+  }
+  if depth == internal.binary_json.MAX_NESTING {
+    return Error(Nesting(start))
+  }
+  if let Some(n) = count {
+    if n > (core@1/bytes.len(data) - pos) / if major == 4 {
+      1u64
+    } else {
+      2u64
+    } {
+      return Error(Truncated(pos))
+    }
+  }
+  let mut i: u64 = 0
+  if major == 4 {
+    let mut items: List[json.Value] = []
+    while !ended(data, mut pos, count, i)? {
+      let child = node(data, mut pos, depth + 1)?
+      core@1/list.push(mut items, take child)
+      i += 1
+    }
+    return Ok(Array(take items))
+  }
+  let mut entries: Map[String, json.Value] = core@1/map.empty()
+  while !ended(data, mut pos, count, i)? {
+    let key_pos = pos
+    let key_value = node(data, mut pos, depth + 1)?
+    let key = match take key_value {
+      Text(s) => take s,
+      _ => return Error(Unsupported(key_pos)),
+    }
+    if let Some(_) = core@1/map.get(entries, key) {
+      return Error(DuplicateKey(key_pos))
+    }
+    let child = node(data, mut pos, depth + 1)?
+    core@1/map.insert(mut entries, take key, take child)
+    i += 1
+  }
+  Ok(Object(take entries))
+}
+
+/// Decode exactly one RFC 8949 item in the JSON domain. Definite and indefinite
+/// text/arrays/maps and nonpreferred integer/float widths are accepted. Byte
+/// strings, tags, simple values other than bool/null, nonfinite floats and
+/// non-text keys return Unsupported. Duplicate keys and trailing bytes fail.
+pub fn decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {} {
+  let mut pos: u64 = 0
+  let value = node(data, mut pos, 0)?
+  if pos != core@1/bytes.len(data) {
+    return Error(Trailing(pos))
+  }
+  Ok(take value)
+}
+
+@preserves_unique(out)
+fn header(major: u64, n: u64, mut out: List[u8]) -> () uses {} {
+  if n < 24 {
+    internal.binary_json.write(major * 32 + n, 1, mut out)
+  } else {
+    let info: u64 = if n <= 255 {
+      24
+    } else if n <= 65535 {
+      25
+    } else if n <= 4294967295 {
+      26
+    } else {
+      27
+    }
+    internal.binary_json.write(major * 32 + info, 1, mut out)
+    internal.binary_json.write(n, 1u64 << info - 24, mut out)
+  }
+}
+
+@preserves_unique(out)
+fn string(value: String, mut out: List[u8]) -> () uses {} {
+  header(3, core@1/bytes.len(core@1/string.as_bytes(value)), mut out)
+  text.append(mut out, value)
+}
+
+@preserves_unique(out)
+fn number(value: String, deterministic: bool, mut out: List[u8]) -> Result[
+  (),
+  binary.DecodeError
+] uses {} {
+  match internal.binary_json.numeric(value)? {
+    Unsigned(n) => header(0, n, mut out),
+    Negative(n) => header(1, n, mut out),
+    Float(n) => {
+      if deterministic {
+        if let Some(bits) = internal.binary_json.half_exact(n) {
+          internal.binary_json.write(249, 1, mut out)
+          internal.binary_json.write(bits, 2, mut out)
+          return Ok(())
+        }
+        let narrowed = core@1/f32.from_f64(n)
+        if core@1/f64.bits(core@1/f64.from_f32(narrowed)) == core@1/f64.bits(n) {
+          internal.binary_json.write(250, 1, mut out)
+          internal.binary_json.write(
+            core@1/int.widen(core@1/f32.bits(narrowed)),
+            4,
+            mut out
+          )
+          return Ok(())
+        }
+      }
+      internal.binary_json.write(251, 1, mut out)
+      internal.binary_json.write(core@1/f64.bits(n), 8, mut out)
+    },
+  }
+  Ok(())
+}
+
+// All keys are text with preferred headers: unsigned lexicographic ordering of
+// their encoded bytes reduces to byte length first, then UTF-8 byte order.
+@noalloc
+fn key_order(a: String, b: String) -> i32 uses {} {
+  let al = core@1/bytes.len(core@1/string.as_bytes(a))
+  let bl = core@1/bytes.len(core@1/string.as_bytes(b))
+  if al < bl {
+    -1
+  } else if al > bl {
+    1
+  } else {
+    string.compare(a, b)
+  }
+}
+
+@preserves_unique(out)
+fn write(value: json.Value, deterministic: bool, mut out: List[u8], depth: u64) -> Result[
+  (),
+  binary.DecodeError
+] uses {} {
+  match value {
+    Null() => internal.binary_json.write(246, 1, mut out),
+    Bool(b) => internal.binary_json.write(
+      if b {
+        245
+      } else {
+        244
+      },
+      1,
+      mut out
+    ),
+    Number(n) => number(n, deterministic, mut out)?,
+    Text(s) => string(s, mut out),
+    Array(items) => {
+      if depth == internal.binary_json.MAX_NESTING {
+        return Error(Nesting(depth))
+      }
+      header(4, core@1/list.len(items), mut out)
+      for child in items {
+        write(child, deterministic, mut out, depth + 1)?
+      }
+    },
+    Object(entries) => {
+      if depth == internal.binary_json.MAX_NESTING {
+        return Error(Nesting(depth))
+      }
+      header(5, core@1/map.len(entries), mut out)
+      if deterministic {
+        let mut keys: List[String] = []
+        for (key, _) in entries {
+          core@1/list.push(mut keys, unique key)
+        }
+        list.sort(mut keys, key_order)
+        for key in keys {
+          string(key, mut out)
+          if let Some(child) = core@1/map.get(entries, key) {
+            write(child, deterministic, mut out, depth + 1)?
+          }
+        }
+      } else {
+        for (key, child) in entries {
+          string(key, mut out)
+          write(child, deterministic, mut out, depth + 1)?
+        }
+      }
+    },
+  }
+  Ok(())
+}
+
+/// Encode definite lengths and shortest integer/length headers. Deterministic
+/// mode uses RFC 8949 core deterministic map order and shortest exact float
+/// width, preserving signed zero. Otherwise maps retain insertion order and
+/// decimal/exponent numbers use binary64. Integers remain exact in either mode.
+pub fn encode(value: json.Value, deterministic: bool) -> Result[
+  unique Bytes,
+  binary.DecodeError
+] uses {} {
+  let mut out: List[u8] = []
+  write(value, deterministic, mut out, 0)?
+  Ok(core@1/bytes.from_list(take out))
+}

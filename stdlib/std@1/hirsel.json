@@ -805,6 +805,31 @@
       "module": [
         "http2"
       ]
+    },
+    {
+      "path": "binary_json.hir",
+      "module": [
+        "internal",
+        "binary_json"
+      ]
+    },
+    {
+      "path": "msgpack.hir",
+      "module": [
+        "msgpack"
+      ]
+    },
+    {
+      "path": "cbor.hir",
+      "module": [
+        "cbor"
+      ]
+    },
+    {
+      "path": "binary.hir",
+      "module": [
+        "binary"
+      ]
     }
   ],
   "dependencies": []

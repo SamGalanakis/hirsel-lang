@@ -1,0 +1,54 @@
+// rule: SEM-3
+// expect: run
+// Offsets refer to the missing scalar, string payload, repeated key or tail.
+pub fn main() -> Result[(), OutputError] {
+  match msgpack.decode(b"\xcc") {
+    Error(Truncated(1)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.decode(b"\x18") {
+    Error(Truncated(1)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.decode(b"\xc1") {
+    Error(Syntax(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.decode(b"\x1c") {
+    Error(Syntax(0)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.decode(b"\xa1\xff") {
+    Error(Utf8(1)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.decode(b"\x61\xff") {
+    Error(Utf8(1)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.decode(b"\x82\xa1a\x00\xa1a\x01") {
+    Error(DuplicateKey(4)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.decode(b"\xa2\x61a\x00\x61a\x01") {
+    Error(DuplicateKey(4)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.decode(b"\xc0\xc0") {
+    Error(Trailing(1)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.decode(b"\xf6\xf6") {
+    Error(Trailing(1)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.decode(b"\x81\x00\x00") {
+    Error(Unsupported(1)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.decode(b"\xa1\x00\x00") {
+    Error(Unsupported(1)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

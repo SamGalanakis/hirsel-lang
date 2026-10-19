@@ -1,0 +1,67 @@
+// rule: SEM-3
+// expect: run
+// Nonpreferred widths, collection headers and string-length boundaries.
+fn check(data: Bytes, expected: String) {
+  match msgpack.decode(data) {
+    Ok(v) => {
+      match json.stringify(v) {
+        Ok(s) => failure.check(s == expected, TextInvariant()),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  check(b"\xca\x3f\xc0\x00\x00", "1.5")
+  check(b"\xd1\x00\x01", "1")
+  check(b"\xdd\x00\x00\x00\x01\x01", "[1]")
+  check(b"\xdf\x00\x00\x00\x01\xa1\x61\x01", "{\"a\":1}")
+  check(b"\xdb\x00\x00\x00\x01\x61", "\"a\"")
+  // rmp string-length boundary: 32 bytes use str8 rather than fixstr.
+  let boundary: json.Value = Text("01234567890123456789012345678901")
+  let str8 = b"\xd9\x2001234567890123456789012345678901"
+  match msgpack.encode(boundary) {
+    Ok(encoded) => failure.check(encoded == str8, TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  check(str8, "\"01234567890123456789012345678901\"")
+  let mut text_data: List[u8] = []
+  let mut i: u64 = 0
+  while i < 256 {
+    list.push(mut text_data, 97u8)
+    i += 1
+  }
+  let text_value: json.Value = Text(text.finish_valid(take text_data))
+  let encoded = match msgpack.encode(text_value) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      b""
+    },
+  }
+  failure.check(bytes.len(encoded) == 259, TextInvariant())
+  match msgpack.decode(encoded) {
+    Ok(Text(s)) => failure.check(string.byte_len(s) == 256, TextInvariant()),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let mut items: List[json.Value] = []
+  i = 0
+  while i < 16 {
+    list.push(mut items, Null())
+    i += 1
+  }
+  let value: json.Value = Array(take items)
+  match msgpack.encode(value) {
+    Ok(v) => {
+      failure.check(bytes.len(v) == 19, TextInvariant())
+      match msgpack.decode(v) {
+        Ok(Array(xs)) => failure.check(list.len(xs) == 16, TextInvariant()),
+        _ => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

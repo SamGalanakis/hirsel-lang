@@ -1,0 +1,30 @@
+// rule: SEM-3
+// expect: run
+// rmp tests/func/{encode,decode} integer, float, string and collection vectors.
+fn vector(source: String, expected: Bytes, decoded_json: String) {
+  let value = match json.parse(unique source) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+  match msgpack.encode(value) {
+    Ok(encoded) => failure.check(encoded == expected, TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match msgpack.decode(expected) {
+    Ok(decoded) => {
+      match json.stringify(decoded) {
+        Ok(s) => failure.check(s == decoded_json, TextInvariant()),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  vector("-0", b"\xcb\x80\x00\x00\x00\x00\x00\x00\x00", "-0")
+  Ok(())
+}

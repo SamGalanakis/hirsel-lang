@@ -1,0 +1,145 @@
+// Shared JSON-domain wire primitives for MessagePack and CBOR. Fixed-width
+// big-endian reads follow rmp's RmpRead; see third-party/NOTICES.md.
+pub type Numeric = Unsigned(u64) | Negative(u64) | Float(f64)
+
+pub const MAX_NESTING: u64 = 128
+
+pub fn read(data: Bytes, mut pos: u64, width: u64) -> Result[u64, binary.DecodeError] uses {} {
+  if width > core@1/bytes.len(data) - pos {
+    return Error(Truncated(pos))
+  }
+  let mut value: u64 = 0
+  let mut i: u64 = 0
+  while i < width {
+    value = value << 8 | core@1/int.widen(data[pos])
+    pos += 1
+    i += 1
+  }
+  Ok(value)
+}
+
+@preserves_unique(out)
+pub fn write(value: u64, width: u64, mut out: List[u8]) -> () uses {} {
+  let mut remaining = width
+  while remaining != 0 {
+    remaining -= 1
+    core@1/list.push(mut out, core@1/int.narrow(value >> remaining * 8 & 255u64))
+  }
+}
+
+pub fn string(data: Bytes, mut pos: u64, length: u64) -> Result[
+  unique String,
+  binary.DecodeError
+] uses {} {
+  if length > core@1/bytes.len(data) - pos {
+    return Error(Truncated(pos))
+  }
+  let start = pos
+  let mut out: List[u8] = []
+  let end = pos + length
+  while pos < end {
+    core@1/list.push(mut out, data[pos])
+    pos += 1
+  }
+  match text.finish(take out) {
+    Ok(value) => Ok(take value),
+    Error(_) => Error(Utf8(start)),
+  }
+}
+
+// Negative stores -1-n, which covers CBOR's complete negative integer domain.
+pub fn negative(n: u64) -> unique String uses {} {
+  let magnitude: i128 = core@1/int.widen(n)
+  i128.to_string(-1i128 - magnitude)
+}
+
+pub fn finite(value: f64, pos: u64) -> Result[json.Value, binary.DecodeError] uses {} {
+  if core@1/f64.bits(value) >> 52 & 2047u64 == 2047 {
+    return Error(Unsupported(pos))
+  }
+  Ok(Number(f64.to_string(value)))
+}
+
+// Validate the public Number lexeme before conversion. Integer lexemes never
+// fall back to a float on overflow; decimal/exponent lexemes use binary64.
+pub fn numeric(spelling: String) -> Result[Numeric, binary.DecodeError] uses {} {
+  if let Error(_) = json.stringify(Number(spelling)) {
+    return Error(InvalidNumber())
+  }
+  let data = core@1/string.as_bytes(spelling)
+  let mut integer = spelling != "-0"
+  for b in data {
+    if b == 46 || b == 101 || b == 69 {
+      integer = false
+    }
+  }
+  if integer {
+    if data[0] == 45 {
+      let n = match i128.parse(spelling) {
+        Ok(n) => n,
+        Error(_) => return Error(InvalidNumber()),
+      }
+      if n < -18446744073709551616i128 {
+        return Error(InvalidNumber())
+      }
+      return Ok(Negative(core@1/int.narrow(-1i128 - n)))
+    }
+    return match u64.parse(spelling) {
+      Ok(n) => Ok(Unsigned(n)),
+      Error(_) => Error(InvalidNumber()),
+    }
+  }
+  match f64.parse(spelling) {
+    Ok(n) => {
+      if core@1/f64.bits(n) >> 52 & 2047u64 == 2047 {
+        Error(InvalidNumber())
+      } else {
+        Ok(Float(n))
+      }
+    },
+    Error(_) => Error(InvalidNumber()),
+  }
+}
+
+// Exact widening of binary16, including subnormal values and signed zero.
+pub fn half(bits: u64) -> f64 uses {} {
+  let sign = (bits & 32768u64) << 48
+  let exponent = bits >> 10 & 31u64
+  let mut fraction = bits & 1023u64
+  if exponent == 31 {
+    return core@1/f64.from_bits(sign | 9218868437227405312u64 | fraction << 42)
+  }
+  if exponent != 0 {
+    return core@1/f64.from_bits(sign | exponent + 1008 << 52 | fraction << 42)
+  }
+  if fraction == 0 {
+    return core@1/f64.from_bits(sign)
+  }
+  let mut shifted: u64 = 0
+  while fraction & 1024u64 == 0 {
+    fraction = fraction << 1
+    shifted += 1
+  }
+  core@1/f64.from_bits(sign | 1009 - shifted << 52 | (fraction & 1023u64) << 42)
+}
+
+// An exact binary16 candidate, checked by widening before use. No rounding is
+// needed: only values already representable in half precision use this path.
+pub fn half_exact(value: f64) -> Option[u64] uses {} {
+  let bits = core@1/f64.bits(value)
+  let sign = bits >> 48 & 32768u64
+  let exponent = bits >> 52 & 2047u64
+  let fraction = bits & 4503599627370495u64
+  let candidate = if exponent >= 1009 && exponent <= 1038 {
+    sign | exponent - 1008 << 10 | fraction >> 42
+  } else if exponent >= 999 && exponent < 1009 {
+    sign | (fraction | 4503599627370496u64) >> 1051 - exponent
+  } else {
+    sign
+  }
+  if core@1/f64.bits(half(candidate)) == bits {
+    Some(candidate)
+  } else {
+    None()
+  }
+}

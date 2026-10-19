@@ -1,0 +1,74 @@
+// rule: SEM-3
+// expect: run
+// Invalid public JSON Number constructors must fail instead of overflowing.
+pub fn main() -> Result[(), OutputError] {
+  match msgpack.encode(Number("")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number(""), true) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.encode(Number("01")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number("01"), true) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.encode(Number("+1")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number("+1"), true) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.encode(Number("nan")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number("nan"), true) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.encode(Number("1e")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number("1e"), true) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.encode(Number("1e400")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number("1e400"), true) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.encode(Number("18446744073709551616")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number("18446744073709551616"), true) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.encode(Number("-18446744073709551617")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(Number("-18446744073709551617"), true) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  match msgpack.encode(Number("-9223372036854775809")) {
+    Error(InvalidNumber()) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

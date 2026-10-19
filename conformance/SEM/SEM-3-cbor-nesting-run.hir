@@ -1,0 +1,39 @@
+// rule: SEM-3
+// expect: run
+// 128 open containers succeed; opening container 129 fails on read and write.
+pub fn main() -> Result[(), OutputError] {
+  let mut builder: List[u8] = []
+  let mut i: u64 = 0
+  while i < 128 {
+    list.push(mut builder, 129u8)
+    i += 1
+  }
+  list.push(mut builder, 246u8)
+  let data = bytes.from_list(take builder)
+  let value = match cbor.decode(data) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+  match cbor.encode(value, true) {
+    Ok(encoded) => failure.check(encoded == data, TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  let over: json.Value = Array([take value])
+  match cbor.encode(over, true) {
+    Error(Nesting(128)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  let mut deeper: List[u8] = []
+  list.push(mut deeper, 129u8)
+  for byte in data {
+    list.push(mut deeper, byte)
+  }
+  match cbor.decode(bytes.from_list(take deeper)) {
+    Error(Nesting(128)) => (),
+    _ => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1330 exported definitions; 448 variants.
+1335 exported definitions; 456 variants.
 
 ## Types and roots
 
@@ -2104,6 +2104,80 @@ Zero.
 References: [`std@1/bigint/BigInt`](#def-std_401_2fbigint_2fBigInt)
 
 
+## binary
+
+<a id="def-std_401_2fbinary_2fDecodeError"></a>
+
+- `pub type binary.DecodeError = Truncated(u64) | Syntax(u64) | Unsupported(u64) | Utf8(u64) | DuplicateKey( u64 ) | Nesting(u64) | Trailing(u64) | InvalidNumber`
+
+Errors shared by MessagePack and CBOR JSON-domain codecs. Decode payloads
+are byte offsets; encoding Nesting carries the attempted container depth.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fDecodeError_23DuplicateKey"></a>
+
+- `DuplicateKey( u64 ) -> binary.DecodeError`
+
+Variant of binary.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fDecodeError_23InvalidNumber"></a>
+
+- `InvalidNumber -> binary.DecodeError`
+
+Variant of binary.DecodeError.
+
+<a id="def-std_401_2fbinary_2fDecodeError_23Nesting"></a>
+
+- `Nesting(u64) -> binary.DecodeError`
+
+Variant of binary.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fDecodeError_23Syntax"></a>
+
+- `Syntax(u64) -> binary.DecodeError`
+
+Variant of binary.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fDecodeError_23Trailing"></a>
+
+- `Trailing(u64) -> binary.DecodeError`
+
+Variant of binary.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fDecodeError_23Truncated"></a>
+
+- `Truncated(u64) -> binary.DecodeError`
+
+Variant of binary.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fDecodeError_23Unsupported"></a>
+
+- `Unsupported(u64) -> binary.DecodeError`
+
+Variant of binary.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fbinary_2fDecodeError_23Utf8"></a>
+
+- `Utf8(u64) -> binary.DecodeError`
+
+Variant of binary.DecodeError.
+
+References: [`core@1/u64`](#def-core_401_2fu64)
+
+
 ## blake2b
 
 <a id="def-std_401_2fblake2b_2fState"></a>
@@ -2445,6 +2519,31 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes)
 <a id="def-core_401_2fbytes_2fslice"></a>
 
 - `@noalloc fn bytes.slice(src: Bytes, start: u64, end: u64) -> Bytes in src`
+
+
+## cbor
+
+<a id="def-std_401_2fcbor_2fdecode"></a>
+
+- `pub fn cbor.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}`
+
+Decode exactly one RFC 8949 item in the JSON domain. Definite and indefinite
+text/arrays/maps and nonpreferred integer/float widths are accepted. Byte
+strings, tags, simple values other than bool/null, nonfinite floats and
+non-text keys return Unsupported. Duplicate keys and trailing bytes fail.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/binary/DecodeError`](#def-std_401_2fbinary_2fDecodeError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fcbor_2fencode"></a>
+
+- `pub fn cbor.encode(value: json.Value, deterministic: bool) -> Result[ unique Bytes, binary.DecodeError ] uses {}`
+
+Encode definite lengths and shortest integer/length headers. Deterministic
+mode uses RFC 8949 core deterministic map order and shortest exact float
+width, preserving signed zero. Otherwise maps retain insertion order and
+decimal/exponent numbers use binary64. Integers remain exact in either mode.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`std@1/binary/DecodeError`](#def-std_401_2fbinary_2fDecodeError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
 
 ## channel
@@ -6882,6 +6981,28 @@ References: [`std@1/md5/State`](#def-std_401_2fmd5_2fState)
 - `@noalloc pub fn md5.update(mut state: State, data: Bytes) -> () uses {}`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/md5/State`](#def-std_401_2fmd5_2fState)
+
+
+## msgpack
+
+<a id="def-std_401_2fmsgpack_2fdecode"></a>
+
+- `pub fn msgpack.decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {}`
+
+Decode exactly one MessagePack value in the JSON domain. Decimal lexemes
+represent wire integers exactly; finite floats use shortest binary64 text.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/binary/DecodeError`](#def-std_401_2fbinary_2fDecodeError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+<a id="def-std_401_2fmsgpack_2fencode"></a>
+
+- `pub fn msgpack.encode(value: json.Value) -> Result[unique Bytes, binary.DecodeError] uses {}`
+
+Encode the JSON domain with shortest integer/length headers, binary64
+decimal/exponent numbers, and insertion-ordered objects. Invalid Number
+lexemes, nonfinite conversions and integers outside the wire range fail.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/binary/DecodeError`](#def-std_401_2fbinary_2fDecodeError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
 
 
 ## mutex

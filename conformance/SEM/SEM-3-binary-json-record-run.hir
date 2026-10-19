@@ -1,0 +1,47 @@
+// rule: SEM-3
+// expect: run
+// The existing source derivers bridge a serializable record to either wire format.
+@serializable
+type Point {
+  x: i32,
+  label: String,
+}
+
+fn point_to_json(v: Point) -> json.Value uses {} = comptime derive.json_value(
+  shape(Point)
+)
+
+fn point_from_json(v: json.Value) -> Result[unique Point, String] uses {} = comptime derive.from_json(
+  shape(Point)
+)
+
+fn check(v: json.Value) {
+  match point_from_json(v) {
+    Ok(p) => failure.check(p.x == -12 && p.label == "agent", TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  let point = Point(x: -12, label: "agent")
+  let value = point_to_json(point)
+  match msgpack.encode(value) {
+    Ok(bytes) => {
+      match msgpack.decode(bytes) {
+        Ok(v) => check(v),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match cbor.encode(value, true) {
+    Ok(bytes) => {
+      match cbor.decode(bytes) {
+        Ok(v) => check(v),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  Ok(())
+}

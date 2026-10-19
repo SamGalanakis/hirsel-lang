@@ -1,0 +1,69 @@
+// rule: SEM-3
+// expect: run
+// RFC 8949 Appendix A, ported from ciborium/tests/codec.rs (Apache-2.0).
+fn vector(source: String, expected: Bytes, decoded_json: String) {
+  let value = match json.parse(unique source) {
+    Ok(v) => v,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      Null()
+    },
+  }
+  match cbor.encode(value, true) {
+    Ok(encoded) => failure.check(encoded == expected, TextInvariant()),
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+  match cbor.decode(expected) {
+    Ok(decoded) => {
+      match json.stringify(decoded) {
+        Ok(s) => failure.check(s == decoded_json, TextInvariant()),
+        Error(_) => failure.check(false, TextInvariant()),
+      }
+    },
+    Error(_) => failure.check(false, TextInvariant()),
+  }
+}
+
+pub fn main() -> Result[(), OutputError] {
+  vector("null", b"\xf6", "null")
+  vector("false", b"\xf4", "false")
+  vector("true", b"\xf5", "true")
+  vector("0", b"\x00", "0")
+  vector("1", b"\x01", "1")
+  vector("10", b"\x0a", "10")
+  vector("23", b"\x17", "23")
+  vector("24", b"\x18\x18", "24")
+  vector("25", b"\x18\x19", "25")
+  vector("100", b"\x18\x64", "100")
+  vector("1000", b"\x19\x03\xe8", "1000")
+  vector("1000000", b"\x1a\x00\x0f\x42\x40", "1000000")
+  vector("1000000000000", b"\x1b\x00\x00\x00\xe8\xd4\xa5\x10\x00", "1000000000000")
+  vector(
+    "18446744073709551615",
+    b"\x1b\xff\xff\xff\xff\xff\xff\xff\xff",
+    "18446744073709551615"
+  )
+  vector(
+    "-18446744073709551616",
+    b"\x3b\xff\xff\xff\xff\xff\xff\xff\xff",
+    "-18446744073709551616"
+  )
+  vector("-1", b"\x20", "-1")
+  vector("-10", b"\x29", "-10")
+  vector("-24", b"\x37", "-24")
+  vector("-25", b"\x38\x18", "-25")
+  vector("-100", b"\x38\x63", "-100")
+  vector("-1000", b"\x39\x03\xe7", "-1000")
+  vector("\"\"", b"\x60", "\"\"")
+  vector("\"a\"", b"\x61\x61", "\"a\"")
+  vector("\"IETF\"", b"\x64\x49\x45\x54\x46", "\"IETF\"")
+  vector("\"é😀\"", b"\x66\xc3\xa9\xf0\x9f\x98\x80", "\"é😀\"")
+  vector("[]", b"\x80", "[]")
+  vector("[1,2,3]", b"\x83\x01\x02\x03", "[1,2,3]")
+  vector(
+    "{\"a\":1,\"b\":[2,3]}",
+    b"\xa2\x61\x61\x01\x61\x62\x82\x02\x03",
+    "{\"a\":1,\"b\":[2,3]}"
+  )
+  Ok(())
+}
