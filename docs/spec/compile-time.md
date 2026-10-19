@@ -217,53 +217,22 @@ independent of topology ([PROG-5](programs.md#prog-5-topology)).
   at `e`, with a secondary label at the selecting call, so a body that selects ever-new
   instances stops. Each generator evaluation has the CT-4 budget.
 
-**Worked example.** `examples/todo-api` derives its `todo_value` with
-[`std@1/derive.json_value`](std-library.md#derived-bodies); this is that generator reduced to
-three field types:
+**Example.** The generator returns source for a body whose header is checked against
+`square`'s declared signature:
 
-```text
-type Todo { id: u64, title: String, done: bool }
-
-fn todo_value(t: Todo) -> json.Value uses {} = comptime record_value(shape(Todo))
-
-fn record_value[T](s: TypeShape[T]) -> Result[Body[fn(T) -> json.Value uses {}], String] {
-  let info = type_shape.info(s)
-  let Record(fields) = info.body else { return Error("record_value needs a record") }
-  let mut lines: List[String] = [
-    string.concat(string.concat("fn(value: ", info.name), ") -> std@1/json.Value uses {} {"),
-    "  let mut fields: Map[String, std@1/json.Value] = map.empty()",
-  ]
-  for f in fields {
-    let read = string.concat("value.", f.name)
-    let value = match f.ty {
-      "u64" => string.join(["Number(std@1/u64.to_string(", read, "))"], ""),
-      "String" => string.join(["Text(unique ", read, ")"], ""),
-      "bool" => string.join(["Bool(", read, ")"], ""),
-      _ => return Error(string.concat("no JSON form for ", f.ty)),
-    }
-    list.push(mut lines, string.join(["  map.insert(mut fields, \"", f.name, "\", ", value, ")"], ""))
-  }
-  list.push(mut lines, "  Object(take fields)")
-  list.push(mut lines, "}")
-  Ok(codegen.body(string.join(lines, "\n")))
+```hirsel
+fn square_body() -> Result[Body[fn(u64) -> u64 uses {}], String] {
+  Ok(codegen.body("fn(x: u64) -> u64 uses {} { x * x }"))
 }
+
+fn square(x: u64) -> u64 uses {} = comptime square_body()
 ```
 
-It generates, and the compiler then checks as `todo_value`'s body:
-
-```text
-fn(value: app@1/Todo) -> std@1/json.Value uses {} {
-  let mut fields: Map[String, std@1/json.Value] = map.empty()
-  map.insert(mut fields, "id", Number(std@1/u64.to_string(value.id)))
-  map.insert(mut fields, "title", Text(unique value.title))
-  map.insert(mut fields, "done", Bool(value.done))
-  Object(take fields)
-}
-```
-
-Adding a field to `Todo` re-evaluates the generator; a field type it has no form for fails
-CT-1 at `todo_value`'s `= comptime` expression, naming the type. Field naming, omission and domain policy stay explicit
-generator code; nothing is derived implicitly.
+For shape-driven generation, see [`std@1/derive.json_value`](std-library.md#derived-bodies)
+and the complete `examples/todo-api` package. Adding a field re-evaluates a shape reader;
+an unsupported field type fails CT-1 at the generation expression, naming the type.
+Field naming, omission and domain policy are explicit generator code; nothing is derived
+implicitly.
 
 ## Reserved for future compile-time features
 
@@ -288,44 +257,5 @@ revision of this specification. Generated function bodies are [CT-5](#ct-5-gener
 
 ## Rationale: shapes and generation
 
-**Decision.** Compile-time code reads a type's declaration as data through a phantom-typed
-token, and generation (when it lands) emits ordinary bodies, as text, for headers written in
-source. Three properties drive it. Checking stays signature-only: dependents never wait on
-evaluation, because evaluation produces neither signatures nor declarations. Opacity is a
-property of the reader's package, enforced where `shape(T)` is written, so a shape can never
-reveal more than source in the same module could name. And the core IR does not grow:
-`shape(T)` is the existing TIR shape rvalue, `type_shape.info` is an ordinary core call
-evaluated by the compile-time interpreter, and its result is ordinary materialized data.
-
-**Alternatives considered.**
-
-- *Zig `@typeInfo` and comptime type construction.* Zig hands compile-time code a complete
-  `std.lang.Type` for any type, with every field in source order, its declarations and its
-  function types, and builds new types with `@Struct`, `@Union` and `@Enum`; `inline for`
-  then specializes a body per field. It is the most expressive design and the model for
-  reading fields as data. Hirsel rejects the rest: Zig fields carry no visibility, so any
-  code that can name a type reads its whole representation and opacity would become
-  advisory; constructed types and `inline for` make a declaration's meaning depend on
-  evaluation, which contradicts signature-only checking; and `type` values would need a new
-  kind of compile-time value in the IR. Hirsel keeps the read, as data, and leaves out the
-  construction.
-- *Rust derive macros.* A derive runs a procedural macro over the declaration's tokens and
-  emits items. It is opt-in and keeps generated code reviewable, but the macro sees tokens,
-  not checked types, so it cannot tell an alias from its target or a hidden field from a
-  visible one; it can emit arbitrary items, including signatures, so dependents wait on
-  expansion; and it runs as compiler-host code with ambient file and process access. Hirsel
-  takes the opt-in, per-declaration generation site and rejects token input, item output and
-  host access.
-- *`go generate`.* An explicitly invoked external command writes ordinary source that is
-  checked like any other. It is simple and fully visible, and it stays available
-  ([CT-3](#ct-3-shapes)). It is not the in-language answer because its output goes stale
-  silently when a type changes, it needs a toolchain outside the compiler, and it bypasses
-  the dependency tracking that re-evaluates a shape reader after an edit.
-- *Typed syntax builders instead of text.* A quotation or AST API would make malformed
-  output unrepresentable, at the cost of a second, larger surface for every syntactic form.
-  Generated text is checked in full anyway, with diagnostics in the generated source, and
-  agents already write Hirsel source well; one way per job favours the text.
-- *Shape as plain data with no token.* `shape(T)` could return `ShapeInfo` directly. The
-  `TypeShape[T]` token keeps the type in the static world, which is what lets a generic
-  generator's signature promise a body for `fn(T) -> R` and lets the checker reject a
-  mismatched header before evaluation.
+Typed shape tokens link a generator's input type to its promised body; checked source text
+keeps generation within the ordinary language, opacity and signature rules (CT-3, CT-5).

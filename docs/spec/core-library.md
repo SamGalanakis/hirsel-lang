@@ -781,7 +781,9 @@ listener, are `0.0.0.0` with port 0.
 
 A connect to a path with no socket accepting on it, including a missing path, is
 `ConnectionRefused()`. `net.unix_connect` has no timeout: it waits only while the
-listener's backlog is full. A listen on a path that already exists is `AddrInUse()`, except
+listener's backlog is full. A connect waiting for room in a backlog has queued nothing,
+so it stays cancellable while it waits; cooperative schedulers park only the waiting task.
+A listen on a path that already exists is `AddrInUse()`, except
 under a `UnixListenRemoveStale()` rule when the existing file is a socket on which a connect
 is refused: the listen then removes that file and binds once more. A file other than a socket
 is never removed. A listen whose directory does not exist is `AddrNotAvailable()`; other
