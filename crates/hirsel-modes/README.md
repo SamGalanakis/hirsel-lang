@@ -199,7 +199,10 @@ mapper's parameter refinements and crossing/authority bounds are checked against
 the owned error payload at the propagation site, independently of its success
 payload and of the enclosing Result. Its uniqueness is I's: the failure edge
 (`Op::MapError`) needs the Result currently unique for a `unique` mapper parameter
-unless the payload is Plain or Shared.
+unless the payload is Plain or Shared. The same edge then returns the error
+(`Op::Propagate`) under the checks an explicit `return Error(e)` gets: a nonplain
+error read from a borrowed Result keeps its bound, unless a mapper function
+returning a global result replaced it.
 
 I alone judges current uniqueness. J's binding rows keep what they received:
 no copy, related call or closure call weakens them, since only flow knows when

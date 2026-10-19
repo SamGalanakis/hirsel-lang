@@ -103,6 +103,13 @@ pub(super) enum Op {
         value: ExprId,
         result: Modes,
     },
+    /// The failure edge of `value ?` returns the (mapped) error payload of
+    /// `value` as `return Error(e)` would (`expression` is the propagation).
+    Propagate {
+        expression: ExprId,
+        value: ExprId,
+        result: Modes,
+    },
     Kill(Vec<usize>),
     /// The block statement's temporaries are released (LANG-3).
     StatementEnd(StmtId),
@@ -1064,6 +1071,16 @@ pub(super) fn build(
                                 env.statement,
                                 None,
                                 kill,
+                                expr.origin.span,
+                            );
+                            kill = node(
+                                &mut nodes,
+                                Op::Propagate {
+                                    expression,
+                                    value: *value,
+                                    result: env.result.clone(),
+                                },
+                                vec![kill],
                                 expr.origin.span,
                             );
                             if map_error.is_some() {

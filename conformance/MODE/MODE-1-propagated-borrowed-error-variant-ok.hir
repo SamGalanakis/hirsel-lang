@@ -1,0 +1,18 @@
+// rule: MODE-1
+// expect: accept
+// Twin of the -bad case: a mapper function returning an owned error releases
+// the borrowed one.
+type Failure = Bad(u64)
+
+fn split(data: Bytes) -> Result[Bytes, String] in data {
+  Ok(data)
+}
+
+fn measure(e: String) -> Failure {
+  Bad(string.byte_len(e))
+}
+
+fn decode(data: Bytes) -> Result[(), Failure] {
+  let _ = split(data) ? measure
+  Ok(())
+}

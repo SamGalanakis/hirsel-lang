@@ -2664,6 +2664,10 @@ conformance/MODE/MODE-1-plain-closure-result-local-ok.hir
 conformance/MODE/MODE-1-plain-local-inert.hir
 conformance/MODE/MODE-1-projected-argument-sibling-bad.hir
 conformance/MODE/MODE-1-projected-argument-sibling-ok.hir
+conformance/MODE/MODE-1-propagated-borrowed-error-bad.hir
+conformance/MODE/MODE-1-propagated-borrowed-error-ok.hir
+conformance/MODE/MODE-1-propagated-borrowed-error-variant-bad.hir
+conformance/MODE/MODE-1-propagated-borrowed-error-variant-ok.hir
 conformance/MODE/MODE-1-receiving-global-holder-inferred-field-bad.hir
 conformance/MODE/MODE-1-receiving-global-holder-local-field-bad.hir
 conformance/MODE/MODE-1-receiving-local-holder-branch-field-ok.hir

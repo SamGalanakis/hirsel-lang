@@ -1,0 +1,13 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 11
+// A variant mapper wraps the borrowed error without releasing its bound.
+type Failure = Bad(String)
+
+fn split(data: Bytes) -> Result[Bytes, String] in data {
+  Ok(data)
+}
+
+fn decode(data: Bytes) -> Result[(), Failure] {
+  let _ = split(data) ? Bad
+  Ok(())
+}

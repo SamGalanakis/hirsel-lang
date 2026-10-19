@@ -702,7 +702,9 @@ fn reads_writes(op: &Op) -> (Vec<ExprId>, Vec<ExprId>) {
         Op::MapError { value, .. } => (vec![*value], vec![]),
         Op::IterationLoan { source, .. } => (vec![*source], vec![]),
         Op::ArgumentLoan { argument, .. } => (vec![*argument], vec![]),
-        Op::Bind { value, .. } | Op::Return { value, .. } => (vec![*value], vec![]),
+        Op::Bind { value, .. } | Op::Return { value, .. } | Op::Propagate { value, .. } => {
+            (vec![*value], vec![])
+        }
         Op::Write { value, .. } => (vec![*value], vec![]),
         Op::Call {
             expression,

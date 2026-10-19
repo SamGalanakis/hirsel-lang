@@ -177,7 +177,9 @@ impl Liveness<'_> {
                         .filter_map(|binding| self.holder(binding)),
                 );
             }
-            Op::Return { value, .. } => uses.push(Holder::Temporary(*value)),
+            Op::Return { value, .. } | Op::Propagate { value, .. } => {
+                uses.push(Holder::Temporary(*value))
+            }
             Op::Write {
                 place: target,
                 value,

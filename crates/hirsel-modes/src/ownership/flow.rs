@@ -6764,6 +6764,11 @@ impl Checker<'_> {
                 self.usage(*expression, value.usage);
                 state.values.insert(*expression, value);
             }
+            Op::Propagate {
+                expression,
+                value,
+                result,
+            } => self.propagate(state, *expression, *value, result),
             Op::Return { value, result } => {
                 self.creation_return(state, *value);
                 let mut result = result.clone();
@@ -6811,119 +6816,21 @@ impl Checker<'_> {
                         return;
                     }
                     let requirement = self.result_requirement(result);
-                    let result_site = requirement.span;
                     if let Some(root) = self.graph.result_ty {
                         if self.required_nested_crossing(&actual, root, *value, site) {
                             self.required_shared_parts(&actual, root, *value, site);
                         }
                     }
-                    if actual.aliased().is_some()
-                        && !self.property(*value).is_some_and(|p| p.copyable)
-                    {
-                        self.report(
-                            const { RuleId::of("OWN-1") },
-                            site,
-                            "an owned result cannot move out of borrowed storage",
-                            |c| {
-                                c.locality(
-                                    state,
-                                    &actual,
-                                    Fact::new(Requirement::OwnedResult, result_site, &[]),
-                                )
-                            },
-                        );
-                    } else if actual.scoped() {
-                        self.report(
-                            const { RuleId::of("CLO-1") },
-                            site,
-                            "a scoped closure cannot be returned",
-                            |_| {
-                                Explanation::default()
-                                    .provided(Fact::new(Cause::ScopedClosure, site, &[]))
-                                    .required(Fact::new(
-                                        Requirement::ReturnClosure,
-                                        result_site,
-                                        &[],
-                                    ))
-                                    .into()
-                            },
-                        );
-                    } else if self.arenas.global(&result.relation)
-                        && actual.usage == UseKind::Borrow
-                        && actual.aliased().is_some()
-                        && !self.property(*value).is_some_and(|p| p.plain)
-                    {
-                        // A scoped capture is a borrow of a possibly global value
-                        // (CLO-1): reading it does not make an owned result.
-                        self.report(
-                            const { RuleId::of("MODE-1") },
-                            site,
-                            "this operation requires a global value",
-                            |c| c.locality(state, &actual, requirement),
-                        );
-                    } else if !self.arenas.global(&actual.modes.relation)
-                        && actual.content.summary().scopes().next().is_some()
-                    {
-                        // Whatever the result declares, its sources are named
-                        // storage of the caller; a temporary of this body is not.
-                        self.report(
-                            const { RuleId::of("MODE-1") },
-                            site,
-                            "a local result retains a temporary that ends with the function",
-                            |c| c.temporary_result(&actual, result_site),
-                        );
-                    } else if self.arenas.lifetime(&result.relation).has_environment()
-                        && !self.arenas.global(&actual.modes.relation)
-                        && self.taken_source(state, &actual).is_some()
-                    {
-                        // Only a result that names a taken parameter is as
-                        // local as that argument was. A callable's unnamed
-                        // local result cannot name one.
-                        self.report(
-                            const { RuleId::of("MODE-1") },
-                            site,
-                            "a local result retains a taken parameter its relation does not name",
-                            |c| {
-                                let taken = c.taken_source(state, &actual).unwrap();
-                                let (name, span) = c.binding_site(taken);
-                                Explanation::default()
-                                    .provided(Fact::new(Cause::TakenParameter, span, &[&name]))
-                                    .required(Fact::new(
-                                        Requirement::ResultTakenSource,
-                                        result_site,
-                                        &[
-                                            "",
-                                            &crate::explain::qualifier(
-                                                crate::explain::Qualifier::In(&[&name]),
-                                            ),
-                                        ],
-                                    ))
-                                    .into()
-                            },
-                        );
-                    } else if self.parameter_parts.outside(&actual) {
-                        self.report(
-                            const { RuleId::of("MODE-1") },
-                            site,
-                            "a local result reads a part of a parameter its relation does not name",
-                            |c| c.locality(state, &actual, requirement),
-                        );
-                    } else {
-                        if let Some(parameters) = result.relation.named_parameters() {
-                            if !self.arenas.global(&actual.modes.relation)
-                                && !self.result_sources_allowed(state, &actual, &parameters)
-                            {
-                                self.report(
-                                    const { RuleId::of("MODE-1") },
-                                    site,
-                                    "a local result retains a source its relation does not name",
-                                    |c| c.locality(state, &actual, requirement),
-                                );
-                                return;
-                            }
-                        }
-                        self.required(state, &actual, result, *value, site, requirement);
-                    }
+                    let property = self.property(*value);
+                    self.result_locality(
+                        state,
+                        &actual,
+                        *value,
+                        property,
+                        site,
+                        result,
+                        requirement,
+                    );
                 }
             }
         }
@@ -6955,6 +6862,204 @@ impl Checker<'_> {
         };
         if let Some(expression) = failure_site {
             self.mutable_crossing_exit(state, self.span_of(expression), &BTreeSet::new());
+        }
+    }
+    /// LANG-8: `value ?` returns `Error(e)` for the error payload `e` of
+    /// `value`, so `e` (or what its mapper makes of it) needs the locality
+    /// of the result, exactly as an explicit `return Error(e)` does.
+    fn propagate(&mut self, state: &State, expression: ExprId, value: ExprId, result: &Modes) {
+        let Some((error, payload)) = self.ty(value).and_then(|ty| {
+            let TypeKind::Named {
+                definition,
+                arguments,
+            } = &self.body.types.get(ty)?.kind
+            else {
+                return None;
+            };
+            let [_, hirsel_types::GenericArgument::Type(payload)] = arguments.as_slice() else {
+                return None;
+            };
+            let signature = self.signatures.cached(definition)?;
+            let SignatureKind::Type(declaration) = &signature.kind else {
+                return None;
+            };
+            let TypeKind::Variant(variants) =
+                &signature.types.get(declaration.representation?)?.kind
+            else {
+                return None;
+            };
+            let error = variants
+                .iter()
+                .position(|variant| variant.name == "Error" && variant.fields.len() == 1)?;
+            Some((error as u32, *payload))
+        }) else {
+            *self.proof_error.borrow_mut() = Some(QueryError::Operational(OperationalFailure {
+                operation: "ownership Result propagation".into(),
+                message: "registered Result lacks its declared error payload".into(),
+            }));
+            return;
+        };
+        let property = self.properties.get(payload.index()).copied();
+        if property.is_some_and(|p| p.plain) || self.mapper_releases(expression) {
+            return;
+        }
+        let mut actual = self.value(state, value);
+        if actual.invalid {
+            return;
+        }
+        actual.project_content(&[Projection::VariantField {
+            variant: error,
+            field: 0,
+        }]);
+        let mut result = result.clone();
+        if self.environment_frame {
+            result.relation = Relation::environment();
+        }
+        let requirement = self.result_requirement(&result);
+        let site = self.span_of(expression);
+        self.result_locality(state, &actual, value, property, site, &result, requirement);
+    }
+    /// A `?` mapper function whose result names no source returns a value
+    /// independent of the error it was given; a variant mapper keeps it.
+    fn mapper_releases(&self, expression: ExprId) -> bool {
+        let Some(path) = self
+            .body
+            .resolution
+            .paths
+            .iter()
+            .find_map(|(site, name)| match name {
+                ResolvedName::Definition(path) if *site == NameSite::Expression(expression) => {
+                    Some(path.clone())
+                }
+                _ => None,
+            })
+        else {
+            return false;
+        };
+        let Some(signature) = self.signatures.cached(&path) else {
+            return false;
+        };
+        let SignatureKind::Function(function) = &signature.kind else {
+            return false;
+        };
+        signature
+            .types
+            .get(function.result)
+            .is_some_and(|row| row.modes.relation.is_global())
+    }
+    /// The locality a returned value needs to leave this frame as `result`
+    /// (MODE-1, OWN-1, CLO-1): for a whole result, or the error a `?`
+    /// propagates.
+    #[allow(clippy::too_many_arguments)]
+    fn result_locality(
+        &mut self,
+        state: &State,
+        actual: &Value,
+        value: ExprId,
+        property: Option<Properties>,
+        site: Span,
+        result: &Modes,
+        requirement: Fact<Requirement>,
+    ) {
+        let result_site = requirement.span;
+        if actual.aliased().is_some() && !property.is_some_and(|p| p.copyable) {
+            self.report(
+                const { RuleId::of("OWN-1") },
+                site,
+                "an owned result cannot move out of borrowed storage",
+                |c| {
+                    c.locality(
+                        state,
+                        actual,
+                        Fact::new(Requirement::OwnedResult, result_site, &[]),
+                    )
+                },
+            );
+        } else if actual.scoped() {
+            self.report(
+                const { RuleId::of("CLO-1") },
+                site,
+                "a scoped closure cannot be returned",
+                |_| {
+                    Explanation::default()
+                        .provided(Fact::new(Cause::ScopedClosure, site, &[]))
+                        .required(Fact::new(Requirement::ReturnClosure, result_site, &[]))
+                        .into()
+                },
+            );
+        } else if self.arenas.global(&result.relation)
+            && actual.usage == UseKind::Borrow
+            && actual.aliased().is_some()
+            && !property.is_some_and(|p| p.plain)
+        {
+            // A scoped capture is a borrow of a possibly global value
+            // (CLO-1): reading it does not make an owned result.
+            self.report(
+                const { RuleId::of("MODE-1") },
+                site,
+                "this operation requires a global value",
+                |c| c.locality(state, actual, requirement),
+            );
+        } else if !self.arenas.global(&actual.modes.relation)
+            && actual.content.summary().scopes().next().is_some()
+        {
+            // Whatever the result declares, its sources are named
+            // storage of the caller; a temporary of this body is not.
+            self.report(
+                const { RuleId::of("MODE-1") },
+                site,
+                "a local result retains a temporary that ends with the function",
+                |c| c.temporary_result(actual, result_site),
+            );
+        } else if self.arenas.lifetime(&result.relation).has_environment()
+            && !self.arenas.global(&actual.modes.relation)
+            && self.taken_source(state, actual).is_some()
+        {
+            // Only a result that names a taken parameter is as
+            // local as that argument was. A callable's unnamed
+            // local result cannot name one.
+            self.report(
+                const { RuleId::of("MODE-1") },
+                site,
+                "a local result retains a taken parameter its relation does not name",
+                |c| {
+                    let taken = c.taken_source(state, actual).unwrap();
+                    let (name, span) = c.binding_site(taken);
+                    Explanation::default()
+                        .provided(Fact::new(Cause::TakenParameter, span, &[&name]))
+                        .required(Fact::new(
+                            Requirement::ResultTakenSource,
+                            result_site,
+                            &[
+                                "",
+                                &crate::explain::qualifier(crate::explain::Qualifier::In(&[&name])),
+                            ],
+                        ))
+                        .into()
+                },
+            );
+        } else if self.parameter_parts.outside(actual) {
+            self.report(
+                const { RuleId::of("MODE-1") },
+                site,
+                "a local result reads a part of a parameter its relation does not name",
+                |c| c.locality(state, actual, requirement),
+            );
+        } else {
+            if let Some(parameters) = result.relation.named_parameters() {
+                if !self.arenas.global(&actual.modes.relation)
+                    && !self.result_sources_allowed(state, actual, &parameters)
+                {
+                    self.report(
+                        const { RuleId::of("MODE-1") },
+                        site,
+                        "a local result retains a source its relation does not name",
+                        |c| c.locality(state, actual, requirement),
+                    );
+                    return;
+                }
+            }
+            self.required(state, actual, result, value, site, requirement);
         }
     }
     /// Project the finite parameter-prefix observations used by this frame's

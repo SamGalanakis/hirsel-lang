@@ -1,0 +1,12 @@
+// rule: MODE-1
+// expect: reject MODE-1 at line 10
+// `e?` returns `Error(e)`: an error read from a Result borrowed from `data`
+// keeps that bound, so a result naming no `in ..` source cannot hold it.
+fn split(data: Bytes) -> Result[Bytes, String] in data {
+  Ok(data)
+}
+
+fn decode(data: Bytes) -> Result[(), String] {
+  let _ = split(data)?
+  Ok(())
+}
