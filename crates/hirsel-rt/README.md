@@ -686,6 +686,8 @@ inert u64 into the context's intern table; file and atomic handles close on drop
 Taken bytes and handles are consumed on every outcome, including status 1.
 `file.walk` owns a counted environment of sorted results and a position, with a
 runtime descriptor and step thunk; it stops after its first Error.
+The ABI test pins that thunk's C signature and result layout to the derived
+`IterNext` ABI on x86-64 and AArch64, including both source-site words.
 `hirsel_rt_v2_launch_zero` calls an eligible `fn() -> Result[(), E]` at its
 three-pointer ABI without acquiring a real directory or an argv snapshot.
 `hirsel_rt_v2_launch_test` grants only Test and accepts the same explicit config.

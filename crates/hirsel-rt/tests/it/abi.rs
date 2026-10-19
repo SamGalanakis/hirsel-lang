@@ -472,3 +472,54 @@ fn a_rust_panic_aborts_at_the_c_boundary() {
         "diagnostic panic probe",
     );
 }
+
+/// A hand-written runtime iterator must receive the same hidden arguments as
+/// compiler-generated IterNext closures, including both source-site words.
+#[test]
+fn file_walk_step_matches_the_derived_iter_next_abi_on_both_targets() {
+    use hirsel_layout::layout::{LayoutBuilder, Owners};
+    use hirsel_lir::abi_types::{CallableShape, PhysicalType};
+    use hirsel_lir::layout_types::{SizeSpec, TargetSpec};
+    use hirsel_rt::io::{WalkOption, hirsel_rt_v2_file_walk_step};
+    use hirsel_types::{Multiplicity, Primitive};
+
+    // This assignment checks the actual exported Rust/C function signature;
+    // the pre-fix four-argument thunk cannot type-check here.
+    let _: unsafe extern "C" fn(
+        *mut RunCtx,
+        *mut Header,
+        u64,
+        u64,
+        *mut u8,
+        *mut WalkOption,
+    ) -> u8 = hirsel_rt_v2_file_walk_step;
+
+    for target in [
+        TargetSpec::x86_64_unknown_linux_gnu(),
+        TargetSpec::aarch64_unknown_linux_gnu(),
+    ] {
+        let mut ty = support::schema::Ty::default();
+        let mut owners = Owners::default();
+        let path = ty.named(&support::schema::handle(&mut owners, "Path", false), vec![]);
+        let u32ty = ty.p(Primitive::U32);
+        let canceled = ty.variant(&[&[], &[], &[]]);
+        let error = ty.variant(&[&[u32ty], &[canceled]]);
+        let item = ty.variant(&[&[path], &[error]]);
+        let option = ty.variant(&[&[], &[item]]);
+        let callable = ty.function(&[], option, Multiplicity::Many, 0);
+        let mut builder = LayoutBuilder::new(&target, &owners);
+        let id = builder
+            .fn_abi(&ty.store, callable, CallableShape::IterNext)
+            .unwrap();
+        let table = builder.finish();
+        let abi = &table.fn_abis[id.0 as usize];
+        assert!(abi.context && abi.environment && abi.caller_site && abi.destination);
+        assert!(abi.parameters.is_empty());
+        let result = abi.result.as_ref().unwrap();
+        assert_eq!(result.slots.len(), 1);
+        assert_eq!(result.slots[0].ty, PhysicalType::Pointer);
+        let layout = table.layout(result.layout).unwrap();
+        assert_eq!(layout.size, SizeSpec::Fixed(size_of::<WalkOption>() as u64));
+        assert_eq!(layout.align, std::mem::align_of::<WalkOption>() as u32);
+    }
+}
