@@ -1791,6 +1791,8 @@ conformance/LANG/LANG-7-prose-header-bad.hir
 conformance/LANG/LANG-7-prose-header-ok.hir
 conformance/LANG/LANG-7-range-coverage-bad.hir
 conformance/LANG/LANG-7-range-coverage-ok.hir
+conformance/LANG/LANG-7-recursive-product-match-bad.hir
+conformance/LANG/LANG-7-recursive-product-match-run.hir
 conformance/LANG/LANG-7-size-equality-bad.hir
 conformance/LANG/LANG-7-size-equality-ok.hir
 conformance/LANG/LANG-7-type-name-alias-bad.hir
@@ -2780,6 +2782,9 @@ conformance/MODE/MODE-1-temporary-source-replaced-bad.hir
 conformance/MODE/MODE-1-trim-split-copy-bad.hir
 conformance/MODE/MODE-1-trim-split-unique-run.hir
 conformance/MODE/MODE-1-type-argument-keeps-abstract-relation-ok.hir
+conformance/MODE/MODE-1-unique-concrete-part-run.hir
+conformance/MODE/MODE-1-unique-function-part-bad.hir
+conformance/MODE/MODE-1-unique-generic-part-bad.hir
 conformance/MODE/MODE-1-unique-local-taken-stays-local-bad.hir
 conformance/MODE/MODE-1-unique-local-taken-stays-local-ok.hir
 conformance/MODE/MODE-1-unique-taken-argument-bad.hir
@@ -5414,6 +5419,8 @@ conformance/SER/SER-1-local-annotation-ok.hir
 conformance/SER/SER-1-opaque-opt-in-bad.hir
 conformance/SER/SER-1-record-opt-in-bad.hir
 conformance/SER/SER-1-record-opt-in-ok.hir
+conformance/SER/SER-1-recursive-option-payload-bad.hir
+conformance/SER/SER-1-recursive-option-payload-ok.hir
 conformance/SER/SER-1-recursive-schema-bad.hir
 conformance/SER/SER-1-recursive-schema-ok.hir
 conformance/SER/SER-1-refinement-opt-in-bad.hir
@@ -5432,6 +5439,8 @@ conformance/SER/SER-2-flat-zero-stride-list-run.hir
 conformance/SER/SER-2-noncanonical-bool-run.hir
 conformance/SER/SER-2-noncanonical-nan-run.hir
 conformance/SER/SER-2-overflow-length-run.hir
+conformance/SER/SER-2-recursive-box-option-run.hir
+conformance/SER/SER-2-recursive-list-option-run.hir
 conformance/SER/SER-2-roundtrip-run.hir
 conformance/SER/SER-2-schema-mismatch-run.hir
 conformance/SER/SER-2-sequential-packed-run.hir
