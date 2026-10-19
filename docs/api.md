@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1357 exported definitions; 494 variants.
+1359 exported definitions; 494 variants.
 
 ## Types and roots
 
@@ -8967,6 +8967,10 @@ References: [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource)
 
+<a id="def-core_401_2ftest_2fclock"></a>
+
+- `@noalloc fn test.clock(t: Test) -> MonotonicClock`
+
 <a id="def-core_401_2ftest_2fcrash"></a>
 
 - `fn test.crash(t: Test, d: Dir, seed: u64) -> ()`
@@ -9058,6 +9062,10 @@ References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_
 - `pub fn test.show_list[T](xs: List[T], show: fn(T) -> String) -> String`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
+
+<a id="def-core_401_2ftest_2ftasks"></a>
+
+- `@noalloc fn test.tasks(t: Test) -> Tasks`
 
 
 ## text
