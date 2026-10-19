@@ -19,15 +19,24 @@ pub struct Toolchain {
     /// The archive variant `link` links; measurement also selects emitted
     /// inline-edge hooks. `with_runtime` selects another built variant.
     pub runtime_build: RuntimeBuild,
-    /// The pinned clang. Its `-###` x86-64 link command is the one `lld` runs.
+    /// The pinned clang, which compiles C test harnesses. No link runs it.
     pub clang: PathBuf,
-    /// The AArch64 cross compiler driver. Its `-###` link command is the one
-    /// `lld` runs for AArch64.
+    /// The AArch64 cross compiler driver, which links the Cargo-built AArch64
+    /// runtime's build scripts and C test harnesses. No program link runs it.
     pub aarch64_cc: Option<PathBuf>,
-    /// The pinned `ld.lld`, which links every executable directly.
+    /// The pinned `ld.lld`, which links every executable and program library
+    /// with the kit's line (`native/kit.rs`).
     pub lld: PathBuf,
-    /// The private runtime cache, which keeps each driver's link command.
-    pub cache: PathBuf,
+    /// The link kit (`HIRSEL_LINK_KIT`): every link input besides the program,
+    /// its runtime archive and foreign libraries.
+    pub kit: PathBuf,
+    /// Link the debug-bearing runtime archive and split each executable's debug
+    /// information into `<build-id>.debug` beside it (`hirsel build --debug`).
+    pub debug_info: bool,
+    /// Launch executables (other than under a wrapper) through the glibc floor
+    /// release's own loader and libraries in `<dir>/<triple>/`
+    /// (`HIRSEL_GLIBC_FLOOR`) instead of the system's or the cross sysroot's.
+    pub glibc_floor: Option<PathBuf>,
     /// The user-mode emulator AArch64 executables run under, and its sysroot.
     pub qemu_aarch64: Option<PathBuf>,
     pub aarch64_sysroot: Option<PathBuf>,
@@ -36,8 +45,13 @@ pub struct Toolchain {
     pub valgrind_lib: Option<PathBuf>,
     /// Matching libc/loader and debug symbols for memcheck's mandatory redirects.
     pub valgrind_runtime: Option<PathBuf>,
-    /// `libhirsel_rt.a` per target triple and archive variant.
+    /// The debug-stripped `libhirsel_rt.a` per target triple and archive variant.
     pub runtime: BTreeMap<(String, RuntimeBuild), PathBuf>,
+    /// The same archives with their debug information, which `debug_info` links read.
+    pub runtime_debug: BTreeMap<(String, RuntimeBuild), PathBuf>,
+    /// Per target triple, the default runtime archive's `compiler_builtins`
+    /// members alone, which program libraries link.
+    pub builtins: BTreeMap<String, PathBuf>,
     /// An x86-64 launch wrapper command and its arguments, or empty. Selecting
     /// the pinned Valgrind executable also enables its loader and environment.
     pub wrapper: Vec<String>,
@@ -247,7 +261,11 @@ impl Toolchain {
         let prefix = environment_path("LLVM_SYS_211_PREFIX")?;
         let needs_aarch64 = targets.iter().any(|target| aarch64(target));
         let needs_memcheck = runtime_builds.iter().any(|build| build.memcheck);
-        let aarch64_cc = selected_path("HIRSEL_AARCH64_CC", needs_aarch64)?;
+        // No program link runs the cross driver: it is an input only where configured.
+        let aarch64_cc = selected_path(
+            "HIRSEL_AARCH64_CC",
+            needs_aarch64 && std::env::var_os("HIRSEL_AARCH64_CC").is_some(),
+        )?;
         let qemu_aarch64 = selected_path("HIRSEL_QEMU_AARCH64", needs_aarch64)?;
         let aarch64_sysroot = selected_path("HIRSEL_AARCH64_SYSROOT", needs_aarch64)?;
         let valgrind = selected_path("HIRSEL_VALGRIND", needs_memcheck)?;
@@ -258,22 +276,28 @@ impl Toolchain {
         // Cargo is then never run, and a missing archive is an error.
         let prebuilt = std::env::var_os("HIRSEL_RUNTIME_ARCHIVES").map(PathBuf::from);
         let mut runtime = BTreeMap::new();
+        let mut runtime_debug = BTreeMap::new();
+        let mut builtins = BTreeMap::new();
         for (target, &runtime_build) in targets
             .iter()
             .flat_map(|t| runtime_builds.iter().map(move |b| (t, b)))
         {
             if let Some(dir) = &prebuilt {
-                let archive = dir
-                    .join(&target.triple)
-                    .join(runtime_build.variant())
-                    .join("libhirsel_rt.a");
+                let variant = dir.join(&target.triple).join(runtime_build.variant());
+                let archive = variant.join("libhirsel_rt.a");
                 if !archive.is_file() {
                     return Err(NativeError::new(
                         StageName::Link,
                         format!("no runtime archive {}", archive.display()),
                     ));
                 }
-                runtime.insert((target.triple.clone(), runtime_build), archive);
+                let key = (target.triple.clone(), runtime_build);
+                runtime.insert(key.clone(), archive);
+                runtime_debug.insert(key, variant.join("debug/libhirsel_rt.a"));
+                builtins.insert(
+                    target.triple.clone(),
+                    dir.join(&target.triple).join("libhirsel_builtins.a"),
+                );
                 continue;
             }
             let archive = super::runtime_cache::archive(
@@ -321,20 +345,46 @@ impl Toolchain {
                     Ok(archive)
                 },
             )?;
-            runtime.insert((target.triple.clone(), runtime_build), archive);
+            // Cargo builds the debug-bearing archive; derive the link forms Buck
+            // builds beside it (tools/buck2/runtime_parts.py).
+            let stripped =
+                super::runtime_cache::derived(build_dir, &archive, "stripped", |scratch| {
+                    let stripped = scratch.join("libhirsel_rt.a");
+                    checked(
+                        StageName::Link,
+                        llvm_tool(&prefix, "llvm-objcopy")
+                            .arg("--strip-debug")
+                            .args([&archive, &stripped]),
+                    )?;
+                    Ok(stripped)
+                })?;
+            if runtime_build == RuntimeBuild::default() || !builtins.contains_key(&target.triple) {
+                let derived =
+                    super::runtime_cache::derived(build_dir, &archive, "builtins", |scratch| {
+                        compiler_builtins(&prefix, &stripped, scratch)
+                    })?;
+                builtins.insert(target.triple.clone(), derived);
+            }
+            let key = (target.triple.clone(), runtime_build);
+            runtime.insert(key.clone(), stripped);
+            runtime_debug.insert(key, archive);
         }
         Ok(Self {
             runtime_build,
             clang: prefix.join("bin/hirsel-clang"),
             aarch64_cc,
             lld: prefix.join("bin/ld.lld"),
-            cache: build_dir.to_path_buf(),
+            kit: environment_path("HIRSEL_LINK_KIT")?,
+            debug_info: false,
+            glibc_floor: None,
             qemu_aarch64,
             aarch64_sysroot,
             valgrind,
             valgrind_lib,
             valgrind_runtime,
             runtime,
+            runtime_debug,
+            builtins,
             wrapper: Vec::new(),
             launch_timeout: LAUNCH_TIMEOUT,
         })
@@ -349,12 +399,106 @@ impl Toolchain {
         }
     }
 
-    /// The selected archive for `triple`.
+    /// The selected (debug-stripped) archive for `triple`.
     pub fn archive(&self, triple: &str) -> Option<&Path> {
         self.runtime
             .get(&(triple.to_string(), self.runtime_build))
             .map(PathBuf::as_path)
     }
+
+    /// The selected archive with its debug information.
+    fn debug_archive(&self, triple: &str) -> Option<&Path> {
+        self.runtime_debug
+            .get(&(triple.to_string(), self.runtime_build))
+            .map(PathBuf::as_path)
+    }
+
+    /// `triple`'s compiler builtins alone, for program libraries.
+    fn builtins_archive(&self, triple: &str) -> Result<&Path, NativeError> {
+        self.builtins
+            .get(triple)
+            .map(PathBuf::as_path)
+            .ok_or_else(|| {
+                NativeError::new(
+                    StageName::Link,
+                    format!("no compiler builtins archive for {triple}"),
+                )
+            })
+    }
+}
+
+/// `tool` from the LLVM tree at `prefix`, with an environment holding only its
+/// library directory.
+fn llvm_tool(prefix: &Path, tool: &str) -> Command {
+    let mut command = Command::new(prefix.join("bin").join(tool));
+    command
+        .env_clear()
+        .env("LD_LIBRARY_PATH", prefix.join("lib"));
+    command
+}
+
+/// `stripped`'s `compiler_builtins` members, in archive order, as an archive in
+/// `scratch` (tools/buck2/runtime_parts.py).
+fn compiler_builtins(
+    prefix: &Path,
+    stripped: &Path,
+    scratch: &Path,
+) -> Result<PathBuf, NativeError> {
+    let listed = llvm_tool(prefix, "llvm-ar")
+        .arg("t")
+        .arg(stripped)
+        .output()
+        .map_err(|error| NativeError::new(StageName::Link, format!("llvm-ar: {error}")))?;
+    if !listed.status.success() {
+        return Err(NativeError::new(
+            StageName::Link,
+            format!(
+                "llvm-ar t {}: {}",
+                stripped.display(),
+                String::from_utf8_lossy(&listed.stderr)
+            ),
+        ));
+    }
+    let members: Vec<&str> = std::str::from_utf8(&listed.stdout)
+        .unwrap_or_default()
+        .lines()
+        .filter(|member| member.starts_with("compiler_builtins-"))
+        .collect();
+    let unique: std::collections::BTreeSet<_> = members.iter().collect();
+    if members.is_empty() || unique.len() != members.len() {
+        return Err(NativeError::new(
+            StageName::Link,
+            format!(
+                "{}: no or duplicate compiler_builtins members",
+                stripped.display()
+            ),
+        ));
+    }
+    let members_dir = scratch.join("members");
+    let _ = std::fs::remove_dir_all(&members_dir);
+    std::fs::create_dir_all(&members_dir)
+        .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
+    let mut output = std::ffi::OsString::from("--output=");
+    output.push(&members_dir);
+    checked(
+        StageName::Link,
+        llvm_tool(prefix, "llvm-ar")
+            .arg("x")
+            .arg(output)
+            .arg(stripped)
+            .args(&members),
+    )?;
+    let builtins = scratch.join("libhirsel_builtins.a");
+    let _ = std::fs::remove_file(&builtins);
+    checked(
+        StageName::Link,
+        llvm_tool(prefix, "llvm-ar")
+            .current_dir(&members_dir)
+            .arg("rcsD")
+            .arg(&builtins)
+            .args(&members),
+    )?;
+    Ok(builtins)
 }
 
 /// Tools are explicit action inputs. Bare executable names would search libc's
@@ -808,15 +952,18 @@ pub(crate) fn link_objects_with_run(
     requested: Option<&hirsel_run_config::ValidatedRun>,
 ) -> Result<PathBuf, NativeError> {
     link_objects_impl(program, entry, objects, toolchain, dir, requested, false)
+        .map(|linked| linked.path)
 }
 
+/// A standalone executable `dir/program` and, for a `debug_info` toolchain, its
+/// `<build-id>.debug` beside it.
 pub(crate) fn link_standalone(
     program: &ReadyProgram,
     entry: &DefPath,
     objects: &[hirsel_lir::stage::ObjectArtifact],
     toolchain: &Toolchain,
     dir: &Path,
-) -> Result<PathBuf, NativeError> {
+) -> Result<Linked, NativeError> {
     link_objects_impl(program, entry, objects, toolchain, dir, None, true)
 }
 
@@ -849,7 +996,8 @@ pub fn link_library(
         dir,
         Output::Library,
         &[main],
-    )?;
+    )?
+    .path;
     let mut imports: std::collections::BTreeSet<String> = objects
         .iter()
         .flat_map(|o| &o.imports)
@@ -880,11 +1028,18 @@ pub fn link_host(
             ),
         )
     })?;
+    // The libc declarations it uses, written out so the compile reads no
+    // headers: glibc's RTLD_NOW is 2 and RTLD_LOCAL 0 on both targets.
     let source = format!(
-        "#include <dlfcn.h>\n#include <stdio.h>\n#include <string.h>\n\
+        "typedef unsigned long size_t;\ntypedef struct _IO_FILE FILE;\n\
+         extern FILE *stdout, *stderr;\n\
+         void *dlopen(const char *, int);\nvoid *dlsym(void *, const char *);\n\
+         char *dlerror(void);\nint fprintf(FILE *, const char *, ...);\n\
+         int printf(const char *, ...);\nint snprintf(char *, size_t, const char *, ...);\n\
+         char *strrchr(const char *, int);\nint fflush(FILE *);\n\
          int main(int argc, char **argv) {{\n\
          for (int i = 1; i < argc; i++) {{\n\
-         void *library = dlopen(argv[i], RTLD_NOW | RTLD_LOCAL);\n\
+         void *library = dlopen(argv[i], 2);\n\
          int (*run)(int, const char *const *) = library\n\
            ? (int (*)(int, const char *const *))dlsym(library, \"{LIBRARY_RUN}\") : 0;\n\
          if (!run) {{ fprintf(stderr, \"host: %s\\n\", dlerror()); return 3; }}\n\
@@ -900,24 +1055,44 @@ pub fn link_host(
          }}\n\
          return 0;\n}}\n"
     );
-    let source_path = dir.join("host.c");
-    std::fs::write(&source_path, source)
-        .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
+    let source_path = write(dir, "host.c", source.as_bytes())?;
+    let object = dir.join("host.o");
+    let target_option = format!("--target={}", target.triple);
+    checked(
+        StageName::Link,
+        Command::new(toolchain.lld.with_file_name("clang"))
+            .env_clear()
+            .env(
+                "LD_LIBRARY_PATH",
+                toolchain
+                    .lld
+                    .parent()
+                    .and_then(Path::parent)
+                    .map_or_else(PathBuf::new, |t| t.join("lib")),
+            )
+            .args([target_option.as_str(), "-nostdinc", "-fPIC", "-O1", "-c"])
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&object),
+    )?;
     let host = dir.join("host");
-    let mut command = Command::new(if aarch64(target) {
-        required_path(&toolchain.aarch64_cc, "HIRSEL_AARCH64_CC")?
-    } else {
-        &toolchain.clang
-    });
-    command.args(toolchain.loader_flags(target)?);
-    command.arg(&source_path).arg(archive);
-    // The libraries resolve their runtime imports against the host's one runtime.
-    command.arg("-Wl,--export-dynamic");
-    for import in libraries.iter().flat_map(|library| &library.imports) {
-        command.arg(format!("-Wl,--undefined={import}"));
-    }
-    command.args(["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"]);
-    command.arg("-o").arg(&host);
+    let kit = super::kit::Kit::load(&toolchain.kit)?;
+    let mut exports: Vec<String> = libraries
+        .iter()
+        .flat_map(|library| library.imports.iter().cloned())
+        .collect();
+    exports.sort();
+    exports.dedup();
+    let link = super::kit::Link {
+        kit: &kit,
+        triple: &target.triple,
+        kind: super::kit::Kind::Host { exports },
+        objects: &[object],
+        runtime: Some(archive),
+        unwind: true,
+        foreign: &[],
+    };
+    let (mut command, _) = link.command(&toolchain.lld, &host)?;
     checked(StageName::Link, &mut command)?;
     Ok(host)
 }
@@ -948,7 +1123,7 @@ fn link_objects_impl(
     dir: &Path,
     requested: Option<&hirsel_run_config::ValidatedRun>,
     standalone: bool,
-) -> Result<PathBuf, NativeError> {
+) -> Result<Linked, NativeError> {
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
     let main = launcher_object(program, entry, objects, dir, requested, standalone, "main")?;
     let main = write(dir, "main.o", &main)?;
@@ -1197,8 +1372,7 @@ fn link_launcher(
     dir: &Path,
     output: Output,
     launchers: &[PathBuf],
-) -> Result<PathBuf, NativeError> {
-    let standalone = output == Output::Standalone;
+) -> Result<Linked, NativeError> {
     let (symbol, _, _) = entry_result(program, entry)?;
     let target = &program.target;
     let library_symbols: std::collections::BTreeSet<String> = program
@@ -1262,66 +1436,165 @@ fn link_launcher(
     } else {
         "program"
     });
-    let mut before = Vec::new();
-    let mut inputs: Vec<std::ffi::OsString> = Vec::new();
-    if output == Output::Library {
-        // Runtime entries stay undefined: the host process supplies its one runtime.
-        let script = write(
-            dir,
-            "exports.map",
-            format!("{{ global: {LIBRARY_RUN}; local: *; }};\n").as_bytes(),
-        )?;
-        before.push("-shared".into());
-        // The driver passes `-Wl,` options through in place, so the per-link
-        // script leads the inputs rather than keying the driver's command.
-        let mut option = std::ffi::OsString::from("--version-script=");
-        option.push(&script);
-        inputs.push(option);
-    } else if !standalone {
-        before = toolchain.loader_flags(target)?;
-    }
-    inputs.extend(launchers.iter().map(Into::into));
+    let kit = super::kit::Kit::load(&toolchain.kit)?;
+    let mut inputs: Vec<PathBuf> = launchers.to_vec();
     for (index, object) in objects.iter().enumerate() {
-        inputs.push(write(dir, &format!("unit-{index}.o"), &object.bytes)?.into());
-    }
-    if output != Output::Library {
-        inputs.push(archive.into());
+        inputs.push(write(dir, &format!("unit-{index}.o"), &object.bytes)?);
     }
     // The externs resolve against the root's `unsafe ffi` libraries (PROG-4).
-    for link in &program.foreign_links {
-        inputs.push(match link {
-            hirsel_engine::LinkInput::Library(name) => format!("-l{name}").into(),
-            hirsel_engine::LinkInput::File(path) => path.into(),
-        });
+    let foreign = foreign_inputs(&kit, &target.triple, &program.foreign_links)?;
+    let debug = toolchain.debug_info && output != Output::Library;
+    let (kind, runtime) = match output {
+        Output::Library => {
+            // Runtime entries stay undefined: the host process supplies its one
+            // runtime. Compiler builtins are the runtime's, linked in.
+            let script = write(
+                dir,
+                "exports.map",
+                format!("{{ global: {LIBRARY_RUN}; local: *; }};\n").as_bytes(),
+            )?;
+            (
+                super::kit::Kind::Library { script },
+                toolchain.builtins_archive(&target.triple)?,
+            )
+        }
+        Output::Standalone => (
+            super::kit::Kind::Executable { loader: None },
+            runtime_archive(toolchain, &target.triple, archive, debug)?,
+        ),
+        Output::Launched => (
+            super::kit::Kind::Executable {
+                loader: toolchain.loader(target)?,
+            },
+            runtime_archive(toolchain, &target.triple, archive, debug)?,
+        ),
+    };
+    let link = super::kit::Link {
+        kit: &kit,
+        triple: &target.triple,
+        kind,
+        objects: &inputs,
+        runtime: Some(runtime),
+        unwind: output != Output::Library,
+        foreign: &foreign,
+    };
+    let (mut command, build_id) = link.command(&toolchain.lld, &executable)?;
+    checked(StageName::Link, &mut command)?;
+    let debug = debug
+        .then(|| split_debug(toolchain, &executable, &build_id))
+        .transpose()?;
+    Ok(Linked {
+        path: executable,
+        debug,
+    })
+}
+
+/// A linked file and, for a `debug_info` toolchain, its split debug information.
+pub(crate) struct Linked {
+    pub path: PathBuf,
+    pub debug: Option<PathBuf>,
+}
+
+/// The archive a link reads: the debug-stripped one, or the debug-bearing one.
+fn runtime_archive<'a>(
+    toolchain: &'a Toolchain,
+    triple: &str,
+    stripped: &'a Path,
+    debug: bool,
+) -> Result<&'a Path, NativeError> {
+    if !debug {
+        return Ok(stripped);
     }
-    let after: &[&str] = match output {
-        // The host process links the system libraries.
-        Output::Library => &[],
-        // Bundle compiler support and math objects as well as the Rust runtime.
-        // On glibc Linux the remaining system interfaces are supplied by libc.
-        Output::Standalone => &[
-            "-static-libgcc",
-            "-Wl,--as-needed",
-            "-Wl,-Bstatic",
-            "-lm",
-            "-Wl,-Bdynamic",
-            "-ldl",
-            "-lpthread",
-        ],
-        Output::Launched => &["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"],
+    toolchain.debug_archive(triple).ok_or_else(|| {
+        NativeError::new(
+            StageName::Link,
+            format!("no debug runtime archive for {triple}"),
+        )
+    })
+}
+
+/// The file name of an executable's split debug information.
+fn debug_file_name(build_id: &[u8; 20]) -> String {
+    let hex: String = build_id.iter().map(|b| format!("{b:02x}")).collect();
+    format!("{hex}.debug")
+}
+
+/// Move `executable`'s debug information into `<build-id>.debug` beside it,
+/// which its `.gnu_debuglink` names (with the file's CRC), as debuggers look it up.
+fn split_debug(
+    toolchain: &Toolchain,
+    executable: &Path,
+    build_id: &[u8; 20],
+) -> Result<PathBuf, NativeError> {
+    let objcopy = toolchain.lld.with_file_name("llvm-objcopy");
+    let debug = executable.with_file_name(debug_file_name(build_id));
+    let run = |args: &[&std::ffi::OsStr]| {
+        let mut command = Command::new(&objcopy);
+        command.env_clear().args(args).current_dir(
+            executable.parent().ok_or_else(|| {
+                NativeError::new(StageName::Link, "an executable has no directory")
+            })?,
+        );
+        if let Some(tree) = objcopy.parent().and_then(Path::parent) {
+            command.env("LD_LIBRARY_PATH", tree.join("lib"));
+        }
+        checked(StageName::Link, &mut command)
     };
-    let driver = if aarch64(target) {
-        required_path(&toolchain.aarch64_cc, "HIRSEL_AARCH64_CC")?
-    } else {
-        &toolchain.clang
-    };
-    let after: Vec<std::ffi::OsString> = after.iter().map(Into::into).collect();
-    let line = super::link_line::LinkLine::of(&toolchain.cache, driver, &before, &after)?;
-    checked(
-        StageName::Link,
-        &mut line.command(&toolchain.lld, &inputs, &executable),
-    )?;
-    Ok(executable)
+    run(&[
+        "--only-keep-debug".as_ref(),
+        executable.as_os_str(),
+        debug.as_os_str(),
+    ])?;
+    // A relative name, so the link is the file name alone, never this directory.
+    let mut link = std::ffi::OsString::from("--add-gnu-debuglink=");
+    link.push(debug.file_name().unwrap());
+    run(&["--strip-debug".as_ref(), &link, executable.as_os_str()])?;
+    Ok(debug)
+}
+
+/// The files `links` name, in order: a library the kit provides (`c`, `m`,
+/// `pthread`, ...) is its stub, any other library the first `lib<name>.so` or
+/// `lib<name>.a` in the host's system library directories, as `ld -l` searches
+/// them. Host libraries are the one link input outside the kit; they enter the
+/// build ID by content.
+fn foreign_inputs(
+    kit: &super::kit::Kit,
+    triple: &str,
+    links: &[hirsel_engine::LinkInput],
+) -> Result<Vec<PathBuf>, NativeError> {
+    let multiarch = triple.replace("-unknown-", "-");
+    let directories = [
+        format!("/usr/local/lib/{multiarch}"),
+        format!("/lib/{multiarch}"),
+        format!("/usr/lib/{multiarch}"),
+        "/usr/local/lib".into(),
+        "/lib64".into(),
+        "/usr/lib64".into(),
+        "/lib".into(),
+        "/usr/lib".into(),
+    ];
+    links
+        .iter()
+        .map(|link| match link {
+            hirsel_engine::LinkInput::File(path) => Ok(path.clone()),
+            hirsel_engine::LinkInput::Library(name) => kit
+                .library(triple, name)
+                .or_else(|| {
+                    directories.iter().find_map(|directory| {
+                        ["so", "a"].iter().find_map(|suffix| {
+                            let path = Path::new(directory).join(format!("lib{name}.{suffix}"));
+                            path.is_file().then_some(path)
+                        })
+                    })
+                })
+                .ok_or_else(|| {
+                    NativeError::new(
+                        StageName::Link,
+                        format!("no foreign library `{name}` in the link kit or {directories:?}"),
+                    )
+                }),
+        })
+        .collect()
 }
 
 fn cranelift_objects(objects: &[hirsel_lir::stage::ObjectArtifact]) -> bool {
@@ -1400,6 +1673,7 @@ refuse:\n ret i32 3\n}}\n",
         Output::Launched,
         &launchers,
     )
+    .map(|linked| linked.path)
 }
 
 /// The encoded failure table every source program's descriptor carries.
@@ -1491,6 +1765,55 @@ pub(crate) fn launch_fixture(
     )
 }
 
+/// The command that runs `executable` for `target`: under qemu for AArch64,
+/// else under the wrapper, and at the floor through the release's own loader.
+fn launcher(
+    executable: &Path,
+    target: &TargetSpec,
+    toolchain: &Toolchain,
+) -> Result<Command, NativeError> {
+    // At the floor, the release's loader runs the executable with the
+    // release's libraries, so nothing installed on the host takes part.
+    let floor = toolchain.glibc_floor.as_ref().map(|floor| {
+        let libraries = floor.join(&target.triple);
+        let loader = if aarch64(target) {
+            "ld-linux-aarch64.so.1"
+        } else {
+            "ld-linux-x86-64.so.2"
+        };
+        [
+            libraries.join(loader).into_os_string(),
+            "--library-path".into(),
+            libraries.into_os_string(),
+        ]
+    });
+    Ok(if aarch64(target) {
+        let mut command = Command::new(required_path(
+            &toolchain.qemu_aarch64,
+            "HIRSEL_QEMU_AARCH64",
+        )?);
+        match &floor {
+            Some(floor) => command.args(floor),
+            None => command.arg("-L").arg(required_path(
+                &toolchain.aarch64_sysroot,
+                "HIRSEL_AARCH64_SYSROOT",
+            )?),
+        };
+        command.arg(executable);
+        command
+    } else if let Some((program, arguments)) = toolchain.wrapper.split_first() {
+        let mut command = Command::new(program);
+        command.args(arguments).arg(executable);
+        command
+    } else if let Some([loader, option, libraries]) = &floor {
+        let mut command = Command::new(loader);
+        command.arg(option).arg(libraries).arg(executable);
+        command
+    } else {
+        Command::new(executable)
+    })
+}
+
 /// Harness execution or a user launch with an explicit admitted run record.
 fn launch_impl(
     executable: &Path,
@@ -1511,26 +1834,7 @@ fn launch_impl(
     let _ = std::fs::remove_file(&refusal);
     std::fs::create_dir_all(&root)
         .map_err(|e| NativeError::new(StageName::Launch, format!("granted directory: {e}")))?;
-    let mut command = if aarch64(target) {
-        let mut command = Command::new(required_path(
-            &toolchain.qemu_aarch64,
-            "HIRSEL_QEMU_AARCH64",
-        )?);
-        command
-            .arg("-L")
-            .arg(required_path(
-                &toolchain.aarch64_sysroot,
-                "HIRSEL_AARCH64_SYSROOT",
-            )?)
-            .arg(executable);
-        command
-    } else if let Some((program, arguments)) = toolchain.wrapper.split_first() {
-        let mut command = Command::new(program);
-        command.args(arguments).arg(executable);
-        command
-    } else {
-        Command::new(executable)
-    };
+    let mut command = launcher(executable, target, toolchain)?;
     command
         .env_clear()
         .env("HIRSEL_RT_ROOT", &root)
@@ -1978,27 +2282,47 @@ impl Toolchain {
         })
     }
 
-    /// The link flags that make an executable for `target` load as this toolchain launches
-    /// it: under memcheck, Valgrind's pinned dynamic loader and runtime libraries.
-    pub fn loader_flags(
+    /// Link C (or other foreign) `objects` with the selected runtime archive into
+    /// the executable `output`, by the same kit line and loader as a program.
+    pub fn link_executable(
         &self,
         target: &TargetSpec,
-    ) -> Result<Vec<std::ffi::OsString>, NativeError> {
+        objects: &[PathBuf],
+        output: &Path,
+    ) -> Result<(), NativeError> {
+        let archive = self.archive(&target.triple).ok_or_else(|| {
+            NativeError::new(
+                StageName::Link,
+                format!("no runtime archive for {}", target.triple),
+            )
+        })?;
+        let kit = super::kit::Kit::load(&self.kit)?;
+        let link = super::kit::Link {
+            kit: &kit,
+            triple: &target.triple,
+            kind: super::kit::Kind::Executable {
+                loader: self.loader(target)?,
+            },
+            objects,
+            runtime: Some(archive),
+            unwind: true,
+            foreign: &[],
+        };
+        checked(StageName::Link, &mut link.command(&self.lld, output)?.0)
+    }
+
+    /// The loader and library directory an executable for `target` loads with
+    /// as this toolchain launches it: under memcheck, Valgrind's pinned loader
+    /// and runtime libraries; otherwise the target's canonical interpreter (`None`).
+    pub fn loader(&self, target: &TargetSpec) -> Result<Option<(PathBuf, PathBuf)>, NativeError> {
         if aarch64(target) || !self.uses_memcheck() {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let runtime = required_path(&self.valgrind_runtime, "HIRSEL_VALGRIND_RUNTIME")?;
-        Ok([
-            "-Xlinker".into(),
-            "--dynamic-linker".into(),
-            "-Xlinker".into(),
-            runtime.join("ld-linux-x86-64.so.2").into(),
-            "-Xlinker".into(),
-            "-rpath".into(),
-            "-Xlinker".into(),
-            runtime.into(),
-        ]
-        .to_vec())
+        Ok(Some((
+            runtime.join("ld-linux-x86-64.so.2"),
+            runtime.to_path_buf(),
+        )))
     }
 
     /// This toolchain with x86-64 executables launched under Valgrind
@@ -2055,6 +2379,57 @@ mod tests {
     }
 
     #[test]
+    fn floor_launches_run_through_the_release_loader_and_its_libraries_only() {
+        let tools = Toolchain {
+            runtime_build: RuntimeBuild::default(),
+            clang: "/unused/clang".into(),
+            aarch64_cc: None,
+            lld: "/unused/ld.lld".into(),
+            kit: "/unused/kit".into(),
+            debug_info: false,
+            glibc_floor: Some("/floor".into()),
+            qemu_aarch64: Some("/tools/qemu".into()),
+            aarch64_sysroot: Some("/unused/sysroot".into()),
+            valgrind: None,
+            valgrind_lib: None,
+            valgrind_runtime: None,
+            runtime: BTreeMap::new(),
+            runtime_debug: BTreeMap::new(),
+            builtins: BTreeMap::new(),
+            wrapper: Vec::new(),
+            launch_timeout: LAUNCH_TIMEOUT,
+        };
+        let shape = |target: &TargetSpec| {
+            let command = launcher(Path::new("/out/app"), target, &tools).unwrap();
+            let mut words = vec![command.get_program().to_owned()];
+            words.extend(command.get_args().map(ToOwned::to_owned));
+            words
+        };
+        let x86 = "/floor/x86_64-unknown-linux-gnu";
+        assert_eq!(
+            shape(&TargetSpec::x86_64_unknown_linux_gnu()),
+            [
+                format!("{x86}/ld-linux-x86-64.so.2").as_str(),
+                "--library-path",
+                x86,
+                "/out/app"
+            ]
+        );
+        // The emulator runs the release's loader; the cross sysroot takes no part.
+        let arm = "/floor/aarch64-unknown-linux-gnu";
+        assert_eq!(
+            shape(&TargetSpec::aarch64_unknown_linux_gnu()),
+            [
+                "/tools/qemu",
+                format!("{arm}/ld-linux-aarch64.so.1").as_str(),
+                "--library-path",
+                arm,
+                "/out/app"
+            ]
+        );
+    }
+
+    #[test]
     fn wrappers_keep_selected_memcheck_inputs_without_requiring_them_for_other_launches() {
         let dir = std::env::temp_dir().join(format!("hirsel-memcheck-env-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -2063,13 +2438,17 @@ mod tests {
             clang: "/unused/clang".into(),
             aarch64_cc: Some("/unused/gcc".into()),
             lld: "/unused/ld.lld".into(),
-            cache: "/unused/cache".into(),
+            kit: "/unused/kit".into(),
+            debug_info: false,
+            glibc_floor: None,
             qemu_aarch64: Some("/unused/qemu".into()),
             aarch64_sysroot: Some("/unused/sysroot".into()),
             valgrind: Some("/bin/sh".into()),
             valgrind_lib: Some("/inputs/valgrind-support".into()),
             valgrind_runtime: Some("/unused/libc".into()),
             runtime: BTreeMap::new(),
+            runtime_debug: BTreeMap::new(),
+            builtins: BTreeMap::new(),
             wrapper: vec![
                 "/bin/sh".into(),
                 "-c".into(),
@@ -2094,9 +2473,9 @@ mod tests {
         tools.valgrind_runtime = None;
         assert!(
             tools
-                .loader_flags(&TargetSpec::x86_64_unknown_linux_gnu())
+                .loader(&TargetSpec::x86_64_unknown_linux_gnu())
                 .unwrap()
-                .is_empty()
+                .is_none()
         );
         let launched = launch(
             Path::new("/unused/program"),

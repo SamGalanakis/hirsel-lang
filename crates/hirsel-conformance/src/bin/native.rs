@@ -12,8 +12,8 @@ use hirsel_cli_args::{
 };
 use hirsel_conformance::native::{self, Case, Class, artifact};
 use hirsel_driver::native::{
-    Configuration, Options, Outcome, TargetSpec, Toolchain, full_matrix, smoke_matrix,
-    topology_matrix,
+    Configuration, Engine, OptLevel, Options, Outcome, Partition, Runtime, TargetSpec, Toolchain,
+    full_matrix, smoke_matrix, topology_matrix,
 };
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -62,6 +62,19 @@ impl Filter {
 
 fn toolchain(matrix: &[Configuration]) -> Result<Toolchain, String> {
     Toolchain::for_matrix(&native::runtime_cache()?, matrix).map_err(|e| e.to_string())
+}
+
+/// `toolchain` launching every executable through the glibc 2.28 floor
+/// release's own loader (`HIRSEL_GLIBC_FLOOR`): the smoke programs prove they
+/// load and run at the floor on both targets.
+fn floor_toolchain(matrix: &[Configuration]) -> Result<Toolchain, String> {
+    let mut toolchain = toolchain(matrix)?;
+    toolchain.glibc_floor = Some(
+        std::env::var_os("HIRSEL_GLIBC_FLOOR")
+            .map(PathBuf::from)
+            .ok_or("HIRSEL_GLIBC_FLOOR must name the glibc floor runtime")?,
+    );
+    Ok(toolchain)
 }
 
 /// The case IDs a list file names, with their sources.
@@ -243,7 +256,17 @@ fn run() -> Result<bool, String> {
     }
     match mode.as_str() {
         "--smoke" => {
-            let matrix = seeded(smoke_matrix(), hash_seed);
+            // Both targets, every launch at the glibc floor (floor_toolchain).
+            let mut matrix = smoke_matrix();
+            matrix.push(Configuration {
+                options: Options::new(TargetSpec::aarch64_unknown_linux_gnu()),
+                engine: Engine::Native {
+                    opt: OptLevel::Speed,
+                    partition: Partition::Whole,
+                    runtime: Runtime::Default,
+                },
+            });
+            let matrix = seeded(matrix, hash_seed);
             let mut cases = if filter.is_empty() {
                 let mut cases = listed(&root, "native-tests/regressions/smoke.txt")?;
                 cases.extend(generated_cases(seed, 8, &filter));
@@ -263,14 +286,14 @@ fn run() -> Result<bool, String> {
             let results = native::run_cases(
                 &cases,
                 &matrix,
-                &toolchain(&matrix)?,
+                &floor_toolchain(&matrix)?,
                 &native::scratch("smoke")?,
                 jobs,
             );
             let mut ok = all_agree("smoke", &results);
             // Real Io: each case is recorded on real Io and replayed from its
             // completion tape on simulated Io.
-            let toolchain = toolchain(&matrix)?;
+            let toolchain = floor_toolchain(&matrix)?;
             let replayed = native::run_cases_with(
                 &cases,
                 &native::scratch("smoke-replay")?,

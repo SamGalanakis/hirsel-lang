@@ -7,3 +7,5 @@ HIRSEL_QEMU_AARCH64	qemu	qemu-aarch64
 HIRSEL_VALGRIND	valgrind	bin/valgrind
 VALGRIND_LIB	valgrind	libexec/valgrind
 HIRSEL_VALGRIND_RUNTIME	valgrind	lib/x86_64-linux-gnu
+HIRSEL_LINK_KIT	kit	.
+HIRSEL_GLIBC_FLOOR	glibc_floor	.

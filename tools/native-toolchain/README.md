@@ -33,6 +33,35 @@ worker image. Only unpacking runs locally, using `dpkg-deb`; it resolves
 symlinks before Buck2 hashes the output directories. Execution uses read-only
 action inputs inside the pool's networkless sandbox, with its private `/tmp`.
 
+## Link kit
+
+`native.lock.json`'s `link_kit` pins the inputs of the link kit
+(`//tools/buck2/native-toolchain:kit`, `../buck2/native-toolchain/link_kit.py`),
+which every executable links with instead of a compiler driver:
+
+- Debian's glibc 2.28-10+deb10u1 `libc6` and `libc6-dev` and Linux 4.19
+  `linux-libc-dev` for amd64 and arm64 (archive.debian.org);
+- LLVM 21.1.8's `libunwind` and `compiler-rt` source releases;
+- Zig's `lib/libc/glibc/abilists` at `bff490a2`.
+
+Per target the kit holds `Scrt1.o`, `crti.o`, `crtn.o` and `libc_nonshared.a`
+from glibc 2.28 unchanged; stub DSOs for libc, libm, libpthread, libdl, librt,
+libutil, libresolv and the loader generated (Zig's `.symver` technique) from
+the 2.28 libraries' public versioned symbols with their kinds, sizes, bindings
+and default versions, cross-checked against abilists; `crtbeginS.o`/`crtendS.o`
+from compiler-rt's `crtbegin.c`/`crtend.c`; and a static `libunwind.a` built with
+LLVM's own static configuration against the 2.28 headers. `manifest.json`
+records each file's SHA-256, source and flags, the clang and lld versions and
+the SHA-256 of `ld.lld` and libLLVM; `digest` (the manifest's SHA-256) is the
+kit's identity and enters every build ID. The runtime archive's own
+`compiler_builtins` provides every compiler builtin: linking every archive
+variant whole against the kit leaves no symbol undefined (the driver unit test
+`native::kit::tests::whole_runtime_archives_need_no_builtins_beyond_their_own`),
+so the supplemental builtin list is empty and the kit carries no compiler-rt
+builtins. `:glibc_floor` unpacks the same `libc6` packages as
+`<triple>/` loader and library directories for running executables at the
+floor through that loader (never a link input).
+
 ```sh
 .buck2/bin/buck2 test //tools/buck2/native-toolchain:proof
 ```

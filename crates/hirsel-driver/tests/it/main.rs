@@ -39,6 +39,7 @@ mod incremental_positions;
 mod invalidation;
 mod ir_size;
 mod lazy_lowering;
+mod link_kit;
 mod match_size;
 mod materialized;
 mod memcheck;

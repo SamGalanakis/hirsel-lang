@@ -45,7 +45,8 @@ CLIPPY_SET = 'attrregexfilter(name, "-clippy$", kind("^rust_(library|binary)$", 
 CAMPAIGN_TARGETS = {
     impact.CONFORMANCE: [f'root//:gate-conformance-shard-{i}' for i in range(1, CONFORMANCE_SHARDS + 1)],
     impact.AGREEMENT: [f'root//:gate-agree-shard-{i}' for i in range(1, AGREE_SHARDS + 1)],
-    impact.NATIVE_SMOKE: ['root//:gate-native-smoke', 'root//tools/buck2/native-toolchain:proof'],
+    impact.NATIVE_SMOKE: ['root//:gate-native-smoke', 'root//tools/buck2/native-toolchain:proof',
+                          'root//:gate-link-hosts'],
 }
 
 # A file carrying this marker keeps its own test binary, for example to install

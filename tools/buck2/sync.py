@@ -674,7 +674,7 @@ def first_party(meta: dict) -> str:
     unguarded = []
     out = [
         HEADER,
-        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test", "hirsel_toolchain_bundle")\n',
+        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_precheck", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
@@ -792,6 +792,8 @@ def first_party(meta: dict) -> str:
                             visibility=["PUBLIC"]))
     out.append("\n" + call("hirsel_toolchain_bundle", name="hirsel-toolchain", hirsel="//:hirsel-cli-bin-hirsel",
                             precheck=PRECHECK, visibility=["PUBLIC"]))
+    out.append("\n" + call("hirsel_link_hosts_test", name="gate-link-hosts", listing="native-tests/link/hosts.txt",
+                            data=Raw(f"glob({starlark(['native-tests/link/**', 'examples/todo-api/**', 'examples/wordscan/**', 'examples/common.hir', 'stdlib/std@1/**'], 4)})")))
     for name, script, data, archives in (
         ("gate-native-runtime-c", "crates/hirsel-rt/harness/run.sh", ["crates/hirsel-rt/harness/**", "crates/hirsel-rt/include/**"], RUNTIME_ARCHIVES),
         ("gate-native-library-c", "native-tests/library/run-c.sh", ["native-tests/library/**", "crates/hirsel-rt/include/**", "stdlib/native/**"], RUNTIME_ARCHIVES),
@@ -883,8 +885,10 @@ def native_toolchain_pins() -> str:
              for row in runtime]
     pins = json.loads((directory / "native.lock.json").read_text())
     valgrind_runtime = pins.pop("valgrind_runtime")
+    link_kit = pins.pop("link_kit")
     return (HEADER + "LLVM_DEBS = " + json.dumps(llvm, indent=4)
             + "\nVALGRIND_DEBS = " + json.dumps(valgrind_runtime, indent=4)
+            + "\nLINK_KIT = " + json.dumps(link_kit, indent=4)
             + "\nNATIVE = " + json.dumps({k: v for k, v in pins.items() if k != "schema"}, indent=4) + "\n")
 
 

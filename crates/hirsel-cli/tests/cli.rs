@@ -1408,7 +1408,7 @@ fn stdout_grant() -> serde_json::Value {
         "wall_clock":null,"random":null,"dirs":[],"net":null})
 }
 #[test]
-fn standalone_hello_runs_directly_with_fresh_grants_and_only_libc() {
+fn standalone_hello_runs_directly_with_fresh_grants_and_only_floor_glibc() {
     hirsel_engine::with_compiler_stack(|| {
         let source = file(
             "pub fn main(rt: Io) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"hello, world\\n\"); Ok(()) }",
@@ -1487,9 +1487,21 @@ fn standalone_hello_runs_directly_with_fresh_grants_and_only_libc() {
         let libs: Vec<_> = text
             .lines()
             .map(str::trim)
-            .filter(|line| line.ends_with(".so.6") || line.contains(".so."))
+            .filter(|line| line.contains(".so."))
             .collect();
-        assert_eq!(libs, ["ld-linux-x86-64.so.2", "libc.so.6"], "{text}");
+        // Only the glibc 2.28 floor's libraries and loader (the link kit's stubs).
+        let floor = [
+            "ld-linux-x86-64.so.2",
+            "libc.so.6",
+            "libdl.so.2",
+            "libm.so.6",
+            "libpthread.so.0",
+            "libresolv.so.2",
+            "librt.so.1",
+            "libutil.so.1",
+        ];
+        assert!(libs.contains(&"libc.so.6"), "{text}");
+        assert!(libs.iter().all(|lib| floor.contains(lib)), "{text}");
         for path in [source, exe, run] {
             std::fs::remove_file(path).unwrap();
         }
@@ -1557,9 +1569,10 @@ fn standalone_cross_target_runs_under_pinned_qemu_and_debug_has_line_tables() {
         assert_eq!(output.status.code(), Some(0), "{output:?}");
         let dwarf = std::path::PathBuf::from(std::env::var_os("LLVM_SYS_211_PREFIX").unwrap())
             .join("bin/llvm-dwarfdump");
+        let split = dwarf::debug_file(&debug);
         let lines = Command::new(dwarf)
             .arg("--debug-line")
-            .arg(&debug)
+            .arg(&split)
             .output()
             .unwrap();
         assert!(lines.status.success(), "{lines:?}");
@@ -1568,7 +1581,7 @@ fn standalone_cross_target_runs_under_pinned_qemu_and_debug_has_line_tables() {
                 .contains(source.file_name().unwrap().to_str().unwrap()),
             "{lines:?}"
         );
-        for path in [source, cross, debug, manifest] {
+        for path in [source, cross, debug, split, manifest] {
             std::fs::remove_file(path).unwrap();
         }
     });

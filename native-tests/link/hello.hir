@@ -1,0 +1,7 @@
+pub type HelloError = Grant(GrantError) | Output(OutputError)
+
+pub fn main(rt: Io) -> Result[(), HelloError] {
+  let output = io.stdout(rt) ? Grant
+  out.print(output, "Hello, world\n") ? Output
+  Ok(())
+}

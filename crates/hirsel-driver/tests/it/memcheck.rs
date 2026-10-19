@@ -58,24 +58,17 @@ fn memcheck_exit(name: &str, defines: &[&str]) -> Option<i32> {
     let source = dir.join("program.c");
     std::fs::write(&source, PROGRAM).unwrap();
     let executable = dir.join("program");
+    let object = dir.join("program.o");
     let include = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hirsel-rt/include");
     let output = Command::new(&tools.clang)
-        .args(["-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-I"])
+        .args(["-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-c"])
+        // The launcher passes its linker, which a compile does not use.
+        .args(["-Wno-unused-command-line-argument", "-I"])
         .arg(&include)
-        .args(tools.loader_flags(&target).unwrap())
         .args(defines.iter().map(|d| format!("-D{d}")))
         .arg(&source)
-        .arg(tools.archive(&target.triple).unwrap())
-        .args([
-            "-lgcc_s",
-            "-lutil",
-            "-lrt",
-            "-lpthread",
-            "-lm",
-            "-ldl",
-            "-o",
-        ])
-        .arg(&executable)
+        .arg("-o")
+        .arg(&object)
         .output()
         .unwrap();
     assert!(
@@ -83,6 +76,9 @@ fn memcheck_exit(name: &str, defines: &[&str]) -> Option<i32> {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    tools
+        .link_executable(&target, &[object], &executable)
+        .unwrap();
     let launched = launch(&executable, &target, &tools, &dir, false).unwrap();
     eprintln!("{}", String::from_utf8_lossy(&launched.stderr));
     launched.exit

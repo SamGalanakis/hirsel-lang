@@ -57,10 +57,14 @@ Release builds use LLVM. Combining `--release` with `--backend cranelift`
 is refused; use Cranelift for default or debug builds.
 
 `build` accepts a source file (and its `.hir.json` sidecar, when present) or a
-launch manifest. The default target is `x86_64-linux`; `aarch64-linux` uses the
-pinned cross compiler and runtime archive. The executable contains the production
-runtime and compiler support libraries statically; its only shared dependencies are
-libc and the platform ELF loader. It runs independently of Hirsel and the source checkout.
+launch manifest. The default target is `x86_64-linux`; `aarch64-linux` uses its
+own runtime archive and link kit, with no cross compiler. Every executable is
+linked by the pinned `ld.lld` with the link kit Hirsel builds and ships (no host
+compiler, crt, libgcc or sysroot), so the same inputs give the same bytes on any
+host. The executable contains the production runtime, compiler builtins and
+LLVM's unwinder statically; its shared dependencies are glibc's libraries and
+loader at the glibc 2.28 ABI floor, so it runs on any Linux with glibc 2.28 or
+newer, independently of Hirsel and the source checkout.
 
 Debug builds from both LLVM and Cranelift emit DWARF 5 source line tables on
 x86-64 and AArch64. Cranelift uses final machine source ranges and emits compile
@@ -70,10 +74,14 @@ LIR does not retain a separate span for every scalar instruction. Generated
 Cranelift helpers and thunks have no source rows. These are line tables, without
 local-variable descriptions.
 
+A debug build writes its debug information beside the executable as
+`<build-id>.debug`, which the executable's `.gnu_debuglink` names; gdb finds it
+there. Keep the two files together.
+
 ```sh
 gdb -batch -ex 'break hello.hir:3' -ex run ./hello-clif
-llvm-dwarfdump --verify ./hello-clif
-llvm-dwarfdump --debug-line ./hello-clif
+llvm-dwarfdump --verify ./<build-id>.debug
+llvm-dwarfdump --debug-line ./<build-id>.debug
 ```
 
 Use an executable source line for the breakpoint. Cross-target line tables can
@@ -164,7 +172,7 @@ UTF-8 arguments refuse launch. These snapshots contribute to run identity.
 
 A directly run executable exits 0 for `Ok(())`, 1 for a returned `Error`, 2 for a
 language failure and 3 for a refused launch. On an x86-64 host, test an AArch64
-artifact with the pinned qemu and cross sysroot:
+artifact with the pinned qemu and a glibc for AArch64 (the cross sysroot here):
 
 ```sh
 "$HIRSEL_QEMU_AARCH64" -L "$HIRSEL_AARCH64_SYSROOT" ./hello-arm64 \

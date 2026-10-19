@@ -1,5 +1,6 @@
 # Corpus cases the per-push native smoke runs under the smoke matrix (heap executor with
-# fault injection, and an optimized x86-64 executable): every one must agree with the
+# fault injection, and optimized x86-64 and AArch64 executables launched at the glibc 2.28
+# floor): every one must agree with the
 # reference. tools/gate runs these for every change that can affect native code.
 conformance/CAP/CAP-1-output-no-added-newline.hir
 conformance/CLO/CLO-2-bound-derived-capability-run.hir

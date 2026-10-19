@@ -428,37 +428,23 @@ fn publish(
     result
 }
 
-/// The bytes of the private file `name` in `cache`, at most `limit` of them; `None`
-/// when it is missing, foreign, larger than `limit` or the directory is not private.
-pub(super) fn read_private(cache: &Path, name: &str, limit: u64) -> Option<Vec<u8>> {
-    use std::os::fd::AsRawFd;
-    let directory = private_directory(cache).ok()?;
-    let pinned = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    let mut bytes = Vec::new();
-    private_file(&pinned.join(name))
-        .ok()?
-        .take(limit + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    (bytes.len() as u64 <= limit).then_some(bytes)
-}
-
-/// Publish `bytes` as the private file `name` in `cache`, replacing it atomically.
-pub(super) fn write_private(cache: &Path, name: &str, bytes: &[u8]) -> Result<(), NativeError> {
-    use std::os::fd::AsRawFd;
-    let directory = private_directory(cache)?;
-    let pinned = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
-    let (temporary, mut file) = temporary_file(&pinned, name)?;
-    let result = (|| {
-        file.write_all(bytes).map_err(io)?;
-        file.sync_all().map_err(io)?;
-        fs::rename(&temporary, pinned.join(name)).map_err(io)?;
-        directory.sync_all().map_err(io)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    result
+/// A file derived from the published archive `archive` (`<key>.a` in `cache`),
+/// published as `<key>-<part>.a` under the same private-cache rules; `build`
+/// writes it in the scratch directory it is given and returns its path.
+pub(super) fn derived(
+    cache: &Path,
+    archive: &Path,
+    part: &str,
+    build: impl FnOnce(&Path) -> Result<PathBuf, NativeError>,
+) -> Result<PathBuf, NativeError> {
+    let key = archive
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| NativeError::new(StageName::Link, "a runtime archive has no key"))?;
+    publish(cache, &format!("{key}-{part}"), |scratch| {
+        fs::create_dir_all(scratch).map_err(io)?;
+        build(scratch)
+    })
 }
 
 /// Frozen Cargo-fallback inputs. Retain one per resident session; create a new

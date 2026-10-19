@@ -191,7 +191,7 @@ def native_tool_inputs():
     launcher sets the variables of `native-toolchain/environment.tsv` from them."""
     return {
         "HIRSEL_TOOLCHAIN_" + name.upper(): "root//tools/buck2/native-toolchain:" + name
-        for name in ["arm", "qemu", "valgrind"]
+        for name in ["arm", "qemu", "valgrind", "kit", "glibc_floor"]
     }
 
 def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, package_name, version, edition, build_script = None, bin_exes = {}, data = [], runtime_archives = None, precheck = None, shards = 1, costs = None, opt_level = None, seeded = False, skips = []):
@@ -291,6 +291,9 @@ def _rust_test_impl(ctx):
     if ctx.attrs.costs:
         inputs.append(ctx.attrs.costs)
         env["HIRSEL_TEST_COSTS"] = cmd_args(ctx.attrs.costs)
+    for name, file in ctx.attrs.files_env.items():
+        inputs.append(file)
+        env[name] = cmd_args(file)
     if ctx.attrs.pool:
         env["HIRSEL_TEST_POOL"] = "1"
     if ctx.attrs.relocate:
@@ -336,6 +339,8 @@ _rust_test = rule(
         "bin_exes": attrs.dict(attrs.string(), attrs.transition_dep(cfg = "root//tools/buck2:test_tool_transition"), default = {}),
         "costs": attrs.option(attrs.source(), default = None),
         "cwd": attrs.string(),
+        # Environment variables naming input files.
+        "files_env": attrs.dict(attrs.string(), attrs.source(), default = {}),
         "data": attrs.list(attrs.source(), default = []),
         "harness": attrs.transition_dep(cfg = "root//tools/buck2:test_tool_transition", providers = [RunInfo]),
         "labels": attrs.list(attrs.string(), default = []),
@@ -438,6 +443,72 @@ def hirsel_script_test(name, script, data, runtime_archives = None):
         llvm = "root//tools/buck2/native-toolchain:llvm",
         native_tools = native_tool_inputs() if runtime_archives else {},
         runtime_archives = runtime_archives, labels = ["gate"],
+        exec_compatible_with = _test_platform(name), pool = not TESTS_ON_HOST,
+        request = _request(name),
+        visibility = ["PUBLIC"],
+    )
+
+def _link_hosts_local_impl(ctx):
+    digests = ctx.actions.declare_output("digests.txt")
+    tree = lambda dep: dep[DefaultInfo].default_outputs[0]
+    tools = {name: tree(dep) for name, dep in ctx.attrs.tools.items()}
+    command = cmd_args(
+        "python3", ctx.attrs.script, "build", "--hirsel", tree(ctx.attrs.hirsel),
+        "--list", ctx.attrs.listing, "--output", digests.as_output(),
+        hidden = ctx.attrs.data + list(tools.values()),
+    )
+    env = {
+        "LLVM_SYS_211_PREFIX": cmd_args(tools["llvm"]),
+        "HIRSEL_LINK_KIT": cmd_args(tools["kit"]),
+        "HIRSEL_RUNTIME_ARCHIVES": cmd_args(tools["archives"]),
+        "HIRSEL_PRECHECK": cmd_args(tools["precheck"]),
+        "HIRSEL_QEMU_AARCH64": cmd_args(tools["qemu"], "/qemu-aarch64", delimiter = ""),
+        "HIRSEL_AARCH64_SYSROOT": cmd_args(tools["arm"], "/aarch64-none-linux-gnu/libc", delimiter = ""),
+    }
+    # This host's half of the two-host gate: never the pool, whose half is the test.
+    ctx.actions.run(command, env = env, local_only = True, category = "link_hosts")
+    return [DefaultInfo(default_output = digests)]
+
+_link_hosts_local = rule(impl = _link_hosts_local_impl, attrs = {
+    # The same binary the test runs, so the two halves differ only in host and roots.
+    "hirsel": attrs.dep(),
+    "script": attrs.source(),
+    "listing": attrs.source(),
+    "data": attrs.list(attrs.source(), default = []),
+    "tools": attrs.dict(attrs.string(), attrs.dep()),
+})
+
+def hirsel_link_hosts_test(name, listing, data):
+    """The two-host link gate (tools/buck2/link_hosts.py): `<name>-local` builds
+    `listing`'s programs on this host, and the test builds them on a pool worker,
+    under different checkout, cache and scratch roots, and compares the bytes."""
+    script = "root//tools/buck2:link_hosts.py"
+    _link_hosts_local(
+        name = name + "-local", hirsel = "//:hirsel-cli-bin-hirsel", script = script,
+        listing = listing, data = data,
+        tools = {
+            "llvm": "root//tools/buck2/native-toolchain:llvm",
+            "kit": "root//tools/buck2/native-toolchain:kit",
+            "qemu": "root//tools/buck2/native-toolchain:qemu",
+            "arm": "root//tools/buck2/native-toolchain:arm",
+            "archives": "//:hirsel-rt-archives",
+            "precheck": "//:hirsel-std-precheck",
+        },
+        exec_compatible_with = ["root//tools/buck2:host"], visibility = ["PUBLIC"],
+    )
+    binary = name + "-script"
+    _script_binary(name = binary, script = script)
+    harness = ":" + binary
+    _rust_test(
+        name = name, harness = harness,
+        args = ["check", "--hirsel", "{}/{}/hirsel".format(BIN_EXE_DIR, harness), "--list", listing],
+        files_env = {"HIRSEL_LINK_HOSTS_LOCAL": ":{}-local".format(name)},
+        bin_exes = {"hirsel": "//:hirsel-cli-bin-hirsel"},
+        bin_exe_dir = "{}/{}".format(BIN_EXE_DIR, harness),
+        data = data + [listing], cwd = ".",
+        llvm = "root//tools/buck2/native-toolchain:llvm",
+        native_tools = native_tool_inputs(), runtime_archives = "//:hirsel-rt-archives",
+        precheck = "//:hirsel-std-precheck", labels = ["gate"],
         exec_compatible_with = _test_platform(name), pool = not TESTS_ON_HOST,
         request = _request(name),
         visibility = ["PUBLIC"],
@@ -597,8 +668,9 @@ def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, featu
     `cargo build --release -p hirsel-rt --lib [--features ...]` with aborting
     panics: one staticlib per feature subset for each target triple, and per
     solo variant for its listed triples, laid out
-    as `<triple>/<features or default>/libhirsel_rt.a`, the directory native
-    tests and tools read from HIRSEL_RUNTIME_ARCHIVES.
+    as `<triple>/<features or default>/libhirsel_rt.a` (debug-stripped) and
+    `.../debug/libhirsel_rt.a`, with `<triple>/libhirsel_builtins.a`: the
+    directory native tests and tools read from HIRSEL_RUNTIME_ARCHIVES.
     """
     archives = {}
     variants = [
@@ -671,7 +743,22 @@ def _runtime_archives_impl(ctx):
             command.add(cmd_args(hidden = list(thin_objects)))
             ctx.actions.run(command, category = "runtime_archive", identifier = path.replace("/", "-"))
             archive = bundled
-        entries[path + "/libhirsel_rt.a"] = archive
+        # Default links read the debug-stripped archive; `--debug` links the
+        # debug-bearing one. Each triple's default archive also gives program
+        # libraries its compiler builtins (runtime_parts.py).
+        stripped = ctx.actions.declare_output(path + "/stripped/libhirsel_rt.a")
+        command = cmd_args(
+            "python3", ctx.attrs._parts, "--llvm", llvm,
+            "--archive", archive, "--stripped", stripped.as_output(),
+        )
+        triple, variant = path.split("/")
+        if variant == "default":
+            builtins = ctx.actions.declare_output(triple + "/libhirsel_builtins.a")
+            command.add("--builtins", builtins.as_output())
+            entries[triple + "/libhirsel_builtins.a"] = builtins
+        ctx.actions.run(command, category = "runtime_parts", identifier = path.replace("/", "-"))
+        entries[path + "/libhirsel_rt.a"] = stripped
+        entries[path + "/debug/libhirsel_rt.a"] = archive
     return [DefaultInfo(default_output = ctx.actions.symlinked_dir(ctx.label.name, entries))]
 
 _runtime_archives = rule(
@@ -679,6 +766,7 @@ _runtime_archives = rule(
     attrs = {
         "archives": attrs.dict(attrs.string(), attrs.dep()),
         "_bundler": attrs.source(default = "//tools/buck2:bundle_archive.py"),
+        "_parts": attrs.source(default = "//tools/buck2:runtime_parts.py"),
         "_llvm": attrs.exec_dep(default = "toolchains//:clang"),
     },
 )

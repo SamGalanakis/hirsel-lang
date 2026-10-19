@@ -74,43 +74,45 @@ the small callee bodies it copies.
 Allowed dependencies: hirsel-engine, the shared data crates, check-protocol, signature, check, modes, lower, run-config, core-contract and the native backends. Only cli, conformance and pipeline-tests (and the registry-backed harnesses of check and modes, as dev-dependencies) depend on this crate.
 
 Native tool paths are explicit absolute inputs: `LLVM_SYS_211_PREFIX`,
+`HIRSEL_LINK_KIT`, and for the targets and variants that use them
 `HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`,
 `HIRSEL_VALGRIND`, `VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME`. The Buck2 test
 launcher supplies them
-from the pinned toolchains. Cross tools, qemu and the AArch64 sysroot are required
-only for an AArch64 target; Valgrind inputs only for a memcheck runtime variant.
-A plain x86 build needs only the LLVM prefix and its runtime archive.
-Missing or relative required paths refuse construction;
-there is no PATH search or system LLVM fallback. Memcheck launches retain their input library path
-when the child's environment is cleared.
-Other launch wrappers require no Valgrind loader or environment.
+from the pinned toolchains. Missing or relative paths refuse construction;
+there is no PATH search or system LLVM fallback. Memcheck launches retain their
+input library path when the child's environment is cleared.
 
-Executables link with the input `ld.lld` directly, with no compiler driver
-process (`native/link_line.rs`). Its arguments are the ones the target's driver
-(the input clang launcher for x86-64, `HIRSEL_AARCH64_CC` for AArch64) passes
-its linker: the driver's `-###` command for placeholder inputs, printed once and
-kept in the runtime cache with the identity (or absence) of every absolute path
-it names and of each one's parent directory, and with the driver's executable and
-the environment variables drivers read. A link reuses the command while all of
-them hold and asks the driver again otherwise. A GCC driver's LTO plugin options
-are dropped, so AArch64 links with lld rather than GNU ld. `native::test_path`'s
-dispatching `main` is compiled in process with the selected backend, and its
-adapters are ordinary link inputs.
+Every executable and program library links with the pinned `ld.lld` and the
+link kit (`native/kit.rs`, built by `tools/buck2/native-toolchain/link_kit.py`):
+no compiler driver, host crt, libgcc or sysroot is on the line, for either
+target. The kit holds, per target, link-only stub DSOs for the glibc 2.28 ABI
+floor (libc, libm, libpthread, libdl, librt, libutil, libresolv and the loader,
+named in the loader's search order with libc before the loader), glibc 2.28's
+`Scrt1.o`/`crti.o`/`crtn.o`/`libc_nonshared.a`, LLVM's crtbegin/crtend and a
+static LLVM libunwind; its `digest` is its identity. An executable's line is
+`ld.lld -nostdlib --threads=1 -z now -z relro -z noexecstack --eh-frame-hdr
+--hash-style=gnu [target options] -pie --dynamic-linker=<canonical loader>
+<crt start> main.o <units> libhirsel_rt.a libunwind.a <foreign inputs>
+--as-needed <stubs> libc_nonshared.a <crt end> --gc-sections
+--build-id=0x<id>`, run with a cleared environment. There is no RELR: the 2.28
+floor's loader predates DT_RELR. The build ID is a hash of the kit digest, the
+line with every input path replaced by that input's content hash, and those
+contents, so it never depends on a checkout, cache or scratch directory. A
+program library (`link_library`) links its units and the runtime's compiler
+builtins (`libhirsel_builtins.a`) `-shared`, leaving runtime entries to its
+host; `link_host`'s host is `host.c` compiled without headers by the pinned
+clang and linked by the same line. Memcheck launches replace the interpreter
+with Valgrind's pinned loader and its library directory as run path. A
+foreign `link` library the kit provides (`c`, `m`, `pthread`, ...) is its stub;
+any other resolves to the first `lib<name>.so` or `.a` in the host's system
+library directories and enters the build ID by content, the one link input
+outside the kit.
 
-The Cargo fallback shares a frozen `native::RuntimeInputs` snapshot within the
-process. It discovers the runtime's local dependency closure and hashes source
-and configuration inputs once, then memoizes archive keys by target, variant and
-toolchain. A cache hit runs no metadata or tool-version probes and reuses that
-snapshot even after source edits. Resident sessions retain their own snapshot
-with `Toolchain::in_tree_with_inputs`; create a new snapshot/session to observe
-runtime source or configuration changes. A cache miss builds with the captured
-environment and rechecks all inputs before publishing; a change during the build
-refuses publication. Buck's prebuilt archives bypass this path.
-
-Memcheck executables select the input libc loader and library directory at
-link time; matching debug symbols sit in each object's adjacent `.debug/`
-directory, so mandatory
-Valgrind redirects do not depend on the worker image's stripped loader.
+Default links read the debug-stripped runtime archive. `hirsel build --debug`
+links the debug-bearing one (`debug/libhirsel_rt.a` beside it) and moves the
+finished executable's debug information into `<build-id>.debug` beside it,
+named by its `.gnu_debuglink`. `native::test_path`'s dispatching `main` is LLVM
+IR compiled in process, and its adapters are ordinary link inputs.
 
 Production native import uses `hirsel-layout` for type-to-layout and ABI derivation.
 

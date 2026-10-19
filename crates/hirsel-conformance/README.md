@@ -248,7 +248,9 @@ an upper bound; an exact launch count requires running the campaign.
 `native-tests/regressions/smoke.txt` and eight generated successes and eight
 directed failures on the heap executor with fault injection and as an optimized
 x86-64 executable on the diagnostic runtime archive and on the shipped (default)
-archive, then records each on real Io and replays its tape, and runs the cases of
+archive and as an optimized AArch64 executable on the shipped archive under qemu,
+every executable launched through the glibc 2.28 floor release's own loader and
+libraries (`HIRSEL_GLIBC_FLOOR`), then records each on real Io and replays its tape, and runs the cases of
 `native-tests/regressions/cranelift-smoke.txt` as Cranelift executables; every one
 must agree with the interpreter.
 

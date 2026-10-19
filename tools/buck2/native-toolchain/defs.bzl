@@ -15,6 +15,34 @@ unpack_toolchain = rule(impl = _unpack, attrs = {
     "_unpack": attrs.source(default = "//tools/buck2/native-toolchain:unpack.py"),
 })
 
+def _link_kit(ctx):
+    output = ctx.actions.declare_output(ctx.label.name, dir = True)
+    pins = ctx.actions.write_json("pins.json", ctx.attrs.pins)
+    source = lambda name: ctx.attrs.sources[name][DefaultInfo].default_outputs[0]
+    command = cmd_args(
+        "python3", ctx.attrs._script,
+        "--llvm", ctx.attrs.llvm[DefaultInfo].default_outputs[0],
+        "--abilists", source("abilists"),
+        "--libunwind", source("libunwind"),
+        "--compiler-rt", source("compiler-rt"),
+        "--pins", pins,
+        "--output", output.as_output(),
+    )
+    for name in sorted(ctx.attrs.sources):
+        if ":" in name:
+            command.add("--deb", cmd_args(name, "=", source(name), delimiter = ""))
+    ctx.actions.run(command, category = "link_kit")
+    return [DefaultInfo(default_output = output)]
+
+# The per-target link kit (link_kit.py): built once from pinned sources and
+# hashed into every executable's build identity.
+link_kit = rule(impl = _link_kit, attrs = {
+    "llvm": attrs.dep(),
+    "sources": attrs.dict(attrs.string(), attrs.dep()),
+    "pins": attrs.dict(attrs.string(), attrs.dict(attrs.string(), attrs.any())),
+    "_script": attrs.source(default = "//tools/buck2/native-toolchain:link_kit.py"),
+})
+
 def _proof(ctx):
     trees = [dep[DefaultInfo].default_outputs[0] for dep in ctx.attrs.tools]
     command = cmd_args("bash", ctx.attrs.script, trees)

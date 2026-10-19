@@ -123,7 +123,8 @@ pub fn build_path_native_backend(
         let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
             .map(PathBuf::from)
             .unwrap_or_else(super::runtime_cache::default_directory);
-        let tools = Toolchain::in_tree(&cache, &[&target])?;
+        let mut tools = Toolchain::in_tree(&cache, &[&target])?;
+        tools.debug_info = profile == BuildProfile::Debug;
         let objects = super::emit_backend_objects(
             &program,
             backend,
@@ -132,10 +133,16 @@ pub fn build_path_native_backend(
             false,
             sources.as_ref(),
         )?;
-        let executable =
+        let linked =
             super::link::link_standalone(&program, &loaded.entry, &objects, &tools, &scratch.0)?;
         let timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Link);
-        std::fs::copy(executable, output).map_err(io)?;
+        std::fs::copy(&linked.path, output).map_err(io)?;
+        // The debug file keeps its build-id name beside the executable, where
+        // its `.gnu_debuglink` leads a debugger.
+        if let Some(debug) = &linked.debug {
+            let beside = output.with_file_name(debug.file_name().unwrap());
+            std::fs::copy(debug, beside).map_err(io)?;
+        }
         drop(timing);
         Ok(proofs.map_or_else(Vec::new, |p| p.report(&program)))
     })())

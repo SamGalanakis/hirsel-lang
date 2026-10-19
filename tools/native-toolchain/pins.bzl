@@ -93,6 +93,53 @@ VALGRIND_DEBS = [
         "size": 7466882
     }
 ]
+LINK_KIT = {
+    "abilists": {
+        "url": "https://raw.githubusercontent.com/ziglang/zig/bff490a23889750de7096d9057c0a432efc929a8/lib/libc/glibc/abilists",
+        "sha256": "9327bdbeae15b383481c7a821f58d3ade9d2c6745ff19bb8b646df4c7a953037",
+        "size": 253117
+    },
+    "libunwind": {
+        "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/libunwind-21.1.8.src.tar.xz",
+        "sha256": "03e8adc6c3bdde657dcaedc94886ea70d1f7d551d622fcd8a36a8300e5c36cbc",
+        "size": 121872
+    },
+    "compiler-rt": {
+        "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/compiler-rt-21.1.8.src.tar.xz",
+        "sha256": "dd54ae21aee1780fac59445b51ebff601ad016b31ac3a7de3b21126fd3ccb229",
+        "size": 2642260
+    },
+    "glibc:amd64": {
+        "url": "https://archive.debian.org/debian/pool/main/g/glibc/libc6_2.28-10+deb10u1_amd64.deb",
+        "sha256": "0ee0f0bfcd7b59ffda1dbc76ef58fa79512913204f2a336206467bfbf45bc69f",
+        "size": 2863212
+    },
+    "glibc-dev:amd64": {
+        "url": "https://archive.debian.org/debian/pool/main/g/glibc/libc6-dev_2.28-10+deb10u1_amd64.deb",
+        "sha256": "76b8413920d91a9a4289f99839933d0d30095e0ec12b05bb4f1a7f27e5ef4a55",
+        "size": 2691760
+    },
+    "linux-headers:amd64": {
+        "url": "https://archive.debian.org/debian/pool/main/l/linux/linux-libc-dev_4.19.249-2_amd64.deb",
+        "sha256": "c512f30f5abe413464b79ed23b54958df8cc104446c3ae93d83d28e23728a571",
+        "size": 1530340
+    },
+    "glibc:arm64": {
+        "url": "https://archive.debian.org/debian/pool/main/g/glibc/libc6_2.28-10+deb10u1_arm64.deb",
+        "sha256": "09f5e92b1527cdc06b757499bb4d97ddf1b064fc3d163f978e5de18b131cd330",
+        "size": 2520708
+    },
+    "glibc-dev:arm64": {
+        "url": "https://archive.debian.org/debian/pool/main/g/glibc/libc6-dev_2.28-10+deb10u1_arm64.deb",
+        "sha256": "04097716018288cef8b82339faa1a9847838b89f39574b5b169f4657da8bf269",
+        "size": 2323448
+    },
+    "linux-headers:arm64": {
+        "url": "https://archive.debian.org/debian/pool/main/l/linux/linux-libc-dev_4.19.249-2_arm64.deb",
+        "sha256": "e9a92d71d62655f673433c345a03fecaa4292f93c6572b28fd3d16dcfd1cc7f6",
+        "size": 1509868
+    }
+}
 NATIVE = {
     "arm": {
         "url": "https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.3.rel1/binrel/arm-gnu-toolchain-14.3.rel1-x86_64-aarch64-none-linux-gnu.tar.xz",

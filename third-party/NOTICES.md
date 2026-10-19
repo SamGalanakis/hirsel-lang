@@ -161,6 +161,9 @@ the license named in its row; the license texts follow once each.
 | Rust standard library | `library/core/src/num/imp/dec2flt/{lemire,table}.rs` Eisel-Lemire algorithm and 128-bit power-of-five table; `library/coretests/tests/num/dec2flt/lemire.rs` halfway, shifted-exponent and boundary vectors | `stdlib/std@1/float_lemire.hir`, `stdlib/std@1/float_decimal.hir` fast path, `conformance/SEM/SEM-2-float-parse-lemire-vectors.hir` | rust-lang/rust `f6c1107f8be13e48465e12c0fd26e6a39fe18e4f` | MIT |
 | Datastar | The v1.0.4 browser bundle, vendored unchanged except for its trailing `sourceMappingURL` line (upstream sha256 `727844adfc825ee651fb93c544a2a739986f9a21820a94524b35f0cac470cf91`) | `examples/tasks/static/datastar.js` | starfederation/datastar `v1.0.4` | MIT |
 | Datastar | `sdk/ADR.md` server SDK specification and the Go and Python SDKs' API shape; `sdk/tests/golden` SDK conformance cases, inputs and outputs verbatim, with the Go test runner's event comparison | `packages/datastar@1/`, `conformance/PROG/PROG-1-datastar-sdk-golden.hir` | starfederation/datastar `1efcdc3cb336ec3e9139491604e770e0329657bc` | MIT |
+| Zig compiler | `src/libs/glibc.zig` stub shared objects: `.symver` placeholder assembly per versioned symbol, linked as a DSO with the library's SONAME and a version script; `lib/libc/glibc/abilists` read at GLIBC_2.28 to cross-check the stubs | `tools/buck2/native-toolchain/link_kit.py` (the link kit) | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
+| LLVM | `compiler-rt/lib/builtins/crt{begin,end}.c` and `libunwind/` compiled into the link kit and linked into every executable | link kit (`tools/buck2/native-toolchain/link_kit.py`) | llvm/llvm-project `llvmorg-21.1.8` | Apache-2.0 WITH LLVM-exception (license text below) |
+| GNU C Library | glibc 2.28's `Scrt1.o`, `crti.o`, `crtn.o` and `libc_nonshared.a` (Debian 2.28-10+deb10u1) linked into every executable; its libraries' public dynamic symbol tables generate the link kit's stubs | link kit (`tools/buck2/native-toolchain/link_kit.py`) | glibc 2.28 (Debian 2.28-10+deb10u1) | LGPL-2.1-or-later, with glibc's exception granting unlimited permission to link these compiled startup and nonshared files into other programs |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -173,6 +176,8 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - lexopt: Copyright (c) 2021 Jan Verbeek
 - Cranelift: Copyright (c) the Bytecode Alliance and Cranelift contributors
 - Zig standard library: Copyright (c) Zig contributors
+- LLVM: Copyright (c) LLVM Project contributors
+- GNU C Library: Copyright (C) Free Software Foundation, Inc.
 - jiff: Copyright (c) 2015 Andrew Gallant
 - Rust standard library: Copyright (c) The Rust Project Contributors
 - unicode-segmentation: Copyright (c) 2015 The Rust Project Developers
@@ -459,7 +464,7 @@ OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 SUCH DAMAGE.
 ```
 
-## Apache License 2.0 with LLVM Exception (Cranelift)
+## Apache License 2.0 with LLVM Exception (Cranelift, LLVM)
 
 ```
                                  Apache License

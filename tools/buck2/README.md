@@ -43,6 +43,7 @@ export CARGO_BUILD_JOBS=4 HIRSEL_JOBS=4 RUST_TEST_THREADS=4
 .buck2/bin/buck2 test //:hirsel-pipeline-tests-test-rc-shard-2  # one shard of a sharded test binary
 .buck2/bin/buck2 test -c hirsel.tests=host //:hirsel-pipeline-tests-test-rc-shard-1   # run tests on this host
 .buck2/bin/buck2 test //:gate-native-smoke          # one corpus campaign of tools/gate
+.buck2/bin/buck2 test //:gate-link-hosts            # native-tests/link built here and on a pool worker, byte-compared
 python3 tools/buck2/conformance.py                # conformance shards and summed counts
 python3 tools/buck2/agree.py                      # AGREE_LIMIT variants over AGREE_SHARDS shards, summed JSON
 python3 tools/buck2/agree.py --native-full        # the native campaign's shards, merged against agree-known.txt
@@ -93,16 +94,19 @@ configured. Native changes use a filtered campaign:
 .buck2/bin/buck2 test -c hirsel.full=true //:gate-native-full -- --test-arg=--filter --test-arg=SEM-4-view-return-source-run --timeout 14400
 ```
 
-Native tests receive LLVM 21.1.8, Arm GNU 14.3.Rel1 with its Linux sysroot,
-static AArch64 qemu and Valgrind as SHA-pinned Buck2 downloads. No worker
+Native tests receive LLVM 21.1.8, the link kit and glibc 2.28 floor runtime
+(`native-toolchain:kit`, `:glibc_floor`), Arm GNU 14.3.Rel1 with its Linux
+sysroot, static AArch64 qemu and Valgrind as SHA-pinned Buck2 downloads or
+builds from them. No worker
 image changes, PATH lookup or binfmt registration are needed. The launcher
 resolves `LLVM_SYS_211_PREFIX` and each variable of
 `native-toolchain/environment.tsv` (`HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`,
 `HIRSEL_QEMU_AARCH64`, `HIRSEL_VALGRIND`, `VALGRIND_LIB`,
-`HIRSEL_VALGRIND_RUNTIME`: a path inside one toolchain) to absolute input paths
-before changing directory; `bench/native/suite.py` sets the same table. The driver
-links with the input `ld.lld`, using the link command the clang launcher (or the
-AArch64 compiler) prints for `-###`. Native launches preserve the selected
+`HIRSEL_VALGRIND_RUNTIME`, `HIRSEL_LINK_KIT`, `HIRSEL_GLIBC_FLOOR`: a path inside
+one toolchain) to absolute input paths before changing directory;
+`bench/native/suite.py` sets the same table. The driver links with the input
+`ld.lld` and the link kit's line (`crates/hirsel-driver/src/native/kit.rs`),
+never a compiler driver. Native launches preserve the selected
 Valgrind support directory when clearing the child's environment.
 
 The full gate's runtime C harness, library C probes and LLVM pin check are

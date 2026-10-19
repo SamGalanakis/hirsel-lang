@@ -33,7 +33,7 @@ appends its floor time, queue wait, time to its first failure and total to
     <test target>          a Buck2 test, `//:name` or `name`; a sharded binary's name runs every shard
     conformance            the whole conformance campaign (16 shards)
     agreement              the whole source/IR agreement sample (seed 1, 16 shards)
-    native-smoke           the native smoke and toolchain proof
+    native-smoke           the native smoke, toolchain proof and two-host link gate
     conformance:<path>     the corpus cases under <path> (a case, or a directory prefix)
     agreement:<path>       those cases' variants in the seed-1 sample
     native:<program>       the LLVM smoke matrix and Cranelift parity for <program>

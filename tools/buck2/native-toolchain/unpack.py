@@ -57,6 +57,15 @@ def place_runtime_debug(output):
 def unpack(kind, output, archives):
     with tempfile.TemporaryDirectory(prefix="hirsel-native-unpack-") as scratch:
         tree = Path(scratch)
+        if kind == "glibc-floor":
+            # Each release's loader and libraries, as `<triple>/`.
+            for archive in archives:
+                release = tree / Path(archive).name
+                subprocess.run(["dpkg-deb", "-x", archive, release], check=True)
+                (libraries,) = (release / "lib").glob("*-linux-gnu")
+                triple = libraries.name.replace("-linux-gnu", "-unknown-linux-gnu")
+                copy_tree(libraries, output / triple)
+            return
         if kind == "arm":
             with tarfile.open(archives[0]) as archive:
                 archive.extractall(tree, filter="tar")
