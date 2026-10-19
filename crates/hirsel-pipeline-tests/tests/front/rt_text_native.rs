@@ -163,7 +163,7 @@ fn execute(tools: &Toolchain, target: &TargetSpec, executable: &Path) {
             .arg(tools.aarch64_sysroot.as_ref().unwrap())
             .arg(executable));
     } else {
-        run(Command::new(executable)
+        run(hirsel_guard::sanitized(&mut Command::new(executable))
             .env("ASAN_OPTIONS", "detect_leaks=1")
             .env("UBSAN_OPTIONS", "halt_on_error=1"));
     }

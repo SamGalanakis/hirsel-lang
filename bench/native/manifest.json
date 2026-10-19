@@ -678,7 +678,7 @@
     "rust/Cargo.toml": "b86d5ae2ac4dbaece36ea8c34024de14d14abbe212f91d383bfa8ba9adce33a8",
     "rust/Cargo.lock": "6f21323f3a21907f643751c37e603e4106888ab99a2ab30146d2a93b106494d6",
     "rust/rust-toolchain.toml": "515c80a149c1e927d497dbebc399e241822aa0197e8f778c21bf5c136c90afd2",
-    "suite.py": "55f0c516cbbee59ef8bd9bd1f58d4898603b684334d73759fa89c0839a1b2aa2",
+    "suite.py": "662edf5bdcaa0767707f01c172cf945ffd5172d9b75c0390bcae0b87d85776dc",
     "generate": "3c2f55dbbd09bb11b800cb38561493522d84c2c986aa17eaaf24cf7042cc5ccd",
     "run": "51863afc8fc06e211c497cfe85311046fa8b2328c5ac83daf1f22c7d7bf81e91",
     "analyse": "b78379bfa741156b9e1a5c80a52897de9c38138a7f655613b96ba24d69f8b905",

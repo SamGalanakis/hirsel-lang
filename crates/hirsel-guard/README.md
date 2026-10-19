@@ -10,12 +10,15 @@ workspace crate.
   library's `lib.rs`) makes `Guarded` the global allocator; `install!(Counting)`
   wraps a test's own unit-struct allocator. `tools/buck2/sync.py` refuses a binary,
   example or test root that does not install it, directly or in a `#[path]` module.
-- The first allocation, before `main`, sets a hard `RLIMIT_DATA` of
+- The first allocation, before `main`, sets the soft `RLIMIT_DATA` to
   `HIRSEL_MEMORY_LIMIT`: positive decimal bytes or a count of binary `K`, `M`, `G`
   or `T` (`4G`, `512M`), the syntax systemd's `MemoryMax` and `tools/capped` read;
   default 4 GiB. A malformed value exits 2 before any work. The limit never rises
   above one the process inherited, and child processes, native executables
-  included, inherit it.
+  included, inherit it. The hard limit stays as inherited: `sanitized(command)`
+  lifts the soft limit in that child alone, for an executable built with
+  AddressSanitizer, which maps terabytes of shadow address space at startup that
+  any data limit refuses. The run's cgroup or pool reservation still bounds it.
 - An allocation the limit refuses ends the process at once: `hirsel: memory limit
   4G reached (HIRSEL_MEMORY_LIMIT); allocating N more bytes failed with a resident
   peak of RM. ...` on stderr, exit status 71 (`EXIT_STATUS`). The resident peak
@@ -38,7 +41,7 @@ never an ad hoc variable. Locally, `tools/capped` passes its cap through.
 
 Tests spawn the harness itself with a small limit: an allocation and a thread stack
 past it end with the message and status, the same work fits under a larger limit,
-a malformed limit is refused, and a shell child inherits the limit and cannot
-raise it. The CLI (`hirsel-cli` `cli.rs`) and the conformance runner
+a malformed limit is refused, a shell child inherits the limit, a guarded child
+cannot raise it, and only a `sanitized` child gets the hard limit back. The CLI (`hirsel-cli` `cli.rs`) and the conformance runner
 (`hirsel-conformance` `runner.rs`) each show a run whose working set exceeds a
 64M limit ending with the message.

@@ -277,6 +277,9 @@ fn empty_main_lowers_no_std_body_that_it_does_not_reach() {
                 "{module}.{name}"
             );
         }
+        // Each check holds all of std checked from source: end the first before
+        // the second, or both stay alive (shadowing drops nothing).
+        drop(program);
         f.app(
             "pub fn main() {\n  let s = std@1/u64.to_string(42u64)\n}\n",
             ("std", &std),

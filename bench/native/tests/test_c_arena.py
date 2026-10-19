@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from suite import controlled_environment, load_manifest, participants, sha
+from suite import controlled_environment, lift_data_limit, load_manifest, participants, sha
 
 
 class CArenaTests(unittest.TestCase):
@@ -90,4 +90,5 @@ int main(void) {
             subprocess.run(['clang', '-std=c17', '-O1', '-g', '-fsanitize=address,undefined',
                             '-Wall', '-Wextra', '-Werror', '-I', str(ROOT / 'c'),
                             str(fixture), '-o', str(binary)], check=True)
-            subprocess.run([str(binary)], check=True, env=controlled_environment())
+            # AddressSanitizer's shadow mapping needs the soft data limit lifted.
+            subprocess.run([str(binary)], check=True, env=controlled_environment(), preexec_fn=lift_data_limit)

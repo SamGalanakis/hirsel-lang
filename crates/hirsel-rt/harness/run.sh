@@ -19,8 +19,11 @@ echo "harness: x86-64 with ASan and UBSan"
 "$llvm/bin/clang" --ld-path="$llvm/bin/ld.lld" -std=c11 -DHIRSEL_RT_ENABLE_STATS -O1 -g -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all \
 -fno-omit-frame-pointer -I "$here/../include" "$here/harness.c" \
 "$x86_archive" "${libs[@]}" -o "$build/harness-asan"
+# AddressSanitizer maps terabytes of shadow address space, which the run's soft
+# data limit (tools/buck2/test_launcher.sh) refuses: lift it for this child.
+(ulimit -S -d "$(ulimit -H -d)"
 ASAN_OPTIONS=detect_leaks=1:abort_on_error=0 UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-"$build/harness-asan"
+"$build/harness-asan")
 
 echo "harness: AArch64 under qemu-user"
 "$HIRSEL_AARCH64_CC" -std=c11 -DHIRSEL_RT_ENABLE_STATS -O2 -Wall -Wextra -Werror -I "$here/../include" "$here/harness.c" \

@@ -1,13 +1,16 @@
 //! The startup guard every hirsel binary and test harness installs.
 //!
 //! `install!()` makes [`Guarded`] the binary's global allocator. Its first
-//! allocation, before `main` and before any work, sets a hard `RLIMIT_DATA` of
-//! `HIRSEL_MEMORY_LIMIT` (bytes, or a count of binary `K`, `M`, `G` or `T`;
+//! allocation, before `main` and before any work, sets the soft `RLIMIT_DATA`
+//! to `HIRSEL_MEMORY_LIMIT` (bytes, or a count of binary `K`, `M`, `G` or `T`;
 //! default 4 GiB), never above a limit the process inherited. An allocation the
 //! limit refuses ends the process at once with exit status [`EXIT_STATUS`] and
 //! `hirsel: memory limit 4G reached (HIRSEL_MEMORY_LIMIT); ...` on stderr,
 //! instead of growing until the host thrashes. Child processes, native
-//! executables included, inherit the limit.
+//! executables included, inherit the limit. The hard limit stays as inherited
+//! so that [`sanitized`] can lift the soft one for a sanitizer's child alone:
+//! AddressSanitizer reserves terabytes of shadow address space that the data
+//! limit counts, and the run's cgroup or pool reservation still bounds it.
 //!
 //! The data limit counts private writable mappings: heap, anonymous `mmap`
 //! and thread stacks, but not file mappings or reserved `PROT_NONE` ranges, so
@@ -101,10 +104,9 @@ fn limit_once() {
         rlim_max: libc::RLIM_INFINITY,
     };
     unsafe { libc::getrlimit(libc::RLIMIT_DATA, &mut current) };
-    let limit = requested.min(current.rlim_max);
     let limited = libc::rlimit {
-        rlim_cur: limit,
-        rlim_max: limit,
+        rlim_cur: requested.min(current.rlim_cur),
+        rlim_max: current.rlim_max,
     };
     unsafe { libc::setrlimit(libc::RLIMIT_DATA, &limited) };
     STATE.store(SET, Ordering::Release);
@@ -134,6 +136,29 @@ pub fn parse_limit(text: &[u8]) -> Option<u64> {
             .checked_add(u64::from(digit - b'0'))?;
     }
     count.checked_mul(unit)
+}
+
+/// `command` with the data limit lifted to its hard limit in the child alone,
+/// for an executable built with a sanitizer: AddressSanitizer maps terabytes of
+/// shadow address space at startup, which any data limit refuses. Every other
+/// child inherits the limit.
+pub fn sanitized(command: &mut std::process::Command) -> &mut std::process::Command {
+    use std::os::unix::process::CommandExt;
+    // getrlimit and setrlimit are async-signal-safe system calls.
+    unsafe {
+        command.pre_exec(|| {
+            let mut current = libc::rlimit {
+                rlim_cur: libc::RLIM_INFINITY,
+                rlim_max: libc::RLIM_INFINITY,
+            };
+            libc::getrlimit(libc::RLIMIT_DATA, &mut current);
+            current.rlim_cur = current.rlim_max;
+            if libc::setrlimit(libc::RLIMIT_DATA, &current) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        })
+    }
 }
 
 /// The worker count for a runner's threads or processes: `HIRSEL_JOBS`, which
@@ -508,7 +533,11 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("soft 98304 hard 98304\n"), "{stdout}");
+        // A shell inherits the soft limit; a guarded child asking for 8G keeps it.
+        assert!(stdout.contains("shell soft 98304\n"), "{stdout}");
+        assert!(stdout.contains("guarded soft 100663296\n"), "{stdout}");
+        // Only a sanitizer's child gets the hard limit back.
+        assert!(stdout.contains("sanitized soft equals hard\n"), "{stdout}");
     }
 
     #[test]
@@ -516,15 +545,33 @@ mod tests {
         if std::env::var_os(CHILD).is_none() {
             return;
         }
-        // A child asking for more keeps the inherited limit.
         let shell = Command::new("/bin/sh")
-            .args([
-                "-c",
-                "ulimit -d 1048576 2>/dev/null; echo soft $(ulimit -S -d) hard $(ulimit -H -d)",
-            ])
-            .env("HIRSEL_MEMORY_LIMIT", "8G")
+            .args(["-c", "echo shell soft $(ulimit -S -d)"])
             .output()
             .unwrap();
         print!("{}", String::from_utf8_lossy(&shell.stdout));
+        let guarded = child("tests::soft_limit_child", &[("HIRSEL_MEMORY_LIMIT", "8G")]);
+        print!("{}", String::from_utf8_lossy(&guarded.stdout));
+        let lifted = sanitized(Command::new("/bin/sh").args([
+            "-c",
+            "[ \"$(ulimit -S -d)\" = \"$(ulimit -H -d)\" ] && echo sanitized soft equals hard",
+        ]))
+        .output()
+        .unwrap();
+        print!("{}", String::from_utf8_lossy(&lifted.stdout));
+    }
+
+    #[test]
+    fn soft_limit_child() {
+        if std::env::var_os(CHILD).is_none() {
+            return;
+        }
+        let _ = Box::new(0u8);
+        let mut current = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        unsafe { libc::getrlimit(libc::RLIMIT_DATA, &mut current) };
+        println!("guarded soft {}", current.rlim_cur);
     }
 }

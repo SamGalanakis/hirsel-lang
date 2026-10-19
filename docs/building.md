@@ -486,8 +486,11 @@ updated when another lane adds an item.
 ## Memory limits
 
 Every hirsel binary and test harness caps its own memory before doing any work
-(`crates/hirsel-guard`): a hard data limit of `HIRSEL_MEMORY_LIMIT` (bytes or a
-`K`, `M`, `G` or `T` count; default `4G`), which programs they launch inherit. A
+(`crates/hirsel-guard`): a soft data limit of `HIRSEL_MEMORY_LIMIT` (bytes or a
+`K`, `M`, `G` or `T` count; default `4G`), which programs they launch inherit;
+only an AddressSanitizer executable is launched with it lifted
+(`hirsel_guard::sanitized`), since its shadow mapping needs terabytes of address
+space and the run's cgroup or pool reservation bounds it anyway. A
 run that reaches it stops at once with `hirsel: memory limit 4G reached
 (HIRSEL_MEMORY_LIMIT); ...` and exit status 71. The native benchmark suite
 (`bench/native/suite.py`) sets the same limit on itself, so every build and

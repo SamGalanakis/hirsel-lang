@@ -205,9 +205,11 @@ class LauncherMemory(LauncherFixture):
         return run.stdout.split()
 
     def test_the_grant_caps_the_run_data_in_every_unit(self):
-        self.assertEqual(self.limits('1048576K'), ['1048576', '1048576', '1048576K'])
-        self.assertEqual(self.limits('512M'), ['524288', '524288', '512M'])
-        self.assertEqual(self.limits('2G'), ['2097152', '2097152', '2G'])
+        hard = subprocess.run(['sh', '-c', 'ulimit -H -d'], capture_output=True, text=True).stdout.strip()
+        # A soft limit: a sanitizer's child may lift it back to the hard one.
+        self.assertEqual(self.limits('1048576K'), ['1048576', hard, '1048576K'])
+        self.assertEqual(self.limits('512M'), ['524288', hard, '512M'])
+        self.assertEqual(self.limits('2G'), ['2097152', hard, '2G'])
 
     def test_without_a_grant_the_launcher_sets_no_cap(self):
         soft, hard = subprocess.run(['sh', '-c', 'echo $(ulimit -S -d) $(ulimit -H -d)'],
