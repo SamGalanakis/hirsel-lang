@@ -304,7 +304,7 @@ Variant of DecodeError.
 
 <a id="def-core_401_2fDirEntry"></a>
 
-- `type DirEntry uses {} = { path: Path, kind: FileKind }`
+- `type DirEntry: serializable uses {} = { path: Path, kind: FileKind }`
 
 <a id="def-core_401_2fDurability"></a>
 
@@ -938,7 +938,7 @@ Variant of OutputError.
 
 <a id="def-core_401_2fPath"></a>
 
-- `opaque type Path: copyable + inert + noalloc_drop + plain + data + key + sendable uses {}`
+- `opaque type Path: copyable + inert + noalloc_drop + plain + data + key + sendable + serializable uses {}`
 
 <a id="def-core_401_2fPayloadShape"></a>
 
@@ -1683,7 +1683,7 @@ References: [`core@1/u8`](#def-core_401_2fu8)
 
 <a id="def-std_401_2fbase64_2fAlphabet"></a>
 
-- `pub type base64.Alphabet = Standard | UrlSafe`
+- `@serializable pub type base64.Alphabet = Standard | UrlSafe`
 
 <a id="def-std_401_2fbase64_2fAlphabet_23Standard"></a>
 
@@ -1699,7 +1699,7 @@ Variant of base64.Alphabet.
 
 <a id="def-std_401_2fbase64_2fDecodeError"></a>
 
-- `pub type base64.DecodeError = InvalidByte(u64) | InvalidLength | InvalidPadding(u64) | NonCanonical( u64 )`
+- `@serializable pub type base64.DecodeError = InvalidByte(u64) | InvalidLength | InvalidPadding(u64) | NonCanonical( u64 )`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -1735,7 +1735,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fbase64_2fPadding"></a>
 
-- `pub type base64.Padding = Required | Omitted`
+- `@serializable pub type base64.Padding = Required | Omitted`
 
 <a id="def-std_401_2fbase64_2fPadding_23Omitted"></a>
 
@@ -2627,13 +2627,13 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/char`](#def-core
 
 <a id="def-std_401_2fcli_2fFlag"></a>
 
-- `pub type cli.Flag { name: String, short: Option[u8], kind: Kind, help: String, }`
+- `@serializable pub type cli.Flag { name: String, short: Option[u8], kind: Kind, help: String, }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/u8`](#def-core_401_2fu8), [`std@1/cli/Kind`](#def-std_401_2fcli_2fKind)
 
 <a id="def-std_401_2fcli_2fKind"></a>
 
-- `pub type cli.Kind = Switch | Value`
+- `@serializable pub type cli.Kind = Switch | Value`
 
 <a id="def-std_401_2fcli_2fKind_23Switch"></a>
 
@@ -2649,7 +2649,7 @@ Variant of cli.Kind.
 
 <a id="def-std_401_2fcli_2fParseError"></a>
 
-- `pub type cli.ParseError = UnknownFlag(u64) | MissingValue(u64) | UnexpectedValue(u64) | InvalidSpec`
+- `@serializable pub type cli.ParseError = UnknownFlag(u64) | MissingValue(u64) | UnexpectedValue(u64) | InvalidSpec`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -2685,7 +2685,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fcli_2fParsed"></a>
 
-- `pub type cli.Parsed { flags: Map[String, List[String]], positional: List[String], }`
+- `@serializable pub type cli.Parsed { flags: Map[String, List[String]], positional: List[String], }`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString)
 
@@ -2748,7 +2748,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_4
 
 <a id="def-std_401_2fcookie_2fCookieError"></a>
 
-- `pub type cookie.CookieError = Blank | MissingEquals(u64) | InvalidName(u64) | InvalidValue(u64) | InvalidPath( u64 ) | InsecureSameSiteNone`
+- `@serializable pub type cookie.CookieError = Blank | MissingEquals(u64) | InvalidName(u64) | InvalidValue(u64) | InvalidPath( u64 ) | InsecureSameSiteNone`
 
 Offsets are byte positions in the parsed header, or in the offending field
 when formatting.
@@ -2801,7 +2801,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fcookie_2fSameSite"></a>
 
-- `pub type cookie.SameSite = Strict | Lax | None`
+- `@serializable pub type cookie.SameSite = Strict | Lax | None`
 
 <a id="def-std_401_2fcookie_2fSameSite_23Lax"></a>
 
@@ -2823,7 +2823,7 @@ Variant of cookie.SameSite.
 
 <a id="def-std_401_2fcookie_2fSetCookie"></a>
 
-- `pub type cookie.SetCookie { name: String, value: String, path: Option[String], max_age: Option[u64], http_only: bool, secure: bool, same_site: Option[SameSite], }`
+- `@serializable pub type cookie.SetCookie { name: String, value: String, path: Option[String], max_age: Option[u64], http_only: bool, secure: bool, same_site: Option[SameSite], }`
 
 One Set-Cookie header value: the RFC 6265 name, value, Path, Max-Age,
 HttpOnly and Secure attributes plus SameSite.
@@ -2946,13 +2946,13 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/crc32c/State`](#def
 
 <a id="def-std_401_2fcsv_2fConfig"></a>
 
-- `pub type csv.Config { delimiter: u8, fields_per_record: Option[u64], max_record_bytes: u64, }`
+- `@serializable pub type csv.Config { delimiter: u8, fields_per_record: Option[u64], max_record_bytes: u64, }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
 
 <a id="def-std_401_2fcsv_2fCsvError"></a>
 
-- `pub type csv.CsvError = Syntax(u64) | UnequalFields(u64) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter`
+- `@serializable pub type csv.CsvError = Syntax(u64) | UnequalFields(u64) | RecordTooLarge | InvalidUtf8 | InvalidDelimiter`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -3238,7 +3238,7 @@ References: [`std@1/decimal/format_into`](#def-std_401_2fdecimal_2fformat_5finto
 
 <a id="def-std_401_2fdecimal_2fRoundingMode"></a>
 
-- `pub type decimal.RoundingMode = HalfEven | HalfUp | Down | Up | Floor | Ceiling`
+- `@serializable pub type decimal.RoundingMode = HalfEven | HalfUp | Down | Up | Floor | Ceiling`
 
 How a result that is not exact at its scale is rounded. `HalfEven` and `HalfUp`
 round to the nearest value, breaking ties to an even last digit and away from zero
@@ -4238,7 +4238,7 @@ output its input completes, and `finish` the rest.
 
 <a id="def-std_401_2fflate_2fFlateError"></a>
 
-- `pub type flate.FlateError = Truncated | Corrupt(u64) | Header | Checksum | TooLarge | TrailingData( u64 )`
+- `@serializable pub type flate.FlateError = Truncated | Corrupt(u64) | Header | Checksum | TooLarge | TrailingData( u64 )`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -4284,7 +4284,7 @@ Variant of flate.FlateError.
 
 <a id="def-std_401_2fflate_2fFormat"></a>
 
-- `pub type flate.Format = Raw | Zlib | Gzip`
+- `@serializable pub type flate.Format = Raw | Zlib | Gzip`
 
 The container around a DEFLATE stream: none (RFC 1951), zlib (RFC 1950)
 or gzip (RFC 1952).
@@ -4474,7 +4474,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u64`](#def-core_40
 
 <a id="def-std_401_2ffnv_2fState"></a>
 
-- `pub type fnv.State { value: u64, }`
+- `@serializable pub type fnv.State { value: u64, }`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -4507,7 +4507,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/fnv/State`](#def-st
 
 <a id="def-std_401_2fglob_2fExpandError"></a>
 
-- `pub type glob.ExpandError = InvalidPattern(PatternError) | Files(FileError)`
+- `@serializable pub type glob.ExpandError = InvalidPattern(PatternError) | Files(FileError)`
 
 References: [`core@1/FileError`](#def-core_401_2fFileError), [`std@1/glob/PatternError`](#def-std_401_2fglob_2fPatternError)
 
@@ -4533,7 +4533,7 @@ References: [`std@1/glob/PatternError`](#def-std_401_2fglob_2fPatternError)
 
 <a id="def-std_401_2fglob_2fPatternError"></a>
 
-- `pub type glob.PatternError = Syntax(u64)`
+- `@serializable pub type glob.PatternError = Syntax(u64)`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -4587,7 +4587,7 @@ References: [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core
 
 <a id="def-std_401_2fhex_2fDecodeError"></a>
 
-- `pub type hex.DecodeError = InvalidDigit(u64) | OddLength`
+- `@serializable pub type hex.DecodeError = InvalidDigit(u64) | OddLength`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -4812,7 +4812,7 @@ References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Encoder`](#def-st
 
 <a id="def-std_401_2fhttp_2fBody"></a>
 
-- `pub type http.Body { bytes: Bytes, content_type: String, }`
+- `@serializable pub type http.Body { bytes: Bytes, content_type: String, }`
 
 An encoded request body and its media type. client_send installs exactly one
 Content-Type, replacing any Content-Type supplied in its headers argument.
@@ -4838,13 +4838,13 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/Path`](#def-core
 
 <a id="def-std_401_2fhttp_2fHeader"></a>
 
-- `pub type http.Header { name: String, value: String, }`
+- `@serializable pub type http.Header { name: String, value: String, }`
 
 References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fhttp_2fHttpError"></a>
 
-- `pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8 | Decode( flate.FlateError ) | UnsupportedContentEncoding`
+- `@serializable pub type http.HttpError = Net(NetError) | Url(uri.UriError) | Malformed(http_wire.HeadError) | Chunk | HeadTooLarge | BodyTooLarge | Truncated | TooManyRedirects | RedirectRequiresResend | RedirectLocationInvalid | UnsupportedScheme | UnsupportedTransferEncoding | Status( u16 ) | OutOfOrder | Closed | RequestTimeout | Clock(ClockError) | Json(json.JsonError) | InvalidJsonUtf8 | Decode( flate.FlateError ) | UnsupportedContentEncoding`
 
 References: [`core@1/ClockError`](#def-core_401_2fClockError), [`core@1/NetError`](#def-core_401_2fNetError), [`core@1/u16`](#def-core_401_2fu16), [`std@1/flate/FlateError`](#def-std_401_2fflate_2fFlateError), [`std@1/http_wire/HeadError`](#def-std_401_2fhttp_5fwire_2fHeadError), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/uri/UriError`](#def-std_401_2furi_2fUriError)
 
@@ -4990,7 +4990,7 @@ References: [`std@1/uri/UriError`](#def-std_401_2furi_2fUriError)
 
 <a id="def-std_401_2fhttp_2fMethod"></a>
 
-- `pub type http.Method = Get | Head | Post | Put | Delete | Patch | Options`
+- `@serializable pub type http.Method = Get | Head | Post | Put | Delete | Patch | Options`
 
 <a id="def-std_401_2fhttp_2fMethod_23Delete"></a>
 
@@ -5042,13 +5042,13 @@ References: [`core@1/Net`](#def-core_401_2fNet)
 
 <a id="def-std_401_2fhttp_2fResponse"></a>
 
-- `pub type http.Response { status: u16, headers: List[Header], body: Bytes, url: String, }`
+- `@serializable pub type http.Response { status: u16, headers: List[Header], body: Bytes, url: String, }`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/u16`](#def-core_401_2fu16), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader)
 
 <a id="def-std_401_2fhttp_2fResponseHead"></a>
 
-- `pub type http.ResponseHead { version: Version, status: u16, reason: String, headers: List[Header], content_length: Option[u64], chunked: bool, keep_alive: bool, location: Option[String], content_type: Option[String], }`
+- `@serializable pub type http.ResponseHead { version: Version, status: u16, reason: String, headers: List[Header], content_length: Option[u64], chunked: bool, keep_alive: bool, location: Option[String], content_type: Option[String], }`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u16`](#def-core_401_2fu16), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/Version`](#def-std_401_2fhttp_2fVersion)
 
@@ -5060,13 +5060,13 @@ References: [`core@1/Net`](#def-core_401_2fNet)
 
 <a id="def-std_401_2fhttp_2fServerRequest"></a>
 
-- `pub type http.ServerRequest { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool, }`
+- `@serializable pub type http.ServerRequest { method: String, target: String, version: Version, headers: List[Header], body: Bytes, trailers: List[Header], keep_alive: bool, }`
 
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/Version`](#def-std_401_2fhttp_2fVersion)
 
 <a id="def-std_401_2fhttp_2fVersion"></a>
 
-- `pub type http.Version = Http10 | Http11`
+- `@serializable pub type http.Version = Http10 | Http11`
 
 <a id="def-std_401_2fhttp_2fVersion_23Http10"></a>
 
@@ -5734,7 +5734,7 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http2_wire/Frame`
 
 <a id="def-std_401_2fhttp_5fwire_2fChunkError"></a>
 
-- `pub type http_wire.ChunkError = InvalidChunkSize()`
+- `@serializable pub type http_wire.ChunkError = InvalidChunkSize()`
 
 <a id="def-std_401_2fhttp_5fwire_2fChunkError_23InvalidChunkSize"></a>
 
@@ -5744,7 +5744,7 @@ Variant of http_wire.ChunkError.
 
 <a id="def-std_401_2fhttp_5fwire_2fChunkSize"></a>
 
-- `pub type http_wire.ChunkSize = Complete(u64, u64) | Partial`
+- `@serializable pub type http_wire.ChunkSize = Complete(u64, u64) | Partial`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -5764,13 +5764,13 @@ Variant of http_wire.ChunkSize.
 
 <a id="def-std_401_2fhttp_5fwire_2fFraming"></a>
 
-- `pub type http_wire.Framing { content_length: Option[u64], chunked: bool, keep_alive: bool, }`
+- `@serializable pub type http_wire.Framing { content_length: Option[u64], chunked: bool, keep_alive: bool, }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fhttp_5fwire_2fHeadError"></a>
 
-- `pub type http_wire.HeadError = HeaderName | HeaderValue | NewLine | Status | Token | TooManyHeaders | Version | ContentLength | TransferEncoding | Continuation`
+- `@serializable pub type http_wire.HeadError = HeaderName | HeaderValue | NewLine | Status | Token | TooManyHeaders | Version | ContentLength | TransferEncoding | Continuation`
 
 <a id="def-std_401_2fhttp_5fwire_2fHeadError_23ContentLength"></a>
 
@@ -5834,13 +5834,13 @@ Variant of http_wire.HeadError.
 
 <a id="def-std_401_2fhttp_5fwire_2fHeaderIterator"></a>
 
-- `pub type http_wire.HeaderIterator { index: u64, is_trailer: bool, done: bool, }`
+- `@serializable pub type http_wire.HeaderIterator { index: u64, is_trailer: bool, done: bool, }`
 
 References: [`core@1/bool`](#def-core_401_2fbool), [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fhttp_5fwire_2fParseStatus"></a>
 
-- `pub type http_wire.ParseStatus = Complete(u64) | Partial`
+- `@serializable pub type http_wire.ParseStatus = Complete(u64) | Partial`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -5860,19 +5860,19 @@ Variant of http_wire.ParseStatus.
 
 <a id="def-std_401_2fhttp_5fwire_2fRawHeader"></a>
 
-- `pub type http_wire.RawHeader { name_start: u64, name_end: u64, value_start: u64, value_end: u64, }`
+- `@serializable pub type http_wire.RawHeader { name_start: u64, name_end: u64, value_start: u64, value_end: u64, }`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fhttp_5fwire_2fRequestLine"></a>
 
-- `pub type http_wire.RequestLine { method_start: u64, method_end: u64, target_start: u64, target_end: u64, version: u8, }`
+- `@serializable pub type http_wire.RequestLine { method_start: u64, method_end: u64, target_start: u64, target_end: u64, version: u8, }`
 
 References: [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
 
 <a id="def-std_401_2fhttp_5fwire_2fStatusLine"></a>
 
-- `pub type http_wire.StatusLine { version: u8, code: u16, reason_start: u64, reason_end: u64, }`
+- `@serializable pub type http_wire.StatusLine { version: u8, code: u16, reason_start: u64, reason_end: u64, }`
 
 References: [`core@1/u16`](#def-core_401_2fu16), [`core@1/u64`](#def-core_401_2fu64), [`core@1/u8`](#def-core_401_2fu8)
 
@@ -6611,7 +6611,7 @@ References: [`core@1/Iter`](#def-core_401_2fIter)
 
 <a id="def-std_401_2fjson_2fJsonError"></a>
 
-- `pub type json.JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber`
+- `@serializable pub type json.JsonError = Syntax(u64) | DuplicateKey(u64) | Nesting(u64) | InvalidNumber`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -6653,7 +6653,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fjson_2fValue"></a>
 
-- `pub type json.Value = Null | Bool(bool) | Number(String) | Text(String) | Array(List[Value]) | Object( Map[String, Value] )`
+- `@serializable pub type json.Value = Null | Bool(bool) | Number(String) | Text(String) | Array(List[Value]) | Object( Map[String, Value] )`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool)
 
@@ -6862,19 +6862,19 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/i32`](#def-core_401_
 
 <a id="def-std_401_2flog_2fEntry"></a>
 
-- `pub type log.Entry { level: Level, message: String, fields: List[Field], timestamp: Option[time.Timestamp], }`
+- `@serializable pub type log.Entry { level: Level, message: String, fields: List[Field], timestamp: Option[time.Timestamp], }`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`std@1/log/Field`](#def-std_401_2flog_2fField), [`std@1/log/Level`](#def-std_401_2flog_2fLevel), [`std@1/time/Timestamp`](#def-std_401_2ftime_2fTimestamp)
 
 <a id="def-std_401_2flog_2fField"></a>
 
-- `pub type log.Field { name: String, value: String, }`
+- `@serializable pub type log.Field { name: String, value: String, }`
 
 References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2flog_2fLevel"></a>
 
-- `pub type log.Level = Debug | Info | Warn | Error`
+- `@serializable pub type log.Level = Debug | Info | Warn | Error`
 
 <a id="def-std_401_2flog_2fLevel_23Debug"></a>
 
@@ -7020,7 +7020,7 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core
 
 <a id="def-std_401_2fnet_2fAddrParseError"></a>
 
-- `pub type net.AddrParseError = Invalid()`
+- `@serializable pub type net.AddrParseError = Invalid()`
 
 <a id="def-std_401_2fnet_2fAddrParseError_23Invalid"></a>
 
@@ -7030,7 +7030,7 @@ Variant of net.AddrParseError.
 
 <a id="def-std_401_2fnet_2fHostError"></a>
 
-- `pub type net.HostError = NameTooLong | InvalidHostName`
+- `@serializable pub type net.HostError = NameTooLong | InvalidHostName`
 
 <a id="def-std_401_2fnet_2fHostError_23InvalidHostName"></a>
 
@@ -7277,7 +7277,7 @@ References: [`core@1/Option`](#def-core_401_2fOption)
 
 <a id="def-std_401_2fpath_2fPathError"></a>
 
-- `pub type path.PathError = Invalid(u64)`
+- `@serializable pub type path.PathError = Invalid(u64)`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -7382,7 +7382,7 @@ References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/priority_queue/Heap`](#
 
 <a id="def-std_401_2fprng_2fSampleError"></a>
 
-- `pub type prng.SampleError = EmptyRange()`
+- `@serializable pub type prng.SampleError = EmptyRange()`
 
 <a id="def-std_401_2fprng_2fSampleError_23EmptyRange"></a>
 
@@ -7464,7 +7464,7 @@ References: [`core@1/ExitStatus`](#def-core_401_2fExitStatus), [`core@1/Pipeline
 
 <a id="def-std_401_2frandom_2fSampleError"></a>
 
-- `pub type random.SampleError = EmptyRange | Source(RandomError)`
+- `@serializable pub type random.SampleError = EmptyRange | Source(RandomError)`
 
 References: [`core@1/RandomError`](#def-core_401_2fRandomError)
 
@@ -7503,7 +7503,7 @@ References: [`core@1/Random`](#def-core_401_2fRandom), [`core@1/RandomError`](#d
 
 <a id="def-std_401_2fregex_2fCompileError"></a>
 
-- `pub type regex.CompileError = Syntax(u64) | ProgramTooLarge`
+- `@serializable pub type regex.CompileError = Syntax(u64) | ProgramTooLarge`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -7523,7 +7523,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fregex_2fMatchError"></a>
 
-- `pub type regex.MatchError = WorkLimit()`
+- `@serializable pub type regex.MatchError = WorkLimit()`
 
 <a id="def-std_401_2fregex_2fMatchError_23WorkLimit"></a>
 
@@ -7537,7 +7537,7 @@ Variant of regex.MatchError.
 
 <a id="def-std_401_2fregex_2fSpan"></a>
 
-- `pub type regex.Span { start: u64, end: u64, }`
+- `@serializable pub type regex.Span { start: u64, end: u64, }`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -7647,7 +7647,7 @@ References: [`core@1/Result`](#def-core_401_2fResult)
 
 <a id="def-std_401_2fscalar_2fFormatError"></a>
 
-- `pub type scalar.FormatError = BufferTooSmall()`
+- `@serializable pub type scalar.FormatError = BufferTooSmall()`
 
 <a id="def-std_401_2fscalar_2fFormatError_23BufferTooSmall"></a>
 
@@ -7657,7 +7657,7 @@ Variant of scalar.FormatError.
 
 <a id="def-std_401_2fscalar_2fParseError"></a>
 
-- `pub type scalar.ParseError = Invalid | OutOfRange`
+- `@serializable pub type scalar.ParseError = Invalid | OutOfRange`
 
 <a id="def-std_401_2fscalar_2fParseError_23Invalid"></a>
 
@@ -8264,7 +8264,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2ftar_2fHeader"></a>
 
-- `pub type tar.Header { name: String, kind: Kind, linkname: String, size: u64, mode: u64, uid: u64, gid: u64, uname: String, gname: String, modified: i64, devmajor: u64, devminor: u64, records: Map[String, String], }`
+- `@serializable pub type tar.Header { name: String, kind: Kind, linkname: String, size: u64, mode: u64, uid: u64, gid: u64, uname: String, gname: String, modified: i64, devmajor: u64, devminor: u64, records: Map[String, String], }`
 
 One entry's metadata. `records` holds the PAX extended header records that
 applied to it, which `name`, `size` and the other fields already reflect.
@@ -8273,7 +8273,7 @@ References: [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401
 
 <a id="def-std_401_2ftar_2fKind"></a>
 
-- `pub type tar.Kind = Regular | Link | Symlink | Char | Block | Directory | Fifo | Global | Other( u8 )`
+- `@serializable pub type tar.Kind = Regular | Link | Symlink | Char | Block | Directory | Fifo | Global | Other( u8 )`
 
 An entry's type flag (POSIX.1-2001 ustar typeflag).
 
@@ -8377,7 +8377,7 @@ current entry's unread data and padding.
 
 <a id="def-std_401_2ftar_2fTarError"></a>
 
-- `pub type tar.TarError = Header(u64) | Encoding(u64) | Unsupported(u64) | Truncated`
+- `@serializable pub type tar.TarError = Header(u64) | Encoding(u64) | Unsupported(u64) | Truncated`
 
 Malformed archive data. `Header(n)` names the byte offset of the header
 block that is invalid; `Encoding(n)` one whose name is not UTF-8;
@@ -8417,7 +8417,7 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2ftar_2fWriteError"></a>
 
-- `pub type tar.WriteError = Field | TooLong | Short | Closed`
+- `@serializable pub type tar.WriteError = Field | TooLong | Short | Closed`
 
 A header that the writer cannot encode, data beyond or short of the
 declared size, or a write after `close`.
@@ -8836,7 +8836,7 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/i32`](#def-core_
 
 <a id="def-std_401_2ftime_2fCalendarError"></a>
 
-- `pub type time.CalendarError = OutOfRange | NoSuchDay`
+- `@serializable pub type time.CalendarError = OutOfRange | NoSuchDay`
 
 <a id="def-std_401_2ftime_2fCalendarError_23NoSuchDay"></a>
 
@@ -8864,7 +8864,7 @@ References: [`std@1/date_time/format_into`](#def-std_401_2fdate_5ftime_2fformat_
 
 <a id="def-std_401_2ftime_2fDisambiguation"></a>
 
-- `pub type time.Disambiguation = Earlier | Later | Reject`
+- `@serializable pub type time.Disambiguation = Earlier | Later | Reject`
 
 <a id="def-std_401_2ftime_2fDisambiguation_23Earlier"></a>
 
@@ -8892,7 +8892,7 @@ References: [`core@1/i128`](#def-core_401_2fi128)
 
 <a id="def-std_401_2ftime_2fFormatError"></a>
 
-- `pub type time.FormatError = Invalid(u64) | NoOffset | OutOfRange`
+- `@serializable pub type time.FormatError = Invalid(u64) | NoOffset | OutOfRange`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -8918,13 +8918,13 @@ Variant of time.FormatError.
 
 <a id="def-std_401_2ftime_2fIsoWeek"></a>
 
-- `pub type time.IsoWeek { year: i32, week: u8, }`
+- `@serializable pub type time.IsoWeek { year: i32, week: u8, }`
 
 References: [`core@1/i32`](#def-core_401_2fi32), [`core@1/u8`](#def-core_401_2fu8)
 
 <a id="def-std_401_2ftime_2fOverflow"></a>
 
-- `pub type time.Overflow = Clamp | Reject`
+- `@serializable pub type time.Overflow = Clamp | Reject`
 
 <a id="def-std_401_2ftime_2fOverflow_23Clamp"></a>
 
@@ -8940,7 +8940,7 @@ Variant of time.Overflow.
 
 <a id="def-std_401_2ftime_2fSleepError"></a>
 
-- `pub type time.SleepError = NegativeDuration | OutOfRange | Wait(WaitError)`
+- `@serializable pub type time.SleepError = NegativeDuration | OutOfRange | Wait(WaitError)`
 
 References: [`core@1/WaitError`](#def-core_401_2fWaitError)
 
@@ -8966,7 +8966,7 @@ References: [`core@1/WaitError`](#def-core_401_2fWaitError)
 
 <a id="def-std_401_2ftime_2fTimeError"></a>
 
-- `pub type time.TimeError = OutOfRange()`
+- `@serializable pub type time.TimeError = OutOfRange()`
 
 <a id="def-std_401_2ftime_2fTimeError_23OutOfRange"></a>
 
@@ -8992,7 +8992,7 @@ References: [`core@1/i128`](#def-core_401_2fi128)
 
 <a id="def-std_401_2ftime_2fWeekday"></a>
 
-- `pub type time.Weekday = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday`
+- `@serializable pub type time.Weekday = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday`
 
 <a id="def-std_401_2ftime_2fWeekday_23Friday"></a>
 
@@ -9038,7 +9038,7 @@ Variant of time.Weekday.
 
 <a id="def-std_401_2ftime_2fZoneError"></a>
 
-- `pub type time.ZoneError = Gap | Fold`
+- `@serializable pub type time.ZoneError = Gap | Fold`
 
 <a id="def-std_401_2ftime_2fZoneError_23Fold"></a>
 
@@ -9302,13 +9302,13 @@ References: [`core@1/i32`](#def-core_401_2fi32), [`std@1/time/DateTime`](#def-st
 
 <a id="def-std_401_2ftoml_2fPosition"></a>
 
-- `pub type toml.Position { line: u64, column: u64, }`
+- `@serializable pub type toml.Position { line: u64, column: u64, }`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2ftoml_2fSegment"></a>
 
-- `pub type toml.Segment = Key(String) | Index(u64)`
+- `@serializable pub type toml.Segment = Key(String) | Index(u64)`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
 
@@ -9330,7 +9330,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2ftoml_2fTomlError"></a>
 
-- `pub type toml.TomlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | InvalidValue | NotFound | NotTable`
+- `@serializable pub type toml.TomlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | InvalidValue | NotFound | NotTable`
 
 References: [`std@1/toml/Position`](#def-std_401_2ftoml_2fPosition)
 
@@ -9378,7 +9378,7 @@ References: [`std@1/toml/Position`](#def-std_401_2ftoml_2fPosition)
 
 <a id="def-std_401_2ftoml_2fValue"></a>
 
-- `pub type toml.Value = Text(String) | Integer(i64) | Float(f64) | Bool(bool) | Datetime( String ) | Array(List[Value]) | Table(Map[String, Value])`
+- `@serializable pub type toml.Value = Text(String) | Integer(i64) | Float(f64) | Bool(bool) | Datetime( String ) | Array(List[Value]) | Table(Map[String, Value])`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/f64`](#def-core_401_2ff64), [`core@1/i64`](#def-core_401_2fi64)
 
@@ -10125,7 +10125,7 @@ References: [`core@1/char`](#def-core_401_2fchar)
 
 <a id="def-std_401_2furi_2fComponent"></a>
 
-- `pub type uri.Component = Raw(String) | Encoded(String)`
+- `@serializable pub type uri.Component = Raw(String) | Encoded(String)`
 
 References: [`core@1/String`](#def-core_401_2fString)
 
@@ -10147,7 +10147,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2furi_2fPart"></a>
 
-- `pub type uri.Part = Unreserved | User | Password | Host | Path | Query | Fragment`
+- `@serializable pub type uri.Part = Unreserved | User | Password | Host | Path | Query | Fragment`
 
 <a id="def-std_401_2furi_2fPart_23Fragment"></a>
 
@@ -10193,7 +10193,7 @@ Variant of uri.Part.
 
 <a id="def-std_401_2furi_2fQueryError"></a>
 
-- `pub type uri.QueryError = InvalidEscape(u64) | InvalidSeparator(u64) | InvalidUtf8(u64)`
+- `@serializable pub type uri.QueryError = InvalidEscape(u64) | InvalidSeparator(u64) | InvalidUtf8(u64)`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -10223,13 +10223,13 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2furi_2fUri"></a>
 
-- `pub type uri.Uri { scheme: String, user: Option[Component], password: Option[Component], host: Option[Component], port: Option[u16], path: Component, query: Option[Component], fragment: Option[Component], }`
+- `@serializable pub type uri.Uri { scheme: String, user: Option[Component], password: Option[Component], host: Option[Component], port: Option[u16], path: Component, query: Option[Component], fragment: Option[Component], }`
 
 References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-core_401_2fString), [`core@1/u16`](#def-core_401_2fu16), [`std@1/uri/Component`](#def-std_401_2furi_2fComponent)
 
 <a id="def-std_401_2furi_2fUriError"></a>
 
-- `pub type uri.UriError = UnexpectedCharacter | InvalidFormat | InvalidPort | InvalidHostName`
+- `@serializable pub type uri.UriError = UnexpectedCharacter | InvalidFormat | InvalidPort | InvalidHostName`
 
 <a id="def-std_401_2furi_2fUriError_23InvalidFormat"></a>
 
@@ -10335,13 +10335,13 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/String`](#def-core
 
 <a id="def-std_401_2fx509_2fCertificate"></a>
 
-- `pub type x509.Certificate { subject: String, names: List[String], uris: List[String], }`
+- `@serializable pub type x509.Certificate { subject: String, names: List[String], uris: List[String], }`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fx509_2fX509Error"></a>
 
-- `pub type x509.X509Error = Malformed(u64)`
+- `@serializable pub type x509.X509Error = Malformed(u64)`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
@@ -10429,13 +10429,13 @@ References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fyaml_2fPosition"></a>
 
-- `pub type yaml.Position { line: u64, column: u64, }`
+- `@serializable pub type yaml.Position { line: u64, column: u64, }`
 
 References: [`core@1/u64`](#def-core_401_2fu64)
 
 <a id="def-std_401_2fyaml_2fSegment"></a>
 
-- `pub type yaml.Segment = Key(String) | Index(u64)`
+- `@serializable pub type yaml.Segment = Key(String) | Index(u64)`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/u64`](#def-core_401_2fu64)
 
@@ -10457,7 +10457,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fyaml_2fValue"></a>
 
-- `pub type yaml.Value = Null | Bool(bool) | Integer(i64) | Float(f64) | Text(String) | Array( List[Value] ) | Object(Map[String, Value])`
+- `@serializable pub type yaml.Value = Null | Bool(bool) | Integer(i64) | Float(f64) | Text(String) | Array( List[Value] ) | Object(Map[String, Value])`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Map`](#def-core_401_2fMap), [`core@1/String`](#def-core_401_2fString), [`core@1/bool`](#def-core_401_2fbool), [`core@1/f64`](#def-core_401_2ff64), [`core@1/i64`](#def-core_401_2fi64)
 
@@ -10517,7 +10517,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fyaml_2fYamlError"></a>
 
-- `pub type yaml.YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases( Position ) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue | NotFound | NotCollection`
+- `@serializable pub type yaml.YamlError = Syntax(Position) | DuplicateKey(Position) | Nesting(Position) | Aliases( Position ) | Tag(Position) | ComplexKey(Position) | Documents(Position) | InvalidValue | NotFound | NotCollection`
 
 References: [`std@1/yaml/Position`](#def-std_401_2fyaml_2fPosition)
 
@@ -10654,7 +10654,7 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 
 <a id="def-std_401_2fzip_2fEntry"></a>
 
-- `pub type zip.Entry { name: String, comment: String, method: Method, flags: u64, creator: u64, external: u64, modified: Option[i64], dos_time: u64, crc: u32, compressed: u64, size: u64, offset: u64, }`
+- `@serializable pub type zip.Entry { name: String, comment: String, method: Method, flags: u64, creator: u64, external: u64, modified: Option[i64], dos_time: u64, crc: u32, compressed: u64, size: u64, offset: u64, }`
 
 One central directory entry. `offset` is the entry's local header offset
 within the data (including any prefix), `modified` the Unix time of an
@@ -10667,7 +10667,7 @@ References: [`core@1/Option`](#def-core_401_2fOption), [`core@1/String`](#def-co
 
 <a id="def-std_401_2fzip_2fExtractError"></a>
 
-- `pub type zip.ExtractError = Read(ZipError) | Insecure(String) | Unsupported(String) | File( FileError )`
+- `@serializable pub type zip.ExtractError = Read(ZipError) | Insecure(String) | Unsupported(String) | File( FileError )`
 
 Extraction refused an entry's name (`Insecure`) or kind (`Unsupported`),
 the archive is malformed, or a file operation failed.
@@ -10708,7 +10708,7 @@ References: [`core@1/String`](#def-core_401_2fString)
 
 <a id="def-std_401_2fzip_2fFileZipError"></a>
 
-- `pub type zip.FileZipError = Storage(FileError) | Archive(ZipError)`
+- `@serializable pub type zip.FileZipError = Storage(FileError) | Archive(ZipError)`
 
 A file operation failed or the archive is malformed.
 
@@ -10732,7 +10732,7 @@ References: [`core@1/FileError`](#def-core_401_2fFileError)
 
 <a id="def-std_401_2fzip_2fMethod"></a>
 
-- `pub type zip.Method = Stored | Deflate | Other(u64)`
+- `@serializable pub type zip.Method = Stored | Deflate | Other(u64)`
 
 An entry's compression method (APPNOTE 4.4.5).
 
@@ -10760,7 +10760,7 @@ Variant of zip.Method.
 
 <a id="def-std_401_2fzip_2fWriteError"></a>
 
-- `pub type zip.WriteError = Field | Directory | Closed`
+- `@serializable pub type zip.WriteError = Field | Directory | Closed`
 
 Writing errors: a name, comment or extra field too long for its 16-bit
 length, data written to a directory entry, or a write after `close`.
@@ -10792,7 +10792,7 @@ entry being written.
 
 <a id="def-std_401_2fzip_2fZipError"></a>
 
-- `pub type zip.ZipError = Format(u64) | Encoding(u64) | Algorithm(String) | Checksum(String) | TooLarge | Data( flate.FlateError )`
+- `@serializable pub type zip.ZipError = Format(u64) | Encoding(u64) | Algorithm(String) | Checksum(String) | TooLarge | Data( flate.FlateError )`
 
 Malformed archive data: `Format(n)` at byte offset `n`, a name or
 comment that is not UTF-8 (`Encoding(n)`, the offset of its directory
