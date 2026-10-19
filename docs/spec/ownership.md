@@ -534,7 +534,9 @@ cross ([MODE-4](#mode-4-sendable)): plain and flat values are copied; unique val
 and their blocks become the receiving task's; a `Shared` root is counted atomically. A
 child task borrows nothing counted from its parent. Every other count operation is plain
 and task-local, and there is no marking walk. A block's storage may return to another
-thread's allocator; this is unobservable (DET-1).
+thread's allocator; this is unobservable (DET-1). Checked execution records the task that
+reaches each tracked block and traps when another task uses it
+([implementation](implementation.md#checked-execution)).
 
 ### OWN-7: Uniqueness test
 

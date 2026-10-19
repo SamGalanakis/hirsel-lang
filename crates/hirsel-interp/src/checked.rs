@@ -41,6 +41,7 @@ pub enum TrapRule {
     AllocationInNoalloc,
     AllocatingCallInNoalloc,
     UniqueShared,
+    TaskShared,
 }
 impl TrapRule {
     pub fn as_str(self) -> &'static str {
@@ -52,6 +53,7 @@ impl TrapRule {
             Self::AllocationInNoalloc => "allocation inside @noalloc",
             Self::AllocatingCallInNoalloc => "allocating call inside @noalloc",
             Self::UniqueShared => "unique value another holder shares",
+            Self::TaskShared => "counted block another task owns",
         }
     }
     /// The spec rules whose run-time consequence this trap witnesses.
@@ -62,6 +64,7 @@ impl TrapRule {
             Self::FinalizerCount | Self::FinalizerOrder => "DROP-2",
             Self::AllocationInNoalloc | Self::AllocatingCallInNoalloc => "MEM-5",
             Self::UniqueShared => "MODE-2/MEM-11",
+            Self::TaskShared => "OWN-6/CONC-4",
         }
     }
 }
@@ -130,6 +133,9 @@ struct Block {
     /// this never resets.
     shared: Cell<bool>,
     holders: RefCell<Vec<Weak<Token>>>,
+    /// The task whose count operations reach this block (OWN-6): none until
+    /// one does, and none again once a task capture hands the block over.
+    owner: Cell<Option<u64>>,
 }
 /// A holder's identity, with the holders its storage keeps alive besides
 /// its own block: those a native `mut` operation took into it.
@@ -144,6 +150,7 @@ impl Holder {
             block: Rc::new(Block {
                 shared: Cell::new(!unique),
                 holders: RefCell::new(vec![Rc::downgrade(&token)]),
+                owner: Cell::new(None),
             }),
             token,
         }
@@ -478,6 +485,36 @@ impl Shadow {
             Self::Uniform(bound) => Self::Uniform(bound.clone()),
         }
     }
+    /// OWN-6: tasks never share counted blocks, so a count operation (a copy,
+    /// take or `mut` access) claims each tracked block for `task`. False when
+    /// another task already owns one.
+    pub(crate) fn claim(&self, task: u64) -> bool {
+        match self {
+            Self::Ownership { content, holder } => {
+                let owner = holder.block.owner.get();
+                if owner.is_some_and(|owner| owner != task) {
+                    return false;
+                }
+                holder.block.owner.set(Some(task));
+                content.claim(task)
+            }
+            Self::Parts(parts) => parts.iter().all(|part| part.claim(task)),
+            Self::View { content, .. } => content.claim(task),
+            Self::Uniform(_) => true,
+        }
+    }
+    /// A task capture moves its blocks to the task that next uses them.
+    pub(crate) fn release(&self) {
+        match self {
+            Self::Ownership { content, holder } => {
+                holder.block.owner.set(None);
+                content.release();
+            }
+            Self::Parts(parts) => parts.iter().for_each(Self::release),
+            Self::View { content, .. } => content.release(),
+            Self::Uniform(_) => (),
+        }
+    }
     /// MODE-2: a value proved unique is the sole owner of every tracked block.
     pub fn sole_owner(&self) -> bool {
         match self {
@@ -683,6 +720,8 @@ enum Kind {
 /// Execution-wide checker state, shared by every frame.
 pub(crate) struct State {
     pub config: CheckedRuntime,
+    /// The task now running, whose count operations claim blocks (OWN-6).
+    pub task: u64,
     open: Vec<bool>,
     kinds: Vec<Kind>,
     pub site: Span,
@@ -695,6 +734,7 @@ pub(crate) type Shared = Rc<RefCell<State>>;
 pub(crate) fn state(config: CheckedRuntime) -> Shared {
     Rc::new(RefCell::new(State {
         config,
+        task: 0,
         open: vec![],
         kinds: vec![],
         site: Span {

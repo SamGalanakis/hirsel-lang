@@ -580,6 +580,20 @@ impl Frame {
             return Ok((value, Default::default()));
         }
         let mut shadow = self.access(operand.place, "operand")?;
+        if let Some(check) = &self.check {
+            let state = check.state.borrow();
+            if !shadow.claim(state.task) {
+                return Err(state
+                    .trap(
+                        crate::checked::TrapRule::TaskShared,
+                        format!(
+                            "task {} reaches a counted block another task owns",
+                            state.task
+                        ),
+                    )
+                    .into());
+            }
+        }
         let value = self.extract(operand)?;
         if operand.usage == UseKind::Copy {
             if let Some(check) = &self.check {

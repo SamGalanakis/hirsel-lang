@@ -369,6 +369,14 @@ pub(crate) fn execute_frames(
                                 lifetime: shadow.lifetime(),
                             })
                         });
+                // OWN-6: a taken capture's blocks become the child's.
+                if let Some(callee) = &callee {
+                    for (capture, owned) in callee.captures.iter().zip(&callee.owned) {
+                        if *owned {
+                            capture.release();
+                        }
+                    }
+                }
                 child.check = Some(enter_checked(&parent.state, &child, vec![], callee)?);
             }
             start.callee.begin_call();
@@ -445,6 +453,9 @@ pub(crate) fn execute_frames(
             if let Some((id, stack, failures)) = runnable.remove(choice) {
                 task = id;
                 frames = stack;
+                if let Some(check) = frames.last().and_then(|f| f.check.as_ref()) {
+                    check.state.borrow_mut().task = task;
+                }
                 execution.failures = failures;
                 operations.enter_task(task, frames.iter().any(|f| f.finalized.is_some()));
                 let resumed = frames.last().unwrap();

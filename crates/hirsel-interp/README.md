@@ -355,7 +355,11 @@ write-back keeps the holders its operation took. Wherever the IR claims a value 
 it must have no other live holder, or execution traps (`UniqueShared`, MODE-2): a whole
 local declared `unique` when assigned, a parameter declared `unique` at frame entry, and
 a native operation's `unique` parameter, such as `shared.freeze`'s (MEM-11). This is
-independent of both checkers' uniqueness proofs. Traps transport as the internal `Error::Trapped` and never leave the run
+independent of both checkers' uniqueness proofs. Tasks never share counted blocks
+(OWN-6): every operand use claims its tracked blocks for the running task, a task
+capture taken by a new task hands its blocks over, and a use of a block another task
+owns traps (`TaskShared`). Values crossing through a channel, a task result, a mutex
+or a `Shared` root reach the other task through a native operation with fresh shadows. Traps transport as the internal `Error::Trapped` and never leave the run
 entry points. With `checked: None` nothing is tracked and execution is unchanged.
 
 Normal execution runs `arena.with` by calling its callback with an opaque

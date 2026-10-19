@@ -69,6 +69,7 @@ is no comparable observable outcome.
 | allocation inside `@noalloc` | MEM-5 | a noalloc body constructs or deep-copies counted storage, or mutates a block that needs a detach |
 | allocating call inside `@noalloc` | MEM-5 | a noalloc body calls a definition or implicitly invokes a destructor not declared `@noalloc` |
 | unique value another holder shares | MODE-2, MEM-11 | a whole local or a parameter declared `unique`, or a native operation's `unique` parameter such as `shared.freeze`'s, receives a value one of whose tracked blocks has another live holder |
+| counted block another task owns | OWN-6, CONC-4 | a task uses a tracked block that another task's operand uses reached and no task capture handed over |
 
 An **access** is any operand extraction (read, copy, take, borrow, `mut`), the destination of
 a write through a projection, and a drop of live storage, the final return to the harness

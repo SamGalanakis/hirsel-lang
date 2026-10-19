@@ -984,3 +984,45 @@ fn freezing_a_value_another_live_holder_shares_traps() {
         assert_eq!(site(&mut engine, &[main, freeze]), "freeze parameter 0");
     });
 }
+
+/// A task takes `sent`, a deep copy of `a`, while its parent keeps `keep`, a
+/// counted copy of `a`, and reads it after the task ends.
+const TASK_COPY: &str = "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {\n  let tasks = io.tasks(rt)?\n  let a: List[List[u64]] = [[1u64]]\n  let keep: List[List[u64]] = copy a\n  let sent: unique List[List[u64]] = unique a\n  let n = task.scope(\n    tasks,\n    fn(s: Scope) -> u64 {\n      let t = task.async(s, fn() -> u64 {\n        let mine = take sent\n        list.len(mine)\n      })\n      task.await(s, take t)\n    }\n  )\n  if n + list.len(keep) == 2u64 { let _ = out.print(io.stdout(rt)?, \"two\\n\") }\n  Ok(())\n}";
+
+/// OWN-6 with both checkers bypassed: a false uniqueness proof elides
+/// `unique a`'s deep copy, so the block the task takes, and so owns, is one
+/// its parent still counts. With the IR's `unique` claims removed too,
+/// checked execution still traps when the parent reads the task's block.
+#[test]
+fn two_tasks_counting_one_block_trap() {
+    with_compiler_stack(|| {
+        let mut engine = accepted(TASK_COPY);
+        assert_eq!(printed(run(&mut engine, &[], true)), "two\n");
+        let mut main = lowered(&mut engine, "main");
+        let mut replaced = 0;
+        for body in &mut main.bodies {
+            for rvalue in &mut body.rvalues {
+                if let hirsel_tir::Rvalue::Unary {
+                    op: hirsel_syntax::UnaryOp::Unique,
+                    value,
+                } = rvalue
+                {
+                    *rvalue = hirsel_tir::Rvalue::Use(value.clone());
+                    replaced += 1;
+                }
+            }
+        }
+        assert_eq!(replaced, 1);
+        assert_eq!(printed(run(&mut engine, &[main.clone()], false)), "two\n");
+        assert_eq!(
+            trapped(run(&mut engine, &[main.clone()], true)),
+            TrapRule::UniqueShared
+        );
+        assert!(validator_rejects(&mut engine, &main));
+        without_unique_locals(&mut main);
+        assert_eq!(
+            trapped(run(&mut engine, &[main], true)),
+            TrapRule::TaskShared
+        );
+    });
+}
