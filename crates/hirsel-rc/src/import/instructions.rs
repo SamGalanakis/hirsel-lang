@@ -687,8 +687,11 @@ impl Importer<'_, '_> {
                 let Some(lop) = lir_binary(*op) else {
                     return unsupported(format!("binary {op:?} as one operation"));
                 };
-                let side = self.place(left.place)?;
-                if !matches!(self.out.types[side.ty.index()].repr, ValueRepr::Scalar(_)) {
+                let side = match self.joined_view(left) {
+                    Some(view) => self.value_type(view?),
+                    None => self.place(left.place)?.ty,
+                };
+                if !matches!(self.out.types[side.index()].repr, ValueRepr::Scalar(_)) {
                     return self.compare(lop, left, right, ty);
                 }
                 let l = self.operand(left)?;

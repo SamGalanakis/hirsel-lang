@@ -7,7 +7,7 @@ impl Importer<'_, '_> {
     pub(super) fn flat_copies(&mut self) -> R<()> {
         use tir::InstructionKind as K;
         let body = self.body;
-        let (initializations, disqualified) = view_assignments(body);
+        let (initializations, disqualified, _) = view_assignments(body);
         let stable = stable_owned_roots(body, &initializations, &disqualified);
         let scopes = scope_intervals(body);
         let ordinary = ordinary_sequence_uses(body);

@@ -1173,7 +1173,7 @@ fn node_anchors(body: &tir::Body) -> Vec<(u32, u32)> {
 /// stays under its root's, and the enclosing match proved its variant, so it
 /// is a view too when its root is one.
 fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
-    let (assigned, disqualified) = view_assignments(body);
+    let (assigned, disqualified, _) = view_assignments(body);
     let n = body.locals.len();
     let single = |l: usize| match assigned[l].as_slice() {
         [Some(view)] if view_storage(body, l) && !disqualified[l] => Some(*view),
@@ -1221,19 +1221,48 @@ fn view_temporaries(body: &tir::Body) -> Vec<Option<tir::PlaceId>> {
 }
 
 /// Temporaries a view temporary would be but for being assigned a view on
-/// more than one path (`if c { &a.f } else { &b.f }`): joined views.
+/// more than one path (`if c { &a.f } else { &b.f }`): joined views. A whole
+/// move of a joined view (into a `match` scrutinee, or an outer `if` of a
+/// nested one) assigns that same view, and a joined view may move only into
+/// another.
 fn joined_views(body: &tir::Body) -> Vec<bool> {
-    let (assigned, disqualified) = view_assignments(body);
-    (0..body.locals.len())
-        .map(|l| {
-            assigned[l].len() > 1
-                && assigned[l]
+    let (assigned, _, pinned) = view_assignments(body);
+    let root = |p: &tir::PlaceId| body.places[p.0 as usize].root.0 as usize;
+    let mut moves = Vec::new();
+    for (d, sources) in assigned.iter().enumerate() {
+        for source in sources {
+            if let Some(ViewSource::Moved(p)) = source {
+                moves.push((root(p), d));
+            }
+        }
+    }
+    let mut joined: Vec<bool> = assigned
+        .iter()
+        .enumerate()
+        .map(|(l, sources)| {
+            view_storage(body, l)
+                && !pinned[l]
+                && sources
                     .iter()
-                    .all(|a| matches!(a, Some(ViewSource::Loaned(_))))
-                && view_storage(body, l)
-                && !disqualified[l]
+                    .all(|a| matches!(a, Some(ViewSource::Loaned(_) | ViewSource::Moved(_))))
+                && (sources.len() > 1 || matches!(sources.as_slice(), [Some(ViewSource::Moved(_))]))
         })
-        .collect()
+        .collect();
+    // Each pass unjoins at least one local or stops.
+    loop {
+        let mut changed = false;
+        for &(source, destination) in &moves {
+            if joined[source] != joined[destination] {
+                joined[source] = false;
+                joined[destination] = false;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    joined
 }
 
 fn view_storage(body: &tir::Body, l: usize) -> bool {
@@ -1362,16 +1391,20 @@ enum ViewSource {
     /// An element of a place under its own loan, assigned at `(block,
     /// instruction)`: a view only while its index stays put.
     Indexed(tir::PlaceId, (usize, usize)),
+    /// A whole move of another local: the view it holds, if it holds one.
+    Moved(tir::PlaceId),
 }
 
-/// Per local, the view each assignment gives it (None: not a view), and
-/// whether any other use rules a view temporary out.
+/// Per local, the view each assignment gives it (None: not a view), whether
+/// any other use rules a view temporary out, and whether a use other than a
+/// whole move into another local does (a joined view moves on as one).
 #[allow(clippy::type_complexity)]
-fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool>) {
+fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool>, Vec<bool>) {
     use tir::InstructionKind as K;
     let n = body.locals.len();
     let mut assigned: Vec<Vec<Option<ViewSource>>> = vec![Vec::new(); n];
     let mut disqualified = vec![false; n];
+    let mut moved = vec![false; n];
     let root = |p: tir::PlaceId| body.places[p.0 as usize].root.0 as usize;
     let whole = |p: tir::PlaceId| body.places[p.0 as usize].projection.is_empty();
     let operand = |o: &tir::Operand, disqualified: &mut Vec<bool>| {
@@ -1407,6 +1440,14 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool
                                 }
                                 _ => None,
                             });
+                        }
+                        tir::Rvalue::Use(o)
+                            if o.usage == UseKind::Take
+                                && whole(*destination)
+                                && whole(o.place) =>
+                        {
+                            assigned[r].push(Some(ViewSource::Moved(o.place)));
+                            moved[root(o.place)] = true;
                         }
                         other => {
                             assigned[r].push(None);
@@ -1464,7 +1505,11 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool
             _ => {}
         }
     }
-    (assigned, disqualified)
+    let pinned = disqualified.clone();
+    for (d, m) in disqualified.iter_mut().zip(moved) {
+        *d |= m;
+    }
+    (assigned, disqualified, pinned)
 }
 
 /// Whether no path from the assignment of view `l` (at `(block,

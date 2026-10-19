@@ -579,11 +579,15 @@ impl Importer<'_, '_> {
         })
     }
 
-    /// A borrowed use of a whole joined view temporary is the view it holds.
+    /// A borrowed use of a whole joined view temporary, or its move into
+    /// another, is the view it holds.
     pub(super) fn joined_view(&self, op: &tir::Operand) -> Option<R<ValueId>> {
         let place = &self.body.places[op.place.0 as usize];
         let l = place.root.0 as usize;
-        if !self.joined[l] || !place.projection.is_empty() || op.usage != UseKind::Borrow {
+        if !self.joined[l]
+            || !place.projection.is_empty()
+            || !matches!(op.usage, UseKind::Borrow | UseKind::Take)
+        {
             return None;
         }
         Some(match (self.state.views[l], self.views[l]) {

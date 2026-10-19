@@ -46,6 +46,17 @@ impl Inline for Importer<'_, '_> {
     }
     fn container_len(&mut self, call: &crate::library::CallShape<'_>) -> R<()> {
         let argument = &call.arguments[0].value;
+        // A joined view has no storage: its entries are a field of the
+        // block it holds.
+        let view = self.joined_view(argument).transpose()?;
+        if let Some(view) = view {
+            let value = self.read_field(view, 0)?;
+            let layout = self.place_layout(call.destination)?;
+            let ty = self.intern(layout);
+            let result = self.value(ty, Holding::Plain);
+            self.push(Inst::SeqLen { result, value });
+            return self.finish(call.destination, call.next, result);
+        }
         let mut place = self.place(argument.place)?;
         let layout = self.layout_of(place.ty);
         let (LayoutKind::Block { payload } | LayoutKind::Box { payload }) =

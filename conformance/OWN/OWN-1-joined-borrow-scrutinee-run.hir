@@ -1,0 +1,103 @@
+// rule: OWN-1
+// expect: run
+// stdout: ok
+// A borrowed value chosen by `if` on several paths is one view of whichever parameter it
+// reads, under that parameter's loan: matched on, bound by `let`, nested in an outer `if`,
+// compared, passed on and measured, it is never stored or released.
+type Named {
+  name: String,
+  tags: List[u64],
+}
+
+fn width(s: String) -> u64 {
+  bytes.len(string.as_bytes(s))
+}
+
+fn matched(a: String, b: String, select: bool) -> u64 {
+  match if select {
+    a
+  } else {
+    b
+  } {
+    value => if value == "outer" {
+      1
+    } else {
+      0
+    },
+  }
+}
+
+fn bound(a: String, b: String, select: bool) -> u64 {
+  let value = if select {
+    a
+  } else {
+    b
+  }
+  if value == "outer" {
+    1
+  } else {
+    0
+  }
+}
+
+fn fields(a: Named, b: Named, select: bool) -> u64 {
+  match if select {
+    a.name
+  } else {
+    b.name
+  } {
+    value => width(value),
+  }
+}
+
+fn nested(a: String, b: String, c: String, k: u64) -> u64 {
+  match if k == 0 {
+    a
+  } else if k == 1 {
+    b
+  } else {
+    c
+  } {
+    value => if value == "bb" {
+      10
+    } else {
+      width(value)
+    },
+  }
+}
+
+fn lists(a: List[u64], b: List[u64], select: bool) -> u64 {
+  match if select {
+    a
+  } else {
+    b
+  } {
+    value => list.len(value),
+  }
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let x = Named(name: "xyz", tags: [1, 2])
+  let y = Named(name: "q", tags: [])
+  let m = matched("outer", "inner", true) + matched("outer", "inner", false) * 10
+  let b = bound("outer", "inner", true) + bound("outer", "inner", false) * 10
+  let f = fields(x, y, true) + fields(x, y, false) * 10
+  let n = nested("a", "bb", "cccc", 0) + nested("a", "bb", "cccc", 1) * 10 + nested(
+    "a",
+    "bb",
+    "cccc",
+    2
+  ) * 1000
+  let l = lists(x.tags, y.tags, true) + lists(x.tags, y.tags, false) * 10
+  let ok = m == 1 && b == 1 && f == 13 && n == 4101 && l == 2
+  let _ = out.print(
+    stdout,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

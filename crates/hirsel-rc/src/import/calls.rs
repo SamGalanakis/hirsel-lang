@@ -155,6 +155,7 @@ impl Importer<'_, '_> {
             && core_operation(path, "list", "len")
             && let [argument] = arguments
             && argument.value.usage == UseKind::Borrow
+            && self.joined_view(&argument.value).is_none()
         {
             let p = self.place(argument.value.place)?;
             if p.source.is_some() {
