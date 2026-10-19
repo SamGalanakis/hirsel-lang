@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1279 exported definitions; 408 variants.
+1283 exported definitions; 408 variants.
 
 ## Types and roots
 
@@ -6008,6 +6008,33 @@ References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/String`](#def-co
 - `@preserves_unique(out) pub fn json.stringify_into(value: Value, mut out: List[u8]) -> Result[(), JsonError] uses {}`
 
 References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u8`](#def-core_401_2fu8), [`std@1/json/JsonError`](#def-std_401_2fjson_2fJsonError), [`std@1/json/Value`](#def-std_401_2fjson_2fValue)
+
+
+## keys
+
+<a id="def-std_401_2fkeys_2fdecode"></a>
+
+- `pub fn keys.decode[K: serializable](data: Bytes) -> Result[unique K, DecodeError] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/DecodeError`](#def-core_401_2fDecodeError), [`core@1/Result`](#def-core_401_2fResult)
+
+<a id="def-std_401_2fkeys_2fencode"></a>
+
+- `pub fn keys.encode[K: serializable](key: K) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fkeys_2fencode_5finto"></a>
+
+- `@preserves_unique(out) pub fn keys.encode_into[K: serializable](key: K, mut out: List[u8]) -> () uses {}`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fkeys_2fprefix_5fend"></a>
+
+- `pub fn keys.prefix_end(prefix: Bytes) -> Option[unique Bytes] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption)
 
 
 ## list
