@@ -1,6 +1,7 @@
 // rule: SEM-1
 // expect: run
 // entry: main
+// net: {"provider":"net.script@2","rules":[{"address":"echo.test","service":"80","operation":"connect"}],"peers":[{"address":"echo.test","port":80,"resolves_to":["192.0.2.7"],"tls":"plain","connections":[{"open":[{"expect":[71,69,84,32,47,99,104,97,116,63,120,61,49,32,72,84,84,80,47,49,46,49,13,10,72,111,115,116,58,32,101,99,104,111,46,116,101,115,116,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,75,101,121,58,32,114,56,48,100,101,122,109,111,73,79,76,48,90,98,109,104,97,112,53,52,98,103,61,61,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,86,101,114,115,105,111,110,58,32,49,51,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,80,114,111,116,111,99,111,108,58,32,99,104,97,116,13,10,79,114,105,103,105,110,58,32,104,116,116,112,58,47,47,101,99,104,111,46,116,101,115,116,13,10,13,10]},{"send":[72,84,84,80,47,49,46,49,32,49,48,49,32,83,119,105,116,99,104,105,110,103,32,80,114,111,116,111,99,111,108,115,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,65,99,99,101,112,116,58,32,102,104,86,69,79,85,89,98,88,106,57,81,110,116,105,120,83,119,101,85,88,69,112,117,114,84,81,61,13,10,13,10]}]},{"open":[{"expect":[71,69,84,32,47,99,104,97,116,63,120,61,49,32,72,84,84,80,47,49,46,49,13,10,72,111,115,116,58,32,101,99,104,111,46,116,101,115,116,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,75,101,121,58,32,84,48,85,74,103,66,104,100,120,65,98,115,103,85,120,121,113,76,105,76,43,65,61,61,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,86,101,114,115,105,111,110,58,32,49,51,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,80,114,111,116,111,99,111,108,58,32,99,104,97,116,13,10,79,114,105,103,105,110,58,32,104,116,116,112,58,47,47,101,99,104,111,46,116,101,115,116,13,10,13,10]},{"send":[72,84,84,80,47,49,46,49,32,52,48,48,32,66,97,100,32,82,101,113,117,101,115,116,13,10,67,111,110,116,101,110,116,45,76,101,110,103,116,104,58,32,48,13,10,13,10]}]},{"open":[{"expect":[71,69,84,32,47,99,104,97,116,63,120,61,49,32,72,84,84,80,47,49,46,49,13,10,72,111,115,116,58,32,101,99,104,111,46,116,101,115,116,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,75,101,121,58,32,109,51,83,111,85,87,113,74,79,82,118,113,111,110,53,48,68,74,47,76,85,119,61,61,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,86,101,114,115,105,111,110,58,32,49,51,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,80,114,111,116,111,99,111,108,58,32,99,104,97,116,13,10,79,114,105,103,105,110,58,32,104,116,116,112,58,47,47,101,99,104,111,46,116,101,115,116,13,10,13,10]},{"send":[72,84,84,80,47,49,46,49,32,49,48,49,32,83,119,105,116,99,104,105,110,103,32,80,114,111,116,111,99,111,108,115,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,65,99,99,101,112,116,58,32,121,76,79,106,43,101,51,55,75,115,79,118,48,120,100,68,57,113,82,74,122,116,81,52,85,56,99,61,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,69,120,116,101,110,115,105,111,110,115,58,32,112,101,114,109,101,115,115,97,103,101,45,100,101,102,108,97,116,101,13,10,13,10]}]},{"open":[{"expect":[71,69,84,32,47,99,104,97,116,63,120,61,49,32,72,84,84,80,47,49,46,49,13,10,72,111,115,116,58,32,101,99,104,111,46,116,101,115,116,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,75,101,121,58,32,52,84,74,70,72,55,54,97,103,105,119,56,113,120,98,74,79,104,79,69,120,81,61,61,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,86,101,114,115,105,111,110,58,32,49,51,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,80,114,111,116,111,99,111,108,58,32,99,104,97,116,13,10,79,114,105,103,105,110,58,32,104,116,116,112,58,47,47,101,99,104,111,46,116,101,115,116,13,10,13,10]},{"send":[72,84,84,80,47,49,46,49,32,49,48,49,32,83,119,105,116,99,104,105,110,103,32,80,114,111,116,111,99,111,108,115,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,65,99,99,101,112,116,58,32,53,79,73,106,83,53,86,75,105,114,83,107,105,117,114,84,122,56,118,81,69,83,109,119,109,43,69,61,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,80,114,111,116,111,99,111,108,58,32,115,117,112,101,114,99,104,97,116,13,10,13,10]}]}]}]}
 // A WebSocket client refuses the handshakes RFC 6455 section 4.1 rules out: a wrong
 // accept key, a status other than 101, an extension it did not offer and a
 // protocol it did not offer; a URL scheme other than ws or wss and a caller header
@@ -8,64 +9,17 @@
 // Random, splitmix64 with seed 0 here.
 pub type AppError = Grant(GrantError) | Ws(websocket.WsError)
 
+fn check(ok: bool) -> () {
+  failure.check(ok, Arithmetic())
+}
+
 fn origin() -> List[http.Header] uses {} {
   [http.Header(name: "Origin", value: "http://echo.test")]
 }
 
-pub fn main(t: Test, rt: Io) -> Result[(), AppError] {
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
   let r = io.random(rt) ? Grant
-  let n = test.net(
-    t,
-    [
-      NetPeer(
-        address: "echo.test",
-        port: 80u16,
-        resolves_to: [V4([192u8, 0u8, 2u8, 7u8])],
-        tls: Plain(),
-        connections: [
-          Open(
-            [
-              Expect(
-                b"GET /chat?x=1 HTTP/1.1\r\nHost: echo.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: r80dezmoIOL0Zbmhap54bg==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: chat\r\nOrigin: http://echo.test\r\n\r\n"
-              ),
-              Send(
-                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: fhVEOUYbXj9QntixSweUXEpurTQ=\r\n\r\n"
-              )
-            ]
-          ),
-          Open(
-            [
-              Expect(
-                b"GET /chat?x=1 HTTP/1.1\r\nHost: echo.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: T0UJgBhdxAbsgUxyqLiL+A==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: chat\r\nOrigin: http://echo.test\r\n\r\n"
-              ),
-              Send(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-            ]
-          ),
-          Open(
-            [
-              Expect(
-                b"GET /chat?x=1 HTTP/1.1\r\nHost: echo.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: m3SoUWqJORvqon50DJ/LUw==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: chat\r\nOrigin: http://echo.test\r\n\r\n"
-              ),
-              Send(
-                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: yLOj+e37KsOv0xdD9qRJztQ4U8c=\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n"
-              )
-            ]
-          ),
-          Open(
-            [
-              Expect(
-                b"GET /chat?x=1 HTTP/1.1\r\nHost: echo.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: 4TJFH76agiw8qxbJOhOExQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: chat\r\nOrigin: http://echo.test\r\n\r\n"
-              ),
-              Send(
-                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: 5OIjS5VKirSkiurTz8vQESmwm+E=\r\nSec-WebSocket-Protocol: superchat\r\n\r\n"
-              )
-            ]
-          )
-        ]
-      )
-    ],
-    []
-  )
+  let n = io.net(rt) ? Grant
   let url = "ws://echo.test/chat?x=1"
   let mut config = websocket.default_config()
   config.protocols = ["chat"]
@@ -77,13 +31,13 @@ pub fn main(t: Test, rt: Io) -> Result[(), AppError] {
   ]
   for expected in refused {
     match websocket.connect(n, r, url, origin(), config) {
-      Error(Handshake(e)) => test.check(t, e == expected),
-      _ => test.check(t, false),
+      Error(Handshake(e)) => check(e == expected),
+      _ => check(false),
     }
   }
   match websocket.connect(n, r, "http://echo.test/", [], config) {
-    Error(Handshake(e)) => test.check(t, e == UnsupportedScheme()),
-    _ => test.check(t, false),
+    Error(Handshake(e)) => check(e == UnsupportedScheme()),
+    _ => check(false),
   }
   // A caller header may not replace one the handshake writes.
   let reserved: List[String] = [
@@ -100,8 +54,8 @@ pub fn main(t: Test, rt: Io) -> Result[(), AppError] {
       [http.Header(name: unique name, value: "x")],
       config
     ) {
-      Error(Handshake(e)) => test.check(t, e == ReservedHeader()),
-      _ => test.check(t, false),
+      Error(Handshake(e)) => check(e == ReservedHeader()),
+      _ => check(false),
     }
   }
   Ok(())

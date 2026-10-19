@@ -1,50 +1,30 @@
 // rule: SEM-1
 // expect: run
 // entry: main
+// net: {"provider":"net.script@2","rules":[{"address":"echo.test","service":"80","operation":"connect"}],"peers":[{"address":"echo.test","port":80,"resolves_to":["192.0.2.7"],"tls":"plain","connections":[{"open":[{"expect":[71,69,84,32,47,99,104,97,116,63,120,61,49,32,72,84,84,80,47,49,46,49,13,10,72,111,115,116,58,32,101,99,104,111,46,116,101,115,116,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,75,101,121,58,32,114,56,48,100,101,122,109,111,73,79,76,48,90,98,109,104,97,112,53,52,98,103,61,61,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,86,101,114,115,105,111,110,58,32,49,51,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,80,114,111,116,111,99,111,108,58,32,99,104,97,116,13,10,79,114,105,103,105,110,58,32,104,116,116,112,58,47,47,101,99,104,111,46,116,101,115,116,13,10,13,10]},{"send":[72,84,84,80,47,49,46,49,32,49,48,49,32,83,119,105,116,99,104,105,110,103,32,80,114,111,116,111,99,111,108,115,13,10,85,112,103,114,97,100,101,58,32,119,101,98,115,111,99,107,101,116,13,10,67,111,110,110,101,99,116,105,111,110,58,32,85,112,103,114,97,100,101,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,65,99,99,101,112,116,58,32,105,72,77,122,48,47,74,49,71,115,81,116,82,104,50,78,102,86,67,48,81,55,67,90,75,77,81,61,13,10,83,101,99,45,87,101,98,83,111,99,107,101,116,45,80,114,111,116,111,99,111,108,58,32,99,104,97,116,13,10,13,10]},{"expect":[136,133,79,69,9,128,76,172,107,249,42]},{"send":[136,2,3,233]}]}]}]}
 // A WebSocket client starts the closing handshake (RFC 6455 section 7.1.2): its
 // masked close carries the code and reason, the server's reply ends the connection
 // and later sends are refused. The key and mask come from the run's Random,
 // splitmix64 with seed 0 here.
 pub type AppError = Grant(GrantError) | Ws(websocket.WsError)
 
+fn check(ok: bool) -> () {
+  failure.check(ok, Arithmetic())
+}
+
 fn origin() -> List[http.Header] uses {} {
   [http.Header(name: "Origin", value: "http://echo.test")]
 }
 
-pub fn main(t: Test, rt: Io) -> Result[(), AppError] {
+pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
   let r = io.random(rt) ? Grant
-  let n = test.net(
-    t,
-    [
-      NetPeer(
-        address: "echo.test",
-        port: 80u16,
-        resolves_to: [V4([192u8, 0u8, 2u8, 7u8])],
-        tls: Plain(),
-        connections: [
-          Open(
-            [
-              Expect(
-                b"GET /chat?x=1 HTTP/1.1\r\nHost: echo.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: r80dezmoIOL0Zbmhap54bg==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: chat\r\nOrigin: http://echo.test\r\n\r\n"
-              ),
-              Send(
-                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: iHMz0/J1GsQtRh2NfVC0Q7CZKMQ=\r\nSec-WebSocket-Protocol: chat\r\n\r\n"
-              ),
-              Expect(b"\x88\x85OE\x09\x80L\xack\xf9*"),
-              Send(b"\x88\x02\x03\xe9")
-            ]
-          )
-        ]
-      )
-    ],
-    []
-  )
+  let n = io.net(rt) ? Grant
   let url = "ws://echo.test/chat?x=1"
   let mut config = websocket.default_config()
   config.protocols = ["chat"]
   let mut second = websocket.connect(n, r, url, origin(), config) ? Ws
   websocket.close(mut second, 1001, "bye") ? Ws
-  test.check(t, websocket.peer_close(second) == Some((1001u16, "")))
-  test.check(t, websocket.send_text(mut second, "late") == Error(Closed()))
+  check(websocket.peer_close(second) == Some((1001u16, "")))
+  check(websocket.send_text(mut second, "late") == Error(Closed()))
   Ok(())
 }

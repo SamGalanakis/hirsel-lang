@@ -5,7 +5,11 @@
 // d934b909f6a50247e2a2e9b89de02cdcef93a163): TestWriter's exact bytes,
 // TestWriterSetBoundary's boundary rule, quoting in names and in the form media
 // type, decode_form's media type checks and a drawn boundary.
-pub fn main(t: Test, rt: Io) -> Result[(), multipart.MultipartError] {
+fn check(ok: bool) -> () {
+  failure.check(ok, Arithmetic())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), multipart.MultipartError] {
   // The writer (TestWriter) and the boundary rule (TestWriterSetBoundary).
   let fields: List[multipart.Field] = [
     multipart.Field(
@@ -17,8 +21,7 @@ pub fn main(t: Test, rt: Io) -> Result[(), multipart.MultipartError] {
     multipart.Field(name: "key", filename: None(), content_type: None(), data: b"val")
   ]
   let encoded = multipart.encode("abc", fields)?
-  test.check(
-    t,
+  check(
     encoded == b"--abc\r\nContent-Disposition: form-data; name=\"myfile\"; filename=\"my-file.txt\"\r\nContent-Type: application/octet-stream\r\n\r\nmy file contents\r\n--abc\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nval\r\n--abc--\r\n"
   )
   let back = multipart.decode_form(
@@ -26,8 +29,8 @@ pub fn main(t: Test, rt: Io) -> Result[(), multipart.MultipartError] {
     encoded,
     multipart.default_limits()
   )?
-  test.check(t, list.len(back) == 2 && back[1].body == b"val")
-  test.check(t, multipart.encode("abc", []) == Ok(b"\r\n--abc--\r\n"))
+  check(list.len(back) == 2 && back[1].body == b"val")
+  check(multipart.encode("abc", []) == Ok(b"\r\n--abc--\r\n"))
   let quoted = multipart.encode(
     "q",
     [
@@ -39,8 +42,7 @@ pub fn main(t: Test, rt: Io) -> Result[(), multipart.MultipartError] {
       )
     ]
   )?
-  test.check(
-    t,
+  check(
     quoted == b"--q\r\nContent-Disposition: form-data; name=\"a\\\"b\\\\c%0D%0Ad\"\r\nContent-Type: text/plain\r\n\r\n\r\n--q--\r\n"
   )
   let boundaries: List[(String, bool)] = [
@@ -57,49 +59,43 @@ pub fn main(t: Test, rt: Io) -> Result[(), multipart.MultipartError] {
     ("(boundary)", true)
   ]
   for (boundary, valid) in boundaries {
-    test.check(t, multipart.valid_boundary(boundary) == valid)
+    check(multipart.valid_boundary(boundary) == valid)
     if valid {
       match multipart.parse_media_type(multipart.form_type(boundary)) {
-        Ok((kind, params)) => test.check(
-          t,
+        Ok((kind, params)) => check(
           kind == "multipart/form-data" && map.get(params, "boundary") == Some(boundary)
         ),
-        Error(_) => test.check(t, false),
+        Error(_) => check(false),
       }
     } else {
-      test.check(t, multipart.encode(boundary, []) == Error(InvalidBoundary()))
+      check(multipart.encode(boundary, []) == Error(InvalidBoundary()))
     }
   }
-  test.check(
-    t,
+  check(
     multipart.form_type("with space") == "multipart/form-data; boundary=\"with space\""
   )
-  test.check(
-    t,
+  check(
     multipart.decode_form("text/plain; boundary=x", b"", multipart.default_limits()) == Error(
       NotMultipart()
     )
   )
-  test.check(
-    t,
+  check(
     multipart.decode_form("multipart/form-data", b"", multipart.default_limits()) == Error(
       MissingBoundary()
     )
   )
   let body = multipart.form_body("abc", fields)?
-  test.check(
-    t,
+  check(
     body.content_type == "multipart/form-data; boundary=abc" && body.bytes == encoded
   )
   // A random boundary is the hex of 30 drawn bytes: splitmix64 with seed 0 here.
   match io.random(rt) {
-    Ok(r) => test.check(
-      t,
+    Ok(r) => check(
       multipart.random_boundary(r) == Ok(
         "afcd1d7b39a820e2f465b9a16a9e786e4f450980185dc406ec814c72a8b8"
       )
     ),
-    Error(_) => test.check(t, false),
+    Error(_) => check(false),
   }
   Ok(())
 }
