@@ -1,0 +1,11 @@
+# The nightly compiler benchmark on main (tools/compiler-bench/README.md, "Schedule").
+# Edit WorkingDirectory to the main checkout before installing.
+[Unit]
+Description=Hirsel compiler benchmark on origin/main
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/agentlang
+ExecStart=%h/code/agentlang/tools/compiler-bench/scheduled
+Nice=10
+TimeoutStartSec=6h

@@ -1,0 +1,62 @@
+{
+  "noise_k": 3,
+  "metrics": [
+    {
+      "name": "wall_s",
+      "threshold": 0.1,
+      "floor": 0.05,
+      "unit": "s"
+    },
+    {
+      "name": "cpu_s",
+      "threshold": 0.1,
+      "floor": 0.05,
+      "unit": "s"
+    },
+    {
+      "name": "rss_mib",
+      "threshold": 0.1,
+      "floor": 16,
+      "unit": "MiB"
+    }
+  ],
+  "phases": {
+    "names": [
+      "parse",
+      "resolve",
+      "signatures",
+      "check",
+      "modes",
+      "lower",
+      "verify",
+      "comptime",
+      "plan",
+      "import",
+      "place",
+      "rc",
+      "reuse",
+      "ready",
+      "lir validate",
+      "codegen",
+      "store lookup"
+    ],
+    "threshold": 0.15,
+    "floor": 0.05
+  },
+  "intervals": {
+    "names": [
+      "image open",
+      "S0",
+      "parallel",
+      "S1",
+      "parallel2",
+      "merge",
+      "plan",
+      "units",
+      "link",
+      "(untimed)"
+    ],
+    "threshold": 0.15,
+    "floor": 0.05
+  }
+}

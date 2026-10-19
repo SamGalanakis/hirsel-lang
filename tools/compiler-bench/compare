@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Compare a compiler-bench result file with a stored baseline.
+
+    tools/compiler-bench/compare BASELINE.json RESULTS.json [--budget budget.json] [--json OUT]
+
+For every cell in both files and every tracked metric (budget.json: wall and
+CPU time, peak RSS, and each tracked driver interval and compiler phase from
+`hirsel --timings=json`), it prints the baseline and
+current medians, the relative delta and the noise bound, and flags a
+regression when the delta exceeds both the metric's threshold and the noise
+bound: k times the larger relative MAD of the two medians (median absolute
+deviation over the median), and the absolute floor. Cells only in one file,
+or whose status changed, are listed. It also prints the Hirsel/Rust scoreboard
+of RESULTS with each pair's ratio change against BASELINE.
+
+Exit 0 when nothing regressed, 1 when something did, 2 for unusable input.
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+# The cargo command of each Rust mode.
+CARGO = {'check': 'check', 'debug': 'build', 'edit-body': 'check after a body edit',
+         'edit-private-sig': 'check after a private signature edit', 'edit-public-sig': 'check after a public signature edit'}
+
+
+def load(path):
+    data = json.loads(Path(path).read_text())
+    if data.get('schema') != 1 or data.get('suite') != 'compiler-bench':
+        raise ValueError(f'{path}: not a schema-1 compiler-bench result')
+    return data
+
+
+def metrics(cell, budget):
+    """(metric name, {median, mad, n}) for each tracked metric of the cell."""
+    summary = cell.get('summary', {})
+    for metric in budget['metrics']:
+        if summary.get(metric['name']):
+            yield metric, summary[metric['name']]
+    for part, prefix in (('intervals', 'interval'), ('phases', 'phase')):
+        tracked = budget[part]
+        for name, values in (summary.get(part) or {}).items():
+            if values and name in tracked['names']:
+                yield {'name': f'{prefix}:{name}', 'threshold': tracked['threshold'], 'floor': tracked['floor'],
+                       'unit': 's'}, values
+
+
+def relative_mad(values):
+    return values['mad'] / values['median'] if values['median'] else 0.0
+
+
+def compare(baseline, current, budget):
+    """Rows for every shared cell and metric, and the cells that changed status
+    or appear in only one file."""
+    old = {c['id']: c for c in baseline['cells']}
+    new = {c['id']: c for c in current['cells']}
+    rows, notes = [], []
+    k = budget['noise_k']
+    for cid in sorted(old.keys() | new.keys()):
+        if cid not in new:
+            notes.append(f'{cid}: only in the baseline')
+            continue
+        if cid not in old:
+            notes.append(f'{cid}: new cell (no baseline)')
+            continue
+        before, after = old[cid], new[cid]
+        if before['status'] != after['status']:
+            notes.append(f"{cid}: status {before['status']} -> {after['status']}")
+            if after['status'] != 'ok':
+                rows.append({'cell': cid, 'metric': 'status', 'regressed': True, 'before': None, 'after': None,
+                             'delta': None, 'bound': None})
+                continue
+        if after['status'] != 'ok' or before['status'] != 'ok':
+            continue
+        previous = dict((m['name'], v) for m, v in metrics(before, budget))
+        for metric, values in metrics(after, budget):
+            base = previous.get(metric['name'])
+            if not base or not base['median']:
+                continue
+            delta = (values['median'] - base['median']) / base['median']
+            bound = max(metric['threshold'], k * max(relative_mad(values), relative_mad(base)))
+            absolute = values['median'] - base['median']
+            regressed = delta > bound and absolute > metric['floor']
+            improved = delta < -bound and -absolute > metric['floor']
+            rows.append({'cell': cid, 'metric': metric['name'], 'unit': metric['unit'], 'before': base['median'],
+                         'after': values['median'], 'delta': delta, 'bound': bound, 'regressed': regressed,
+                         'improved': improved})
+    return rows, notes
+
+
+def scoreboard(baseline, current):
+    old = {(p['program'], p['mode'], p['rust_jobs']): p for p in baseline.get('pairs', [])}
+    lines = []
+    for p in current.get('pairs', []):
+        if p['ratio'] is None:
+            continue
+        was = old.get((p['program'], p['mode'], p['rust_jobs']))
+        change = f"  (was {was['ratio']:.1f}x)" if was and was['ratio'] else ''
+        lines.append(f"  {p['program']:<24} {p['mode']:<17} vs cargo {CARGO[p['rust_mode']]} -j{p['rust_jobs']}: "
+                     f"{p['hirsel_wall_s']:.2f} s / {p['rust_wall_s']:.2f} s = {p['ratio']:.1f}x{change}")
+    return lines
+
+
+def fmt(value, unit):
+    if value is None:
+        return '-'
+    return f'{value:.3f} {unit}' if unit == 's' else f'{value:.0f} {unit}'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('baseline')
+    parser.add_argument('results')
+    parser.add_argument('--budget', default=str(HERE / 'budget.json'))
+    parser.add_argument('--json', help='also write the comparison rows here')
+    parser.add_argument('--all', action='store_true', help='print every row, not only changes')
+    args = parser.parse_args()
+    try:
+        baseline, current = load(args.baseline), load(args.results)
+        budget = json.loads(Path(args.budget).read_text())
+    except (OSError, ValueError, KeyError) as error:
+        print(f'compare: {error}', file=sys.stderr)
+        return 2
+    rows, notes = compare(baseline, current, budget)
+    print(f"baseline {baseline.get('commit') or '?'} ({baseline.get('started')}), "
+          f"current {current.get('commit') or '?'} ({current.get('started')})")
+    shown = [r for r in rows if args.all or r['regressed'] or r.get('improved')]
+    for r in shown:
+        mark = 'REGRESSED' if r['regressed'] else 'improved' if r.get('improved') else ''
+        if r['metric'] == 'status':
+            print(f"  {r['cell']}: status changed  {mark}")
+            continue
+        print(f"  {r['cell']:<48} {r['metric']:<22} {fmt(r['before'], r['unit']):>12} -> "
+              f"{fmt(r['after'], r['unit']):>12}  {r['delta']:+7.1%} (bound {r['bound']:.0%})  {mark}")
+    for note in notes:
+        print('  ' + note)
+    board = scoreboard(baseline, current)
+    if board:
+        print('Hirsel / Rust (median wall; above 1x Hirsel is slower):')
+        print('\n'.join(board))
+    regressed = [r for r in rows if r['regressed']]
+    print(f'{len(regressed)} regressions in {len(rows)} compared metrics')
+    if args.json:
+        Path(args.json).write_text(json.dumps({'rows': rows, 'notes': notes}, indent=1) + '\n')
+    return 1 if regressed else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

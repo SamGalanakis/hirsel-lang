@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Print one compiler-bench result file as Markdown: the Hirsel/Rust scoreboard,
+each Hirsel cell's driver intervals and phases, and the cells that did not complete.
+
+    tools/compiler-bench/report RESULTS.json [--groups G,...]
+"""
+import argparse
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+# The cargo command of each Rust mode.
+CARGO = {'check': 'check', 'debug': 'build', 'edit-body': 'check after a body edit',
+         'edit-private-sig': 'check after a private signature edit', 'edit-public-sig': 'check after a public signature edit'}
+
+
+def median(cell, metric):
+    value = cell['summary'].get(metric)
+    return value['median'] if value else None
+
+
+def number(value, digits=2):
+    return '—' if value is None else f'{value:.{digits}f}'
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('results')
+    parser.add_argument('--groups', help='only cells of these groups')
+    args = parser.parse_args()
+    data = json.loads(Path(args.results).read_text())
+    groups = set(args.groups.split(',')) if args.groups else None
+    cells = [c for c in data['cells'] if groups is None or set(c['groups']) & groups or
+             (c['mode'].startswith('edit-') and 'edit' in groups)]
+    ids = {c['id'] for c in cells}
+    print(f"compiler-bench at {data.get('commit')} ({data.get('started')}, load1 {data['host']['load1']:.1f}, "
+          f"{data.get('repeat')} runs per cell)\n")
+    print('| program | lines | Hirsel mode | Hirsel s | Rust | Rust s | ratio | RSS ratio |')
+    print('|---|---:|---|---:|---|---:|---:|---:|')
+    lines = {c['id']: c['lines'] for c in cells}
+    for p in data.get('pairs', []):
+        if p['hirsel'] not in ids or p['ratio'] is None:
+            continue
+        print(f"| {p['program']} | {lines[p['hirsel']]} | {p['mode']} | {number(p['hirsel_wall_s'])} | "
+              f"cargo {CARGO[p['rust_mode']]} -j{p['rust_jobs']} | {number(p['rust_wall_s'])} | "
+              f"{number(p['ratio'], 1)}x | {number(p['rss_ratio'], 1)}x |")
+    budget = json.loads((HERE / 'budget.json').read_text())
+    for part, title in (('intervals', 'Hirsel driver intervals (median wall seconds; they add up to the wall time)'),
+                        ('phases', 'Hirsel phases (median work seconds, excluding nested phases; they overlap the intervals)')):
+        hirsel = [c for c in cells if c['language'] == 'hirsel' and c['summary'].get(part)]
+        if not hirsel:
+            continue
+        used = [n for n in budget[part]['names']
+                if any((c['summary'][part].get(n) or {}).get('median', 0) >= 0.005 for c in hirsel)]
+        print(f'\n{title}:\n')
+        print('| cell | wall | RSS MiB | ' + ' | '.join(used) + ' |')
+        print('|---|---:|---:|' + '---:|' * len(used))
+        for c in hirsel:
+            row = [number((c['summary'][part].get(n) or {}).get('median')) for n in used]
+            print(f"| {c['id']} | {number(median(c, 'wall_s'))} | {number(median(c, 'rss_mib'), 0)} | "
+                  + ' | '.join(row) + ' |')
+    incomplete = [c for c in cells if c['status'] != 'ok']
+    if incomplete:
+        print('\nDid not complete:\n')
+        for c in incomplete:
+            last = c['runs'][-1]
+            peak = last.get('scope_peak_mib')
+            print(f"- {c['id']} ({c['lines']} lines): {c['status']} after {number(last.get('wall_s'), 1)} s"
+                  + (f', scope peak {peak} MiB' if peak else ''))
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

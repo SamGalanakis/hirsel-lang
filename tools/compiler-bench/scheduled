@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# The scheduled compiler benchmark on main (never on the merge path): build the
+# release bundle of a fresh origin/main on the Buck2 pool, run the suite one
+# capped process at a time, and compare it with the baseline. Results
+# go to $HIRSEL_MAIN_RUNS/compiler-bench/; a regression or a failed run appends
+# one line to $HIRSEL_MAIN_RUNS/alarms.log. Extra arguments go to `run`.
+set -Eeuo pipefail
+repo=$(git -C "$(dirname "$0")/../.." rev-parse --show-toplevel)
+runs=${HIRSEL_MAIN_RUNS:-${XDG_STATE_HOME:-$HOME/.local/state}/hirsel/main-runs}
+out="$runs/compiler-bench"
+trees=${HIRSEL_MAIN_WORKTREES:-$runs/worktrees}
+mkdir -p "$out" "$trees"
+# Keep the lock inode: unlinking it would let another runner lock a different file.
+exec 9>"$out/compiler-bench.lock"
+if ! flock -n 9; then
+  echo "compiler-bench: a run is already active" >&2
+  exit 75
+fi
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+git -C "$repo" fetch origin main
+sha=$(git -C "$repo" rev-parse refs/remotes/origin/main)
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+log="$out/$stamp-$sha.log"
+worktree=$(mktemp -d "$trees/compiler-bench-XXXXXXXX")
+rmdir "$worktree"
+status=0
+stage="worktree"
+finish() {
+  local code=$?
+  trap - EXIT
+  if (( code != 0 )); then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) compiler-bench $sha: $stage failed (exit $code); $log" >> "$runs/alarms.log"
+  fi
+  cd "$repo"
+  (cd "$worktree" 2>/dev/null && .buck2/bin/buck2 kill >> "$log" 2>&1) || true
+  git -C "$repo" worktree remove --force "$worktree" >> "$log" 2>&1 || true
+  exit "$code"
+}
+trap finish EXIT
+git -C "$repo" worktree add --detach "$worktree" "$sha" >> "$log" 2>&1
+cd "$worktree"
+stage="toolchain build"
+python3 tools/buck2/prepare.py >> "$log" 2>&1
+bundle=$(.buck2/bin/buck2 build --target-platforms //tools/buck2:release //:hirsel-toolchain --show-full-output 2>> "$log" \
+  | awk '/^root\/\/:hirsel-toolchain /{print $2}')
+toolchain="$out/toolchain-$sha"
+rm -rf "$toolchain"
+cp -rL "$bundle" "$toolchain"
+stage="suite"
+result="$out/$stamp-$sha.json"
+tools/compiler-bench/run --toolchain "$toolchain" --work "$out/work" --output "$result" "$@" >> "$log" 2>&1 || status=$?
+rm -rf "$toolchain"
+stage="comparison"
+compare=0
+# A committed baseline wins; otherwise the first run on this host is the baseline.
+baseline=tools/compiler-bench/baseline.json
+[[ -f $baseline ]] || baseline="$out/baseline.json"
+if [[ ! -f $baseline ]]; then
+  cp "$result" "$baseline"
+  echo "compiler-bench: no baseline yet; recorded this run as $baseline" > "$result.compare.txt"
+else
+  tools/compiler-bench/compare "$baseline" "$result" --json "$result.compare.json" \
+    > "$result.compare.txt" 2>&1 || compare=$?
+fi
+cp "$result" "$out/latest.json"
+cp "$result.compare.txt" "$out/latest.compare.txt"
+if (( compare == 1 )); then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) compiler-bench $sha: $(tail -1 "$result.compare.txt"); $result.compare.txt" >> "$runs/alarms.log"
+fi
+if (( compare > 1 )); then
+  exit 1
+fi
+stage="suite"
+if (( status != 0 )); then
+  exit 1
+fi
+echo "compiler-bench: $sha $(tail -1 "$result.compare.txt"); $result"
