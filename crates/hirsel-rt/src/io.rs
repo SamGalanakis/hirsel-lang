@@ -3368,13 +3368,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_file_walk(
     }
     crate::STATUS_OK
 }
-/// IterNext closure ABI: context, environment, hidden destination, output.
+/// IterNext closure ABI: context, environment, the inert caller and operation
+/// site words every closure and iterator callable carries, hidden destination,
+/// output.
 /// # Safety
 /// The environment is an exclusive live walk environment and out is writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_file_walk_step(
     _ctx: *mut crate::RunCtx,
     environment: *mut crate::Header,
+    _caller_site: u64,
+    _operation_site: u64,
     _destination: *mut u8,
     out: *mut WalkOption,
 ) -> u8 {

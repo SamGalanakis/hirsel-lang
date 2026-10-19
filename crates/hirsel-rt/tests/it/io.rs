@@ -548,7 +548,7 @@ fn walk_step_stops_after_the_first_error_and_releases_its_environment() {
         let environment = walk_environment(ctx.0, &items);
         let mut out = WalkOption::default();
         assert_eq!(
-            hirsel_rt_v2_file_walk_step(ctx.0, environment, std::ptr::null_mut(), &mut out),
+            hirsel_rt_v2_file_walk_step(ctx.0, environment, 0, 0, std::ptr::null_mut(), &mut out),
             0
         );
         assert_eq!(
@@ -560,7 +560,7 @@ fn walk_step_stops_after_the_first_error_and_releases_its_environment() {
             }
         );
         assert_eq!(
-            hirsel_rt_v2_file_walk_step(ctx.0, environment, std::ptr::null_mut(), &mut out),
+            hirsel_rt_v2_file_walk_step(ctx.0, environment, 0, 0, std::ptr::null_mut(), &mut out),
             0
         );
         assert_eq!(
@@ -573,7 +573,14 @@ fn walk_step_stops_after_the_first_error_and_releases_its_environment() {
         );
         for _ in 0..2 {
             assert_eq!(
-                hirsel_rt_v2_file_walk_step(ctx.0, environment, std::ptr::null_mut(), &mut out),
+                hirsel_rt_v2_file_walk_step(
+                    ctx.0,
+                    environment,
+                    0,
+                    0,
+                    std::ptr::null_mut(),
+                    &mut out
+                ),
                 0
             );
             assert_eq!(out.tag, 0);

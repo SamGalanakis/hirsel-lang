@@ -1,0 +1,24 @@
+// rule: CAP-1
+// expect: run
+// Each step of a walk over a test directory, through the runtime's iterator thunk.
+pub fn main(t: Test) -> Result[(), FileError] {
+  let dir = test.dir(t, [(path.of("b"), b"b"), (path.of("a"), b"a")])
+  let mut count: u64 = 0
+  for item in take file.walk(dir)? {
+    let p = item?
+    failure.check(
+      path.text(p) == if count == 0 {
+        "a"
+      } else {
+        "b"
+      },
+      Bounds()
+    )
+    count += 1
+  }
+  failure.check(count == 2, Bounds())
+  for item in take file.walk(test.dir(t, []))? {
+    failure.check(false, Bounds())
+  }
+  Ok(())
+}

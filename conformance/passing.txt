@@ -29,6 +29,7 @@ conformance/CAP/CAP-1-file-put-new-authority-bad.hir
 conformance/CAP/CAP-1-file-put-new-authority-ok.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-bad.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-ok.hir
+conformance/CAP/CAP-1-file-walk-steps-run.hir
 conformance/CAP/CAP-1-hello-web-scripted-run.hir
 conformance/CAP/CAP-1-host-inputs-run.hir
 conformance/CAP/CAP-1-listen-not-granted-run.hir
