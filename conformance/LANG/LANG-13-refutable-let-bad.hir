@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 6
+// expect: reject LANG-13 at line 7
+// twin: LANG/LANG-13-let-else-initializer-ok.hir
 // Shows "Refutable patterns appear only in match"
 @noalloc
 fn example(x: Option[u32]) -> u32 {

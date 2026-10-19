@@ -1,5 +1,6 @@
 // rule: CAP-4
-// expect: reject CAP-4 at line 5
+// expect: reject CAP-4 at line 6
+// twin: CAP/CAP-4-atomic-create-ok.hir
 // Atomics are "created and operated through Tasks" (CONC-7/CAP-4).
 fn make(tasks: Tasks) -> () {
   let a: Atomic[u32] = atomic.create(1)

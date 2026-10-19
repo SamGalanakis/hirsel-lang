@@ -1,5 +1,6 @@
 // rule: OWN-5
-// expect: reject OWN-5 at line 5
+// expect: reject OWN-5 at line 6
+// twin: OWN/OWN-5-iterator-copy-ok.hir
 // "Noncopyable ... Moved or borrowed only."
 fn example(take x: Iter[u64]) -> () {
   let y = copy x

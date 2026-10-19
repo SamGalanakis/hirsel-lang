@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 17
+// expect: reject MODE-4 at line 18
+// twin: MODE/MODE-4-counted-ok.hir
 fn view(x: Bytes) -> Bytes in x {
   x
 }

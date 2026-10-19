@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 7
+// expect: reject PROV-1 at line 8
+// twin: PROV/PROV-1-slots-mutation-keeps-brand.hir
 fn probe() {
   let mut s: Slots[u64] = slots.empty()
   let id = slots.insert(mut s, 10u64)

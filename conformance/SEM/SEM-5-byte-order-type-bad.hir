@@ -1,5 +1,6 @@
 // rule: SEM-5
-// expect: reject LANG-7 at line 4
+// expect: reject LANG-7 at line 5
+// twin: SEM/SEM-5-byte-order-run.hir
 fn example() -> bool {
   "a" < b"b"
 }

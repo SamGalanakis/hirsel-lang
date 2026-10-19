@@ -1,5 +1,6 @@
 // rule: PROG-2
-// expect: reject PROG-2 at line 6
+// expect: reject PROG-2 at line 7
+// twin: PROG/PROG-2-opaque-client-read-ok.hir
 type Hidden = vendor.Hidden
 
 fn probe(take h: vendor.Hidden) -> String {

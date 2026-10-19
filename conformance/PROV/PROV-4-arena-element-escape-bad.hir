@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 10
+// expect: reject PROV-4 at line 11
+// twin: PROV/PROV-4-placed-local-binding-result-ok.hir
 // "A relation that names an arena ... says x's blocks live in a or in
 // something that outlives it." "A global requirement (a result ...) cannot
 // receive arena content."

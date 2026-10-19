@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 16
+// expect: reject OWN-2 at line 17
+// twin: CLO/CLO-4-scope-body-takes-let-mut-list-run.hir
 // "Using a value after it has moved is a compile error."
 // The rejected twin of CLO-4-scope-body-takes-let-mut-list-run: the caller
 // reads the `let mut` binding the scope body took without installing a new value.

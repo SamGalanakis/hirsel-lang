@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 14
+// expect: reject CLO-4 at line 15
+// twin: CLO/CLO-4-contract6-creation-run.hir
 // A fresh callback cannot install an environment the selection never saw.
 type Mapped[T, U] {
   inner: Iter[T],

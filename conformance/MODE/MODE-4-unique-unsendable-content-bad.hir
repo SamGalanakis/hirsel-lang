@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 14
+// expect: reject MODE-4 at line 15
+// twin: MODE/MODE-4-unique-unsendable-content-ok.hir
 // "Unique values whose contents are sendable (moved)."
 type Rec {
   handle: Receiver[u64],

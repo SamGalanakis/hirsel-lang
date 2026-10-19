@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 5
+// expect: reject CLO-2 at line 6
+// twin: CLO/CLO-4-contract6-creation-run.hir
 @noalloc
 fn invoke(action: @noalloc fn() -> (), other: @noalloc fn() -> ()) -> () uses {action} {
   other()

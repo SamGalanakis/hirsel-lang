@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 5
+// expect: reject CLO-2 at line 6
+// twin: CLO/CLO-2-callback-forward-local-ok.hir
 @noalloc
 fn invoke(action: @noalloc fn(@noalloc fn() -> ()) -> (), other: @noalloc fn() -> ()) -> () uses {action} {
   action(other)

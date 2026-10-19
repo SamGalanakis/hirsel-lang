@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 6
+// expect: reject LANG-13 at line 7
+// twin: LANG/LANG-13-let-else-run.hir
 // Shows "the else block must diverge"
 @noalloc
 fn example(x: Option[u32]) -> u32 {

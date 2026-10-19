@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 13
+// expect: reject MODE-4 at line 14
+// twin: MODE/MODE-4-written-invariant-getter-ok.hir
 type Wrap[T] {
   value: T,
 }

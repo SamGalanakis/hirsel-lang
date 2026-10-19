@@ -3,20 +3,20 @@ source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
 expression: "rendered(\"MODE/MODE-1-global-store-bad.hir\")"
 ---
 error[MODE-1]: a local value cannot be stored into global storage: `src` is local to the caller, but `owned` only receives global values
- --> ../../conformance/MODE/MODE-1-global-store-bad.hir:10:3
-  10 |   owned.items = src
-     |   ^^^^^^^^^^^^^^^^^ 
- --> ../../conformance/MODE/MODE-1-global-store-bad.hir:8:28
-   8 | fn put(take dst: Rec, src: Bytes) -> Rec {
-     |                            ^^^^^ provided: `src` is a borrowed parameter; it lives in the caller's region
- --> ../../conformance/MODE/MODE-1-global-store-bad.hir:9:11
-   9 |   let mut owned = take dst
-     |           ^^^^^ required: `owned` is declared without `in owned`, so it receives only global values
  --> ../../conformance/MODE/MODE-1-global-store-bad.hir:11:3
-  11 |   take owned
+  11 |   owned.items = src
+     |   ^^^^^^^^^^^^^^^^^ 
+ --> ../../conformance/MODE/MODE-1-global-store-bad.hir:9:28
+   9 | fn put(take dst: Rec, src: Bytes) -> Rec {
+     |                            ^^^^^ provided: `src` is a borrowed parameter; it lives in the caller's region
+ --> ../../conformance/MODE/MODE-1-global-store-bad.hir:10:11
+  10 |   let mut owned = take dst
+     |           ^^^^^ required: `owned` is declared without `in owned`, so it receives only global values
+ --> ../../conformance/MODE/MODE-1-global-store-bad.hir:12:3
+  12 |   take owned
      |   ^^^^^^^^^^ this also fails here for the same cause (MODE-1)
- --> ../../conformance/MODE/MODE-1-global-store-bad.hir:8:38
-   8 | fn put(take dst: Rec, src: Bytes) -> Rec {
+ --> ../../conformance/MODE/MODE-1-global-store-bad.hir:9:38
+   9 | fn put(take dst: Rec, src: Bytes) -> Rec {
      |                                      ^^^ required: the result names no `in ..` source, so it is global (MODE-7)
   = help: 1. declare the parameter `take src` (no cost; callers write `take src`, which moves their value into this call)
   = help: 2. `unique src` (deep copy: allocates, costs O(size), and is not allowed under `@noalloc`)

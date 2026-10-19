@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 15
+// expect: reject PROV-2 at line 16
+// twin: PROV/PROV-2-wave1-user-variant-ok.hir
 type Choice[T] = Absent | Present(T)
 
 fn example(a: String, b: String, p: StrPos of a, q: StrPos of b, select: bool) -> () {

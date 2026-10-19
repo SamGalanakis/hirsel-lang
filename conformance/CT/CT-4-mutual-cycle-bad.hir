@@ -1,5 +1,6 @@
 // rule: CT-4
-// expect: reject CT-4 at line 4
+// expect: reject CT-4 at line 5
+// twin: CT/CT-2-dependent-constant.hir
 // "Compile-time evaluations depend on each other acyclically".
 const FIRST: u32 = comptime SECOND
 

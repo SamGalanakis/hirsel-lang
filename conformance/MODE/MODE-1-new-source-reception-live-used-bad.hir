@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 20
+// expect: reject MODE-1 at line 21
+// twin: MODE/MODE-1-new-source-reception-ok.hir
 type Pair {
   left: Bytes,
   right: Bytes,

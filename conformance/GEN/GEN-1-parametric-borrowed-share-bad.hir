@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 7
+// expect: reject GEN-1 at line 8
+// twin: MODE/MODE-2-parametric-borrowed-input-ok.hir
 // slots.get hands back a share of the borrowed `seen`, local to it, so pick
 // cannot return it as its global result: a checked body never turns a borrow
 // into an owned U. Twin is MODE-2-parametric-borrowed-input-ok.

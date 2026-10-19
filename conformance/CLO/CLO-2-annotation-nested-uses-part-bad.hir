@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-4 at line 17
+// expect: reject CLO-4 at line 18
+// twin: CLO/CLO-4-parameter-authority.hir
 // A written function type is preserved exactly (#58) at every depth of a
 // binding annotation. The tuple part is written `uses {}`; the part `pair`
 // returns holds `Stdout`.

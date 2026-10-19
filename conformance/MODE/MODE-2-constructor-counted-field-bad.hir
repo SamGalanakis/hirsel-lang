@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
+// expect: reject MODE-2 at line 10
+// twin: MODE/MODE-2-deep-construction-ok.hir
 type Reply {
   status: u16,
   body: String,

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-local-function-bare-local-result-ok.hir
 // A local function is named too, so its local result names its sources.
 fn probe(y: String) -> u64 {
   fn inner(x: String) -> String in env {

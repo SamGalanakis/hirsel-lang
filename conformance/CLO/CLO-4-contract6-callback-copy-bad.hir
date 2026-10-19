@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 9
+// expect: reject CLO-4 at line 10
+// twin: CLO/CLO-4-contract6-creation-run.hir
 // A shared copy changes the state's ownership evidence.
 @captures(state)
 fn build[S: copyable](take state: S) -> Iter[u64] {

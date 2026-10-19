@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 13
+// expect: reject MEM-5 at line 14
+// twin: MEM/MEM-5-destructor-field-cleanup-ok.hir
 resource type Inner {
   n: u32,
 }

@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 6
+// expect: reject GEN-1 at line 7
+// twin: GEN/GEN-1-noalloc-drop-declared-ok.hir
 fn need[T: noalloc_drop](take x: T) -> () {}
 
 fn probe[T: copyable](take x: T) {

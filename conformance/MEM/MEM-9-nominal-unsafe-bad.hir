@@ -1,5 +1,6 @@
 // rule: MEM-9
-// expect: reject MEM-9 at line 9
+// expect: reject MEM-9 at line 10
+// twin: MEM/MEM-9-unchecked-without-capability-ok.hir
 // A same-spelled user type grants no Unsafe authority.
 type Unsafe {
   n: u32,

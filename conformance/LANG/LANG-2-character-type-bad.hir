@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 4
+// expect: reject LANG-2 at line 5
+// twin: LANG/LANG-1-character-surrogate-ok.hir
 fn scalar() -> u32 {
   'a'
 }

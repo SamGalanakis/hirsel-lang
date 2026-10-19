@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 16
+// expect: reject OWN-3 at line 17
+// twin: OWN/OWN-3-last-use-capture-dead-ok.hir
 // A closure capturing storage is called after the `mut` call (OWN-3).
 fn look(x: Bytes) -> u64 {
   0

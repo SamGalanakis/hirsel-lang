@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 7
+// expect: reject GEN-1 at line 8
+// twin: GEN/GEN-1-flat-generic-proof-ok.hir
 // Plain admits raw pointers; a symbolic Flat obligation needs the written Flat bound.
 fn use_flat[T: flat](x: T) {}
 

@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 7
+// expect: reject CLO-4 at line 8
+// twin: CLO/CLO-4-erased-carrier-hidden-input-ok.hir
 // A wrapper that selects only its input cannot hide a `Net` closure in the
 // carrier it returns.
 @captures(input)

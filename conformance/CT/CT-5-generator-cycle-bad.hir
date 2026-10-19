@@ -1,5 +1,6 @@
 // rule: CT-5
-// expect: reject CT-4 at line 9
+// expect: reject CT-4 at line 10
+// twin: CT/CT-5-generator-cycle-ok.hir
 // "Generation that needs its own result is a CT-4 cycle at `e`".
 fn looping() -> Result[Body[fn(u64) -> u64 uses {}], String] {
   let _ = again(1)

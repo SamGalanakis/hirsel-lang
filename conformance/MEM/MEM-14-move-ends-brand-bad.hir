@@ -1,5 +1,6 @@
 // rule: MEM-14
-// expect: reject PROV-1 at line 9
+// expect: reject PROV-1 at line 10
+// twin: MEM/MEM-14-slots-owned-payloads.hir
 // "moving ... the container ends [identity]"; brands do not rebind to a new owner.
 fn read(take original: Slots[u64]) -> Option[u64] {
   let mut s = take original

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 4
+// expect: reject MODE-4 at line 5
+// twin: MODE/MODE-4-written-mut-failure-handback-ok.hir
 fn example(mut s: sendable String) -> u64 {
   let bytes = string.as_bytes(s)
   let len = bytes.len(bytes)

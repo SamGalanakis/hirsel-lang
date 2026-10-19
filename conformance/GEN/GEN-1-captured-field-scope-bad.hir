@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 13
+// expect: reject GEN-1 at line 14
+// twin: GEN/GEN-1-captured-field-scope-ok.hir
 type Wrap[T] {
   value: T,
 }

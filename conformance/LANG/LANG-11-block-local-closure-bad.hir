@@ -1,5 +1,6 @@
 // rule: LANG-11
-// expect: reject MODE-1 at line 14
+// expect: reject MODE-1 at line 15
+// twin: LANG/LANG-11-block-value-owned-ok.hir
 // "A block, branch or arm is transparent to its consumer's use." A scoped
 // closure borrows what it captures. One that captures a binding the block
 // declares cannot be the block's value, because `v` ends with the block.

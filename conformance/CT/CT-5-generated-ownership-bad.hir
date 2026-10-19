@@ -1,5 +1,6 @@
 // rule: CT-5
 // expect: reject OWN-1 at line 2
+// twin: CT/CT-5-generated-ownership-ok.hir
 // "the primary span is in the generated text": line 2 writes a borrowed parameter.
 type Tag {
   name: String,

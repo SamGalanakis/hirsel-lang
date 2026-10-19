@@ -1,5 +1,6 @@
 // rule: MEM-8
-// expect: reject MEM-8 at line 8
+// expect: reject MEM-8 at line 9
+// twin: MEM/MEM-8-record-lane-annotation-ok.hir
 // Section 22 limits A to integer, float or bool scalars.
 type Lane {
   value: u8,

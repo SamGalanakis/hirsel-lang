@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: SEM/SEM-4-view-return-opaque-run.hir
 fn first(s: String) -> String {
   for piece in view_return@1/view(s) {
     return piece

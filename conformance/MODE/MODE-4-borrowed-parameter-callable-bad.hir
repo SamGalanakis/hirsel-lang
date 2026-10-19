@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 10
+// expect: reject MODE-4 at line 11
+// twin: MODE/MODE-4-borrowed-parameter-callable-run.hir
 // A borrowed parameter written `sendable fn` promises what the function
 // it lends holds, as a taken one does; its locality is MODE-1's, apart.
 fn needs(g: sendable fn() -> u64) -> u64 {

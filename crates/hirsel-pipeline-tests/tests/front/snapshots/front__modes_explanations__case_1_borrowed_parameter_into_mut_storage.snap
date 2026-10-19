@@ -3,14 +3,14 @@ source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
 expression: "rendered(\"MODE/MODE-1-mut-storage-list-constructor-bad.hir\")"
 ---
 error[MODE-1]: a local value cannot be stored into global storage: `v` is local to the caller, but `slot` only receives global values
- --> ../../conformance/MODE/MODE-1-mut-storage-list-constructor-bad.hir:4:3
-   4 |   slot = [v]
+ --> ../../conformance/MODE/MODE-1-mut-storage-list-constructor-bad.hir:5:3
+   5 |   slot = [v]
      |   ^^^^^^^^^^ 
- --> ../../conformance/MODE/MODE-1-mut-storage-list-constructor-bad.hir:3:35
-   3 | fn put(mut slot: List[String], v: String) -> () {
+ --> ../../conformance/MODE/MODE-1-mut-storage-list-constructor-bad.hir:4:35
+   4 | fn put(mut slot: List[String], v: String) -> () {
      |                                   ^^^^^^ provided: `v` is a borrowed parameter; it lives in the caller's region
- --> ../../conformance/MODE/MODE-1-mut-storage-list-constructor-bad.hir:3:18
-   3 | fn put(mut slot: List[String], v: String) -> () {
+ --> ../../conformance/MODE/MODE-1-mut-storage-list-constructor-bad.hir:4:18
+   4 | fn put(mut slot: List[String], v: String) -> () {
      |                  ^^^^^^^^^^^^ required: `slot` is a `mut` parameter; its storage is the caller's and outlives this call
   = help: 1. declare the parameter `take v` (no cost; callers write `take v`, which moves their value into this call)
   = help: 2. `unique v` (deep copy: allocates, costs O(size), and is not allowed under `@noalloc`)

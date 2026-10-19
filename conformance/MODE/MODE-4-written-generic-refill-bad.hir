@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 4
+// expect: reject MODE-4 at line 5
+// twin: MODE/MODE-4-written-generic-refill-ok.hir
 fn bad[T](mut x: sendable T, take y: T) {
   x = take y
 }

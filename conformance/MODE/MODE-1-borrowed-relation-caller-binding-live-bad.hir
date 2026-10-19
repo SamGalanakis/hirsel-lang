@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 12
+// expect: reject MODE-1 at line 13
+// twin: MODE/MODE-1-borrowed-relation-caller-binding-live-ok.hir
 // Under v22 S2, the result of f(a, h) keeps the caller's binding h borrowed, so h
 // cannot be replaced while the result is live.
 fn f(a: Arena, x: Bytes in a) -> Bytes in {a, x} {

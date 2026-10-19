@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 9
+// expect: reject MEM-5 at line 10
+// twin: MEM/MEM-14-wave1-sort-callback-run.hir
 fn callback(a: u64) -> bool uses {} {
   true
 }

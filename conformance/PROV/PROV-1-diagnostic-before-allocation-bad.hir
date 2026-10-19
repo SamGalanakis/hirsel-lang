@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 9
+// expect: reject PROV-1 at line 10
+// twin: PROV/PROV-1-diagnostic-before-allocation-ok.hir
 fn inspect(d: Dir, f: File of d) -> () {
   ()
 }

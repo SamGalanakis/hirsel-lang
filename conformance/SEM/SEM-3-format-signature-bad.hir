@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 4
+// expect: reject SEM-3 at line 5
+// twin: SEM/SEM-3-format-precision-ok.hir
 // An @format function borrows its receiver; one taking it is rejected at the attribute.
 @format(point_text)
 type Point {

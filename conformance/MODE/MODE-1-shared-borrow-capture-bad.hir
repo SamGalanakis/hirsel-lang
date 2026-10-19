@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-2-shared-borrow-capture-ok.hir
 // A copy of a borrowed capture is local, as a copy of a borrowed parameter is;
 // section 23 checks MODE-1 before MODE-2.
 fn need(take x: unique String) {}

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 4
+// expect: reject MODE-1 at line 5
+// twin: MODE/MODE-1-mut-storage-list-constructor-ok.hir
 fn put(mut slot: List[String], v: String) -> () {
   slot = [v]
 }

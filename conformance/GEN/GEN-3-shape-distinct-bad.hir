@@ -1,5 +1,6 @@
 // rule: GEN-3
-// expect: reject GEN-3 at line 7
+// expect: reject GEN-3 at line 8
+// twin: GEN/GEN-3-shape-distinct-ok.hir
 // A distinct type wraps a base type; it has no record or variant shape.
 distinct type Percent(v: u8)
 

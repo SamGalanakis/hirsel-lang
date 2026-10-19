@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 19
+// expect: reject CAP-2 at line 20
+// twin: CAP/CAP-2-resource-drop-summary-ok.hir
 // "inert means the summary is empty"; summaries join held authority.
 resource type AtomicFile {
   dir: Dir,

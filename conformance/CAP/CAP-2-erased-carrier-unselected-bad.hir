@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 5
+// expect: reject CAP-2 at line 6
+// twin: CAP/CAP-2-erased-carrier-unselected-ok.hir
 // A carrier's declared summary covers its unselected fields: `dir` is not
 // selected, so a declaration without `Dir` omits its authority.
 @captures(inner)

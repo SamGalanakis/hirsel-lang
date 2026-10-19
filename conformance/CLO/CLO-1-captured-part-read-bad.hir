@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject MODE-1 at line 9
+// expect: reject MODE-1 at line 10
+// twin: CLO/CLO-1-captured-part-read-ok.hir
 // Over a borrowed r the part stays local to it and cannot be returned as global.
 type Rec {
   items: Array[u64],

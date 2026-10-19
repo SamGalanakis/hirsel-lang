@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 26
+// expect: reject MODE-1 at line 27
+// twin: MODE/MODE-2-parametric-mutex-result-run.hir
 // With R = T, a body that returns the lent Store itself would share it with
 // the mutex: the Store is the mutex's storage, so it cannot leave as a global
 // result. Twin is

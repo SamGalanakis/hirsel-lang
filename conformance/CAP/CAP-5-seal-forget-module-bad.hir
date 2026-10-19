@@ -1,5 +1,6 @@
 // rule: CAP-5
-// expect: reject DROP-4 at line 4
+// expect: reject DROP-4 at line 5
+// twin: CAP/CAP-5-seal-forget-module-ok.hir
 fn probe(take w: seal_box@1/owner.Writer) {
   forget(take w)
 }

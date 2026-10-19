@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 5
+// expect: reject OWN-1 at line 6
+// twin: MODE/MODE-1-owned-local-field-loop-reception-run.hir
 // "Borrow (default). Local and read-only for the call."
 fn example(x: Bytes) -> () {
   x = b"new"

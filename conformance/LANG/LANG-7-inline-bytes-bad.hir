@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 4
+// expect: reject LANG-7 at line 5
+// twin: SEM/SEM-3-sha256-run.hir
 pub fn example() -> String {
   std@1/hex.encode(std@1/sha256.digest(b"abc"))
 }

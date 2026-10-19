@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 10
+// expect: reject MODE-1 at line 11
+// twin: MODE/MODE-1-propagated-borrowed-error-variant-ok.hir
 // `e?` returns `Error(e)`: an error read from a Result borrowed from `data`
 // keeps that bound, so a result naming no `in ..` source cannot hold it.
 fn split(data: Bytes) -> Result[Bytes, String] in data {

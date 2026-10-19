@@ -1,5 +1,6 @@
 // rule: LANG-15
-// expect: reject LANG-15 at line 7
+// expect: reject LANG-15 at line 8
+// twin: LANG/LANG-15-borrow-binding-readonly-ok.hir
 // Shows "Binding a mut parameter gives a read-only borrow while the binding lives."
 @noalloc
 fn example(mut xs: List[u32]) -> u64 {

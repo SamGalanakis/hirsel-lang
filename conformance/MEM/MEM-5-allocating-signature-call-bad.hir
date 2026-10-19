@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 10
+// expect: reject MEM-5 at line 11
+// twin: SEM/SEM-4-contract6-noalloc-run.hir
 // "every call goes through a signature declared @noalloc".
 fn callee() -> u8 {
   1

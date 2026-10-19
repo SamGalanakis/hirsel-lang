@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 16
+// expect: reject CLO-4 at line 17
+// twin: CLO/CLO-4-contract6-field-callee-ok.hir
 // A callee preserving only a sibling field does not cover the selection.
 type State[T] {
   it: Iter[T],

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-local-result-temporary-source-arena-copy-ok.hir
 // A taken parameter's arena storage is not an arena-only argument. A result
 // holding a copy of it must name the parameter (ratified #43/#70/P2). The
 // named twin is MODE-1-local-result-temporary-source-arena-copy-ok.

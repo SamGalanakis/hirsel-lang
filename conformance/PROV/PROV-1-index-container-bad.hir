@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 15
+// expect: reject PROV-1 at line 16
+// twin: PROV/PROV-1-index-container-ok.hir
 fn make(r: List[u64]) -> Option[u8 of r] {
   None
 }

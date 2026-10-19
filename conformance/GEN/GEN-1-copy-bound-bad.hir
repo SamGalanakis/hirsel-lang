@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 5
+// expect: reject GEN-1 at line 6
+// twin: GEN/GEN-1-local-copy-result-summary.hir
 // Shows "Structural, computed from the type, no user instances."
 fn duplicate[T](x: T) -> T in x {
   copy x

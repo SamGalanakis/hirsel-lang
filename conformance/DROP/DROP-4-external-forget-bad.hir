@@ -1,5 +1,6 @@
 // rule: DROP-4
-// expect: reject DROP-4 at line 4
+// expect: reject DROP-4 at line 5
+// twin: DROP/DROP-4-external-forget-ok.hir
 fn probe(take token: resource_probe@1/owner.Token) {
   forget(take token)
 }

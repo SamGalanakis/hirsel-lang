@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 6
+// expect: reject SER-1 at line 7
+// twin: SER/SER-1-brand-use-ok.hir
 fn encode[T: serializable](x: T) {}
 
 fn example(xs: List[u64], x: u64 of xs) {

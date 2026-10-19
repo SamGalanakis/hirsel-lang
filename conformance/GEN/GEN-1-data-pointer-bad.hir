@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 10
+// expect: reject GEN-1 at line 11
+// twin: GEN/GEN-1-inert-capability-ok.hir
 @noalloc
 fn bound[T: data](x: T) -> () {
   ()

@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject MODE-2 at line 17
+// expect: reject MODE-2 at line 18
+// twin: CLO/CLO-1-captured-unique-extraction-ok.hir
 // "Captures are borrows." "Copying, sharing a part or passing as a plain mut
 // argument ends a binding's uniqueness."
 // The closure returns a share of its captured local, so its result is aliased

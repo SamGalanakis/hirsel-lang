@@ -1,5 +1,6 @@
 // rule: PROG-2
-// expect: reject PROG-2 at line 8
+// expect: reject PROG-2 at line 9
+// twin: PROG/PROG-2-opaque-client-read-ok.hir
 type Hidden = vendor.Hidden
 
 type Alias = Hidden

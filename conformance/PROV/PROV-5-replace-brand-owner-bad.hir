@@ -1,5 +1,6 @@
 // rule: PROV-5
-// expect: reject PROV-5 at line 10
+// expect: reject PROV-5 at line 11
+// twin: PROV/PROV-5-replace-brand-owner-ok.hir
 // "A field named by a sibling’s brand is neither replaced ... except together with the whole record."
 type Log {
   dir: Dir,

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 9
+// expect: reject MODE-4 at line 10
+// twin: MODE/MODE-4-written-copied-header-ok.hir
 fn dup[T: copyable](take x: T) -> T {
   copy x
 }

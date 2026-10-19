@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 11
+// expect: reject PROV-1 at line 12
+// twin: PROV/PROV-1-taken-argument-ends-brand-ok.hir
 // spec: #60
 // "A brand ends when p is ... moved." The written argument moves the owner
 // before the next argument reads the value it brands.

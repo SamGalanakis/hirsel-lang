@@ -1,5 +1,6 @@
 // rule: CAP-1
-// expect: reject CAP-1 at line 4
+// expect: reject CAP-1 at line 5
+// twin: CAP/CAP-1-net-connect-parameter-ok.hir
 pub fn probe() {
   let _ = net.connect("example.com", 80u16, Unbounded())
 }

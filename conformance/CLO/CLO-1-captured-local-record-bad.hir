@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject MODE-1 at line 19
+// expect: reject MODE-1 at line 20
+// twin: CLO/CLO-1-captured-part-read-ok.hir
 // A record built from views of a borrowed parameter is as local as they are,
 // so a closure over it returns local content, as the getter twin `get(slot)`
 // of a getter local to its argument does.

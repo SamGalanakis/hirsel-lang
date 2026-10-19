@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 6
+// expect: reject LANG-13 at line 7
+// twin: LANG/LANG-13-range-empty-ok.hir
 // A range pattern whose start exceeds its end matches nothing.
 fn digit(b: u8) -> bool {
   match b {

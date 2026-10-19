@@ -1,5 +1,6 @@
 // rule: LANG-5
-// expect: reject OWN-1 at line 6
+// expect: reject OWN-1 at line 7
+// twin: LANG/LANG-5-immutable-element-ok.hir
 // Shows "A value changes only through a visible name"
 @noalloc
 fn example(xs: Inline[u32, 1]) -> () {

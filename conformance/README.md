@@ -2,7 +2,17 @@
 
 Each `.hir` file is one case, with a `// rule:` and `// expect:` header. The
 runner discovers these files recursively and checks their canonical formatting.
-A rejected case needs an accepted twin that isolates the rule being tested.
+
+Every rejected case names an accepted twin in a `// twin: <DIR>/<file>.hir`
+header: an accepted, run or test case that pins the same boundary. One accepted
+program may serve several rejected cases. Add a new accepted file only when it
+pins a boundary no existing file pins, and say which in a `// boundary:`
+comment; its body differs from the rejected case only inside the checked
+construct. A twin that only repairs the rejected program (drops or replaces the
+checked construct) is not a new file. File names end in `-bad` (rejected, or a
+bad program that fails at run time), `-ok`, `-run` or `-fail`; the runner
+rejects a name whose suffix contradicts its `expect:` header and a `rule:`
+header that differs from the name's rule prefix.
 
 An executed case (`expect: run`, `fail`, `blocked` or `test`) runs under a
 budget of 1,000,000 interpreter steps, in ordinary and checked interpretation

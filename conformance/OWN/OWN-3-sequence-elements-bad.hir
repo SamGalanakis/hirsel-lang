@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 10
+// expect: reject OWN-3 at line 11
+// twin: OWN/OWN-3-same-name-ok.hir
 // "All elements of one sequence are one storage."
 fn both(mut a: u64, mut b: u64) -> () {
   a = 1

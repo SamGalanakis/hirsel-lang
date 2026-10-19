@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 7
+// expect: reject MODE-1 at line 8
+// twin: MODE/MODE-1-borrow-capture-function-element-call-ok.hir
 // Twin of MODE-1-borrow-capture-function-element-call-ok. A scoped function value borrows
 // its captures. Copying it out of a scoped
 // closure does not make it global, so it stays bounded by the borrow.

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 12
+// expect: reject MODE-4 at line 13
+// twin: MODE/MODE-4-std-stream-sendable-ok.hir
 fn step(mut r: Receiver[u64]) -> Option[Result[u64, ChannelError]] {
   None
 }

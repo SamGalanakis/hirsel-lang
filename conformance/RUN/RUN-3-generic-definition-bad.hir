@@ -1,5 +1,6 @@
 // rule: RUN-3
-// expect: reject RUN-3 at line 10
+// expect: reject RUN-3 at line 11
+// twin: RUN/RUN-3-entry-flows-run.hir
 // A generic definition forms no entry until code hashes cover instantiations.
 fn same[T: plain](o: T) -> Result[T, String] {
   Ok(o)

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-4 at line 11
+// expect: reject MODE-4 at line 12
+// twin: MODE/MODE-2-deep-receipt-sendable-ok.hir
 type Rec {
   items: unique List[Bytes],
 }

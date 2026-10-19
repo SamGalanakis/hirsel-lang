@@ -1,5 +1,6 @@
 // rule: CT-1
-// expect: reject CT-1 at line 5
+// expect: reject CT-1 at line 6
+// twin: CT/CT-2-closed-frame-size-run.hir
 fn inverse[n: size](xs: Inline[u8, n]) -> u64 {
   let _ = xs
   comptime (12u64 / n)

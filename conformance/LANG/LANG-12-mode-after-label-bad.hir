@@ -1,5 +1,6 @@
 // rule: LANG-12
-// expect: reject LANG-12 at line 7
+// expect: reject LANG-12 at line 8
+// twin: LANG/LANG-12-mode-after-label-ok.hir
 // Shows "must be labelled at every call; an unlabelled parameter cannot be."
 @noalloc
 fn set(into mut x: u32) -> () { x = 1 }

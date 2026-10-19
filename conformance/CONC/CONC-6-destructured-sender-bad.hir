@@ -1,5 +1,6 @@
 // rule: CONC-6
-// expect: reject CONC-6 at line 5
+// expect: reject CONC-6 at line 6
+// twin: CONC/CONC-6-destructured-sender-ok.hir
 fn a(tasks: Tasks, mut jobs: Sender[Receiver[bool]]) -> () {
   let (tx, rx): (Sender[bool], Receiver[bool]) = channel.open(tasks)
   let _ = channel.send(tasks, mut jobs, take rx)

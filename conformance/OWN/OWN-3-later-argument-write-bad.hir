@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 11
+// expect: reject OWN-3 at line 12
+// twin: OWN/OWN-3-later-argument-use-ok.hir
 // A borrowed argument is lent until the call returns. A later argument
 // cannot replace the storage it names.
 fn total(xs: List[u64], extra: ()) -> u64 {

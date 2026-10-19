@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 32
+// expect: reject PROV-1 at line 33
+// twin: PROV/PROV-1-loop-owner-replacement-ok.hir
 type Rec {
   n: u64,
   name: String,

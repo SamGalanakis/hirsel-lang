@@ -1,5 +1,6 @@
 // rule: LANG-4
-// expect: reject LANG-4 at line 4
+// expect: reject LANG-4 at line 5
+// twin: LANG/LANG-4-external-own-head-ok.hir
 fn probe() -> bool {
   vendor.value()
 }

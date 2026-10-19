@@ -1,5 +1,6 @@
 // rule: CONC-2
-// expect: reject CONC-2 at line 12
+// expect: reject CONC-2 at line 13
+// twin: CONC/CONC-2-task-set-scope-body-capture-run.hir
 // "A handle or set passed `take` to a parameter declared `Task` or `TaskSet` ... takes its
 // obligation along ... Passing one anywhere else ... leaves the obligation behind."
 // A nested scope body that takes a `let mut` task set of an outer scope consumes it,

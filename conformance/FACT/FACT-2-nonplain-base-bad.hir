@@ -1,4 +1,5 @@
 // rule: FACT-2
-// expect: reject FACT-2 at line 4
+// expect: reject FACT-2 at line 5
+// twin: FACT/FACT-2-nested-distinct-base.hir
 // "where is allowed only on a distinct type over a scalar or other plain base".
 distinct type Sized(v: String) where v == "x"

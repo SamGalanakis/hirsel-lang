@@ -1,6 +1,6 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 8
-// twin: LANG-8-inject-bytes-payload-ok.hir
+// twin: LANG/LANG-8-inject-bytes-payload-ok.hir
 // A Bytes error, as from string.from_bytes, is not nominal and needs `? Utf8`.
 type ConfigError = Utf8(Bytes) | Empty
 

@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 3
+// expect: reject GEN-1 at line 4
+// twin: GEN/GEN-1-sortedmap-declared-data-ok.hir
 type Wrapped: data {
   items: SortedMap[u32, u8],
 }

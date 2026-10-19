@@ -1,5 +1,6 @@
 // rule: FACT-1
-// expect: reject FACT-1 at line 13
+// expect: reject FACT-1 at line 14
+// twin: FACT/FACT-1-borrowed-resource-clause-run.hir
 resource type Token {
   n: u8,
 }

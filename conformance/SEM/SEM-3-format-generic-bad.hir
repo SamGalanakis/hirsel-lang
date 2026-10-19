@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 5
+// expect: reject SEM-3 at line 6
+// twin: SEM/SEM-3-format-generic-run.hir
 // A generic type's @format function is generic over the type's own parameters;
 // one formatting a single instantiation is rejected.
 @format(cell_text)

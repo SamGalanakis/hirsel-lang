@@ -1,5 +1,6 @@
 // rule: STORE-3
-// expect: reject MODE-6 at line 6
+// expect: reject MODE-6 at line 7
+// twin: STORE/STORE-3-tx-escape-ok.hir
 // A Tx cannot leave its transaction: a closure that keeps it cannot be
 // returned out of the body's helper.
 fn reader(tx: store.Tx) -> once fn() -> bool {

@@ -1,5 +1,6 @@
 // rule: CAP-5
-// expect: reject PROG-2 at line 6
+// expect: reject PROG-2 at line 7
+// twin: CAP/CAP-5-seal-client-alias-ok.hir
 pub type Alias = vendor.ReadDir
 
 pub fn probe(r: vendor.ReadDir) -> Dir {

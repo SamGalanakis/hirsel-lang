@@ -1,5 +1,6 @@
 // rule: LANG-15
-// expect: reject CLO-1 at line 8
+// expect: reject CLO-1 at line 9
+// twin: LANG/LANG-15-closure-binding-context-ok.hir
 // Shows "let y = x copies a plain value and moves any other"
 fn example() -> fn() -> u32 uses {} {
   let f = fn() -> u32 {

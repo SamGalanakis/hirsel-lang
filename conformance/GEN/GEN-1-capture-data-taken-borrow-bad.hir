@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject OWN-1 at line 5
+// expect: reject OWN-1 at line 6
+// twin: GEN/GEN-1-capture-data-borrow-run.hir
 fn probe(take text: String) -> once fn() -> u64 {
   fn length[n: size](ys: Inline[u8, n]) -> u64 {
     string.byte_len(take text) + n

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 11
+// expect: reject MODE-4 at line 12
+// twin: MODE/MODE-4-written-owned-field-share-ok.hir
 type R {
   payload: sendable Bytes,
 }

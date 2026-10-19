@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 4
+// expect: reject MODE-1 at line 5
+// twin: MODE/MODE-1-wave2-trim-accept.hir
 fn probe(s: String) -> String uses {} {
   string.trim(s)
 }

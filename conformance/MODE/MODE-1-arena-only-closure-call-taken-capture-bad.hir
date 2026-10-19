@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 15
+// expect: reject MODE-1 at line 16
+// twin: MODE/MODE-1-arena-only-closure-call-taken-capture-ok.hir
 // The ratified #43/#70/P2 clause does not let unnamed taken storage escape. A
 // closure that captures the taken parameter z shares z's storage, so its call
 // is not arena-only, and a result omitting z is MODE-1, as `copy z` is.

@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 4
+// expect: reject SER-1 at line 5
+// twin: SER/SER-1-codec-generic-decode-ok.hir
 fn use_codec[T](data: Bytes) -> Result[T, DecodeError] {
   codec.decode(data)
 }

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 4
+// expect: reject MODE-4 at line 5
+// twin: MODE/MODE-4-written-sendable-positions-run.hir
 fn bad(take x: Bytes) -> Result[sendable Bytes, ()] {
   Ok(take x)
 }

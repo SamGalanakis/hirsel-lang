@@ -1,5 +1,6 @@
 // rule: CT-3
-// expect: reject CT-3 at line 13
+// expect: reject CT-3 at line 14
+// twin: CT/CT-3-shape-variant-run.hir
 // A helper body is run-time code even when only comptime calls it.
 type Rec {
   n: u32,

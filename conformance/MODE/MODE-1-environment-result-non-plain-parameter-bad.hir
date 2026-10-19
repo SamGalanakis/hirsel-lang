@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-environment-result-non-plain-parameter-ok.hir
 // Under v22 #72, `in env` alone on a function type would drop the result's
 // dependence on its non-Plain parameter x, so x is offered as a source.
 fn apply(f: fn(x: Bytes) -> Bytes in env) -> () {

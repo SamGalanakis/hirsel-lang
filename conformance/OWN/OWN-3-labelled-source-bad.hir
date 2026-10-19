@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 7
+// expect: reject OWN-3 at line 8
+// twin: OWN/OWN-3-labelled-source-ok.hir
 fn f() {
   let mut xs: List[u64] = [1, 2]
   'outer: for x in xs {

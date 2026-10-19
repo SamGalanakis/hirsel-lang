@@ -1,5 +1,6 @@
 // rule: GEN-5
-// expect: reject GEN-5 at line 4
+// expect: reject GEN-5 at line 5
+// twin: GEN/GEN-5-generic-callable-growing-ok.hir
 fn grow[T: plain](value: T) {
   let f: fn((T, T)) uses {} = grow
   f((value, value))

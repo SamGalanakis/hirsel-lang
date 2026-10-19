@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 12
+// expect: reject MODE-2 at line 13
+// twin: MODE/MODE-2-inferred-closure-result-unique-run.hir
 // "Written/contextual result promises are not inferred." A closure literal
 // with no written result promises no uniqueness, as a named function whose
 // result type does not write `unique` promises none, even though the body

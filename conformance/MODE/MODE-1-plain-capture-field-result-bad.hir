@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 18
+// expect: reject MODE-1 at line 19
+// twin: MODE/MODE-1-plain-capture-field-result-run.hir
 // Bytes viewing a String field through a borrowed capture are local to the
 // record, unlike a plain field, so a global result cannot return them.
 resource type Cursor {

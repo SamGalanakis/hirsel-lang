@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 12
+// expect: reject MODE-1 at line 13
+// twin: MODE/MODE-1-computed-local-field-ok.hir
 type Holder {
   value: Bytes,
 }

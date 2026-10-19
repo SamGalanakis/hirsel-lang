@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject LANG-13 at line 8
+// expect: reject LANG-13 at line 9
+// twin: MODE/MODE-2-pattern-physical-wildcard-ok.hir
 type Rec {
   items: List[Bytes],
 }

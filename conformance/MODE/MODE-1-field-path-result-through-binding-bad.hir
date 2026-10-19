@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 12
+// expect: reject MODE-1 at line 13
+// twin: MODE/MODE-1-field-path-result-through-binding-ok.hir
 // v22 #77. A binding read from p.b keeps that part, so returning it under a
 // relation to p.a is outside the relation.
 type Pair {

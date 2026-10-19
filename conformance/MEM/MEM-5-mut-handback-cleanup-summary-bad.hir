@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 17
+// expect: reject MEM-5 at line 18
+// twin: MEM/MEM-5-mut-handback-cleanup-summary-run.hir
 // "Cleanup effects of erased closures ... are carried in their complete
 // value types." The unannotated literal's row proves that destroying it does
 // not allocate, while the written parameter type permits allocating cleanup.

@@ -1,5 +1,6 @@
 // rule: LANG-4
-// expect: reject LANG-4 at line 8
+// expect: reject LANG-4 at line 9
+// twin: LANG/LANG-4-qualified-variant-ok.hir
 // Shows "Variants are written bare ... and resolved through the expected type."
 type Choice = First | Last
 

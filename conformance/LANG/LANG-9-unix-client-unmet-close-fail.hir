@@ -2,8 +2,8 @@
 // expect: fail LANG-9 at line 26
 // stdout: test failure: net client 0 of /run/app.sock expected b"pong" but the program closed after writing b"po"
 // entry: trial
-// A Unix listener's client report names the listener by its socket path. The accepted
-// twin is LANG-9-unix-client-expect-met-run.
+// A Unix listener's client report names the listener by its socket path.
+// The accepted twin is LANG-9-unix-client-expect-met-run.
 fn client() -> NetClient uses {} {
   NetClient(
     from: SocketAddr(ip: V4([0u8, 0u8, 0u8, 0u8]), port: 0u16),

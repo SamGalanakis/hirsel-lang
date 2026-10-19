@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-callable-header-uniqueness-variance-run.hir
 // Only a header row itself weakens: an element's uniqueness inside a result
 // and a `mut` parameter, which the callee hands back, stay exact. The
 // accepted twin is MODE-2-callable-header-uniqueness-variance-run.hir.

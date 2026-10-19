@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 6
+// expect: reject LANG-7 at line 7
+// twin: LANG/LANG-7-label-block-closure-ok.hir
 fn f() -> u64 {
   'value: {
     let g = fn() -> u64 {

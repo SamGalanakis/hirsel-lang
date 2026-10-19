@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
+// expect: reject MODE-2 at line 10
+// twin: MODE/MODE-2-inferred-tuple-shared-part-run.hir
 // `y` still shares `x`, which the tuple holds where a parameter needs its
 // first part unique. Twin is MODE-2-inferred-tuple-shared-part-run.
 fn need(take t: (unique List[u64], List[u64])) -> () {}

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 21
+// expect: reject MODE-1 at line 22
+// twin: MODE/MODE-1-last-use-closure-view-dead-ok.hir
 // The closure capturing the view is called after the `mut` (MODE-5).
 fn look(x: Bytes) -> u64 {
   0

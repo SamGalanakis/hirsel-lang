@@ -70,13 +70,13 @@ fn std_head_diagnostics_name_versioned_candidates() {
         ("qualified-run", None, &[][..]),
         (
             "majors-bad",
-            Some(4),
+            Some(5),
             &["std@1/string/starts_with", "std@2/string/starts_with"][..],
         ),
         ("majors-ok", None, &[][..]),
         (
             "member-bad",
-            Some(4),
+            Some(5),
             &[
                 "core@1/string/unknown_member",
                 "std@1/string/unknown_member",
@@ -89,7 +89,7 @@ fn std_head_diagnostics_name_versioned_candidates() {
             &["std@1/string/byte_len", "core@1/string/byte_len"][..],
         ),
         ("duplicate-ok", None, &[][..]),
-        ("alias-core-bad", Some(4), &["probe@1/api/byte_len"][..]),
+        ("alias-core-bad", Some(5), &["probe@1/api/byte_len"][..]),
         ("alias-core-ok", None, &[][..]),
     ];
     for (suffix, line, candidates) in cases {

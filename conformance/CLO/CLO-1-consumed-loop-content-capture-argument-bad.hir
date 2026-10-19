@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject MODE-1 at line 26
+// expect: reject MODE-1 at line 27
+// twin: CLO/CLO-1-consumed-loop-content-capture-nested-run.hir
 // A closure over consumed loop content that views a borrowed parameter
 // returns local content. Its rows say so where it is bound and called, but a
 // parameter of function type promises a global result, so the closure cannot

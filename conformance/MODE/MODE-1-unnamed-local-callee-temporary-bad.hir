@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 18
+// expect: reject MODE-1 at line 19
+// twin: MODE/MODE-1-temporary-source-ok.hir
 // The callee's result is local to its argument. The moved local token is a
 // temporary of this function, so the result cannot be returned as local to
 // the parameter it was moved from.

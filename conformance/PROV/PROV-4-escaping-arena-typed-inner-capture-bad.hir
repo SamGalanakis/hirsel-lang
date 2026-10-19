@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 7
+// expect: reject PROV-4 at line 8
+// twin: PROV/PROV-4-escaping-heap-typed-inner-capture-ok.hir
 // A closure typed global by its binding escapes at its own literal, before the returned closure captures it.
 fn probe(a: Arena) -> fn() -> u64 {
   let x: String in a = "x"

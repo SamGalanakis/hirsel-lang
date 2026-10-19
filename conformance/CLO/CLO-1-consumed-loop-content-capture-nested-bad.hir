@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject MODE-1 at line 21
+// expect: reject MODE-1 at line 22
+// twin: CLO/CLO-1-consumed-loop-content-capture-nested-run.hir
 // A closure that returns the result of a captured closure local to its
 // environment returns content local to the same environment, which a take
 // parameter cannot keep. The accepted twin uses that result in place.

@@ -1,5 +1,6 @@
 // rule: LANG-11
-// expect: reject LANG-11 at line 7
+// expect: reject LANG-11 at line 8
+// twin: LANG/LANG-11-closure-return-runtime.hir
 // Shows "A block’s value is its final expression."
 @noalloc
 fn example(x: u32) -> u32 {

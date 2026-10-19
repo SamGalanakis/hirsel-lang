@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 15
+// expect: reject SEM-3 at line 16
+// twin: SEM/SEM-3-format-precision-ok.hir
 // Precision does not apply to a @format type's text.
 @format(point_text)
 type Point {

@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 6
+// expect: reject LANG-7 at line 7
+// twin: LANG/LANG-12-bare-construction-empty-alias-ok.hir
 type R = (u8, u8)
 
 fn probe() {

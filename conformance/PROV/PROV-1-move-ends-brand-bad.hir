@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 19
+// expect: reject PROV-1 at line 20
+// twin: PROV/PROV-1-move-ends-brand-ok.hir
 // "A brand ends when p is ... moved."
 fn first(s: String) -> Option[StrPos of s] {
   for p in string.positions(s) {

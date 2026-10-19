@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject MEM-5 at line 6
+// expect: reject MEM-5 at line 7
+// twin: MEM/MEM-11-freeze-allocation-ok.hir
 // "Freeze and thaw each walk the value and are allocation sites".
 @noalloc
 fn operation(take x: unique String) -> Shared[String] {

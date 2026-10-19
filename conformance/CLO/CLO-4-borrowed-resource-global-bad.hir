@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 15
+// expect: reject CLO-4 at line 16
+// twin: CLO/CLO-4-stored-borrowed-capture-ok.hir
 resource type Token {
   n: u64,
 }

@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 29
+// expect: reject CLO-4 at line 30
+// twin: CLO/CLO-4-erased-carrier-write-ok.hir
 // Inside its owner, a write into a carrier's selected field stays within the
 // authority the carrier carries, so it cannot install an iterator holding
 // `Stdout` into a pure carrier.

@@ -1,5 +1,6 @@
 // rule: MEM-14
-// expect: reject MEM-14 at line 8
+// expect: reject MEM-14 at line 9
+// twin: MEM/MEM-14-contract6-local-callable-ok.hir
 // The literal receives the contextual promise and its body must prove it.
 fn build() {
   let step: @advance_only(it) fn(mut it: Iter[u64], take other: Iter[u64]) -> Option[

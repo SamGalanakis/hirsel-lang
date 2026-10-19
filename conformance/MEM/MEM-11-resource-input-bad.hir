@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject MEM-11 at line 10
+// expect: reject MEM-11 at line 11
+// twin: MEM/MEM-11-aggregate-record-tuple-ok.hir
 // "for T inert and holding no resources".
 resource type Token {
   n: u8,

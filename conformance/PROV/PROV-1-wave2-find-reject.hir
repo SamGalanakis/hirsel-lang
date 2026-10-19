@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 6
+// expect: reject PROV-1 at line 7
+// twin: PROV/PROV-1-wave2-find-accept.hir
 fn probe(s: String, other: String) -> () {
   match string.find(s, "é") {
     Some(p) => {

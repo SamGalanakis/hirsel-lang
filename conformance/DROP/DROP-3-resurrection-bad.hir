@@ -1,5 +1,6 @@
 // rule: DROP-3
-// expect: reject DROP-3 at line 8
+// expect: reject DROP-3 at line 9
+// twin: OWN/OWN-8-physical-finalizer-projection-ok.hir
 // "cannot resurrect the value".
 resource type Value {
   n: u8,

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 6
+// expect: reject MODE-4 at line 7
+// twin: MODE/MODE-4-written-input-variance-ok.hir
 fn restricted(take x: sendable Bytes) {}
 
 fn bad() {

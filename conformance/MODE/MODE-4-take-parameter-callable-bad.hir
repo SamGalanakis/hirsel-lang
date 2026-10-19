@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 12
+// expect: reject MODE-4 at line 13
+// twin: MODE/MODE-4-take-parameter-callable-run.hir
 // A parameter written `sendable fn` receives only a function value that
 // may cross tasks, whatever its passing mode. A taken parameter whose type
 // does not state `sendable` promises nothing of the kind, so it cannot be

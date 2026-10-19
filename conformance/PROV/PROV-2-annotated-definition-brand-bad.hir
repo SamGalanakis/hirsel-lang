@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 9
+// expect: reject PROV-2 at line 10
+// twin: PROV/PROV-2-annotated-definition-brand-ok.hir
 // The written brand still cannot certify an unbranded initializer.
 fn other() -> unique SortedMap[u32, u8] uses {} {
   sorted_map.empty(u32.order)

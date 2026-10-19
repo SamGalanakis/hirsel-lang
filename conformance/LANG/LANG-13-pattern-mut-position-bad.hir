@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 4
+// expect: reject LANG-13 at line 5
+// twin: LANG/LANG-13-pattern-mut-position-ok.hir
 fn probe() {
   let (mut stream, _) = (1u64, 2u64)
   stream += 1

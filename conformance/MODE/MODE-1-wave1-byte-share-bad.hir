@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-last-use-view-dead-before-mut-ok.hir
 fn example(mut s: String) -> u64 {
   let bytes = string.as_bytes(s)
   s = "changed"

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 18
+// expect: reject MODE-1 at line 19
+// twin: MODE/MODE-1-physical-pattern-local-destructure-ok.hir
 type Pair {
   left: Bytes,
   right: Bytes,

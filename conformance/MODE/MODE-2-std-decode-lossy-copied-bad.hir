@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 6
+// expect: reject MODE-2 at line 7
+// twin: MODE/MODE-2-std-decode-lossy-unique-ok.hir
 fn decoded(data: Bytes) -> unique String uses {} {
   let text = utf8.decode_lossy(data)
   let kept = copy text

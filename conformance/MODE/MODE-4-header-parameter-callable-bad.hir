@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 11
+// expect: reject MODE-4 at line 12
+// twin: MODE/MODE-4-header-parameter-callable-run.hir
 // A callable's crossing mode is part of its type and is read in the
 // direction of each edge. A function that requires a sendable argument
 // cannot stand where callers may hand it any function.

@@ -1,5 +1,6 @@
 // rule: CT-5
 // expect: reject LANG-4 at line 3
+// twin: CT/CT-5-std-derive-nested-run.hir
 // A field of another record type calls that type's deriver, named from its declared
 // name (`item_to_json` for Item) and resolved in the declaring module; with none
 // declared, the generated call is an unresolved name in the generated text.

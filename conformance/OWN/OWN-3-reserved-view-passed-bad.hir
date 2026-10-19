@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 16
+// expect: reject OWN-3 at line 17
+// twin: LANG/LANG-3-reserved-view-last-use-run.hir
 // The view is passed into the callee itself, so it is in use when the callee
 // is entered and takes the exclusive loan. The accepted twin is
 // LANG-3-reserved-view-last-use-run.

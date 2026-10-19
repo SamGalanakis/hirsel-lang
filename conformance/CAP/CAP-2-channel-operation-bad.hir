@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 8
+// expect: reject CAP-2 at line 9
+// twin: CAP/CAP-2-channel-operation-ok.hir
 // "Resources and handles ... give callers no authority"; operations take a capability.
 fn operation(tasks: Tasks, mut s: Sender[u32], take value: u32) -> Result[
   (),

@@ -1,5 +1,6 @@
 // rule: CAP-5
-// expect: reject PROG-2 at line 4
+// expect: reject PROG-2 at line 5
+// twin: CAP/CAP-5-seal-owner-version-ok.hir
 pub fn probe(r: vendor.ReadDir) -> Dir {
   r.d
 }

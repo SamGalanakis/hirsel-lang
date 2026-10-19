@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 10
+// expect: reject MODE-4 at line 11
+// twin: MODE/MODE-4-written-slots-instantiated-result-ok.hir
 // An owned share of a counted element has no crossing evidence.
 fn cross(take x: sendable Option[Bytes]) {}
 

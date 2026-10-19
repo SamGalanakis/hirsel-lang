@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 3
+// expect: reject SER-1 at line 4
+// twin: SER/SER-1-closure-field-ok.hir
 @serializable
 pub opaque type Domain: plain + inert uses {} {
   n: u64,

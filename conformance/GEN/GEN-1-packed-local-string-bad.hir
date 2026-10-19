@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 8
+// expect: reject GEN-1 at line 9
+// twin: GEN/GEN-1-packed-local-string-ok.hir
 // Packed[T] requires T to be Flat wherever the type is written, a local annotation
 // included, and a counted String payload is not flat (MEM-12).
 type Named = Word(text: String) | Pair(a: String, b: u64)

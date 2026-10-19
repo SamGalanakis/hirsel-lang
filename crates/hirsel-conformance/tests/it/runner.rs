@@ -70,23 +70,23 @@ fn failure(id: &str, line: usize) -> End {
 
 #[test]
 fn reject_verdict_needs_the_first_errors_rule_and_exact_line() {
-    let expect = header(include_str!("../fixtures/conformance/OWN/reject.hir"))
+    let expect = header(include_str!("../fixtures/conformance/OWN/OWN-6-reject.hir"))
         .unwrap()
         .expect;
     let at = |id: &str, line| Actual::Rejected {
         rule: rule(id),
         line,
     };
-    assert!(expect.matches(&at("OWN-6", 3)));
+    assert!(expect.matches(&at("OWN-6", 4)));
     for actual in [
-        at("OWN-6", 2),
-        at("OWN-7", 3),
+        at("OWN-6", 3),
+        at("OWN-7", 4),
         Actual::Accepted,
         ran(End::Exit(0), ""),
     ] {
         assert!(!expect.matches(&actual), "{actual:?}");
     }
-    let accept = header(include_str!("../fixtures/conformance/OWN/accept.hir"))
+    let accept = header(include_str!("../fixtures/conformance/OWN/OWN-6-accept.hir"))
         .unwrap()
         .expect;
     assert!(accept.matches(&Actual::Accepted));
@@ -95,9 +95,11 @@ fn reject_verdict_needs_the_first_errors_rule_and_exact_line() {
 }
 #[test]
 fn run_verdict_needs_literal_stdout_and_exit() {
-    let expect = header(include_str!("../fixtures/conformance/OWN/nested/run.hir"))
-        .unwrap()
-        .expect;
+    let expect = header(include_str!(
+        "../fixtures/conformance/OWN/nested/OWN-6-run.hir"
+    ))
+    .unwrap()
+    .expect;
     assert_eq!(
         expect,
         Expect::Run {
@@ -128,7 +130,7 @@ fn run_verdict_needs_literal_stdout_and_exit() {
 }
 #[test]
 fn fail_verdict_matches_rule_line_and_stdout_only_when_present() {
-    let expect = header(include_str!("../fixtures/conformance/OWN/fail.hir"))
+    let expect = header(include_str!("../fixtures/conformance/OWN/OWN-6-fail.hir"))
         .unwrap()
         .expect;
     assert!(expect.matches(&ran(failure("OWN-7", 3), "unchecked output")));
@@ -376,6 +378,14 @@ fn malformed_headers_name_the_file_and_problem() {
             "// rule: OWN-6\nfn f() {}\n// expect: accept\n",
             "after source",
         ),
+        (
+            "// rule: OWN-6\n// expect: reject OWN-6 at line 3\n// twin: OWN/../OWN-6-ok.hir\n",
+            "twin must name",
+        ),
+        (
+            "// rule: OWN-6\n// expect: reject OWN-6 at line 3\n// twin: OWN/a-ok.hir\n// twin: OWN/b-ok.hir\n",
+            "duplicate twin",
+        ),
     ] {
         let error = header(source).unwrap_err();
         assert!(
@@ -433,11 +443,13 @@ fn errors_with(report: &hirsel_conformance::Report, text: &str) -> Vec<String> {
 #[test]
 fn an_unlisted_failing_file_fails_its_shard() {
     let root = Fixture::new();
-    let path = "conformance/OWN/reject.hir";
+    let path = "conformance/OWN/OWN-6-reject.hir";
     for status in [Status::NotImplemented, Status::Fail("new".into())] {
-        let driver = Statuses(vec![("reject.hir", status.clone())]);
+        let driver = Statuses(vec![("OWN-6-reject.hir", status.clone())]);
         let owners: Vec<_> = (1..=3)
-            .map(|index| run_suite_shard(&root.0, &driver, Some(Shard { index, count: 3 })).unwrap())
+            .map(|index| {
+                run_suite_shard(&root.0, &driver, Some(Shard { index, count: 3 })).unwrap()
+            })
             .filter(|report| !report.success())
             .collect();
         assert_eq!(owners.len(), 1);
@@ -450,9 +462,9 @@ fn an_unlisted_failing_file_fails_its_shard() {
 #[test]
 fn a_pending_failing_file_is_reported_with_its_reason_and_does_not_fail() {
     let root = Fixture::new();
-    let path = "conformance/OWN/reject.hir";
+    let path = "conformance/OWN/OWN-6-reject.hir";
     pending(&root, &format!("{path} # needs the M2 runtime\n"));
-    let report = run_suite(&root.0, &failing("reject.hir")).unwrap();
+    let report = run_suite(&root.0, &failing("OWN-6-reject.hir")).unwrap();
     assert!(report.success(), "{:?}", report.errors);
     assert_eq!(report.counts.failing, 1);
     assert_eq!(report.in_gate.failing, 0);
@@ -470,12 +482,14 @@ fn a_pending_failing_file_is_reported_with_its_reason_and_does_not_fail() {
 #[test]
 fn a_pending_passing_file_fails() {
     let root = Fixture::new();
-    let path = "conformance/OWN/reject.hir";
+    let path = "conformance/OWN/OWN-6-reject.hir";
     pending(&root, &format!("{path} # needs the M2 runtime\n"));
     let report = run_suite(&root.0, &passing()).unwrap();
     assert_eq!(
         report.errors,
-        [format!("{path}: passes; remove it from conformance/pending.txt")]
+        [format!(
+            "{path}: passes; remove it from conformance/pending.txt"
+        )]
     );
 }
 #[test]
@@ -502,8 +516,8 @@ fn a_pending_missing_path_fails_the_shard_that_owns_it() {
 #[test]
 fn every_pending_line_is_a_sorted_unique_path_with_a_reason() {
     let root = Fixture::new();
-    let a = "conformance/OWN/fail.hir";
-    let b = "conformance/OWN/reject.hir";
+    let a = "conformance/OWN/OWN-6-fail.hir";
+    let b = "conformance/OWN/OWN-6-reject.hir";
     for malformed in [
         format!("{a}\n"),
         format!("{a} # \n"),
@@ -511,12 +525,12 @@ fn every_pending_line_is_a_sorted_unique_path_with_a_reason() {
         format!("{b} # x\n{a} # y\n"),
         format!("{a} # x\n{a} # y\n"),
         "conformance/../escape.hir # x\n".into(),
-        "OWN/fail.hir # x\n".into(),
+        "OWN/OWN-6-fail.hir # x\n".into(),
         "\n".into(),
     ] {
         pending(&root, &malformed);
         assert!(
-            run_suite(&root.0, &failing("fail.hir"))
+            run_suite(&root.0, &failing("OWN-6-fail.hir"))
                 .unwrap_err()
                 .starts_with("conformance/pending.txt: "),
             "{malformed:?}"
@@ -524,8 +538,8 @@ fn every_pending_line_is_a_sorted_unique_path_with_a_reason() {
     }
     pending(&root, &format!("{a} # x\n{b} # y\n"));
     let driver = Statuses(vec![
-        ("fail.hir", Status::Fail("x".into())),
-        ("reject.hir", Status::NotImplemented),
+        ("OWN-6-fail.hir", Status::Fail("x".into())),
+        ("OWN-6-reject.hir", Status::NotImplemented),
     ]);
     assert!(run_suite(&root.0, &driver).unwrap().success());
     fs::remove_file(root.0.join("conformance/pending.txt")).unwrap();
@@ -586,10 +600,10 @@ impl Fixture {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         for file in [
             "docs/spec/ownership.md",
-            "conformance/OWN/accept.hir",
-            "conformance/OWN/reject.hir",
-            "conformance/OWN/fail.hir",
-            "conformance/OWN/nested/run.hir",
+            "conformance/OWN/OWN-6-accept.hir",
+            "conformance/OWN/OWN-6-reject.hir",
+            "conformance/OWN/OWN-6-fail.hir",
+            "conformance/OWN/nested/OWN-6-run.hir",
         ] {
             // A fresh file: the tests edit the copies, whatever the fixtures' modes.
             fs::write(root.join(file), fs::read(fixtures.join(file)).unwrap()).unwrap();
@@ -623,9 +637,9 @@ fn suite_discovers_nested_files_and_fails_every_unpassed_in_gate_file() {
     assert_eq!(
         unpassed,
         [
-            "conformance/OWN/fail.hir",
-            "conformance/OWN/nested/run.hir",
-            "conformance/OWN/reject.hir"
+            "conformance/OWN/OWN-6-fail.hir",
+            "conformance/OWN/OWN-6-reject.hir",
+            "conformance/OWN/nested/OWN-6-run.hir"
         ],
         "{:?}",
         report.errors
@@ -637,6 +651,65 @@ fn suite_discovers_nested_files_and_fails_every_unpassed_in_gate_file() {
     )
     .unwrap();
     assert!(!run_suite(&root.0, &passing()).unwrap().success());
+}
+#[test]
+fn names_rules_and_twins_must_agree_with_their_headers() {
+    // The fixture's rejected case names its accepted twin.
+    assert!(run_suite(&Fixture::new().0, &passing()).unwrap().success());
+    let accept = "// rule: OWN-6\n// expect: accept\nfn f() {}\n";
+    let reject = |twin: &str| {
+        format!("// rule: OWN-6\n// expect: reject OWN-6 at line 4\n// twin: {twin}\nfn f() {{}}\n")
+    };
+    for (file, source, message) in [
+        (
+            "OWN-6-accepted-bad.hir",
+            accept.to_owned(),
+            "needs expect: reject or fail",
+        ),
+        (
+            "OWN-6-rejected-ok.hir",
+            reject("OWN/OWN-6-accept.hir"),
+            "cannot expect reject",
+        ),
+        (
+            "OWN-7-misnamed-bad.hir",
+            reject("OWN/OWN-6-accept.hir"),
+            "differs from the name's rule prefix",
+        ),
+        (
+            "OWN-6-untwinned-bad.hir",
+            "// rule: OWN-6\n// expect: reject OWN-6 at line 3\nfn f() {}\n".to_owned(),
+            "needs a twin: header",
+        ),
+        (
+            "OWN-6-twin-rejected-bad.hir",
+            reject("OWN/OWN-6-reject.hir"),
+            "is not an accepted, run or test case",
+        ),
+        (
+            "OWN-6-twin-missing-bad.hir",
+            reject("OWN/OWN-6-absent-ok.hir"),
+            "names no corpus case",
+        ),
+        (
+            "OWN-6-twinned-ok.hir",
+            "// rule: OWN-6\n// expect: accept\n// twin: OWN/OWN-6-accept.hir\nfn f() {}\n"
+                .to_owned(),
+            "twin is only valid for expect: reject",
+        ),
+    ] {
+        let root = Fixture::new();
+        let path = format!("conformance/OWN/{file}");
+        fs::write(root.0.join(&path), source).unwrap();
+        let report = run_suite(&root.0, &passing()).unwrap();
+        assert!(
+            report.errors.len() == 1
+                && report.errors[0].starts_with(&format!("{path}: "))
+                && report.errors[0].contains(message),
+            "{file}: {:?}",
+            report.errors
+        );
+    }
 }
 #[test]
 fn binary_json_and_exit_status_follow_validation_and_the_gate() {
@@ -652,7 +725,7 @@ fn binary_json_and_exit_status_follow_validation_and_the_gate() {
     let pending = root.0.join("conformance/pending.txt");
     fs::write(
         &pending,
-        "conformance/OWN/fail.hir # M2\nconformance/OWN/nested/run.hir # M2\nconformance/OWN/reject.hir # M2\n",
+        "conformance/OWN/OWN-6-fail.hir # M2\nconformance/OWN/OWN-6-reject.hir # M2\nconformance/OWN/nested/OWN-6-run.hir # M2\n",
     )
     .unwrap();
     let output = run();
@@ -672,7 +745,7 @@ fn binary_json_and_exit_status_follow_validation_and_the_gate() {
     // Back in the gate, an unlisted file that does not pass fails the run.
     fs::write(
         &pending,
-        "conformance/OWN/fail.hir # M2\nconformance/OWN/nested/run.hir # M2\n",
+        "conformance/OWN/OWN-6-fail.hir # M2\nconformance/OWN/nested/OWN-6-run.hir # M2\n",
     )
     .unwrap();
     let output = run();
@@ -683,7 +756,7 @@ fn binary_json_and_exit_status_follow_validation_and_the_gate() {
         json["errors"][0]
             .as_str()
             .unwrap()
-            .starts_with("conformance/OWN/reject.hir: an in-gate file must pass, got Fail(")
+            .starts_with("conformance/OWN/OWN-6-reject.hir: an in-gate file must pass, got Fail(")
     );
     fs::write(
         root.0.join("conformance/OWN/invalid.hir"),
@@ -705,10 +778,10 @@ fn gate_exclusions_are_an_offline_union_of_pending_and_open_spec_issues() {
     let root = Fixture::new();
     fs::write(
         root.0.join("conformance/pending.txt"),
-        "conformance/OWN/accept.hir # M2\n",
+        "conformance/OWN/OWN-6-accept.hir # M2\n",
     )
     .unwrap();
-    let accept = root.0.join("conformance/OWN/accept.hir");
+    let accept = root.0.join("conformance/OWN/OWN-6-accept.hir");
     let source = fs::read_to_string(&accept).unwrap();
     // Open issues overlap the pending line; the closed #5 marker must add no exclusion.
     fs::write(
@@ -717,14 +790,17 @@ fn gate_exclusions_are_an_offline_union_of_pending_and_open_spec_issues() {
     )
     .unwrap();
     // Out of the gate, a file may fail.
-    let report = run_suite(&root.0, &failing("accept.hir")).unwrap();
+    let report = run_suite(&root.0, &failing("OWN-6-accept.hir")).unwrap();
     assert!(report.success(), "{:?}", report.errors);
     assert_eq!(report.counts.failing, 1);
     assert_eq!(report.counts.validated, 4);
     assert_eq!(report.in_gate.validated, 3);
-    assert_eq!(report.exclusions["conformance/OWN/accept.hir"].len(), 3);
+    assert_eq!(
+        report.exclusions["conformance/OWN/OWN-6-accept.hir"].len(),
+        3
+    );
     assert!(
-        !report.exclusions["conformance/OWN/accept.hir"]
+        !report.exclusions["conformance/OWN/OWN-6-accept.hir"]
             .iter()
             .any(|reason| reason == "open spec issue #5")
     );
@@ -733,7 +809,7 @@ fn gate_exclusions_are_an_offline_union_of_pending_and_open_spec_issues() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|v| v["path"] == "conformance/OWN/accept.hir")
+        .find(|v| v["path"] == "conformance/OWN/OWN-6-accept.hir")
         .unwrap();
     assert_eq!(json["unchecked"], 0);
     assert_eq!(case["unchecked"], 0);
@@ -741,16 +817,19 @@ fn gate_exclusions_are_an_offline_union_of_pending_and_open_spec_issues() {
     assert_eq!(case["exclusions"].as_array().unwrap().len(), 3);
     // Only a pending line leaves the gate; open spec issues alone keep it out too.
     fs::write(root.0.join("conformance/pending.txt"), "").unwrap();
-    let report = run_suite(&root.0, &failing("accept.hir")).unwrap();
+    let report = run_suite(&root.0, &failing("OWN-6-accept.hir")).unwrap();
     assert!(report.success(), "{:?}", report.errors);
-    assert_eq!(report.exclusions["conformance/OWN/accept.hir"].len(), 2);
+    assert_eq!(
+        report.exclusions["conformance/OWN/OWN-6-accept.hir"].len(),
+        2
+    );
 }
 
 #[test]
 fn path_selection_runs_only_matches_and_gates_them() {
     use hirsel_conformance::{Selection, run_suite_selected};
     let root = Fixture::new();
-    let paths = ["conformance/OWN/accept.hir".to_owned()];
+    let paths = ["conformance/OWN/OWN-6-accept.hir".to_owned()];
     let selection = Selection {
         shard: None,
         paths: &paths,
@@ -772,7 +851,7 @@ fn path_selection_runs_only_matches_and_gates_them() {
         .unwrap_err()
         .contains("selected no corpus files")
     );
-    let report = run_suite_selected(&root.0, &failing("accept.hir"), selection).unwrap();
+    let report = run_suite_selected(&root.0, &failing("OWN-6-accept.hir"), selection).unwrap();
     assert_eq!(report.counts.failing, 1);
     assert!(
         report
@@ -786,7 +865,7 @@ fn path_selection_runs_only_matches_and_gates_them() {
         .unwrap();
     assert!(report.errors.is_empty(), "{:?}", report.errors);
     fs::write(
-        root.0.join("conformance/OWN/reject.hir"),
+        root.0.join("conformance/OWN/OWN-6-reject.hir"),
         "malformed unrelated source",
     )
     .unwrap();
@@ -853,12 +932,12 @@ fn a_run_past_the_memory_limit_ends_the_runner_with_the_guard_message() {
 fn path_selection_requires_expected_outcomes() {
     use hirsel_conformance::{Selection, run_suite_selected};
     let root = Fixture::new();
-    let paths = ["conformance/OWN/accept.hir".to_owned()];
+    let paths = ["conformance/OWN/OWN-6-accept.hir".to_owned()];
     let selection = Selection {
         shard: None,
         paths: &paths,
     };
-    let report = run_suite_selected(&root.0, &failing("accept.hir"), selection).unwrap();
+    let report = run_suite_selected(&root.0, &failing("OWN-6-accept.hir"), selection).unwrap();
     assert_eq!(report.counts.failing, 1);
     assert!(
         !report.success(),

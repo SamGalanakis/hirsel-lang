@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 13
+// expect: reject MODE-4 at line 14
+// twin: MODE/MODE-4-written-agreement-third-mut-projected-content-ok.hir
 type Rec {
   items: Array[Bytes],
 }

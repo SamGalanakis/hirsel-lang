@@ -1,5 +1,6 @@
 // rule: RUN-3
-// expect: reject RUN-3 at line 13
+// expect: reject RUN-3 at line 14
+// twin: RUN/RUN-3-entry-flows-run.hir
 // A closure is not an entry: only a top-level definition's name forms one.
 // runners: [{"name":"pool","provider":"local.threads@1","grants":null,"definitions":null}]
 fn price(o: u64) -> Result[u64, String] {

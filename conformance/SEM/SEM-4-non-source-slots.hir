@@ -1,5 +1,6 @@
 // rule: SEM-4
-// expect: reject SEM-4 at line 4
+// expect: reject SEM-4 at line 5
+// twin: SEM/SEM-4-borrowed-grapheme-alias-continue.hir
 fn probe(xs: Slots[u64]) {
   for x in xs {
     let _ = x

@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 7
+// expect: reject SER-1 at line 8
+// twin: SER/SER-1-resource-field-ok.hir
 resource type Token {
   n: u64,
 }

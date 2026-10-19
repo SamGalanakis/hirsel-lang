@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 11
+// expect: reject GEN-1 at line 12
+// twin: GEN/GEN-1-flat-pointer-record-ok.hir
 // MEM-12 excludes pointers even when ordinary representation is Plain.
 type Record {
   value: Ptr[u8],

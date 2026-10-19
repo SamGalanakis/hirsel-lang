@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 7
+// expect: reject PROV-1 at line 8
+// twin: PROV/PROV-1-wave1-inactive-closure-ok.hir
 fn example(mut source: String, p: StrPos of source) -> () {
   let option: Option[StrPos of source] = Some(p)
   source = "changed"

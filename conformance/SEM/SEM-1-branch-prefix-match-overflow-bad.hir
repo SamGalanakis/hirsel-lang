@@ -1,5 +1,6 @@
 // rule: SEM-1
-// expect: reject SEM-1 at line 6
+// expect: reject SEM-1 at line 7
+// twin: LANG/LANG-2-branch-prefix-guard-bottom-ok.hir
 fn probe(b: bool) {
   let x = match b {
     true => 1u8,

@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 5
+// expect: reject CLO-4 at line 6
+// twin: CLO/CLO-4-erased-carrier-selector-ok.hir
 // A sealed capability's authority is its own nominal term, so it cannot also
 // carry per-value erased evidence.
 @captures(inner)

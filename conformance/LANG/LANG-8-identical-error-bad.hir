@@ -1,5 +1,6 @@
 // rule: LANG-8
-// expect: reject LANG-8 at line 15
+// expect: reject LANG-8 at line 16
+// twin: LANG/LANG-8-mapping-arity-ok.hir
 // Shows "plain e? propagates an identical error unchanged; otherwise it injects through an arm."
 type Inner = Missing()
 

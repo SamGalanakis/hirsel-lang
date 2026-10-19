@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 16
+// expect: reject PROV-1 at line 17
+// twin: PROV/PROV-1-consumed-named-owner-result-ok.hir
 // spec: #60
 // "A brand ends when p is ... moved." The written take moves the named owner
 // into the call, so the result it brands has no owner when the call returns.

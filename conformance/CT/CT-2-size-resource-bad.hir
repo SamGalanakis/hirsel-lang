@@ -1,5 +1,6 @@
 // rule: CT-2
-// expect: reject CT-2 at line 12
+// expect: reject CT-2 at line 13
+// twin: CT/CT-2-size-resource-ok.hir
 resource type Token {
   value: u64,
 }

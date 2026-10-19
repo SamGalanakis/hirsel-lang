@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 33
+// expect: reject CLO-4 at line 34
+// twin: CLO/CLO-4-erased-carrier-part-handback-ok.hir
 // Inside its owner, a carrier's selected field comes back from a `mut` call
 // within the authority the carrier carries, so `reset`, which may install an
 // iterator holding `Stdout`, cannot receive it.

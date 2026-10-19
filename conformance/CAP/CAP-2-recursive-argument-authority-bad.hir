@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 8
+// expect: reject CAP-2 at line 9
+// twin: CAP/CAP-2-recursive-argument-authority-ok.hir
 type Tree[T] = Leaf(value: T) | Node(child: box Tree[Dir])
 
 fn need[T: inert](x: T) {}

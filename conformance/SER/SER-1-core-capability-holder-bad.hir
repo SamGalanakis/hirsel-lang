@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 7
+// expect: reject SER-1 at line 8
+// twin: SER/SER-1-core-capability-holder-ok.hir
 // A core record that holds a capability stays outside every serializable schema.
 fn encode[T: serializable](x: T) {}
 

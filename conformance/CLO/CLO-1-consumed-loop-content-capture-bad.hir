@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject MODE-1 at line 18
+// expect: reject MODE-1 at line 19
+// twin: CLO/CLO-1-consumed-loop-content-capture-nested-run.hir
 // Consumed loop content that views a borrowed parameter is local, so a
 // closure over it returns local content that a take parameter cannot keep,
 // as the getter twin `get(v)` of a getter local to its argument cannot.

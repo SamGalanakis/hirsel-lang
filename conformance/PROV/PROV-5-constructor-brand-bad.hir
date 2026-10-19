@@ -1,5 +1,6 @@
 // rule: PROV-5
-// expect: reject PROV-5 at line 10
+// expect: reject PROV-5 at line 11
+// twin: PROV/PROV-5-constructor-brand-ok.hir
 // "Must be of the expression supplied for f in the same constructor."
 type Log {
   dir: Dir,

@@ -1,5 +1,6 @@
 // rule: CLO-3
-// expect: reject CLO-3 at line 10
+// expect: reject CLO-3 at line 11
+// twin: CLO/CLO-3-scoped-shared-root-copy.hir
 // "It captures sendable values ... by copy or take."
 fn example(tasks: Tasks, take x: Bytes) -> () {
   task.scope(

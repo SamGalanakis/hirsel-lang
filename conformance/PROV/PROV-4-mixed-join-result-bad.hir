@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 12
+// expect: reject PROV-4 at line 13
+// twin: PROV/PROV-4-mixed-join-result-ok.hir
 // A join that lost an arena placement is as local as every source. The taken
 // arena value lends from nothing the result names, so the join ends with the
 // function and cannot be its result.

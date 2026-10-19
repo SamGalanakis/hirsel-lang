@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 31
+// expect: reject PROV-1 at line 32
+// twin: PROV/PROV-1-copied-prefix-second-field-ok.hir
 type R {
   n: u64,
   other: u64,

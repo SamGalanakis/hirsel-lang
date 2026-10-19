@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 18
+// expect: reject MODE-1 at line 19
+// twin: MODE/MODE-1-consuming-loop-content-ok.hir
 // A collection built from local views is local whatever its binding
 // declares, and so are the elements a consuming loop yields. One cannot be
 // stored into storage that outlives the loop. The accepted twin is

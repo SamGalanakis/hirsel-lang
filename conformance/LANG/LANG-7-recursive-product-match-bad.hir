@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 8
+// expect: reject LANG-7 at line 9
+// twin: LANG/LANG-7-recursive-product-match-run.hir
 // A product match over a box-recursive variant that omits one pair of
 // constructors does not cover every value.
 type Chain = End | Link(u8, box Chain)

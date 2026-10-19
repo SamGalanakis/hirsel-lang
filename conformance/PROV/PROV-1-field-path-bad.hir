@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 14
+// expect: reject PROV-1 at line 15
+// twin: PROV/PROV-1-field-path-ok.hir
 // "A field path (log.dir)."
 type Log {
   dir: Dir,

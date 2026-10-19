@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 14
+// expect: reject OWN-2 at line 15
+// twin: OWN/OWN-2-local-result-propagation-ok.hir
 fn load() -> Result[bool, String] {
   Ok(true)
 }

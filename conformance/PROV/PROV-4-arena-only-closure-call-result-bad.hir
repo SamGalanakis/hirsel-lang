@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 16
+// expect: reject PROV-4 at line 17
+// twin: MODE/MODE-1-arena-only-argument-result-ok.hir
 // A closure call over arena-only captures holds its arena bound, so a result
 // related to another arena receives a value in `a` (PROV-4), as the direct
 // argument would.

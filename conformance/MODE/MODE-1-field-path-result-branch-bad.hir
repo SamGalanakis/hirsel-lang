@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 12
+// expect: reject MODE-1 at line 13
+// twin: MODE/MODE-1-field-path-result-branch-ok.hir
 // v22 #77. A join of p.a and p.b reads within p only, which a relation to
 // p.a does not admit.
 type Pair {

@@ -1,5 +1,6 @@
 // rule: DROP-3
-// expect: reject DROP-3 at line 6
+// expect: reject DROP-3 at line 7
+// twin: MEM/MEM-5-binding-moved-on-every-path-run.hir
 resource type Token {
   n: u32,
 }

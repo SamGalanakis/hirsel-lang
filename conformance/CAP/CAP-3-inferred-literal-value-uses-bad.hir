@@ -1,5 +1,6 @@
 // rule: CAP-3
-// expect: reject CAP-3 at line 12
+// expect: reject CAP-3 at line 13
+// twin: CAP/CAP-3-inferred-literal-value-uses-ok.hir
 fn repeat(f: fn() -> u64 uses {}) -> u64 {
   f()
 }

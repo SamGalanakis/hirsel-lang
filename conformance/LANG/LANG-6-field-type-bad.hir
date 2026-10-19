@@ -1,4 +1,5 @@
 // rule: LANG-6
-// expect: reject LANG-6 at line 4
+// expect: reject LANG-6 at line 5
+// twin: LANG/LANG-7-alias-field-locality-ok.hir
 // Shows "No part of a signature is ever inferred from a body."
 type Rec { n }

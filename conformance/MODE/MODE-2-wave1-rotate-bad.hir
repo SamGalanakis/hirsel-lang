@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 4
+// expect: reject MODE-2 at line 5
+// twin: SEM/SEM-4-wave1-counted-run.hir
 fn example(mut xs: List[u64]) -> () {
   list.rotate(mut xs, 0);
 }

@@ -1,5 +1,6 @@
 // rule: CONC-5
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: CONC/CONC-5-payload-unique-ok.hir
 // "values stored into the payload are unique".
 const DATA: List[u32] = [1]
 

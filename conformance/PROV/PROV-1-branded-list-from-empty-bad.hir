@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 8
+// expect: reject PROV-1 at line 9
+// twin: PROV/PROV-1-branded-list-from-empty-ok.hir
 // The list's element type fixes `list.push`'s type argument at `StrPos of
 // text`, so a position of `other` cannot enter through the generic parameter.
 fn mixed(text: String, other: String) -> u64 {

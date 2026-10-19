@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject OWN-1 at line 26
+// expect: reject OWN-1 at line 27
+// twin: MEM/MEM-11-with-send-ok.hir
 // A Shared value is "read by borrowing": while `shared.with` lends `s`, its root cannot
 // be sent to another task.
 type Config {

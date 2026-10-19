@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 26
+// expect: reject MODE-2 at line 27
+// twin: MODE/MODE-2-parametric-map-unwrap-run.hir
 // keep returns an aliased Bytes, so U holds an alias and nothing makes the
 // result unique. Twin is MODE-2-parametric-map-unwrap-run.
 fn unwrap_or[T, E](take value: Result[T, E], take fallback: T) -> T uses {} {

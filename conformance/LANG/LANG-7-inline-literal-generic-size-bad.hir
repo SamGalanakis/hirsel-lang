@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 6
+// expect: reject LANG-7 at line 7
+// twin: LANG/LANG-7-inline-literal-generic-size-ok.hir
 // Sizes compare by equality only, so no literal has the length of an abstract
 // size `n`, whatever `n` is instantiated with.
 fn fill[n: size](xs: Inline[u8, n]) -> Inline[u8, n] {

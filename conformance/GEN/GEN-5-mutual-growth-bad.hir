@@ -1,5 +1,6 @@
 // rule: GEN-5
-// expect: reject GEN-5 at line 5
+// expect: reject GEN-5 at line 6
+// twin: GEN/GEN-5-mutual-growth-ok.hir
 // Shows "A cycle of calls whose type arguments grow is rejected."
 fn first[T: copyable](x: T) -> () {
   second((copy x, copy x))

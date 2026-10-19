@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 10
+// expect: reject MODE-2 at line 11
+// twin: MODE/MODE-2-copy-temporary-aliased-ok.hir
 // "Copying, sharing a part or passing as a plain mut argument ends a binding's uniqueness".
 // A copy shares storage with what it copies, also when that is a fresh temporary.
 fn keep(take x: unique String) -> () {

@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-1 at line 8
+// expect: reject PROV-1 at line 9
+// twin: PROV/PROV-2-sleep-until-same-clock-ok.hir
 fn example(c: MonotonicClock, other: MonotonicClock) -> Result[(), WaitError] {
   let now = match clock.monotonic(c) {
     Ok(now) => now,

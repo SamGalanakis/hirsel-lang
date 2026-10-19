@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 13
+// expect: reject MODE-2 at line 14
+// twin: MODE/MODE-2-parametric-mut-part-later-argument-share-ok.hir
 // `mut st.items` is unique only while its owner is, and the later block
 // argument shares the part into `keep` before callee entry, so the old list
 // `replace` returns is aliased. Twin is

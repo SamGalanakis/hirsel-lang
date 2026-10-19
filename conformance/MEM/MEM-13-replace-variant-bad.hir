@@ -1,5 +1,6 @@
 // rule: MEM-13
-// expect: reject MEM-13 at line 8
+// expect: reject MEM-13 at line 9
+// twin: MEM/MEM-13-replace-variant-ok.hir
 // "variant can never be replaced, except by whole assignment of its container".
 type Choice = Small(value: u64) | Large(value: u64, extra: u64)
 

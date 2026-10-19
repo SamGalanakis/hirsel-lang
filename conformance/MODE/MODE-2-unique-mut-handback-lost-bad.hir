@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-preserves-unique-direct-ok.hir
 // The caller keeps treating a `mut x: unique T` argument as unique, so it must be
 // handed back unique, here `plain_mut` may have installed a share of `C`.
 const C: List[u64] = [1, 2, 3]

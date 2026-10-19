@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 29
+// expect: reject MODE-2 at line 30
+// twin: MODE/MODE-2-error-mapper-occurrence-ok.hir
 fn workload(data: Bytes) -> Bytes {
   let mut output: List[u8] = []
   bytes.from_list(take output)

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 8
+// expect: reject MODE-4 at line 9
+// twin: MODE/MODE-4-written-sendable-positions-run.hir
 fn equal(x: sendable Bytes, y: Bytes) -> bool {
   x == y
 }

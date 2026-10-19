@@ -1,5 +1,6 @@
 // rule: LANG-10
-// expect: reject LANG-10 at line 5
+// expect: reject LANG-10 at line 6
+// twin: LANG/LANG-10-top-level-mutual.hir
 fn outer() -> u8 {
   fn inner[T: plain](x: T) -> u8 {
     inner(x)

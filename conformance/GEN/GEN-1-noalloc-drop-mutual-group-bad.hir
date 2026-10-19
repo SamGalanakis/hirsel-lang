@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 15
+// expect: reject GEN-1 at line 16
+// twin: GEN/GEN-1-noalloc-drop-mutual-group-ok.hir
 // A recursive group's cleanup depends on its arguments: a SortedMap key
 // allocates when dropped.
 fn need[T: noalloc_drop](take x: T) -> () {}

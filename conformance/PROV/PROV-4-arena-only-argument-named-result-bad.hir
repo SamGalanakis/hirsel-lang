@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 15
+// expect: reject PROV-4 at line 16
+// twin: MODE/MODE-1-arena-only-argument-result-ok.hir
 // The argument contributes its arena bound, so a result whose relation omits
 // the arena cannot keep it. The accepted twin is MODE-1-arena-only-argument-result-ok.
 fn mk(a: Arena) -> Bytes in a {

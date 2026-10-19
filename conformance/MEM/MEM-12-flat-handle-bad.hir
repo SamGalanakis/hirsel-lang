@@ -1,5 +1,6 @@
 // rule: MEM-12
-// expect: reject MEM-12 at line 3
+// expect: reject MEM-12 at line 4
+// twin: MEM/MEM-12-flat-handle-ok.hir
 flat type R {
   value: Mutex[u32],
 }

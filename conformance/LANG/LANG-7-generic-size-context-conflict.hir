@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 13
+// expect: reject LANG-7 at line 14
+// twin: LANG/LANG-7-size-equality-ok.hir
 resource type Sized[n: size] {
   payload: Inline[u32, n],
 }

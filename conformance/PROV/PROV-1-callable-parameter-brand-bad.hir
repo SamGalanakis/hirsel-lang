@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 11
+// expect: reject PROV-1 at line 12
+// twin: PROV/PROV-1-callable-parameter-brand-ok.hir
 // "An operation taking a branded value requires the same p."
 // The callee promises this callback no relation between the handle and the
 // directory, so a callback that requires one is a different function type.

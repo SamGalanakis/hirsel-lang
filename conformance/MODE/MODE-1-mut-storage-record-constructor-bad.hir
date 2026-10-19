@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 8
+// expect: reject MODE-1 at line 9
+// twin: MODE/MODE-1-mut-storage-record-constructor-ok.hir
 type Holder {
   name: String,
 }

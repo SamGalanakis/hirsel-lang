@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
+// expect: reject MODE-2 at line 10
+// twin: MODE/MODE-2-std-sorted-map-cycle-ok.hir
 fn cycle(by: Order[u64], mut m: unique SortedMap[u64, String] of by) -> () {
   match take sorted_map.remove(by, mut m, 1) {
     Some(item) => {

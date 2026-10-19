@@ -1,5 +1,6 @@
 // rule: CT-5
 // expect: reject MODE-2 at line 2
+// twin: CT/CT-5-unique-result-run.hir
 // A generator's body type carries no uniqueness; the declaration's `-> unique Holder`
 // decides it, and the generated body is checked against it: a taken parameter that is
 // not `unique` may still be shared.

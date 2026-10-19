@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 5
+// expect: reject SER-1 at line 6
+// twin: SER/SER-1-record-opt-in-ok.hir
 // Only an opaque type names a check: a transparent record's fields already are its
 // values, so `check` on one is rejected (its plain twin is SER-1-record-opt-in-ok).
 @serializable(check = valid)

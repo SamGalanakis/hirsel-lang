@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 5
+// expect: reject LANG-2 at line 6
+// twin: LANG/LANG-1-byte-empty-ok.hir
 // A byte literal has type u8; it is not a char or a wider integer.
 fn code() -> u32 {
   b'a'

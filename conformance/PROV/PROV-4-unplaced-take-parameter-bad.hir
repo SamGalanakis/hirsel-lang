@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 12
+// expect: reject PROV-4 at line 13
+// twin: PROV/PROV-4-unplaced-take-parameter-ok.hir
 // spec: #62
 // "A value in a cannot outlive a." A taken value is the callee's to keep, and
 // a take parameter declared without a placement promises nothing about the

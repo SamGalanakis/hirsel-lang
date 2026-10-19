@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject MODE-4 at line 6
+// expect: reject MODE-4 at line 7
+// twin: SER/SER-1-borrowed-list-ok.hir
 fn cross[T: sendable](x: T) {}
 
 fn example(xs: List[u64]) {

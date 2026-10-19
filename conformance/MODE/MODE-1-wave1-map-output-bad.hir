@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 8
+// expect: reject MODE-1 at line 9
+// twin: SEM/SEM-4-wave1-counted-run.hir
 fn mapper(s: String) -> String in s {
   copy s
 }

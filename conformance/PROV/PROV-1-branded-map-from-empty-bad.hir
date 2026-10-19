@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 9
+// expect: reject PROV-1 at line 10
+// twin: PROV/PROV-1-branded-map-from-empty-ok.hir
 // The map's value type fixes `map.insert`'s type argument at `StrPos of text`,
 // so a position of `other` cannot be inserted.
 fn index(text: String, other: String) -> u64 {

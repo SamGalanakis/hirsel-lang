@@ -1,5 +1,6 @@
 // rule: CONC-5
-// expect: reject CONC-5 at line 9
+// expect: reject CONC-5 at line 10
+// twin: CONC/CONC-5-channel-in-body-ok.hir
 // The lock body "holds no authority" and cannot "use a channel".
 fn locked(tasks: Tasks, m: Mutex[u32], n: u32) -> () {
   mutex.with(

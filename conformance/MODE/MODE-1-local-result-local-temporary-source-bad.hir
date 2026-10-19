@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-local-result-local-temporary-source-ok.hir
 // A copy of a local value is a new value in a temporary of this function, and
 // its content is bounded by that temporary, so a result viewing it cannot be
 // returned. Only an arena value's copy keeps just its arena bound (v22 P2).

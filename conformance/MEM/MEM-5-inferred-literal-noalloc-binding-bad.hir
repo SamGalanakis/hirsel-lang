@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 12
+// expect: reject MEM-5 at line 13
+// twin: MEM/MEM-5-noalloc-borrowed-literal-local-ok.hir
 // A written function type in a binding annotation is preserved exactly at
 // every depth (#58). The tuple part promises `@noalloc`, and the part the
 // called closure returns, whose literal may allocate, does not.

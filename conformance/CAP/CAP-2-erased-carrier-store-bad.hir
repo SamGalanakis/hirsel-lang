@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CLO-4 at line 24
+// expect: reject CLO-4 at line 25
+// twin: CAP/CAP-2-erased-carrier-file-ok.hir
 // An opaque store holding callbacks that capture a database directory holds
 // `Dir`, as each callback does, which a closure restricted to `uses {}`
 // cannot keep.

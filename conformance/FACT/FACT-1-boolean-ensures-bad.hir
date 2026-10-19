@@ -1,5 +1,6 @@
 // rule: FACT-1
-// expect: reject FACT-1 at line 6
+// expect: reject FACT-1 at line 7
+// twin: FACT/FACT-1-taken-before-entry.hir
 // "Each is any pure boolean expression"; result names the returned value.
 @noalloc
 fn id(x: u32) -> u32

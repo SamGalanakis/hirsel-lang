@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 29
+// expect: reject MODE-1 at line 30
+// twin: MODE/MODE-1-result-holder-whole-sequence-field-release-ok.hir
 type Pair {
   left: Bytes,
   right: Bytes,

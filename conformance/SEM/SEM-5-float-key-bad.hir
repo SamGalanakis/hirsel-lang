@@ -1,5 +1,6 @@
 // rule: SEM-5
-// expect: reject GEN-1 at line 5
+// expect: reject GEN-1 at line 6
+// twin: SEM/SEM-5-wave2-map-same-entries-empty-run.hir
 // "key" excludes floats (GEN-1); Map requires K to satisfy that bound.
 type Lookup {
   entries: Map[f32, u8],

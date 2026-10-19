@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 19
+// expect: reject CLO-2 at line 20
+// twin: CLO/CLO-2-mut-handback-erased-state-run.hir
 // Both iterators are unsendable; erased capture authority still must be exact.
 fn next_value(mut s: String) -> Option[u64] {
   let _ = string.byte_len(s)

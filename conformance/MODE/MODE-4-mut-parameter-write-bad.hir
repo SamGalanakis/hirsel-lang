@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 7
+// expect: reject MODE-4 at line 8
+// twin: MODE/MODE-4-mut-handback-sendable-run.hir
 // A `mut` parameter written `sendable fn` may store only a function value
 // that may cross tasks; the caller's storage promises it. Its twin is
 // MODE-4-mut-handback-sendable-run, whose `replace` stores a sendable one.

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 10
+// expect: reject MODE-2 at line 11
+// twin: MODE/MODE-2-map-insert-plain-key-ok.hir
 // map.insert takes a String key that `kept` still shares, so the map is aliased
 // after it. Twin is MODE-2-map-insert-plain-key-ok.
 fn need(mut m: unique Map[String, u64]) -> () {}

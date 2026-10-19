@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 11
+// expect: reject LANG-2 at line 12
+// twin: LANG/LANG-2-generic-function-value-ok.hir
 // "Type arguments are never written in expressions."
 // Without an immediate expected callable type, this name cannot choose
 // its type arguments from the later use.

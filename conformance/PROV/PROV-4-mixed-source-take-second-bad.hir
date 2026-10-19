@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject MODE-1 at line 9
+// expect: reject MODE-1 at line 10
+// twin: PROV/PROV-4-mixed-source-return-first-arena-ok.hir
 fn choose(a: Arena, b: Arena, x: Bytes in a, y: Bytes in b) -> Bytes in {x, y} {
   x
 }

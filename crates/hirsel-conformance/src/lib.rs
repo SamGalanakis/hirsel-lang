@@ -193,10 +193,12 @@ impl Expect {
 pub struct Header {
     pub rule: RuleId,
     pub expect: Expect,
+    /// The accepted case a rejected one names, relative to `conformance/`.
+    pub twin: Option<String>,
 }
 
 /// Header directive names; other colon-bearing comments are prose.
-const DIRECTIVES: [&str; 15] = [
+const DIRECTIVES: [&str; 16] = [
     "rule",
     "expect",
     "stdout",
@@ -212,6 +214,7 @@ const DIRECTIVES: [&str; 15] = [
     "oracle-reason",
     "runners",
     "fault_seed",
+    "twin",
 ];
 
 /// The most ordinary-interpretation steps a `// steps:` header may grant.
@@ -368,6 +371,7 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
         let mut saw_stdout = false;
         let mut exit = None;
         let mut entry = None;
+        let mut twin = None;
         let mut in_header = true;
         let line_count = source.lines().count();
         for (index, raw) in source.lines().enumerate() {
@@ -495,6 +499,28 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
                     );
                 }
                 "grant" | "env" | "net" | "process" | "runners" | "fault_seed" => {}
+                "twin" => {
+                    if twin.is_some() {
+                        return Err("duplicate twin directive".into());
+                    }
+                    let target = Path::new(value_trimmed);
+                    let mut parts = target.components();
+                    let well_formed = matches!(
+                        (parts.next(), parts.next(), parts.next()),
+                        (Some(Component::Normal(dir)), Some(Component::Normal(_)), None)
+                            if dir.to_str().is_some_and(|dir| {
+                                !dir.is_empty() && dir.bytes().all(|b| b.is_ascii_uppercase())
+                            })
+                    ) && target.extension().is_some_and(|e| e == "hir")
+                        && !value_trimmed.contains('\\');
+                    if !well_formed {
+                        return Err(format!(
+                            "line {}: twin must name <DIR>/<file>.hir under conformance/",
+                            index + 1
+                        ));
+                    }
+                    twin = Some(value_trimmed.to_string());
+                }
                 // The value is checked by `fixture`; the next line must say why.
                 "steps" => {
                     let reason = source.lines().nth(index + 1).and_then(|next| {
@@ -531,6 +557,9 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
         if matches!(expect, Expect::Accept | Expect::Reject { .. }) && fixture.steps.is_some() {
             return Err("steps requires expect: run, fail, blocked or test".into());
         }
+        if twin.is_some() && !matches!(expect, Expect::Reject { .. }) {
+            return Err("twin is only valid for expect: reject".into());
+        }
         let prefix_dir = path
             .components()
             .nth(1)
@@ -557,9 +586,78 @@ pub fn parse_header(path: &Path, source: &str, rules: &Rules) -> Result<Header, 
         } else if saw_stdout || exit.is_some() {
             return Err("stdout/exit directives are only valid for expect: run".into());
         }
-        Ok(Header { rule, expect })
+        Ok(Header { rule, expect, twin })
     };
     parse().map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// The leading `[A-Z]+-\d+` of a file stem, the rule its name claims.
+fn rule_prefix(stem: &str) -> Option<&str> {
+    let letters = stem.bytes().take_while(u8::is_ascii_uppercase).count();
+    let digits = stem[letters..]
+        .strip_prefix('-')?
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .count();
+    (letters > 0 && digits > 0).then(|| &stem[..letters + 1 + digits])
+}
+
+/// What a corpus file's name and twin must agree with: its suffix with
+/// `expect:`, its rule prefix with `rule:`, and a rejected case's `twin:` with
+/// an accepted, run or test case of the corpus.
+fn corpus_errors(root: &Path, path: &str, header: &Header, rules: &Rules) -> Vec<String> {
+    let mut errors = Vec::new();
+    let stem = Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    let reject = matches!(header.expect, Expect::Reject { .. });
+    let fail = matches!(header.expect, Expect::Fail { .. });
+    let suffix = if stem.ends_with("-bad") || stem.ends_with("-reject") {
+        (!reject && !fail).then_some("a -bad or -reject name needs expect: reject or fail")
+    } else if stem.ends_with("-ok") || stem.ends_with("-run") || stem.ends_with("-accept") {
+        reject.then_some("an -ok, -run or -accept name cannot expect reject")
+    } else if stem.ends_with("-fail") {
+        (!fail).then_some("a -fail name needs expect: fail")
+    } else {
+        None
+    };
+    if let Some(message) = suffix {
+        errors.push(format!("{path}: {message}"));
+    }
+    if rule_prefix(stem) != Some(header.rule.as_str()) {
+        errors.push(format!(
+            "{path}: rule {} differs from the name's rule prefix",
+            header.rule
+        ));
+    }
+    match &header.twin {
+        None if reject => errors.push(format!("{path}: a rejected case needs a twin: header")),
+        None => {}
+        Some(twin) => {
+            let target = format!("conformance/{twin}");
+            let accepted = |source: &str| {
+                parse_header(Path::new(&target), source, rules).is_ok_and(|twin| {
+                    matches!(
+                        twin.expect,
+                        Expect::Accept | Expect::Run { .. } | Expect::Test
+                    )
+                })
+            };
+            if target == path {
+                errors.push(format!("{path}: twin {twin} names the file itself"));
+            } else if let Ok(source) = fs::read_to_string(root.join(&target)) {
+                if !accepted(&source) {
+                    errors.push(format!(
+                        "{path}: twin {twin} is not an accepted, run or test case"
+                    ));
+                }
+            } else {
+                errors.push(format!("{path}: twin {twin} names no corpus case"));
+            }
+        }
+    }
+    errors
 }
 
 /// Ordinary selected entry for main and Test corpus programs.
@@ -817,11 +915,15 @@ pub fn run_suite_selected(
         let path = file.strip_prefix(root).map_err(|e| e.to_string())?;
         let source = fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
         match parse_header(path, &source, &rules) {
-            Ok(header) => headers.push((
-                file.clone(),
-                path.to_string_lossy().replace('\\', "/"),
-                header,
-            )),
+            Ok(header) => {
+                let path = path.to_string_lossy().replace('\\', "/");
+                let errors = corpus_errors(root, &path, &header, &rules);
+                if errors.is_empty() {
+                    headers.push((file.clone(), path, header));
+                } else {
+                    report.errors.extend(errors);
+                }
+            }
             Err(error) => report.errors.push(error),
         }
     }

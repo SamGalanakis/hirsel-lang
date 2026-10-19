@@ -1,6 +1,6 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 12
-// twin: LANG-8-inject-generic-run.hir
+// twin: LANG/LANG-8-inject-generic-run.hir
 // An enclosing error that is a bare type parameter has no arms: only identity applies.
 type FileProblem = NotFound()
 

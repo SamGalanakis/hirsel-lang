@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 14
+// expect: reject MODE-1 at line 15
+// twin: MODE/MODE-1-fresh-local-receiver-capture-ok.hir
 // On the path that skips the assignment the receiver still holds the local
 // view, so the closure cannot hand out a global value.
 fn view(x: Bytes) -> Bytes in x {

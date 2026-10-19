@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 5
+// expect: reject MODE-4 at line 6
+// twin: MODE/MODE-4-written-aggregate-capture-copy-ok.hir
 fn bad() -> sendable once fn() -> u64 {
   let pair: (String, u8) = ("payload", 0u8)
   fn() {

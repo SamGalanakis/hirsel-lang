@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 7
+// expect: reject MEM-5 at line 8
+// twin: MEM/MEM-5-graphemes-cleanup-ok.hir
 resource type Trace {}
 drop(value) {}
 

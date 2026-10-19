@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 35
+// expect: reject PROV-1 at line 36
+// twin: PROV/PROV-1-closure-copy-sibling-loop-ok.hir
 type Inner {
   n: u64,
   other: u64,

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 12
+// expect: reject MODE-2 at line 13
+// twin: MODE/MODE-2-fresh-counted-record-field-write-unique-ok.hir
 type R {
   x: String,
 }

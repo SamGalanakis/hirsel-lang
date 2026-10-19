@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 13
+// expect: reject PROV-1 at line 14
+// twin: PROV/PROV-1-top-level-identity-ok.hir
 // "A top-level definition (identity by name)."
 const FIRST: String = "first"
 

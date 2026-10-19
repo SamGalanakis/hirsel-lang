@@ -1,5 +1,6 @@
 // rule: LANG-4
-// expect: reject LANG-7 at line 6
+// expect: reject LANG-7 at line 7
+// twin: LANG/LANG-4-nested-builtin-variant-run.hir
 type Value = Leaf(u64) | Array(List[String])
 
 fn wrap(xs: List[u64]) -> Option[Value] {

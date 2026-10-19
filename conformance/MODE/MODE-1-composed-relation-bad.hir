@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 16
+// expect: reject MODE-1 at line 17
+// twin: MODE/MODE-1-composed-relation-run.hir
 // The accepted twin is MODE-1-composed-relation-run: here the intermediate
 // local is related to `other`, not to `data`, so the composed result is not
 // within the declared relation.

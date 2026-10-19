@@ -1,5 +1,6 @@
 // rule: SEM-1
-// expect: reject SEM-1 at line 6
+// expect: reject SEM-1 at line 7
+// twin: SEM/SEM-1-simd-integer-domain-ok.hir
 // Section 22 ranges I over sized integers; simd.add checks integer lanes.
 fn example() {
   let a: Simd[f32, 2] = simd.splat(1.0f32)

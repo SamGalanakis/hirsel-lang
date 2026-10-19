@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 5
+// expect: reject OWN-1 at line 6
+// twin: OWN/OWN-1-if-let-take-ok.hir
 // An if-let can take its payload only from a value it owns.
 fn size(x: Option[String]) -> String {
   if let Some(s) = take x {

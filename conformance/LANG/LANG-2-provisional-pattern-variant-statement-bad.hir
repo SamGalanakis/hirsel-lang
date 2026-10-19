@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 11
+// expect: reject LANG-2 at line 12
+// twin: LANG/LANG-2-provisional-pattern-variant-statement-ok.hir
 // A bare use of a name the checked scrutinee selected as a nullary variant is
 // that variant, a value. As a discarded statement it has no expected type.
 fn pick(o: Option[u64]) -> Option[u64] {

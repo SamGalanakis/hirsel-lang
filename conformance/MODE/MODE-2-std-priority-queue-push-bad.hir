@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-std-priority-queue-push-ok.hir
 @noalloc
 fn compare(a: String, b: String) -> i32 uses {} {
   0

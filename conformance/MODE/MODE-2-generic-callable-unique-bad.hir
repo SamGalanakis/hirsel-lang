@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 6
+// expect: reject MODE-2 at line 7
+// twin: MODE/MODE-2-generic-callable-unique-ok.hir
 fn consume[T](take value: unique T) {}
 
 fn example() {

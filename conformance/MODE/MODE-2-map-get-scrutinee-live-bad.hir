@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-map-get-borrow-dies-mid-body-ok.hir
 // Inside the arm the matched map.get result still lives until the match's
 // statement ends, so the map is aliased when `need` requires it unique. Twin is
 // MODE-2-map-get-borrow-dies-mid-body-ok.

@@ -1,5 +1,6 @@
 // rule: PROG-4
-// expect: reject PROG-4 at line 8
+// expect: reject PROG-4 at line 9
+// twin: LANG/LANG-7-extern-preserves-unique-ok.hir
 type Count {
   calls: u32,
 }

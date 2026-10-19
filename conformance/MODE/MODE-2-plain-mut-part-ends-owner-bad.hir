@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 14
+// expect: reject MODE-2 at line 15
+// twin: MODE/MODE-2-plain-mut-ends-ok.hir
 // A plain `mut` callee may install a share in the part it receives, which ends
 // its owner's uniqueness, and a `mut unique` parameter must be handed back unique.
 type Store {

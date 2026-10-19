@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 10
+// expect: reject MODE-2 at line 11
+// twin: MODE/MODE-2-mut-loop-element-copy-ok.hir
 // "Copying, sharing a part, or passing as a plain `mut` argument ends a binding's uniqueness."
 // A mutable loop binds element places (SEM-4), so copying an element shares a part of
 // the list for the rest of its scope, and a binding that requires it unique is refused.

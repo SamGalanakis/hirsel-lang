@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 17
+// expect: reject MODE-1 at line 18
+// twin: MODE/MODE-1-flat-part-through-block-borrowed-ok.hir
 // OWN-1 makes a flat copy of a borrowed part local to its owner, and a block
 // naming the owner reads the part through the same borrow (spec issue #50).
 flat type F {

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 7
+// expect: reject MODE-4 at line 8
+// twin: MODE/MODE-4-written-iter-parameter-ok.hir
 // A written callable type keeps its declared environment promises. Its `mut`
 // Iter parameter lends any iterator, so a function value that requires a
 // sendable one is another type.

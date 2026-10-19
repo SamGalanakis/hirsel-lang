@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 4
+// expect: reject LANG-2 at line 5
+// twin: LANG/LANG-2-unknown-variant-ok.hir
 fn lookup() -> Result[u64, FileError] {
   Error(Fault())
 }

@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 18
+// expect: reject PROV-1 at line 19
+// twin: PROV/PROV-1-record-held-owner-take-run.hir
 // "A brand ends when p is ... moved." Moving `text` into the record carries
 // its identity there, so `pos` stays usable while the record holds it. The
 // written take of the record ends that identity with the record's own, and

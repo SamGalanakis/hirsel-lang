@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 16
+// expect: reject OWN-1 at line 17
+// twin: OWN/OWN-1-mut-storage-iteration-resource-ok.hir
 resource type Trace {
   text: String,
 }

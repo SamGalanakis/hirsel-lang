@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 21
+// expect: reject PROV-1 at line 22
+// twin: PROV/PROV-1-loop-rebound-binding-ok.hir
 // A brand made before the loop names the incarnation the loop replaces, so
 // using it after the loop is PROV-1 (#78).
 type R {

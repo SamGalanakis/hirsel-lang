@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 25
+// expect: reject PROV-1 at line 26
+// twin: PROV/PROV-1-written-field-taken-owner-ok.hir
 // A field written after a computed value is named by the binding, and taking
 // the binding ends that name too, so a value branded by the field no longer
 // belongs to it.

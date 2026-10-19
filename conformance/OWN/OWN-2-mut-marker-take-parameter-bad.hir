@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 9
+// expect: reject OWN-2 at line 10
+// twin: OWN/OWN-2-mut-marker-take-parameter-ok.hir
 // A take parameter receives an owned value. `mut` lends the place itself,
 // also when the value is plain and an unmarked argument would be copied.
 fn bump(take n: u64) -> () {}

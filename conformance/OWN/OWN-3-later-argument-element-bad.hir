@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 16
+// expect: reject OWN-3 at line 17
+// twin: OWN/OWN-3-later-argument-use-ok.hir
 // The element place is reserved for the callee. A later argument that lends
 // the whole list exclusively could remove the element before the call.
 fn clear(mut xs: List[u64]) -> u64 {

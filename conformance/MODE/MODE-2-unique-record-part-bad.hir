@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-unique-record-part-ok.hir
 // A part declared unique is a contract of the aggregate, and a value shared
 // by a copy no longer satisfies it.
 type Holder {

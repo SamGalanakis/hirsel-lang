@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 13
+// expect: reject MODE-2 at line 14
+// twin: MODE/MODE-2-callable-header-uniqueness-variance-run.hir
 // A `mut` parameter is read and written back, so its uniqueness is exact in
 // a callable header. The accepted twin is
 // MODE-2-callable-header-uniqueness-variance-run.hir.

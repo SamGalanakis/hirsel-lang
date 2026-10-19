@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject CLO-1 at line 16
+// expect: reject CLO-1 at line 17
+// twin: CLO/CLO-1-written-recursive-retention-ok.hir
 fn sink(x: sendable Bytes) {}
 
 type Chain {

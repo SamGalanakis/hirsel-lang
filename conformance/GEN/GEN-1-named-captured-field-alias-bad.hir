@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 14
+// expect: reject GEN-1 at line 15
+// twin: GEN/GEN-1-named-captured-field-alias-ok.hir
 type Wrap[T] {
   value: T,
 }

@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 9
+// expect: reject OWN-3 at line 10
+// twin: OWN/OWN-3-last-use-capture-dead-ok.hir
 // "A scoped closure’s captures count as arguments of the call."
 fn both(mut x: u64, f: fn() -> u64 uses {}) -> () {
   x = f()

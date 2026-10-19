@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 5
+// expect: reject SER-1 at line 6
+// twin: SER/SER-1-checked-opaque-ok.hir
 // A check must be `@noalloc fn(value: T) -> bool uses {}`; one that allocates is no
 // check.
 @serializable(check = valid)

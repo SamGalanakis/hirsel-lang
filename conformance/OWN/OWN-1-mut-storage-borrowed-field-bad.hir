@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 15
+// expect: reject OWN-1 at line 16
+// twin: OWN/OWN-1-mut-storage-borrowed-field-ok.hir
 resource type Trace {
   text: String,
 }

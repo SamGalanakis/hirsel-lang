@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 5
+// expect: reject LANG-2 at line 6
+// twin: LANG/LANG-2-later-parameter-ok.hir
 // Shows "Parameters are in scope only after their declaration."
 @noalloc
 fn example(value: File of d, d: Dir) -> () {

@@ -1,5 +1,6 @@
 // rule: CONC-2
-// expect: reject CONC-2 at line 4
+// expect: reject CONC-2 at line 5
+// twin: CONC/CONC-2-handle-parameter-ok.hir
 // A parameter taking a task handle holds its caller's await-or-detach obligation.
 fn forget(s: Scope, take h: Task[u64] of s) -> u64 {
   0

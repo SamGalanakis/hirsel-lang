@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 15
+// expect: reject PROV-4 at line 16
+// twin: PROV/PROV-4-inner-to-outer-ok.hir
 // "In explicit arena a or in something that outlives it."
 fn store(a: Arena, mut dst: Bytes in a, take src: Bytes in a) -> () {
   dst = take src

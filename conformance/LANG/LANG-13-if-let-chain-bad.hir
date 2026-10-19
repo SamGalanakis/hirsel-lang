@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 5
+// expect: reject LANG-13 at line 6
+// twin: LANG/LANG-13-let-else-initializer-ok.hir
 // A conditional let does not chain with && or ||.
 fn first(x: Option[u32], ready: bool) -> u32 {
   if let Some(n) = x && ready {

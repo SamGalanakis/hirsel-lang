@@ -1,5 +1,6 @@
 // rule: CT-3
-// expect: reject CT-3 at line 9
+// expect: reject CT-3 at line 10
+// twin: CT/CT-3-compile-time-value-call-ok.hir
 // Run-time code never holds a Body, so it cannot call a definition returning one.
 fn generator() -> Body[fn() -> u64] {
   codegen.body("fn() -> u64 { 1 }")

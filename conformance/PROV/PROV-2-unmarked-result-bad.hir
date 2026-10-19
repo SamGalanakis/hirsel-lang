@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 14
+// expect: reject PROV-2 at line 15
+// twin: PROV/PROV-2-unmarked-result-ok.hir
 // "Unmarked results carry no brand."
 fn erase(d: Dir, take value: File of d) -> File {
   take value

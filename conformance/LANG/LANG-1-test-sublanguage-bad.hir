@@ -1,5 +1,6 @@
 // rule: LANG-1
-// expect: reject LANG-1 at line 5
+// expect: reject LANG-1 at line 6
+// twin: LANG/LANG-1-byte-empty-ok.hir
 // Shows "No methods, no use, no conditional operator, no test sublanguage."
 @noalloc
 test check() -> () { () }

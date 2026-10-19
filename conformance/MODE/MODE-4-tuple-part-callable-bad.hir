@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 7
+// expect: reject MODE-4 at line 8
+// twin: MODE/MODE-4-tuple-part-callable-run.hir
 // A tuple part written `sendable fn` holds only a function value that may
 // cross tasks, as a parameter of that type does.
 fn probe(take f: fn() -> u64) -> u64 {

@@ -1,5 +1,6 @@
 // rule: CLO-3
-// expect: reject CLO-3 at line 12
+// expect: reject CLO-3 at line 13
+// twin: CONC/CONC-6-receiver-child-capture.hir
 // A task closure takes its Receivers, but the exception is for sendability.
 // A Receiver declared local is bounded by its caller and cannot cross into a
 // task. The accepted twin is CONC-6-receiver-child-capture.

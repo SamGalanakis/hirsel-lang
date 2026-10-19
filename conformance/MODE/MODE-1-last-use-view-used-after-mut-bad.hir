@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 18
+// expect: reject MODE-1 at line 19
+// twin: MODE/MODE-1-last-use-view-dead-before-mut-ok.hir
 // The view is used after the `mut`, so its loan is live there (LANG-3).
 fn look(x: Bytes) -> u64 {
   0

@@ -1,5 +1,6 @@
 // rule: LANG-5
-// expect: reject LANG-5 at line 8
+// expect: reject LANG-5 at line 9
+// twin: LANG/LANG-5-byte-index-mut-loan-ok.hir
 fn edit(mut byte: u8) -> () {
   byte = 1u8
 }

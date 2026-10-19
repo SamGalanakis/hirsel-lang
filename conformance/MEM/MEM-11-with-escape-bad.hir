@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject MODE-1 at line 13
+// expect: reject MODE-1 at line 14
+// twin: MEM/MEM-11-with-escape-ok.hir
 // A Shared value is "read by borrowing": a copy of borrowed frozen content stays local
 // to the view, so it cannot be the body's global result.
 type Index {

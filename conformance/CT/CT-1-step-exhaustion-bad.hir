@@ -1,5 +1,6 @@
 // rule: CT-1
-// expect: reject CT-1 at line 10
+// expect: reject CT-1 at line 11
+// twin: CT/CT-2-dependent-constant.hir
 // spec: #7
 // "exhausted step limit ... during comptime is a compile error".
 @noalloc

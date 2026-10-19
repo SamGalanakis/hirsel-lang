@@ -1,5 +1,6 @@
 // rule: PROV-5
-// expect: reject PROV-1 at line 22
+// expect: reject PROV-1 at line 23
+// twin: PROV/PROV-5-field-read-record-take-run.hir
 // "Moving the record keeps the relation" holds inside the record only. A
 // position copied out of the field is branded by `c.text`, and the written
 // take of `c` ends that owner.

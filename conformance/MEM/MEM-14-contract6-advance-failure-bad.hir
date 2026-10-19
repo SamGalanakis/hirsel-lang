@@ -1,5 +1,6 @@
 // rule: MEM-14
-// expect: reject MEM-14 at line 5
+// expect: reject MEM-14 at line 6
+// twin: MEM/MEM-14-contract6-advance-normal-ok.hir
 @advance_only(it)
 fn step[T](mut it: Iter[T], take replacement: Iter[T]) {
   it = take replacement

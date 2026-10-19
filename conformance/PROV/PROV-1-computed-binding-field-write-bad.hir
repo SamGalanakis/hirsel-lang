@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 24
+// expect: reject PROV-1 at line 25
+// twin: PROV/PROV-1-computed-binding-field-write-ok.hir
 // Writing the field again ends the brand that named it.
 type R {
   n: u64,

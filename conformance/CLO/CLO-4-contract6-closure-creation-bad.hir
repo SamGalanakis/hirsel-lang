@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 18
+// expect: reject CLO-4 at line 19
+// twin: CLO/CLO-4-contract6-creation-run.hir
 fn count(mut position: u64) -> Option[u64] {
   if position < 3 {
     let value = position

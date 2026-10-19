@@ -1,5 +1,6 @@
 // rule: LANG-1
-// expect: reject LANG-1 at line 5
+// expect: reject LANG-1 at line 6
+// twin: LANG/LANG-1-byte-empty-ok.hir
 // A byte literal spells one ASCII scalar.
 fn byte() -> u8 {
   b'é'

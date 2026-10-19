@@ -1,5 +1,6 @@
 // rule: CT-2
-// expect: reject CT-2 at line 4
+// expect: reject CT-2 at line 5
+// twin: CT/CT-2-closed-frame-run.hir
 fn probe() -> u8 {
   let f: fn() -> u8 = comptime fn() {
     1u8

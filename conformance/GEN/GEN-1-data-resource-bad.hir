@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 18
+// expect: reject GEN-1 at line 19
+// twin: GEN/GEN-1-flat-bound-ok.hir
 // Shows "Structural, computed from the type, no user instances."
 resource type Token {
   n: u32,

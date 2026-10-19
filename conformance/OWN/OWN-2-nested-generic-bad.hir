@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 6
+// expect: reject OWN-2 at line 7
+// twin: OWN/OWN-2-nested-generic-inner-plain-ok.hir
 fn outer[T: plain](x: T) -> () {
   fn inner[U](take y: U) -> () {
     let a = y

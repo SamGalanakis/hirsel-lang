@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 6
+// expect: reject SEM-3 at line 7
+// twin: SEM/SEM-3-fstring-zero-run.hir
 // A spec follows its expression on the same line.
 fn label(n: u64) -> String {
   f"{n

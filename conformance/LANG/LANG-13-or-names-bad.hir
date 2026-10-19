@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 8
+// expect: reject LANG-13 at line 9
+// twin: LANG/LANG-13-or-names-ok.hir
 // Every alternative of an or-pattern binds the same names.
 type Shape = Square(u32) | Rect(u32, u32)
 

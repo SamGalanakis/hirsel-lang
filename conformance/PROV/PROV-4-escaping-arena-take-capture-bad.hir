@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 5
+// expect: reject PROV-4 at line 6
+// twin: PROV/PROV-4-escaping-arena-take-capture-ok.hir
 fn probe(a: Arena) -> once fn() -> u64 {
   let x: String in a = "x"
   fn() {

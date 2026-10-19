@@ -1,5 +1,6 @@
 // rule: MODE-3
-// expect: reject MODE-3 at line 3
+// expect: reject MODE-3 at line 4
+// twin: MODE/MODE-3-nested-once-annotation-ok.hir
 fn identity(take x: once u64) -> u64 {
   x
 }

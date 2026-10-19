@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject MEM-11 at line 5
+// expect: reject MEM-11 at line 6
+// twin: MEM/MEM-11-box-taken-ok.hir
 fn probe(take xs: unique List[Bytes]) {
   let built: box List[Bytes] = box copy xs
   let frozen: Shared[box List[Bytes]] = shared.freeze(take built)

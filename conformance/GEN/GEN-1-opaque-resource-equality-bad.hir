@@ -1,3 +1,4 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 3
+// expect: reject GEN-1 at line 4
+// twin: GEN/GEN-1-opaque-resource-equality-ok.hir
 pub opaque resource type Datum: key uses {}

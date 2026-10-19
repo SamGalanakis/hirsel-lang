@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 3
+// expect: reject LANG-7 at line 4
+// twin: MEM/MEM-13-nested-nullary-closed-run.hir
 type TypeShape = Dot(u64) | Empty
 
 fn make() -> TypeShape {

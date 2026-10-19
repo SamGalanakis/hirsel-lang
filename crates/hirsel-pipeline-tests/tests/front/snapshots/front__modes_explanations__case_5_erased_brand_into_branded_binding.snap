@@ -3,13 +3,13 @@ source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
 expression: "rendered(\"PROV/PROV-2-unary-assignment-bad.hir\")"
 ---
 error[PROV-2]: a union or erased origin cannot satisfy a branded use: `-p` has no single brand, but the declared type of `q` requires a value `of s`
- --> ../../conformance/PROV/PROV-2-unary-assignment-bad.hir:9:3
-   9 |   q = -p
+ --> ../../conformance/PROV/PROV-2-unary-assignment-bad.hir:10:3
+  10 |   q = -p
      |   ^^^^^^ 
- --> ../../conformance/PROV/PROV-2-unary-assignment-bad.hir:9:7
-   9 |   q = -p
+ --> ../../conformance/PROV/PROV-2-unary-assignment-bad.hir:10:7
+  10 |   q = -p
      |       ^^ provided: a computed or joined value does not keep a brand (PROV-2)
- --> ../../conformance/PROV/PROV-2-unary-assignment-bad.hir:8:11
-   8 |   let mut q: i64 of s = p
+ --> ../../conformance/PROV/PROV-2-unary-assignment-bad.hir:9:11
+   9 |   let mut q: i64 of s = p
      |           ^ required: the declared type of `q` requires `of s`
   = help: 1. declare `q` without a brand (no cost)

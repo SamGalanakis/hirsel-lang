@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 12
+// expect: reject MODE-1 at line 13
+// twin: MODE/MODE-1-temporary-source-ok.hir
 // The copy of a borrowed value is this function's own binding and is as
 // local as the value it copied. A result that lends from the binding would
 // outlive it, whatever the binding was copied from.

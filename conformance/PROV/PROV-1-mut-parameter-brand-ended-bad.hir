@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 16
+// expect: reject PROV-1 at line 17
+// twin: PROV/PROV-1-mut-parameter-brand-ended-ok.hir
 // spec: #60
 // A mut parameter is handed back to its caller, so the operation that ends a
 // brand it carries has no valid continuation.

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-propagated-borrowed-error-variant-ok.hir
 // A variant mapper wraps the borrowed error without releasing its bound.
 type Failure = Bad(String)
 

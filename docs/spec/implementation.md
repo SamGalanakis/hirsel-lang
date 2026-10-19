@@ -117,9 +117,9 @@ this specification. `expect` is one of:
 - `fail RULE at line N`: execution stops with a language failure citing `RULE` at line `N`,
   with optional `// stdout:` lines.
 
-`// entry: name` selects a test entry other than `main`. Every rejected program has an
-accepted twin that differs only in the violation. Directives appear only in the leading
-comment block. A program with a `// spec: #N` comment depends on an open specification
+`// entry: name` selects a test entry other than `main`. Every rejected program names, in a
+`// twin:` header, an accepted program that pins the same boundary; one accepted program may
+serve several rejected ones. Directives appear only in the leading comment block. A program with a `// spec: #N` comment depends on an open specification
 question; a program in `conformance/pending.txt` cannot produce its expected outcome yet, for the
 reason its line gives. Both stay in the corpus and are excluded from the gate.
 

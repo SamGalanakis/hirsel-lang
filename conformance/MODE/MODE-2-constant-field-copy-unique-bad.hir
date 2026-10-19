@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 12
+// expect: reject MODE-2 at line 13
+// twin: MODE/MODE-2-constant-field-unique-receipt-ok.hir
 type R {
   xs: unique List[Bytes],
 }

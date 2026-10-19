@@ -1,5 +1,6 @@
 // rule: MEM-12
-// expect: reject MEM-12 at line 5
+// expect: reject MEM-12 at line 6
+// twin: MEM/MEM-12-growable-last-ok.hir
 // "at most one growable field, which must be last".
 flat type Value {
   items: List[u8] @ growable,

@@ -1,4 +1,5 @@
 // rule: CT-1
-// expect: reject CT-1 at line 4
+// expect: reject CT-1 at line 5
+// twin: CT/CT-2-dependent-constant.hir
 // "A failure ... during comptime is a compile error".
 pub const VALUE: u8 = comptime (255 + 1)

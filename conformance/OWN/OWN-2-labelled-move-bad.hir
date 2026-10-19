@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 8
+// expect: reject OWN-2 at line 9
+// twin: OWN/OWN-2-labelled-move-ok.hir
 fn consume(take values: List[u64]) {}
 
 fn f(take values: List[u64]) {

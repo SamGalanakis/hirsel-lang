@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 15
+// expect: reject PROV-1 at line 16
+// twin: PROV/PROV-1-annotated-definition-brand-ok.hir
 fn descending(a: u32, b: u32) -> i32 uses {} {
   if a > b {
     -1

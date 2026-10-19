@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 6
+// expect: reject GEN-1 at line 7
+// twin: GEN/GEN-1-sortedmap-key-call-ok.hir
 fn need[K: key](x: K) {}
 
 fn probe(x: SortedMap[u32, u8]) {

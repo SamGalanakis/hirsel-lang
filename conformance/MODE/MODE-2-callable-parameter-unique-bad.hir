@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-callable-parameter-unique-ok.hir
 // A unique parameter "accepts only unique arguments".
 // The callee passes this callback an aliased value, so a callback whose own
 // parameter demands a unique one is a different function type.

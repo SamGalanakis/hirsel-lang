@@ -1,5 +1,6 @@
 // rule: PROG-2
-// expect: reject PROG-2 at line 3
+// expect: reject PROG-2 at line 4
+// twin: SEM/SEM-4-view-return-source-run.hir
 @loop_source(open, next)
 pub type View {
   source: String,

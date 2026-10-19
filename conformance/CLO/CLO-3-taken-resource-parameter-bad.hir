@@ -1,5 +1,6 @@
 // rule: CLO-3
-// expect: reject CLO-3 at line 14
+// expect: reject CLO-3 at line 15
+// twin: CLO/CLO-3-taken-resource-parameter-ok.hir
 // Bytes received by `take` may still be shared by the caller, so they are not sendable
 // without a `unique` parameter.
 fn use_bytes(take b: Bytes) -> () {}

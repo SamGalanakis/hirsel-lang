@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-shared-root-copy-parameter-ok.hir
 // Without a copy the borrowed root itself is returned, and it is local.
 fn root(s: Shared[Bytes]) -> Shared[Bytes] {
   s

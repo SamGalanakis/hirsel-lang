@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 14
+// expect: reject OWN-3 at line 15
+// twin: OWN/OWN-3-same-name-ok.hir
 // "No storage passed twice."
 type Rec {
   a: u64,

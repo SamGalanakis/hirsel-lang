@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 11
+// expect: reject LANG-2 at line 12
+// twin: LANG/LANG-2-later-call-argument-ok.hir
 // Shows "Type arguments are never written in expressions, so postfix [ is always indexing."
 @noalloc
 fn identity[T](x: T) -> () {

@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 6
+// expect: reject PROV-4 at line 7
+// twin: PROV/PROV-4-unplaced-storage-ok.hir
 // "A value in a cannot outlive a." Storage declared without a placement may
 // outlive the arena.
 fn store(a: Arena, mut dst: Bytes, take src: Bytes in a) -> () {

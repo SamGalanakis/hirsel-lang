@@ -1,5 +1,6 @@
 // rule: OWN-5
-// expect: reject OWN-5 at line 7
+// expect: reject OWN-5 at line 8
+// twin: CAP/CAP-3-dir-read-only-run.hir
 fn probe(rt: Io) -> Result[(), FileError] {
   let d = io.dir(rt, path.of("."))?
   let f = file.open(d, path.of("a.txt"))?

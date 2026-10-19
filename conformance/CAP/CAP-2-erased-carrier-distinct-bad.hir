@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 23
+// expect: reject CAP-2 at line 24
+// twin: CAP/CAP-2-erased-carrier-distinct-ok.hir
 // A distinct type can carry its field's erased authority: wrapping an iterator
 // that holds `Stdout` is not inert.
 @captures(it)

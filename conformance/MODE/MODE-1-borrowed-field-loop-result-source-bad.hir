@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 9
+// expect: reject MODE-1 at line 10
+// twin: MODE/MODE-1-borrowed-field-loop-result-source-ok.hir
 type Values {
   xs: List[Bytes],
 }

@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 12
+// expect: reject OWN-2 at line 13
+// twin: OWN/OWN-2-block-tail-place-ok.hir
 // Under LANG-11 (#50), a block is transparent to its consumer's use. An outer place
 // in its tail keeps that identity, so `consume({ t })` passes `t` itself to a
 // take parameter without `take`, as `consume(t)` does (#83).

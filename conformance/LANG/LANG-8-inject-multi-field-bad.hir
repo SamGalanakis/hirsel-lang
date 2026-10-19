@@ -1,6 +1,6 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 14
-// twin: LANG-8-inject-multi-field-ok.hir
+// twin: LANG/LANG-8-inject-multi-field-ok.hir
 // An arm with two fields is never injectable.
 type RowError = Bad()
 

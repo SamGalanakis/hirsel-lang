@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 4
+// expect: reject MODE-4 at line 5
+// twin: MODE/MODE-4-written-agreement-12-written-generic-relay-ok.hir
 fn get[T: copyable](xs: List[sendable T]) -> sendable T in xs {
   copy xs[0]
 }

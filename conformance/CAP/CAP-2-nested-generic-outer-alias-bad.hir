@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 10
+// expect: reject CAP-2 at line 11
+// twin: CAP/CAP-2-nested-generic-outer-alias-ok.hir
 fn accept[X: inert](x: X) -> () {
   ()
 }

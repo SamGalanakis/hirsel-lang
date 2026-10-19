@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 15
+// expect: reject CAP-2 at line 16
+// twin: CAP/CAP-2-mutual-group-authority-ok.hir
 // A capability held by one member of a recursive group is held by every
 // member that reaches it.
 type Tree = Leaf | Node(box Entry)

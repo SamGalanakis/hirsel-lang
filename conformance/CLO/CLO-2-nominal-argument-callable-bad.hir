@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 18
+// expect: reject CLO-2 at line 19
+// twin: CLO/CLO-2-nominal-argument-callable-run.hir
 // "Written unrestricted parameters do not meet restricted uses." v22 states
 // no variance for a nominal type's arguments, so a callable inside one is
 // exact (spec #92). `Option` may use its argument in either direction, so an

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-function-value-local-result-ok.hir
 // The call through the function value is local to `b`, as a direct call of
 // `view` would be, so its result cannot leave as a global value.
 fn view(x: Bytes) -> Bytes in x {

@@ -1,5 +1,6 @@
 // rule: LANG-5
-// expect: reject LANG-5 at line 7
+// expect: reject LANG-5 at line 8
+// twin: LANG/LANG-5-immutable-element-ok.hir
 // Shows "A value changes only through a visible name"
 @noalloc
 fn example() -> u32 {

@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 12
+// expect: reject OWN-3 at line 13
+// twin: MODE/MODE-2-deep-construction-ok.hir
 // "Exclusive in-place access, mut x at the call site".
 // A constructor stores its operands and lends no place, so none is passed mut.
 type Item {

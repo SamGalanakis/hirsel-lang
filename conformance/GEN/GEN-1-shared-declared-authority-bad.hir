@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 7
+// expect: reject GEN-1 at line 8
+// twin: GEN/GEN-1-shared-declared-authority-ok.hir
 type W[T: inert] {
   value: T,
 }

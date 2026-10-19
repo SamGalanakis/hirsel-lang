@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 6
+// expect: reject LANG-13 at line 7
+// twin: LANG/LANG-13-range-half-open-ok.hir
 // Range patterns are closed; `a..b` is not a pattern.
 fn digit(n: u32) -> bool {
   match n {

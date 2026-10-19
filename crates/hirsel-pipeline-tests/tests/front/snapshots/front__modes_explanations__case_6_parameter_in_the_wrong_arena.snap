@@ -3,14 +3,14 @@ source: crates/hirsel-pipeline-tests/tests/front/modes_explanations.rs
 expression: "rendered(\"PROV/PROV-4-arena-aggregate-wrong-field-bad.hir\")"
 ---
 error[PROV-4]: the value's placement does not outlive the required arena: `x` lives in arena `b`, but the constructed field requires arena `a`
- --> ../../conformance/PROV/PROV-4-arena-aggregate-wrong-field-bad.hir:8:3
-   8 |   Ast(bytes: take x)
+ --> ../../conformance/PROV/PROV-4-arena-aggregate-wrong-field-bad.hir:9:3
+   9 |   Ast(bytes: take x)
      |   ^^^^^^^^^^^^^^^^^^ 
- --> ../../conformance/PROV/PROV-4-arena-aggregate-wrong-field-bad.hir:7:36
-   7 | fn bad(a: Arena, b: Arena, take x: Bytes in b) -> Ast in a {
+ --> ../../conformance/PROV/PROV-4-arena-aggregate-wrong-field-bad.hir:8:36
+   8 | fn bad(a: Arena, b: Arena, take x: Bytes in b) -> Ast in a {
      |                                    ^^^^^^^^^^ provided: placed `in b` by its declared type
- --> ../../conformance/PROV/PROV-4-arena-aggregate-wrong-field-bad.hir:8:3
-   8 |   Ast(bytes: take x)
+ --> ../../conformance/PROV/PROV-4-arena-aggregate-wrong-field-bad.hir:9:3
+   9 |   Ast(bytes: take x)
      |   ^^^^^^^^^^^^^^^^^^ required: the constructed field requires `in a`; every part must outlive `a`
   = help: 1. declare `x` `in a` (no cost; signature)
   = help: 2. declare the result `in b` (no cost; signature)

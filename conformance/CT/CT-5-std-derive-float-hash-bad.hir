@@ -1,5 +1,6 @@
 // rule: CT-5
-// expect: reject CT-1 at line 10
+// expect: reject CT-1 at line 11
+// twin: CT/CT-5-std-derive-nested-run.hir
 // Floats are not `key` (GEN-1), so derived hashing has no form for them, while derived
 // text writes them.
 type Sample {

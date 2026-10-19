@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 8
+// expect: reject GEN-1 at line 9
+// twin: GEN/GEN-1-local-result-taken-relay-ok.hir
 fn same[T](x: T) -> T in x {
   x
 }

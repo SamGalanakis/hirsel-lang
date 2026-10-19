@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
+// expect: reject MODE-2 at line 10
+// twin: MODE/MODE-2-scoped-capture-unique-ok.hir
 fn demand(mut action: unique fn() -> ()) -> () {}
 
 fn example(text: String) -> () {

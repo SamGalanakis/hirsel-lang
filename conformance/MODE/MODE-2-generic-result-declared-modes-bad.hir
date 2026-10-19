@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 18
+// expect: reject MODE-2 at line 19
+// twin: MODE/MODE-2-generic-result-preserves-unique-run.hir
 // A generic result `T` holds its declared modes, so a unique payload
 // instantiating it comes back aliased unless the callee promises it. Twin is
 // MODE-2-generic-result-preserves-unique-run.

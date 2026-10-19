@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 14
+// expect: reject PROV-2 at line 15
+// twin: PROV/PROV-2-computed-addition-ok.hir
 // Arithmetic produces an unmarked scalar; the annotation cannot invent an origin.
 fn use_pos(s: Dir, p: u64 of s) -> () {
   ()

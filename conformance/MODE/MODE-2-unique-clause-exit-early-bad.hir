@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 12
+// expect: reject MODE-2 at line 13
+// twin: MODE/MODE-4-written-agreement-06-FACT-1-unique-clause-before-ok.hir
 fn inspect(x: unique Bytes) -> bool {
   true
 }

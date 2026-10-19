@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 15
+// expect: reject GEN-1 at line 16
+// twin: GEN/GEN-1-flat-bound-ok.hir
 // Shows "Structural, computed from the type, no user instances."
 type Record {
   n: box u32,

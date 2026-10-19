@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 13
+// expect: reject MODE-2 at line 14
+// twin: MODE/MODE-2-parametric-lent-pure-callback-ok.hir
 // A callback lent a U is no supplier that receives U only by take, even when its
 // own result is unique, so tap's result is not proved unique. Twin is
 // MODE-2-parametric-lent-pure-callback-ok.

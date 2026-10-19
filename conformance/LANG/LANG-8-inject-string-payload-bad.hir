@@ -1,6 +1,6 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 12
-// twin: LANG-8-inject-string-payload-ok.hir
+// twin: LANG/LANG-8-inject-string-payload-ok.hir
 // String names no error domain, so plain ? never injects it, even into the one String arm.
 type CliError = Usage(String) | Code(u64)
 

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 12
+// expect: reject MODE-1 at line 13
+// twin: LANG/LANG-3-reserved-view-last-use-run.hir
 // The view is used again after the call, so it is still live when the callee
 // is entered and takes the exclusive loan. The accepted twin is
 // LANG-3-reserved-view-last-use-run.

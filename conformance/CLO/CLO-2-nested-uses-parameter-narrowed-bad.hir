@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 24
+// expect: reject CLO-2 at line 25
+// twin: CLO/CLO-2-nested-uses-annotation-run.hir
 // "Written unrestricted parameters do not meet restricted uses" (#58). `run`
 // hands its function a callback with open `uses`; `inner` requires a
 // `uses {}` callback and forwards it to `sandbox`, so passing `inner` to

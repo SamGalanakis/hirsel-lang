@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 8
+// expect: reject SER-1 at line 9
+// twin: SER/SER-1-codec-nominal-decode-ok.hir
 type Row {
   x: u8,
 }

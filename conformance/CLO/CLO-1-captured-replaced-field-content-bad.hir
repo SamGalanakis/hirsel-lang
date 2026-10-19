@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject MODE-1 at line 20
+// expect: reject MODE-1 at line 21
+// twin: CLO/CLO-1-captured-part-read-ok.hir
 // After the replacement, the field is written with content local to seed, so
 // the closure's result is local to its environment and a take parameter
 // cannot keep it, as its getter twin `keep(get(r))` cannot.

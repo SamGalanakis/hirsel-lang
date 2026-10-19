@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 18
+// expect: reject MODE-2 at line 19
+// twin: MODE/MODE-2-map-get-borrow-dies-at-continue-run.hir
 // The `let` statement holding the map.get temporary has not ended when its
 // branch calls `need` before `continue`, so the map is still aliased there.
 // Twin is MODE-2-map-get-borrow-dies-at-continue-run.

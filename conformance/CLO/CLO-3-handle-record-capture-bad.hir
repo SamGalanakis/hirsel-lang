@@ -1,5 +1,6 @@
 // rule: CLO-3
-// expect: reject CLO-3 at line 33
+// expect: reject CLO-3 at line 34
+// twin: CLO/CLO-3-handle-record-capture-ok.hir
 // A record that also holds an aliased List is not sendable: copying it into a child would
 // share the list's blocks across tasks.
 type Board {

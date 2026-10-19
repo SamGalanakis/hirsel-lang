@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 13
+// expect: reject GEN-1 at line 14
+// twin: GEN/GEN-1-packed-local-resource-ok.hir
 // Packed[T] requires T to be Flat in a local annotation too, and a resource payload is
 // never flat (MEM-12).
 resource type Res {

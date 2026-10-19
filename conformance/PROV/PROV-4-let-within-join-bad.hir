@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 12
+// expect: reject PROV-4 at line 13
+// twin: PROV/PROV-4-let-within-join-ok.hir
 // v22 R3. The join holds text's loans on arena a, which the global other
 // does not hold, so it is not within other.
 fn len(b: Bytes) -> u64 {

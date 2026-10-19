@@ -1,5 +1,6 @@
 // rule: MEM-12
-// expect: reject OWN-2 at line 11
+// expect: reject OWN-2 at line 12
+// twin: MEM/MEM-12-explicit-copy-required-ok.hir
 // "Flat values are copied only explicitly (a memcpy)".
 flat type Item {
   text: String,

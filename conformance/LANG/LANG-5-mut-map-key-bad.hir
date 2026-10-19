@@ -1,5 +1,6 @@
 // rule: LANG-5
-// expect: reject LANG-5 at line 6
+// expect: reject LANG-5 at line 7
+// twin: LANG/LANG-5-loop-element-ok.hir
 // The first access obligation cites the complete operation (docs/spec/diagnostics.md).
 fn probe(mut m: Map[u8, u8]) {
   for (k, v) in mut m {

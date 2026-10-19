@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 19
+// expect: reject PROV-4 at line 20
+// twin: PROV/PROV-4-caller-arena-tree-escape-ok.hir
 // "A value in a cannot outlive a."
 // A tree that a callee builds in its caller's arena lives in that arena, so
 // the arena.with callback cannot return it without copying it out.

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 17
+// expect: reject MODE-2 at line 18
+// twin: MODE/MODE-2-deep-receipt-nested-ok.hir
 type Mid {
   leaf: unique List[Bytes],
 }

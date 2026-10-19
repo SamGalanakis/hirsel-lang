@@ -1,5 +1,6 @@
 // rule: CLO-3
-// expect: reject CLO-3 at line 12
+// expect: reject CLO-3 at line 13
+// twin: CLO/CLO-3-scoped-shared-root-copy.hir
 // A copied counted value is still not sendable into a child.
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?

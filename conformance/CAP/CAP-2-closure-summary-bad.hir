@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 10
+// expect: reject CAP-2 at line 11
+// twin: CAP/CAP-2-closure-summary-ok.hir
 // "inert means the summary is empty"; summaries join held authority.
 @noalloc
 fn inert_only[T: inert](x: T) -> () {

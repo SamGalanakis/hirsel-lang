@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 11
+// expect: reject MEM-5 at line 12
+// twin: SEM/SEM-4-iterator-take.hir
 @noalloc
 fn next(mut state: u32) -> Option[u32] {
   None

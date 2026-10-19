@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 15
+// expect: reject MODE-1 at line 16
+// twin: SEM/SEM-3-csv-run.hir
 // spec: #89
 // The source of `for r in xs` may only be read in the body (SEM-4). Each
 // advance reads it, so the loop keeps it lent while it may advance again,

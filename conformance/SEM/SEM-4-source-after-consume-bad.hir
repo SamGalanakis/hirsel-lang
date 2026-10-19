@@ -1,5 +1,6 @@
 // rule: SEM-4
-// expect: reject OWN-2 at line 8
+// expect: reject OWN-2 at line 9
+// twin: LANG/LANG-6-tour-00-statements-run.hir
 // "for x in take xs consumes (the source is gone)".
 fn visit(take xs: Array[u8]) -> u8 {
   for x in take xs {

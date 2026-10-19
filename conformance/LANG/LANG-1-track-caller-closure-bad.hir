@@ -1,5 +1,6 @@
 // rule: LANG-1
-// expect: reject LANG-1 at line 4
+// expect: reject LANG-1 at line 5
+// twin: FAIL/FAIL-1-track-caller-location-run.hir
 pub fn main() -> Result[(), ()] {
   let f = @track_caller fn(n: u8) -> u8 { n }
   let _ = f(1u8)

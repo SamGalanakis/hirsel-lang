@@ -1,5 +1,6 @@
 // rule: MEM-4
-// expect: reject MEM-5 at line 6
+// expect: reject MEM-5 at line 7
+// twin: MEM/MEM-4-seal-noalloc-ok.hir
 // "sealing is an allocation site".
 @noalloc
 fn seal(take a: Arena in a, take root: u64) -> Region[u64] {

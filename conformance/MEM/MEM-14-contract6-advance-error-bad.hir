@@ -1,5 +1,6 @@
 // rule: MEM-14
-// expect: reject MEM-14 at line 7
+// expect: reject MEM-14 at line 8
+// twin: MEM/MEM-14-contract6-advance-normal-ok.hir
 type Fault = Stop()
 
 @advance_only(it)

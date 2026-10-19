@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 10
+// expect: reject PROV-2 at line 11
+// twin: PROV/PROV-2-annotated-alias-brand-ok.hir
 type OrderedMap[V] = SortedMap[u32, V] of u32.order
 
 fn other() -> unique SortedMap[u32, u8] uses {} {

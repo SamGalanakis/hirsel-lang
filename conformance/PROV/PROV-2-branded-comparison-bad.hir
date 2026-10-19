@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 9
+// expect: reject PROV-2 at line 10
+// twin: PROV/PROV-2-branded-comparison-ok.hir
 // A brand is identity evidence, not operand type. A branded value compares with an unbranded one, and the result is unbranded.
 fn need(xs: Array[u8], ok: bool of xs) -> () {
   ()

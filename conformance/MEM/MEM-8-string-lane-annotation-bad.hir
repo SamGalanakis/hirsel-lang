@@ -1,4 +1,5 @@
 // rule: MEM-8
-// expect: reject MEM-8 at line 4
+// expect: reject MEM-8 at line 5
+// twin: MEM/MEM-8-bool-lane-annotation-ok.hir
 // Section 22 limits A to integer, float or bool scalars.
 fn example(x: Simd[String, 2]) {}

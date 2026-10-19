@@ -1,5 +1,6 @@
 // rule: PROG-4
-// expect: reject LANG-7 at line 18
+// expect: reject LANG-7 at line 19
+// twin: PROG/PROG-4-tour-17-ffi-ok.hir
 type Count {
   calls: u32,
 }

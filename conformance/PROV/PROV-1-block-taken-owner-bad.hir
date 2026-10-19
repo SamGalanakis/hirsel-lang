@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 21
+// expect: reject PROV-1 at line 22
+// twin: PROV/PROV-1-block-taken-owner-ok.hir
 // A block is transparent to its consumer (#50). Taking a value through a
 // block consumes its identity as a bare take does, and a brand on the old
 // owner does not describe the new binding (issue #74).

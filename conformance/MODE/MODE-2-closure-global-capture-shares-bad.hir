@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 18
+// expect: reject MODE-2 at line 19
+// twin: MODE/MODE-2-closure-global-capture-shares-ok.hir
 // A closure that returns a counted part of a captured heap record shares it, as
 // reading `r.items` directly does, so the record is no longer unique (#80).
 type Rec {

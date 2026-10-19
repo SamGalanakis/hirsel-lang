@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 5
+// expect: reject MODE-4 at line 6
+// twin: MODE/MODE-4-generic-callable-sendable-ok.hir
 fn example() {
   fn discard[T: sendable](take value: T) {}
   let f: fn(take List[String]) uses {} = discard

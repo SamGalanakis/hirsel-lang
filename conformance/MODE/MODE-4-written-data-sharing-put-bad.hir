@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 9
+// expect: reject MODE-4 at line 10
+// twin: MODE/MODE-4-written-shared-list-insertion-ok.hir
 fn put[T: data](mut xs: List[T], take x: T) {
   list.push(mut xs, take x)
 }

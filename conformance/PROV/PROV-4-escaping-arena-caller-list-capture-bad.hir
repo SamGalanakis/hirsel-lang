@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 9
+// expect: reject PROV-4 at line 10
+// twin: PROV/PROV-4-escaping-heap-caller-list-capture-ok.hir
 // Pushing the closure into a caller list lets it outlive the arena.
 fn probe(a: Arena, mut out: List[fn() -> u64]) {
   let x: String in a = "x"

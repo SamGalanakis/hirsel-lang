@@ -1,6 +1,6 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 20
-// twin: LANG-8-inject-no-arm-ok.hir
+// twin: LANG/LANG-8-inject-no-arm-ok.hir
 // No arm of AppError carries ConfigError, so plain ? cannot inject it.
 type ParseError = Empty()
 

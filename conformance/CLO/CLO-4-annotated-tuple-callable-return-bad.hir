@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 16
+// expect: reject CLO-4 at line 17
+// twin: CLO/CLO-4-annotated-tuple-callable-return-run.hir
 // The twin of CLO-4-annotated-tuple-callable-return-run. The binding's
 // written type leaves the callable part's authority unknown, so returning
 // the binding where the result states `uses {}` is rejected, although the

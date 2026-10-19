@@ -1,5 +1,6 @@
 // rule: PROG-2
-// expect: reject PROG-2 at line 5
+// expect: reject PROG-2 at line 6
+// twin: PROG/PROG-2-opaque-client-read-ok.hir
 fn main(s: String) {
   let v = vendor.view_value(s)
   let cursor = vendor.open(v)

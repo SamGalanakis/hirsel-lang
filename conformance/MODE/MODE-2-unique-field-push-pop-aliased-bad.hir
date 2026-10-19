@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-unique-part-mut-ok.hir
 // A field shared by a copy is no longer unique, through a push as before it.
 type Queue {
   items: unique List[u64],

@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 5
+// expect: reject LANG-7 at line 6
+// twin: LANG/LANG-4-core-shadow-variant-run.hir
 // Primitive names stay reserved: literals and operators produce these types,
 // so a user `String` could never stand where core's is meant (LANG-4).
 type String = Text(u8)

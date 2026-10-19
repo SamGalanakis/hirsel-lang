@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject OWN-1 at line 13
+// expect: reject OWN-1 at line 14
+// twin: MEM/MEM-11-with-mut-ok.hir
 // A Shared value is "read by borrowing": the frozen value is never written through
 // the view `shared.with` lends.
 type Index {

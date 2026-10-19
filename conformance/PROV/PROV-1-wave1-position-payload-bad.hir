@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 6
+// expect: reject PROV-1 at line 7
+// twin: PROV/PROV-1-wave1-position-payload-ok.hir
 fn example(a: String, b: String) -> () {
   match string.position(a, 0) {
     Some(position) => {

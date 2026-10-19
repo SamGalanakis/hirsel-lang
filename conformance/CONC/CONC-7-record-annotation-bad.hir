@@ -1,5 +1,6 @@
 // rule: CONC-7
-// expect: reject CONC-7 at line 8
+// expect: reject CONC-7 at line 9
+// twin: CONC/CONC-7-scalar-annotation-ok.hir
 // Section 22 limits A to integer, float or bool scalars.
 type Payload {
   value: u8,

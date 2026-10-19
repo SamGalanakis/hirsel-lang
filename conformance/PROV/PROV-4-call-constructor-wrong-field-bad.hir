@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 10
+// expect: reject PROV-4 at line 11
+// twin: PROV/PROV-4-spec-parse-signature.hir
 type Ast {
   bytes: Bytes,
 }

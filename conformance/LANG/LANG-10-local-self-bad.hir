@@ -1,5 +1,6 @@
 // rule: LANG-10
-// expect: reject LANG-10 at line 10
+// expect: reject LANG-10 at line 11
+// twin: CT/CT-2-size-local-run.hir
 // Shows "Only top-level definitions recurse; local fns cannot refer to themselves or later locals."
 // Local function signatures allow allocation by default (#2).
 fn example(n: u32) -> u32 {

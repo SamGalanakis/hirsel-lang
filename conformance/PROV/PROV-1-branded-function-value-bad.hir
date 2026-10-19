@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 13
+// expect: reject PROV-1 at line 14
+// twin: PROV/PROV-1-branded-function-value-ok.hir
 // "An operation taking a branded value requires the same p."
 // A named function used as a value keeps the brand relations of its header.
 fn inspect(d: Dir, f: File of d) -> () {

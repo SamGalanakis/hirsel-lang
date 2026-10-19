@@ -1,5 +1,6 @@
 // rule: OWN-5
-// expect: reject OWN-5 at line 11
+// expect: reject OWN-5 at line 12
+// twin: LANG/LANG-7-repeat-run.hir
 resource type Token {
   n: u64,
 }

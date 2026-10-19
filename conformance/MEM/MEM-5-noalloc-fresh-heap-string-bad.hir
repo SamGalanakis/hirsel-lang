@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 7
+// expect: reject MEM-5 at line 8
+// twin: MEM/MEM-5-noalloc-heap-constant-read-ok.hir
 const DATA: String in heap = "saved"
 
 fn example() {

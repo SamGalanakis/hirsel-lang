@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 16
+// expect: reject MODE-4 at line 17
+// twin: MODE/MODE-4-parametric-result-send-run.hir
 // `xs` is aliased, so the parametric result it supplies is aliased and cannot
 // be sent. Twin is MODE-4-parametric-result-send-run.
 fn id[T](take value: T) -> T {

@@ -1,5 +1,6 @@
 // rule: MEM-8
-// expect: reject MEM-8 at line 3
+// expect: reject MEM-8 at line 4
+// twin: SER/SER-2-vectors-run.hir
 fn example() -> Simd[u32, 0] {
   simd.splat(1)
 }

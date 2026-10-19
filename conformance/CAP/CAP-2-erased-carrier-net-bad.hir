@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CLO-4 at line 27
+// expect: reject CLO-4 at line 28
+// twin: CAP/CAP-2-erased-carrier-file-ok.hir
 // A carrier mapped through a closure that captures `Net` holds `Net`, which a
 // closure restricted to `uses {}` cannot keep.
 fn count(mut n: u64) -> Option[u64] {

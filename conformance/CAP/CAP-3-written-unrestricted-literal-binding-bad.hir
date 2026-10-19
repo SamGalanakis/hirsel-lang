@@ -1,5 +1,6 @@
 // rule: CAP-3
-// expect: reject CAP-3 at line 11
+// expect: reject CAP-3 at line 12
+// twin: CAP/CAP-3-written-unrestricted-literal-binding-ok.hir
 fn repeat(f: fn() -> u64 uses {}) -> u64 {
   f()
 }

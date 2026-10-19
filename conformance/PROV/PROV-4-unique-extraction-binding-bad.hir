@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 7
+// expect: reject PROV-4 at line 8
+// twin: PROV/PROV-4-unique-extraction-binding-ok.hir
 // The same holds when the extracted value is bound first. The accepted twin
 // is PROV-4-unique-extraction-binding-ok.
 fn probe(a: Arena, x: List[Bytes] in a) -> List[Bytes] {

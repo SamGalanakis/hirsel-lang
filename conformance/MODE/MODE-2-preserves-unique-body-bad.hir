@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
+// expect: reject MODE-2 at line 10
+// twin: MODE/MODE-2-preserves-unique-body-ok.hir
 // A body that installs a share cannot keep a @preserves_unique promise.
 const EMPTY: List[u8] = []
 

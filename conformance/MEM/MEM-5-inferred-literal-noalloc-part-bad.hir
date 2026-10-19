@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 12
+// expect: reject MEM-5 at line 13
+// twin: MEM/MEM-5-inferred-literal-noalloc-part-run.hir
 // "Every call goes through a signature declared @noalloc." The inner
 // literal calls a function that may allocate, so its row carries no
 // `@noalloc` evidence and the written `@noalloc` part cannot receive it.

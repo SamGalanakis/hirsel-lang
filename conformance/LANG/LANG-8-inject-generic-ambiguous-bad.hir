@@ -1,6 +1,6 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 14
-// twin: LANG-8-inject-generic-run.hir
+// twin: LANG/LANG-8-inject-generic-run.hir
 // In a concrete Mixed[FileProblem], Source and Files both carry FileProblem.
 type FileProblem = NotFound()
 

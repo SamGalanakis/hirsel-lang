@@ -1,5 +1,6 @@
 // rule: MEM-7
-// expect: reject OWN-1 at line 12
+// expect: reject OWN-1 at line 13
+// twin: MEM/MEM-7-box-read-take-run.hir
 resource type Token {
   text: String,
 }

@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject CLO-1 at line 12
+// expect: reject CLO-1 at line 13
+// twin: CLO/CLO-1-caller-retains-captured-value.hir
 // "It may not assign outer let mut names."
 fn invoke(f: fn() -> () uses {}) -> () {
   f()

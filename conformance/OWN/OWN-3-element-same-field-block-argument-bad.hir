@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 19
+// expect: reject OWN-3 at line 20
+// twin: OWN/OWN-3-element-sibling-field-block-argument-run.hir
 // OWN-3 makes all elements of a sequence one place, so a block argument
 // cannot replace the field of an element place an earlier argument lends,
 // whichever index it writes through.

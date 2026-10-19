@@ -14,7 +14,7 @@ Invariants and boundary:
 - NotImplemented is distinct from rejection.
 - Header validation applies even while the compiler is unimplemented; corpus files are never rewritten.
 
-Only rule, expect, stdout, exit, entry, spec, grant, env, net, process, steps, oracle, oracle-reason, runners and fault_seed are header directive names. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
+Only rule, expect, stdout, exit, entry, spec, grant, env, net, process, steps, oracle, oracle-reason, runners, fault_seed and twin are header directive names. A rejected case names its accepted, run or test twin in exactly one `// twin: <DIR>/<file>.hir` header; the runner also checks that a file name's `-bad`/`-reject`, `-ok`/`-run`/`-accept` or `-fail` suffix agrees with its `expect:` and its rule prefix with its `rule:`. Other colon-bearing comments remain ordinary prose. Known malformed or misplaced directives still fail.
 
 The binaries use `hirsel-cli-args` and pinned lexopt for argument parsing.
 Common `--root`, `--hash-seed` and `--shard` values share validation and

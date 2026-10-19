@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 13
+// expect: reject GEN-1 at line 14
+// twin: GEN/GEN-1-flat-inline-element-ok.hir
 // MEM-12: an inline array does not opt into flat, so it qualifies only through a
 // plain, pointer-free representation, as a tuple does; a flat element owning a
 // String is not plain.

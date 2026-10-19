@@ -1,5 +1,6 @@
 // rule: PROV-5
-// expect: reject PROV-1 at line 15
+// expect: reject PROV-1 at line 16
+// twin: PROV/PROV-5-destructured-brand-ok.hir
 // "Destructuring it rebrands the field to the new local bound for f."
 type Log {
   dir: Dir,

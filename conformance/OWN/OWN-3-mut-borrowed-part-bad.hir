@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 17
+// expect: reject OWN-3 at line 18
+// twin: OWN/OWN-3-mut-borrowed-part-ok.hir
 // "A mut borrow is exclusive."
 // Provisional reading (spec issue 50). A counted part read out of a block is
 // read through a borrow of the block's value. It is neither a place nor an

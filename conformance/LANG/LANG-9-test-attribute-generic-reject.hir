@@ -1,4 +1,5 @@
 // rule: LANG-9
-// expect: reject LANG-9 at line 3
+// expect: reject LANG-9 at line 4
+// twin: LANG/LANG-9-bench-attribute-both-ok.hir
 @test
 fn example[T](value: T) {}

@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 12
+// expect: reject OWN-2 at line 13
+// twin: OWN/OWN-2-branch-tail-place-ok.hir
 // Under LANG-11 (#50), a branch is transparent to its consumer's use. The `else`
 // arm passes the outer place `t` itself to a take parameter without `take`,
 // as `consume(t)` does (#83).

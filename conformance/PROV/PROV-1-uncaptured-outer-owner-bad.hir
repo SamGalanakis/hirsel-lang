@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 13
+// expect: reject PROV-1 at line 14
+// twin: PROV/PROV-1-uncaptured-outer-owner-ok.hir
 // The nested function's result is declared to belong to x and the value it
 // returns belongs to w.
 fn fresh() -> List[u64] {

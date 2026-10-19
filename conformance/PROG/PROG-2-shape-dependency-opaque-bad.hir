@@ -1,5 +1,6 @@
 // rule: PROG-2
-// expect: reject PROG-2 at line 5
+// expect: reject PROG-2 at line 6
+// twin: CT/CT-5-cross-module-spelling-run.hir
 // Only a type's owning package can take the shape of its opaque representation.
 fn probe() -> () {
   let _ = comptime type_shape.info(shape(vendor.Secret))

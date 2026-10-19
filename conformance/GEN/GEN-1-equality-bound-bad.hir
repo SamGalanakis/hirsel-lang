@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 6
+// expect: reject GEN-1 at line 7
+// twin: GEN/GEN-1-generic-float-ieee.hir
 // Shows "Structural, computed from the type, no user instances."
 @noalloc
 fn equal[T](a: T, b: T) -> bool {

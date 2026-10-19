@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 20
+// expect: reject PROV-1 at line 21
+// twin: PROV/PROV-1-field-index-container-ok.hir
 type R {
   xs: List[u64],
   other: u64,

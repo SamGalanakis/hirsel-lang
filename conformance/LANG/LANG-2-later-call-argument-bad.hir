@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 8
+// expect: reject LANG-2 at line 9
+// twin: LANG/LANG-2-later-call-argument-ok.hir
 fn first[T](a: T, b: T) -> () {
   ()
 }

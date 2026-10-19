@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 8
+// expect: reject PROV-2 at line 9
+// twin: PROV/PROV-2-unary-neg-ok.hir
 fn use_pos(s: Dir, p: i64 of s) -> () {
   ()
 }

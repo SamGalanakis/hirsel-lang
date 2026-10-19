@@ -1,5 +1,6 @@
 // rule: MODE-3
-// expect: reject MODE-3 at line 11
+// expect: reject MODE-3 at line 12
+// twin: MODE/MODE-3-once-part-ok.hir
 // An element of a list of many functions is a many function, so a write cannot
 // store a once function there.
 fn loud() -> once fn() -> () {

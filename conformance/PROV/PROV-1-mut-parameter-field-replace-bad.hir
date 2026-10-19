@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 11
+// expect: reject PROV-1 at line 12
+// twin: PROV/PROV-1-mut-parameter-field-replace-ok.hir
 resource type Cursor {
   text: String,
   pos: StrPos of .text,

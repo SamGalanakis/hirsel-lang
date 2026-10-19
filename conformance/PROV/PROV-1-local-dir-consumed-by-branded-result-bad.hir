@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 5
+// expect: reject PROV-1 at line 6
+// twin: PROV/PROV-1-local-dir-consumed-by-branded-result-run.hir
 pub fn trial(t: Test) -> () {
   let d = test.dir(t, [])
   let f = file.open(take d, path.of("a"))

@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 6
+// expect: reject OWN-2 at line 7
+// twin: OWN/OWN-2-moved-storage-write-sequential.hir
 fn probe() {
   let mut r = 1u8
   let x = take r

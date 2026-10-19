@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 4
+// expect: reject PROV-1 at line 5
+// twin: PROV/PROV-1-net-stream-other-net-ok.hir
 pub fn probe(a: Net, b: Net, mut s: Stream of a, mut buf: List[u8]) {
   let _ = net.read(b, mut s, mut buf, 1u64)
 }

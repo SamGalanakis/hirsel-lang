@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 15
+// expect: reject CAP-2 at line 16
+// twin: CAP/CAP-2-erased-carrier-inert-ok.hir
 // A carrier over an iterator that holds `Stdout` is not inert after it advances.
 fn print(mut s: Stdout) -> Option[u64] {
   let _ = out.print(s, "printed\n")

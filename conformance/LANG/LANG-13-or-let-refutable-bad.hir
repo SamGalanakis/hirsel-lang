@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 7
+// expect: reject LANG-13 at line 8
+// twin: LANG/LANG-13-or-let-refutable-ok.hir
 // A let pattern with alternatives is irrefutable when they cover the type.
 type Reading = Exact(u32) | Rounded(u32) | Missing
 

@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 8
+// expect: reject PROV-1 at line 9
+// twin: PROV/PROV-1-buffered-file-dir-ok.hir
 fn line(d: Dir, other: Dir, mut f: File of d) -> Result[
   Option[String],
   bufio.ReadError[FileError]

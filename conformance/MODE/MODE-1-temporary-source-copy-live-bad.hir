@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 13
+// expect: reject MODE-1 at line 14
+// twin: MODE/MODE-1-temporary-source-copy-death-ok.hir
 fn view(x: Bytes) -> Bytes in x {
   copy x
 }

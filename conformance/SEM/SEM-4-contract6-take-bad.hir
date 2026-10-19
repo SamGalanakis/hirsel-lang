@@ -1,5 +1,6 @@
 // rule: SEM-4
-// expect: reject SEM-4 at line 34
+// expect: reject SEM-4 at line 35
+// twin: SEM/SEM-4-view-return-transparent-run.hir
 @loop_source(open, next)
 type View {
   source: String,

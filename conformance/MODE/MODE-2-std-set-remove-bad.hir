@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 4
+// expect: reject MODE-2 at line 5
+// twin: SEM/SEM-5-std-set-string-remove-run.hir
 fn remove(mut s: Set[u64]) -> bool {
   set.remove(mut s, 1)
 }

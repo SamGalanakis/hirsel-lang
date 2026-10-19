@@ -1,4 +1,5 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 4
+// expect: reject SEM-3 at line 5
+// twin: SEM/SEM-3-bidi-source-ok.hir
 // "Bidi control characters in source must be escaped".
 fn value() -> String { "a‮b" }

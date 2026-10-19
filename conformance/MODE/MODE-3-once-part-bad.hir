@@ -1,5 +1,6 @@
 // rule: MODE-3
-// expect: reject MODE-3 at line 10
+// expect: reject MODE-3 at line 11
+// twin: MODE/MODE-3-once-part-ok.hir
 // A part's declared multiplicity is a contract of the aggregate, and a once
 // function cannot fill a part that may be called many times.
 type Holder {

@@ -1,5 +1,6 @@
 // rule: LANG-11
-// expect: reject MODE-1 at line 13
+// expect: reject MODE-1 at line 14
+// twin: LANG/LANG-11-block-value-owned-ok.hir
 // "A block's value is its final expression."
 // Provisional reading (spec issue 50). Where the consumer needs an owned value
 // the block's final expression is an owned use, exactly as without the braces.

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 16
+// expect: reject MODE-2 at line 17
+// twin: MODE/MODE-2-release-failure-displaced-run.hir
 // Assigning b releases its old value, whose finalizer may fail while kept
 // shares xs. Twin is MODE-2-release-failure-displaced-run.
 resource type Bomb {

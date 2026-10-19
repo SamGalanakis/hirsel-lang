@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-borrowed-loop-result-source-run.hir
 fn pick(xs: List[Bytes], x: Bytes) -> Bytes in x {
   for e in xs {
     return e

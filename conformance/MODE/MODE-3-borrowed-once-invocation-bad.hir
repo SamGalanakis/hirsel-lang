@@ -1,5 +1,6 @@
 // rule: MODE-3
-// expect: reject MODE-3 at line 9
+// expect: reject MODE-3 at line 10
+// twin: CLO/CLO-4-parameter-authority.hir
 // Capturing once stays once; a borrow cannot consume the captured callable.
 fn invoke(f: fn() uses {}) {
   ()

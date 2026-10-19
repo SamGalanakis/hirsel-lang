@@ -1,5 +1,6 @@
 // rule: PROG-4
-// expect: reject GEN-1 at line 12
+// expect: reject GEN-1 at line 13
+// twin: PROG/PROG-4-ffi-null-api-ok.hir
 type State {
   value: i32,
 }

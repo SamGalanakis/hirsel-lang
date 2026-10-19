@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 3
+// expect: reject PROV-1 at line 4
+// twin: PROV/PROV-1-borrowed-result-brand-clause-run.hir
 fn probe(take x: Bytes) -> () of x
   ensures true {
   ()

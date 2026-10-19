@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 27
+// expect: reject MODE-1 at line 28
+// twin: MODE/MODE-1-scoped-capture-replace-ok.hir
 type Rec {
   n: u64,
   name: String,

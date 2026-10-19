@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: LANG/LANG-2-generic-callable-owned-run.hir
 // "Taken parameters are global unless related."
 fn get(take x: Bytes in x) -> Bytes {
   x

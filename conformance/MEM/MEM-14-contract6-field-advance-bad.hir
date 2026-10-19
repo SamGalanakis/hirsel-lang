@@ -1,5 +1,6 @@
 // rule: MEM-14
-// expect: reject MEM-14 at line 11
+// expect: reject MEM-14 at line 12
+// twin: CLO/CLO-4-contract6-field-callee-ok.hir
 // The selected field cannot be rebound to another environment.
 type State[T] {
   it: Iter[T],

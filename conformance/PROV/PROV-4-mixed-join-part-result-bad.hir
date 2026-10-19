@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 14
+// expect: reject PROV-4 at line 15
+// twin: PROV/PROV-4-mixed-join-part-result-ok.hir
 // The mixed-placement join rule holds at every depth. The tuple's string part
 // joins arena and heap content, so it has no placement and is as local as
 // every source, and so is the tuple holding it.

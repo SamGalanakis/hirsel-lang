@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-temporary-source-ok.hir
 // "A local(x) result may refer to x." The argument is a local temporary of
 // this body, which is not storage the caller named, so the result that may
 // refer to it cannot be returned.

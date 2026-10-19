@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 8
+// expect: reject PROV-4 at line 9
+// twin: PROV/PROV-4-let-within-arena-and-binding-ok.hir
 // v22 R3. Naming a binding beside an arena admits only the arenas the
 // binding holds. z holds none, so y, placed in b, is outside {a, z}, as
 // it would be outside a alone.

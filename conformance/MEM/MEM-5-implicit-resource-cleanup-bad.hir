@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 11
+// expect: reject MEM-5 at line 12
+// twin: MEM/MEM-5-implicit-resource-cleanup-ok.hir
 resource type Token {
   n: u32,
 }

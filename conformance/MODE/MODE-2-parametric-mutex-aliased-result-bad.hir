@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 20
+// expect: reject MODE-2 at line 21
+// twin: MODE/MODE-2-parametric-mutex-result-run.hir
 // The body's result is declared aliased, so mutex.with's R result is aliased
 // and the binding cannot receive it unique. Twin is
 // MODE-2-parametric-mutex-result-run.

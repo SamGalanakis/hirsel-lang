@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-mut-storage-iteration-counted-ok.hir
 fn put(mut xs: List[String], y: String) -> () {
   for x in mut xs {
     x = y

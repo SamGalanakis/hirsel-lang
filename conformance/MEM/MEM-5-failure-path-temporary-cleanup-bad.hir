@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 33
+// expect: reject MEM-5 at line 34
+// twin: MEM/MEM-5-failure-path-temporary-cleanup-run.hir
 // "Consuming it into another call does not remove cleanup obligations on
 // earlier failure paths." In the `@noalloc` closure body the `Token` that
 // `make()` returns is a temporary until `keep` is entered, and `100 / d` may

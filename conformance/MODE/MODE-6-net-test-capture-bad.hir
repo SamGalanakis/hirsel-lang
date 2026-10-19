@@ -1,5 +1,6 @@
 // rule: MODE-6
-// expect: reject MODE-6 at line 4
+// expect: reject MODE-6 at line 5
+// twin: MODE/MODE-6-scoped-body-keeps-capability.hir
 pub fn capture(take t: Test) -> once fn() -> Net uses {Test} {
   fn() {
     test.net(t, [], [])

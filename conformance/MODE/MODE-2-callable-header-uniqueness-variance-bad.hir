@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 12
+// expect: reject MODE-2 at line 13
+// twin: MODE/MODE-2-callable-header-uniqueness-variance-run.hir
 // Header uniqueness weakens only in the direction a unique value is a valid
 // shared one: a required `unique` result cannot come from a function that
 // returns an aliased value. The diagnostic names both function types. The

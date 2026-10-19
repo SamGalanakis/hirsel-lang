@@ -1,5 +1,6 @@
 // rule: CAP-1
-// expect: reject CAP-1 at line 4
+// expect: reject CAP-1 at line 5
+// twin: CAP/CAP-1-store-backend-authority-ok.hir
 fn denied(d: Dir) -> Result[store.Store[Dir], store.StoreError] uses {} {
   store.open_backend(d, store.local_backend(), store.default_config())
 }

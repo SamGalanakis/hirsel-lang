@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 14
+// expect: reject MODE-2 at line 15
+// twin: MODE/MODE-2-deep-construction-ok.hir
 // "Fresh constructions from unique parts are unique."
 type Rec {
   items: Bytes,

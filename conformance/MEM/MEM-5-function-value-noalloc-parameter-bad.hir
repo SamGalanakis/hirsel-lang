@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 17
+// expect: reject MEM-5 at line 18
+// twin: MEM/MEM-5-inferred-literal-noalloc-part-run.hir
 // "The allocation contract is part of closure and dictionary types."
 // `invoke` is `@noalloc` because its parameter promises it; a function that
 // may allocate is not such a value, whether or not the caller is `@noalloc`.

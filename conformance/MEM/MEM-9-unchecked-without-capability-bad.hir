@@ -1,5 +1,6 @@
 // rule: MEM-9
-// expect: reject MEM-9 at line 7
+// expect: reject MEM-9 at line 8
+// twin: MEM/MEM-9-unchecked-without-capability-ok.hir
 // "unchecked arithmetic ... only with the Unsafe capability, under a written aliasing contract".
 // Aliasing contract — scalar operands hold no memory aliases.
 @noalloc

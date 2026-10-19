@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 13
+// expect: reject PROV-4 at line 14
+// twin: PROV/PROV-4-mixed-join-part-capture-ok.hir
 // An escaping environment owns global values. A tuple whose part joins arena
 // and heap content is as local as every source, as the whole-value join is.
 fn probe(a: Arena, c: bool) -> fn() -> u64 {

@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 4
+// expect: reject GEN-1 at line 5
+// twin: SEM/SEM-5-equality-same-order.hir
 fn equal(x: SortedMap[u32, u8]) -> bool {
   x == x
 }

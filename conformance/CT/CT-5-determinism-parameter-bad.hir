@@ -1,5 +1,6 @@
 // rule: CT-5
-// expect: reject CT-2 at line 9
+// expect: reject CT-2 at line 10
+// twin: CT/CT-5-determinism-parameter-ok.hir
 // "`e` is inside CT-2's closed frame: it reads no parameter", so the text depends only on
 // compile-time inputs and is the same on every compile.
 fn sized(limit: u64) -> Result[Body[fn(u64) -> u64 uses {}], String] {

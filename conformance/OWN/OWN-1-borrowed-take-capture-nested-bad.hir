@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 10
+// expect: reject OWN-1 at line 11
+// twin: OWN/OWN-1-borrowed-take-capture-ok.hir
 // A scoped closure borrows its captures (CLO-1), so a closure created inside
 // it cannot take one of them, exactly as the scoped closure itself cannot.
 fn example(tasks: Tasks, take x: unique Bytes) -> () {

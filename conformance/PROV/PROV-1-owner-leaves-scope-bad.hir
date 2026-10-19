@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 15
+// expect: reject PROV-1 at line 16
+// twin: PROV/PROV-1-owner-leaves-scope-ok.hir
 // "A brand ends when p ... leaves scope."
 fn inspect(s: Slots[u64], id: SlotId[u64] of s) -> () {
   let _ = slots.get(s, id)

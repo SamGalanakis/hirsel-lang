@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-pattern-physical-take-ok.hir
 type Rec {
   items: unique Bytes,
 }

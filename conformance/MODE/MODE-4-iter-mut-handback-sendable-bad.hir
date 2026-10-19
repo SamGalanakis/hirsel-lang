@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 14
+// expect: reject MODE-4 at line 15
+// twin: MODE/MODE-4-iter-mut-handback-sendable-run.hir
 // A plain mut Iter parameter may replace its state with unsendable captures.
 fn step(mut n: u64) -> Option[u64] {
   None

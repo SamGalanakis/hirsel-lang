@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 15
+// expect: reject MODE-1 at line 16
+// twin: MODE/MODE-1-flat-part-through-block-borrowed-ok.hir
 // The generic flat tuple form keeps the local root's locality as well.
 type R[T] {
   part: unique T,

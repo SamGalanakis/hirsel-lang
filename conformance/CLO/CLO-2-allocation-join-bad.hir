@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject MEM-5 at line 13
+// expect: reject MEM-5 at line 14
+// twin: CLO/CLO-4-parameter-authority.hir
 // "The call’s ... @noalloc status [is] the join of callee and closure."
 @noalloc
 fn invoke(f: @noalloc fn() -> u64 uses {}) -> u64 {

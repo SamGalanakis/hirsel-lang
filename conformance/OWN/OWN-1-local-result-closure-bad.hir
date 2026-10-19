@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 12
+// expect: reject OWN-1 at line 13
+// twin: MODE/MODE-1-fresh-local-receiver-capture-ok.hir
 resource type Trace {
   n: u8,
 }

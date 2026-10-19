@@ -1,5 +1,6 @@
 // rule: CONC-2
-// expect: reject CLO-3 at line 15
+// expect: reject CLO-3 at line 16
+// twin: CONC/CONC-2-nested-handle-capture-ok.hir
 fn work(m: Mutex[u64], take x: unique String) -> () {}
 
 fn main(rt: Io) -> Result[(), GrantError] {

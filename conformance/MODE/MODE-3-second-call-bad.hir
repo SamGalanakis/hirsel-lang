@@ -1,5 +1,6 @@
 // rule: MODE-3
-// expect: reject MODE-3 at line 6
+// expect: reject MODE-3 at line 7
+// twin: MODE/MODE-4-written-sendable-positions-run.hir
 // "A once function value may be called at most once."
 fn example(take action: once fn() -> () uses {}) -> () {
   action()

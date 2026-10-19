@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-field-path-result-other-field-ok.hir
 // v22 #77. A result related to p.a must stay within p.a, so it cannot read
 // p.b, directly or through a binding.
 type Pair {

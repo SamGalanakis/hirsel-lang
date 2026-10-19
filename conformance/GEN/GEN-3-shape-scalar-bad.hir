@@ -1,5 +1,6 @@
 // rule: GEN-3
-// expect: reject GEN-3 at line 9
+// expect: reject GEN-3 at line 10
+// twin: CT/CT-3-shape-variant-run.hir
 // "Only nominal record and variant types have a shape."
 type Rec {
   n: u32,

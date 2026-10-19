@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject MEM-11 at line 5
+// expect: reject MEM-11 at line 6
+// twin: MEM/MEM-11-unique-input-ok.hir
 // "shared.freeze(take x" — " unique T)".
 fn freeze(take x: String) -> Shared[String] {
   shared.freeze(take x)

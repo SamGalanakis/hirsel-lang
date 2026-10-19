@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 6
+// expect: reject MEM-5 at line 7
+// twin: MEM/MEM-5-local-binding-ok.hir
 // Returning the nested container requires heap placement in a noalloc body.
 @noalloc
 fn escape() -> List[(List[u64], u64)] {

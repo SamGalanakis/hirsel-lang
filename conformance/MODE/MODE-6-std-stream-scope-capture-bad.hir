@@ -1,5 +1,6 @@
 // rule: MODE-6
-// expect: reject MODE-6 at line 10
+// expect: reject MODE-6 at line 11
+// twin: CLO/CLO-4-std-stream-terminal-run.hir
 @preserves_captures(s)
 fn read(mut s: Scope) -> Result[Option[u64], ()] {
   let _ = task.check_canceled(s)

@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 9
+// expect: reject MODE-4 at line 10
+// twin: MODE/MODE-4-written-agreement-07-written-local-getter-ok.hir
 fn get[T](xs: List[T]) -> T in xs {
   xs[0]
 }

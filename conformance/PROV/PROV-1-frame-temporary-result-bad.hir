@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 16
+// expect: reject PROV-1 at line 17
+// twin: PROV/PROV-1-frame-temporary-result-ok.hir
 // spec: #60
 // "A brand ends when p ... leaves scope." A body's temporaries end before its
 // result reaches the caller, so the result cannot be branded by one of them.

@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 16
+// expect: reject MEM-5 at line 17
+// twin: MEM/MEM-5-closure-local-element-read-run.hir
 // "no block may be constructed whose destination may be the counted heap"
 // Returning the local list itself from a `@noalloc` closure sends its block to
 // the caller, so its construction may reach the counted heap.

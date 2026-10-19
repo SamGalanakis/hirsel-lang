@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 6
+// expect: reject LANG-13 at line 7
+// twin: LANG/LANG-13-or-let-borrow-ok.hir
 // An or-pattern outside match binds plain values or takes its payloads: a
 // borrowed binding would have no single source place.
 fn label(r: Result[String, String]) -> u64 {

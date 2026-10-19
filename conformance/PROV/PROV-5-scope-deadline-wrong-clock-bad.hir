@@ -1,5 +1,6 @@
 // rule: PROV-5
-// expect: reject PROV-5 at line 11
+// expect: reject PROV-5 at line 12
+// twin: PROV/PROV-5-scope-deadline-same-clock-ok.hir
 // An instant of one clock cannot bound a scope on another.
 fn bounded(tasks: Tasks, a: MonotonicClock, b: MonotonicClock) -> Bounded[u64] {
   let now = match clock.monotonic(a) {

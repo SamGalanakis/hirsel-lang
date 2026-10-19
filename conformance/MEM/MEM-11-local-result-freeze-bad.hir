@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject MEM-11 at line 13
+// expect: reject MEM-11 at line 14
+// twin: MEM/MEM-11-unique-input-ok.hir
 fn view(x: List[Bytes]) -> List[Bytes] in x {
   x
 }

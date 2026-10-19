@@ -1,5 +1,6 @@
 // rule: CT-2
-// expect: reject CT-2 at line 9
+// expect: reject CT-2 at line 10
+// twin: CT/CT-3-shape-record-run.hir
 // A shape token describes a type to compile-time code; it is not data.
 type Rec {
   n: u32,

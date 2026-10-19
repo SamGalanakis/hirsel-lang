@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-sorted-map-insert-unretained-order-ok.hir
 // sorted_map.insert takes a String key that `kept` still shares, so the map is
 // aliased after it; only `by` is unretained. Twin is
 // MODE-2-sorted-map-insert-unretained-order-ok.

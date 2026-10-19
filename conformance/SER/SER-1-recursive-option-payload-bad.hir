@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 12
+// expect: reject SER-1 at line 13
+// twin: SER/SER-1-recursive-option-payload-ok.hir
 // A recursive type is refused when a field's schema is not admitted, even
 // inside an Option payload.
 resource type Token {

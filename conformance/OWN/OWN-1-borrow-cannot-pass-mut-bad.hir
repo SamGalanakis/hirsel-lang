@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 9
+// expect: reject OWN-1 at line 10
+// twin: MODE/MODE-1-owned-local-field-loop-reception-run.hir
 // "Local and read-only for the call."
 fn change(mut x: Bytes) -> () {
   x = b"new"

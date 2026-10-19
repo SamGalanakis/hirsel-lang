@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 6
+// expect: reject PROV-1 at line 7
+// twin: PROV/PROV-1-taken-brand-owner-loop-ok.hir
 // A brand cannot name a taken parameter. The declaration is diagnosed also
 // when the body holds a loop, which is then never checked. The accepted twin
 // is PROV-1-taken-brand-owner-loop-ok.

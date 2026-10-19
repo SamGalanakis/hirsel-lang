@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 11
+// expect: reject PROV-2 at line 12
+// twin: PROV/PROV-2-join-unbranded-ok.hir
 // "A value whose brand is a union is a type error at its first branded use."
 // One path gives an unbranded file, so the joined value has no identity to
 // offer a branded parameter.

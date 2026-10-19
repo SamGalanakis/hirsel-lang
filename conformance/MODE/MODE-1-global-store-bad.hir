@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 10
+// expect: reject MODE-1 at line 11
+// twin: MODE/MODE-1-global-store-ok.hir
 // "Local values cannot be stored into global values."
 type Rec {
   items: Bytes,

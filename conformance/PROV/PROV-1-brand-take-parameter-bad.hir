@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 4
+// expect: reject PROV-1 at line 5
+// twin: PROV/PROV-1-brand-take-parameter-ok.hir
 // "Brands never name take parameters."
 fn inspect(take d: Dir, value: File of d) -> () {
   ()

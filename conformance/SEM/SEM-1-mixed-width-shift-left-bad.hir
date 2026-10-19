@@ -1,5 +1,6 @@
 // rule: SEM-1
-// expect: reject SEM-1 at line 6
+// expect: reject SEM-1 at line 7
+// twin: FACT/FACT-3-proof-removal-forms-run.hir
 // "No mixed-width operators".
 @noalloc
 fn mixed(a: u8, b: u16) -> u8 {

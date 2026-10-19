@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 12
+// expect: reject MODE-2 at line 13
+// twin: MODE/MODE-2-parametric-mut-later-argument-share-run.hir
 // A `mut` argument is only reserved while the later arguments are evaluated
 // (LANG-3), and the block argument shares `a` into `keep` before callee entry.
 // So `a` is not unique at entry and the parametric result of `replace`, the

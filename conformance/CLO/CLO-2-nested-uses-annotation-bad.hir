@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 16
+// expect: reject CLO-2 at line 17
+// twin: CLO/CLO-2-nested-uses-annotation-run.hir
 // "A written binding type keeps its written contract" (#58). The parameter
 // `g` of the function held in the tuple is written `uses {}`, so a callback
 // that prints through `rt` exceeds what that part declares.

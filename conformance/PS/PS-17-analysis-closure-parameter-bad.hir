@@ -1,5 +1,6 @@
 // rule: PS-17
-// expect: reject LANG-7 at line 6
+// expect: reject LANG-7 at line 7
+// twin: PS/PS-17-analysis-closure-parameter-ok.hir
 // An analysis annotation stands before a parameter of a function
 // definition only, never a closure's.
 fn apply(x: u64) -> u64 {

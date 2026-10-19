@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 8
+// expect: reject LANG-2 at line 9
+// twin: LANG/LANG-2-core-shadow-bare-variant-ok.hir
 // A bare `Net` that a same-package variant spells no longer falls back to core's
 // Net type; with no expected type it names no variant.
 type Event = Net(u8) | Quiet

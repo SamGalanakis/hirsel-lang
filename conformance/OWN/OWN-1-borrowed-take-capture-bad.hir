@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 9
+// expect: reject OWN-1 at line 10
+// twin: OWN/OWN-1-borrowed-take-capture-ok.hir
 // A task closure that takes a capture owns it. A borrowed parameter is not
 // the function's to give away. The scope callback is the first closure that
 // would have to own it.

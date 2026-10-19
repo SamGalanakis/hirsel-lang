@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 4
+// expect: reject PROV-1 at line 5
+// twin: PROV/PROV-1-std-sorted-map-get-brand-ok.hir
 fn access(a: Order[u64], b: Order[u64], mut m: unique SortedMap[u64, u64] of a) {
   let _ = sorted_map.get(b, m, 1)
 }

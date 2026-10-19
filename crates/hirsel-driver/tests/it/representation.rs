@@ -250,10 +250,10 @@ fn opaque_package_controls_preserve_private_operations_and_diagnostic_sites() {
             }
         }
         for (slug, line) in [
-            ("construct", 4),
-            ("read", 4),
-            ("destructure", 6),
-            ("alias-chain", 8),
+            ("construct", 5),
+            ("read", 5),
+            ("destructure", 7),
+            ("alias-chain", 9),
         ] {
             let path = root.join(format!(
                 "conformance/PROG/PROG-2-opaque-client-{slug}-bad.hir"

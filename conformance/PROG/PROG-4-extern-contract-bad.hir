@@ -1,3 +1,4 @@
 // rule: PROG-4
-// expect: reject PROG-4 at line 3
+// expect: reject PROG-4 at line 4
+// twin: PROG/PROG-4-ffi-null-api-ok.hir
 extern "c" fn add(u: Unsafe, a: i32, b: i32) -> i32

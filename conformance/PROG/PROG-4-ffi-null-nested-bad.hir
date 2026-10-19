@@ -1,4 +1,5 @@
 // rule: PROG-4
-// expect: reject PROG-4 at line 4
+// expect: reject PROG-4 at line 5
+// twin: PROG/PROG-4-ffi-null-api-ok.hir
 /// Returns a nullable byte pointer.
 extern "c" fn nested(u: Unsafe) -> Option[Option[Ptr[u8]]]

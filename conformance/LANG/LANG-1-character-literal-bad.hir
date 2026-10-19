@@ -1,5 +1,6 @@
 // rule: LANG-1
-// expect: reject LANG-1 at line 4
+// expect: reject LANG-1 at line 5
+// twin: LANG/LANG-1-character-literal-ok.hir
 fn newline(c: char) -> bool {
   c == 'ab'
 }

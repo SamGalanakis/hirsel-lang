@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 8
+// expect: reject PROV-1 at line 9
+// twin: PROV/PROV-1-file-stream-dir-ok.hir
 pub fn read(d: Dir, other: Dir, mut f: File of d, mut buffer: List[u8]) -> Result[
   u64,
   FileError

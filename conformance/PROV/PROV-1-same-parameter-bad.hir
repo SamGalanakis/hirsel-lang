@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 9
+// expect: reject PROV-1 at line 10
+// twin: PROV/PROV-1-same-parameter-ok.hir
 // "An operation taking a branded value requires the same p."
 fn inspect(d: Dir, value: File of d) -> () {
   ()

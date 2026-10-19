@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 24
+// expect: reject MODE-1 at line 25
+// twin: MODE/MODE-1-last-use-early-return-drop-ok.hir
 // On the early-return path the holder is dropped after the `mut`, a use on that path (LANG-3).
 resource type Guard {
   data: Bytes,

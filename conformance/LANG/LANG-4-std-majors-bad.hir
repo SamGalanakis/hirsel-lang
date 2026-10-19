@@ -1,5 +1,6 @@
 // rule: LANG-4
-// expect: reject LANG-4 at line 4
+// expect: reject LANG-4 at line 5
+// twin: LANG/LANG-4-std-majors-ok.hir
 pub fn main(t: Test) -> Result[(), ()] {
   test.check(t, string.starts_with("abc", "a"))
   Ok(())

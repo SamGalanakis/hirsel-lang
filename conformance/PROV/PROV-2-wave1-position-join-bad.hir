@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 11
+// expect: reject PROV-2 at line 12
+// twin: PROV/PROV-2-wave1-position-join-ok.hir
 fn example(a: String, b: String, select: bool) -> () {
   let position = if select {
     string.position(a, 0)

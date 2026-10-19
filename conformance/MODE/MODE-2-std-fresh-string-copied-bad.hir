@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 7
+// expect: reject MODE-2 at line 8
+// twin: MODE/MODE-2-std-decode-lossy-unique-ok.hir
 // A fresh std result shared by a copy is no longer unique.
 fn label(n: u64) -> unique String uses {} {
   let text = u64.to_string(n)

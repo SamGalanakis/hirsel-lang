@@ -1,5 +1,6 @@
 // rule: CT-1
-// expect: reject CT-1 at line 10
+// expect: reject CT-1 at line 11
+// twin: CT/CT-2-closed-frame-run.hir
 // "A failure ... during comptime is a compile error".
 @noalloc
 fn positive(x: u32) -> u32

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 4
+// expect: reject MODE-2 at line 5
+// twin: SEM/SEM-5-std-map-owned-cycle-run.hir
 fn remove(mut m: Map[u64, String]) -> Option[String] {
   map.remove(mut m, 1)
 }

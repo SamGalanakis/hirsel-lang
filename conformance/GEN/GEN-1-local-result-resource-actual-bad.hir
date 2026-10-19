@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 15
+// expect: reject GEN-1 at line 16
+// twin: LANG/LANG-2-expected-holder-modes-ok.hir
 resource type Trace {
   n: u8,
 }

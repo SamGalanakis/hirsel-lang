@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 5
+// expect: reject PROV-1 at line 6
+// twin: PROV/PROV-1-group-other-proc-ok.hir
 // A ChildGroup's operations take the Proc that spawned it.
 pub fn feed(p: Proc, other: Proc, mut g: ChildGroup of p) -> Result[(), ProcessError] {
   group.write(other, mut g, b"ping\n")

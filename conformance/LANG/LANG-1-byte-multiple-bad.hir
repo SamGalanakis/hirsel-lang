@@ -1,5 +1,6 @@
 // rule: LANG-1
-// expect: reject LANG-1 at line 5
+// expect: reject LANG-1 at line 6
+// twin: LANG/LANG-1-byte-multiple-ok.hir
 // Two bytes are a byte string, not a byte literal.
 fn byte() -> u8 {
   b'ab'

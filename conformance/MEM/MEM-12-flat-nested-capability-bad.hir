@@ -1,5 +1,6 @@
 // rule: MEM-12
-// expect: reject MEM-12 at line 7
+// expect: reject MEM-12 at line 8
+// twin: MEM/MEM-12-flat-nested-capability-ok.hir
 type Holder[T] {
   value: T,
 }

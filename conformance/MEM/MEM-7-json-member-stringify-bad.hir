@@ -1,5 +1,6 @@
 // rule: MEM-7
-// expect: reject LANG-7 at line 7
+// expect: reject LANG-7 at line 8
+// twin: MEM/MEM-7-json-member-stringify-run.hir
 // There is no implicit unboxing: a `box json.Value` is not a `json.Value`.
 // json.Value's own members are unboxed, so a selected member needs none.
 // The accepted twin is MEM-7-json-member-stringify-run.hir.

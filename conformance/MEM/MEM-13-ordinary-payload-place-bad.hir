@@ -1,5 +1,6 @@
 // rule: MEM-13
-// expect: reject MEM-13 at line 7
+// expect: reject MEM-13 at line 8
+// twin: MEM/MEM-13-ordinary-payload-place-ok.hir
 // "Ordinary variant values ... expose no payload places".
 type Choice = Small(value: u64) | Large(value: u64, extra: u64)
 

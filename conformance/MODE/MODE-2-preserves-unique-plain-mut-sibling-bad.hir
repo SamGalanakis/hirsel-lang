@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 18
+// expect: reject MODE-2 at line 19
+// twin: MODE/MODE-2-preserves-unique-plain-mut-sibling-ok.hir
 // The selected argument itself must still be unique: an `out` copied from a
 // parameter stays aliased, whatever the cursor. Twin is
 // MODE-2-preserves-unique-plain-mut-sibling-ok.

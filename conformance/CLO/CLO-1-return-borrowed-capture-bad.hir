@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject MODE-1 at line 14
+// expect: reject MODE-1 at line 15
+// twin: CLO/CLO-1-return-local-capture-run.hir
 // "Captures are borrows."
 // Over a borrowed r the environment-local result stays local and cannot be taken.
 type Rec {

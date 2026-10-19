@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 12
+// expect: reject MODE-4 at line 13
+// twin: MODE/MODE-4-written-callable-owner-share-ok.hir
 fn whole(take jobs: sendable List[sendable fn() -> u64]) {}
 
 fn bad() {

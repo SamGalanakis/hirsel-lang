@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 6
+// expect: reject MODE-2 at line 7
+// twin: MODE/MODE-2-nested-view-phantom-ok.hir
 fn inspect(x: Ptr[List[Bytes]]) {}
 
 fn probe(x: Ptr[unique List[Bytes]]) {

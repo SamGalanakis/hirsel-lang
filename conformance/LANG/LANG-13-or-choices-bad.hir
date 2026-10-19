@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 6
+// expect: reject LANG-13 at line 7
+// twin: LANG/LANG-13-or-choices-ok.hir
 // A pattern matches in at most 256 ways through its alternatives.
 fn small(p: (u8, u8, u8, u8, u8)) -> bool {
   match p {

@@ -1,5 +1,6 @@
 // rule: CAP-1
-// expect: reject CAP-1 at line 5
+// expect: reject CAP-1 at line 6
+// twin: CAP/CAP-1-process-run-ok.hir
 // A Dir names the child's working directory; it is not authority to run a program.
 pub fn status(d: Dir) -> Result[ProcessOutput, ProcessError] {
   proc.run(

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: CAP/CAP-2-file-map-run.hir
 // A mapped.with body borrows the mapped bytes: its view is local to the body, so it
 // cannot leave as the body's result and outlive the mapping it reads.
 fn keep(d: Dir) -> Result[Bytes, FileError] uses {d} {

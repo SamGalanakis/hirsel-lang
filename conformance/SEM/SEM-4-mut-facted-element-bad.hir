@@ -1,5 +1,6 @@
 // rule: SEM-4
-// expect: reject SEM-4 at line 7
+// expect: reject SEM-4 at line 8
+// twin: SEM/SEM-4-mut-facted-element-ok.hir
 // "the element type may not carry facts".
 distinct type Percent(v: u8) where v <= 100
 

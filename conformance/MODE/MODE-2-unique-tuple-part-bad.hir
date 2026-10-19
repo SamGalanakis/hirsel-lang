@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 7
+// expect: reject MODE-2 at line 8
+// twin: MODE/MODE-2-unique-tuple-part-ok.hir
 // An expected tuple type supplies the part contracts, and a value shared by
 // a copy no longer satisfies a unique part.
 fn shared(take x: unique Bytes) -> (unique Bytes, Bytes) {

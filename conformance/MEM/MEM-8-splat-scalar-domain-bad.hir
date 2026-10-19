@@ -1,5 +1,6 @@
 // rule: MEM-8
-// expect: reject MEM-8 at line 9
+// expect: reject MEM-8 at line 10
+// twin: SER/SER-2-vectors-run.hir
 // Section 22 limits A to integer, float or bool scalars.
 type Lane {
   value: u8,

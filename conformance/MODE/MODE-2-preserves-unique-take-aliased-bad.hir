@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 13
+// expect: reject MODE-2 at line 14
+// twin: MODE/MODE-2-preserves-unique-take-ok.hir
 // An aliased taken input yields an aliased result.
 @preserves_unique(builder)
 fn finish(take builder: List[u8]) -> Bytes uses {} {

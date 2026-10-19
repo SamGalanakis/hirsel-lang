@@ -1,5 +1,6 @@
 // rule: CONC-2
-// expect: reject CONC-2 at line 5
+// expect: reject CONC-2 at line 6
+// twin: CONC/CONC-2-task-set-parameter-ok.hir
 // A parameter taking a task set holds its caller's obligation; dropping it leaks the
 // members' joins.
 fn forget(s: Scope, take set: TaskSet[u64] of s) -> () {}

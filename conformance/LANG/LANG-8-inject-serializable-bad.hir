@@ -1,6 +1,6 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 16
-// twin: LANG-8-inject-serializable-ok.hir
+// twin: LANG/LANG-8-inject-serializable-ok.hir
 // The no-arm fix on a serializable error notes that the arm changes its stored and wire schema.
 @serializable
 type RateError = Unknown()

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 7
+// expect: reject MODE-2 at line 8
+// twin: MODE/MODE-2-unique-record-part-ok.hir
 // An element type declared unique is a contract of the sequence, and a value
 // shared by a copy no longer satisfies it.
 fn list(take x: unique Bytes) -> List[unique Bytes] {

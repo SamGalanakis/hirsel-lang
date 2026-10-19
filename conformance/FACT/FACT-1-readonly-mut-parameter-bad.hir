@@ -1,5 +1,6 @@
 // rule: FACT-1
-// expect: reject FACT-1 at line 9
+// expect: reject FACT-1 at line 10
+// twin: FACT/FACT-1-borrowed-resource-clause-run.hir
 fn poke(mut xs: List[u8]) -> bool {
   xs[0] = 9u8
   true

@@ -1,5 +1,6 @@
 // rule: MODE-3
-// expect: reject MODE-3 at line 9
+// expect: reject MODE-3 at line 10
+// twin: MODE/MODE-4-written-agreement-23-taken-capture-ok.hir
 // "Closures that take captures ... are once."
 fn sink(take x: Bytes) -> () {
   ()

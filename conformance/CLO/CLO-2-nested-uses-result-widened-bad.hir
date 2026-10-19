@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 21
+// expect: reject CLO-2 at line 22
+// twin: CLO/CLO-2-nested-uses-annotation-run.hir
 // "Uses restrictions may narrow, never widen", at every depth (#58). `pass`
 // requires a function whose result is `uses {}`; `p` is written to return a
 // function with open `uses`, which here prints through `rt`, so passing it

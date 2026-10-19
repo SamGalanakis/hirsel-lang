@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 22
+// expect: reject MEM-5 at line 23
+// twin: MEM/MEM-5-closure-bound-closure-call-run.hir
 // The rejected twin, where the bound closure calls a function that may allocate,
 // so calling it is an allocating call inside the `@noalloc` closure body.
 @noalloc

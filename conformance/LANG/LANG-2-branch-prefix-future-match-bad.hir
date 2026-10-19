@@ -1,5 +1,6 @@
 // rule: LANG-2
-// expect: reject LANG-2 at line 5
+// expect: reject LANG-2 at line 6
+// twin: LANG/LANG-2-branch-prefix-guard-bottom-ok.hir
 fn probe(b: bool) {
   let x = match b {
     true => 1,

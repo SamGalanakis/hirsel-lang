@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject MODE-4 at line 21
+// expect: reject MODE-4 at line 22
+// twin: CLO/CLO-2-mut-handback-erased-state-annotated-run.hir
 // The twin of CLO-2-mut-handback-erased-state-annotated-run without the
 // written type. The binding's inferred state holds no authority, and
 // `restart` may store any `Iter[u64]` in it (spec #91).

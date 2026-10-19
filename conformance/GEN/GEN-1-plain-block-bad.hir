@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 11
+// expect: reject GEN-1 at line 12
+// twin: GEN/GEN-1-inert-capability-ok.hir
 // Shows "Structural, computed from the type, no user instances."
 @noalloc
 fn bound[T: plain](x: T) -> () {

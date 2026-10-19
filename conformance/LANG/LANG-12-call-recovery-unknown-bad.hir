@@ -1,5 +1,6 @@
 // rule: LANG-12
-// expect: reject LANG-12 at line 6
+// expect: reject LANG-12 at line 7
+// twin: LANG/LANG-12-call-recovery-labelled-ok.hir
 fn rename(from x: u8, to y: u8) {}
 
 fn probe() {

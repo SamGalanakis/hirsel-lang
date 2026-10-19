@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 4
+// expect: reject MODE-2 at line 5
+// twin: MODE/MODE-2-box-payload-unique-ok.hir
 fn probe(take xs: List[Bytes]) {
   let b: box unique List[Bytes] = box take xs
 }

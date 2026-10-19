@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 5
+// expect: reject CAP-2 at line 6
+// twin: CAP/CAP-2-lexical-generic-inert-ok.hir
 fn example() {
   fn discard[T: inert](take value: T) {}
   let f: fn(take Io) uses {} = discard

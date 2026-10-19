@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 10
+// expect: reject MODE-1 at line 11
+// twin: MODE/MODE-1-unique-taken-argument-ok.hir
 // Twin of the accept. A result that omits the taken parameter z cannot keep a
 // unique copy of z's storage past the frame, as `copy z` cannot (P2).
 fn id(a: Arena, x: Bytes in a) -> Bytes in {a, x} {

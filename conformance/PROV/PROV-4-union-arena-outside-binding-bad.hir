@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 15
+// expect: reject PROV-4 at line 16
+// twin: PROV/PROV-4-union-arena-outside-binding-ok.hir
 // v22 R3. selected may hold a bound loan on either arena. A view related
 // only to a cannot hold content placed in b.
 type View {

@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 4
+// expect: reject LANG-7 at line 5
+// twin: LANG/LANG-7-exhaustive-product-option-bool-run.hir
 fn classify(p: (Option[u8], bool)) -> u64 {
   match p {
     (Some(n), true) => 1,

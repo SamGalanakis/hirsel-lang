@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 16
+// expect: reject MODE-2 at line 17
+// twin: MODE/MODE-2-copied-callable-getter-result-share-ok.hir
 fn needs_unique(x: unique String) {}
 
 fn pass[T: copyable](x: T) -> T in x {

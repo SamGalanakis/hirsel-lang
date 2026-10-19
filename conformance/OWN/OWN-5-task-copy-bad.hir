@@ -1,5 +1,6 @@
 // rule: OWN-5
-// expect: reject OWN-5 at line 5
+// expect: reject OWN-5 at line 6
+// twin: OWN/OWN-5-task-sender-free-use-run.hir
 // "Noncopyable ... task handles ... Moved or borrowed only."
 fn example(s: Scope, take x: Task[u64] of s) -> () {
   let y = copy x

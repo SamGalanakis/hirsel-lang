@@ -1,5 +1,6 @@
 // rule: PROG-2
-// expect: reject PROG-2 at line 4
+// expect: reject PROG-2 at line 5
+// twin: PROG/PROG-1-source-dependencies-run.hir
 pub fn main(t: Test) -> Result[(), ()] {
   test.check(t, vendor.secret() == 42)
   Ok(())

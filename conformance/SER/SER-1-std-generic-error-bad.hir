@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 7
+// expect: reject SER-1 at line 8
+// twin: SER/SER-2-std-conditional-run.hir
 // A std generic error is serializable exactly when the type argument its fields use is.
 fn encode[T: serializable](x: T) {}
 

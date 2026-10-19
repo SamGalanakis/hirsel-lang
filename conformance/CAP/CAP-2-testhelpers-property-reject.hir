@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CLO-2 at line 11
+// expect: reject CLO-2 at line 12
+// twin: CAP/CAP-2-testhelpers-property-accept.hir
 // entry: trial
 fn trial(t: Test) {
   test.property(

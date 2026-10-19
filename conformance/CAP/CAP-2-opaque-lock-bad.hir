@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 3
+// expect: reject CAP-2 at line 4
+// twin: CAP/CAP-2-opaque-lock-ok.hir
 pub opaque type Key: plain + sendable + inert uses {} {
   t: Tasks,
   m: Mutex[u32],

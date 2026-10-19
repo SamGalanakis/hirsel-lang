@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 11
+// expect: reject MEM-5 at line 12
+// twin: MEM/MEM-5-function-field-call-ok.hir
 // "Every call goes through a signature declared @noalloc." A function held
 // in a field is called by the field's type, which promises no `@noalloc`.
 type Holder {

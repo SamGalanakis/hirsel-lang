@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject MODE-4 at line 27
+// expect: reject MODE-4 at line 28
+// twin: CLO/CLO-2-mut-handback-erased-state-run.hir
 // A `mut` argument is written back through its parameter. `it` is inferred
 // from `iter.from(0u64, next_value)`, so its state holds no authority, while a
 // written `Iter[u64]` parameter states unknown captures. `reset` may store a

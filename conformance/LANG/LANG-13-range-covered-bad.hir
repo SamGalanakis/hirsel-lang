@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 8
+// expect: reject LANG-13 at line 9
+// twin: LANG/LANG-13-range-covered-ok.hir
 // A range pattern no value reaches, because earlier arms match every value
 // it matches, is rejected.
 fn bucket(n: u32) -> u32 {

@@ -1,5 +1,6 @@
 // rule: CT-5
-// expect: reject CT-1 at line 9
+// expect: reject CT-1 at line 10
+// twin: CT/CT-5-std-derive-nested-option-ok.hir
 // A nested Option, here as a List element, has no JSON form: null cannot tell `None`
 // from `Some(None)`, so the generator's Error names the type.
 type Setting {

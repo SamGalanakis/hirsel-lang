@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 13
+// expect: reject PROV-1 at line 14
+// twin: PROV/PROV-1-container-move-ok.hir
 // "Moving ... the container ends [its brand]."
 fn inspect(s: Slots[u64], id: SlotId[u64] of s) -> () {
   let _ = slots.get(s, id)

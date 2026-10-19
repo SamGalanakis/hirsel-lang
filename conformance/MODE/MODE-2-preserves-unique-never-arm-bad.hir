@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: MODE/MODE-2-preserves-unique-never-arm-ok.hir
 // A diverging arm adds nothing to the match, but the other arm's real
 // alias still breaks the promise. Twin is
 // MODE-2-preserves-unique-never-arm-ok.

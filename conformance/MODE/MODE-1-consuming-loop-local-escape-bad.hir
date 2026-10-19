@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-consuming-loop-local-escape-ok.hir
 // Each element a consuming loop binds is as local as the collection it came
 // from. An element of a local collection cannot be kept in global storage.
 type Keep {

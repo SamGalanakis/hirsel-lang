@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 12
+// expect: reject OWN-1 at line 13
+// twin: OWN/OWN-1-borrowed-assign-resource-ok.hir
 // "Caller keeps it." A borrowed resource cannot be shared, so assigning it
 // into owned storage would move it out of its caller (issue #73).
 resource type Token {

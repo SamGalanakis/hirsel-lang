@@ -1,5 +1,6 @@
 // rule: SEM-4
-// expect: reject SEM-4 at line 6
+// expect: reject SEM-4 at line 7
+// twin: SEM/SEM-4-range-exclusive.hir
 fn consume(take r: Iter[u8]) {}
 
 fn probe() {

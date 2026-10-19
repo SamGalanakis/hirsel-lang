@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 28
+// expect: reject MEM-5 at line 29
+// twin: MEM/MEM-5-discarded-temporary-cleanup-run.hir
 // "Implicit destruction is a call for this rule, including replacements,
 // discarded temporaries and every exit path." The `@noalloc` closure body
 // discards the `Token` that `make()` returns, so the frame destroys it, and

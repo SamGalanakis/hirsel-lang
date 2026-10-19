@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
+// expect: reject MODE-2 at line 10
+// twin: SEM/SEM-4-wave1-counted-run.hir
 @noalloc
 fn compare(a: u64, b: u64) -> i32 uses {} {
   0i32

@@ -1,5 +1,6 @@
 // rule: OWN-8
-// expect: reject OWN-8 at line 16
+// expect: reject OWN-8 at line 17
+// twin: OWN/OWN-1-mut-storage-borrowed-field-ok.hir
 // "To move a part out of an owned value, destructure the whole." Assigning a
 // noncopyable field into other storage would move that part (issue #73).
 resource type Token {

@@ -1,5 +1,6 @@
 // rule: CAP-3
-// expect: reject CAP-3 at line 8
+// expect: reject CAP-3 at line 9
+// twin: CAP/CAP-3-known-function-value-uses-ok.hir
 fn effect(io: Io) {}
 
 fn apply(f: fn(Io) uses {}) {}

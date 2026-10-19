@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 7
+// expect: reject PROV-1 at line 8
+// twin: PROV/PROV-1-borrowed-result-brand-clause-run.hir
 type R {
   value: Bytes,
 }

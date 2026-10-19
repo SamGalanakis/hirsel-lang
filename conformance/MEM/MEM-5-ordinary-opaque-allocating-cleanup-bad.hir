@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 24
+// expect: reject MEM-5 at line 25
+// twin: DROP/DROP-2-destructure-opaque-run.hir
 pub opaque resource type Domain: inert uses {} {
   n: u64,
 }

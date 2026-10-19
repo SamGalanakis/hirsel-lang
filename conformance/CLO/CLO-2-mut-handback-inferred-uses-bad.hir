@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 24
+// expect: reject CLO-2 at line 25
+// twin: CLO/CLO-2-mut-handback-uses-run.hir
 // An unannotated binding's type is the one inferred where it is declared.
 // Here `quiet()` is `uses {}`, so the binding is, and it cannot be handed to an
 // open-`uses` `mut` parameter that may store a function holding authority.

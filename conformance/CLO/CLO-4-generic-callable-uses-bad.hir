@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 8
+// expect: reject CLO-4 at line 9
+// twin: CLO/CLO-4-lexical-generic-uses-ok.hir
 fn effect[T](io: Io, take value: T) -> T {
   value
 }

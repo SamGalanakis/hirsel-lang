@@ -1,5 +1,6 @@
 // rule: CONC-5
-// expect: reject MODE-1 at line 15
+// expect: reject MODE-1 at line 16
+// twin: CONC/CONC-5-unique-payload-part-ok.hir
 // A plain copy of part of a mutex payload shares the payload's blocks, so it can neither
 // leave the body nor cross back to the caller.
 type Board {

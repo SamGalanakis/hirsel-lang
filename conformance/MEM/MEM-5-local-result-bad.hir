@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 6
+// expect: reject MEM-5 at line 7
+// twin: SEM/SEM-3-csv-run.hir
 // "no block may be constructed whose destination may be the counted heap"; "no ... deep copy not proven unnecessary".
 @noalloc
 fn make(x: String) -> String in x {

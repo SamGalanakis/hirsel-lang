@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 12
+// expect: reject PROV-4 at line 13
+// twin: PROV/PROV-4-escaping-heap-mut-parameter-capture-ok.hir
 // Writing the closure into caller storage through a mut parameter lets it outlive the arena.
 type H {
   f: fn() -> u64,

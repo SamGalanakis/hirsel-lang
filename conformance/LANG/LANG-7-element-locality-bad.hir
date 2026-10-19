@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 6
+// expect: reject LANG-7 at line 7
+// twin: LANG/LANG-7-alias-field-locality-ok.hir
 
 // An element is as local as its collection, so a type argument writes no locality.
 

@@ -1,5 +1,6 @@
 // rule: OWN-5
-// expect: reject OWN-5 at line 16
+// expect: reject OWN-5 at line 17
+// twin: OWN/OWN-5-task-sender-free-use-run.hir
 // "Noncopyable ... Moved or borrowed only."
 resource type Token {
   n: u64,

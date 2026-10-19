@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 11
+// expect: reject GEN-1 at line 12
+// twin: GEN/GEN-1-flat-bytes-record-ok.hir
 // MEM-12 keeps flat storage opt-in; compatible fields do not grant root Flatness.
 type Text {
   value: Bytes,

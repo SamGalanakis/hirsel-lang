@@ -1,5 +1,6 @@
 // rule: SEM-4
-// expect: reject SEM-4 at line 8
+// expect: reject SEM-4 at line 9
+// twin: SEM/SEM-4-map-call-source.hir
 fn value() -> u64 {
   1
 }

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 13
+// expect: reject MODE-1 at line 14
+// twin: MODE/MODE-1-shortest-argument-ok.hir
 // "At the call site it is local to the shortest-lived of them."
 fn choose(a: Bytes, b: Bytes, pick: bool) -> Bytes in {a, b} {
   if pick {

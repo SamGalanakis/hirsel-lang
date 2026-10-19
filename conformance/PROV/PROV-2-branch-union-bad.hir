@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 14
+// expect: reject PROV-2 at line 15
+// twin: PROV/PROV-2-branch-union-ok.hir
 // "At branch joins brands take the union ... type error at its first branded use."
 fn inspect(d: Dir, value: File of d) -> () {
   ()

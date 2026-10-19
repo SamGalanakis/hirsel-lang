@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 11
+// expect: reject CAP-2 at line 12
+// twin: CAP/CAP-2-nested-generic-captured-wrapper-inert-ok.hir
 type Wrap[T] {
   value: T,
 }

@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 3
+// expect: reject CAP-2 at line 4
+// twin: CAP/CAP-2-opaque-dir-ok.hir
 pub opaque type Box: plain + sendable + inert uses {} {
   d: Dir,
 }

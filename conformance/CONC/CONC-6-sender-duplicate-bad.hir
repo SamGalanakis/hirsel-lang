@@ -1,5 +1,6 @@
 // rule: CONC-6
-// expect: reject OWN-5 at line 5
+// expect: reject OWN-5 at line 6
+// twin: CONC/CONC-6-sender-duplicate-ok.hir
 // "A Sender is a noncopyable resource, duplicated with sender.dup(tasks, s)".
 fn duplicate(tasks: Tasks, s: Sender[u32]) -> () {
   let other = copy s

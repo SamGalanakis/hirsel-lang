@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 16
+// expect: reject SEM-3 at line 17
+// twin: SEM/SEM-3-format-record-run.hir
 // A declared type without @format has no f-string text, even when a fitting
 // function exists; the hole names the type and @format.
 type Point {

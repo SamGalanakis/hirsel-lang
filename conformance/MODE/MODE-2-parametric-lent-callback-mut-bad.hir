@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 18
+// expect: reject MODE-2 at line 19
+// twin: MODE/MODE-2-parametric-lent-pure-callback-ok.hir
 // A callback lent a U with a counted `mut` parameter can store a copy of the U
 // there, so tap's result shares with `log`. Twin is
 // MODE-2-parametric-lent-pure-callback-ok.

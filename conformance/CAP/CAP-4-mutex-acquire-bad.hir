@@ -1,5 +1,6 @@
 // rule: CAP-4
-// expect: reject CAP-4 at line 5
+// expect: reject CAP-4 at line 6
+// twin: CAP/CAP-4-mutex-acquire-ok.hir
 // "Every atomic operation and every mutex acquisition takes the Tasks capability".
 fn operation(tasks: Tasks, m: Mutex[u32]) -> () {
   mutex.with(

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 5
+// expect: reject MODE-2 at line 6
+// twin: MODE/MODE-2-unique-mut-handback-restored-ok.hir
 // "Only unique whole-value assignments."
 fn example(mut x: unique Bytes, take y: Bytes) -> () {
   x = take y

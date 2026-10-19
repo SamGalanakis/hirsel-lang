@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 17
+// expect: reject MODE-1 at line 18
+// twin: MODE/MODE-1-owned-local-receiver-after-fresh-ok.hir
 fn view(x: Bytes) -> Bytes in x {
   copy x
 }

@@ -1,5 +1,6 @@
 // rule: CAP-3
-// expect: reject CAP-3 at line 8
+// expect: reject CAP-3 at line 9
+// twin: CAP/CAP-3-unrestricted-callback-value-ok.hir
 fn repeat(f: fn() -> u64 uses {}) -> u64 {
   f()
 }

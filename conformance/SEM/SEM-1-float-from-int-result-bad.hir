@@ -1,5 +1,6 @@
 // rule: SEM-1
-// expect: reject SEM-1 at line 4
+// expect: reject SEM-1 at line 5
+// twin: SEM/SEM-1-float-from-int-run.hir
 fn convert(x: u64) -> u64 {
   float.from_int(x)
 }

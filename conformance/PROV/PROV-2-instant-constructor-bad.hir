@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROG-2 at line 4
+// expect: reject PROG-2 at line 5
+// twin: PROV/PROV-2-instant-same-clock-ok.hir
 fn example() -> Instant {
   Instant(ticks: 0)
 }

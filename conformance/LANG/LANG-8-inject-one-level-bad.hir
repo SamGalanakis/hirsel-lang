@@ -1,6 +1,6 @@
 // rule: LANG-8
 // expect: reject LANG-8 at line 16
-// twin: LANG-8-inject-one-level-ok.hir
+// twin: LANG/LANG-8-inject-one-level-ok.hir
 // Injection is one level deep: StartError carries StoreError, which carries FileProblem.
 type FileProblem = NotFound()
 

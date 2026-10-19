@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 13
+// expect: reject OWN-1 at line 14
+// twin: OWN/OWN-1-map-borrow-resource-read-ok.hir
 // The first access obligation cites the complete operation (docs/spec/diagnostics.md).
 resource type Token {
   n: u8,

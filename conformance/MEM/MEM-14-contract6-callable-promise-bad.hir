@@ -1,5 +1,6 @@
 // rule: MEM-14
-// expect: reject MEM-14 at line 11
+// expect: reject MEM-14 at line 12
+// twin: MEM/MEM-14-contract6-callable-promise-ok.hir
 // A function value must state every guarantee its receiving type requires.
 fn plain(mut it: Iter[u64]) -> Option[u64] {
   None

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 19
+// expect: reject MODE-2 at line 20
+// twin: MODE/MODE-2-parametric-named-handle-part-ok.hir
 // Thunk's `make` field returns a T, which can be one the caller still holds, so
 // force's result is aliased. Twin is MODE-2-parametric-named-handle-part-ok.
 pub type Thunk[T] {

@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 6
+// expect: reject CLO-4 at line 7
+// twin: CLO/CLO-4-contract6-held-selection-ok.hir
 // A callable type's @captures selection is part of what a held function value
 // must promise. A closure built inside another closure's body promises none.
 fn first() {

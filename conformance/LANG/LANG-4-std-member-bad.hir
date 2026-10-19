@@ -1,5 +1,6 @@
 // rule: LANG-4
-// expect: reject LANG-4 at line 4
+// expect: reject LANG-4 at line 5
+// twin: LANG/LANG-8-tour-07-path-time-run.hir
 pub fn main(t: Test) -> Result[(), ()] {
   string.unknown_member("abc")
   Ok(())

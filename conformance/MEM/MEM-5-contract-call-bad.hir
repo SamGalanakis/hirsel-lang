@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 10
+// expect: reject MEM-5 at line 11
+// twin: MEM/MEM-5-contract-call-ok.hir
 // "contracts included"; calls require a noalloc signature.
 fn allocates(x: u8) -> bool {
   true

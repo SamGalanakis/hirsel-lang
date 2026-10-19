@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 12
+// expect: reject PROV-4 at line 13
+// twin: PROV/PROV-4-mixed-join-unique-ok.hir
 // The same extraction from a join with an arena parameter. A deep copy is made
 // where its source lives (MEM-5), which the join no longer names.
 fn probe(a: Arena, c: bool, take x: String in a) -> String {

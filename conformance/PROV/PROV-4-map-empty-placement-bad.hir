@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 7
+// expect: reject PROV-4 at line 8
+// twin: PROV/PROV-4-map-empty-placement-ok.hir
 // A Map that map.empty() placed in an arena cannot be kept where no placement is
 // declared.
 fn keep(a: Arena) -> Map[u64, u64] {

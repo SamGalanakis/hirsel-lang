@@ -1,5 +1,6 @@
 // rule: OWN-5
-// expect: reject OWN-5 at line 14
+// expect: reject OWN-5 at line 15
+// twin: OWN/OWN-5-task-sender-free-use-run.hir
 // "Noncopyable ... Moved or borrowed only."
 // A task closure copies a free use it does not take (CLO-3), and a Sender cannot be
 // copied, so naming the parent's Sender without `take` is rejected.

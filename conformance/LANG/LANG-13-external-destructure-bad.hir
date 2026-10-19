@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 6
+// expect: reject LANG-13 at line 7
+// twin: LANG/LANG-13-external-destructure-ok.hir
 type Held = resource_probe@1/owner.Token
 
 fn probe(take token: Held) -> u64 {

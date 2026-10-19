@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 6
+// expect: reject CAP-2 at line 7
+// twin: CAP/CAP-2-typed-heap-inert-ok.hir
 fn need[T: inert](x: T) {}
 
 fn probe(a: Arena) {

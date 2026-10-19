@@ -1,5 +1,6 @@
 // rule: CLO-4
-// expect: reject CLO-4 at line 16
+// expect: reject CLO-4 at line 17
+// twin: CLO/CLO-4-contract6-creation-run.hir
 type Relay[S, N] {
   state: S,
   next: N,

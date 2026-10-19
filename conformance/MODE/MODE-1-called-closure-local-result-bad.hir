@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 11
+// expect: reject MODE-1 at line 12
+// twin: MODE/MODE-1-called-closure-local-result-ok.hir
 // "A value is global or local."
 // The called closure's inferred result is local to its borrowed capture, so
 // the call cannot be returned as a global value.

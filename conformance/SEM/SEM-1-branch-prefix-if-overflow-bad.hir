@@ -1,5 +1,6 @@
 // rule: SEM-1
-// expect: reject SEM-1 at line 7
+// expect: reject SEM-1 at line 8
+// twin: LANG/LANG-2-branch-prefix-nested-if-ok.hir
 fn probe(b: bool) {
   let x = if b {
     1u8

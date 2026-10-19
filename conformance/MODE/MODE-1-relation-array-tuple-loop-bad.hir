@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 6
+// expect: reject MODE-1 at line 7
+// twin: MODE/MODE-1-relation-array-tuple-loop-ok.hir
 fn receive(parents: Array[(String, String)]) {
   let names: Array[(String, String)] in parents = copy parents
   for (input, expected) in names {

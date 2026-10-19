@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 5
+// expect: reject MODE-1 at line 6
+// twin: MODE/MODE-1-unique-concrete-part-run.hir
 // A deep copy of a borrowed closure keeps the loans of its borrowed captures.
 fn collect(xs: List[fn() -> u64], mut out: List[fn() -> u64]) -> () {
   list.push(mut out, unique xs[0])

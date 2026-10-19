@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 13
+// expect: reject MODE-2 at line 14
+// twin: MODE/MODE-2-preserves-unique-direct-ok.hir
 @preserves_unique(xs)
 fn keep[T: plain](mut xs: List[T], value: T) {
   list.push(mut xs, value)

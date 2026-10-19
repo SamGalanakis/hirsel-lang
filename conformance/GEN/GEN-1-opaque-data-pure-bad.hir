@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 3
+// expect: reject GEN-1 at line 4
+// twin: GEN/GEN-1-opaque-data-pure-ok.hir
 pub opaque type F: data uses {} {
   f: fn() -> u64 uses {},
 }

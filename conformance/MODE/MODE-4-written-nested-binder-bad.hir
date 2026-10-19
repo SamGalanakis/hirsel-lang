@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 7
+// expect: reject MODE-4 at line 8
+// twin: MODE/MODE-4-written-nested-binder-ok.hir
 fn sink[T](take x: sendable T) {}
 
 fn outer[T: sendable](take x: T) {

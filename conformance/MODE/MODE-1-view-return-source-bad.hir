@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 35
+// expect: reject MODE-1 at line 36
+// twin: SEM/SEM-4-view-return-source-run.hir
 @loop_source(open, next)
 pub opaque type View: copyable + noalloc_drop uses {} {
   source: String,

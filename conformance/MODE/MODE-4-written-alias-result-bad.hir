@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 6
+// expect: reject MODE-4 at line 7
+// twin: MODE/MODE-4-written-alias-result-ok.hir
 type Payload = sendable Bytes
 
 fn old(take x: Bytes) -> Payload {

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 17
+// expect: reject MODE-1 at line 18
+// twin: MODE/MODE-1-field-path-caller-copied-sibling-ok.hir
 // v22 #77, a copied argument. The result still reads within p.a, so writing
 // p.a while it lives conflicts with that loan.
 type Pair {

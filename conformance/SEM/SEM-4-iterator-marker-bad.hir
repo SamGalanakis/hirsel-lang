@@ -1,5 +1,6 @@
 // rule: SEM-4
-// expect: reject SEM-4 at line 5
+// expect: reject SEM-4 at line 6
+// twin: SEM/SEM-4-iterator-take.hir
 // "Over an iterator, for x in take it consumes it and for x in mut it advances it".
 fn visit(take it: Iter[u8]) -> () {
   for x in it {

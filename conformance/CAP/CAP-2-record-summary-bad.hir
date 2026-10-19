@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 14
+// expect: reject CAP-2 at line 15
+// twin: CAP/CAP-2-record-summary-ok.hir
 // "inert means the summary is empty"; summaries join held authority.
 type Holder {
   dir: Dir,

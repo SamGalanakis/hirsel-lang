@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 6
+// expect: reject MEM-5 at line 7
+// twin: MEM/MEM-5-cow-detach-ok.hir
 // "no copy-on-write detach ... not proven unnecessary may occur".
 @noalloc
 fn edit(mut xs: Array[u8]) -> () {

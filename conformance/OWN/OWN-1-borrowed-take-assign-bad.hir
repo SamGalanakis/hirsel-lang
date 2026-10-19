@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 7
+// expect: reject OWN-1 at line 8
+// twin: OWN/OWN-1-borrowed-assign-resource-ok.hir
 // "Caller keeps it." Only a plain value read from a borrowed parameter is
 // its own copy; this one cannot be taken into owned storage.
 fn probe(x: Bytes) -> () {

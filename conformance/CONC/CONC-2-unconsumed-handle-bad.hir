@@ -1,5 +1,6 @@
 // rule: CONC-2
-// expect: reject CONC-2 at line 8
+// expect: reject CONC-2 at line 9
+// twin: CONC/CONC-2-unconsumed-handle-ok.hir
 // "Every task handle is awaited or explicitly detached".
 fn launch(tasks: Tasks) -> () {
   task.scope(

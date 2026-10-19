@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 13
+// expect: reject CLO-2 at line 14
+// twin: MODE/MODE-2-scoped-capture-unique-ok.hir
 // The binding is unannotated, so its type is the literal's inferred one,
 // `fn() -> () uses {}`. The `mut` parameter is written with open `uses` and
 // may store a function holding authority, so the hand-back is refused. The

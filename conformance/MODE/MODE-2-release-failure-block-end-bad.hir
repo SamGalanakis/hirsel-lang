@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 15
+// expect: reject MODE-2 at line 16
+// twin: MODE/MODE-2-release-failure-block-end-run.hir
 // Releasing b at the block's end runs its finalizer, which may fail while
 // kept shares xs, so the caller would get xs back aliased. Twin is
 // MODE-2-release-failure-block-end-run.

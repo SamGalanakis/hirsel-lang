@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 40
+// expect: reject MODE-1 at line 41
+// twin: SEM/SEM-4-contract6-borrowed-run.hir
 @loop_source(open, next)
 type View {
   source: String,

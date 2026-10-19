@@ -1,5 +1,6 @@
 // rule: CT-2
-// expect: reject CT-2 at line 3
+// expect: reject CT-2 at line 4
+// twin: CT/CT-2-closed-frame-internal-ok.hir
 fn probe[T]() -> List[T] {
   comptime []
 }

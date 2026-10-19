@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 11
+// expect: reject CLO-2 at line 12
+// twin: CLO/CLO-4-parameter-authority.hir
 // "The call’s ... authority summary ... [is] the join of callee and closure."
 fn invoke(f: fn() -> Dir uses {}) -> Dir {
   f()

@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-1 at line 8
+// expect: reject PROV-1 at line 9
+// twin: PROV/PROV-2-instant-same-clock-ok.hir
 fn example(c: MonotonicClock, other: MonotonicClock) -> Result[
   time.Duration,
   ClockError

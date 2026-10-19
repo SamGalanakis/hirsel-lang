@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 22
+// expect: reject MODE-1 at line 23
+// twin: MODE/MODE-1-projected-argument-sibling-ok.hir
 // v22 #77, a projected argument. The result reads within q.p.a, so writing
 // q.p.a while it lives conflicts with that loan.
 type Pair {

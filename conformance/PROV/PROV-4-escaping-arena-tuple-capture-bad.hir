@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 8
+// expect: reject PROV-4 at line 9
+// twin: PROV/PROV-4-escaping-arena-tuple-capture-ok.hir
 // A value owns the blocks of its parts, so an escaping environment that copies a
 // tuple holding an arena string outlives the arena (PROV-4, CLO-4).
 fn probe(a: Arena) -> fn() -> u64 {

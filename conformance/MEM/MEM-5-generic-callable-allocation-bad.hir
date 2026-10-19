@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 8
+// expect: reject MEM-5 at line 9
+// twin: MEM/MEM-5-generic-callable-allocation-ok.hir
 fn identity[T: noalloc_drop](take value: T) -> T {
   value
 }

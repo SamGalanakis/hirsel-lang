@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject MODE-2 at line 11
+// expect: reject MODE-2 at line 12
+// twin: SEM/SEM-3-format-record-run.hir
 // The association implies a proved promise, even when no f-string uses it.
 @format(point_text)
 type Point {

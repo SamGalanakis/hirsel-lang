@@ -1,5 +1,6 @@
 // rule: LANG-6
-// expect: reject LANG-6 at line 5
+// expect: reject LANG-6 at line 6
+// twin: LANG/LANG-12-mode-after-label-ok.hir
 // Shows "No part of a signature is ever inferred from a body."
 @noalloc
 fn example(x) -> u32 { 0 }

@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 13
+// expect: reject MODE-2 at line 14
+// twin: MODE/MODE-2-parametric-generic-mut-later-argument-share-ok.hir
 // A user generic is parametric as `replace` is: its `mut` supplier must be
 // unique at callee entry, after the later block argument has shared `a` into
 // `keep`. Twin is MODE-2-parametric-generic-mut-later-argument-share-ok.

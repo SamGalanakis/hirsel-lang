@@ -1,5 +1,6 @@
 // rule: MODE-6
-// expect: reject MODE-6 at line 5
+// expect: reject MODE-6 at line 6
+// twin: MODE/MODE-6-net-global-capture-ok.hir
 // "A scoped capability ... cannot be ... captured by an escaping closure."
 fn example(take cap: Test) -> once fn() -> () uses {Test} {
   fn() {

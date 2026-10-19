@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 10
+// expect: reject MODE-4 at line 11
+// twin: MODE/MODE-4-record-field-callable-run.hir
 // A record field declared `sendable fn` holds only a function value that
 // may cross tasks.
 type Job {

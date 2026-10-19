@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 11
+// expect: reject PROV-1 at line 12
+// twin: CAP/CAP-3-dir-read-only-run.hir
 // entry: test_narrow
 pub fn test_narrow(t: Test) -> Result[(), FileError] {
   let p = path.of("sub/value")

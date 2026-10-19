@@ -1,5 +1,6 @@
 // rule: FACT-1
-// expect: reject MEM-5 at line 6
+// expect: reject MEM-5 at line 7
+// twin: FACT/FACT-1-unique-mut-append-transport-run.hir
 // Contracts "are code" and "their allocations count toward @noalloc".
 @noalloc
 fn check(x: u64) -> u64

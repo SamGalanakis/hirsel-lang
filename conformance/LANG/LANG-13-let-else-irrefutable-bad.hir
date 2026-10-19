@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 5
+// expect: reject LANG-13 at line 6
+// twin: LANG/LANG-13-let-else-initializer-ok.hir
 // A let-else pattern can fail to match; an irrefutable one needs no else.
 fn sum(pair: (u32, u32)) -> u32 {
   let (a, b) = pair else {

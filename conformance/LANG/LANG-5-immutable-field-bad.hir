@@ -1,5 +1,6 @@
 // rule: LANG-5
-// expect: reject LANG-5 at line 11
+// expect: reject LANG-5 at line 12
+// twin: LANG/LANG-5-immutable-element-ok.hir
 // Shows "A value changes only through a visible name"
 type Rec {
   n: u32,

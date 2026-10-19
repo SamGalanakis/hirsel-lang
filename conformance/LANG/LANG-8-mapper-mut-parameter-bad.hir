@@ -1,5 +1,6 @@
 // rule: LANG-8
-// expect: reject LANG-8 at line 12
+// expect: reject LANG-8 at line 13
+// twin: LANG/LANG-8-mapper-mut-parameter-ok.hir
 // "e ? C maps the error through C, a path naming a one-argument variant or function".
 // The propagated error is a temporary, so a mapper cannot receive it as a mut place.
 type Failure = Wrapped(u8)

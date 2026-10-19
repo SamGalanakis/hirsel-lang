@@ -1,5 +1,6 @@
 // rule: LANG-8
-// expect: reject LANG-8 at line 20
+// expect: reject LANG-8 at line 21
+// twin: LANG/LANG-8-mapping-arity-ok.hir
 // Shows "plain e? requires identical error types."
 type Inner = Missing()
 

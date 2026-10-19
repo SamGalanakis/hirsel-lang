@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 7
+// expect: reject LANG-13 at line 8
+// twin: LANG/LANG-13-while-let-irrefutable-ok.hir
 // A while-let pattern must be able to fail; an irrefutable one never ends the loop.
 fn count(source: List[u32]) -> u32 {
   let mut xs: unique List[u32] = unique source

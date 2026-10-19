@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 5
+// expect: reject MEM-5 at line 6
+// twin: MEM/MEM-5-unique-extraction-closure-plain-ok.hir
 fn probe() {
   let f: @noalloc fn(x: String) -> unique String uses {} = fn(x: String) -> unique String {
     unique x

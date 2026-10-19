@@ -1,5 +1,6 @@
 // rule: CLO-3
-// expect: reject CLO-3 at line 7
+// expect: reject CLO-3 at line 8
+// twin: CLO/CLO-3-scoped-shared-root-copy.hir
 // "task.isolate’s closure follows the same rules."
 fn example(tasks: Tasks, take x: unique Bytes) -> () {
   let _ = task.isolate(

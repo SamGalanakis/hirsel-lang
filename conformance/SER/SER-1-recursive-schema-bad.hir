@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 7
+// expect: reject SER-1 at line 8
+// twin: SER/SER-1-recursive-schema-ok.hir
 @serializable
 type Tree[T: inert] = Leaf(T) | Node(List[Tree[T]])
 

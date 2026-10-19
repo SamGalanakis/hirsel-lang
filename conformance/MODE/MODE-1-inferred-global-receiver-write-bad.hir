@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 13
+// expect: reject MODE-1 at line 14
+// twin: MODE/MODE-1-inferred-local-receiver-write-run.hir
 // The twin of MODE-1-inferred-local-receiver-write-run. The element received
 // is global, so the inferred storage is global and rejects a local write.
 fn view(x: Bytes) -> Bytes in x {

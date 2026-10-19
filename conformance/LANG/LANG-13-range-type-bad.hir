@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 6
+// expect: reject LANG-13 at line 7
+// twin: LANG/LANG-13-range-type-ok.hir
 // Range patterns select integer and char scalars only.
 fn unit(x: f64) -> bool {
   match x {

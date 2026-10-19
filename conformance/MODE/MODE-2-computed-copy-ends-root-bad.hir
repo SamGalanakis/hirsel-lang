@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 13
+// expect: reject MODE-2 at line 14
+// twin: MODE/MODE-2-computed-unique-source-preserved-ok.hir
 type R {
   xs: unique List[Bytes],
 }

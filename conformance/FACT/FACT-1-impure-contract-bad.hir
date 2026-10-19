@@ -1,5 +1,6 @@
 // rule: FACT-1
-// expect: reject FACT-1 at line 5
+// expect: reject FACT-1 at line 6
+// twin: FACT/FACT-1-borrowed-resource-clause-run.hir
 // Contracts must be "pure boolean expression[s]".
 fn observe(tasks: Tasks, a: Atomic[u32]) -> u32
   requires atomic.load(tasks, a) > 0 {

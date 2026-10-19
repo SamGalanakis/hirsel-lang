@@ -1,5 +1,6 @@
 // rule: PROG-1
-// expect: reject LANG-7 at line 7
+// expect: reject LANG-7 at line 8
+// twin: PROG/PROG-1-source-dependencies-run.hir
 fn consume(x: probe@1/api.Widget) {}
 
 pub fn main(t: Test) -> Result[(), ()] {

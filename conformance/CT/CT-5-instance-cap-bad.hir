@@ -1,5 +1,6 @@
 // rule: CT-5
-// expect: reject CT-1 at line 64
+// expect: reject CT-1 at line 65
+// twin: CT/CT-5-instance-cap-ok.hir
 // "one declaration selects at most 256 instances; selecting another is CT-1 at `e`": the
 // body for Tag[n] calls the declaration at Tag[n + 1], so selection never closes.
 type Tag[n: size] {

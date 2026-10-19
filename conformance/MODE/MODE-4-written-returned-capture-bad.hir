@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 16
+// expect: reject MODE-4 at line 17
+// twin: MODE/MODE-4-written-returned-capture-ok.hir
 fn sink(x: sendable Bytes) {}
 
 fn pass[T: copyable](x: T) -> T in x {

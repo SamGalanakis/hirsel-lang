@@ -1,5 +1,6 @@
 // rule: MEM-12
-// expect: reject MEM-12 at line 10
+// expect: reject MEM-12 at line 11
+// twin: MEM/MEM-12-variable-field-update-ok.hir
 // "Variable-size fields are fixed at construction; fixed-size fields are mutable in place".
 flat type Item {
   text: String,

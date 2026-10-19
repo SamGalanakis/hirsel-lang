@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 18
+// expect: reject MODE-1 at line 19
+// twin: MODE/MODE-1-field-path-caller-copied-sibling-ok.hir
 // v22 #77, caller side. A call whose result is related to p.a loans the
 // argument's p.a, so p.a cannot be replaced while the result lives.
 type Pair {

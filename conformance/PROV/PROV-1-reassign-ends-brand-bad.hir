@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 15
+// expect: reject PROV-1 at line 16
+// twin: PROV/PROV-1-mutate-ends-brand-ok.hir
 // "A copy of p keeps p’s identity only until the copy’s first mutation or reassignment."
 fn inspect(d: Dir, value: File of d) -> () {
   ()

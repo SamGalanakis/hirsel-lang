@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 11
+// expect: reject OWN-1 at line 12
+// twin: OWN/OWN-1-local-result-option-ok.hir
 resource type Trace {
   n: u8,
 }

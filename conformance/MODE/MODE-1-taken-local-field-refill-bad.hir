@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 13
+// expect: reject MODE-1 at line 14
+// twin: MODE/MODE-1-taken-local-field-refill-ok.hir
 // A taken Local argument bounds the content it brings. Refilling one field
 // leaves the other field's content, so the result must name that argument.
 type Holder {

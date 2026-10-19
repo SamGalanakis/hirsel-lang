@@ -1,5 +1,6 @@
 // rule: LANG-7
-// expect: reject LANG-7 at line 7
+// expect: reject LANG-7 at line 8
+// twin: LANG/LANG-7-callback-passing-inferred-ok.hir
 // "No overloading, type classes, implicit conversions".
 // A callback's parameter passing modes are part of its type, also while the
 // call is still inferring its result type.

@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 5
+// expect: reject PROV-1 at line 6
+// twin: PROV/PROV-1-wave1-byte_offset-ok.hir
 fn example(a: String, b: String) -> () {
   for position in string.positions(a) {
     string.byte_offset(b, position);

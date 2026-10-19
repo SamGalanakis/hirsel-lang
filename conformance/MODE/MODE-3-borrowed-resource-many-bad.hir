@@ -1,5 +1,6 @@
 // rule: MODE-3
-// expect: reject MODE-3 at line 24
+// expect: reject MODE-3 at line 25
+// twin: MODE/MODE-3-borrowed-resource-many-run.hir
 // Taking the same capture requires once and cannot satisfy repeat's many promise.
 resource type Token {
   n: u64,

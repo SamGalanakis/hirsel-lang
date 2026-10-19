@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 9
+// expect: reject MEM-5 at line 10
+// twin: MEM/MEM-5-closure-bound-closure-call-run.hir
 fn maybe() -> () {
   ()
 }

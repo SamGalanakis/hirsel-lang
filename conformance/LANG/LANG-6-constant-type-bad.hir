@@ -1,5 +1,6 @@
 // rule: LANG-6
-// expect: reject LANG-6 at line 6
+// expect: reject LANG-6 at line 7
+// twin: CT/CT-2-heap-constant-two-reads.hir
 // Shows "No part of a signature is ever inferred from a body."
 @noalloc
 fn value() -> u32 { 0 }

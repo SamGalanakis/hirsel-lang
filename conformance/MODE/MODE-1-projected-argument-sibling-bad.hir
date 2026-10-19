@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 22
+// expect: reject MODE-1 at line 23
+// twin: MODE/MODE-1-projected-argument-sibling-ok.hir
 // Replacing q.p overlaps the loan on the argument place q.p, which a live result
 // related to the argument holds (places and loans, docs/spec/ownership.md).
 type Pair {

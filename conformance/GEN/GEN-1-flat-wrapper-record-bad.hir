@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 15
+// expect: reject GEN-1 at line 16
+// twin: GEN/GEN-1-flat-wrapper-record-ok.hir
 // MEM-12 keeps flat storage opt-in; compatible fields do not grant root Flatness.
 flat type Text {
   value: String,

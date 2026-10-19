@@ -1,5 +1,6 @@
 // rule: CONC-5
-// expect: reject CONC-5 at line 7
+// expect: reject CONC-5 at line 8
+// twin: CONC/CONC-5-create-unique-payload-ok.hir
 // Mutex creation requires a unique value "for sendable T".
 fn make(tasks: Tasks) -> () {
   let xs: List[u32] = [1]

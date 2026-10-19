@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 5
+// expect: reject SEM-3 at line 6
+// twin: SEM/SEM-3-fstring-zero-run.hir
 // Fill characters obey string source scalar rules.
 fn label() -> String {
   f"{1u64:	>4}"

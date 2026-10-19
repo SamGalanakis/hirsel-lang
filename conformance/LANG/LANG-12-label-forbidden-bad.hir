@@ -1,5 +1,6 @@
 // rule: LANG-12
-// expect: reject LANG-12 at line 11
+// expect: reject LANG-12 at line 12
+// twin: GEN/GEN-5-generic-callable-growing-ok.hir
 // Shows "must be labelled at every call; an unlabelled parameter cannot be."
 @noalloc
 fn read(x: u32) -> u32 {

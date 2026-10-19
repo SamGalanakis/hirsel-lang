@@ -1,5 +1,6 @@
 // rule: CAP-2
-// expect: reject CAP-2 at line 5
+// expect: reject CAP-2 at line 6
+// twin: CAP/CAP-2-file-operation-authority-ok.hir
 // "every operation on one takes the capability it is of".
 pub fn write(dir: Dir, mut f: AtomicFile of dir, data: Bytes) -> Result[(), FileError] {
   file.write_all(mut f, data)

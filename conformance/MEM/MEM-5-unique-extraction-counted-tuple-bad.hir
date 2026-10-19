@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 5
+// expect: reject MEM-5 at line 6
+// twin: MEM/MEM-5-unique-extraction-plain-tuple-ok.hir
 @noalloc
 fn probe(x: (u64, String)) -> unique (u64, String) {
   unique x

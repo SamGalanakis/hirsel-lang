@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 16
+// expect: reject OWN-2 at line 17
+// twin: OWN/OWN-2-closure-take-capture-ok.hir
 // "Move. Use-after-move is a compile error."
 fn sink(take x: Bytes) -> () {
   ()

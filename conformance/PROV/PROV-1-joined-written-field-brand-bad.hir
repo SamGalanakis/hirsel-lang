@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 22
+// expect: reject PROV-1 at line 23
+// twin: PROV/PROV-1-joined-written-field-brand-ok.hir
 // A brand made before the branch names the field that one path renews, so
 // using it after the join is PROV-1.
 type R {

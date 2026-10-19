@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
+// expect: reject MODE-2 at line 10
+// twin: MODE/MODE-2-push-unique-element-ok.hir
 // Pushing an aliased counted element leaves the list aliased: the promise holds
 // only when every taken input is unique. Twin is MODE-2-push-unique-element-ok.
 fn build(take s: String) -> unique List[String] uses {} {

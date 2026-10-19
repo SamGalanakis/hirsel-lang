@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 25
+// expect: reject CLO-2 at line 26
+// twin: CLO/CLO-2-mut-handback-uses-run.hir
 // "Written unrestricted parameters do not meet restricted uses" (#58). A
 // `mut` argument is written back through its parameter, and `set` may store a
 // function holding authority, so storage typed `uses {}` cannot be handed

@@ -1,5 +1,6 @@
 // rule: CT-5
-// expect: reject CT-1 at line 7
+// expect: reject CT-1 at line 8
+// twin: CT/CT-5-std-derive-nested-run.hir
 // A deriver takes its type by value and nothing lends a `box T` payload as a `T`
 // (MEM-7), so a boxed field has no JSON form.
 type Chain = End | Link(u64, box Chain)

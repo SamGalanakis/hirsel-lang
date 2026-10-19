@@ -1,5 +1,6 @@
 // rule: LANG-11
-// expect: reject MODE-1 at line 13
+// expect: reject MODE-1 at line 14
+// twin: LANG/LANG-11-block-local-value-run.hir
 // "An outer-place tail retains that identity and its field partition; a
 // binding declared inside moves out to the consumer, even a borrower ... a
 // counted projected part remains borrowed."

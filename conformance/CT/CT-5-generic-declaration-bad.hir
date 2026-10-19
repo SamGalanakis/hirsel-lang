@@ -1,5 +1,6 @@
 // rule: CT-5
-// expect: reject GEN-3 at line 12
+// expect: reject GEN-3 at line 13
+// twin: CT/CT-5-std-derive-run.hir
 // A generic generated declaration evaluates per selected instance: count[u64] reads shape(u64), and a scalar has no shape.
 type Count {
   n: u64,

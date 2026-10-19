@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 20
+// expect: reject PROV-1 at line 21
+// twin: PROV/PROV-1-moved-replacement-fresh-ok.hir
 // "A brand ends when p is reassigned", also by a self-assignment that moves
 // the old value back (issue #75).
 type R {

@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 13
+// expect: reject PROV-4 at line 14
+// twin: PROV/PROV-4-captured-arena-copy-ok.hir
 // The copy of a captured arena value still lives in the arena, so it cannot
 // be kept in storage declared without a placement. The accepted twin is
 // PROV-4-captured-arena-copy-ok.

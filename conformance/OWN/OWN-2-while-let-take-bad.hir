@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 7
+// expect: reject OWN-2 at line 8
+// twin: LANG/LANG-13-while-let-irrefutable-ok.hir
 // A while-let evaluates its value before every iteration, so taking a binding
 // there moves it again after the first.
 fn total(take x: Option[String]) -> u64 {

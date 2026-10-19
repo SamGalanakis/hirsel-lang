@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 9
+// expect: reject MODE-2 at line 10
+// twin: MODE/MODE-2-flat-copy-preserves-unique-ok.hir
 @noalloc
 fn need(mut x: unique String) -> ()
 

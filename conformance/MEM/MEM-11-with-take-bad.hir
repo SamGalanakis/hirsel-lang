@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject OWN-1 at line 15
+// expect: reject OWN-1 at line 16
+// twin: MEM/MEM-11-with-take-ok.hir
 // A Shared value is "read by borrowing": `shared.with`'s body gets a borrowed view,
 // which cannot be taken.
 type Index {

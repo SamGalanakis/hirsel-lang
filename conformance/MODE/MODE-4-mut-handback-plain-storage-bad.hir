@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 14
+// expect: reject MODE-4 at line 15
+// twin: MODE/MODE-4-mut-handback-sendable-run.hir
 // The reverse of MODE-4-mut-handback-sendable-storage-bad; storage whose
 // type does not state `sendable` would be read as sendable inside a
 // callee whose `mut` parameter states it.

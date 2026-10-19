@@ -1,5 +1,6 @@
 // rule: CONC-5
-// expect: reject CONC-5 at line 14
+// expect: reject CONC-5 at line 15
+// twin: CONC/CONC-5-try-inner-receipt-ok.hir
 type Parcel {
   body: unique String,
 }

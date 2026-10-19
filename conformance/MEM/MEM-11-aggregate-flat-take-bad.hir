@@ -1,5 +1,6 @@
 // rule: MEM-11
-// expect: reject MEM-11 at line 14
+// expect: reject MEM-11 at line 15
+// twin: MEM/MEM-11-aggregate-flat-copy-ok.hir
 flat type Item {
   text: String,
   n: u64,

@@ -1,5 +1,6 @@
 // rule: GEN-1
-// expect: reject GEN-1 at line 11
+// expect: reject GEN-1 at line 12
+// twin: GEN/GEN-1-nested-nominal-data-ok.hir
 type Wrap[T] {
   value: T,
 }

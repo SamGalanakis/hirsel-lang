@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CAP-3 at line 18
+// expect: reject CAP-3 at line 19
+// twin: CLO/CLO-2-mut-handback-uses-run.hir
 // "Written unrestricted parameters do not meet restricted uses" (#58). A
 // binding written with open `uses` promises none, whatever its initializer
 // proves, so it does not meet a `uses {}` parameter.

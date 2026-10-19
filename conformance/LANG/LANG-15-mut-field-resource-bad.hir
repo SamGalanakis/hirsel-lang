@@ -1,5 +1,6 @@
 // rule: LANG-15
-// expect: reject LANG-15 at line 15
+// expect: reject LANG-15 at line 16
+// twin: LANG/LANG-15-mut-field-resource-ok.hir
 // A noncopyable field remains a read-only borrow, even with let mut.
 resource type Index {
   index: u64,

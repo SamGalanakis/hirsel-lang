@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 22
+// expect: reject PROV-1 at line 23
+// twin: PROV/PROV-1-alias-branch-if-exit-ok.hir
 // Section 23 selects the branded use after a continuing identity change.
 type R {
   n: u64,

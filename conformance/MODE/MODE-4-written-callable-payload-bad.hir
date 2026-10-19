@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 4
+// expect: reject MODE-4 at line 5
+// twin: MODE/MODE-4-written-callable-owner-share-ok.hir
 fn bad(take f: fn() -> u64) {
   let jobs: List[sendable fn() -> u64] = [f]
 }

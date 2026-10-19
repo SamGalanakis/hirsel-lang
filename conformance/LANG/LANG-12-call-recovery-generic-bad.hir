@@ -1,5 +1,6 @@
 // rule: LANG-12
-// expect: reject LANG-12 at line 6
+// expect: reject LANG-12 at line 7
+// twin: LANG/LANG-12-call-recovery-generic-ok.hir
 fn rename[T](from x: T) {}
 
 fn probe() {

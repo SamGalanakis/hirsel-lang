@@ -1,5 +1,6 @@
 // rule: LANG-12
-// expect: reject LANG-12 at line 11
+// expect: reject LANG-12 at line 12
+// twin: LANG/LANG-12-call-recovery-record-ok.hir
 // Shows "must be labelled at every call; an unlabelled parameter cannot be."
 type Rec {
   a: u32,

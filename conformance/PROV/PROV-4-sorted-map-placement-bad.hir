@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 7
+// expect: reject PROV-4 at line 8
+// twin: PROV/PROV-4-sorted-map-placement-ok.hir
 // An arena SortedMap cannot escape as an unplaced value.
 fn keep(a: Arena, by: Order[u64]) -> SortedMap[u64, u64] of by {
   let m: SortedMap[u64, u64] of by in a = sorted_map.empty(by)

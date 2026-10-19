@@ -1,5 +1,6 @@
 // rule: SER-1
-// expect: reject SER-1 at line 9
+// expect: reject SER-1 at line 10
+// twin: SER/SER-1-generic-schema-ok.hir
 @serializable
 type Row[T: inert] {
   value: T,

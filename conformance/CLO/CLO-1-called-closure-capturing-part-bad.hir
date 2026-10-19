@@ -1,5 +1,6 @@
 // rule: CLO-1
-// expect: reject CLO-1 at line 8
+// expect: reject CLO-1 at line 9
+// twin: CLO/CLO-1-nested-local-call-result-run.hir
 // "A scoped closure cannot be stored or returned." The inner closure borrows
 // `rt` from its environment, so the called closure cannot return it as a
 // tuple part.

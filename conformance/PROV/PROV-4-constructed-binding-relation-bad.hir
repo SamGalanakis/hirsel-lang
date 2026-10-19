@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 13
+// expect: reject PROV-4 at line 14
+// twin: PROV/PROV-4-constructed-binding-relation-ok.hir
 // A binding inferred from a construction over arena content lives in that
 // arena, so returning it under an unplaced result is PROV-4 where it is kept (#79).
 type Ast {

@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 12
+// expect: reject MODE-1 at line 13
+// twin: MODE/MODE-1-arena-binding-borrowed-store-ok.hir
 // A binding related only to an arena has a global lifetime, since `in a` names
 // where its blocks live and bounds nothing. A borrowed parameter's value is
 // local to its own root, so storing it there exceeds the contract.

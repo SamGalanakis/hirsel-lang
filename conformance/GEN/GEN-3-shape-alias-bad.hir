@@ -1,5 +1,6 @@
 // rule: GEN-3
-// expect: reject GEN-3 at line 7
+// expect: reject GEN-3 at line 8
+// twin: GEN/GEN-3-shape-alias-run.hir
 // A transparent alias has its target's shape, and a builtin collection has none.
 type Same = List[String]
 

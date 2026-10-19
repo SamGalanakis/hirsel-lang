@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 5
+// expect: reject SEM-3 at line 6
+// twin: SEM/SEM-3-fstring-dynamic-run.hir
 // F-strings format through std@1; this program selects no packages.
 fn label(n: u64) -> String {
   f"total {n}"

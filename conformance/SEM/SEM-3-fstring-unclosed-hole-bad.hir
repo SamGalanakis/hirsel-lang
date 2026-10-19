@@ -1,5 +1,6 @@
 // rule: SEM-3
-// expect: reject SEM-3 at line 5
+// expect: reject SEM-3 at line 6
+// twin: SEM/SEM-3-fstring-values-run.hir
 // A hole needs its closing brace before the f-string's closing quote.
 fn label(n: u64) -> String {
   f"total {n"

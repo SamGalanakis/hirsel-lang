@@ -1,5 +1,6 @@
 // rule: MODE-1
-// expect: reject MODE-1 at line 12
+// expect: reject MODE-1 at line 13
+// twin: MODE/MODE-1-local-taken-parameter-ok.hir
 // A result local to a taken parameter is bounded by that argument and by
 // nothing else. A view of another local value cannot be returned as local to
 // the parameter.

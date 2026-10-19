@@ -1,5 +1,6 @@
 // rule: FACT-1
-// expect: reject FACT-1 at line 12
+// expect: reject FACT-1 at line 13
+// twin: FACT/FACT-1-borrowed-resource-clause-run.hir
 type Holder {
   xs: List[u8],
 }

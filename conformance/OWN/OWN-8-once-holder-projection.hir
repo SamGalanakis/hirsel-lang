@@ -1,5 +1,6 @@
 // rule: OWN-8
-// expect: reject OWN-8 at line 21
+// expect: reject OWN-8 at line 22
+// twin: OWN/OWN-8-loop-field-identity-view-ok.hir
 type Holder[F] {
   action: F,
 }

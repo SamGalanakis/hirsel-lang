@@ -1,5 +1,6 @@
 // rule: PROV-2
-// expect: reject PROV-2 at line 22
+// expect: reject PROV-2 at line 23
+// twin: PROV/PROV-2-nested-brand-unbranded-parameter-ok.hir
 // spec: #60
 // A mut parameter hands its storage back. One that names no brand could
 // store an unmarked value there, and the caller's binding would still claim

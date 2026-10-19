@@ -1,5 +1,6 @@
 // rule: OWN-1
-// expect: reject OWN-1 at line 15
+// expect: reject OWN-1 at line 16
+// twin: MODE/MODE-1-field-path-result-other-field-ok.hir
 resource type Trace {
   n: u8,
 }

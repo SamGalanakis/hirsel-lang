@@ -1,5 +1,6 @@
 // rule: LANG-9
-// expect: reject LANG-9 at line 3
+// expect: reject LANG-9 at line 4
+// twin: LANG/LANG-9-test-attribute-result-ok.hir
 @test
 fn example() -> u64 {
   1

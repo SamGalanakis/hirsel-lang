@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 32
+// expect: reject MEM-5 at line 33
+// twin: MEM/MEM-5-binding-moved-on-every-path-run.hir
 // The twin of MEM-5-binding-moved-on-every-path-run. On the `else` path the
 // `Token` is still owned when its block ends, so the `@noalloc` closure body
 // destroys it there, and its finalizer is not `@noalloc`.

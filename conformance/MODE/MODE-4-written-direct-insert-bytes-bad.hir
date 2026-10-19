@@ -1,5 +1,6 @@
 // rule: MODE-4
-// expect: reject MODE-4 at line 5
+// expect: reject MODE-4 at line 6
+// twin: MODE/MODE-4-written-transport-growth-run.hir
 fn probe(take old: Bytes) {
   let mut xs: List[sendable Bytes] = [b"first"]
   list.push(mut xs, take old)

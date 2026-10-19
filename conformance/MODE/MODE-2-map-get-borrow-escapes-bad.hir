@@ -1,5 +1,6 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 7
+// expect: reject MODE-2 at line 8
+// twin: MODE/MODE-2-map-get-borrow-dies-ok.hir
 // The returned map.get result keeps its share of the map past the exit, so the
 // unique map cannot be handed back. Twin is MODE-2-map-get-borrow-dies-ok.
 fn look(mut m: unique Map[String, String], k: String) -> Option[String] in m {

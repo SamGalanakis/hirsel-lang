@@ -1,5 +1,6 @@
 // rule: PROV-4
-// expect: reject PROV-4 at line 12
+// expect: reject PROV-4 at line 13
+// twin: PROV/PROV-4-constructed-part-relation-ok.hir
 // A constructed record holds its parts' loans (docs/spec/ownership.md), so a record built from a
 // binding whose blocks live in `a` lives in `a` too, and it cannot be kept in
 // an unplaced result (#79).

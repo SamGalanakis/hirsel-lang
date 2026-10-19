@@ -1,5 +1,6 @@
 // rule: OWN-2
-// expect: reject OWN-2 at line 5
+// expect: reject OWN-2 at line 6
+// twin: OWN/OWN-2-if-let-take-ok.hir
 fn bad(take w: String) -> u64 {
   let c = copy take w
   string.byte_len(w)

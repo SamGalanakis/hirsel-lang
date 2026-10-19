@@ -1,5 +1,6 @@
 // rule: PROV-1
-// expect: reject PROV-1 at line 23
+// expect: reject PROV-1 at line 24
+// twin: PROV/PROV-1-alias-branch-match-first-exit-ok.hir
 // Section 23 selects the branded use when evidence from a continuing mutation is rejected at the branded use.
 type R {
   n: u64,

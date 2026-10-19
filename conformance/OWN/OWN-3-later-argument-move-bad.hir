@@ -1,5 +1,6 @@
 // rule: OWN-3
-// expect: reject OWN-3 at line 9
+// expect: reject OWN-3 at line 10
+// twin: OWN/OWN-3-later-argument-use-ok.hir
 // The place a mut argument names is lent when the callee is entered. A later
 // argument that moves it leaves nothing to lend.
 fn f(mut xs: List[u64], take ys: List[u64]) -> () {}

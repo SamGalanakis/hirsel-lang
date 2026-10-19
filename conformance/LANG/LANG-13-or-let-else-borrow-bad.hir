@@ -1,5 +1,6 @@
 // rule: LANG-13
-// expect: reject LANG-13 at line 8
+// expect: reject LANG-13 at line 9
+// twin: LANG/LANG-13-or-let-else-borrow-ok.hir
 // A let-else or-pattern binds plain values or takes its payloads: a borrowed
 // binding would view one of several places past the choice.
 type Token = Plus | Name(String) | Label(String)

@@ -1,5 +1,6 @@
 // rule: STORE-3
-// expect: reject CAP-3 at line 9
+// expect: reject CAP-3 at line 10
+// twin: STORE/STORE-3-body-capture-ok.hir
 // A transaction body is `uses {}`: it holds its Tx and data, and capturing
 // the store's Dir to write outside the store is refused.
 pub fn note(mut s: store.Store[Dir], d: Dir) -> Result[(), store.TxFailure[FileError]] {

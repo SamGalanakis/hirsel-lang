@@ -1,5 +1,6 @@
 // rule: MEM-5
-// expect: reject MEM-5 at line 7
+// expect: reject MEM-5 at line 8
+// twin: SEM/SEM-3-csv-run.hir
 // "every path ... failure paths and contracts included".
 @noalloc
 fn check_path(flag: u8) -> Result[(), String] {

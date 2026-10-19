@@ -1,5 +1,6 @@
 // rule: CLO-2
-// expect: reject CLO-2 at line 8
+// expect: reject CLO-2 at line 9
+// twin: CLO/CLO-2-callback-forward-local-ok.hir
 fn inner(f: fn() -> ()) uses {f} {
   f()
 }
