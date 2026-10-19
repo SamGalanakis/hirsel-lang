@@ -54,6 +54,9 @@ from loop entry while it may advance again (SEM-4): a write, move or `mut`
 loan of an overlapping place in the body conflicts whether or not the body uses
 the element, and the diagnostic names the loop as the cause. A write followed by
 `break` or `return` does not, since the loop never reads the source again.
+Its element is a place of the source (`element_view`): a copy of it shares a part of
+the source and ends the source's uniqueness (MODE-2), as a copy of `xs[i]` does, while
+a borrow of it keeps the source unique.
 A block whose value projects a counted part of a binding the block declares
 (`{ let v = ..; v[0] }`) only borrows that part, and nothing moves a part out,
 so a consumer that borrows the block's value would read storage the block has

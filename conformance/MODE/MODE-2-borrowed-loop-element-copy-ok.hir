@@ -1,0 +1,13 @@
+// rule: MODE-2
+// expect: accept
+// The twin of MODE-2-borrowed-loop-element-copy-bad: a deep copy of the element owns its
+// own storage and shares no part of the set, so the set stays unique for set.remove.
+pub fn main() -> Result[(), ()] {
+  let mut names: unique Set[String] = set.empty()
+  let mut text = ""
+  for name in names {
+    text = unique name
+  }
+  let _ = set.remove(mut names, "a")
+  Ok(())
+}

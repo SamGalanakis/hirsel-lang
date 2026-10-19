@@ -233,6 +233,9 @@ struct Value {
     modes: Modes,
     usage: UseKind,
     element_place: bool,
+    /// A borrowed collection loop's element place (SEM-4): copying it shares
+    /// a part of its owner, which ends the owner's uniqueness (MODE-2).
+    element_view: bool,
     /// The loans the value holds itself: an identity loan on the binding it
     /// aliases; bound loans on the bindings its content depends on and on a
     /// placement a join lost (PROV-4); read loans on the bindings a scoped
@@ -272,6 +275,7 @@ impl Value {
             modes,
             usage: UseKind::Borrow,
             element_place: false,
+            element_view: false,
             loans: LoanSet::default(),
             content: Content::default(),
             crossing_parts: CrossingParts::default(),
@@ -682,6 +686,7 @@ impl Value {
             (mine, theirs) => mine.or(theirs),
         });
         self.element_place |= other.element_place;
+        self.element_view |= other.element_view;
         self.invalid |= other.invalid;
         self.deep_copy |= other.deep_copy;
         self.content.whole = whole;
@@ -3975,7 +3980,9 @@ impl Checker<'_> {
                     && slot.value.content.summary().is_empty();
                 let mut value = slot.value.clone();
                 value.project_content(&place.projections);
-                let element_owner = value.element_place.then(|| value.aliased()).flatten();
+                let element_owner = (value.element_place || value.element_view)
+                    .then(|| value.aliased())
+                    .flatten();
                 let environment = self
                     .ty(*expression)
                     .and_then(|t| self.body.types.get(t))
@@ -4296,6 +4303,7 @@ impl Checker<'_> {
                 if usage == UseKind::Copy {
                     value.acquire_copy();
                     value.element_place = false;
+                    value.element_view = false;
                 }
                 if usage == UseKind::Copy && property.shared {
                     value.shared_root_copy();
@@ -4331,6 +4339,8 @@ impl Checker<'_> {
                     if !copied_independently {
                         if let Some(owner) = element_owner.filter(|owner| *owner != place.binding) {
                             state.slots[owner].value.share();
+                            // The copied element is what ends the owner's uniqueness.
+                            state.slots[owner].value.uniqueness_site = Some(*expression);
                             state.slots[owner].value.modes.sendability = Sendability::NotSendable;
                             state.slots[owner]
                                 .value
@@ -5272,6 +5282,7 @@ impl Checker<'_> {
                             })
                             .or(binding.map(|b| (b, Site::Binding(b))));
                         part.set_alias(alias);
+                        part.element_view = true;
                         if let Some(ty) = ty {
                             part.modes = self.body.types.get(ty).unwrap().modes.clone();
                         }
@@ -6584,10 +6595,9 @@ impl Checker<'_> {
                         .is_some_and(|p| !p.plain && !p.flat && !p.shared)
                 {
                     for root in self.value(state, *callee).captures().collect::<Vec<_>>() {
-                        if let Some(owner) = state.slots[root]
-                            .value
-                            .element_place
-                            .then(|| state.slots[root].value.aliased())
+                        let element = &state.slots[root].value;
+                        if let Some(owner) = (element.element_place || element.element_view)
+                            .then(|| element.aliased())
                             .flatten()
                             .filter(|owner| *owner != root)
                         {

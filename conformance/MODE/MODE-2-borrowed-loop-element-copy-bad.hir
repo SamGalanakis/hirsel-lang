@@ -1,0 +1,14 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 12
+// "Copying, sharing a part, or passing as a plain `mut` argument ends a binding's uniqueness."
+// A borrowed loop binds element places (SEM-4), so copying an element shares a part of
+// the set for the rest of its scope, and set.remove, which needs it unique, is refused.
+pub fn main() -> Result[(), ()] {
+  let mut names: unique Set[String] = set.empty()
+  let mut text = ""
+  for name in names {
+    text = name
+  }
+  let _ = set.remove(mut names, "a")
+  Ok(())
+}
