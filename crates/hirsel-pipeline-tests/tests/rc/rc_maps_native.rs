@@ -154,7 +154,7 @@ fn compiled_hash_seed_changes_buckets_and_preserves_insertion_order() {
                     std::fs::write(&obj, object.bytes).unwrap();
                     let arm = target.triple.starts_with("aarch64");
                     let mut compiler = std::process::Command::new(if arm {
-                        &tools.aarch64_cc
+                        tools.aarch64_cc.as_ref().unwrap()
                     } else {
                         &tools.clang
                     });
@@ -185,8 +185,12 @@ fn compiled_hash_seed_changes_buckets_and_preserves_insertion_order() {
                         String::from_utf8_lossy(&linked.stderr)
                     );
                     let mut command = if arm {
-                        let mut command = std::process::Command::new(&tools.qemu_aarch64);
-                        command.arg("-L").arg(&tools.aarch64_sysroot).arg(&exe);
+                        let mut command =
+                            std::process::Command::new(tools.qemu_aarch64.as_ref().unwrap());
+                        command
+                            .arg("-L")
+                            .arg(tools.aarch64_sysroot.as_ref().unwrap())
+                            .arg(&exe);
                         command
                     } else {
                         std::process::Command::new(&exe)

@@ -1567,6 +1567,37 @@ fn standalone_admits_selected_roots_and_explicit_argv_without_ambient_grants() {
 }
 
 #[test]
+fn x86_build_needs_no_cross_target_or_memcheck_environment() {
+    let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
+    let executable = source.with_extension("exe");
+    for backend in ["llvm", "cranelift"] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        for name in [
+            "HIRSEL_AARCH64_CC",
+            "HIRSEL_AARCH64_SYSROOT",
+            "HIRSEL_QEMU_AARCH64",
+            "HIRSEL_VALGRIND",
+            "VALGRIND_LIB",
+            "HIRSEL_VALGRIND_RUNTIME",
+        ] {
+            command.env_remove(name);
+        }
+        let output = command
+            .args(["build", "--backend", backend])
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(0), "{backend}: {output:?}");
+        let output = Command::new(&executable).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{backend}: {output:?}");
+        std::fs::remove_file(&executable).unwrap();
+    }
+    std::fs::remove_file(source).unwrap();
+}
+
+#[test]
 fn cranelift_builds_and_runs_what_llvm_builds_and_runs() {
     let source = file(
         "pub fn main(rt: Io, args: Args) -> Result[(), GrantError] { let _ = out.print(io.stdout(rt)?, \"backend\\n\"); Ok(()) }\n",

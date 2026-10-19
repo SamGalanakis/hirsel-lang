@@ -59,10 +59,10 @@ fn run(
     let _ = std::fs::remove_file(&record);
     std::fs::create_dir_all(&root).unwrap();
     let mut command = if target.triple.starts_with("aarch64") {
-        let mut command = Command::new(&tools.qemu_aarch64);
+        let mut command = Command::new(tools.qemu_aarch64.as_ref().unwrap());
         command
             .arg("-L")
-            .arg(&tools.aarch64_sysroot)
+            .arg(tools.aarch64_sysroot.as_ref().unwrap())
             .arg(executable);
         command
     } else {

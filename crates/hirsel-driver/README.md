@@ -77,9 +77,12 @@ Native tool paths are explicit absolute inputs: `LLVM_SYS_211_PREFIX`,
 `HIRSEL_AARCH64_CC`, `HIRSEL_AARCH64_SYSROOT`, `HIRSEL_QEMU_AARCH64`,
 `HIRSEL_VALGRIND`, `VALGRIND_LIB`, `HIRSEL_VALGRIND_RUNTIME`. The Buck2 test
 launcher supplies them
-from the pinned toolchains. Missing or relative paths refuse construction;
-there is no PATH search or system LLVM fallback. Memcheck launches retain their
-input library path when the child's environment is cleared.
+from the pinned toolchains. Cross tools, qemu and the AArch64 sysroot are required
+only for an AArch64 target; Valgrind inputs only for a memcheck runtime variant.
+A plain x86 build needs only the LLVM prefix and its runtime archive.
+Missing or relative required paths refuse construction;
+there is no PATH search or system LLVM fallback. Memcheck launches retain their input library path
+when the child's environment is cleared.
 
 Executables link with the input `ld.lld` directly, with no compiler driver
 process (`native/link_line.rs`). Its arguments are the ones the target's driver

@@ -23,19 +23,19 @@ pub struct Toolchain {
     pub clang: PathBuf,
     /// The AArch64 cross compiler driver. Its `-###` link command is the one
     /// `lld` runs for AArch64.
-    pub aarch64_cc: PathBuf,
+    pub aarch64_cc: Option<PathBuf>,
     /// The pinned `ld.lld`, which links every executable directly.
     pub lld: PathBuf,
     /// The private runtime cache, which keeps each driver's link command.
     pub cache: PathBuf,
     /// The user-mode emulator AArch64 executables run under, and its sysroot.
-    pub qemu_aarch64: PathBuf,
-    pub aarch64_sysroot: PathBuf,
+    pub qemu_aarch64: Option<PathBuf>,
+    pub aarch64_sysroot: Option<PathBuf>,
     /// The pinned memcheck executable and its relocated support directory.
-    pub valgrind: PathBuf,
-    pub valgrind_lib: PathBuf,
+    pub valgrind: Option<PathBuf>,
+    pub valgrind_lib: Option<PathBuf>,
     /// Matching libc/loader and debug symbols for memcheck's mandatory redirects.
-    pub valgrind_runtime: PathBuf,
+    pub valgrind_runtime: Option<PathBuf>,
     /// `libhirsel_rt.a` per target triple and archive variant.
     pub runtime: BTreeMap<(String, RuntimeBuild), PathBuf>,
     /// A checking tool an x86-64 executable is launched under (Valgrind
@@ -245,7 +245,14 @@ impl Toolchain {
             ));
         };
         let prefix = environment_path("LLVM_SYS_211_PREFIX")?;
-        let aarch64_cc = environment_path("HIRSEL_AARCH64_CC")?;
+        let needs_aarch64 = targets.iter().any(|target| aarch64(target));
+        let needs_memcheck = runtime_builds.iter().any(|build| build.memcheck);
+        let aarch64_cc = selected_path("HIRSEL_AARCH64_CC", needs_aarch64)?;
+        let qemu_aarch64 = selected_path("HIRSEL_QEMU_AARCH64", needs_aarch64)?;
+        let aarch64_sysroot = selected_path("HIRSEL_AARCH64_SYSROOT", needs_aarch64)?;
+        let valgrind = selected_path("HIRSEL_VALGRIND", needs_memcheck)?;
+        let valgrind_lib = selected_path("VALGRIND_LIB", needs_memcheck)?;
+        let valgrind_runtime = selected_path("HIRSEL_VALGRIND_RUNTIME", needs_memcheck)?;
         // A build that makes the runtime archives itself (Buck2, tools/buck2/README.md)
         // names their directory: `<dir>/<triple>/<features or default>/libhirsel_rt.a`.
         // Cargo is then never run, and a missing archive is an error.
@@ -322,11 +329,11 @@ impl Toolchain {
             aarch64_cc,
             lld: prefix.join("bin/ld.lld"),
             cache: build_dir.to_path_buf(),
-            qemu_aarch64: environment_path("HIRSEL_QEMU_AARCH64")?,
-            aarch64_sysroot: environment_path("HIRSEL_AARCH64_SYSROOT")?,
-            valgrind: environment_path("HIRSEL_VALGRIND")?,
-            valgrind_lib: environment_path("VALGRIND_LIB")?,
-            valgrind_runtime: environment_path("HIRSEL_VALGRIND_RUNTIME")?,
+            qemu_aarch64,
+            aarch64_sysroot,
+            valgrind,
+            valgrind_lib,
+            valgrind_runtime,
             runtime,
             wrapper: Vec::new(),
             launch_timeout: LAUNCH_TIMEOUT,
@@ -354,6 +361,19 @@ impl Toolchain {
 /// default PATH after launch clears the environment, escaping the selected tree.
 pub(super) fn environment_path(name: &str) -> Result<PathBuf, NativeError> {
     configured_path(name, std::env::var_os(name))
+}
+
+fn selected_path(name: &str, required: bool) -> Result<Option<PathBuf>, NativeError> {
+    required.then(|| environment_path(name)).transpose()
+}
+
+fn required_path<'a>(path: &'a Option<PathBuf>, name: &str) -> Result<&'a Path, NativeError> {
+    path.as_deref().ok_or_else(|| {
+        NativeError::new(
+            StageName::Link,
+            format!("toolchain was not configured for {name}"),
+        )
+    })
 }
 
 pub(super) fn configured_path(
@@ -885,11 +905,11 @@ pub fn link_host(
         .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?;
     let host = dir.join("host");
     let mut command = Command::new(if aarch64(target) {
-        &toolchain.aarch64_cc
+        required_path(&toolchain.aarch64_cc, "HIRSEL_AARCH64_CC")?
     } else {
         &toolchain.clang
     });
-    command.args(toolchain.loader_flags(target));
+    command.args(toolchain.loader_flags(target)?);
     command.arg(&source_path).arg(archive);
     // The libraries resolve their runtime imports against the host's one runtime.
     command.arg("-Wl,--export-dynamic");
@@ -1264,7 +1284,7 @@ fn link_launcher(
         option.push(&script);
         inputs.push(option);
     } else if !standalone {
-        before = toolchain.loader_flags(target);
+        before = toolchain.loader_flags(target)?;
     }
     inputs.extend(launchers.iter().map(Into::into));
     for (index, object) in objects.iter().enumerate() {
@@ -1297,7 +1317,7 @@ fn link_launcher(
         Output::Launched => &["-lgcc_s", "-lutil", "-lrt", "-lpthread", "-lm", "-ldl"],
     };
     let driver = if aarch64(target) {
-        &toolchain.aarch64_cc
+        required_path(&toolchain.aarch64_cc, "HIRSEL_AARCH64_CC")?
     } else {
         &toolchain.clang
     };
@@ -1479,10 +1499,16 @@ fn launch_impl(
     std::fs::create_dir_all(&root)
         .map_err(|e| NativeError::new(StageName::Launch, format!("granted directory: {e}")))?;
     let mut command = if aarch64(target) {
-        let mut command = Command::new(&toolchain.qemu_aarch64);
+        let mut command = Command::new(required_path(
+            &toolchain.qemu_aarch64,
+            "HIRSEL_QEMU_AARCH64",
+        )?);
         command
             .arg("-L")
-            .arg(&toolchain.aarch64_sysroot)
+            .arg(required_path(
+                &toolchain.aarch64_sysroot,
+                "HIRSEL_AARCH64_SYSROOT",
+            )?)
             .arg(executable);
         command
     } else if let Some((program, arguments)) = toolchain.wrapper.split_first() {
@@ -1537,8 +1563,14 @@ fn launch_impl(
     }
     if !toolchain.wrapper.is_empty() {
         command
-            .env("VALGRIND_LIB", &toolchain.valgrind_lib)
-            .env("LD_LIBRARY_PATH", &toolchain.valgrind_runtime);
+            .env(
+                "VALGRIND_LIB",
+                required_path(&toolchain.valgrind_lib, "VALGRIND_LIB")?,
+            )
+            .env(
+                "LD_LIBRARY_PATH",
+                required_path(&toolchain.valgrind_runtime, "HIRSEL_VALGRIND_RUNTIME")?,
+            );
     }
     if toolchain.runtime_build.measurement {
         command.env("HIRSEL_RT_MEASUREMENT", dir.join("measurement"));
@@ -1932,12 +1964,15 @@ impl Toolchain {
     /// times the timeout.
     /// The link flags that make an executable for `target` load as this toolchain launches
     /// it: under the wrapper, Valgrind's pinned dynamic loader and runtime libraries.
-    pub fn loader_flags(&self, target: &TargetSpec) -> Vec<std::ffi::OsString> {
+    pub fn loader_flags(
+        &self,
+        target: &TargetSpec,
+    ) -> Result<Vec<std::ffi::OsString>, NativeError> {
         if aarch64(target) || self.wrapper.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        let runtime = &self.valgrind_runtime;
-        [
+        let runtime = required_path(&self.valgrind_runtime, "HIRSEL_VALGRIND_RUNTIME")?;
+        Ok([
             "-Xlinker".into(),
             "--dynamic-linker".into(),
             "-Xlinker".into(),
@@ -1947,13 +1982,15 @@ impl Toolchain {
             "-Xlinker".into(),
             runtime.into(),
         ]
-        .to_vec()
+        .to_vec())
     }
 
-    pub fn under_memcheck(mut self) -> Self {
+    pub fn under_memcheck(mut self) -> Result<Self, NativeError> {
         self.launch_timeout = LAUNCH_TIMEOUT * 10;
         self.wrapper = [
-            self.valgrind.to_string_lossy().as_ref(),
+            required_path(&self.valgrind, "HIRSEL_VALGRIND")?
+                .to_str()
+                .ok_or_else(|| NativeError::new(StageName::Link, "Valgrind path is not UTF-8"))?,
             "--quiet",
             "--error-exitcode=97",
             "--leak-check=full",
@@ -1961,7 +1998,7 @@ impl Toolchain {
         ]
         .map(String::from)
         .to_vec();
-        self
+        Ok(self)
     }
 }
 
@@ -2003,14 +2040,14 @@ mod tests {
         let tools = Toolchain {
             runtime_build: RuntimeBuild::default(),
             clang: "/unused/clang".into(),
-            aarch64_cc: "/unused/gcc".into(),
+            aarch64_cc: Some("/unused/gcc".into()),
             lld: "/unused/ld.lld".into(),
             cache: "/unused/cache".into(),
-            qemu_aarch64: "/unused/qemu".into(),
-            aarch64_sysroot: "/unused/sysroot".into(),
-            valgrind: "/bin/sh".into(),
-            valgrind_lib: "/inputs/valgrind-support".into(),
-            valgrind_runtime: "/unused/libc".into(),
+            qemu_aarch64: Some("/unused/qemu".into()),
+            aarch64_sysroot: Some("/unused/sysroot".into()),
+            valgrind: Some("/bin/sh".into()),
+            valgrind_lib: Some("/inputs/valgrind-support".into()),
+            valgrind_runtime: Some("/unused/libc".into()),
             runtime: BTreeMap::new(),
             wrapper: vec![
                 "/bin/sh".into(),
@@ -2030,6 +2067,17 @@ mod tests {
         assert_eq!(launched.exit, Some(0));
         assert_eq!(launched.stdout, b"/inputs/valgrind-support");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn configured_tools_refuse_missing_or_path_searched_names() {
+        assert!(configured_path("tool", None).is_err());
+        assert!(configured_path("tool", Some("clang".into())).is_err());
+        assert!(configured_path("tool", Some("relative/clang".into())).is_err());
+        assert_eq!(
+            configured_path("tool", Some("/inputs/clang".into())).unwrap(),
+            Path::new("/inputs/clang")
+        );
     }
 
     #[test]
@@ -2054,13 +2102,10 @@ mod tests {
     }
 
     #[test]
-    fn configured_tools_refuse_missing_or_path_searched_names() {
-        assert!(configured_path("tool", None).is_err());
-        assert!(configured_path("tool", Some("clang".into())).is_err());
-        assert!(configured_path("tool", Some("relative/clang".into())).is_err());
-        assert_eq!(
-            configured_path("tool", Some("/inputs/clang".into())).unwrap(),
-            Path::new("/inputs/clang")
-        );
+    fn unused_tool_inputs_are_not_read_and_missing_selected_inputs_are_errors() {
+        let missing = "HIRSEL_TEST_UNCONFIGURED_TOOL_INPUT";
+        assert_eq!(selected_path(missing, false).unwrap(), None);
+        assert!(selected_path(missing, true).is_err());
+        assert!(required_path(&None, missing).is_err());
     }
 }

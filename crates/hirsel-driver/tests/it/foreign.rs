@@ -434,7 +434,7 @@ fn native_c_fixture(
     let tools = native::Toolchain::in_tree(&root.join("runtime"), &[&target]).unwrap();
     std::fs::write(root.join("lib/demo.c"), c).unwrap();
     let cc = if target.triple.starts_with("aarch64") {
-        &tools.aarch64_cc
+        tools.aarch64_cc.as_ref().unwrap()
     } else {
         &tools.clang
     };

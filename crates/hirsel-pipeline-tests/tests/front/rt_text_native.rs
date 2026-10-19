@@ -111,7 +111,11 @@ fn compile(
     sanitize: bool,
 ) {
     let arm = target.triple.starts_with("aarch64");
-    let mut command = Command::new(if arm { &tools.aarch64_cc } else { &tools.clang });
+    let mut command = Command::new(if arm {
+        tools.aarch64_cc.as_ref().unwrap()
+    } else {
+        &tools.clang
+    });
     command.args([
         "-std=c11",
         "-DHIRSEL_RT_ENABLE_STATS",
@@ -154,9 +158,9 @@ fn compile(
 }
 fn execute(tools: &Toolchain, target: &TargetSpec, executable: &Path) {
     if target.triple.starts_with("aarch64") {
-        run(Command::new(&tools.qemu_aarch64)
+        run(Command::new(tools.qemu_aarch64.as_ref().unwrap())
             .arg("-L")
-            .arg(&tools.aarch64_sysroot)
+            .arg(tools.aarch64_sysroot.as_ref().unwrap())
             .arg(executable));
     } else {
         run(Command::new(executable)

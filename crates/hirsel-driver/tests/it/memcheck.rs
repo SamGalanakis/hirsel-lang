@@ -53,7 +53,8 @@ fn memcheck_exit(name: &str, defines: &[&str]) -> Option<i32> {
         },
     )
     .unwrap()
-    .under_memcheck();
+    .under_memcheck()
+    .unwrap();
     let source = dir.join("program.c");
     std::fs::write(&source, PROGRAM).unwrap();
     let executable = dir.join("program");
@@ -61,7 +62,7 @@ fn memcheck_exit(name: &str, defines: &[&str]) -> Option<i32> {
     let output = Command::new(&tools.clang)
         .args(["-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-I"])
         .arg(&include)
-        .args(tools.loader_flags(&target))
+        .args(tools.loader_flags(&target).unwrap())
         .args(defines.iter().map(|d| format!("-D{d}")))
         .arg(&source)
         .arg(tools.archive(&target.triple).unwrap())

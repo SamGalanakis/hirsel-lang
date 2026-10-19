@@ -205,8 +205,11 @@ fn trees_and_inline_counts(target: TargetSpec, name: &str) {
             ));
             let exe = dir.join("binarytrees");
             let arm = target.triple.starts_with("aarch64");
-            let mut cmd =
-                std::process::Command::new(if arm { &tools.aarch64_cc } else { &tools.clang });
+            let mut cmd = std::process::Command::new(if arm {
+                tools.aarch64_cc.as_ref().unwrap()
+            } else {
+                &tools.clang
+            });
             let output = cmd
                 .arg(
                     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -233,8 +236,10 @@ fn trees_and_inline_counts(target: TargetSpec, name: &str) {
                 String::from_utf8_lossy(&output.stderr)
             );
             let mut command = if arm {
-                let mut cmd = std::process::Command::new(&tools.qemu_aarch64);
-                cmd.arg("-L").arg(&tools.aarch64_sysroot).arg(&exe);
+                let mut cmd = std::process::Command::new(tools.qemu_aarch64.as_ref().unwrap());
+                cmd.arg("-L")
+                    .arg(tools.aarch64_sysroot.as_ref().unwrap())
+                    .arg(&exe);
                 cmd
             } else {
                 std::process::Command::new(&exe)

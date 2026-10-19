@@ -335,7 +335,9 @@ fn run() -> Result<bool, String> {
                 cases.retain(|c| filter.keeps(&c.id));
                 cases
             };
-            let toolchain = toolchain(&matrix)?.under_memcheck();
+            let toolchain = toolchain(&matrix)?
+                .under_memcheck()
+                .map_err(|e| e.to_string())?;
             let results = native::run_cases(
                 &cases,
                 &matrix,
