@@ -54,6 +54,7 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
         .unwrap();
     assert_eq!(SECTION22.trim(), section.trim());
     let registry = BuiltinRegistry::new();
+    let mut names = BTreeSet::new();
     for line in SECTION22
         .lines()
         .map(|l| {
@@ -69,6 +70,7 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
     {
         let head = line.trim_start_matches("N ").strip_prefix("fn ").unwrap();
         let name = head.split(['[', '(']).next().unwrap();
+        assert!(names.insert(name), "duplicate ledger declaration: {name}");
         assert!(
             matches!(
                 registry
@@ -80,6 +82,41 @@ fn section22_ledger_is_a_complete_verbatim_transcription() {
             "{name}"
         );
     }
+    // DROP-4's forget and the core-library overview's transaction example are
+    // declared outside the ledger. Every other source-callable function must
+    // have a ledger row, so removing or forgetting one cannot hide in a total.
+    let expected: BTreeSet<_> = names
+        .into_iter()
+        .map(hirsel_syntax::DefPath::core)
+        .chain(
+            [
+                "forget",
+                "reservations.insert",
+                "stock.get",
+                "stock.put",
+                "store.transact",
+            ]
+            .into_iter()
+            .map(hirsel_syntax::DefPath::core),
+        )
+        .collect();
+    let declared: BTreeSet<_> = registry
+        .signatures()
+        .filter(|signature| {
+            matches!(signature.kind, SignatureKind::Function(_))
+                && !signature
+                    .definition
+                    .0
+                    .modules
+                    .iter()
+                    .any(|module| module.starts_with('$'))
+        })
+        .map(|signature| signature.definition.clone())
+        .collect();
+    assert_eq!(
+        expected, declared,
+        "source-callable functions and ledger rows"
+    );
 }
 #[test]
 fn roles_and_provider_lookup_are_nominal_and_read_only() {
@@ -115,12 +152,20 @@ fn roles_and_provider_lookup_are_nominal_and_read_only() {
 #[test]
 fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
     let r = BuiltinRegistry::new();
-    assert_eq!(loop_protocols().len(), 6);
-    assert_eq!(r.signatures().count(), 429);
-    for ((protocol, open, next), generics) in loop_protocols().into_iter().zip([2, 2, 1, 1, 1, 2]) {
+    let mut protocols = BTreeSet::new();
+    let mut operations = BTreeSet::new();
+    for (protocol, open, next) in loop_protocols() {
+        assert!(
+            protocols.insert(protocol),
+            "duplicate loop protocol: {protocol}"
+        );
         assert_eq!(open.0.modules, ["$intrinsic"]);
         assert_eq!(open.0.name, format!("{protocol}_open"));
         for path in [&open, &next] {
+            assert!(
+                operations.insert(path.clone()),
+                "duplicate loop operation: {path}"
+            );
             let signature = r.get(path).unwrap();
             assert_eq!(
                 signature.metadata.visibility,
@@ -143,6 +188,12 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
         let open = r.get(&open).unwrap();
         let SignatureKind::Function(f) = &open.kind else {
             panic!()
+        };
+        let map = matches!(protocol, "MapInsertionOrder" | "SortedMapOrder");
+        let generics = if map || protocol == "InlineConsume" {
+            2
+        } else {
+            1
         };
         assert_eq!(f.generics.len(), generics);
         let consuming = protocol.ends_with("Consume")
@@ -178,7 +229,6 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
             result.modes.relation,
             Relation::parameters([hirsel_types::ParameterRef::bound(ParamId(0))])
         );
-        let map = matches!(protocol, "MapInsertionOrder" | "SortedMapOrder");
         let cursor_name = match protocol {
             "MapInsertionOrder" => "$intrinsic.OwnedMapCursor",
             "SortedMapOrder" => "$intrinsic.OwnedSortedMapCursor",
@@ -200,6 +250,25 @@ fn compiler_loop_protocols_are_declared_and_cannot_resolve_from_source() {
             matches!(&next.types.get(f.result).unwrap().kind,TypeKind::Named {definition,arguments} if *definition==hirsel_syntax::DefPath::core("Option") && arguments.len()==1)
         );
     }
+    // Signature-selected view protocols supplement the compiler's protocol list.
+    // Compare identities to catch an omitted protocol without pinning the size.
+    for signature in r.signatures() {
+        if let SignatureKind::Type(t) = &signature.kind {
+            if let Some(source) = &t.loop_source {
+                operations.extend([source.open.clone(), source.next.clone()]);
+            }
+        }
+    }
+    let declared: BTreeSet<_> = r
+        .signatures()
+        .filter(|signature| {
+            signature.definition.0.modules == ["$intrinsic"]
+                && (signature.definition.0.name.ends_with("_open")
+                    || signature.definition.0.name.ends_with("_next"))
+        })
+        .map(|signature| signature.definition.clone())
+        .collect();
+    assert_eq!(operations, declared, "loop protocol operation coverage");
     let cursor = r
         .get(&hirsel_syntax::DefPath::core("$intrinsic.Cursor"))
         .unwrap();

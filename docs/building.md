@@ -388,6 +388,26 @@ Every in-gate corpus file must pass whether or not that list names it; a listed
 file must pass even when excluded from the gate, and the list is the native
 gate's baseline, so add a new corpus file's path to it (the list is sorted).
 
+## Growing inventories: no hand-maintained totals
+
+Do not pin the size of a growing primitive, ledger, registry, provider, test or
+API inventory in an assertion, array type or fixture footer. Check the identities
+instead: compare inventories in both directions, reject duplicate rows, and
+verify every declaration's contract or implementation. Keep fixed counts only
+when they express a format, a bounded domain or a test's explicit input.
+
+Use inferred arrays or slices for extensible lists. A checked-in inventory has
+one item per line, sorted by identity, with no trailing total. Generate derived
+inventories with the owning tool and verify them with `--check` or an exact drift
+test; regenerate them after a merge instead of hand-merging their contents.
+`tools/bless.sh core-review native-inventory` regenerates the core review and
+native operation tables; the registry and native coverage tests check their
+identities and contracts. `tools/land` regenerates `docs/api.md`, whose drift test
+compares it with every public core and std export. The conformance ratchet checks
+each sorted, unique path in `conformance/passing.txt`; the full-gate counter
+checks every compiled test identity executes exactly once. Neither needs a total
+updated when another lane adds an item.
+
 ## Run locally
 
 The host is shared. A program run outside Buck2 (a built `hirsel`, a

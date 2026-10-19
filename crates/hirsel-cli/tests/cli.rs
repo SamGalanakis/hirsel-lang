@@ -3134,7 +3134,13 @@ fn doc_manifest_json_and_output_file_share_public_api() {
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(json["schema"], 1);
     let entries = json["entries"].as_array().unwrap();
-    assert_eq!(entries.len(), 13);
+    let expected = hirsel_driver::api_index::render_json(
+        &hirsel_driver::api_index::entries(&manifest).unwrap(),
+    );
+    assert_eq!(
+        json,
+        serde_json::from_str::<serde_json::Value>(&expected).unwrap()
+    );
     let token = entries
         .iter()
         .find(|e| e["identity"] == "doc_api@1/api/token")

@@ -103,23 +103,23 @@ pub enum ProviderContract {
     BudgetsLimits,
 }
 impl ProviderContract {
-    pub const ALL: [Self; 16] = [
-        Self::TasksCooperative,
-        Self::StdinBytes,
-        Self::StderrBytes,
-        Self::StdoutBytes,
-        Self::RandomSplitMix64,
-        Self::RandomSystem,
-        Self::MonotonicNanoseconds,
-        Self::WallUnixNanoseconds,
-        Self::NetStream,
-        Self::NetScript,
-        Self::ProcessSpawn,
-        Self::ProcessScript,
+    pub const ALL: &[Self] = &[
         Self::AdmitAny,
         Self::AdmitSafe,
-        Self::BudgetsNone,
         Self::BudgetsLimits,
+        Self::BudgetsNone,
+        Self::MonotonicNanoseconds,
+        Self::WallUnixNanoseconds,
+        Self::NetScript,
+        Self::NetStream,
+        Self::ProcessScript,
+        Self::ProcessSpawn,
+        Self::RandomSplitMix64,
+        Self::RandomSystem,
+        Self::StderrBytes,
+        Self::StdinBytes,
+        Self::StdoutBytes,
+        Self::TasksCooperative,
     ];
     pub const fn name(self) -> &'static str {
         match self {
@@ -143,7 +143,8 @@ impl ProviderContract {
     }
     pub fn parse(name: &str) -> Option<Self> {
         Self::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|contract| contract.name() == name)
     }
 }

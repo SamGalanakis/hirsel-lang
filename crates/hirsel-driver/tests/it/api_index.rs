@@ -202,7 +202,12 @@ fn package_public_api_matches_readable_golden() {
             return;
         }
         assert_eq!(page, include_str!("../../../../packages/doc_api@1/api.md"));
-        assert_eq!(entries.len(), 13);
+        let identities: BTreeSet<_> = entries.iter().map(|entry| &entry.identity).collect();
+        assert_eq!(
+            identities.len(),
+            entries.len(),
+            "duplicate package index row"
+        );
         assert_eq!(
             entries
                 .iter()

@@ -323,7 +323,11 @@ class Queries(unittest.TestCase):
         self.assertEqual((floor.campaigns, floor.conformance), (set(), set()))
         plan, _ = self.run_query(gating.Selection.suggest, selection)
         self.assertEqual(plan.campaigns, {impact.CONFORMANCE, impact.AGREEMENT})
-        self.assertEqual(len(plan.campaign_targets()), 32)
+        expected = [f'root//:gate-{name}-shard-{index}'
+                    for name, count in [('conformance', gating.CONFORMANCE_SHARDS),
+                                        ('agree', gating.AGREE_SHARDS)]
+                    for index in range(1, count + 1)]
+        self.assertCountEqual(plan.campaign_targets(), expected)
         # A crate's tests, not a longer-named crate's.
         query = gating.crate_tests({'hirsel-check'})
         self.assertIn('"^(hirsel\\-check)-(unittest|test-.+|bin-.+-unittest)$"', query)

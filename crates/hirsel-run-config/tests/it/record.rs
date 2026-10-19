@@ -547,7 +547,13 @@ fn known_provider_contracts_are_shared_by_live_and_replayed_runs() {
         },
     )
     .unwrap();
-    for contract in ProviderContract::ALL {
+    assert!(
+        ProviderContract::ALL
+            .windows(2)
+            .all(|pair| pair[0].name() < pair[1].name()),
+        "provider contracts must be sorted and unique by name"
+    );
+    for &contract in ProviderContract::ALL {
         assert_eq!(ProviderContract::parse(contract.name()), Some(contract));
     }
     // External revocation references are host evidence selectors, not providers.

@@ -359,14 +359,44 @@ fn every_runtime_primitive_row_matches_its_export() {
     with_compiler_stack(|| {
         let program = checked(HELLO);
         let manifest = hirsel_driver::native::manifest(program.validated.snapshot()).unwrap();
-        let mut primitives = 0;
+        let inventory = hirsel_engine::registry::BuiltinRegistry::new().operation_inventory();
+        manifest
+            .check_coverage(
+                inventory
+                    .into_keys()
+                    .map(|key| hirsel_core_contract::OperationId {
+                        definition: key.definition,
+                        declaration_digest: key.declaration_digest,
+                    }),
+            )
+            .unwrap();
+        let mut exports = std::collections::BTreeSet::new();
+        for export in HIRSEL_ABI_EXPORTS {
+            assert!(
+                exports.insert(export.symbol),
+                "duplicate ABI export: {}",
+                export.symbol
+            );
+        }
+        let mut used_exports = std::collections::BTreeSet::new();
         for row in manifest.rows() {
+            let classified = hirsel_rt::operations::classify(row.clone()).unwrap();
+            if matches!(
+                classified.dispositions.native,
+                Disposition::RuntimePrimitive(_)
+            ) || matches!(row.dispositions.native, Disposition::RuntimePrimitive(_))
+            {
+                assert_eq!(
+                    row.dispositions.native, classified.dispositions.native,
+                    "{:?}",
+                    row.id
+                );
+            }
             let Disposition::RuntimePrimitive(template) =
                 row.dispositions.get(ManifestEngine::Native)
             else {
                 continue;
             };
-            primitives += 1;
             let symbols: Vec<String> = if template.contains('{') {
                 [ScalarKind::F32, ScalarKind::F64]
                     .into_iter()
@@ -378,14 +408,19 @@ fn every_runtime_primitive_row_matches_its_export() {
             assert!(!symbols.is_empty(), "{template} resolves to no symbol");
             for symbol in symbols {
                 assert!(
-                    HIRSEL_ABI_EXPORTS.iter().any(|e| e.symbol == symbol),
+                    exports.contains(symbol.as_str()),
                     "{symbol} has no Hirsel ABI export row"
                 );
+                used_exports.insert(symbol);
             }
         }
         assert_eq!(
-            primitives, 152,
-            "Io, Args, Env, Test, host streams, text, scalar/position cursors, network streams, listeners and datagrams, processes, streaming children and groups, random draws, timer waits, and the task (scope deadlines and task sets included), channel, mutex, atomic and isolation runtime entries"
+            used_exports
+                .iter()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            exports,
+            "every Hirsel ABI export has a registered runtime primitive"
         );
         // Calls of each, with each float family, on both targets.
         let calls = checked(
