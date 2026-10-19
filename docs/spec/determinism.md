@@ -52,18 +52,12 @@ failures.
 
 ## Run configuration
 
-A native program is launched as `program --hirsel-run /absolute/run.json [args...]`; a
-source run is `hirsel run launch.json --run /absolute/run.json`. The file selects the run
-record. There are no environment-variable fallbacks for roots, seeds or grants, no
-build-mode grants and no search of parent directories. For a source run, the program's
-`Args` come only from the record. For a standalone executable, arguments following the
-record path replace its Args snapshot, including an empty snapshot, before validation and
-admission; the record may omit Args. Without a record, `program -- [args...]` explicitly
-supplies only Args. These process snapshots contribute to the admitted run identity like
-any other input. Without either option the run uses the fully specified empty-grant record
-with all seeds zero. An explicit record may grant empty `Args` or empty `Env`, which differs
-from omitting the root. A requested but absent root is a launch refusal under
-[PROG-3](programs.md#prog-3-entry), not a language failure.
+An explicit run record is selected by `program --hirsel-run /absolute/run.json [args...]`
+or `hirsel run launch.json --run /absolute/run.json`. Argument snapshots, grants templates,
+root admission and denial defaults follow [PROG-3](programs.md#prog-3-entry).
+There are no environment-variable fallbacks for roots, seeds or grants, no build-mode
+grants and no search of parent directories. The default empty-grant record has all seeds
+zero. Process snapshots contribute to the admitted run identity like any other input.
 
 | Field | Meaning |
 |---|---|
@@ -159,8 +153,7 @@ no authority beyond the explicit rules.
 **Budgets.** A host bounds the resources one run may use, for example to host untrusted
 code, by choosing a budget implementation in the record; budgets are host policy and grant
 nothing. `budgets.none@1`, the default, bounds nothing; its canonical spelling omits the `budgets`
-member, so a record without budgets has the bytes and identity it had before the member
-existed.
+member.
 `budgets.limits@1` takes `fuel` and `memory_bytes`, each a positive `u64` or null for
 unbounded, at least one present, for example
 `{"provider": "budgets.limits@1", "fuel": 100000000, "memory_bytes": null}`. **Fuel** is
@@ -194,9 +187,8 @@ normalization); explicit `null` for absence, except run-policy members; no white
 A run-policy member (the recording level, budgets, the admission code policy, and any later
 member that chooses how a run is executed rather than what it may do) is absent from the
 canonical bytes when it equals its default: validation normalizes a default value to absence,
-so adding a policy member changes neither an existing record's identity nor a recorded tape's
-header. Digests are 64 lowercase
-hexadecimal SHA-256 digits; admission timestamps are signed decimal `i64` Unix nanoseconds,
+so adding a default policy changes neither record identity nor a recorded tape's header.
+Digests are 64 lowercase hexadecimal SHA-256 digits; admission timestamps are signed decimal `i64` Unix nanoseconds,
 zero spelled `0`. The record's identity hashes these bytes with a domain-separated,
 length-prefixed SHA-256. A parser for human input may normalize member order and whitespace
 before validation. Hash values bind bytes; they do not authenticate a grant, establish type
@@ -219,11 +211,7 @@ rather than identical machine code. Observations carry the same program and run 
 Public signature digests alone are insufficient: a body change invalidates replay even when
 request prefixes match.
 
-**Revision swaps.** A run executes the program revision selected at launch; no feature
-replaces it during a run today. Any future live-swap feature must obey this rule, so that
-replay reproduces which revision every call ran. A definition's selected revision may advance only at recorded swap points. A named
-function value follows its definition, so later calls use the current revision. A closure
-keeps the revision that created it. A run's tape records every swap point. See
+**Revision swaps.** Revision selection and any future recorded swap points follow
 [PROG-1](programs.md#prog-1-names). A runner's callee run (planned) executes the revision
 its place selects for the callee, and the place refuses a call whose code hash differs
 from the request's ([RUN-8](runners.md#run-8-identity-and-arrival)); a call never swaps the
@@ -360,9 +348,8 @@ SHA-256 of the trust set's PEM bytes, and its completion the handshake outcome; 
 key, and any digest of one, is never recorded. Replay re-derives the server's validity from
 the material the program supplies again, and a different chain or trust set refuses. A
 `tls.peer` request records the stream, and its completion the DER chain it returned, which
-replay returns without cryptography. A replayable ciphertext recording would have to
-contain the key material, so recording plaintext loses no confidentiality; recordings are
-secret-bearing in any case, since their run record holds granted `Env` values.
+replay returns without cryptography. Recordings are secret-bearing: they hold plaintext
+and granted `Env` values.
 
 Replay returns recorded completions without sockets, name resolution or cryptography. Each
 request must equal the next recorded request; a mismatch, a missing event and an unconsumed
@@ -376,9 +363,8 @@ InDoubt; continuing from an InDoubt write never retries it.
 
 A process run is recorded at the call: the request (the `Proc` handle, the command's
 program, arguments, working-directory handle or none, exact environment or none and
-`own_group`, which a recording holds only when it is `true`, so recordings made before the
-field existed keep their bytes, every
-stdin byte, `max_output`, and the deadline's clock handle and ticks or none) and the completion (the exit status with exactly the
+`own_group` (present only when `true`), every stdin byte, `max_output`, and the deadline's
+clock handle and ticks or none) and the completion (the exit status with exactly the
 captured stdout and stderr bytes, or the error, `TimedOut()` included). Elapsed time and the
 order in which the child's streams were drained are never recorded. A `proc.pipeline` is
 recorded the same way: its request holds every stage's command in stage order, and its

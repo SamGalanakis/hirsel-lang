@@ -76,9 +76,9 @@ must assign the source to its root package. Formatting operates on one source fi
 needs no dependency bodies. Capability implementations and simulation inputs are separate,
 explicit launch inputs ([run configuration](determinism.md#run-configuration)); selecting a
 package grants no authority. An explicit `--run /absolute/run.json` selects freshly admitted
-host Io in either engine. Without `--run`, source-run tooling keeps its simulated world:
-captured stdout, empty virtual directories and no network. This simulation grants no real
-host authority.
+host Io in either engine. Launch defaults and argument snapshots follow
+[PROG-3](#prog-3-entry). A simulated world requires explicit `--simulation <json>` and is
+available only in the interpreter; it grants no host authority.
 
 The standard library is the source package `stdlib/hirsel.json`
 ([standard library](std-library.md)). It is selected by the same manifest mechanism as any

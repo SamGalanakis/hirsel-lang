@@ -114,7 +114,8 @@ including an explicitly empty snapshot. No other authority is implied. A bare
 `hirsel run program.hir`, in either engine, admits the empty-grant record: a root-free
 `main()` runs, and an entry taking `Io`, `Args` or `Env` is refused at launch
 (`{"kind":"not_granted","root":"Io"}`, exit 1), with a line naming `--grants` and
-`--simulation` (a simulated world, interpreted only).
+`--simulation <json>`. A simulated world requires that explicit option and is available
+only in the interpreter; ordinary runs follow [entry admission](spec/programs.md#prog-3-entry).
 
 Interpreted host runs (`--run` and `--grants`) have no default step budget;
 simulated runs and runs without `--run` or `--grants` keep a 1,000,000,000-step budget. `--max-steps <n>` selects a
