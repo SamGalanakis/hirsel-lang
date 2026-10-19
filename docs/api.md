@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-1283 exported definitions; 408 variants.
+1330 exported definitions; 448 variants.
 
 ## Types and roots
 
@@ -4577,6 +4577,138 @@ References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/digest/Hash`](#def-
 References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool), [`std@1/digest/Hash`](#def-std_401_2fdigest_2fHash)
 
 
+## hpack
+
+<a id="def-std_401_2fhpack_2fDecoder"></a>
+
+- `pub opaque type hpack.Decoder: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fhpack_2fEncoder"></a>
+
+- `pub opaque type hpack.Encoder: copyable + inert + noalloc_drop uses {}`
+
+<a id="def-std_401_2fhpack_2fError"></a>
+
+- `pub type hpack.Error = Truncated | IntegerOverflow | InvalidIndex | InvalidHuffman | TableSize | HeaderListTooLarge | Failed`
+
+<a id="def-std_401_2fhpack_2fError_23Failed"></a>
+
+- `Failed -> hpack.Error`
+
+Variant of hpack.Error.
+
+<a id="def-std_401_2fhpack_2fError_23HeaderListTooLarge"></a>
+
+- `HeaderListTooLarge -> hpack.Error`
+
+Variant of hpack.Error.
+
+<a id="def-std_401_2fhpack_2fError_23IntegerOverflow"></a>
+
+- `IntegerOverflow -> hpack.Error`
+
+Variant of hpack.Error.
+
+<a id="def-std_401_2fhpack_2fError_23InvalidHuffman"></a>
+
+- `InvalidHuffman -> hpack.Error`
+
+Variant of hpack.Error.
+
+<a id="def-std_401_2fhpack_2fError_23InvalidIndex"></a>
+
+- `InvalidIndex -> hpack.Error`
+
+Variant of hpack.Error.
+
+<a id="def-std_401_2fhpack_2fError_23TableSize"></a>
+
+- `TableSize -> hpack.Error`
+
+Variant of hpack.Error.
+
+<a id="def-std_401_2fhpack_2fError_23Truncated"></a>
+
+- `Truncated -> hpack.Error`
+
+Variant of hpack.Error.
+
+<a id="def-std_401_2fhpack_2fField"></a>
+
+- `pub type hpack.Field { name: Bytes, value: Bytes, sensitive: bool, }`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool)
+
+<a id="def-std_401_2fhpack_2fdecode"></a>
+
+- `pub fn hpack.decode(mut d: Decoder, data: Bytes, limit: u64) -> Result[List[Field], Error] uses {}`
+
+Decode one complete header block. `limit` counts uncompressed name and
+value octets plus 32 per field, including indexed fields (RFC 9113 6.5.2).
+Any failure invalidates this context; callers must close the connection.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/hpack/Decoder`](#def-std_401_2fhpack_2fDecoder), [`std@1/hpack/Error`](#def-std_401_2fhpack_2fError), [`std@1/hpack/Field`](#def-std_401_2fhpack_2fField)
+
+<a id="def-std_401_2fhpack_2fdecoder"></a>
+
+- `pub fn hpack.decoder(capacity: u32) -> Decoder uses {}`
+
+One decoding context per connection direction. `capacity` is the locally
+advertised SETTINGS_HEADER_TABLE_SIZE, initially 4096 for HTTP/2.
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Decoder`](#def-std_401_2fhpack_2fDecoder)
+
+<a id="def-std_401_2fhpack_2fencode"></a>
+
+- `pub fn hpack.encode(mut e: Encoder, fields: List[Field]) -> unique Bytes uses {}`
+
+Encode a complete block, reusing static/dynamic entries. Sensitive fields
+always use never-indexed literals, even when an exact table match exists.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`std@1/hpack/Encoder`](#def-std_401_2fhpack_2fEncoder), [`std@1/hpack/Field`](#def-std_401_2fhpack_2fField)
+
+<a id="def-std_401_2fhpack_2fencoder"></a>
+
+- `pub fn hpack.encoder(capacity: u32) -> Encoder uses {}`
+
+One encoding context per connection direction, using the peer's table limit.
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Encoder`](#def-std_401_2fhpack_2fEncoder)
+
+<a id="def-std_401_2fhpack_2fhuffman_5fdecode"></a>
+
+- `pub fn hpack.huffman_decode(data: Bytes, limit: u64) -> Result[unique Bytes, Error] uses {}`
+
+Decode static Huffman octets, enforcing EOS and at most seven one bits
+of padding. `limit` bounds output before allocation of the next octet.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u64`](#def-core_401_2fu64), [`std@1/hpack/Error`](#def-std_401_2fhpack_2fError)
+
+<a id="def-std_401_2fhpack_2fhuffman_5fencode"></a>
+
+- `pub fn hpack.huffman_encode(data: Bytes) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fhpack_2fset_5fallowed_5fcapacity"></a>
+
+- `pub fn hpack.set_allowed_capacity(mut d: Decoder, capacity: u32) uses {}`
+
+Change the locally advertised upper bound. A reduction must be reflected
+by the peer's first size update before any field in the next block.
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Decoder`](#def-std_401_2fhpack_2fDecoder)
+
+<a id="def-std_401_2fhpack_2fset_5fcapacity"></a>
+
+- `pub fn hpack.set_capacity(mut e: Encoder, capacity: u32) uses {}`
+
+Apply the peer's SETTINGS_HEADER_TABLE_SIZE. Multiple changes before the
+next block emit the smallest value followed by the final value (7541 4.2).
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Encoder`](#def-std_401_2fhpack_2fEncoder)
+
+
 ## http
 
 <a id="def-std_401_2fhttp_2fBody"></a>
@@ -5016,6 +5148,487 @@ References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Stream`](#def-core_401
 - `pub fn http.trailers(r: Request) -> unique List[Header]`
 
 References: [`core@1/List`](#def-core_401_2fList), [`std@1/http/Header`](#def-std_401_2fhttp_2fHeader), [`std@1/http/Request`](#def-std_401_2fhttp_2fRequest)
+
+
+## http2
+
+<a id="def-std_401_2fhttp2_2fConnection"></a>
+
+- `pub opaque resource type http2.Connection: noalloc_drop uses {Net}`
+
+An explicit HTTP/2 connection over an already selected Net transport.
+`connection` uses prior knowledge: the caller supplies a plain h2c stream
+or a TLS stream whose protocol it has already selected. It never upgrades
+an HTTP/1.1 connection. Net's host/script/replay provider remains authoritative.
+
+References: [`core@1/Net`](#def-core_401_2fNet)
+
+<a id="def-std_401_2fhttp2_2fError"></a>
+
+- `pub type http2.Error = Net(NetError) | Truncated | InvalidPreface | Wire( http2_wire.FrameError ) | Closed | InvalidHeaders | UnknownStream | WouldBlock`
+
+References: [`core@1/NetError`](#def-core_401_2fNetError), [`std@1/http2_wire/FrameError`](#def-std_401_2fhttp2_5fwire_2fFrameError)
+
+<a id="def-std_401_2fhttp2_2fError_23Closed"></a>
+
+- `Closed -> http2.Error`
+
+Variant of http2.Error.
+
+<a id="def-std_401_2fhttp2_2fError_23InvalidHeaders"></a>
+
+- `InvalidHeaders -> http2.Error`
+
+Variant of http2.Error.
+
+<a id="def-std_401_2fhttp2_2fError_23InvalidPreface"></a>
+
+- `InvalidPreface -> http2.Error`
+
+Variant of http2.Error.
+
+<a id="def-std_401_2fhttp2_2fError_23Net"></a>
+
+- `Net(NetError) -> http2.Error`
+
+Variant of http2.Error.
+
+References: [`core@1/NetError`](#def-core_401_2fNetError)
+
+<a id="def-std_401_2fhttp2_2fError_23Truncated"></a>
+
+- `Truncated -> http2.Error`
+
+Variant of http2.Error.
+
+<a id="def-std_401_2fhttp2_2fError_23UnknownStream"></a>
+
+- `UnknownStream -> http2.Error`
+
+Variant of http2.Error.
+
+<a id="def-std_401_2fhttp2_2fError_23Wire"></a>
+
+- `Wire( http2_wire.FrameError ) -> http2.Error`
+
+Variant of http2.Error.
+
+References: [`std@1/http2_wire/FrameError`](#def-std_401_2fhttp2_5fwire_2fFrameError)
+
+<a id="def-std_401_2fhttp2_2fError_23WouldBlock"></a>
+
+- `WouldBlock -> http2.Error`
+
+Variant of http2.Error.
+
+<a id="def-std_401_2fhttp2_2fEvent"></a>
+
+- `pub type http2.Event = Idle | Headers(u32, List[hpack.Field], bool) | Data( u32, Bytes, u32, bool ) | Reset(u32, u32) | Goaway(u32, u32) | PingAck(Bytes) | Settings`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Field`](#def-std_401_2fhpack_2fField)
+
+<a id="def-std_401_2fhttp2_2fEvent_23Data"></a>
+
+- `Data( u32, Bytes, u32, bool ) -> http2.Event`
+
+Variant of http2.Event.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32)
+
+<a id="def-std_401_2fhttp2_2fEvent_23Goaway"></a>
+
+- `Goaway(u32, u32) -> http2.Event`
+
+Variant of http2.Event.
+
+References: [`core@1/u32`](#def-core_401_2fu32)
+
+<a id="def-std_401_2fhttp2_2fEvent_23Headers"></a>
+
+- `Headers(u32, List[hpack.Field], bool) -> http2.Event`
+
+Variant of http2.Event.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Field`](#def-std_401_2fhpack_2fField)
+
+<a id="def-std_401_2fhttp2_2fEvent_23Idle"></a>
+
+- `Idle -> http2.Event`
+
+Variant of http2.Event.
+
+<a id="def-std_401_2fhttp2_2fEvent_23PingAck"></a>
+
+- `PingAck(Bytes) -> http2.Event`
+
+Variant of http2.Event.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fhttp2_2fEvent_23Reset"></a>
+
+- `Reset(u32, u32) -> http2.Event`
+
+Variant of http2.Event.
+
+References: [`core@1/u32`](#def-core_401_2fu32)
+
+<a id="def-std_401_2fhttp2_2fEvent_23Settings"></a>
+
+- `Settings -> http2.Event`
+
+Variant of http2.Event.
+
+<a id="def-std_401_2fhttp2_2fRole"></a>
+
+- `pub type http2.Role = Client | Server`
+
+<a id="def-std_401_2fhttp2_2fRole_23Client"></a>
+
+- `Client -> http2.Role`
+
+Variant of http2.Role.
+
+<a id="def-std_401_2fhttp2_2fRole_23Server"></a>
+
+- `Server -> http2.Role`
+
+Variant of http2.Role.
+
+<a id="def-std_401_2fhttp2_2fSession"></a>
+
+- `pub opaque type http2.Session: copyable + inert + noalloc_drop uses {}`
+
+A transport-independent HTTP/2 endpoint. Feed complete validated frames
+with receive; drain bytes with output and write them through the caller's
+Net Stream. DATA events are not buffered here. Call consumed only after
+the consumer releases the octets, including the reported padding cost.
+
+<a id="def-std_401_2fhttp2_2fconnection"></a>
+
+- `pub fn http2.connection(n: Net, take stream: Stream of n, role: Role, header_limit: u64) -> Connection`
+
+References: [`core@1/Net`](#def-core_401_2fNet), [`core@1/Stream`](#def-core_401_2fStream), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http2/Connection`](#def-std_401_2fhttp2_2fConnection), [`std@1/http2/Role`](#def-std_401_2fhttp2_2fRole)
+
+<a id="def-std_401_2fhttp2_2fconsumed"></a>
+
+- `pub fn http2.consumed(mut s: Session, id: u32, amount: u32) -> Result[(), Error] uses {}`
+
+Return receive credit after the application consumes a DATA event. The
+amount includes its padding and never exceeds octets actually received.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u32`](#def-core_401_2fu32), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession)
+
+<a id="def-std_401_2fhttp2_2fdrain_5fframes"></a>
+
+- `pub fn http2.drain_frames(mut s: Session) -> (Bytes, List[http2_wire.Frame]) uses {}`
+
+Drain the pending preface and frames in wire order without coalescing them.
+Write the returned preface first, followed by each encoded frame.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/List`](#def-core_401_2fList), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession), [`std@1/http2_wire/Frame`](#def-std_401_2fhttp2_5fwire_2fFrame)
+
+<a id="def-std_401_2fhttp2_2fflush"></a>
+
+- `pub fn http2.flush(mut c: Connection) -> Result[(), Error]`
+
+Write queued protocol frames. Any write failure makes the connection unusable.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http2/Connection`](#def-std_401_2fhttp2_2fConnection), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError)
+
+<a id="def-std_401_2fhttp2_2fgoaway"></a>
+
+- `pub fn http2.goaway(mut s: Session, code: http2_wire.Code) uses {}`
+
+References: [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession), [`std@1/http2_wire/Code`](#def-std_401_2fhttp2_5fwire_2fCode)
+
+<a id="def-std_401_2fhttp2_2fheaders"></a>
+
+- `pub fn http2.headers(mut s: Session, id: u32, fields: List[hpack.Field], end: bool) -> Result[ (), Error ] uses {}`
+
+Send initial response headers, or trailers after initial headers.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Field`](#def-std_401_2fhpack_2fField), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession)
+
+<a id="def-std_401_2fhttp2_2fnext_5fevent"></a>
+
+- `pub fn http2.next_event(mut c: Connection) -> Result[Event, Error]`
+
+Read one event, retaining partial frame bytes across reads. Protocol
+responses (SETTINGS/PING acknowledgements, RST_STREAM and GOAWAY) are
+flushed before returning. EOF in a partial frame/preface is Truncated.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http2/Connection`](#def-std_401_2fhttp2_2fConnection), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2/Event`](#def-std_401_2fhttp2_2fEvent)
+
+<a id="def-std_401_2fhttp2_2fopen"></a>
+
+- `pub fn http2.open(mut s: Session, fields: List[hpack.Field], end: bool) -> Result[u32, Error] uses {}`
+
+Open another client stream without waiting for earlier responses. Odd IDs
+increase monotonically. WouldBlock means the peer's concurrency limit is full.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Field`](#def-std_401_2fhpack_2fField), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession)
+
+<a id="def-std_401_2fhttp2_2foutput"></a>
+
+- `pub fn http2.output(mut s: Session) -> unique Bytes uses {}`
+
+Coalesce all pending writes into one wire buffer. For streaming writes,
+drain_frames avoids copying all queued payloads into a combined buffer.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession)
+
+<a id="def-std_401_2fhttp2_2fping"></a>
+
+- `pub fn http2.ping(mut s: Session, payload: Bytes) -> Result[(), Error] uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession)
+
+<a id="def-std_401_2fhttp2_2freceive"></a>
+
+- `pub fn http2.receive(mut s: Session, frame: http2_wire.Frame) -> Result[Event, Error] uses {}`
+
+Process one complete frame. The parser validates its fixed shape first,
+including when callers construct Frame values directly. Connection errors
+emit GOAWAY and permanently fail the session; stream errors emit RST_STREAM.
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2/Event`](#def-std_401_2fhttp2_2fEvent), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession), [`std@1/http2_wire/Frame`](#def-std_401_2fhttp2_5fwire_2fFrame)
+
+<a id="def-std_401_2fhttp2_2frelease_5fbody"></a>
+
+- `pub fn http2.release_body(mut c: Connection, id: u32, flow_bytes: u32) -> Result[(), Error]`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u32`](#def-core_401_2fu32), [`std@1/http2/Connection`](#def-std_401_2fhttp2_2fConnection), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError)
+
+<a id="def-std_401_2fhttp2_2freset"></a>
+
+- `pub fn http2.reset(mut s: Session, id: u32, code: http2_wire.Code) -> Result[(), Error] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u32`](#def-core_401_2fu32), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession), [`std@1/http2_wire/Code`](#def-std_401_2fhttp2_5fwire_2fCode)
+
+<a id="def-std_401_2fhttp2_2freset_5fstream"></a>
+
+- `pub fn http2.reset_stream(mut c: Connection, id: u32, code: http2_wire.Code) -> Result[ (), Error ]`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`core@1/u32`](#def-core_401_2fu32), [`std@1/http2/Connection`](#def-std_401_2fhttp2_2fConnection), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2_wire/Code`](#def-std_401_2fhttp2_5fwire_2fCode)
+
+<a id="def-std_401_2fhttp2_2fsend_5fdata"></a>
+
+- `pub fn http2.send_data(mut s: Session, id: u32, data: Bytes, end: bool) -> Result[u64, Error] uses {}`
+
+Send as many bytes as connection/stream windows and the peer frame limit
+allow. Zero means wait for WINDOW_UPDATE. END_STREAM is sent only when
+all supplied bytes fit. Empty final DATA is legal even at a zero window.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession)
+
+<a id="def-std_401_2fhttp2_2fsession"></a>
+
+- `pub fn http2.session(role: Role, header_limit: u64) -> Session uses {}`
+
+Both peers advertise no server push. Clients emit the connection preface;
+servers must verify the client's preface before passing its first frame.
+Header blocks and decoded header lists are each bounded by `header_limit`.
+
+References: [`core@1/u64`](#def-core_401_2fu64), [`std@1/http2/Role`](#def-std_401_2fhttp2_2fRole), [`std@1/http2/Session`](#def-std_401_2fhttp2_2fSession)
+
+<a id="def-std_401_2fhttp2_2fstart"></a>
+
+- `pub fn http2.start(mut c: Connection, fields: List[hpack.Field], end: bool) -> Result[ u32, Error ]`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Field`](#def-std_401_2fhpack_2fField), [`std@1/http2/Connection`](#def-std_401_2fhttp2_2fConnection), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError)
+
+<a id="def-std_401_2fhttp2_2fwrite_5fbody"></a>
+
+- `pub fn http2.write_body(mut c: Connection, id: u32, data: Bytes, end: bool) -> Result[ u64, Error ]`
+
+The streaming body writer returns the prefix accepted by flow control.
+Call next_event to receive WINDOW_UPDATE when this returns zero.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http2/Connection`](#def-std_401_2fhttp2_2fConnection), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError)
+
+<a id="def-std_401_2fhttp2_2fwrite_5fheaders"></a>
+
+- `pub fn http2.write_headers(mut c: Connection, id: u32, fields: List[hpack.Field], end: bool) -> Result[ (), Error ]`
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/Result`](#def-core_401_2fResult), [`core@1/bool`](#def-core_401_2fbool), [`core@1/u32`](#def-core_401_2fu32), [`std@1/hpack/Field`](#def-std_401_2fhpack_2fField), [`std@1/http2/Connection`](#def-std_401_2fhttp2_2fConnection), [`std@1/http2/Error`](#def-std_401_2fhttp2_2fError)
+
+
+## http2_wire
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode"></a>
+
+- `pub type http2_wire.Code = Protocol | Internal | FlowControl | SettingsTimeout | StreamClosed | FrameSize | RefusedStream | Cancel | Compression | Connect | EnhanceYourCalm | InadequateSecurity | Http11Required | NoError`
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23Cancel"></a>
+
+- `Cancel -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23Compression"></a>
+
+- `Compression -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23Connect"></a>
+
+- `Connect -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23EnhanceYourCalm"></a>
+
+- `EnhanceYourCalm -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23FlowControl"></a>
+
+- `FlowControl -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23FrameSize"></a>
+
+- `FrameSize -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23Http11Required"></a>
+
+- `Http11Required -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23InadequateSecurity"></a>
+
+- `InadequateSecurity -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23Internal"></a>
+
+- `Internal -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23NoError"></a>
+
+- `NoError -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23Protocol"></a>
+
+- `Protocol -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23RefusedStream"></a>
+
+- `RefusedStream -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23SettingsTimeout"></a>
+
+- `SettingsTimeout -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fCode_23StreamClosed"></a>
+
+- `StreamClosed -> http2_wire.Code`
+
+Variant of http2_wire.Code.
+
+<a id="def-std_401_2fhttp2_5fwire_2fFrame"></a>
+
+- `pub type http2_wire.Frame { kind: u8, flags: u8, stream: u32, payload: Bytes, }`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u8`](#def-core_401_2fu8)
+
+<a id="def-std_401_2fhttp2_5fwire_2fFrameError"></a>
+
+- `pub type http2_wire.FrameError = ConnectionError(Code) | StreamError(u32, Code)`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/http2_wire/Code`](#def-std_401_2fhttp2_5fwire_2fCode)
+
+<a id="def-std_401_2fhttp2_5fwire_2fFrameError_23ConnectionError"></a>
+
+- `ConnectionError(Code) -> http2_wire.FrameError`
+
+Variant of http2_wire.FrameError.
+
+References: [`std@1/http2_wire/Code`](#def-std_401_2fhttp2_5fwire_2fCode)
+
+<a id="def-std_401_2fhttp2_5fwire_2fFrameError_23StreamError"></a>
+
+- `StreamError(u32, Code) -> http2_wire.FrameError`
+
+Variant of http2_wire.FrameError.
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/http2_wire/Code`](#def-std_401_2fhttp2_5fwire_2fCode)
+
+<a id="def-std_401_2fhttp2_5fwire_2fcode_5fnumber"></a>
+
+- `@noalloc pub fn http2_wire.code_number(code: Code) -> u32 uses {}`
+
+References: [`core@1/u32`](#def-core_401_2fu32), [`std@1/http2_wire/Code`](#def-std_401_2fhttp2_5fwire_2fCode)
+
+<a id="def-std_401_2fhttp2_5fwire_2fencode"></a>
+
+- `pub fn http2_wire.encode(frame: Frame, max_size: u32) -> Result[unique Bytes, FrameError] uses {}`
+
+Serialize a frame with the peer's maximum payload size. Stream IDs with
+the reserved bit set are rejected rather than silently changed.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u32`](#def-core_401_2fu32), [`std@1/http2_wire/Frame`](#def-std_401_2fhttp2_5fwire_2fFrame), [`std@1/http2_wire/FrameError`](#def-std_401_2fhttp2_5fwire_2fFrameError)
+
+<a id="def-std_401_2fhttp2_5fwire_2ffragment"></a>
+
+- `@noalloc pub fn http2_wire.fragment(frame: Frame) -> Bytes in frame`
+
+DATA octets or the HPACK fragment of HEADERS/PUSH_PROMISE/CONTINUATION,
+excluding padding and priority fields. The input must have passed parse.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`std@1/http2_wire/Frame`](#def-std_401_2fhttp2_5fwire_2fFrame)
+
+<a id="def-std_401_2fhttp2_5fwire_2fparse"></a>
+
+- `pub fn http2_wire.parse(data: Bytes, offset: u64, max_size: u32) -> Result[ Option[(Frame, u64)], FrameError ] in data`
+
+Parse one frame at `offset`; incomplete input consumes nothing. The
+reserved stream bit is ignored. Oversized frames fail from the header,
+before waiting for their payload. `max_size` is the local frame limit.
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/Option`](#def-core_401_2fOption), [`core@1/Result`](#def-core_401_2fResult), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64), [`std@1/http2_wire/Frame`](#def-std_401_2fhttp2_5fwire_2fFrame), [`std@1/http2_wire/FrameError`](#def-std_401_2fhttp2_5fwire_2fFrameError)
+
+<a id="def-std_401_2fhttp2_5fwire_2fpreface"></a>
+
+- `pub fn http2_wire.preface() -> Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes)
+
+<a id="def-std_401_2fhttp2_5fwire_2fread_5fu32"></a>
+
+- `@noalloc pub fn http2_wire.read_u32(data: Bytes, offset: u64) -> u32 uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u32`](#def-core_401_2fu32), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2fhttp2_5fwire_2fu32_5fbytes"></a>
+
+- `pub fn http2_wire.u32_bytes(value: u32) -> unique Bytes uses {}`
+
+References: [`core@1/Bytes`](#def-core_401_2fBytes), [`core@1/u32`](#def-core_401_2fu32)
+
+<a id="def-std_401_2fhttp2_5fwire_2fvalidate"></a>
+
+- `@noalloc pub fn http2_wire.validate(f: Frame) -> Result[(), FrameError] uses {}`
+
+References: [`core@1/Result`](#def-core_401_2fResult), [`std@1/http2_wire/Frame`](#def-std_401_2fhttp2_5fwire_2fFrame), [`std@1/http2_wire/FrameError`](#def-std_401_2fhttp2_5fwire_2fFrameError)
 
 
 ## http_wire
