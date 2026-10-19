@@ -1464,7 +1464,16 @@ impl<'m> HashGenerator<'m, '_> {
             .builder
             .binary(crate::context::BinOp::Mul, index, self.u64(stride));
         let at = self.builder.offset(first, offset);
-        let next_state = self.builder.call(callee, &[at, running, depth, deep]);
+        let next_state = self.builder.call(
+            callee,
+            &[
+                at,
+                running,
+                depth,
+                deep,
+                self.module.parameter(self.function, 4),
+            ],
+        );
         let next = self
             .builder
             .binary(crate::context::BinOp::Add, index, self.u64(1));

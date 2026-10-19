@@ -1,0 +1,18 @@
+// rule: SEM-5
+// expect: run
+// Sequence key hashing shares its caller-owned stream through every element.
+pub fn main() -> Result[(), String] {
+  let a: List[u64] = [1, 2, 3]
+  let b: List[u64] = [1, 2, 4]
+  let mut m: Map[List[u64], u64] = map.empty()
+  map.insert(mut m, copy a, 10)
+  map.insert(mut m, copy b, 20)
+  if map.get(m, a) != Some(10) || map.get(m, b) != Some(20) {
+    return Error("wrong sequence key")
+  }
+  let same: List[u64] = [1, 2, 3]
+  if map.get(m, same) != Some(10) {
+    return Error("equal sequence key missing")
+  }
+  Ok(())
+}

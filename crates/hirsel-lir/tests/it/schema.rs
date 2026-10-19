@@ -1869,6 +1869,7 @@ fn runtime_declarations_match_the_landed_c_header() {
             let open = item
                 .find("(hirsel_rt_v2_ctx")
                 .or_else(|| item.find("(void)"))
+                .or_else(|| item.find("(void *out"))
                 .or_else(|| item.find("(const hirsel_rt_v2_config"))
                 .or_else(|| item.find("(hirsel_rt_v2_header"))
                 .or_else(|| item.find("(uint64_t "))

@@ -9,7 +9,7 @@
 //! floats by IEEE with an unordered pair deciding at once. A pair deeper than
 //! `COMPARE_MAX_DEPTH` is the MEM-3 Depth failure.
 //!
-//! A hash function `hirsel.hash.<layout>(at, state, depth, deep) -> i64` feeds the scalar
+//! A hash function `hirsel.hash.<layout>(at, state, depth, deep, context) -> i64` feeds the scalar
 //! leaves of its value to `hirsel_rt_v2_hash_update` in layout order and returns the
 //! caller-owned stream. Only the root finalizes it. Floats feed `-0.0` as `+0.0`,
 //! a variant its ordinal, a sequence its count first.
@@ -1232,7 +1232,7 @@ impl Gen<'_, '_> {
         self.b.switch_to_block(work);
         let offset = self.b.ins().imul_imm_s(index, stride as i64);
         let at = self.b.ins().iadd(first, offset);
-        let next_state = self.call(callee, &[at, running, depth, deep]);
+        let next_state = self.call(callee, &[at, running, depth, deep, self.params[4]]);
         let next = self.b.ins().iadd_imm_s(index, 1);
         self.b.ins().jump(head, &[next.into(), next_state.into()]);
         self.b.switch_to_block(after);
