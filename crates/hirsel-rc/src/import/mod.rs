@@ -1197,8 +1197,11 @@ fn node_anchors(body: &tir::Body) -> Vec<(u32, u32)> {
 
 /// Temporaries that only ever hold a view: assigned once by a borrowed use of
 /// a place under a loan (`_1 = use(Borrow _0@L0)`), never written, moved or
-/// lent mutably afterwards, and viewing no variant part. Their reads go to the
-/// viewed place itself. An element (`_7 = use(Borrow _0[_5]@L0)`, a loop's
+/// lent mutably afterwards. Their reads go to the viewed place itself. A
+/// variant part is a pattern binding, read after its match tested the tag;
+/// the loan keeps the root's variant, so each later read's tag check holds
+/// as the first did (`let Obj(fields) = v else ..`, then a `match` on a key
+/// of `for (key, _) in fields`). An element (`_7 = use(Borrow _0[_5]@L0)`, a loop's
 /// binding matched on) is a view only while its index stays put: no path from
 /// the assignment writes an index local before the view's storage ends.
 /// A nested `match` on a pattern binding views a part of another view
@@ -1553,15 +1556,9 @@ fn view_assignments(body: &tir::Body) -> (Vec<Vec<Option<ViewSource>>>, Vec<bool
                                 .projection
                                 .iter()
                                 .any(|p| matches!(p, tir::Projection::Index(_)));
-                            let variant = viewed
-                                .projection
-                                .iter()
-                                .any(|p| matches!(p, tir::Projection::VariantField { .. }));
                             assigned[r].push(match viewed.loan {
-                                Some(_) if !indexed && !variant => {
-                                    Some(ViewSource::Loaned(o.place))
-                                }
-                                Some(_) if !variant => Some(ViewSource::Indexed(o.place, (b, k))),
+                                Some(_) if !indexed => Some(ViewSource::Loaned(o.place)),
+                                Some(_) => Some(ViewSource::Indexed(o.place, (b, k))),
                                 None if !indexed && !viewed.projection.is_empty() => {
                                     Some(ViewSource::Nested(o.place))
                                 }

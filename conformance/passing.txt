@@ -3590,6 +3590,7 @@ conformance/OWN/OWN-1-mut-storage-resource-bad.hir
 conformance/OWN/OWN-1-mut-storage-resource-ok.hir
 conformance/OWN/OWN-1-plain-result-copied.hir
 conformance/OWN/OWN-1-spec-at.hir
+conformance/OWN/OWN-1-variant-binding-key-literal-match-run.hir
 conformance/OWN/OWN-2-arena-branch-tail-place-bad.hir
 conformance/OWN/OWN-2-arena-branch-tail-place-ok.hir
 conformance/OWN/OWN-2-binding-use-after-move-bad.hir

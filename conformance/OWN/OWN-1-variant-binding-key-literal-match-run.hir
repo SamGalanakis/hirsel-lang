@@ -1,0 +1,55 @@
+// rule: OWN-1
+// expect: run
+// stdout: 2 big none
+// A literal match on a key of a Map bound out of a borrowed variant by `let .. else`
+// reads the key in place: the loan on the parameter keeps its variant, so the scrutinee
+// is a view of the entry and owns nothing, on the normal path and on a `?` failure.
+type Doc = Obj(Map[String, String]) | Other
+
+fn check(n: u64) -> Result[u64, String] uses {} {
+  if n > 1 {
+    return Error("big")
+  }
+  Ok(n)
+}
+
+fn count(v: Doc, limit: u64) -> Result[u64, String] uses {} {
+  let Obj(fields) = v else {
+    return Error("none")
+  }
+  let mut total: u64 = 0
+  for (key, value) in fields {
+    match key {
+      "a" | "b" => {
+        total = total + 1
+        if total > limit {
+          total = check(total)?
+        }
+      },
+      _ => (),
+    }
+  }
+  Ok(total)
+}
+
+fn show(stdout: Stdout, r: Result[u64, String], end: String) -> () {
+  let _ = match r {
+    Ok(2) => out.print(stdout, "2"),
+    Ok(_) => out.print(stdout, "wrong"),
+    Error(e) => out.print(stdout, e),
+  }
+  let _ = out.print(stdout, end)
+}
+
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let stdout = io.stdout(rt)?
+  let mut m: Map[String, String] = map.empty()
+  map.insert(mut m, "a", "x")
+  map.insert(mut m, "z", "y")
+  map.insert(mut m, "b", "w")
+  let doc: Doc = Obj(take m)
+  show(stdout, count(doc, 5), " ")
+  show(stdout, count(doc, 1), " ")
+  show(stdout, count(Other, 5), "\n")
+  Ok(())
+}
