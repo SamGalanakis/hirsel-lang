@@ -194,7 +194,7 @@ new value; a `mut` argument has no rollback ([OWN-3](ownership.md#own-3-exclusiv
 
 A byte list that is only created empty, reserved, pushed and frozen whole into the Bytes
 field of an element that a flat list builder appends is written where that element will
-lie (LIR schema revision 24). The list's creation opens the element at that field
+lie. The list's creation opens the element at that field
 (`FlatField Open`), its reservations and pushes write the field's bytes in place
 (`FlatField Reserve`, `FlatField Push`), its freeze is a jump, and the element's
 construction becomes `FlatClose`, which completes the element around the bytes already
@@ -209,9 +209,7 @@ them to be open at their field, and an opening needs one open at no field. Every
 write of the builder defines a version with no open element, so a write between the
 opening and the close leaves the close without its element. The checked heap executor
 tracks each builder's open element and refuses any other write of the builder while one
-is open. A unit with no open element checks as it did before revision 24, and the runtime
-ABI is unchanged. The rewrite is an optimization: without it, such byte lists are ordinary
-lists, and no program's meaning changes.
+is open. Without this optimization, the byte lists are ordinary lists with the same meaning.
 
 ### Time in the checked heap executor
 

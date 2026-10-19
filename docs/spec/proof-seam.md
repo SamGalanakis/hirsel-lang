@@ -105,10 +105,10 @@ and interface version that produced it; a consumer that pins a checker also reco
 
 ### PS-8: Encoding
 
-Version 4 carries size-generic constant signatures and constant-read size actuals
-of TIR version 6. It retains the order-bearing empty SortedMap constructor,
-caller-attribution declaration metadata, the explicit tracked body set and
-indirect-call boundaries. Imports reject earlier formats.
+Version 4 carries TIR version 6: size-generic constant signatures, constant-read size
+actuals, order-bearing empty SortedMap constructors, caller-attribution declaration
+metadata, the explicit tracked body set and indirect-call boundaries. Imports reject
+earlier formats.
 
 The export is one canonical text in the S-expression form of the `hirsel-codec` crate: one
 spelling per value, so decode-then-encode is byte-identical and two runs of one build on one
@@ -200,7 +200,7 @@ check.
 
 #### Sidecar format and removal forms (v1)
 
-This records the first consumer of PS-12 and PS-13, `hirsel build` and
+PS-12 and PS-13 apply to `hirsel build` and
 `hirsel run --native` with `--proofs <sidecar>` and `--trust <tool@version>`.
 
 - **Format.** A JSON object `{"format": "hirsel.proof.sidecar.v1", "records": [...]}`.
@@ -216,7 +216,8 @@ This records the first consumer of PS-12 and PS-13, `hirsel build` and
 - **Trust.** The checker hook is an explicitly trusted external verdict.
   Nothing is replayed: a current `proved` record is accepted when its checker is
   one the build names with `--trust` and its budget is a positive count in
-  `steps`, `heartbeats`, `conflicts`, `rlimit` or `fuel` (PS-15). A record from
+  `steps`, `heartbeats`, `conflicts`, `rlimit` or `fuel`
+  ([PS-15](#ps-15-deterministic-budgets-replayable-evidence)). A record from
   any other checker is unreplayable; a verdict other than `proved` is rejected.
 - **Removal forms.** An accepted `check` or `ensures` obligation removes the
   `Check` at each of its sites. The clause is still evaluated, so its own
@@ -254,8 +255,9 @@ separately, which is enough to prove `False`.
 ### PS-15: Deterministic budgets, replayable evidence
 
 Budgets are deterministic resource counts (steps, heartbeats, conflicts), never wall time;
-wall time is only an outer kill switch and never a verdict. Evidence that cannot be replayed
-with its recorded checker version and budget is not proved.
+wall time is only an outer kill switch and never a verdict. Evidence is proved only when
+it replays with its recorded checker version and budget, or when
+[PS-13](#ps-13-fail-safe-removal) accepts it from a checker the build names with `--trust`.
 
 ### PS-16: Named trust
 
@@ -266,24 +268,10 @@ is implicit.
 
 ## Consumers
 
-These sketches show the primitives are sufficient; they are not part of the contract.
-
-- **A Lean projection** emits one module per exported definition over a fixed prelude:
-  fixed-width integers as bit vectors, records and variants as structures and inductives
-  named by `DefPath`, each body a control-flow graph of mutually recursive local functions or
-  a fuel-indexed step relation. `requires` obligations become hypotheses, and every other
-  obligation a theorem named by its id; `requires-at-call` goals cite only the callee's
-  signature contracts. PS-14 functions are opaque constants threaded through a world.
-- **An SMT or Why3 generator** computes weakest preconditions over each definition's control
-  flow, naming each goal by its id. Callees are their contracts; failure edges become
-  assertions of the operation's no-failure condition (no overflow for the width, nonzero
-  divisor, index below length, active variant). Each goal's context is pruned to the
-  definitions whose fingerprints its checksum covers.
-- **An agent loop** reads the export, picks obligations, asks a prover and writes verdicts
-  to the sidecar. Routing back to source uses the primary location; routing a run-time
-  failure to its obligation uses the definition, rule and reported line and column, so a
-  failing test points at the id to strengthen or prove. Stale verdicts are detected by
-  checksum alone.
+Consumers may project exported obligations to Lean, SMT or Why3, or drive an agent proof
+loop. Callee reasoning uses signature contracts; authority follows [PS-14](#ps-14-authority-is-opaque)
+and evidence currency follows [PS-7](#ps-7-what-digests-bind). These consumer sketches are
+not part of the contract.
 
 What lowering erases, and how a consumer recovers it:
 
