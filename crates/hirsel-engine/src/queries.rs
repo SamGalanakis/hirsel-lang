@@ -172,6 +172,10 @@ pub struct QueryEngine {
     prechecks: BTreeMap<hirsel_syntax::PackageId, precheck::AdoptedPrecheck>,
     pub unavailable: Option<QueryKind>,
     pub last_phase: Option<QueryKind>,
+    /// Interpretation refuses to enter a definition outside its entry's
+    /// semantic closure (`run_snapshot`, `run_observed_*`). On in builds with
+    /// debug assertions; the conformance runner turns it on in every build.
+    pub closure_assertions: bool,
 }
 impl QueryEngine {
     /// Every indexed source definition.
@@ -308,6 +312,7 @@ impl QueryEngine {
             prechecks: BTreeMap::new(),
             unavailable: None,
             last_phase: None,
+            closure_assertions: cfg!(debug_assertions),
         }
     }
     /// The environment a package's queries and parses key on.

@@ -378,6 +378,69 @@ pub fn format_snapshot(
     }
     result
 }
+/// Run `f` over the provider interpretation enters every definition through.
+/// Under `closure_assertions` that provider refuses any definition outside
+/// `entry`'s semantic closure: the program a run identity and `--safe` judge
+/// (CAP-6) must hold everything a run executes, finalizers, function values and
+/// generated instances included.
+fn closed<R>(
+    engine: &mut QueryEngine,
+    entry: &DefPath,
+    f: impl FnOnce(&mut dyn TirProvider) -> Result<R, RuntimeError>,
+) -> Result<R, RuntimeError> {
+    if !engine.closure_assertions {
+        return f(engine);
+    }
+    let closure = engine
+        .semantic_program([entry.clone()])
+        .map_err(RuntimeError::Query)?
+        .definitions;
+    f(&mut Closed {
+        engine,
+        entry,
+        closure,
+    })
+}
+struct Closed<'a, P: TirProvider> {
+    engine: &'a mut P,
+    entry: &'a DefPath,
+    closure: std::collections::BTreeSet<DefPath>,
+}
+impl<P: TirProvider> TirProvider for Closed<'_, P> {
+    fn definition(&mut self, path: &DefPath) -> Result<hirsel_tir::DefinitionRef, QueryError> {
+        if !self.closure.contains(path) {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "semantic closure".into(),
+                message: format!(
+                    "interpretation entered {path}, outside the semantic closure of {}",
+                    self.entry
+                ),
+            }));
+        }
+        TirProvider::definition(self.engine, path)
+    }
+    fn constant(&mut self, path: &DefPath) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+        TirProvider::constant(self.engine, path)
+    }
+    fn constant_instance(
+        &mut self,
+        path: &DefPath,
+        arguments: &[u64],
+    ) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+        TirProvider::constant_instance(self.engine, path, arguments)
+    }
+    fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
+        TirProvider::constant_definitions(self.engine)
+    }
+    fn instance_body(
+        &mut self,
+        path: &DefPath,
+        types: &hirsel_types::TypeStore,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Option<DefPath>, QueryError> {
+        TirProvider::instance_body(self.engine, path, types, arguments)
+    }
+}
 /// Execute a checked program with explicitly simulated capabilities.
 pub fn run_snapshot(
     engine: &mut QueryEngine,
@@ -414,17 +477,18 @@ pub fn run_snapshot(
     };
     interpreter.prepare(signature, runtime, simulation);
     let sources = engine.sources.clone();
-    let result = interpreter
-        .run_query(config, engine, stdout, &sources)
-        .map_err(|error| match error {
-            RuntimeError::Query(error) => ToolError::Query {
-                error,
-                phase: Some(QueryKind::Interpret),
-                sources: engine.sources.clone(),
-            },
-            RuntimeError::Io(error) => ToolError::Io(error),
-            RuntimeError::Tool(message) => ToolError::Runtime(message),
-        });
+    let result = closed(engine, &config.entry, |definitions| {
+        interpreter.run_query(config, definitions, stdout, &sources)
+    })
+    .map_err(|error| match error {
+        RuntimeError::Query(error) => ToolError::Query {
+            error,
+            phase: Some(QueryKind::Interpret),
+            sources: engine.sources.clone(),
+        },
+        RuntimeError::Io(error) => ToolError::Io(error),
+        RuntimeError::Tool(message) => ToolError::Runtime(message),
+    });
     engine.adapters.interpreter = Some(interpreter);
     result
 }
@@ -476,17 +540,18 @@ fn run_observed(
     };
     interpreter.prepare(signature, runtime, simulation);
     let sources = engine.sources.clone();
-    let result = interpreter
-        .run_observed_query(config, engine, &sources)
-        .map_err(|error| match error {
-            RuntimeError::Query(error) => ToolError::Query {
-                error,
-                phase: Some(QueryKind::Interpret),
-                sources: engine.sources.clone(),
-            },
-            RuntimeError::Io(error) => ToolError::Io(error),
-            RuntimeError::Tool(message) => ToolError::Runtime(message),
-        });
+    let result = closed(engine, &config.entry, |definitions| {
+        interpreter.run_observed_query(config, definitions, &sources)
+    })
+    .map_err(|error| match error {
+        RuntimeError::Query(error) => ToolError::Query {
+            error,
+            phase: Some(QueryKind::Interpret),
+            sources: engine.sources.clone(),
+        },
+        RuntimeError::Io(error) => ToolError::Io(error),
+        RuntimeError::Tool(message) => ToolError::Runtime(message),
+    });
     engine.adapters.interpreter = Some(interpreter);
     result
 }
@@ -496,4 +561,45 @@ pub fn entry_path(context: &FileContext) -> DefPath {
         modules: context.modules.clone(),
         name: "main".into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// Has no definitions: every request that reaches it is refused as missing.
+    struct Empty;
+    impl TirProvider for Empty {
+        fn definition(&mut self, _: &DefPath) -> Result<hirsel_tir::DefinitionRef, QueryError> {
+            Err(QueryError::NotImplemented)
+        }
+        fn constant(&mut self, _: &DefPath) -> Result<hirsel_tir::MaterializedRef, QueryError> {
+            Err(QueryError::NotImplemented)
+        }
+        fn constant_definitions(&mut self) -> Result<Vec<DefPath>, QueryError> {
+            Ok(vec![])
+        }
+    }
+    #[test]
+    fn interpretation_enters_only_definitions_of_the_closure() {
+        let context = default_context();
+        let path = |name: &str| {
+            let mut path = entry_path(&context);
+            path.0.name = name.into();
+            path
+        };
+        let entry = path("main");
+        let mut closed = Closed {
+            engine: &mut Empty,
+            entry: &entry,
+            closure: [entry.clone()].into(),
+        };
+        assert!(matches!(
+            closed.definition(&entry),
+            Err(QueryError::NotImplemented)
+        ));
+        let Err(QueryError::Operational(refusal)) = closed.definition(&path("other")) else {
+            panic!("a definition outside the closure was entered");
+        };
+        assert_eq!(refusal.operation, "semantic closure");
+    }
 }

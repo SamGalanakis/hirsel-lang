@@ -63,6 +63,9 @@ fn evaluate_on_compiler_thread(
         Ok(interpreter) => program.engine.adapters.interpreter = Some(interpreter),
         Err(error) => return (Status::Fail(error), Observation::default()),
     }
+    // Interpretation refuses a definition outside the entry's semantic closure
+    // in every build, so every executed corpus file checks the closure.
+    program.engine.closure_assertions = true;
     if matches!(expect, Expect::Test) {
         let mut observation = Observation {
             phase: "test execution".into(),

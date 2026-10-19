@@ -182,6 +182,11 @@ Runtime conformance consumes `run_observed_snapshot`: exact output/exit and the
 primary failure rule/site come from semantic observation v1. Complete causes,
 effects and final simulation state remain available at that driver seam.
 
+Every execution refuses to enter a definition outside its entry's semantic
+closure (`QueryEngine::closure_assertions`, on for every runner build), so
+each executed file checks that the closure a run identity and `--safe` judge
+holds everything the run executes.
+
 Every accepted test that executes is executed again with `run_observed_checked`.
 The checked run must reproduce the outcome, observation and output exactly; a
 trap or any difference is a report error, whatever the test's own status, so it

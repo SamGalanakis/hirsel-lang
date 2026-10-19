@@ -41,6 +41,14 @@ Comments/spaces, source positions, file order, compiler provenance and native
 instances/options are excluded. Newline boundaries remain because LANG-1 uses
 them. Unrelated source definitions do not participate.
 
+Interpretation (`run_snapshot`, `run_observed_snapshot`, `run_observed_checked`)
+enters every definition through the engine's `TirProvider`. Under
+`QueryEngine::closure_assertions` (on in builds with debug assertions, and in
+the conformance runner in every build) that provider refuses, as an operational
+`semantic closure` error, any definition outside `semantic_program([entry])`:
+finalizers, function values and generated instances included, whatever a run
+executes must be in the program its identity names.
+
 `QueryEngine::definition_hashes(roots)` gives every definition the roots reach
 its LANG-6 definition hash, and each definition with TIR its call sites with
 their callees' hashes (`definition_hash`, `package_definition_hashes` and
