@@ -238,7 +238,7 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             }
         }
         Some(Value(command)) if command == "build" => {
-            use hirsel_driver::native::{BuildProfile, TargetSpec};
+            use hirsel_driver::native::{Backend, BuildProfile, TargetSpec};
             let (mut source, mut output, mut target, mut profile) = (None, None, None, None);
             let mut selected = None;
             let mut proofs = Proofs::default();
@@ -269,6 +269,11 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                     }
                     arg => return Err(arg.unexpected()),
                 }
+            }
+            if profile == Some(BuildProfile::Release) && selected == Some(Backend::Cranelift) {
+                return Err(
+                    "release builds use LLVM; remove --backend cranelift or --release".into(),
+                );
             }
             Command::Build {
                 source: source.ok_or("build requires a source or manifest")?,

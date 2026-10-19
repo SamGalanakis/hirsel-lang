@@ -1567,6 +1567,32 @@ fn standalone_admits_selected_roots_and_explicit_argv_without_ambient_grants() {
 }
 
 #[test]
+fn cranelift_release_is_refused_before_reading_source_or_writing_output() {
+    let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
+    let exe = source.with_extension("exe");
+    for options in [
+        ["--release", "--backend", "cranelift"],
+        ["--backend", "cranelift", "--release"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("build")
+            .args(options)
+            .arg(&source)
+            .arg("-o")
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("release builds use LLVM"));
+        assert!(!exe.exists());
+        // The second order also refuses invalid source before checking it.
+        std::fs::remove_file(&source).unwrap();
+        std::fs::write(&source, "invalid source").unwrap();
+    }
+    std::fs::remove_file(source).unwrap();
+}
+
+#[test]
 fn x86_build_needs_no_cross_target_or_memcheck_environment() {
     let source = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
     let executable = source.with_extension("exe");

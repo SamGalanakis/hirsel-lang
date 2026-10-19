@@ -53,6 +53,9 @@ hirsel build hello.hir --debug --backend cranelift -o hello-clif
 hirsel build hello.hir --target aarch64-linux -o hello-arm64
 ```
 
+Release builds use LLVM. Combining `--release` with `--backend cranelift`
+is refused; use Cranelift for default or debug builds.
+
 `build` accepts a source file (and its `.hir.json` sidecar, when present) or a
 launch manifest. The default target is `x86_64-linux`; `aarch64-linux` uses the
 pinned cross compiler and runtime archive. The executable contains the production

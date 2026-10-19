@@ -71,8 +71,8 @@ pub fn build_path_native(
     )
 }
 
-/// `build_path_native` with `backend`, which lowers the same Ready LIR; Cranelift reads
-/// the profile's optimization level as none or speed.
+/// `build_path_native` with `backend`, which lowers the same Ready LIR.
+/// Release builds require LLVM.
 pub fn build_path_native_backend(
     source: &Path,
     output: &Path,
@@ -82,6 +82,12 @@ pub fn build_path_native_backend(
     evidence: Option<&super::Evidence>,
     fuel: bool,
 ) -> Result<Result<Vec<String>, NativeError>, ToolError> {
+    if profile == BuildProfile::Release && backend == super::Backend::Cranelift {
+        return Ok(Err(NativeError::new(
+            StageName::Emission,
+            "release builds use LLVM; select LLVM or a non-release profile",
+        )));
+    }
     let mut loaded = crate::load_program(source)?;
     loaded.check_for_execution()?;
     let mut engine = loaded.engine;
