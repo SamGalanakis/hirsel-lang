@@ -4753,6 +4753,7 @@ conformance/SEM/SEM-1-signed-subtract-max-ok.hir
 conformance/SEM/SEM-1-signed-subtract-ok.hir
 conformance/SEM/SEM-1-simd-integer-domain-bad.hir
 conformance/SEM/SEM-1-simd-integer-domain-ok.hir
+conformance/SEM/SEM-1-sse-stream-run.hir
 conformance/SEM/SEM-1-std-integer-add-policies-run.hir
 conformance/SEM/SEM-1-std-integer-i8-policy-edges-0-run.hir
 conformance/SEM/SEM-1-std-integer-i8-policy-edges-1-run.hir
@@ -5658,6 +5659,8 @@ conformance/SEM/SEM-3-shlex-posix-1-run.hir
 conformance/SEM/SEM-3-siphash-vectors-run.hir
 conformance/SEM/SEM-3-split-ascii-whitespace-run.hir
 conformance/SEM/SEM-3-split-once-run.hir
+conformance/SEM/SEM-3-sse-fields-run.hir
+conformance/SEM/SEM-3-sse-run.hir
 conformance/SEM/SEM-3-string-common-run.hir
 conformance/SEM/SEM-3-string-compare-run.hir
 conformance/SEM/SEM-3-substring-adversarial-run.hir

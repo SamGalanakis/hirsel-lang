@@ -1,0 +1,110 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// Event-stream field rules from WHATWG HTML "Server-sent events" and
+// eventsource-stream's parser: CRLF and CR line ends, the byte order mark, retry
+// and id values, the size bound, resuming from a last event ID, and writing events.
+fn event(kind: String, data: String, id: Option[String]) -> sse.Event uses {} {
+  sse.Event(event: unique kind, data: unique data, id: unique id, retry: None())
+}
+
+fn decode(input: Bytes, chunk: u64) -> Result[List[sse.Event], sse.SseError] uses {} {
+  let mut p = sse.parser(1024)
+  let size = bytes.len(input)
+  let mut start: u64 = 0
+  while start < size {
+    let end = if start + chunk < size {
+      start + chunk
+    } else {
+      size
+    }
+    sse.push(mut p, bytes.slice(input, start, end))?
+    start = end
+  }
+  let mut out: List[sse.Event] = []
+  while let Some(e) = sse.next(mut p) {
+    list.push(mut out, take e)
+  }
+  Ok(out)
+}
+
+fn decodes(t: Test, input: Bytes, expected: List[sse.Event]) {
+  test.check(t, decode(input, bytes.len(input) + 1) == Ok(expected))
+  test.check(t, decode(input, 3) == Ok(expected))
+  test.check(t, decode(input, 1) == Ok(expected))
+}
+
+pub fn main(t: Test) -> Result[(), sse.SseError] {
+  // CRLF and CR line ends, a byte order mark only at the start, unknown fields.
+  decodes(
+    t,
+    b"\xef\xbb\xbfdata: a\r\n\r\ndata: b\r\rdata: c\nfoo: bar\n\n",
+    [
+      event("message", "a", None()),
+      event("message", "b", None()),
+      event("message", "c", None())
+    ]
+  )
+  decodes(t, b"\xef\xbb\xbf\xef\xbb\xbfdata: x\n\n", [])
+  decodes(t, b"\xef\xbbdata: x\n\n", [])
+  // retry takes only ASCII digits; an id holding NUL is ignored.
+  test.check(
+    t,
+    decode(b"retry: 3000\ndata: r\n\nretry: +5\ndata: s\n\nretry: 30x0\ndata: u\n\n", 1) == Ok(
+      [
+        sse.Event(event: "message", data: "r", id: None(), retry: Some(3000)),
+        sse.Event(event: "message", data: "s", id: None(), retry: None()),
+        sse.Event(event: "message", data: "u", id: None(), retry: None())
+      ]
+    )
+  )
+  decodes(
+    t,
+    b"id: 7\ndata: a\n\nid: 8\x00\ndata: b\n\n",
+    [event("message", "a", Some("7")), event("message", "b", Some("7"))]
+  )
+  // An event type without data dispatches nothing and does not leak.
+  decodes(t, b"event: lone\n\ndata: d\n\n", [event("message", "d", None())])
+  // Invalid UTF-8 becomes U+FFFD.
+  decodes(t, b"data: \xff\n\n", [event("message", "\u{fffd}", None())])
+  // A resumed stream starts from the given last event ID.
+  let mut resumed = sse.parser(1024)
+  sse.set_last_event_id(mut resumed, "41")
+  sse.push(mut resumed, b"data: again\n\n")?
+  test.check(t, sse.next(mut resumed) == Some(event("message", "again", Some("41"))))
+  test.check(t, sse.next(mut resumed) == None())
+  test.check(t, sse.last_event_id(resumed) == "41")
+  // The bound covers one line and one event's data: three 8-byte lines carry
+  // 9 bytes of data with their line feeds.
+  let mut small = sse.parser(8)
+  test.check(t, sse.push(mut small, b"data: 123456789\n") == Error(TooLarge()))
+  let mut lines = sse.parser(8)
+  test.check(
+    t,
+    sse.push(mut lines, b"data: 12\ndata: 34\ndata: 56\n") == Error(TooLarge())
+  )
+  // Writing: one data field per line, whichever line end split it.
+  test.check(
+    t,
+    sse.encode(
+      sse.Event(
+        event: "update",
+        data: "one\r\ntwo\rthree\nfour",
+        id: Some("9"),
+        retry: Some(1500)
+      )
+    ) == Ok(
+      "event: update\nid: 9\nretry: 1500\ndata: one\ndata: two\ndata: three\ndata: four\n\n"
+    )
+  )
+  test.check(t, sse.encode(event("message", "", None())) == Ok("data: \n\n"))
+  test.check(t, sse.encode(event("bad\ntype", "x", None())) == Error(InvalidField()))
+  test.check(
+    t,
+    sse.encode(event("message", "x", Some("a\rb"))) == Error(InvalidField())
+  )
+  let written = event("tick", " leading space\n", Some("10"))
+  let wire = sse.encode(written)?
+  test.check(t, decode(string.as_bytes(wire), 2) == Ok([written]))
+  Ok(())
+}

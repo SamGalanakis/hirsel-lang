@@ -1,0 +1,83 @@
+// rule: SEM-3
+// expect: run
+// entry: main
+// The WHATWG event-stream examples and eventsource-stream's parser tests, each fed
+// whole, in 3-byte chunks and byte by byte. Line ends, the byte order mark, the
+// retry and id rules, the size bound and writing run in SEM-3-sse-fields-run.hir.
+fn event(kind: String, data: String, id: Option[String]) -> sse.Event uses {} {
+  sse.Event(event: unique kind, data: unique data, id: unique id, retry: None())
+}
+
+fn decode(input: Bytes, chunk: u64) -> Result[List[sse.Event], sse.SseError] uses {} {
+  let mut p = sse.parser(1024)
+  let size = bytes.len(input)
+  let mut start: u64 = 0
+  while start < size {
+    let end = if start + chunk < size {
+      start + chunk
+    } else {
+      size
+    }
+    sse.push(mut p, bytes.slice(input, start, end))?
+    start = end
+  }
+  let mut out: List[sse.Event] = []
+  while let Some(e) = sse.next(mut p) {
+    list.push(mut out, take e)
+  }
+  Ok(out)
+}
+
+fn decodes(t: Test, input: Bytes, expected: List[sse.Event]) {
+  test.check(t, decode(input, bytes.len(input) + 1) == Ok(expected))
+  test.check(t, decode(input, 3) == Ok(expected))
+  test.check(t, decode(input, 1) == Ok(expected))
+}
+
+pub fn main(t: Test) -> Result[(), sse.SseError] {
+  decodes(
+    t,
+    b"data: This is the first message.\n\ndata: This is the second message, it\ndata: has two lines.\n\ndata: This is the third message.\n\n",
+    [
+      event("message", "This is the first message.", None()),
+      event("message", "This is the second message, it\nhas two lines.", None()),
+      event("message", "This is the third message.", None())
+    ]
+  )
+  decodes(
+    t,
+    b"event: add\ndata: 73857293\n\nevent: remove\ndata: 2153\n\nevent: add\ndata: 113411\n\n",
+    [
+      event("add", "73857293", None()),
+      event("remove", "2153", None()),
+      event("add", "113411", None())
+    ]
+  )
+  decodes(
+    t,
+    b"data: YHOO\ndata: +2\ndata: 10\n\n",
+    [event("message", "YHOO\n+2\n10", None())]
+  )
+  // An id persists until changed; a bare `id` clears it. One leading space goes.
+  decodes(
+    t,
+    b": test stream\n\ndata: first event\nid: 1\n\ndata:second event\nid\n\ndata:  third event\n\n",
+    [
+      event("message", "first event", Some("1")),
+      event("message", "second event", None()),
+      event("message", " third event", None())
+    ]
+  )
+  // A bare `data` adds an empty line; the unterminated last block is dropped.
+  decodes(
+    t,
+    b"data\n\ndata\ndata\n\ndata:\n",
+    [event("message", "", None()), event("message", "\n", None())]
+  )
+  decodes(
+    t,
+    b"data:test\n\ndata: test\n\n",
+    [event("message", "test", None()), event("message", "test", None())]
+  )
+  Ok(())
+}

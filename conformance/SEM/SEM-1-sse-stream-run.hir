@@ -1,0 +1,136 @@
+// rule: SEM-1
+// expect: run
+// entry: main
+// Server-Sent Events over HTTP/1.1: a client reads a close-delimited
+// text/event-stream whose fields split across reads, resuming from a last event
+// ID, and refuses a non-200 status and another media type; a server answers a
+// request with a stream and writes a comment and two events.
+pub type AppError = Network(NetError) | Http(http.HttpError) | Sse(sse.SseError)
+
+fn home() -> SocketAddr uses {} {
+  SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: 8081u16)
+}
+
+fn client(t: Test, n: Net) -> Result[(), AppError] {
+  let config = http.default_config()
+  let mut r = sse.request(n, config, "http://events.test/stream", [], "41") ? Sse
+  let mut p = sse.parser(4096)
+  sse.set_last_event_id(mut p, "41")
+  let mut events: List[sse.Event] = []
+  while let Some(e) = sse.read_event(mut r, mut p) ? Sse {
+    list.push(mut events, take e)
+  }
+  test.check(
+    t,
+    events == [
+      sse.Event(event: "tick", data: "one", id: Some("42"), retry: None()),
+      sse.Event(event: "message", data: "two\nlines", id: Some("42"), retry: None()),
+      sse.Event(event: "message", data: "three", id: Some("42"), retry: Some(500))
+    ]
+  )
+  test.check(t, sse.last_event_id(p) == "42")
+  match sse.request(n, config, "http://events.test/stream", [], "41") {
+    Error(Http(Status(code))) => test.check(t, code == 503),
+    _ => test.check(t, false),
+  }
+  match sse.request(n, config, "http://events.test/stream", [], "41") {
+    Error(NotEventStream()) => test.check(t, true),
+    _ => test.check(t, false),
+  }
+  Ok(())
+}
+
+fn server(t: Test, n: Net) -> Result[(), AppError] {
+  let mut listener = net.listen(n, home()) ? Network
+  let (stream, _) = net.accept(n, mut listener) ? Network
+  let mut connection = http.server_connection(n, take stream, http.default_config())
+  let request = http.receive_request(mut connection, None()) ? Http
+  test.check(t, request.target == "/events")
+  let mut w = sse.respond(
+    take connection,
+    [http.Header(name: "X-Accel-Buffering", value: "no")]
+  ) ? Sse
+  sse.comment(mut w, "hello") ? Sse
+  sse.send(mut w, sse.Event(event: "tick", data: "one", id: Some("1"), retry: None())) ? Sse
+  sse.send(
+    mut w,
+    sse.Event(event: "message", data: "two\nlines", id: None(), retry: Some(2000))
+  ) ? Sse
+  test.check(t, sse.comment(mut w, "two\nlines") == Error(InvalidField()))
+  Ok(())
+}
+
+pub fn main(t: Test) -> Result[(), AppError] {
+  let n = test.net(
+    t,
+    [
+      NetPeer(
+        address: "events.test",
+        port: 80u16,
+        resolves_to: [V4([192u8, 0u8, 2u8, 9u8])],
+        tls: Plain(),
+        connections: [
+          Open(
+            [
+              Expect(
+                b"GET /stream HTTP/1.1\r\nhost: events.test\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\naccept: text/event-stream\r\ncache-control: no-cache\r\nlast-event-id: 41\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n\r\n: keep-alive\n\nid: 42\nevent: tick\nda"
+              ),
+              Send(b"ta: one\r\n\r\ndata: two\n"),
+              Send(b"data: lines\n\nretry: 500\ndata: three\n\ndata: unfinished"),
+              Close()
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /stream HTTP/1.1\r\nhost: events.test\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\naccept: text/event-stream\r\ncache-control: no-cache\r\nlast-event-id: 41\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+              )
+            ]
+          ),
+          Open(
+            [
+              Expect(
+                b"GET /stream HTTP/1.1\r\nhost: events.test\r\nuser-agent: hirsel-std/1\r\nconnection: close\r\naccept: text/event-stream\r\ncache-control: no-cache\r\nlast-event-id: 41\r\n\r\n"
+              ),
+              Send(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+              )
+            ]
+          )
+        ]
+      )
+    ],
+    [
+      NetListener(
+        address: "127.0.0.1",
+        port: 8081u16,
+        clients: [
+          NetClient(
+            from: SocketAddr(ip: V4([192u8, 0u8, 2u8, 1u8]), port: 40100u16),
+            tls: Plain(),
+            steps: [
+              Send(
+                b"GET /events HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
+              ),
+              Expect(
+                b"HTTP/1.1 200 \r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nX-Accel-Buffering: no\r\n\r\n"
+              ),
+              Expect(b": hello\n"),
+              Expect(b"event: tick\nid: 1\ndata: one\n\n"),
+              Expect(b"retry: 2000\ndata: two\ndata: lines\n\n")
+            ]
+          )
+        ]
+      )
+    ]
+  )
+  client(t, n)?
+  server(t, n)?
+  Ok(())
+}

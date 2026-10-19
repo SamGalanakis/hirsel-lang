@@ -3593,6 +3593,62 @@ oversized message, before returning `Protocol(error)`. End of stream before a cl
 
 Extensions, permessage-deflate included, are not negotiated.
 
+## Server-Sent Events
+
+`std@1/sse` reads and writes `text/event-stream` (WHATWG HTML, "Server-sent events"),
+adapted from the eventsource-stream crate's parser and event builder and tested with the
+specification's examples:
+
+```text
+Event    = { event: String, data: String, id: Option[String], retry: Option[u64] }
+SseError = Http(http.HttpError) | Net(NetError) | TooLarge | NotEventStream | InvalidField
+pub opaque type Parser: copyable + inert + noalloc_drop
+pub opaque resource type Writer: noalloc_drop uses {Net}
+
+fn parser(max_event_bytes: u64) -> Parser uses {}
+fn set_last_event_id(mut p: Parser, id: String) -> () uses {}
+fn last_event_id(p: Parser) -> unique String uses {}
+fn push(mut p: Parser, chunk: Bytes) -> Result[(), SseError] uses {}
+fn next(mut p: Parser) -> Option[Event] uses {}
+fn request(n: Net, config: http.Config, url: String, headers: List[http.Header], resume_from: String) -> Result[http.Request, SseError]
+fn read_event(mut r: http.Request, mut p: Parser) -> Result[Option[Event], SseError]
+@preserves_unique(out) fn encode_into(event: Event, mut out: List[u8]) -> Result[(), SseError] uses {}
+fn encode(event: Event) -> Result[unique String, SseError] uses {}
+fn respond(take c: http.ServerConnection, headers: List[http.Header]) -> Result[Writer, SseError]
+fn send(mut w: Writer, event: Event) -> Result[(), SseError]
+fn comment(mut w: Writer, note: String) -> Result[(), SseError]
+```
+
+`push` accepts the stream in chunks split anywhere. It drops one leading byte order
+mark, ends lines at CRLF, LF or CR (a CRLF split across chunks counts once), decodes each
+complete line as UTF-8 with replacement, and applies the field rules: a line starting
+with `:` is a comment; otherwise the field name runs to the first `:` and one space after
+it is dropped. `data` appends the value and a line feed, `event` sets the type, `id` sets
+the last event ID unless the value holds NUL, `retry` sets the reconnection time when the
+value is all ASCII digits, and other fields are ignored. A blank line dispatches: with no
+data it only resets the type and retry; otherwise the event, with its data's final line feed
+removed, its type (`message` when unset), the current last event ID (`None()` when empty)
+and the block's retry, is queued for `next`. A line, or one event's data, over
+`max_event_bytes` is `TooLarge()`. An unterminated final block is never dispatched.
+`set_last_event_id` resumes a stream from a stored ID.
+
+`request` sends a GET with `Accept: text/event-stream`, `Cache-Control: no-cache`, the
+caller's headers and, when `resume_from` is not empty, `Last-Event-ID`. The response
+must be 200 (`Http(Status(code))` otherwise) with media type `text/event-stream`
+(`NotEventStream()`). `read_event` reads the body until the parser has an event, or
+returns `None()` at its end. Reconnecting, and honoring `retry`, is the caller's: it
+passes `last_event_id` to a new `request`.
+
+`encode` writes `event:` unless it is `message` or empty, then `id:` and `retry:` when
+present, then one `data:` line per line of `data`, split at CRLF, LF or CR, and a blank
+line. A type or ID holding CR, LF or NUL is `InvalidField()`. `respond` detaches a
+connection whose request was received and writes a close-delimited 200 response with
+`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: close` and the
+caller's headers, which may not set Content-Type, Content-Length, Transfer-Encoding or
+Connection (`Http(Malformed(ContentLength()))`, as `http.respond` reports framing
+headers). `send` writes one encoded event and `comment` one
+`: note` line, such as a keep-alive; dropping the `Writer` ends the stream.
+
 ## Arbitrary-precision integers
 
 `bigint` is exact integer arithmetic of any size, in ordinary std source:

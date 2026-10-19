@@ -378,6 +378,11 @@ fn full_gate_websocket_large_frame_native() {
 }
 
 #[test]
+fn sse_is_ordinary_source() {
+    source_codec("sse", "sse", &["parser", "push", "next"]);
+}
+
+#[test]
 fn unicode_properties_are_ordinary_source() {
     source_codec(
         "unicode-properties",

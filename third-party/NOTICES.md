@@ -233,6 +233,8 @@ the license named in its row; the license texts follow once each.
 | Zig standard library | `lib/std/http/Server.zig` respondWebSocket upgrade response, readSmallMessage masked-frame reading (MissingMaskBit) and control-frame handling | `stdlib/std@1/websocket.hir` | ziglang/zig `bff490a23889750de7096d9057c0a432efc929a8` | MIT |
 | RFC 6455 | sections 1.3 and 5.7 handshake, accept key and frame examples; section 7.4 close code ranges | `conformance/SEM/SEM-{1,3}-websocket-*`, `crates/hirsel-driver/tests/fixtures/websocket-large.hir` | RFC 6455 (December 2011) | Simplified BSD (IETF Trust code components) |
 | Autobahn testsuite | `autobahntestsuite/case/case{1,2,3,4,5,6,7,9}_*.py` framing, ping/pong, reserved bit and opcode, fragmentation, UTF-8, close and limit cases, adapted to scripted clients with RFC 6455's example key | `conformance/SEM/SEM-1-websocket-autobahn-*` | crossbario/autobahn-testsuite `ff462c0a7ccb6512ad8442d09dab371a3c40a843` | Apache-2.0 |
+| eventsource-stream | `src/parser.rs` line and field parsing, `src/event_stream.rs` EventBuilder add/dispatch and last-event-id handling; parser test streams | `stdlib/std@1/sse.hir`, Server-Sent Events conformance | jpopesculian/eventsource-stream `3d46f1c758f9ee4681e9da0427556d24c53f9c01` | MIT |
+| WHATWG HTML Standard | "Server-sent events" parsing and interpretation rules and its stock-ticker, multi-line, typed-event and id examples | `conformance/SEM/SEM-3-sse-run.hir`, `conformance/SEM/SEM-3-sse-fields-run.hir` | HTML Living Standard (2026) | CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/) |
 
 Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 
@@ -297,6 +299,8 @@ Where an upstream offers MIT or Apache-2.0, the MIT option is used.
 - node-semver: Copyright (c) Isaac Z. Schlueter and Contributors
 - RFC 6455: Copyright (c) 2011 IETF Trust and the persons identified as the document authors
 - Autobahn testsuite: Copyright (c) typedef int GmbH
+- eventsource-stream: Copyright (c) Julian Popescu
+- WHATWG HTML Standard: Copyright (c) WHATWG (Apple, Google, Mozilla, Microsoft)
 
 ## Zlib License (zlib)
 

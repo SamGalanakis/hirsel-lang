@@ -1,0 +1,384 @@
+// Server-Sent Events (WHATWG HTML "Server-sent events", text/event-stream),
+// adapted from eventsource-stream src/parser.rs and the event_stream.rs
+// EventBuilder add/dispatch, jpopesculian/eventsource-stream
+// 3d46f1c758f9ee4681e9da0427556d24c53f9c01 (MIT or Apache-2.0; third-
+// party/NOTICES.md). Lines are decoded as UTF-8 with replacement once complete,
+// so a chunk may end anywhere.
+/// One dispatched event. Read: `event` is the type (`message` when unnamed), `id`
+/// the stream's last event ID (`None()` while empty) and `retry` the reconnection
+/// time in milliseconds when this event's block set one. Written: an `event` of
+/// `message` or empty is omitted, as are `None()` fields.
+pub type Event {
+  event: String,
+  data: String,
+  id: Option[String],
+  retry: Option[u64],
+}
+
+pub type SseError = Http(http.HttpError) | Net(NetError) | TooLarge | NotEventStream | InvalidField
+
+/// Incremental event-stream decoder: `push` bytes, then take events with `next`.
+pub opaque type Parser: copyable + inert + noalloc_drop uses {} {
+  line: List[u8],
+  bom: u8,
+  after_cr: bool,
+  kind: String,
+  data: List[u8],
+  last_id: String,
+  retry: Option[u64],
+  ready: List[Event],
+  taken: u64,
+  max_event_bytes: u64,
+}
+
+/// A decoder that rejects an event block, or one line, above `max_event_bytes`.
+pub fn parser(max_event_bytes: u64) -> Parser uses {} {
+  Parser(
+    line: [],
+    bom: 0,
+    after_cr: false,
+    kind: "",
+    data: [],
+    last_id: "",
+    retry: None(),
+    ready: [],
+    taken: 0,
+    max_event_bytes: max_event_bytes
+  )
+}
+
+/// Starts the last event ID at `id`, as a reconnecting client does.
+pub fn set_last_event_id(mut p: Parser, id: String) -> () uses {} {
+  p.last_id = unique id
+}
+
+/// The last event ID the stream set, empty when none.
+pub fn last_event_id(p: Parser) -> unique String uses {} {
+  unique p.last_id
+}
+
+@noalloc
+fn digits(value: String) -> bool uses {} {
+  let data = core@1/string.as_bytes(value)
+  if core@1/bytes.len(data) == 0 {
+    return false
+  }
+  for b in data {
+    if !ascii.is_digit(b) {
+      return false
+    }
+  }
+  true
+}
+
+fn part(raw: List[u8], start: u64, end: u64) -> unique String uses {} {
+  let mut out: List[u8] = []
+  let mut i = start
+  while i < end {
+    list.push(mut out, raw[i])
+    i += 1
+  }
+  utf8.decode_lossy(core@1/bytes.from_list(take out))
+}
+
+// The spec's "process the field" and "dispatch the event" steps.
+fn line(mut p: Parser, raw: List[u8]) -> Result[(), SseError] uses {} {
+  let size = list.len(raw)
+  if size == 0 {
+    let data = replace(mut p.data, [])
+    let kind = replace(mut p.kind, "")
+    let retry = replace(mut p.retry, None())
+    let count = list.len(data)
+    if count == 0 {
+      return Ok(())
+    }
+    // Drop the LF that followed the last data line.
+    let event = Event(
+      event: if kind == "" {
+        "message"
+      } else {
+        take kind
+      },
+      data: part(data, 0, count - 1),
+      id: if p.last_id == "" {
+        None()
+      } else {
+        Some(unique p.last_id)
+      },
+      retry: retry
+    )
+    list.push(mut p.ready, take event)
+    return Ok(())
+  }
+  let mut colon = size
+  let mut i: u64 = 0
+  while i < size {
+    if raw[i] == b':' {
+      colon = i
+      break
+    }
+    i += 1
+  }
+  if colon == 0 {
+    return Ok(())
+  }
+  let name = part(raw, 0, colon)
+  let mut start = colon + 1
+  if start < size && raw[start] == b' ' {
+    start += 1
+  }
+  let value = if colon < size {
+    part(raw, start, size)
+  } else {
+    ""
+  }
+  if name == "event" {
+    p.kind = take value
+  } else if name == "data" {
+    text.append(mut p.data, value)
+    list.push(mut p.data, b'\n')
+    if list.len(p.data) > p.max_event_bytes {
+      return Error(TooLarge())
+    }
+  } else if name == "id" {
+    if !string.contains(value, "\u{0}") {
+      p.last_id = take value
+    }
+  } else if name == "retry" {
+    if digits(value) {
+      if let Ok(ms) = u64.parse(value) {
+        p.retry = Some(ms)
+      }
+    }
+  }
+  Ok(())
+}
+
+/// Decodes `chunk`, queueing every event whose block it completes. A stream may
+/// start with a UTF-8 byte order mark; lines end with CRLF, LF or CR. A final block
+/// without its blank line is never dispatched.
+pub fn push(mut p: Parser, chunk: Bytes) -> Result[(), SseError] uses {} {
+  let bom: Bytes = b"\xef\xbb\xbf"
+  for b in chunk {
+    if p.bom < 3 {
+      if b == bom[core@1/int.widen(p.bom)] {
+        p.bom += 1
+        continue
+      }
+      // Not a byte order mark: replay the bytes that looked like one.
+      let mut i: u8 = 0
+      while i < p.bom {
+        list.push(mut p.line, bom[core@1/int.widen(i)])
+        i += 1
+      }
+      p.bom = 3
+    }
+    if p.after_cr && b == b'\n' {
+      p.after_cr = false
+      continue
+    }
+    p.after_cr = b == b'\r'
+    if b == b'\r' || b == b'\n' {
+      let raw = replace(mut p.line, [])
+      line(mut p, raw)?
+    } else {
+      list.push(mut p.line, b)
+      if list.len(p.line) > p.max_event_bytes {
+        return Error(TooLarge())
+      }
+    }
+  }
+  Ok(())
+}
+
+/// The oldest queued event.
+pub fn next(mut p: Parser) -> Option[Event] uses {} {
+  if p.taken == list.len(p.ready) {
+    if p.taken > 0 {
+      p.ready = []
+      p.taken = 0
+    }
+    return None()
+  }
+  let event = unique p.ready[p.taken]
+  p.taken += 1
+  Some(take event)
+}
+
+/// Opens an event stream: a GET of `url` with `accept: text/event-stream`,
+/// `cache-control: no-cache`, `last-event-id` when `resume_from` is nonempty, and
+/// `headers`. A final status other than 200 is `Http(Status(code))`; a content type
+/// other than `text/event-stream` is `NotEventStream()`. Read it with `read_event`.
+pub fn request(
+  n: Net,
+  config: http.Config,
+  url: String,
+  headers: List[http.Header],
+  resume_from: String
+) -> Result[http.Request, SseError] {
+  let mut fields: List[http.Header] = [
+    http.Header(name: "accept", value: "text/event-stream"),
+    http.Header(name: "cache-control", value: "no-cache")
+  ]
+  if resume_from != "" {
+    list.push(mut fields, http.Header(name: "last-event-id", value: unique resume_from))
+  }
+  for h in headers {
+    list.push(mut fields, unique h)
+  }
+  let mut r = http.request(n, config, Get(), url, fields) ? Http
+  http.send_bodiless(mut r) ? Http
+  let head = http.receive_head(mut r) ? Http
+  if head.status != 200 {
+    return Error(Http(Status(head.status)))
+  }
+  let Some(media) = head.content_type else {
+    return Error(NotEventStream())
+  }
+  let essence = match string.split_once(media, ";") {
+    Some((essence_text, _)) => string.ascii_lower(string.trim(essence_text)),
+    None() => string.ascii_lower(string.trim(media)),
+  }
+  if essence != "text/event-stream" {
+    return Error(NotEventStream())
+  }
+  Ok(take r)
+}
+
+/// The next event of the response body `r`, decoded by `p`; `None()` at the end of
+/// the body. Keep one parser per stream, seeded with `set_last_event_id` to resume.
+pub fn read_event(mut r: http.Request, mut p: Parser) -> Result[Option[Event], SseError] {
+  while true {
+    if let Some(event) = next(mut p) {
+      return Ok(Some(take event))
+    }
+    let mut chunk: List[u8] = []
+    if http.read_body(mut r, mut chunk, 4096) ? Http == 0 {
+      return Ok(None())
+    }
+    push(mut p, core@1/bytes.from_list(take chunk))?
+  }
+  Ok(None())
+}
+
+fn net_error(error: NetError) -> SseError uses {} {
+  Net(error)
+}
+
+fn field_text(value: String) -> Result[(), SseError] uses {} {
+  for b in core@1/string.as_bytes(value) {
+    if b == b'\r' || b == b'\n' || b == 0 {
+      return Error(InvalidField())
+    }
+  }
+  Ok(())
+}
+
+/// Appends `event` in wire form: `event`, `id` and `retry` fields, one `data` field
+/// per line of `data` (split at CRLF, LF or CR) and the blank line. An event type or
+/// id containing CR, LF or NUL is `InvalidField()`.
+@preserves_unique(out)
+pub fn encode_into(event: Event, mut out: List[u8]) -> Result[(), SseError] uses {} {
+  field_text(event.event)?
+  if event.event != "" && event.event != "message" {
+    text.append(mut out, "event: ")
+    text.append(mut out, event.event)
+    list.push(mut out, b'\n')
+  }
+  if let Some(id) = event.id {
+    field_text(id)?
+    text.append(mut out, "id: ")
+    text.append(mut out, id)
+    list.push(mut out, b'\n')
+  }
+  if let Some(ms) = event.retry {
+    text.append(mut out, "retry: ")
+    u64.format_into(ms, mut out)
+    list.push(mut out, b'\n')
+  }
+  let data = core@1/string.as_bytes(event.data)
+  let size = core@1/bytes.len(data)
+  text.append(mut out, "data: ")
+  let mut i: u64 = 0
+  while i < size {
+    let b = data[i]
+    if b == b'\r' || b == b'\n' {
+      if b == b'\r' && i + 1 < size && data[i + 1] == b'\n' {
+        i += 1
+      }
+      text.append(mut out, "\ndata: ")
+    } else {
+      list.push(mut out, b)
+    }
+    i += 1
+  }
+  text.append(mut out, "\n\n")
+  Ok(())
+}
+
+/// `event` in wire form, as `encode_into` appends it.
+pub fn encode(event: Event) -> Result[unique String, SseError] uses {} {
+  let mut out: List[u8] = []
+  encode_into(event, mut out)?
+  Ok(text.finish_valid(take out))
+}
+
+/// The server end of one event stream; dropping it closes the connection.
+pub opaque resource type Writer: noalloc_drop uses {Net} {
+  link: http.Detached,
+}
+@noalloc drop(self) {}
+
+/// Answers the request `c` last received with a 200 event stream: `content-type:
+/// text/event-stream`, `cache-control: no-cache`, `connection: close` and
+/// `headers`, with no length, so the body ends when the stream does. Framing fields
+/// among `headers` are `Http(Malformed(ContentLength()))`.
+pub fn respond(take c: http.ServerConnection, headers: List[http.Header]) -> Result[
+  Writer,
+  SseError
+] {
+  http.validate_headers(headers) ? Http
+  for h in headers {
+    let name = string.ascii_lower(h.name)
+    if name == "content-length" || name == "transfer-encoding" || name == "connection" || name == "content-type" {
+      return Error(Http(Malformed(ContentLength())))
+    }
+  }
+  let mut link = http.detach(take c) ? Http
+  let n = link.net
+  let mut out: List[u8] = []
+  text.append(
+    mut out,
+    "HTTP/1.1 200 \r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n"
+  )
+  for h in headers {
+    text.append(mut out, h.name)
+    text.append(mut out, ": ")
+    text.append(mut out, h.value)
+    text.append(mut out, "\r\n")
+  }
+  text.append(mut out, "\r\n")
+  core@1/net.write_all(n, mut link.stream, core@1/bytes.from_list(take out)) ? net_error
+  Ok(Writer(link: take link))
+}
+
+/// Writes one event.
+pub fn send(mut w: Writer, event: Event) -> Result[(), SseError] {
+  let data = encode(event)?
+  let n = w.link.net
+  core@1/net.write_all(n, mut w.link.stream, core@1/string.as_bytes(data)) ? net_error
+  Ok(())
+}
+
+/// Writes a comment line, which readers ignore: a keep-alive. CR or LF in `note` is
+/// `InvalidField()`.
+pub fn comment(mut w: Writer, note: String) -> Result[(), SseError] {
+  field_text(note)?
+  let mut out: List[u8] = []
+  text.append(mut out, ": ")
+  text.append(mut out, note)
+  list.push(mut out, b'\n')
+  let n = w.link.net
+  core@1/net.write_all(n, mut w.link.stream, core@1/bytes.from_list(take out)) ? net_error
+  Ok(())
+}
