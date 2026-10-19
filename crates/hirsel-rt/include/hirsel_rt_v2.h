@@ -129,7 +129,7 @@ extern "C" {
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 10
+#define HIRSEL_RT_V2_LAYOUT_VERSION 11
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -173,6 +173,9 @@ extern "C" {
 /* Restore ordinary counts in the frozen value at offset (read through layout) before releasing
  * it: the first step of a Shared root block's program (MEM-11). */
 #define HIRSEL_RT_V2_STEP_THAW 9
+/* A RELEASE after which its value runs nothing more (version 11): when it kills its child, the
+ * dying block is freed at once and the child takes its place (a tail release). Never in a loop. */
+#define HIRSEL_RT_V2_STEP_RELEASE_LAST 10
 #define HIRSEL_RT_V2_STEP_CURSOR_BITS 24
 #define HIRSEL_RT_V2_WHOLE_VALUE UINT32_MAX
 #define HIRSEL_RT_V2_NO_OFFSET UINT64_MAX

@@ -11,6 +11,138 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
     }
 
+    /// Whether a block of covered payload `layout` under the static live mask `mask` leaves
+    /// its reset or release nothing to run (`rt_program::masked_inert`): every field with
+    /// drop steps has moved out.
+    fn inert_mask(&self, layout: LayoutId, mask: MaskId) -> Emitted<bool> {
+        if !crate::glue::covered(self.inputs.layouts, layout) {
+            return Ok(false);
+        }
+        let Some(mask) = self.unit.tables.masks.get(mask.index()) else {
+            return self.invalid("a mask outside the mask table");
+        };
+        let words = self.pool(mask.words, &self.unit.pools.mask_words)?;
+        match hirsel_lir::rt_program::masked_inert(self.inputs.layouts, layout, words) {
+            Ok(inert) => Ok(inert),
+            Err(error) => self.invalid(format!("the drop program of a reset: {error:?}")),
+        }
+    }
+
+    /// T12 Reset through `hirsel_rt_v2_reset`: the token, or null for a shared donor.
+    fn reset_call(
+        &mut self,
+        block: Value<'m>,
+        live: MaskRef,
+        anchor: CleanupAnchorId,
+        failure: FailureId,
+    ) -> Emitted<Value<'m>> {
+        let reset = self.runtime(RuntimeEntry::Reset)?;
+        let descriptor = self.block_descriptor(block);
+        let out = self.prologue.alloca(self.module.ptr_type(), 8);
+        let (anchor, operation_site) = self.failure_sites(self.cleanup_code(anchor)?);
+        let arguments = [
+            self.context,
+            block,
+            descriptor,
+            self.live_mask(live)?,
+            anchor,
+            operation_site,
+            out,
+        ];
+        let status = self.builder.call(reset, &arguments);
+        self.status_guard(status, failure)?;
+        Ok(self.builder.load(self.module.ptr_type(), out, 8))
+    }
+
+    /// T12 Reset of a block of covered payload `layout`, fully live or with every counted field
+    /// moved out ([`Self::inert_mask`]). While the context frees inline, a unique heap donor
+    /// runs its drop program through compiled glue, in the walk's order, and is the token as
+    /// it is: the runtime would only record the state that diagnostic mode, measurement
+    /// builds, the system allocator and memcheck keep, and those turn the inline paths off.
+    /// If a finalizer below it fails, its storage is freed and no token escapes, as in
+    /// `hirsel_rt_v2_reset`. Every other donor goes to the runtime.
+    fn reset_glue(
+        &mut self,
+        block: Value<'m>,
+        layout: LayoutId,
+        live: MaskRef,
+        anchor: CleanupAnchorId,
+        failure: FailureId,
+    ) -> Emitted<Value<'m>> {
+        use hirsel_lir::runtime_abi::{
+            COUNT_OFFSET, COUNT_UNIQUE, CTX_FREE_INLINE_OFFSET, KIND_SHIFT, KIND_STATIC,
+            LAYOUT_OFFSET,
+        };
+        let (ptr, i32_ty) = (self.module.ptr_type(), self.module.int_type(32));
+        let half = |n: u64| self.module.const_int(i32_ty, u128::from(n));
+        let at = |base, offset| self.builder.offset(base, self.const_u64(offset));
+        let enabled = self
+            .builder
+            .load(i32_ty, at(self.context, CTX_FREE_INLINE_OFFSET), 4);
+        let count = self.builder.load_access(
+            i32_ty,
+            at(block, COUNT_OFFSET),
+            4,
+            crate::context::Access::Count,
+        );
+        let descriptor = self.builder.load(i32_ty, at(block, LAYOUT_OFFSET), 4);
+        let kind = self
+            .builder
+            .binary(BinOp::LShr, descriptor, half(u64::from(KIND_SHIFT)));
+        let heap = self
+            .builder
+            .icmp(IntPredicate::Ult, kind, half(u64::from(KIND_STATIC)));
+        let unique = self
+            .builder
+            .icmp(IntPredicate::Eq, count, half(COUNT_UNIQUE));
+        let enabled = self.builder.icmp(IntPredicate::Ne, enabled, half(0));
+        let fast = self.builder.binary(
+            BinOp::And,
+            self.builder.binary(BinOp::And, enabled, unique),
+            heap,
+        );
+        let [inline, slow, done] = std::array::from_fn(|_| self.module.append_block(self.function));
+        self.builder.cond_br(fast, inline, slow);
+        self.builder.position(slow);
+        let token = self.reset_call(block, live, anchor, failure)?;
+        let from_slow = self.builder.current();
+        self.builder.br(done);
+        self.builder.position(inline);
+        let record = self.layout(layout)?;
+        let mut kept = block;
+        if live == MaskRef::All && !record.drop.is_empty() {
+            let payload = self.payload_of(block, layout)?;
+            let code = self.const_u64(self.cleanup_code(anchor)?);
+            let scope = glue::Scope::of(layout);
+            let status = self.drop_glue(code, |walk| {
+                walk.steps(&scope, payload.ptr, payload.align, &record.drop)
+            })?;
+            let failed = self.builder.icmp(
+                IntPredicate::Ne,
+                status,
+                self.module.const_int(self.module.int_type(8), 0),
+            );
+            let [dispose, guard] = std::array::from_fn(|_| self.module.append_block(self.function));
+            self.builder.cold_cond_br(failed, dispose, guard);
+            self.builder.position(dispose);
+            let free = self.runtime(RuntimeEntry::Free)?;
+            self.builder.call(free, &[self.context, block]);
+            self.builder.br(guard);
+            self.builder.position(guard);
+            kept = self
+                .builder
+                .select(failed, self.module.const_zero(ptr), block);
+            self.status_guard(status, failure)?;
+        }
+        let from_inline = self.builder.current();
+        self.builder.br(done);
+        self.builder.position(done);
+        let phi = self.builder.phi(ptr);
+        self.builder.add_incoming(phi, kept, from_inline);
+        self.builder.add_incoming(phi, token, from_slow);
+        Ok(phi)
+    }
+
     pub(super) fn scalar_kind(&self, value: ValueId) -> Emitted<ScalarKind> {
         match self.value_shape(value)? {
             Shape::Scalar(kind) => Ok(kind),
@@ -1377,6 +1509,25 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             Inst::Reset {
                 result,
                 value,
+                layout,
+                live,
+                anchor,
+                failure,
+            } if self.value_type(value)?.repr == ValueRepr::Block
+                && glue::covered(self.inputs.layouts, layout)
+                && match live {
+                    MaskRef::All => true,
+                    MaskRef::Static(mask) => self.inert_mask(layout, mask)?,
+                    MaskRef::Dynamic(_) => false,
+                } =>
+            {
+                let block = self.get(value)?;
+                let token = self.reset_glue(block, layout, live, anchor, failure)?;
+                self.define(result, token)
+            }
+            Inst::Reset {
+                result,
+                value,
                 layout: _,
                 live,
                 anchor,
@@ -1388,22 +1539,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     ValueRepr::Callable => self.callable_parts(value)?.1,
                     _ => self.get(value)?,
                 };
-                let reset = self.runtime(RuntimeEntry::Reset)?;
-                let descriptor = self.block_descriptor(block);
-                let out = self.prologue.alloca(self.module.ptr_type(), 8);
-                let (anchor, operation_site) = self.failure_sites(self.cleanup_code(anchor)?);
-                let arguments = [
-                    self.context,
-                    block,
-                    descriptor,
-                    self.live_mask(live)?,
-                    anchor,
-                    operation_site,
-                    out,
-                ];
-                let status = self.builder.call(reset, &arguments);
-                self.status_guard(status, failure)?;
-                let token = self.builder.load(self.module.ptr_type(), out, 8);
+                let token = self.reset_call(block, live, anchor, failure)?;
                 self.define(result, token)
             }
             Inst::Reuse {

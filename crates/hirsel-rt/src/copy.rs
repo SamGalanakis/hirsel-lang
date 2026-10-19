@@ -46,7 +46,7 @@ use crate::release::{
 };
 use crate::release::{
     Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP,
-    STEP_NONNULL, STEP_RELEASE, STEP_TAG, STEP_THAW, Step, variant_inactive,
+    STEP_NONNULL, STEP_RELEASE, STEP_RELEASE_LAST, STEP_TAG, STEP_THAW, Step, variant_inactive,
 };
 use crate::{STATUS_EXHAUSTED, STATUS_OK, fault};
 
@@ -142,7 +142,7 @@ pub(crate) unsafe fn holders(
                 pc += 1;
                 let at = base.wrapping_add(step.offset as usize);
                 match step.kind {
-                    STEP_RELEASE => visit(at),
+                    STEP_RELEASE | STEP_RELEASE_LAST => visit(at),
                     STEP_TAG | STEP_NONNULL | STEP_LIVE_BIT => {
                         if variant_inactive(step, at) {
                             pc += step.span as usize;

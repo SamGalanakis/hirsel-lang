@@ -624,7 +624,7 @@ pub fn cases_header(corpus: &Corpus, scenarios: &[Scenario]) -> String {
     for symbol in drop_symbols {
         let _ = writeln!(
             c,
-            "uint8_t {symbol}(ctx_t *ctx, void *value) {{ return fin_log(ctx, value, 7); }}"
+            "uint8_t {symbol}(ctx_t *ctx, void *value) {{ return fin_log(ctx, value, 7, 7); }}"
         );
     }
     for root in &corpus.roots {

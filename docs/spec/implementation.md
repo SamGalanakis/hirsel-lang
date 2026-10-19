@@ -226,6 +226,17 @@ meaning, TIR or LIR, and each falls back to the general path when its condition 
 - The deep copy of a block whose layout has no counted children is one allocation and one
   byte copy, with no visited map; a copy of a larger graph keeps its first visited blocks
   in place before using a map.
+- A unique heap block reset for reuse runs its drop program through compiled glue, or
+  nothing at all when every counted field has moved out, and is its own reuse token,
+  reinstalled inline; a partly moved block released whole runs nothing either.
+- A block is freed after the children its drop program releases, except at the release
+  that ends the program (through the arms of a last variant): nothing of the block remains
+  to run, so it is freed first (a tail release, the runtime's `STEP_RELEASE_LAST`, layout
+  descriptor version 11). Compiled drop glue, one function per layout named by its
+  `LayoutKey`, then releases a tail child of the same layout by looping, so a list releases
+  in one native frame; the runtime's worklist frees in the same order. Finalizers, closes
+  and failures keep the DROP-2 order: no step that runs anything is reordered, and free order
+  is not observable.
 
 ### Time in the checked heap executor
 

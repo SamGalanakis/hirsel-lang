@@ -9,7 +9,10 @@
 //!
 //! The lowering is structural:
 //! - `Release` and `Environment` release a counted holder (`STEP_RELEASE`);
-//!   `CloseHandle` closes a run-context handle.
+//!   `CloseHandle` closes a run-context handle. The release that ends the
+//!   program, through the arms of a last `ActiveVariant`, is a
+//!   `STEP_RELEASE_LAST` (`mark_last`): the runtime frees its value before
+//!   draining the child it kills.
 //! - `Child` inlines the child's program at its offset; the child's leading
 //!   `Finalize` becomes a `STEP_FINALIZE` naming the child's layout.
 //! - `ActiveVariant` becomes one `STEP_TAG` per variant, whose span skips that
@@ -41,7 +44,7 @@ use crate::layout_types::{
 use crate::runtime_abi::{
     LAYOUT_DYNAMIC, LAYOUT_NO_EXTENT, LAYOUT_UNSAFE_FFI, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN,
     STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL, STEP_RELEASE,
-    STEP_TAG, STEP_THAW, WHOLE_VALUE,
+    STEP_RELEASE_LAST, STEP_TAG, STEP_THAW, WHOLE_VALUE,
 };
 
 /// Whether `record`'s arena blocks omit the extent before their header ([`LAYOUT_NO_EXTENT`]):
@@ -63,6 +66,8 @@ pub fn no_extent(record: &LayoutRecord) -> bool {
 pub enum StepKind {
     /// Release the counted holder at `offset`.
     Release,
+    /// A `Release` after which the value runs nothing more (see [`mark_last`]).
+    ReleaseLast,
     /// Run `layout`'s finalizer on the inline value at `offset`, shielded.
     Finalize,
     /// Close the run-context handle stored at `offset`.
@@ -86,6 +91,7 @@ impl StepKind {
     pub const fn code(self) -> u32 {
         match self {
             Self::Release => STEP_RELEASE,
+            Self::ReleaseLast => STEP_RELEASE_LAST,
             Self::Finalize => STEP_FINALIZE,
             Self::CloseHandle => STEP_CLOSE_HANDLE,
             Self::Tag => STEP_TAG,
@@ -240,6 +246,8 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
         .finalizer
         .as_ref()
         .is_some_and(|f| f.unsafe_ffi_package);
+    let end = lower.steps.len();
+    mark_last(&mut lower.steps, 0, end);
     if lower.steps.len() as u64 >= 1 << STEP_CURSOR_BITS {
         return Err(DescriptorError::TooLarge(format!(
             "{} steps; a dead header's cursor counts fewer than 2^{STEP_CURSOR_BITS}",
@@ -319,6 +327,96 @@ pub fn descriptor(table: &LayoutTable, id: LayoutId) -> Result<Descriptor, Descr
             },
         steps: lower.steps,
     })
+}
+
+/// Whether a release or reset of a block of `id` under the static live mask `words` runs
+/// nothing but its count edge and free: the layout has no finalizer (a masked root runs none
+/// anyway, but its children's would) and every top-level step of its program belongs to a
+/// field the mask leaves dead, as the runtime walk skips it (`WHOLE_VALUE` is always live).
+/// Compiled code then resets or releases such a block without the runtime's walk.
+pub fn masked_inert(
+    table: &LayoutTable,
+    id: LayoutId,
+    words: &[u64],
+) -> Result<bool, DescriptorError> {
+    let d = descriptor(table, id)?;
+    if d.finalizer.is_some() {
+        return Ok(false);
+    }
+    let live = |field: u32| {
+        field == WHOLE_VALUE
+            || words
+                .get(field as usize / 64)
+                .is_none_or(|word| word >> (field % 64) & 1 == 1)
+    };
+    let mut at = 0;
+    while at < d.steps.len() {
+        let step = &d.steps[at];
+        if live(step.field) {
+            return Ok(false);
+        }
+        at += 1 + match step.kind {
+            StepKind::Tag
+            | StepKind::NonNull
+            | StepKind::LiveBit
+            | StepKind::Loop
+            | StepKind::Column => step.span as usize,
+            _ => 0,
+        };
+    }
+    Ok(true)
+}
+
+/// Marks the release that ends `steps[start..end]`, one frame's steps, as `ReleaseLast`: its
+/// last step, when that is a `Release`, or else the release ending each arm of the variant
+/// whose arms are its last steps (`Tag` steps on one tag word, or one `NonNull` or `LiveBit`
+/// arm). It is the drop program's last step through the arms of a last `ActiveVariant`, which
+/// compiled drop glue frees by the same rule; a loop's steps are never marked.
+fn mark_last(steps: &mut [Step], start: usize, end: usize) {
+    let spanning = |kind: StepKind| {
+        matches!(
+            kind,
+            StepKind::Tag
+                | StepKind::NonNull
+                | StepKind::LiveBit
+                | StepKind::Loop
+                | StepKind::Column
+        )
+    };
+    let mut items = Vec::new();
+    let mut at = start;
+    while at < end {
+        items.push(at);
+        at += 1 + if spanning(steps[at].kind) {
+            steps[at].span as usize
+        } else {
+            0
+        };
+    }
+    let Some(&last) = items.last() else {
+        return;
+    };
+    let arm = |steps: &mut [Step], at: usize| {
+        let close = at + 1 + steps[at].span as usize;
+        mark_last(steps, at + 1, close);
+    };
+    match steps[last].kind {
+        StepKind::Release => steps[last].kind = StepKind::ReleaseLast,
+        StepKind::Tag => {
+            let offset = steps[last].offset;
+            let arms: Vec<usize> = items
+                .iter()
+                .rev()
+                .take_while(|&&i| steps[i].kind == StepKind::Tag && steps[i].offset == offset)
+                .copied()
+                .collect();
+            for at in arms {
+                arm(steps, at);
+            }
+        }
+        StepKind::NonNull | StepKind::LiveBit => arm(steps, last),
+        _ => {}
+    }
 }
 
 /// Descriptors for `roots` and every layout their `Finalize` steps name,
@@ -729,7 +827,11 @@ mod tests {
         )]);
         let d = descriptor(&t, LayoutId(0)).unwrap();
         assert_eq!(d.steps.len(), 1);
-        assert_eq!((d.steps[0].kind, d.steps[0].offset), (StepKind::Release, 8));
+        // Its only release ends the program, so it is the last (`mark_last`).
+        assert_eq!(
+            (d.steps[0].kind, d.steps[0].offset),
+            (StepKind::ReleaseLast, 8)
+        );
         assert_eq!(d.steps[0].field, WHOLE_VALUE);
     }
 

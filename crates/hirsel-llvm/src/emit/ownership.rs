@@ -212,6 +212,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             budget: self.const_u64(glue::GLUE_MAX_DEPTH),
             status,
             pending: &mut pending,
+            looping: None,
         });
         let defined =
             emitted.and_then(|()| glue::define(self.module, self.inputs.layouts, runtime, pending));

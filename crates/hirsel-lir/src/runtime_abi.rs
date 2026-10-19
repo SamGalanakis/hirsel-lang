@@ -151,7 +151,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 10;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 11;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -204,6 +204,11 @@ pub const STEP_LIVE_BIT: u32 = 8;
 /// Restore ordinary counts in the frozen value at `offset`, read through `layout`, before
 /// the steps that release it: the first step of a `Shared` root block's program (MEM-11).
 pub const STEP_THAW: u32 = 9;
+/// A [`STEP_RELEASE`] after which its value runs nothing more (descriptor version 11): the
+/// last step of the program, or the last of a variant arm that is itself last, never inside a
+/// loop. When it kills its child the dying block is freed at once and the child takes its
+/// place (a tail release); compiled drop glue frees in the same order.
+pub const STEP_RELEASE_LAST: u32 = 10;
 /// Step bits of the logical dead cursor; wide programs preserve forty mixed-radix
 /// bits in the eight-byte header and a reserved four-byte shadow.
 pub const STEP_CURSOR_BITS: u32 = 24;

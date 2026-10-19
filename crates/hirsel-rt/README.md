@@ -109,15 +109,25 @@ Invariants and boundary:
   when its word is null), `LIVE_BIT` (skip a moved capture whose persistent bit is clear), `LOOP` (a span per element, highest first; a static count, or a
   dynamic `u64` count only in an outermost loop) and `COLUMN` (one structure-of-arrays column of
   the enclosing loop's element). Outside loops each step names its top-level live-mask field.
-- Release is iterative and post-order, with no allocation or recursion through data.
+- Release is iterative, with no allocation or recursion through data. A block is freed after
+  the children its steps kill (post-order), except at a `RELEASE_LAST` (descriptor version
+  11): the release that ends its value's program, through the arms of a last variant. When it
+  kills its child, nothing of the block remains to run, so the block is freed at once and the
+  child takes its place under the same parent (a tail release): a list's links are freed head
+  first in one pass, never suspended, and a list built tail first, as constructors build it,
+  is handed back by the LIFO free lists in its build order. A kept or masked root runs to its
+  end.
   A last release of a payload with no finalizer or drop steps frees it directly,
   including an erased String/Bytes owner: there is no cursor or worklist to drain.
   Simple dead blocks retain their index and use the count word for the next step. Loop/column
   descriptors set WIDE_CURSOR: their complete 24-bit step and 40-bit mixed-radix cursor spans
   the header plus a pre-reserved four-byte slab shadow (or a large prefix shadow). The parent
   link uses the consumed reference slot. The root's bytes stay intact for Reset/Reuse.kept.
-  Resumption reconstructs frames from immutable steps, preserving DROP-2 and build-order
-  recycling. Diagnostic descriptor validation rejects control words aliased with consumed
+  A masked root that runs nothing (no finalizer, and the mask leaves no top-level step live:
+  every counted field moved out) is not walked: its reset makes it the token and its release
+  frees it at once. Compiled code makes the same test statically
+  (`hirsel_lir::rt_program::masked_inert`) and resets such a unique heap block inline.
+  Resumption reconstructs frames from immutable steps, preserving DROP-2. Diagnostic descriptor validation rejects control words aliased with consumed
   slots, allowing the deliberately shared null-pointer niche guard and words in exclusive
   arms of one ordinal tag (a nested tag in one arm may share bytes with a sibling arm's
   reference: only one arm runs). Finalizers and closes
@@ -127,7 +137,7 @@ Invariants and boundary:
   (`hirsel_rt_v2.h`, transcribed in `hirsel_lir::runtime_abi`): a plain task-local `u32` at
   `COUNT_OFFSET`; at `COUNT_UNIQUE` the block dies, `COUNT_IMMORTAL` is never written, any
   other count is stored one lower. The glue releases a dead block's fields itself, in the
-  drop program's order, and returns the storage through `hirsel_rt_v2_free(ctx, block)`
+  drop program's order and with the walk's tail releases, and returns the storage through `hirsel_rt_v2_free(ctx, block)`
   (or its inline fast path), which is shallow and faults on a static block. Only layouts without a finalizer, an inline
   resource or columns have glue; every other block, a block whose layout its holder does not
   fix, and a block that dies with the glue's depth budget spent come back through

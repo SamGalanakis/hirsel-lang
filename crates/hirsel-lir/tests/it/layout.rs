@@ -536,7 +536,7 @@ fn a_niche_lowers_to_one_nonnull_step_around_the_dataful_variant() {
         [
             (StepKind::NonNull, u32::MAX, 2, 0),
             (StepKind::Release, 1, 0, 8),
-            (StepKind::Release, 0, 0, 0),
+            (StepKind::ReleaseLast, 0, 0, 0),
         ]
     );
     let mut m = table.clone();
@@ -2062,7 +2062,7 @@ fn an_environment_descriptor_drops_only_its_taken_captures() {
             .iter()
             .map(|s| (s.kind, s.offset, s.field))
             .collect();
-        assert_eq!(steps, [(StepKind::Release, offset, taken as u32)]);
+        assert_eq!(steps, [(StepKind::ReleaseLast, offset, taken as u32)]);
     }
 }
 
@@ -2148,7 +2148,7 @@ fn a_borrowed_handle_holding_capture_contributes_no_descriptor_steps() {
         .iter()
         .map(|s| (s.kind, s.offset, s.field))
         .collect();
-    assert_eq!(steps, [(StepKind::Release, owned, 1)]);
+    assert_eq!(steps, [(StepKind::ReleaseLast, owned, 1)]);
 
     let mut m = table.clone();
     m.layouts[env.0 as usize].drop.clear(); // the owned box never released

@@ -195,12 +195,16 @@ moved out of an owned block by `Read Take` through the block's value, and the bl
 released or reset under a static live mask (a private `hirsel.mask` constant). `Reset` of a
 callable resets its environment block. Drop glue (`glue.rs`) lowers a LayoutRecord's drop program to straight code. A `Release`
 of a whole block whose payload layout has no finalizer, inline resource or columns calls
-the private `hirsel.release.<layout>(ctx, block, anchor, budget)`, one per layout and
-object: it consumes one credit on the count word (the contract in `hirsel_rt_v2.h`; T04,
+the private `hirsel.release.<key>(ctx, block, anchor, site, budget)`, one per layout and
+object, named by the layout's `LayoutKey`: it consumes one credit on the count word (the contract in `hirsel_rt_v2.h`; T04,
 T16), and when that was the last it walks the payload, tags switched on, static repeats
 unrolled or looped, sequences looped from the highest element, then frees the block
 through `hirsel_rt_v2_free`'s fast path (`runtime::free_fast`), onto its page's deferred list
-when the context allows: post-order, as the runtime's worklist frees. A layout with an
+when the context allows: after its children, as the runtime's worklist frees, except that
+the release ending the program (the walk's `RELEASE_LAST`) frees the block first. A tail
+child of the function's own layout (a list's link, a tree's last child) is then released by
+looping back to the function's head, so a chain of any length releases in one frame and
+never reaches the runtime's worklist. A layout with an
 empty program has no function, only the inline count test and the free. A child whose
 layout the record fixes (a `Block` field) is released by its own function, by native
 recursion under a budget of 64 nested frames, with the next sibling's header prefetched; a
@@ -210,7 +214,15 @@ their own header names, so the stack is bounded and the order is the walk's. Sha
 erased owners use the same inline count edge; only a dying owner reads its descriptor and calls
 the runtime, which accounts for that edge in measurement builds. A layout whose release
 can never fail carries no status. A masked `Release`, `Reset` and a block of any other
-layout call the runtime with the descriptor index stored in the block header. An inline `Release` is the same walk
+layout call the runtime with the descriptor index stored in the block header, except a
+`Reset` of a covered block whose static mask leaves no drop step live
+(`rt_program::masked_inert`: every counted field moved out, as a destructure that rebuilds
+in place does): while the context frees inline, a unique heap donor is its token as it is,
+and only another donor calls the runtime. A `Reuse` of a token likewise installs it inline,
+its count set unique and its header's layout index replaced, and calls `hirsel_rt_v2_reuse`
+only for a null token or while the context's inline paths are off (diagnostic mode,
+measurement builds, the system allocator, memcheck), which check the token's key and record
+its state. An inline `Release` is the same walk
 over the value in its slot: handles
 through `hirsel_rt_v2_close_handle`, statuses accumulated and the failure edge taken after
 the walk; a static mask gates a record's top-level fields. A Ready `Copy` (Dup or Fields
@@ -354,9 +366,9 @@ Tests:
   are built twice from generated C data and released by the runtime walk and by an emitted
   entry; the finalizers, closes, failure chain and each slab's free-list links (its free
   order) must be equal, in both modes, with no failure, every finalizer and close failing,
-  and every third; a full tree's order is checked against the drop program's post-order,
-  a 300-link chain outruns the budget, and a million-link chain is released on a 128 KiB
-  stack. The same test file writes the object `crates/hirsel-rt/harness/bench.sh` times.
+  and every third; a full tree's order is checked against the drop program's (each last
+  child after its parent), a 300-link chain is freed head first in one frame, and a
+  million-link chain is released on a 128 KiB stack. The same test file writes the object `crates/hirsel-rt/harness/bench.sh` times.
 
 A `Switch` on an aggregate value with a layout tag spills the value and loads
 its tag. A projection from a slot of an uncounted type (region storage) starts

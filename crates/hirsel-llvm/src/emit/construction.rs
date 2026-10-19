@@ -497,8 +497,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(())
     }
 
-    /// `hirsel_rt_v2_reuse` of `token` as a heap block of `layout` with `extent` payload
-    /// bytes: the block, or `failure` when the runtime reports one.
+    /// T13 Reuse of `token` as a heap block of `layout` with `extent` payload bytes: the
+    /// block, or `failure` when `hirsel_rt_v2_reuse` reports one.
     pub(super) fn reuse_block(
         &mut self,
         token: Value<'m>,
@@ -507,8 +507,48 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         align: u32,
         failure: FailureId,
     ) -> Emitted<Value<'m>> {
+        use hirsel_lir::runtime_abi::{
+            COUNT_OFFSET, COUNT_UNIQUE, CTX_FREE_INLINE_OFFSET, DESCRIPTOR_INDEX_MASK,
+            LAYOUT_OFFSET,
+        };
         let descriptor = self.descriptor(layout)?;
-        let out = self.prologue.alloca(self.module.ptr_type(), 8);
+        let (ptr, i32_ty) = (self.module.ptr_type(), self.module.int_type(32));
+        let half = |n: u64| self.module.const_int(i32_ty, u128::from(n));
+        // A token is installed inline while the context frees inline: the runtime would only
+        // check its key and record its state, which diagnostic mode, measurement builds, the
+        // system allocator and memcheck keep, and those turn the inline paths off.
+        let enabled = self.builder.load(
+            i32_ty,
+            self.builder
+                .offset(self.context, self.const_u64(CTX_FREE_INLINE_OFFSET)),
+            4,
+        );
+        let fast = self.builder.binary(
+            BinOp::And,
+            self.builder
+                .icmp(IntPredicate::Ne, token, self.module.const_zero(ptr)),
+            self.builder.icmp(IntPredicate::Ne, enabled, half(0)),
+        );
+        let [inline, slow, done] = std::array::from_fn(|_| self.module.append_block(self.function));
+        self.builder.cond_br(fast, inline, slow);
+        self.builder.position(inline);
+        self.builder.store_access(
+            half(COUNT_UNIQUE),
+            self.builder.offset(token, self.const_u64(COUNT_OFFSET)),
+            4,
+            crate::context::Access::Count,
+        );
+        let word = self.builder.offset(token, self.const_u64(LAYOUT_OFFSET));
+        let kind = self.builder.binary(
+            BinOp::And,
+            self.builder.load(i32_ty, word, 4),
+            half(u64::from(!DESCRIPTOR_INDEX_MASK)),
+        );
+        self.builder
+            .store(self.builder.binary(BinOp::Or, kind, descriptor), word, 4);
+        self.builder.br(done);
+        self.builder.position(slow);
+        let out = self.prologue.alloca(ptr, 8);
         let reuse = self.runtime(RuntimeEntry::Reuse)?;
         let status = self.builder.call(
             reuse,
@@ -522,7 +562,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             ],
         );
         self.status_guard(status, failure)?;
-        Ok(self.builder.load(self.module.ptr_type(), out, 8))
+        let block = self.builder.load(ptr, out, 8);
+        let from = self.builder.current();
+        self.builder.br(done);
+        self.builder.position(done);
+        let phi = self.builder.phi(ptr);
+        self.builder.add_incoming(phi, token, inline);
+        self.builder.add_incoming(phi, block, from);
+        Ok(phi)
     }
 
     /// A block at an arena token: a counted heap block when the

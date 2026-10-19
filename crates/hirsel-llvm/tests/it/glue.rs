@@ -94,16 +94,21 @@ fn sections(output: &str) -> BTreeMap<&str, Vec<&str>> {
     sections
 }
 
-/// The blocks of `graph` in the order a release of its root frees them: each block after
-/// the blocks its references name, the reference at the highest offset first (a variant's
-/// fields drop in reverse).
-fn post_order(graph: &Graph, block: usize, out: &mut Vec<usize>) {
+/// The blocks of `graph` in the order a release of its root frees them: the references drop
+/// at the highest offset first (a variant's fields drop in reverse), each block after the
+/// blocks its references name, except that the release ending its program (the lowest
+/// offset) is a tail release, which frees the block first.
+fn free_order(graph: &Graph, block: usize, out: &mut Vec<usize>) {
     let mut relocs = graph.blocks[block].relocs.clone();
     relocs.sort_by_key(|(offset, _)| std::cmp::Reverse(*offset));
+    let last = relocs.pop();
     for (_, child) in relocs {
-        post_order(graph, child, out);
+        free_order(graph, child, out);
     }
     out.push(block);
+    if let Some((_, child)) = last {
+        free_order(graph, child, out);
+    }
 }
 
 #[test]
@@ -137,14 +142,14 @@ fn glue_and_the_runtime_walk_free_the_same_blocks_in_the_same_order() {
             );
             let sections = sections(&output);
             // The full tree: one slab, so the free list links are the whole free order,
-            // and it is the post-order of the drop program.
+            // and it is the drop program's, each last child released after its parent.
             let tree = &scenarios
                 .iter()
                 .find(|s| s.name == "tree full")
                 .unwrap()
                 .graph;
             let mut order = Vec::new();
-            post_order(tree, 0, &mut order);
+            free_order(tree, 0, &mut order);
             assert_eq!(order.len(), (1 << (TREE_DEPTH + 1)) - 1);
             let mut want = vec![String::from("status 0")];
             for block in 0..order.len() {
@@ -156,10 +161,12 @@ fn glue_and_the_runtime_walk_free_the_same_blocks_in_the_same_order() {
             }
             want.extend(["live 0".into(), "left 0".into()]);
             assert_eq!(sections["tree full failing 0"], want, "{label}");
-            // The chain is longer than the glue's budget: all of it is freed, deepest first.
+            // The chain is longer than the glue's budget of nested frames: each link is a
+            // tail release, so all of it is freed in one frame, head first.
             let chain = &sections["chain full failing 0"];
             assert_eq!(chain.len(), CHAIN_LINKS as usize + 4, "{label}");
-            assert_eq!(chain[1], "b0 free after b1", "{label}");
+            assert_eq!(chain[1], "b0 free after -", "{label}");
+            assert_eq!(chain[2], "b1 free after b0", "{label}");
             // Every scenario frees its whole graph, and the corpus reaches finalizers,
             // closes, failures and surviving shared blocks.
             for (name, lines) in &sections {

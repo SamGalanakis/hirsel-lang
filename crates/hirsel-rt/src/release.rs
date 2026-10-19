@@ -34,7 +34,7 @@ use crate::{STATUS_OK, fault};
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
 /// `Layout::version` of this descriptor format.
-pub const LAYOUT_VERSION: u32 = 10;
+pub const LAYOUT_VERSION: u32 = 11;
 /// `Layout::flags`: the type is declared in an `unsafe ffi` package, so a failure in its
 /// finalizer ends the process (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
@@ -94,6 +94,17 @@ pub const STEP_LIVE_BIT: u32 = 8;
 /// Restore ordinary counts in the frozen value at `offset`, read through `layout`, before the
 /// steps that release it: the first step of a `Shared` root block's program (MEM-11).
 pub const STEP_THAW: u32 = 9;
+/// A [`STEP_RELEASE`] after which its value runs nothing more (version 11): the last step of
+/// the program, or the last of a variant arm that is itself last. Never inside a loop. When it
+/// kills its child, the dying block is freed at once and the child takes its place (a tail
+/// release), so a chain drains without suspending a block per link.
+pub const STEP_RELEASE_LAST: u32 = 10;
+
+/// Whether a step releases the counted reference at its offset.
+#[inline(always)]
+pub(crate) fn releases(kind: u32) -> bool {
+    kind == STEP_RELEASE || kind == STEP_RELEASE_LAST
+}
 
 /// Step bits of the logical dead cursor. Simple programs use the count word alone;
 /// wide programs retain the complete remaining forty mixed-radix bits in header plus shadow.
@@ -300,7 +311,7 @@ fn check_frame(
         };
         framed(steps, start, end, &mut |slot_at| {
             let slot = &steps[slot_at];
-            if slot.kind == STEP_RELEASE
+            if releases(slot.kind)
                 && control < slot.offset.saturating_add(8)
                 && slot.offset < control.saturating_add(width)
                 && !exclusive(control_at, slot_at)
@@ -325,7 +336,10 @@ fn check_frame(
             fault("a leaf drop step has a span");
         }
         match step.kind {
-            STEP_RELEASE | STEP_CLOSE_HANDLE => {
+            STEP_RELEASE | STEP_RELEASE_LAST | STEP_CLOSE_HANDLE => {
+                if step.kind == STEP_RELEASE_LAST && loops > 0 {
+                    fault("a last release inside a loop");
+                }
                 if !fits(step.offset, 8) {
                     fault("a drop step lies outside its layout");
                 }
@@ -711,10 +725,10 @@ pub(crate) struct Drained {
 /// released, and the status is returned only after the drain finishes.
 ///
 /// The top item runs its steps until one kills a child, which is pushed and drained first. When
-/// that was the item's last step, nothing of the item remains to run: its cursor becomes
-/// [`CURSOR_DRAINED`] and, once the child has drained, it is freed without rereading its
-/// program. Freeing it only then keeps the free order post-order (children before parents), so
-/// the LIFO free lists hand a structure's storage back in the order it is built again.
+/// that step was a [`STEP_RELEASE_LAST`], nothing of the item remains to run: the item is freed
+/// at once and the child replaces it (a tail release), so a list's links are freed head first
+/// in one pass. Any other item is freed after its children (post-order). Compiled drop glue
+/// frees in the same order (`hirsel-llvm`'s `glue`).
 pub(crate) unsafe fn drain(
     ctx: &mut RunCtx,
     base: *mut Header,
@@ -750,6 +764,8 @@ unsafe fn drain_items<const ROOTED: bool>(
 ) -> Drained {
     let mut status = STATUS_OK;
     let mut kept_root = false;
+    // The root stops being one once a tail release frees it.
+    let mut root = root;
     let mut item = root;
     let mut parent: *mut Header = ptr::null_mut();
     let mut fresh = true;
@@ -810,7 +826,7 @@ unsafe fn drain_items<const ROOTED: bool>(
                         continue;
                     }
                     let at = value.wrapping_add(step.offset as usize);
-                    if step.kind == STEP_RELEASE {
+                    if releases(step.kind) {
                         pc += 1;
                         let killed = at.cast::<*mut Header>().read_unaligned();
                         if consume_edge(ctx, killed) {
@@ -819,7 +835,7 @@ unsafe fn drain_items<const ROOTED: bool>(
                             // start it now so it overlaps the child's drain.
                             if pc < end {
                                 let next = &*steps.add(pc);
-                                if next.kind == STEP_RELEASE
+                                if releases(next.kind)
                                     && (!ROOTED || field_live(item_mask, next.field))
                                 {
                                     let at = value.wrapping_add(next.offset as usize);
@@ -892,6 +908,25 @@ unsafe fn drain_items<const ROOTED: bool>(
                 ctx.work = item;
                 continue;
             }
+            // A tail release: the item runs nothing more, so it is freed now and the child takes
+            // its place under the same parent. A kept or masked root runs to its end.
+            if resume >> STEP_CURSOR_BITS == 0
+                && (*steps.add(resume as usize - 1)).kind == STEP_RELEASE_LAST
+                && !is_cleanup(item)
+                && !(ROOTED && item == root)
+            {
+                finish(ctx, item);
+                if item == root {
+                    root = ptr::null_mut();
+                }
+                item = child;
+                let child_layout = ctx.descriptor((*child).index());
+                ctx.heap.set_state(child, STATE_FINALIZE_PENDING);
+                save_cursor(child, 0, child_layout);
+                ctx.work = item;
+                fresh = true;
+                continue;
+            }
             // A dying child's credit has been consumed. Only non-root slots carry a parent link;
             // root donor bytes remain intact, including moved/kept fields used by Reuse.
             save_cursor(item, resume, layout);
@@ -935,7 +970,7 @@ unsafe fn run_step(
     // SAFETY: `at` addresses the step's field inside the value being dropped.
     unsafe {
         match step.kind {
-            STEP_RELEASE => {
+            STEP_RELEASE | STEP_RELEASE_LAST => {
                 let child = at.cast::<*mut Header>().read_unaligned();
                 if consume_edge(ctx, child) {
                     return child;
@@ -1177,10 +1212,11 @@ pub(crate) unsafe fn release_block(
             return STATUS_OK;
         }
         // A scalar/byte payload has no work, including when reached through
-        // an erased String/Bytes owner. T04 DropLast + T16 Free need neither
-        // dead-header cursor setup nor a drain invocation for an empty program.
+        // an erased String/Bytes owner, and neither has a partly moved block whose mask leaves
+        // no step live. T04 DropLast + T16 Free need neither dead-header cursor setup nor a
+        // drain invocation for an empty program.
         let layout = &*ctx.descriptor((*block).index());
-        if layout.finalizer.is_none() && layout.step_count == 0 {
+        if layout.finalizer.is_none() && layout.step_count == 0 || masked_inert(layout, mask) {
             ctx.heap.free(block);
             return STATUS_OK;
         }
@@ -1219,6 +1255,29 @@ pub unsafe extern "C" fn hirsel_rt_v2_release(
     }
 }
 
+/// Whether a masked root of `layout` runs nothing: it has no finalizer and every top-level step
+/// belongs to a field `mask` leaves dead (`hirsel_lir::rt_program::masked_inert`, which compiled
+/// code tests statically).
+fn masked_inert(layout: &Layout, mask: *const u64) -> bool {
+    if mask.is_null() || layout.finalizer.is_some() {
+        return false;
+    }
+    let mut at = 0;
+    while at < layout.step_count as usize {
+        // SAFETY: a checked descriptor's steps; a live mask covers its fields.
+        let step = unsafe { &*layout.steps.add(at) };
+        if unsafe { field_live(mask, step.field) } {
+            return false;
+        }
+        at += 1 + if spans(step.kind) {
+            step.span as usize
+        } else {
+            0
+        };
+    }
+    true
+}
+
 /// T12 Reset. Consume the donor holder. A unique donor drains its children and finalizers at this
 /// anchor and becomes raw storage written to `out_token`; a shared or immortal donor is released
 /// normally and the token is null (None). If any finalizer fails the storage is disposed, no
@@ -1246,13 +1305,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
         if (*block).count != 1 || (*block).domain() != DOMAIN_HEAP {
             return release_block(ctx, block, live_mask, anchor, operation_site);
         }
-        let base = ctx.work;
-        push(ctx, block, live_mask.is_null());
         #[cfg(feature = "measurement")]
         {
             ctx.heap.measurement.record("count_decrements", 1);
             ctx.heap.measurement.count_decrements += 1;
         }
+        // Every field with drop steps has moved out: no walk, the donor is the token.
+        if masked_inert(&*ctx.descriptor(index), live_mask) {
+            ctx.heap.set_state(block, STATE_RAW);
+            #[cfg(feature = "memcheck")]
+            crate::memcheck::noaccess(
+                crate::alloc::payload(block),
+                ctx.heap.capacity(block) as usize,
+            );
+            out_token.write(block);
+            return STATUS_OK;
+        }
+        let base = ctx.work;
+        push(ctx, block, live_mask.is_null());
         let drained = drain(ctx, base, block, live_mask, true, anchor, operation_site);
         if drained.kept_root {
             // The donor is gone: its payload is unaddressable until a reuse installs a value.

@@ -2051,6 +2051,7 @@ fn runtime_declarations_match_the_landed_c_header() {
         ("COLUMN", runtime_abi::STEP_COLUMN),
         ("NONNULL", runtime_abi::STEP_NONNULL),
         ("LIVE_BIT", runtime_abi::STEP_LIVE_BIT),
+        ("RELEASE_LAST", runtime_abi::STEP_RELEASE_LAST),
     ] {
         define(&format!("STEP_{name}"), &value.to_string());
     }

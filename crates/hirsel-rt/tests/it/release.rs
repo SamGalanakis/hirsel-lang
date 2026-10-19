@@ -9,7 +9,10 @@ use hirsel_rt::alloc::{hirsel_rt_v2_alloc, hirsel_rt_v2_dispose, hirsel_rt_v2_re
 use hirsel_rt::count::hirsel_rt_v2_dup;
 use hirsel_rt::failure::{hirsel_rt_v2_failure_active, hirsel_rt_v2_failure_clear};
 use hirsel_rt::release::{hirsel_rt_v2_release, hirsel_rt_v2_reset};
-use hirsel_rt::{COUNT_IMMORTAL, DOMAIN_HEAP, Header, Layout, RunCtx, STATE_LIVE, STATE_RAW};
+use hirsel_rt::{
+    COUNT_IMMORTAL, DOMAIN_HEAP, Header, Layout, RunCtx, STATE_LIVE, STATE_RAW, STEP_NONNULL,
+    STEP_RELEASE_LAST, Step, WHOLE_VALUE,
+};
 use support::*;
 
 fn alloc(ctx: *mut RunCtx, layout: &Layout, extent: u64) -> *mut Header {
@@ -83,6 +86,98 @@ fn a_million_node_chain_releases_on_a_small_stack_without_allocating() {
         ctx.stats().backing_allocations,
         ctx.stats().slab_bytes / hirsel_rt::SLAB_SIZE as u64
     );
+}
+
+/// A tail release (`STEP_RELEASE_LAST`) frees its link before the next one drains, so a list
+/// built tail first, as a constructor builds it, is freed head first and LIFO reuse replays
+/// its build order; with a resource in every link the finalizers still run head first, each
+/// before the rest of the chain.
+#[cfg(not(feature = "system-allocator"))]
+#[test]
+fn a_tail_release_frees_each_link_before_the_rest_of_the_chain() {
+    let ctx = Ctx::production();
+    // `{ id: u64, next: ref }`: `next` is null at the end.
+    let link = layout(
+        16,
+        2,
+        None,
+        vec![
+            Step {
+                span: 1,
+                ..step(STEP_NONNULL, WHOLE_VALUE, 8)
+            },
+            step(STEP_RELEASE_LAST, 1, 8),
+        ],
+    );
+    let build = |order: &mut Vec<*mut Header>, recycled: Option<*mut Header>| {
+        let mut next = ptr::null_mut();
+        for i in 0..64u64 {
+            let block = match (i, recycled) {
+                (0, Some(block)) => block,
+                _ => alloc(ctx.0, link, 16),
+            };
+            order.push(block);
+            write_u64(block, 0, i);
+            write_ref(block, 8, next);
+            next = block;
+        }
+        next
+    };
+    let mut first = Vec::new();
+    let head = build(&mut first, None);
+    assert_eq!(release(ctx.0, head, None), 0);
+    assert_eq!(ctx.stats().live_blocks, 0);
+    let mut fresh = Vec::new();
+    let recycled = loop {
+        let block = alloc(ctx.0, link, 16);
+        if block == first[0] {
+            break block;
+        }
+        write_u64(block, 0, 0);
+        write_ref(block, 8, ptr::null_mut());
+        fresh.push(block);
+        assert!(fresh.len() < hirsel_rt::SLAB_SIZE / 16);
+    };
+    let mut second = Vec::new();
+    let head = build(&mut second, Some(recycled));
+    assert_eq!(
+        first, second,
+        "each link is freed before the rest of its chain, so LIFO reuse replays the build order"
+    );
+    assert_eq!(release(ctx.0, head, None), 0);
+    for block in fresh {
+        assert_eq!(release(ctx.0, block, None), 0);
+    }
+    assert_eq!(ctx.stats().live_blocks, 0);
+
+    // `{ resource: logged leaf, next: ref }`: the leaf's finalizer runs before the link's tail.
+    let ctx = Ctx::production();
+    let logged = logged_leaf();
+    let link = layout(
+        16,
+        2,
+        None,
+        vec![
+            finalize_step(0, 0, logged),
+            Step {
+                span: 1,
+                ..step(STEP_NONNULL, WHOLE_VALUE, 8)
+            },
+            step(STEP_RELEASE_LAST, 1, 8),
+        ],
+    );
+    let mut next = ptr::null_mut();
+    for i in 0..4u64 {
+        let block = alloc(ctx.0, link, 16);
+        write_u64(block, 0, i);
+        write_ref(block, 8, next);
+        next = block;
+    }
+    take_events();
+    assert_eq!(release(ctx.0, next, None), 0);
+    let order: Vec<u64> = take_events().into_iter().map(|(id, _)| id).collect();
+    assert_eq!(order, [3, 2, 1, 0]);
+    assert_eq!(ctx.stats().live_blocks, 0);
 }
 
 #[cfg(not(feature = "system-allocator"))]
@@ -425,6 +520,56 @@ fn a_moved_field_keeps_its_bits_through_reset_and_reuse() {
     write_ref(reused, 16, node(ctx.0, leaf, 4));
     release(ctx.0, reused, None);
     assert_eq!(ctx.stats().live_blocks, 0);
+}
+
+/// A donor whose live mask leaves no step live (every counted field moved out) is the token
+/// with no walk, in both modes, and a masked release of one is freed at once: the moved
+/// children keep their credits, and nothing is finalized.
+#[test]
+fn a_donor_with_every_counted_field_moved_resets_and_releases_without_a_walk() {
+    for ctx in [Ctx::production(), Ctx::diagnostic()] {
+        let pair = layout(24, 3, None, vec![release_step(2, 16), release_step(1, 8)]);
+        let leaf = logged_leaf();
+        let moved = [node(ctx.0, leaf, 2), node(ctx.0, leaf, 3)];
+        let donor = node(ctx.0, pair, 1);
+        write_ref(donor, 8, moved[0]);
+        write_ref(donor, 16, moved[1]);
+        take_events();
+        // Fields 1 and 2 were moved out: only the scalar field 0 is live.
+        let live = [0b001u64];
+        let mut token = ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                hirsel_rt_v2_reset(
+                    ctx.0,
+                    donor,
+                    index(ctx.0, pair),
+                    live.as_ptr(),
+                    5,
+                    5,
+                    &mut token,
+                )
+            },
+            0
+        );
+        assert_eq!(token, donor);
+        assert_eq!(take_events(), []);
+        assert_eq!(ctx.stats().live_blocks, 3);
+        let mut reused = ptr::null_mut();
+        assert_eq!(
+            unsafe { hirsel_rt_v2_reuse(ctx.0, token, index(ctx.0, pair), 24, 8, &mut reused) },
+            0
+        );
+        assert_eq!(reused, donor);
+        assert_eq!(release(ctx.0, reused, Some(&live[..])), 0);
+        assert_eq!(take_events(), []);
+        assert_eq!(ctx.stats().live_blocks, 2);
+        for child in moved {
+            assert_eq!(unsafe { (*child).count }, 1);
+            assert_eq!(release(ctx.0, child, None), 0);
+        }
+        assert_eq!(ctx.stats().live_blocks, 0);
+    }
 }
 
 #[test]
@@ -829,6 +974,7 @@ mod schema_release {
         let (d, cases) = corpus();
         for kind in [
             StepKind::Release,
+            StepKind::ReleaseLast,
             StepKind::Finalize,
             StepKind::CloseHandle,
             StepKind::Tag,

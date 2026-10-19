@@ -93,6 +93,7 @@ fn header_constants_match_the_runtime() {
         ("STEP_LOOP", STEP_LOOP as u64),
         ("STEP_COLUMN", STEP_COLUMN as u64),
         ("STEP_NONNULL", STEP_NONNULL as u64),
+        ("STEP_RELEASE_LAST", STEP_RELEASE_LAST as u64),
         ("STEP_LIVE_BIT", STEP_LIVE_BIT as u64),
         ("STEP_CURSOR_BITS", STEP_CURSOR_BITS as u64),
         ("WHOLE_VALUE", WHOLE_VALUE as u64),

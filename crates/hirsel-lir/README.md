@@ -645,6 +645,11 @@ payload size: the element's logical size is in its charge, and its block is copi
 shared, never relocated. `SeqAppend`'s growth, `hirsel_rt_v2_block_grow` (runtime ABI 15),
 regrows an unshared tracked block in its arena and empties the abandoned one.
 
+Descriptor version 11 marks the release that ends a layout's program, through the arms of
+a last variant, as `STEP_RELEASE_LAST` (`rt_program::mark_last`): the runtime frees the
+dying block before the child that release kills drains, and compiled drop glue follows the
+same rule.
+
 SortedMap reuses `LAYOUT_KEYED`: its sole payload field is the entries List at
 offset zero. It has no index. Its placed constructor tracks both blocks, and
 `sorted_map.insert` charges a vacant entry with `ArenaPush` before taking the

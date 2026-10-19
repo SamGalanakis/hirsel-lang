@@ -4,23 +4,27 @@
 //! A [`Walk`] emits a drop program over a value at an address: every step in listed order,
 //! each counted holder releasing one credit. `Inst::Release` of an inline value uses it
 //! directly. A counted block whose payload layout is [`covered`] is released through
-//! `hirsel.release.<layout>(ctx, block, anchor, budget) -> i8`, one private function per
-//! layout and module: it consumes one credit, and when that was the last (the count is 1,
-//! T04 DropLast) it walks the payload and then returns the storage through
-//! `hirsel_rt_v2_free`, so a parent is freed after its last child (post-order, the order the
-//! runtime's worklist frees in). A covered layout with an empty program has no function: its
-//! release is the count test and the free, inline.
+//! `hirsel.release.<key>(ctx, block, anchor, site, budget) -> i8`, one private function per
+//! layout and module, named by the layout's `LayoutKey`: it consumes one credit, and when that
+//! was the last (the count is 1, T04 DropLast) it walks the payload and then returns the
+//! storage through `hirsel_rt_v2_free`, so a parent is freed after its children, except for the
+//! release that ends its program (the runtime's `STEP_RELEASE_LAST`, the order the runtime's
+//! worklist frees in): nothing of the parent remains to run, so it is freed first. A tail child
+//! of the function's own layout (a list's next link, a tree's last child) is then released by
+//! looping back to the function's head, so a chain of any length releases in one frame. A
+//! covered layout with an empty program has no function: its release is the count test and
+//! the free, inline.
 //!
 //! The runtime keeps everything else. A holder whose block layout the record does not fix (a
 //! slice's owner, a callable's environment) and a block whose layout has a finalizer, an
 //! inline resource or structure-of-arrays columns use the same inline count edge. Their
 //! final credit goes to `hirsel_rt_v2_release` with the descriptor their own header names.
-//! Children are released by native
-//! recursion under a budget of [`GLUE_MAX_DEPTH`] nested glue frames; a block that dies with
-//! the budget spent goes to `hirsel_rt_v2_release` too, whose worklist uses constant native
-//! stack and never calls glue, so the stack a release needs is bounded whatever the data.
-//! Either way a child is drained before its parent's next step, so glue and walk free the
-//! same blocks, close the same handles and run the same finalizers in the same order.
+//! Other children are released by native recursion under a budget of [`GLUE_MAX_DEPTH`]
+//! nested glue frames; a block that dies with the budget spent goes to `hirsel_rt_v2_release`
+//! too, whose worklist uses constant native stack and never calls glue, so the stack a
+//! release needs is bounded whatever the data. Either way a child is drained before its
+//! parent's next step, so glue and walk free the same blocks, close the same handles and run
+//! the same finalizers in the same order.
 
 use hirsel_lir::layout::payload_offset;
 use hirsel_lir::layout_types::{
@@ -66,8 +70,17 @@ pub(crate) struct Runtime<'m> {
 /// A release function whose body is still to be generated, with its entry block.
 pub(crate) type Pending<'m> = (LayoutId, Function<'m>, BasicBlock<'m>);
 
-fn name(layout: LayoutId) -> String {
-    format!("hirsel.release.{}", layout.0)
+/// A release function's name: keyed on its payload's `LayoutKey`, so it names no number the
+/// program assigns.
+fn name(record: &LayoutRecord) -> String {
+    let digest = hirsel_lir::snapshot::digest("drop-glue", &record.key);
+    let hex: String = digest
+        .0
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("hirsel.release.{hex}")
 }
 
 /// Whether glue releases a block of payload `layout` itself: the layout has no finalizer and
@@ -254,12 +267,16 @@ fn drop_edge<'m>(
 /// new. A queued function already has its entry block, so the module counts it as defined.
 fn declare<'m>(
     module: &'m Module<'m>,
+    layouts: &LayoutTable,
     layout: LayoutId,
     pending: &mut Vec<Pending<'m>>,
 ) -> Glued<Function<'m>> {
     let (ptr, i64_ty) = (module.ptr_type(), module.int_type(64));
     let ty = module.function_type(module.int_type(8), &[ptr, ptr, i64_ty, i64_ty, i64_ty]);
-    let name = name(layout);
+    let Some(record) = layouts.layout(layout) else {
+        return invalid(format!("no layout {}", layout.0));
+    };
+    let name = name(record);
     let fresh = !module.defines(&name);
     let function = module.function(&name, ty).map_err(GlueError)?;
     if fresh {
@@ -270,6 +287,11 @@ fn declare<'m>(
 }
 
 /// Generates the body of every queued release function, and of those they call.
+///
+/// A program whose last step releases a block of its own layout (a list's tail, a tree's
+/// last child) loops instead of recursing: the dying block is freed and its tail child takes
+/// its place at the loop head, so a chain of any length releases in one frame and never
+/// reaches the runtime's worklist.
 pub(crate) fn define<'m>(
     module: &'m Module<'m>,
     layouts: &LayoutTable,
@@ -289,13 +311,19 @@ pub(crate) fn define<'m>(
         let int = |n: u64| module.const_int(i64_ty, u128::from(n));
         let status = builder.alloca(i8_ty, 1);
         builder.store(module.const_int(i8_ty, 0), status, 1);
-        let (context, block, anchor, operation_site, budget) = (
+        let (context, first, anchor, operation_site, budget) = (
             module.parameter(function, 0),
             module.parameter(function, 1),
             module.parameter(function, 2),
             module.parameter(function, 3),
             module.parameter(function, 4),
         );
+        // The loop head: the block whose credit is consumed next.
+        let head = module.append_block(function);
+        builder.br(head);
+        builder.position(head);
+        let block = builder.phi(ptr_ty);
+        builder.add_incoming(block, first, entry);
         let [spent, drop] = std::array::from_fn(|_| module.append_block(function));
         let done = drop_edge(
             module,
@@ -307,6 +335,7 @@ pub(crate) fn define<'m>(
         );
         builder.cond_br(builder.icmp(IntPredicate::Eq, budget, int(0)), spent, drop);
         // The budget of nested glue frames is spent: the runtime's worklist drains the block.
+        // A loop never spends it, so this is the first block.
         builder.position(spent);
         let descriptor = builder.load(
             module.int_type(32),
@@ -323,7 +352,8 @@ pub(crate) fn define<'m>(
             runtime.release,
             &[context, block, descriptor, null, anchor, operation_site],
         );
-        builder.ret(if infallible(layouts, layout) {
+        let infallible = infallible(layouts, layout);
+        builder.ret(if infallible {
             module.const_int(i8_ty, 0)
         } else {
             drained
@@ -345,8 +375,13 @@ pub(crate) fn define<'m>(
             budget: builder.binary(BinOp::Sub, budget, int(1)),
             status,
             pending: &mut pending,
+            looping: Some(Loop {
+                layout,
+                head,
+                block,
+            }),
         };
-        walk.steps(
+        walk.tail_steps(
             &Scope::of(layout),
             builder.offset(block, int(payload)),
             record.align,
@@ -358,10 +393,23 @@ pub(crate) fn define<'m>(
             &[context, block],
         );
         builder.ret(builder.load(i8_ty, status, 1));
+        // The tail child survives: the blocks before it accumulated the status.
         builder.position(done);
-        builder.ret(module.const_int(i8_ty, 0));
+        builder.ret(if infallible {
+            module.const_int(i8_ty, 0)
+        } else {
+            builder.load(i8_ty, status, 1)
+        });
     }
     Ok(())
+}
+
+/// The loop of a release function: its payload layout, its head and the block it releases.
+#[derive(Clone, Copy)]
+pub(crate) struct Loop<'m> {
+    layout: LayoutId,
+    head: BasicBlock<'m>,
+    block: Value<'m>,
 }
 
 /// Emits drop programs at a builder's position in `function`.
@@ -381,6 +429,8 @@ pub(crate) struct Walk<'m, 'g> {
     /// not stop the walk.
     pub(crate) status: Value<'m>,
     pub(crate) pending: &'g mut Vec<Pending<'m>>,
+    /// The release function's loop, when this walk is its body.
+    pub(crate) looping: Option<Loop<'m>>,
 }
 
 impl<'m, 'g> Walk<'m, 'g> {
@@ -459,7 +509,7 @@ impl<'m, 'g> Walk<'m, 'g> {
             .layout(payload)
             .is_some_and(|record| record.drop.is_empty());
         if !leaf {
-            let glue = declare(self.module, payload, self.pending)?;
+            let glue = declare(self.module, self.layouts, payload, self.pending)?;
             let arguments = [
                 self.context,
                 block,
@@ -496,6 +546,34 @@ impl<'m, 'g> Walk<'m, 'g> {
         Ok(())
     }
 
+    /// The release of `child` that ends the release function's program (the runtime's
+    /// `STEP_RELEASE_LAST`): the function's block runs nothing more, so it is freed first.
+    /// A child of the function's own layout is then released at the loop head; any other
+    /// child is released here and the function returns. Outside a release function it is an
+    /// ordinary release.
+    fn tail_release(&mut self, child: Value<'m>, payload: Option<LayoutId>) -> Glued {
+        let Some(looping) = self.looping else {
+            return self.release(child, payload);
+        };
+        self.builder.call(
+            crate::runtime::free_fast(self.module, self.runtime.free),
+            &[self.context, looping.block],
+        );
+        if payload == Some(looping.layout) {
+            self.builder
+                .add_incoming(looping.block, child, self.builder.current());
+            self.builder.br(looping.head);
+        } else {
+            self.release(child, payload)?;
+            let i8_ty = self.module.int_type(8);
+            self.builder.ret(self.builder.load(i8_ty, self.status, 1));
+        }
+        // Whatever the caller emits next is unreachable.
+        let after = self.block();
+        self.builder.position(after);
+        Ok(())
+    }
+
     /// Hints that the header of the block reference at `at` is read soon, so its miss
     /// overlaps the release before it.
     fn prefetch(&self, at: Value<'m>, align: u32) -> Glued {
@@ -521,6 +599,29 @@ impl<'m, 'g> Walk<'m, 'g> {
         align: u32,
         steps: &[DropStep],
     ) -> Glued {
+        self.steps_at(scope, base, align, steps, false)
+    }
+
+    /// The release function's whole program: its last step may continue the loop.
+    fn tail_steps(
+        &mut self,
+        scope: &Scope,
+        base: Value<'m>,
+        align: u32,
+        steps: &[DropStep],
+    ) -> Glued {
+        self.steps_at(scope, base, align, steps, true)
+    }
+
+    /// `steps`, the last of which ends the release function's program when `tail`.
+    fn steps_at(
+        &mut self,
+        scope: &Scope,
+        base: Value<'m>,
+        align: u32,
+        steps: &[DropStep],
+        tail: bool,
+    ) -> Glued {
         for (index, step) in steps.iter().enumerate() {
             if let (DropStep::Release { offset }, Some(DropStep::Release { offset: next })) =
                 (step, steps.get(index + 1))
@@ -534,7 +635,7 @@ impl<'m, 'g> Walk<'m, 'g> {
                     self.prefetch(self.at(base, *next), align.min(low_bit(*next)).min(8))?;
                 }
             }
-            self.step(scope, base, align, step)?;
+            self.step_at(scope, base, align, step, tail && index + 1 == steps.len())?;
         }
         Ok(())
     }
@@ -547,6 +648,18 @@ impl<'m, 'g> Walk<'m, 'g> {
         align: u32,
         step: &DropStep,
     ) -> Glued {
+        self.step_at(scope, base, align, step, false)
+    }
+
+    /// `step`, which ends the release function's program when `tail`.
+    fn step_at(
+        &mut self,
+        scope: &Scope,
+        base: Value<'m>,
+        align: u32,
+        step: &DropStep,
+        tail: bool,
+    ) -> Glued {
         let (ptr_ty, i64_ty) = (self.module.ptr_type(), self.module.int_type(64));
         let word = |offset: u64| align.min(low_bit(offset)).min(8);
         match step {
@@ -554,12 +667,19 @@ impl<'m, 'g> Walk<'m, 'g> {
                 let block = self
                     .builder
                     .load(ptr_ty, self.at(base, *offset), word(*offset));
-                self.release(block, holder(self.layouts, scope, *offset))
+                let payload = holder(self.layouts, scope, *offset);
+                if tail {
+                    return self.tail_release(block, payload);
+                }
+                self.release(block, payload)
             }
             DropStep::Environment { offset } => {
                 let block = self
                     .builder
                     .load(ptr_ty, self.at(base, *offset), word(*offset));
+                if tail {
+                    return self.tail_release(block, None);
+                }
                 self.release(block, None)
             }
             DropStep::CloseHandle { offset } => {
@@ -600,7 +720,7 @@ impl<'m, 'g> Walk<'m, 'g> {
                     self.builder.position(arm);
                     let mut inner = scope.clone();
                     inner.arms.push((*tag_offset, *variant));
-                    self.steps(&inner, base, align, steps)?;
+                    self.steps_at(&inner, base, align, steps, tail)?;
                     self.builder.br(done);
                     cases.push((
                         self.module
