@@ -192,6 +192,11 @@ impl Io {
                 IoGrant::File { tree: t, .. } | IoGrant::Atomic { tree: t, .. } if *t == tree => {
                     Some(*id)
                 }
+                IoGrant::Mapped { directory, .. }
+                    if matches!(self.grants.get(directory), Some(IoGrant::Dir { tree: t, .. }) if *t == tree) =>
+                {
+                    Some(*id)
+                }
                 _ => None,
             })
             .collect();

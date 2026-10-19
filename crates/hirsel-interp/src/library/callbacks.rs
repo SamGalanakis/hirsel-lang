@@ -155,8 +155,13 @@ impl Library {
         if owner_tree != tree || owner != dir {
             return Err(invalid("mapped.with directory"));
         }
-        let contents = &self.simulation.file_contents[&identity];
-        let mut view = contents[..contents.len().min(length as usize)].to_vec();
+        // A mapping from before its tree's crash reads as zeros.
+        let mut view = if self.simulation.stale.contains(&mapping) {
+            vec![]
+        } else {
+            let contents = &self.simulation.file_contents[&identity];
+            contents[..contents.len().min(length as usize)].to_vec()
+        };
         view.resize(length as usize, 0);
         let view = Value::Bytes(view);
         let input = super::dispatch::encode_arguments(&args[..2]);
@@ -538,6 +543,8 @@ impl Library {
                     return Ok(result);
                 };
                 self.tasks.yield_now = true;
+                // A mapping from before its tree's crash fails as a stale File does.
+                let stale = self.simulation.stale.contains(&mapping);
                 let Some(super::simulation::Grant::Mapped {
                     identity,
                     length,
@@ -547,8 +554,12 @@ impl Library {
                 else {
                     return Err(invalid("mapped.with grant"));
                 };
-                *truncated |= (self.simulation.file_contents[identity].len() as u64) < *length;
-                let check = if *truncated {
+                if !stale {
+                    *truncated |= (self.simulation.file_contents[identity].len() as u64) < *length;
+                }
+                let check = if stale {
+                    super::dispatch::file_fault(1)
+                } else if *truncated {
                     super::dispatch::error(super::dispatch::variant(10, vec![]))
                 } else {
                     super::dispatch::ok(Value::Unit)

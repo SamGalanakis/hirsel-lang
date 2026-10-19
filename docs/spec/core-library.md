@@ -477,6 +477,8 @@ modifications are: the body may see old or new bytes. So are the program's own w
 the mapped file while a body runs (from the body or another task): a host view shows
 them in place and a simulated view keeps the bytes it lent; a truncation still makes
 `mapped.with` return `Truncated()`. Writes made before `mapped.with` starts always show.
+A `test.crash` makes a mapping of its tree stale, as it does a `File`: every later
+`mapped.with` lends a view of zeros and returns `FileFault(1)`.
 
 ### Watching files
 

@@ -1783,7 +1783,9 @@ impl State {
                     .sorted()
                     .into_iter()
                     .filter_map(|(id, grant)| match grant {
-                        Grant::File { directory, .. } | Grant::AtomicFile { directory, .. }
+                        Grant::File { directory, .. }
+                        | Grant::AtomicFile { directory, .. }
+                        | Grant::Mapped { directory, .. }
                             if self.fake_directories.get(directory) == Some(&tree) =>
                         {
                             Some(id)
@@ -1921,11 +1923,19 @@ impl State {
                 if owner != directory {
                     return Err(AdapterError::InvalidHandle(*mapped));
                 }
+                // A mapping from before its test tree's crash reads as zeros and fails.
+                let stale = storage.stale(*mapped);
                 if let R::MapView { .. } = request {
                     if error.is_some() {
                         return Err(AdapterError::InvalidCompletion);
                     }
+                    if stale {
+                        return Ok(C::View(MapView::of(vec![0; *length as usize])));
+                    }
                     return Ok(C::View(storage.map_view(*mapped, *length, capture)));
+                }
+                if stale {
+                    return Ok(C::Unit(Err(IoError::Fault(1))));
                 }
                 // A recorded truncation is a host input; a check that found none is derived.
                 *truncated = match error {
@@ -2741,7 +2751,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_mapped_view(
     unsafe { out.write(slice) };
     crate::STATUS_OK
 }
-/// `mapped.with`'s check: 0, or 1 when the mapped file was truncated.
+/// `mapped.with`'s check: 0, 1 when the mapped file was truncated, or 2 when the mapping
+/// predates its test tree's crash.
 /// # Safety
 /// Context bound, directory and mapping borrowed, out writable.
 #[unsafe(no_mangle)]
@@ -2761,6 +2772,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mapped_check(
     let status = match completion {
         Completion::Unit(Ok(())) => 0,
         Completion::Unit(Err(IoError::Truncated)) => 1,
+        Completion::Unit(Err(IoError::Fault(1))) => 2,
         _ => crate::fault("Io completion type mismatch"),
     };
     unsafe { out.write(status) };

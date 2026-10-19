@@ -1,0 +1,35 @@
+// rule: CAP-2
+// expect: run
+// entry: exercise
+// A test.crash makes a mapping of its tree stale, like a File: mapped.with returns
+// FileFault(1), while the file that survived the crash maps afresh.
+pub fn exercise(t: Test) -> Result[(), FileError] {
+  let d = test.dir(t, [(path.of("data"), b"hello")])
+  let m = file.map(d, path.of("data"))?
+  test.crash(t, d, 1u64)
+  test.check(
+    t,
+    match mapped.with(
+      d,
+      m,
+      fn(view: Bytes) -> bool {
+        view == b"\x00\x00\x00\x00\x00"
+      }
+    ) {
+      Error(FileFault(code)) => code == 1u32,
+      _ => false,
+    }
+  )
+  let fresh = file.map(d, path.of("data"))?
+  test.check(
+    t,
+    mapped.with(
+      d,
+      fresh,
+      fn(view: Bytes) -> bool {
+        view == b"hello"
+      }
+    )?
+  )
+  Ok(())
+}

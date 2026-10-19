@@ -1,8 +1,9 @@
 //! `mapped.with[R](d, m, body) -> Result[R, FileError]` over the runtime's mapping entries
 //! (`hirsel_rt_v2_mapped_view`, `hirsel_rt_v2_mapped_check`, `hirsel-rt/src/mapping.rs`).
 //! The body borrows the view `$intrinsic.MappedView` returns, which is released after it;
-//! then `$intrinsic.MappedCheck` says whether the file was truncated meanwhile, and the
-//! body's result is dropped for `Error(Truncated())`.
+//! then `$intrinsic.MappedCheck` says whether the file was truncated meanwhile (1) or the
+//! mapping predates its test tree's crash (2), and the body's result is dropped for
+//! `Error(Truncated())` or `Error(FileFault(1))`.
 use super::LibraryBody;
 use super::arena::{RESULT_ERROR, RESULT_OK, payload, variant};
 use super::builder::{Body, Cx};
@@ -22,7 +23,8 @@ pub static WITH: LibraryBody = LibraryBody {
     build: with,
 };
 
-/// `FileError::Truncated()`'s ordinal.
+/// `FileError::FileFault(u32)`'s and `FileError::Truncated()`'s ordinals.
+const FILE_FAULT: u32 = 0;
 const TRUNCATED: u32 = 10;
 
 fn with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
@@ -122,10 +124,21 @@ fn with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let cause = variant(&mut b, error, "FileError", TRUNCATED, &[]);
     let value = variant(&mut b, returned, "Result", RESULT_ERROR, &[cause]);
     b.ret(Some(value));
+    let stale = b.block(BlockKind::Body, &[]);
+    b.at(stale);
+    if let Some((slot, address)) = result {
+        drop_local(&mut b, slot, address);
+    }
+    let code = payload(&b, error, FILE_FAULT)
+        .ok_or_else(|| PassError::Malformed("FileFault carries a code".into()))?;
+    let code = b.constant(code, ConstantValue::Integer(1));
+    let cause = variant(&mut b, error, "FileError", FILE_FAULT, &[code]);
+    let value = variant(&mut b, returned, "Result", RESULT_ERROR, &[cause]);
+    b.ret(Some(value));
     let broken = b.block(BlockKind::Body, &[]);
     b.at(broken);
     b.terminate(Terminator::InvariantFault {
-        reason: "a mapping check status past Truncated".into(),
+        reason: "a mapping check status past a stale mapping".into(),
     });
     b.at(at);
     let arms = vec![
@@ -136,6 +149,10 @@ fn with(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         SwitchArm {
             value: 1,
             edge: b.edge(truncated, &[]),
+        },
+        SwitchArm {
+            value: 2,
+            edge: b.edge(stale, &[]),
         },
     ];
     let otherwise = b.edge(broken, &[]);

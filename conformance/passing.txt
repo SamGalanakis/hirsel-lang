@@ -164,6 +164,7 @@ conformance/CAP/CAP-2-file-errors-not-found-run.hir
 conformance/CAP/CAP-2-file-errors-permission-denied-run.hir
 conformance/CAP/CAP-2-file-lexical-parent-run.hir
 conformance/CAP/CAP-2-file-list-recursive-run.hir
+conformance/CAP/CAP-2-file-map-crash-run.hir
 conformance/CAP/CAP-2-file-map-host-run.hir
 conformance/CAP/CAP-2-file-map-run.hir
 conformance/CAP/CAP-2-file-operation-authority-bad.hir

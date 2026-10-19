@@ -1215,7 +1215,8 @@ impl Io {
                 OpValue::Unit
             }
             // `mapped.with`'s view: the identity's current bytes, zero past their end;
-            // its check: 1 once the identity is found shorter than the mapping.
+            // its check: 1 once the identity is found shorter than the mapping. A mapping
+            // from before its tree's crash views zeros and checks 2 (FileFault(1)).
             (
                 Some("$intrinsic"),
                 view @ ("MappedView" | "MappedCheck"),
@@ -1234,10 +1235,20 @@ impl Io {
                 if owner != directory {
                     return Some(OpOutcome::Fail("CAP-2".into()));
                 }
+                let stale = self.stale.contains(mapped);
                 if view == "MappedView" {
-                    let mut bytes = contents[..contents.len().min(*length as usize)].to_vec();
+                    let mut bytes = if stale {
+                        vec![]
+                    } else {
+                        contents[..contents.len().min(*length as usize)].to_vec()
+                    };
                     bytes.resize(*length as usize, 0);
                     OpValue::ByteSequence(bytes)
+                } else if stale {
+                    OpValue::Bits {
+                        scalar: ScalarKind::U32,
+                        bits: 2,
+                    }
                 } else {
                     *truncated |= (contents.len() as u64) < *length;
                     OpValue::Bits {

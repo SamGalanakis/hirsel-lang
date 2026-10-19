@@ -620,7 +620,7 @@ impl Simulation {
             &files,
         );
     }
-    /// `test.crash`: the tree becomes its durable state; its open files go stale.
+    /// `test.crash`: the tree becomes its durable state; its open files and mappings go stale.
     pub(crate) fn crash(&mut self, tree: u64, seed: u64) {
         let crashed = self
             .durable
@@ -642,7 +642,11 @@ impl Simulation {
             .grants
             .iter()
             .filter_map(|(id, grant)| match grant {
-                Grant::File { tree: t, .. } | Grant::Atomic { tree: t, .. } if *t == tree => {
+                Grant::File { tree: t, .. }
+                | Grant::Atomic { tree: t, .. }
+                | Grant::Mapped { tree: t, .. }
+                    if *t == tree =>
+                {
                     Some(*id)
                 }
                 _ => None,
