@@ -1,0 +1,47 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml stringify accepts 128 nested arrays and rejects level 129 as InvalidValue.
+fn repeat(piece: String, count: u64) -> String {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, piece)
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+fn written(value: toml.Value) -> String {
+  match toml.stringify(value) {
+    Ok(s) => s,
+    Error(_) => {
+      failure.check(false, TextInvariant())
+      ""
+    },
+  }
+}
+
+fn single(key: String, take value: toml.Value) -> toml.Value {
+  let mut entries: Map[String, toml.Value] = map.empty()
+  map.insert(mut entries, unique key, take value)
+  Table(take entries)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(toml.MAX_NESTING == 128, TextInvariant())
+  let mut value: toml.Value = Integer(0)
+  let mut i: u64 = 0
+  while i < 128 {
+    value = Array([take value])
+    i += 1
+  }
+  let inner = string.concat(repeat("[", 128), "0")
+  let arrays = string.concat(inner, repeat("]", 128))
+  let expected = string.concat("a = ", string.concat(arrays, "\n"))
+  failure.check(written(single("a", copy value)) == expected, TextInvariant())
+  failure.check(
+    toml.stringify(single("a", Array([take value]))) == Error(InvalidValue()),
+    TextInvariant()
+  )
+  Ok(())
+}

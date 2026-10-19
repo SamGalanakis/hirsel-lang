@@ -4936,7 +4936,10 @@ conformance/SEM/SEM-3-toml-edit-remove-table-run.hir
 conformance/SEM/SEM-3-toml-edit-remove-value-run.hir
 conformance/SEM/SEM-3-toml-edit-respell-run.hir
 conformance/SEM/SEM-3-toml-error-position-run.hir
+conformance/SEM/SEM-3-toml-nesting-array-run.hir
+conformance/SEM/SEM-3-toml-nesting-header-run.hir
 conformance/SEM/SEM-3-toml-stringify-float-run.hir
+conformance/SEM/SEM-3-toml-stringify-nesting-run.hir
 conformance/SEM/SEM-3-toml-stringify-run.hir
 conformance/SEM/SEM-3-toml-test-invalid-array-1-run.hir
 conformance/SEM/SEM-3-toml-test-invalid-bool-1-run.hir

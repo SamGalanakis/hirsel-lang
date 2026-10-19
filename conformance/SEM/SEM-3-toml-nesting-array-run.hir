@@ -1,0 +1,35 @@
+// rule: SEM-3
+// expect: run
+// std@1/toml accepts 128 nested arrays and reports the opening bracket of level 129.
+fn error_of(text: String) -> Option[toml.TomlError] {
+  match toml.parse(unique text) {
+    Ok(_) => None(),
+    Error(e) => Some(e),
+  }
+}
+
+fn at(line: u64, column: u64) -> toml.Position {
+  toml.Position(line: line, column: column)
+}
+
+fn repeat(piece: String, count: u64) -> String {
+  let mut out: List[u8] = []
+  let mut i: u64 = 0
+  while i < count {
+    text.append(mut out, piece)
+    i += 1
+  }
+  text.finish_valid(take out)
+}
+
+pub fn main() -> Result[(), ()] {
+  failure.check(toml.MAX_NESTING == 128, TextInvariant())
+  let nested = string.concat(repeat("[", 128), repeat("]", 128))
+  failure.check(error_of(string.concat("a = ", nested)) == None(), TextInvariant())
+  let too_deep = string.concat(repeat("[", 129), repeat("]", 129))
+  failure.check(
+    error_of(string.concat("a = ", too_deep)) == Some(Nesting(at(1, 133))),
+    TextInvariant()
+  )
+  Ok(())
+}
