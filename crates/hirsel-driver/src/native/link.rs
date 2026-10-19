@@ -38,8 +38,8 @@ pub struct Toolchain {
     pub valgrind_runtime: Option<PathBuf>,
     /// `libhirsel_rt.a` per target triple and archive variant.
     pub runtime: BTreeMap<(String, RuntimeBuild), PathBuf>,
-    /// A checking tool an x86-64 executable is launched under (Valgrind
-    /// memcheck with a failing exit code), or empty.
+    /// An x86-64 launch wrapper command and its arguments, or empty. Selecting
+    /// the pinned Valgrind executable also enables its loader and environment.
     pub wrapper: Vec<String>,
     /// How long one launched process may run before it is killed and its
     /// launch fails.
@@ -1574,7 +1574,7 @@ fn launch_impl(
             }
         }
     }
-    if !toolchain.wrapper.is_empty() {
+    if toolchain.uses_memcheck() {
         command
             .env(
                 "VALGRIND_LIB",
@@ -1970,18 +1970,21 @@ pub fn observe_run(
 }
 
 impl Toolchain {
-    /// This toolchain with x86-64 executables launched under Valgrind
-    /// memcheck: an invalid read or write, a use of uninitialised memory in a
-    /// branch or system call and a definite leak each fail the launch.
-    /// Memcheck runs a program tens of times slower, so its launches get ten
-    /// times the timeout.
+    fn uses_memcheck(&self) -> bool {
+        self.valgrind.as_deref().is_some_and(|valgrind| {
+            self.wrapper
+                .first()
+                .is_some_and(|wrapper| Path::new(wrapper) == valgrind)
+        })
+    }
+
     /// The link flags that make an executable for `target` load as this toolchain launches
-    /// it: under the wrapper, Valgrind's pinned dynamic loader and runtime libraries.
+    /// it: under memcheck, Valgrind's pinned dynamic loader and runtime libraries.
     pub fn loader_flags(
         &self,
         target: &TargetSpec,
     ) -> Result<Vec<std::ffi::OsString>, NativeError> {
-        if aarch64(target) || self.wrapper.is_empty() {
+        if aarch64(target) || !self.uses_memcheck() {
             return Ok(Vec::new());
         }
         let runtime = required_path(&self.valgrind_runtime, "HIRSEL_VALGRIND_RUNTIME")?;
@@ -1998,6 +2001,11 @@ impl Toolchain {
         .to_vec())
     }
 
+    /// This toolchain with x86-64 executables launched under Valgrind
+    /// memcheck: an invalid read or write, a use of uninitialised memory in a
+    /// branch or system call and a definite leak each fail the launch.
+    /// Memcheck runs a program tens of times slower, so its launches get ten
+    /// times the timeout.
     pub fn under_memcheck(mut self) -> Result<Self, NativeError> {
         self.launch_timeout = LAUNCH_TIMEOUT * 10;
         self.wrapper = [
@@ -2047,10 +2055,10 @@ mod tests {
     }
 
     #[test]
-    fn memcheck_launch_keeps_its_input_library_directory_after_env_clear() {
+    fn wrappers_keep_selected_memcheck_inputs_without_requiring_them_for_other_launches() {
         let dir = std::env::temp_dir().join(format!("hirsel-memcheck-env-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let tools = Toolchain {
+        let mut tools = Toolchain {
             runtime_build: RuntimeBuild::default(),
             clang: "/unused/clang".into(),
             aarch64_cc: Some("/unused/gcc".into()),
@@ -2079,6 +2087,27 @@ mod tests {
         .unwrap();
         assert_eq!(launched.exit, Some(0));
         assert_eq!(launched.stdout, b"/inputs/valgrind-support");
+        // A different wrapper uses neither the Valgrind loader nor its environment,
+        // even when the toolchain has a pinned Valgrind executable available.
+        tools.valgrind = Some("/unused/valgrind".into());
+        tools.valgrind_lib = None;
+        tools.valgrind_runtime = None;
+        assert!(
+            tools
+                .loader_flags(&TargetSpec::x86_64_unknown_linux_gnu())
+                .unwrap()
+                .is_empty()
+        );
+        let launched = launch(
+            Path::new("/unused/program"),
+            &TargetSpec::x86_64_unknown_linux_gnu(),
+            &tools,
+            &dir,
+            false,
+        )
+        .unwrap();
+        assert_eq!(launched.exit, Some(0));
+        assert!(launched.stdout.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

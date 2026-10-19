@@ -83,6 +83,7 @@ A plain x86 build needs only the LLVM prefix and its runtime archive.
 Missing or relative required paths refuse construction;
 there is no PATH search or system LLVM fallback. Memcheck launches retain their input library path
 when the child's environment is cleared.
+Other launch wrappers require no Valgrind loader or environment.
 
 Executables link with the input `ld.lld` directly, with no compiler driver
 process (`native/link_line.rs`). Its arguments are the ones the target's driver

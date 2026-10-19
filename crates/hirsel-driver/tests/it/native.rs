@@ -138,7 +138,7 @@ fn a_hanging_launch_fails_its_configuration_by_name() {
             match (configuration.engine, outcome) {
                 (Engine::Heap { .. }, Outcome::Agree) => {}
                 (Engine::Native { .. }, Outcome::Unavailable(error)) => {
-                    assert_eq!(error.stage, StageName::Launch, "{name}");
+                    assert_eq!(error.stage, StageName::Launch, "{name}: {error}");
                     assert!(error.message.contains("launch timeout"), "{name}: {error}");
                 }
                 _ => panic!("{name}: {outcome:?}"),
