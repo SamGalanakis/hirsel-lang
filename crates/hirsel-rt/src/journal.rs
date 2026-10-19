@@ -27,6 +27,10 @@ pub struct Prepared {
 
 /// A recording level: where a run's requests and completions go.
 pub trait Journal {
+    /// Whether the level records anything.
+    fn records(&self) -> bool {
+        true
+    }
     /// Whether requests are made durable before issue and completions before delivery.
     fn durable(&self) -> bool {
         false
@@ -55,6 +59,9 @@ pub trait Journal {
 /// Recording level `none`.
 pub struct NoJournal;
 impl Journal for NoJournal {
+    fn records(&self) -> bool {
+        false
+    }
     fn event(&mut self, _: Option<u64>, _: &Event) -> io::Result<()> {
         Ok(())
     }
@@ -766,6 +773,9 @@ impl Journaled {
     /// Keep a recording failure for the next request, which it prevents.
     pub fn fail(&mut self, error: io::Error) {
         self.failed.get_or_insert(error);
+    }
+    pub fn records(&self) -> bool {
+        self.journal.records()
     }
     pub fn durable(&self) -> bool {
         self.journal.durable()

@@ -429,7 +429,7 @@ impl Adapter for RealIo {
         stderr: bool,
         bytes: &[u8],
     ) -> Result<Completion, AdapterError> {
-        if !self.retain_history && self.recording.is_none() && self.fault.is_none() {
+        if !self.retain_history && !self.journal.records() && self.fault.is_none() {
             self.state.expect(
                 handle,
                 if stderr {
