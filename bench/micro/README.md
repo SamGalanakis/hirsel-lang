@@ -18,8 +18,8 @@ file while running; their output is hashed and discarded afterwards.
 ```json
 [
   {"name": "rust", "command": ["/tmp/micro/rust", "strbuild", "2000000", "1"]},
-  {"name": "old", "command": ["/tmp/old-strbuild", "2000000", "1"]},
-  {"name": "new", "command": ["/tmp/micro/strbuild", "2000000", "1"]}
+  {"name": "old", "command": ["/tmp/old-strbuild", "--hirsel-grants", "bench/micro/grants.json", "2000000", "1"]},
+  {"name": "new", "command": ["/tmp/micro/strbuild", "--hirsel-grants", "bench/micro/grants.json", "2000000", "1"]}
 ]
 ```
 
@@ -38,7 +38,8 @@ counts. The CI describes within-session jitter; it does not bound host drift
 or correlated contention across rounds.
 
 Every sample records raw before/after `/proc/stat` tick snapshots for every SMT
-sibling and its busy fraction during the sample, including capped startup/wait.
+sibling and its busy fraction during the sample. Perf pre/post hooks take the
+snapshots inside the capped slot, excluding queue time and capped startup.
 Idle and iowait ticks count as idle; guest ticks are not double counted. A zero
 tick interval is `null`. No busy samples are silently excluded. Counter running
 percentages expose perf multiplexing. Session ID, seed, CPU, argv, executable
@@ -62,11 +63,20 @@ Build one workload at LLVM O3 and its Rust pair (pool-built release CLI/precheck
 capped compiler invocations; output directory may be outside the worktree):
 
 ```sh
-bench/micro/build strbuild --output /tmp/micro
+bench/micro/build strbuild --size 2000000 --output /tmp/micro
+```
+
+Run the generated pair list directly:
+
+```sh
+bench/micro/run /tmp/micro/strbuild.json --output /tmp/strbuild-session.json --seed 42
 ```
 
 The promoted scratchpad programs are in `programs/`; `rust/main.rs` dispatches
-by case name. Hirsel argv is `N [epochs]`; Rust argv is `case N [epochs]`.
+by case name. CLI-built Hirsel executables require explicit launch grants:
+`--hirsel-grants bench/micro/grants.json N [epochs]`; Rust argv is
+`case N [epochs]`. The supplied template grants stdout and cooperative tasks,
+with zero seeds and no directory access.
 Epochs default to 1 on Hirsel and are required on Rust except print/channel.
 Use the same epochs on both; each epoch changes the salt and contributes to a
 wrapping checksum. Harness rounds are independent process samples.

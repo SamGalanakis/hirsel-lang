@@ -59,7 +59,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / 'bench/native'))
 import corpus  # noqa: E402
 sys.path.insert(0, str(ROOT / 'bench/micro'))
-from measure import cpu_snapshot, siblings, busy_share, perf_counts, timing_lock  # noqa: E402
+from measure import cpu_snapshot, siblings, busy_share, perf_counts, perf_command, timing_lock  # noqa: E402
 
 CAPPED = ROOT / 'tools/capped'
 HIRSEL_MODES = ('check', 'clif', 'llvm-o0', 'llvm-o2')
@@ -105,27 +105,31 @@ def measured(command, env, timeout, cpu=31):
     and peak RSS (MiB) from /usr/bin/time, `cap` or `timeout` from capped's
     report, and the command's own stderr (capped's lines removed)."""
     sibling_cpus = siblings(cpu)
-    with tempfile.NamedTemporaryFile('r', suffix='.time') as times, tempfile.NamedTemporaryFile('r', suffix='.perf') as counters:
-        timed = ['/usr/bin/time', '-f', '%e %U %S %M', '-o', times.name,
-                 'taskset', '-c', str(cpu), 'perf', 'stat', '--no-big-num', '-x', ';',
-                 '-e', 'task-clock,cycles,instructions,cycles:u,instructions:u', '-o', counters.name, '--', *command]
-        before = cpu_snapshot(sibling_cpus)
+    with tempfile.TemporaryDirectory(prefix='compiler-sample-') as scratch:
+        times, counters = Path(scratch) / 'time', Path(scratch) / 'perf'
+        before_path, after_path = Path(scratch) / 'before.stat', Path(scratch) / 'after.stat'
+        timed = ['/usr/bin/time', '-f', '%e %U %S %M', '-o', str(times),
+                 *perf_command(command, cpu, counters, before_path, after_path)]
         started = time.monotonic()
         process = subprocess.run([str(CAPPED), '--timeout', str(timeout), *timed], env=dict(env, LC_ALL='C'),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        after = cpu_snapshot(sibling_cpus)
-        perf_text = counters.read()
+        snapshots_present = before_path.exists() and after_path.exists()
+        before = cpu_snapshot(sibling_cpus, before_path) if before_path.exists() else {}
+        after = cpu_snapshot(sibling_cpus, after_path) if after_path.exists() else {}
+        perf_text = counters.read_text() if counters.exists() else ''
         elapsed = time.monotonic() - started
-        fields = times.read().split()
+        fields = times.read_text().split() if times.exists() else []
     lines = process.stderr.splitlines()
     report = next((line for line in reversed(lines) if line.startswith('capped: peak')), '')
     stderr = ''.join(line + '\n' for line in lines if not line.startswith('capped:'))
     status = ('cap' if 'memory limit' in report else 'timeout' if 'timed out' in report
               else 'ok' if process.returncode == 0 else 'failed')
     run = {'exit': process.returncode, 'wall_s': elapsed, 'status': status,
-           'sibling_before': before, 'sibling_after': after, 'sibling_busy_share': busy_share(before, after)}
+           'sibling_before': before, 'sibling_after': after, 'sibling_busy_share': busy_share(before, after) if before and after else {}}
     if status == 'ok':
         try:
+            if not snapshots_present:
+                raise ValueError('perf pre/post /proc/stat snapshots missing')
             counts, running = perf_counts(perf_text)
             run.update(instructions_u=counts['instructions:u'], perf=counts, running_percent=running)
         except ValueError as error:

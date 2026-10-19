@@ -2,6 +2,7 @@
 """Build one micro and its Rust pair; each compiler is a separate capped run."""
 import argparse
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -15,8 +16,12 @@ from suite import buck2_build, native_environment  # noqa: E402
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('case', choices=sorted(p.stem for p in (HERE / 'programs').glob('*.hir')))
+    parser.add_argument('--size', type=int, default=1000, help='workload size in the generated participant list')
+    parser.add_argument('--epochs', type=int, default=1, help='epochs in the generated participant list')
     parser.add_argument('--output', type=Path, default=ROOT / 'build/micro')
     args = parser.parse_args()
+    if args.size < 0 or args.epochs < 1:
+        parser.error('size must be nonnegative and epochs positive')
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     source = output / f'{args.case}.hir'
@@ -34,7 +39,16 @@ def main():
                     'build', '--release', str(source), '-o', str(output / args.case)], env=env, check=True)
     subprocess.run([capped, 'rustc', '--edition=2021', '-O', str(HERE / 'rust/main.rs'),
                     '-o', str(output / 'rust')], check=True)
-    print(output / args.case)
+    shutil.copyfile(HERE / 'grants.json', output / 'grants.json')
+    workload = [str(args.size)] + ([] if args.case in ('print', 'channel') else [str(args.epochs)])
+    participants = [
+        {'name': 'rust', 'command': [str(output / 'rust'), args.case, *workload]},
+        {'name': 'hirsel', 'command': [str(output / args.case), '--hirsel-grants',
+                                       str(output / 'grants.json'), *workload]},
+    ]
+    manifest = output / f'{args.case}.json'
+    manifest.write_text(json.dumps(participants, indent=2) + '\n')
+    print(manifest)
 
 
 if __name__ == '__main__':

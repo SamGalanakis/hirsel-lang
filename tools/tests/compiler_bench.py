@@ -101,6 +101,9 @@ class Measurement(unittest.TestCase):
             self.assertEqual(command[-3:], ['--', 'hirsel', 'check'])
             self.assertEqual(command[command.index('taskset') + 1:command.index('taskset') + 3], ['-c', '31'])
             Path(command[command.index('-o') + 1]).write_text('1.0 0.8 0.1 1024')
+            import shlex
+            for hook in ('--pre', '--post'):
+                Path(shlex.split(command[command.index(hook) + 1])[-1]).touch()
             perf_path = command[command.index('perf'):]
             Path(perf_path[perf_path.index('-o') + 1]).write_text('\n'.join(
                 f'123;;{e};100;100;;' for e in ('task-clock', 'cycles', 'instructions', 'cycles:u', 'instructions:u')))

@@ -1,0 +1,7 @@
+{
+  "io": {
+    "stdout": "stdout.bytes@1",
+    "tasks": "tasks.cooperative@1",
+    "dirs": []
+  }
+}

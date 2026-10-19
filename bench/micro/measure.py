@@ -5,6 +5,7 @@ import math
 import os
 from pathlib import Path
 import random
+import shlex
 import statistics
 import subprocess
 import tempfile
@@ -53,9 +54,9 @@ def siblings(cpu):
     return [c for c in cpu_list(path.read_text()) if c != cpu]
 
 
-def cpu_snapshot(cpus):
+def cpu_snapshot(cpus, path=Path('/proc/stat')):
     rows = {}
-    for line in Path('/proc/stat').read_text().splitlines():
+    for line in Path(path).read_text().splitlines():
         fields = line.split()
         if fields[0] in {f'cpu{cpu}' for cpu in cpus}:
             # guest and guest_nice are already included in user and nice.
@@ -75,24 +76,33 @@ def busy_share(before, after):
     return shares
 
 
+def perf_command(command, cpu, counters, before, after):
+    # Hooks run inside the capped slot, immediately around the workload. Reading
+    # outside capped would include queue time in the sibling's busy fraction.
+    return ['taskset', '-c', str(cpu), 'perf', 'stat', '--no-big-num', '-x', ';',
+            '-e', ','.join(EVENTS), '-o', str(counters),
+            '--pre', '/bin/cat /proc/stat > ' + shlex.quote(str(before)),
+            '--post', '/bin/cat /proc/stat > ' + shlex.quote(str(after)), '--', *command]
+
+
 def sample(participant, cpu, timeout):
     """One process under capped; perf counts only the pinned participant tree."""
     sibling_cpus = siblings(cpu)
     env = {**os.environ, **participant.get('env', {}), 'LC_ALL': 'C'}
     with tempfile.TemporaryDirectory(prefix='micro-') as scratch:
         counters = Path(scratch) / 'perf.csv'
+        before_path, after_path = Path(scratch) / 'before.stat', Path(scratch) / 'after.stat'
         with open(Path(scratch) / 'stdout', 'w+b') as output:
             with open(participant.get('stdin', '/dev/null'), 'rb') as source:
-                before = cpu_snapshot(sibling_cpus)
                 process = subprocess.run([
                     str(ROOT / 'tools/capped'), '--timeout', str(timeout),
-                    'taskset', '-c', str(cpu), 'perf', 'stat', '--no-big-num', '-x', ';',
-                    '-e', ','.join(EVENTS), '-o', str(counters), '--', *participant['command'],
+                    *perf_command(participant['command'], cpu, counters, before_path, after_path),
                 ], cwd=participant.get('cwd', ROOT), env=env, stdin=source,
                     stdout=output, stderr=subprocess.PIPE, text=True)
-                after = cpu_snapshot(sibling_cpus)
             if process.returncode:
                 raise ValueError(f"{participant['name']}: exit {process.returncode}\n{process.stderr}")
+            before = cpu_snapshot(sibling_cpus, before_path)
+            after = cpu_snapshot(sibling_cpus, after_path)
             counts, running = perf_counts(counters.read_text())
             output.seek(0)
             digest = hashlib.file_digest(output, 'sha256').hexdigest()
