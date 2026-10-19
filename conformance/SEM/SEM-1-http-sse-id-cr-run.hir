@@ -1,6 +1,6 @@
 // rule: SEM-1
 // expect: run
-pub fn main(t: Test) {
+pub fn main(t: Test) -> Result[(), http.SseError] {
   match http.sse_event(None(), [], Some("bad\rfield"), None()) {
     Error(IdLineBreak()) => (),
     _ => test.check(t, false),
@@ -11,4 +11,5 @@ pub fn main(t: Test) {
       b"event: valid\ndata: data\nid: id\n\n"
     )
   )
+  Ok(())
 }

@@ -59,7 +59,7 @@ fn reset(t: Test, finish: bool) -> Result[(), http.HttpError] {
   let mut c = http.server_connection(n, take stream, http.default_config())
   let _ = http.receive_request(mut c, None())?
   http.respond_head(mut c, 200u16, [])?
-  let outcome = if finish {
+  let outcome: Result[(), http.HttpError] = if finish {
     http.end_response_body(mut c)
   } else {
     http.write_response_body(mut c, b"bad")
